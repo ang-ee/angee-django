@@ -11,6 +11,7 @@ from rebac import system_context
 
 from angee.iam_integrate_oidc.errors import ONLY_SIGN_IN_METHOD
 from angee.integrate.credentials import CredentialKind
+from angee.integrate.models import AccountStatus
 
 if TYPE_CHECKING:
     from angee.integrate.models import Credential
@@ -46,7 +47,9 @@ class CredentialOidc(models.Model):
         oauth_client = (
             oauth_field.related_model._base_manager.using(using).filter(pk=credential.oauth_client_id).first()
         )
-        if oauth_client is None or not oauth_client.login_enabled:
+        if oauth_client is None or not type(oauth_client).login_picker_queryset(
+            type(oauth_client)._base_manager.using(using).filter(pk=oauth_client.pk),
+        ).exists():
             return
         user_field = type(credential).user.field
         assert credential.user_id is not None
@@ -64,8 +67,9 @@ class CredentialOidc(models.Model):
                 .objects.using(using).filter(
                     user_id=credential.user_id,
                     kind=CredentialKind.OAUTH,
-                    oauth_client__login_enabled=True,
-                    external_account__isnull=False,
+                    external_account_id__in=type(oauth_client).login_accounts(
+                        type(credential).external_account.field.related_model._base_manager.using(using).all(),
+                    ).values("pk"),
                 )
                 .order_by()
                 .values("external_account_id")
@@ -136,6 +140,13 @@ class OAuthClientOidc(models.Model):
             .exclude(client_id="")
             .filter(models.Q(authorize_endpoint__gt="", token_endpoint__gt="") | models.Q(discovery_url__gt=""))
         )
+
+    @classmethod
+    def login_accounts(cls, rows: Any) -> Any:
+        """Admit active linked identities whose provider can still start OIDC login."""
+
+        clients = cls.login_picker_queryset(cls._base_manager.using(rows.db).all())
+        return rows.filter(status=AccountStatus.ACTIVE, oauth_client_id__in=clients.values("pk"))
 
     DISCOVERY_FIELDS = {
         "issuer": "issuer",

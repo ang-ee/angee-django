@@ -36,18 +36,12 @@ function resolveCurrencyCode(row: unknown, currencyField: string | undefined): s
   return undefined;
 }
 
-function toAmount(value: MoneyWidgetValue | undefined): number | null {
-  if (value == null || value === "") return null;
-  const amount = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(amount) ? amount : null;
-}
-
 /**
  * Format an amount for display. With a known currency, `Intl.NumberFormat`'s
  * `currency` style renders the symbol and the currency's own minor-unit digits
  * (JPY 0, BHD 3) from CLDR; without one it falls back to a currency-neutral
- * decimal. Display coerces the Decimal string to a number for `Intl`; the exact
- * string is preserved by the edit control, which is where precision matters.
+ * decimal. Decimal text reaches the shared formatter unchanged so native Intl
+ * preserves its exact decimal precision.
  */
 export interface FormatMoneyOptions {
   /** A presentation precision that overrides the currency's own minor-unit digits (a company's display places). */
@@ -57,15 +51,14 @@ export interface FormatMoneyOptions {
 }
 
 export function formatMoney(value: MoneyWidgetValue | undefined, code: string | undefined, options: FormatMoneyOptions = {}): string {
-  const amount = toAmount(value);
-  if (amount === null) return "";
+  if (value == null || value === "") return "";
   const precision = options.fractionDigits === undefined
     ? {}
     : { minimumFractionDigits: options.fractionDigits, maximumFractionDigits: options.fractionDigits };
   const sign = options.signDisplay === undefined ? {} : { signDisplay: options.signDisplay };
   if (code) {
     try {
-      return formatNumber(amount, { style: "currency", currency: code, ...precision, ...sign });
+      return formatNumber(value, { style: "currency", currency: code, ...precision, ...sign });
     } catch {
       // Unknown/blank code — fall through to the neutral format.
     }
@@ -74,7 +67,7 @@ export function formatMoney(value: MoneyWidgetValue | undefined, code: string | 
   // neutral two fraction digits rather than exposing the stored Decimal's full
   // scale (e.g. a 6dp `24.900000`). The currency-styled path above already renders
   // each currency's own minor-unit digits from CLDR when the code is known.
-  return formatNumber(amount, {
+  return formatNumber(value, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
     ...precision,

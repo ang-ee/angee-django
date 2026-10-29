@@ -31,6 +31,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
+from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.db.models.functions import Abs, Cast, Coalesce, Floor, Log, Power, Round, Sign
 from django.db.models.lookups import Exact
@@ -41,6 +43,9 @@ from angee.base.models.roles import role_anchor
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
 from angee.base.querysets import AngeeQuerySet
 from angee.resources.mixins import ResourceLoadMixin
+
+
+_ROUNDING_STEPS = tuple(Decimal(10) ** exponent for exponent in range(-6, 6))
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +134,10 @@ class Uom(ResourceLoadMixin, ArchiveMixin, AngeeDataModel):
         on_delete=models.PROTECT,
         related_name="units",
     )
-    ratio = models.DecimalField(max_digits=20, decimal_places=10, default=Decimal(1))
+    ratio = models.DecimalField(
+        max_digits=20, decimal_places=10, default=Decimal(1),
+        validators=(MinValueValidator(Decimal("0.0000000001")),),
+    )
     offset = models.DecimalField(max_digits=20, decimal_places=10, default=Decimal(0))
     rounding = models.DecimalField(max_digits=12, decimal_places=6, default=Decimal("0.01"))
     is_reference = models.BooleanField(default=False)
@@ -145,6 +153,11 @@ class Uom(ResourceLoadMixin, ArchiveMixin, AngeeDataModel):
         verbose_name_plural = "units of measure"
         rebac_resource_type = "uom/uom"
         constraints = (
+            models.CheckConstraint(condition=models.Q(ratio__gt=0), name="%(app_label)s_uom_ratio_positive"),
+            models.CheckConstraint(
+                condition=models.Q(rounding__in=_ROUNDING_STEPS),
+                name="%(app_label)s_uom_rounding_power_of_ten",
+            ),
             models.UniqueConstraint(
                 fields=("category",),
                 condition=models.Q(is_reference=True),
@@ -155,6 +168,13 @@ class Uom(ResourceLoadMixin, ArchiveMixin, AngeeDataModel):
                 name="%(app_label)s_uom_reference_is_identity",
             ),
         )
+
+    def clean(self) -> None:
+        """Admit only the decimal steps represented by the scalar and SQL contracts."""
+
+        super().clean()
+        if self.rounding not in _ROUNDING_STEPS:
+            raise ValidationError({"rounding": "Choose a positive power-of-ten rounding step."})
 
     def __str__(self) -> str:
         """Return the unit name for Django displays."""

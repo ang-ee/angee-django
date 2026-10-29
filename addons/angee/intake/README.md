@@ -8,12 +8,12 @@
 - Both task schema nodes project the first linked Need as `requester { display_name email }`. The name uses the linked party or captured claim; the email is returned only to a task writer. Lists select this field without reading a second collection.
 
 Access questions assign the target's current sharers when asked. Later grants do
-not rewrite that assignment. The Need owner consumes its current answer after
-commit through `decide_access`, rechecking normal share and account authority; the
-Decision owner only records chosen keys. The nullable `admitted_user` records
+not rewrite that assignment. The Need owner consumes its current answer synchronously inside the answer
+transaction, rechecking normal share and account authority; the Decision owner
+records chosen keys and emits the answer signal. The nullable `admitted_user` records
 the account granted access after successful owner application; a verdict alone
-grants no access. Reset or identity replacement clears that receipt. Failed application can be retried through
-the Need verb. Captured messaging webforms keep their own input schema.
+grants no access. Reset or identity replacement clears that receipt. Failed application rolls back the verdict and owner changes together. Replacing
+an unanswered question withdraws it; answered questions remain audit history. Captured messaging webforms keep their own input schema.
 
 Task merges move Needs through their model-owned reference contract and normal
 assignment checks, inside the shared merge changeset. Need history retains every

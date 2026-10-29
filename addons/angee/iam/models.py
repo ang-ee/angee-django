@@ -22,7 +22,7 @@ from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
 from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, models, transaction
+from django.db import router, IntegrityError, models, transaction
 from django.db.models import Exists, F, OuterRef, Q, TextField
 from django.db.models.functions import Cast
 from django.utils import timezone
@@ -446,8 +446,9 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
     ) -> UserT:
         """Own validation, uniqueness, persistence and the transactional event."""
 
-        with transaction.atomic():
-            if self._person_email_matches(email).exists():
+        using = self._db or router.db_for_write(self.model)
+        with transaction.atomic(using=using):
+            if self.db_manager(using)._person_email_matches(email).exists():
                 raise AccountExists
             user = self.model(
                 username=self.model.normalize_username(username),
@@ -459,14 +460,15 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
                 is_superuser=False,
                 is_active=True,
             )
+            user._state.db = using
             user.set_password(password)
             try:
-                with transaction.atomic():
+                with transaction.atomic(using=using):
                     with system_context(reason="iam.person.validate"):
                         user.full_clean()
-                    user.sudo(reason=reason).save()
+                    user.sudo(reason=reason).save(using=using)
             except IntegrityError, ValidationError:
-                if self._person_email_matches(email).exists():
+                if self.db_manager(using)._person_email_matches(email).exists():
                     raise AccountExists from None
                 raise
             if actor is not None:
@@ -530,7 +532,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
         user.set_password(password)
         actor = current_actor()
         user.sudo(reason="iam.user.create")
-        user.save()
+        user.save(using=self._db)
         if actor is not None:
             user.with_actor(actor)
         else:

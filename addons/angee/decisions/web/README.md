@@ -23,6 +23,7 @@ through `@angee/ui`'s `FieldDescriptorControl`: form metadata defaults resolve
 scalars and `RelationFieldWidget` supplies server search and metadata-backed inline
 create. `choose.filter` optionally supplies a Hasura condition, such as
 `{"name": {"_neq": "Hidden"}}`, combined with the picker's search. Inline create
-saves immediately and selects the new public id. Many-to-many remains refused by
-the backend. Confirm requires a value for every selected `choose` field; changing
+saves immediately and selects the new public id. Many-to-many answers use lists
+of related public ids; an empty list clears the relation. Confirm requires a supplied
+value for every selected `choose` field; field metadata owns null/blank validity. Changing
 the revision clears both keys and values. Decisions supplies no separate answer form.

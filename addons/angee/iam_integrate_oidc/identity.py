@@ -25,7 +25,6 @@ from angee.iam.models import AmbiguousAccountEmail
 from angee.iam_integrate_oidc.errors import IDENTITY_RESOLUTION_FAILED, IdentityFlowError
 from angee.iam_integrate_oidc.protocol import OAuthClientOidcProtocol
 from angee.integrate.connect import complete_external_account_link
-from angee.integrate.models import AccountStatus
 from angee.integrate.oauth import flow
 from angee.integrate.oauth.errors import INVALID_ID_TOKEN, INVALID_STATE, OAuthFlowError
 from angee.integrate.oauth.state import StateFlow, StateRecord
@@ -192,7 +191,7 @@ class OidcIdentityResolver:
             account = manager.filter(oauth_client=self.oauth_client, external_id=sub).first()
             if account is not None:
                 # A revoked/expired/disabled account or a deactivated user must not log in.
-                if account.status != AccountStatus.ACTIVE:
+                if not type(self.oauth_client).login_accounts(manager.filter(pk=account.pk)).exists():
                     raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
                 owner = account.owner
                 if owner is None or not can_authenticate_user(owner):
@@ -201,8 +200,8 @@ class OidcIdentityResolver:
 
             normalized_email = get_user_model().objects.normalize_email(email)
             email_verified = claims.get("email_verified") is True
-            email_allowed = not normalized_email or (
-                email_verified and self.oauth_client.allows_email_domain(normalized_email)
+            email_allowed = self.oauth_client.allows_email_domain(normalized_email) and (
+                not normalized_email or email_verified
             )
             if normalized_email and email_allowed:
                 user = self._find_by_email(normalized_email)

@@ -119,15 +119,11 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
                 algorithms=_ALLOWED_JWT_ALGORITHMS,
                 audience=client_id,
                 issuer=issuer,
-                options={"require": ["exp", "iat"], "verify_exp": True},
+                options={"require": ["exp", "iat"], "verify_exp": True, "verify_iss": True, "verify_aud": True},
             )
         except (PyJWKClientError, PyJWTError, ValueError, TypeError) as exc:
             raise OAuthFlowError(INVALID_ID_TOKEN, 400) from exc
         if not isinstance(claims, dict):
-            raise OAuthFlowError(INVALID_ID_TOKEN, 400)
-        if claims.get("iss") != issuer:
-            raise OAuthFlowError(INVALID_ID_TOKEN, 400)
-        if not _audience_matches(claims.get("aud"), client_id):
             raise OAuthFlowError(INVALID_ID_TOKEN, 400)
         if nonce is not None and claims.get("nonce") != nonce:
             raise OAuthFlowError(INVALID_ID_TOKEN, 400)
@@ -144,16 +140,6 @@ class OAuthClientOidcProtocol(OAuthClientProtocol):
         """
 
         return dict(self.oauth_client.discover_endpoints())
-
-
-def _audience_matches(value: object, expected: str) -> bool:
-    """Return whether an OIDC ``aud`` claim contains ``expected``."""
-
-    if isinstance(value, str):
-        return value == expected
-    if isinstance(value, list):
-        return expected in value
-    return False
 
 
 class _PinnedPyJWKClient(PyJWKClient):
