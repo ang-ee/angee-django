@@ -40,9 +40,9 @@ def role_anchor(
     a helper that wraps this factory would capture the helper's module, not the
     adopter's, and emit an import that resolves to the wrong symbol. Call
     ``role_anchor`` directly at module level, or pass ``module=__name__`` when
-    indirecting it. The composer verifies the captured module actually binds the
-    anchor at emission (``django_compose.rendering``) and fails loudly on a mis-capture
-    rather than emitting a broken import.
+    indirecting it. Native ``django_compose.model_composition.ModelComposition`` verifies the
+    captured module actually binds the anchor before rendering and fails loudly
+    on a mis-capture.
 
     The ``.zed`` fragment stays **co-located and static** — each adopter ships its
     own ``definition <ns>/role`` block beside its models; the factory owns only
