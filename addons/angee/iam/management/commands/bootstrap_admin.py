@@ -9,7 +9,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db import transaction
-from rebac import ObjectRef, app_settings, system_context
+from rebac import ObjectRef, app_settings, database_context, system_context
 from rebac.memberships import grant as grant_membership
 
 
@@ -21,6 +21,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser: CommandParser) -> None:
         """Declare CLI overrides for the env/settings-backed bootstrap values."""
 
+        parser.add_argument("--database", default="default")
         parser.add_argument("--username", default=None, help="Admin username. Defaults to settings/env or 'admin'.")
         parser.add_argument(
             "--email",
@@ -52,11 +53,12 @@ class Command(BaseCommand):
 
         User = get_user_model()
 
-        manager = User._default_manager
-        lookup_manager = _system_lookup_manager(User)
+        using = options["database"]
+        manager = User._default_manager.db_manager(using)
+        lookup_manager = _system_lookup_manager(User, using=using)
         username_field = User.USERNAME_FIELD
 
-        with system_context(reason="iam.bootstrap_admin"), transaction.atomic():
+        with database_context(using), system_context(reason="iam.bootstrap_admin"), transaction.atomic(using=using):
             try:
                 user = lookup_manager.get(**{username_field: username})
             except User.DoesNotExist:
@@ -71,7 +73,7 @@ class Command(BaseCommand):
                 created = False
                 update_fields = _promote_existing_admin(user, email=email, password=password)
                 if update_fields:
-                    user.save(update_fields=sorted(update_fields))
+                    user.save(using=using, update_fields=sorted(update_fields))
             role = app_settings.REBAC_UNIVERSAL_ADMIN_ROLE
             if not role:
                 raise CommandError("bootstrap_admin requires REBAC_UNIVERSAL_ADMIN_ROLE.")
@@ -99,10 +101,10 @@ def _configured(
     return default
 
 
-def _system_lookup_manager(user_model: type[Any]) -> Any:
+def _system_lookup_manager(user_model: type[Any], *, using: str | None = None) -> Any:
     """Return a queryset/manager that can see users before an admin exists."""
 
-    manager = user_model._default_manager
+    manager = user_model._default_manager.db_manager(using)
     system_context = getattr(manager, "system_context", None)
     if system_context is None:
         return manager

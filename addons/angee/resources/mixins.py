@@ -100,5 +100,6 @@ class ResourceLoadMixin(models.Model):
         *,
         tier: str,
         source: str,
+        using: str | None = None,
     ) -> None:
         """Finish the post-load chain after every participant has run."""

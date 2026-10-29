@@ -797,13 +797,14 @@ class Dashboard(
         *,
         tier: str,
         source: str,
+        using: str | None = None,
     ) -> None:
         """Validate snapshots, including unchanged resource rows."""
 
         loaded = tuple(instances)
         for instance in loaded:
             instance.validate_installed_snapshot()
-        super().after_resource_load(loaded, tier=tier, source=source)
+        super().after_resource_load(loaded, tier=tier, source=source, using=using)
 
 
 class DashboardWidgetQuerySet[WidgetT: DashboardWidget](ArchiveQuerySet[WidgetT], AngeeHistoryQuerySet[WidgetT]):
@@ -866,12 +867,13 @@ class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, HistoryMixin,
         *,
         tier: str,
         source: str,
+        using: str | None = None,
     ) -> None:
         """Revalidate installed parents when a widget resource is loaded alone."""
 
         loaded = tuple(instances)
         dashboard_model = cls.dashboard.field.related_model
         dashboard_ids = sorted({widget.dashboard_id for widget in loaded})
-        for dashboard in dashboard_model.objects.filter(pk__in=dashboard_ids, is_baseline=True):
+        for dashboard in dashboard_model.objects.using(using).filter(pk__in=dashboard_ids, is_baseline=True):
             dashboard.validate_installed_snapshot()
-        super().after_resource_load(loaded, tier=tier, source=source)
+        super().after_resource_load(loaded, tier=tier, source=source, using=using)

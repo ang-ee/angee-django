@@ -19,7 +19,7 @@ from django.db.models.fields import NOT_PROVIDED
 from django.db.models.utils import make_model_tuple
 from import_export.results import Result, RowResult
 
-from angee.addons import addon_facts
+from angee.base.addons import addon_facts
 from angee.base.fields.text import ModelLabelField
 from angee.base.implementations import impl_registry, resolve_impl_class
 from angee.resources import sources
@@ -97,7 +97,7 @@ RETIRED_MODELS_KEY = "retired_models"
 def _resource_declarations(app_config: AppConfig) -> Mapping[str, Any]:
     """Read and validate the table shared by tier and retirement declarations."""
 
-    resources = addon_facts(app_config.name).get("resources", {})
+    resources = addon_facts(app_config.name, "angee.resources")
     if not isinstance(resources, Mapping):
         raise ImproperlyConfigured(f"{app_config.name}: tool.angee.resources must be a table")
     return resources

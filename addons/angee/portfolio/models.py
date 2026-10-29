@@ -359,33 +359,34 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=
         *,
         tier: str,
         source: str,
+        using: str | None = None,
     ) -> None:
         """Apply demo provisioning, then continue the resource hook chain."""
 
         if tier == "demo":
-            cls._seed_demo_reports(instances)
-        super().after_resource_load(instances, tier=tier, source=source)
+            cls._seed_demo_reports(instances, using=using)
+        super().after_resource_load(instances, tier=tier, source=source, using=using)
 
     @classmethod
-    def _seed_demo_reports(cls, instances: Iterable[Any]) -> None:
+    def _seed_demo_reports(cls, instances: Iterable[Any], *, using: str | None = None) -> None:
         """Seed one idempotent report for each side of demo placements."""
 
         update_model = apps.get_model("portfolio", "Update")
         for placement in sorted(instances, key=lambda instance: instance.pk or 0):
             targets = (
                 (
-                    placement.initiative,
+                    cls._meta.get_field("initiative").related_model._base_manager.using(using).get(pk=placement.initiative_id),
                     "at_risk",
                     "Scope is clear; delivery sequencing needs attention.",
                 ),
                 (
-                    placement.project,
+                    cls._meta.get_field("project").related_model._base_manager.using(using).get(pk=placement.project_id),
                     "on_track",
                     "The current push is progressing as planned.",
                 ),
             )
             for target, health, body in targets:
-                if update_model._base_manager.filter(
+                if update_model._base_manager.using(using).filter(
                     **generic_target(target).lookups(update_model, "target"),
                     body=body,
                 ).exists():
@@ -397,7 +398,7 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=
                     created_by_id=placement.created_by_id,
                     updated_by_id=placement.updated_by_id,
                 )
-                report.sudo(reason="portfolio.demo.report").save()
+                report.sudo(reason="portfolio.demo.report").save(using=using)
 
 
 class UpdateManager[UpdateT: Update](AngeeHistoryManager[UpdateT]):

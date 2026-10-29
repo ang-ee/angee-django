@@ -8,6 +8,7 @@ _Settings = TypedDict(
     "_Settings",
     {
         "COMPOSE_INTEGRATIONS:append": list[str],
+        "ANGEE_RESOURCE_INCLUDE_DEMO": bool,
         "ANGEE_MERGE_GUARDS:append": list[str],
         "ANGEE_RESOURCE_SOURCE_CLASSES": dict[str, str],
         "ANGEE_RESOURCE_ENTRY_KIND_CLASSES": dict[str, str],
@@ -16,6 +17,7 @@ _Settings = TypedDict(
 )
 
 SETTINGS: _Settings = {
+    "ANGEE_RESOURCE_INCLUDE_DEMO": False,
     "COMPOSE_INTEGRATIONS:append": ["angee.resources.build.CatalogueIntegration"],
     # A record a ledger loaded cannot be merged away: the next load would recreate it.
     "ANGEE_MERGE_GUARDS:append": ["angee.resources.managers.seeded_record_merge_guard"],
