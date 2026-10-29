@@ -10,7 +10,7 @@ from rebac.resources import model_resource_type
 from rebac.schema import FieldBinding
 
 from angee.base.models.ownership import OwnerMixin
-from angee.base.permissions import effective_rebac_definition, effective_rebac_schema
+from angee.base.permissions import declared_rebac_definition, effective_rebac_schema
 
 
 def check_rebac_caveats(
@@ -52,7 +52,7 @@ def check_ownership(
     )
     errors: list[checks.CheckMessage] = []
     for model in models:
-        definition = effective_rebac_definition(model)
+        definition = declared_rebac_definition(model)
         owner_relation = (
             next((relation for relation in definition.relations if relation.name == "owner"), None)
             if definition is not None

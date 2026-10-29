@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from functools import partial
+from typing import TYPE_CHECKING
 
-from django.apps import AppConfig
+from django.apps import AppConfig, apps
+from django.conf import settings
 from django.core import checks
 
 from angee.base.hooks import check_hooks
+
+if TYPE_CHECKING:
+    from angee.base.provision import ProvisionContext
 
 check_settings = partial(check_hooks, ("ANGEE_MERGE_GUARDS",))
 
@@ -17,15 +22,29 @@ class BaseConfig(AppConfig):
 
     default = True
     name = "angee.base"
-    requires_apps = ('django.contrib.contenttypes', 'rebac')
+    requires_apps = ('django.contrib.contenttypes', 'django.contrib.auth', 'rebac')
     # Moving the Python package must not rename Django's persisted app label:
     # migrations, content types, and the test-model schema all retain ``base``.
     label = "base"
+
+    def compose_provision(self, context: ProvisionContext) -> None:
+        """Synchronize the selected database after its native migrations complete."""
+
+        context.call('rebac', 'sync', database=context.database, prune_stale=True, yes=True,
+                     force_overwrite=settings.ANGEE_REBAC_FORCE_OVERWRITE, skip_checks=True)
 
     def ready(self) -> None:
         """Validate runtime safety and persistence independently of API addons."""
 
         super().ready()
+        if getattr(settings, "COMPOSE_SNAPSHOT", None) is not None:
+            from django_compose.serving import artifact_path
+
+            from angee.base.permissions import bind_rebac_schema, declared_schema_path, merged_schema_relpath
+
+            for config in apps.get_app_configs():
+                if declared_schema_path(config) is not None:
+                    bind_rebac_schema(config, artifact_path(merged_schema_relpath(config.name)))
         from django.contrib.contenttypes.fields import GenericRelation
         from django.db.models.signals import pre_delete
         from rebac.field_backing import canonical_model

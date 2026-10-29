@@ -31,7 +31,7 @@ from angee.base.models.inputs import InputExtensionsMixin
 from angee.base.models.merge_references import MergeContractMixin, named_in_relationships, references
 from angee.base.models.timestamps import TimestampMixin
 from angee.base.models.transitions import StateTransitionsMixin
-from angee.base.permissions import DirectRecordAccess, declared_grants, effective_rebac_definition, instance_actor
+from angee.base.permissions import DirectRecordAccess, declared_grants, declared_rebac_definition, instance_actor
 from angee.base.querysets import row_lock_paths
 from angee.base.signals import record_access_revoked
 
@@ -384,7 +384,7 @@ class AngeeModel(
             return []
 
         resource_type = model_resource_type(cls)
-        definition = effective_rebac_definition(cls)
+        definition = declared_rebac_definition(cls)
         if definition is None:
             return [
                 checks.Error(

@@ -69,7 +69,7 @@ class _ChatterResource(AngeeResource):
         if not isinstance(value, str) or not value:
             raise ValidationError({column: "This column needs an xref."})
         try:
-            return resolve_xref(value, self.ledger_model, self.addon_aliases)
+            return resolve_xref(value, self.ledger_model, self.addon_aliases, using=self.get_db_connection_name())
         except ValueError as error:
             raise ValidationError({column: str(error)}) from error
 

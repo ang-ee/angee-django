@@ -19,6 +19,7 @@ from strawberry_django.utils.requests import get_request
 
 from angee.base.models.identity import instance_from_public_id
 from angee.base.models.locks import StaleRevisionError
+from angee.base.serialization import ASCII_JSON, canonical_json_sha256
 from angee.dashboards.models import Dashboard as DashboardModel
 from angee.dashboards.models import DashboardConflictError, canonical_dashboard_snapshot, widget_visibility_answers
 from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
@@ -30,7 +31,6 @@ from angee.iam.audit import TrashedRefMixin
 from angee.iam.identity import user_display_label, user_public_id
 from angee.iam.permissions import session_user
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
-from angee.serialization import ASCII_JSON, canonical_json_sha256
 
 Dashboard = apps.get_model("dashboards", "Dashboard")
 DashboardWidget = apps.get_model("dashboards", "DashboardWidget")

@@ -12,6 +12,7 @@ and orphans edge rows on delete.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, ClassVar, Protocol, cast
 
 from django.apps import apps
@@ -107,7 +108,7 @@ class RecordRefMixin(RecordRefMergeContract):
         content_type_id = getattr(self, reference.ct_field_attname)
         object_id = getattr(self, reference.fk_field)
         model = (
-            ContentType.objects.get_for_id(content_type_id).model_class()
+            ContentType.objects.db_manager(self._state.db).get_for_id(content_type_id).model_class()
             if content_type_id not in (None, "") and object_id not in (None, "") else None
         )
         if model is None:
@@ -156,7 +157,9 @@ class RecordRefMixin(RecordRefMergeContract):
         return models.Q(**scope)
 
     @classmethod
-    def declared_target_models(cls) -> dict[str, type[models.Model]]:
+    def declared_target_models(
+        cls, *, definition_for: Callable[[type[models.Model]], Definition | None] = effective_rebac_definition,
+    ) -> dict[str, type[models.Model]]:
         """Return the target models this edge's effective schema declares, by ``label_lower``.
 
         One relation per target type, backed by the generic pointer
@@ -165,7 +168,7 @@ class RecordRefMixin(RecordRefMergeContract):
         declaration instead of listing the types again.
         """
 
-        definition = effective_rebac_definition(cls)
+        definition = definition_for(cls)
         if definition is None:
             raise ImproperlyConfigured(f"{cls._meta.label} declares no REBAC definition to read target types from.")
         return cls._declared_target_models(definition)
@@ -202,11 +205,13 @@ class RecordRefMixin(RecordRefMergeContract):
         return cast(type[models.Model], canonical_model(model))
 
     @classmethod
-    def accepted_target_models(cls) -> dict[str, type[models.Model]]:
+    def accepted_target_models(
+        cls, *, definition_for: Callable[[type[models.Model]], Definition | None] = effective_rebac_definition,
+    ) -> dict[str, type[models.Model]]:
         """Return the complete target set from the schema or the explicit open edge."""
 
         if not cls.accepts_any_record_target:
-            return cls.declared_target_models()
+            return cls.declared_target_models(definition_for=definition_for)
         targets = {
             target._meta.label_lower: target
             for model in cls._meta.apps.get_models()
@@ -294,7 +299,9 @@ class RecordRefMixin(RecordRefMergeContract):
         return self.record_ref.public_id
 
 
-def record_edges_by_target() -> dict[type[models.Model], tuple[type[RecordRefMixin], ...]]:
+def record_edges_by_target(
+    *, definition_for: Callable[[type[models.Model]], Definition | None] = effective_rebac_definition,
+) -> dict[type[models.Model], tuple[type[RecordRefMixin], ...]]:
     """Index installed edges by every canonical target they accept, in label order.
 
     The inverse of :meth:`RecordRefMixin.accepted_target_models`: the polymorphic
@@ -308,9 +315,9 @@ def record_edges_by_target() -> dict[type[models.Model], tuple[type[RecordRefMix
         if not issubclass(edge, RecordRefMixin):
             continue
         if edge.accepts_any_record_target:
-            targets = edge.accepted_target_models()
+            targets = edge.accepted_target_models(definition_for=definition_for)
         else:
-            definition = effective_rebac_definition(edge)
+            definition = definition_for(edge)
             if definition is None:
                 continue
             targets = edge._declared_target_models(definition)

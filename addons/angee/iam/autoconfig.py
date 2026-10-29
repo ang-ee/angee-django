@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 SETTINGS = {
+    "COMPOSE_COMMAND_CONTEXT:append": ["angee.iam.context.command_context"],
     "AUTH_USER_MODEL": "iam.User",
     # IAM owns the platform-admin role used by its schema and bootstrap command.
     "REBAC_UNIVERSAL_ADMIN_ROLE": "angee/role:admin",

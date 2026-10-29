@@ -7,7 +7,7 @@ from functools import partial
 from django.apps import AppConfig
 from django.core import checks
 
-from angee.hooks import check_hook
+from angee.base.hooks import check_hook
 
 check_settings = partial(check_hook, "ANGEE_WEBFORM_TOKEN_HOOK")
 
@@ -17,6 +17,7 @@ class MessagingConfig(AppConfig):
 
     default = True
     name = "angee.messaging"
+    compose_urls = "angee.messaging.urls"
     requires_apps = ('django.contrib.contenttypes', 'django.contrib.postgres')
 
     def ready(self) -> None:

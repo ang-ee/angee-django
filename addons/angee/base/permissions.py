@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from django.apps import AppConfig, apps
@@ -13,6 +13,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from rebac import SubjectRef, check_new, current_actor, proposed_forward_relationships, to_subject_ref
 from rebac import user_subject_type as _user_subject_type
+from rebac.backends import backend
 from rebac.managers import RebacQuerySet
 from rebac.resources import model_resource_type
 from rebac.schema import Definition, Schema, resolve_schema_path
@@ -47,39 +48,59 @@ def require_rebac_queryset[M: models.Model](model: type[M]) -> RebacQuerySet[M]:
     return queryset
 
 
-def effective_rebac_definition(model: type[models.Model]) -> Definition | None:
-    """Return ``model``'s effective Zed definition parsed from its disk source.
+def declared_schema_path(app_config: AppConfig) -> Path | None:
+    """Retain the native authored declaration before binding generated output."""
 
-    The composer points an extended definition's owning ``AppConfig.rebac_schema``
-    at the emitted base-plus-extensions source.  Resolving that declaration rather
-    than assuming ``permissions.zed`` therefore covers both ordinary addons and
-    composed ``permissions.extends.zed`` contributions without consulting the
-    runtime backend or its database-backed schema.
-    """
+    effective = app_config.__dict__.get('_angee_rebac_schema_effective')
+    if (
+        '_angee_rebac_schema_source' not in app_config.__dict__
+        or getattr(app_config, 'rebac_schema', None) != effective
+    ):
+        app_config._angee_rebac_schema_source = resolve_schema_path(app_config)
+    return app_config._angee_rebac_schema_source
+
+
+def bind_rebac_schema(app_config: AppConfig, path: Path) -> None:
+    """Bind a native schema path while retaining its authored declaration."""
+
+    declared_schema_path(app_config)
+    app_config.rebac_schema = path
+    app_config._angee_rebac_schema_effective = path
+
+
+
+def merged_schema_relpath(package: str) -> Path:
+    """Return the permission artifact address relative to compiler output."""
+
+    return Path('permissions') / f'{package}.zed'
+
+
+def effective_rebac_definition(model: type[models.Model]) -> Definition | None:
+    """Read request policy through the native synced, scope-pinned backend."""
+
+    resource_type = model_resource_type(model)
+    return backend().schema().get_definition(resource_type) if resource_type else None
+
+
+def effective_rebac_schema(app_config: AppConfig) -> Schema | None:
+    """Read the bound compose snapshot for startup and declaration checks only."""
+
+    schema_path = resolve_schema_path(app_config)
+    return parse_zed(schema_path.read_text(encoding='utf-8')) if schema_path is not None else None
+
+
+def declared_rebac_definition(model: type[models.Model]) -> Definition | None:
+    """Read one model declaration without consulting database-backed policy."""
 
     resource_type = model_resource_type(model)
     if not resource_type:
         return None
     try:
-        app_config = apps.get_app_config(model._meta.app_label)
+        config = apps.get_app_config(model._meta.app_label)
     except LookupError:
         return None
-    schema = effective_rebac_schema(app_config)
+    schema = effective_rebac_schema(config)
     return schema.get_definition(resource_type) if schema is not None else None
-
-
-def effective_rebac_schema(app_config: AppConfig) -> Schema | None:
-    """Read the effective app schema through the content-keyed parser cache."""
-
-    schema_path = resolve_schema_path(app_config)
-    return _parse_schema(schema_path.read_text(encoding="utf-8")) if schema_path is not None else None
-
-
-@lru_cache(maxsize=128)
-def _parse_schema(source: str) -> Schema:
-    """Cache parsed content, so rewritten effective sources cannot leave stale gates."""
-
-    return parse_zed(source)
 
 
 def instance_actor(instance: models.Model) -> SubjectRef | None:

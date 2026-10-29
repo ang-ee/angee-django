@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
+from typing import Any
 
 from django.core.exceptions import ValidationError
 from django.db import models, router
@@ -22,12 +23,18 @@ logical write and keeps the command boundary.
 """
 
 
-def management_context(command: str) -> _ChangesetScope | nullcontext[None]:
+def management_context(
+    command: str, argv: Sequence[str], options: Mapping[str, Any],
+) -> _ChangesetScope | nullcontext[None]:
     """Attribute command writes while servers, workers and tests own their boundaries."""
 
+    del argv
     if command in SERVER_COMMANDS:
         return nullcontext()
-    return changeset(fresh=True, activity="system", change_reason=f"manage.{command}", process=True)
+    return changeset(
+        fresh=True, activity="system", change_reason=f"manage.{command}", process=True,
+        using=options.get("database"),
+    )
 
 
 @contextmanager

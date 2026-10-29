@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
 from typing import Any
 
@@ -13,6 +13,7 @@ from rebac import ObjectRef, SubjectRef, current_actor
 from rebac.backends import backend
 from rebac.field_visibility import check_field_access, gated_read_fields
 from rebac.resources import model_resource_type
+from rebac.schema import Definition
 from rebac.schema.walker import field_gated_actions
 
 from angee.base.models.identity import instance_from_public_id
@@ -37,12 +38,20 @@ def actor_can_read(resource: ObjectRef) -> bool:
     return check_field_access(backend(), subject=actor, action="read", resource=resource).allowed
 
 
-def assert_no_gated_read_fields(model: type[models.Model], field_names: Iterable[str], owner: str, reason: str) -> None:
-    if gated := sorted(name for name in set(field_names) if is_gated_read_axis(model, name)):
+def assert_no_gated_read_fields(
+    model: type[models.Model], field_names: Iterable[str], owner: str, reason: str, *,
+    definition_for: Callable[[type[models.Model]], Definition | None] = effective_rebac_definition,
+) -> None:
+    if gated := sorted(
+        name for name in set(field_names) if is_gated_read_axis(model, name, definition_for=definition_for)
+    ):
         raise ImproperlyConfigured(f"{model._meta.label}: {owner} {gated} are field-gated reads; {reason}")
 
 
-def is_gated_read_axis(model: type[models.Model], axis: str) -> bool:
+def is_gated_read_axis(
+    model: type[models.Model], axis: str, *,
+    definition_for: Callable[[type[models.Model]], Definition | None] = effective_rebac_definition,
+) -> bool:
     """Whether a (possibly relation-leaf) group-by axis reads a field-gated column.
 
     A dotted axis (``party__display_name``) is never a field on ``model``, so it
@@ -55,7 +64,7 @@ def is_gated_read_axis(model: type[models.Model], axis: str) -> bool:
     leaf_model: type[models.Model] = model
     for step in path:
         field_name = step.split(".", maxsplit=1)[0]
-        if field_name in _declared_gated_read_fields(leaf_model):
+        if field_name in _gated_read_fields(leaf_model, definition_for=definition_for):
             return True
         try:
             field = leaf_model._meta.get_field(field_name)
@@ -65,13 +74,15 @@ def is_gated_read_axis(model: type[models.Model], axis: str) -> bool:
         if related is None:
             return False
         leaf_model = related
-    return leaf.split(".", maxsplit=1)[0] in _declared_gated_read_fields(leaf_model)
+    return leaf.split(".", maxsplit=1)[0] in _gated_read_fields(leaf_model, definition_for=definition_for)
 
 
-def _declared_gated_read_fields(model: type[models.Model]) -> frozenset[str]:
-    """Return field names protected by disk-declared ``read__`` permissions."""
+def _gated_read_fields(
+    model: type[models.Model], *, definition_for: Callable[[type[models.Model]], Definition | None],
+) -> frozenset[str]:
+    """Resolve native gate declarations through the caller's policy authority."""
 
-    definition = effective_rebac_definition(model)
+    definition = definition_for(model)
     if definition is None:
         # Untyped models cannot cause the backend helper to resolve a schema, and
         # retaining that empty fast path keeps synthetic callers injectable.

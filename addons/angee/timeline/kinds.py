@@ -13,7 +13,7 @@ from django.core.signals import setting_changed
 from django.db import models
 from django.dispatch import receiver
 
-from angee.hooks import resolve_hooks
+from angee.base.hooks import resolve_hooks
 
 HOOK_SETTING = "ANGEE_TIMELINE_KINDS"
 type RecordIdentity = tuple[type[models.Model], int]

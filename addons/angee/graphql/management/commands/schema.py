@@ -16,7 +16,7 @@ from angee.graphql.sdl import GraphQLSdl
 class Command(BaseCommand):
     """Expose GraphQL SDL rendering through Django management."""
 
-    help = "Write or check generated GraphQL SDL output."
+    help = "Check prebuilt GraphQL SDL against the serving schema."
     requires_system_checks: list[str] = []
 
     def add_arguments(self, parser: CommandParser) -> None:
@@ -34,8 +34,7 @@ class Command(BaseCommand):
                 sdl.check()
                 message = "schema --check: ok"
             else:
-                sdl.emit()
-                message = "schema: ok"
+                raise CommandError("Schema artifacts are compiler-owned; run manage.py compose")
         except RuntimeError as error:
             raise CommandError(str(error)) from error
         self.stdout.write(self.style.SUCCESS(message))

@@ -74,7 +74,10 @@ class WorkflowDefinitionResource(AngeeResource):
         """Return this load's contributions, retaining the published set for a narrow load."""
 
         if self.kind_declarations is None:
-            workflow = self._meta.model.system_queryset().filter(key=key).select_related("published").first()
+            workflow = (
+                self._meta.model.system_queryset().using(self.get_db_connection_name())
+                .filter(key=key).select_related("published").first()
+            )
             return (
                 workflow.published.definition.retained_extensions()
                 if workflow is not None and workflow.published_id is not None
@@ -101,7 +104,7 @@ class WorkflowDefinitionResource(AngeeResource):
 
         del is_create
         self.before_save_instance(instance, row, **kwargs)
-        installed = type(instance).objects.install_definition(
+        installed = type(instance).objects.db_manager(self.get_db_connection_name()).install_definition(
             key=instance.key,
             name=instance.name,
             description=instance.description,

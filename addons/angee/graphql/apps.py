@@ -8,7 +8,7 @@ from django.apps import AppConfig
 from django.core import checks
 from sentry_sdk.integrations.logging import ignore_logger
 
-from angee.hooks import check_hooks
+from angee.base.hooks import check_hooks
 
 check_settings = partial(check_hooks, ("ANGEE_GRAPHQL_RESOURCE_FILTERS",))
 
@@ -18,7 +18,17 @@ class GraphQLConfig(AppConfig):
 
     default = True
     name = "angee.graphql"
-    requires_apps = ('channels',)
+    compose_urls = "angee.graphql.urls"
+    requires_apps = ('channels', 'django.contrib.auth', 'django.contrib.sessions')
+
+    def compose_asgi(self):
+        """Contribute the single Channels protocol owner after app population."""
+
+        from django_compose.asgi import AsgiContribution
+
+        from angee.graphql.asgi import websocket_application
+
+        return AsgiContribution(protocols={"websocket": websocket_application()})
 
     def ready(self) -> None:
         """Register schema checks and connect model-change hooks."""
