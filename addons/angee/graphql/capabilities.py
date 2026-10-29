@@ -18,7 +18,7 @@ from strawberry.extensions import FieldExtension
 from strawberry.types.field import StrawberryField
 from strawberry_django.fields.field import StrawberryDjangoField
 
-from angee.base.permissions import effective_rebac_definition, require_rebac_queryset
+from angee.base.permissions import declared_rebac_definition, require_rebac_queryset
 
 _ACTOR = "_angee_permission_actor"
 
@@ -93,7 +93,7 @@ class PermissionsExtension(FieldExtension):
         if django_definition is None:
             raise ImproperlyConfigured("Permission projections require a strawberry_django field.")
         model = _permission_model(django_definition.model, self.model)
-        definition = effective_rebac_definition(model)
+        definition = declared_rebac_definition(model)
         declared = {permission.name for permission in definition.permissions} if definition is not None else set()
         if unknown := set(self.names) - declared:
             raise ImproperlyConfigured(

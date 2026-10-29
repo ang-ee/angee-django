@@ -23,7 +23,7 @@ from rebac.schema import AllowedSubject, FieldBinding, PermArrow, PermRef
 from angee.base.models.audit import AuditMixin, retained_set_null
 from angee.base.models.base import AngeeModel
 from angee.base.models.persistence import PersistenceMixin
-from angee.base.permissions import actor_user_id, effective_rebac_definition, instance_actor
+from angee.base.permissions import actor_user_id, declared_rebac_definition, instance_actor
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
@@ -95,7 +95,7 @@ class OwnerMixin(AuditMixin, PersistenceMixin):
         if cls._meta.abstract:
             return errors
         model = cls
-        definition = effective_rebac_definition(model)
+        definition = declared_rebac_definition(model)
         owner_model = model._meta.get_field("owner").model
         assert issubclass(owner_model, OwnerMixin)
         if owner_model is model and model.owner_container is not None:

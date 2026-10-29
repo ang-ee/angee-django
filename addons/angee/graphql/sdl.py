@@ -1,24 +1,19 @@
-"""On-disk GraphQL schema artifact rendering and reconciliation policy.
-
-:class:`GraphQLSdl` is the schema counterpart of :class:`angee.compose.runtime.Runtime`:
-it owns where generated schema artifacts live (``runtime/schemas/<name>.graphql`` and
-``runtime/schemas/<name>.metadata.json``), renders them from the discovered
-:class:`~angee.graphql.schema.GraphQLSchemas`, and reconciles disk against that render.
-The explicit ``schema`` management command delegates here during provisioning. Shared filesystem lifecycle logic
-lives in :class:`angee.utils.artifacts.GeneratedTree`; this owner supplies the GraphQL render and
-owned-suffix policy.
-"""
+"""GraphQL-owned deterministic SDL and metadata render, published by the compiler."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from django.conf import settings
 
 from angee.graphql.schema import GraphQLSchemas
-from angee.utils.artifacts import GeneratedTree
+
+if TYPE_CHECKING:
+    from django.apps.registry import Apps
+    from django_compose.declarations import ModelsView
+    from django_compose.model_composition import ModelComposition
 
 _SDL_SUFFIX = ".graphql"
 _METADATA_SUFFIX = ".metadata.json"
@@ -39,7 +34,7 @@ class GraphQLSdl:
 
         return cls(
             GraphQLSchemas.from_discovery(),
-            schema_dir=Path(settings.COMPOSE_RUNTIME_DIR) / "schemas",
+            schema_dir=Path(settings.COMPOSE_OUTPUT_DIR) / "schemas",
         )
 
     def render(self) -> dict[str, str]:
@@ -52,18 +47,16 @@ class GraphQLSdl:
 
         return self.schemas.render_metadata()
 
-    def emit(self) -> None:
-        """Reconcile the owned schema directory to the rendered schemas."""
-
-        self._generated_tree().reconcile(prune=True)
-
     def check(self) -> None:
-        """Raise when on-disk schema artifacts differ from the render."""
+        """Compare the prebuilt compiler-owned schema snapshot without writing it."""
 
-        drift = self._generated_tree().drift()
-        if drift:
-            rendered = ", ".join(f"schemas/{path}" for path in drift)
-            raise RuntimeError(f"generated GraphQL schema artifacts are stale: {rendered}")
+        expected = self._rendered_artifacts()
+        stale = [path for path, text in expected.items()
+                 if not (self.schema_dir / path).is_file()
+                 or (self.schema_dir / path).read_text(encoding='utf-8') != text]
+        if stale:
+            raise RuntimeError('generated GraphQL schema artifacts are stale: '
+                               + ', '.join(f'schemas/{path}' for path in sorted(stale)))
 
     def _rendered_artifacts(self) -> dict[Path, str]:
         """Return owned schema artifact filenames mapped to rendered content."""
@@ -75,14 +68,6 @@ class GraphQLSdl:
         })
         return artifacts
 
-    def _generated_tree(self) -> GeneratedTree:
-        """Return the synchronizer with GraphQL's owned-suffix prune policy."""
-
-        return GeneratedTree(
-            self.schema_dir,
-            self._rendered_artifacts(),
-            owns=lambda path: len(path.parts) == 1 and path.name.endswith((_SDL_SUFFIX, _METADATA_SUFFIX)),
-        )
 
 
 def _metadata_json(metadata: dict[str, object]) -> str:
@@ -95,3 +80,15 @@ def _json_default(value: Any) -> object:
     """Reject non-JSON metadata values with a useful owner-level error."""
 
     raise TypeError(f"GraphQL schema metadata is not JSON serializable: {value!r}")
+
+
+class SchemaIntegration:
+    """Publish schemas only after all native app ready callbacks have completed."""
+
+    external_root = "schemas"
+    phase = "ready"
+
+    def render(self, composition: ModelComposition, models: ModelsView | Apps) -> dict[Path, bytes]:
+        del composition, models
+        return {Path('schemas') / path: text.encode('utf-8')
+                for path, text in GraphQLSdl.from_discovery()._rendered_artifacts().items()}

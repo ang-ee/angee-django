@@ -18,7 +18,7 @@ from angee.base.lineage import concrete_child_models
 from angee.base.models.base import AngeeModel
 from angee.base.models.merge import MergeableMixin
 from angee.base.models.refs import RecordRefMixin, record_edges_by_target
-from angee.base.permissions import effective_rebac_definition
+from angee.base.permissions import declared_rebac_definition
 from angee.base.refs import generic_pointer_model
 from angee.graphql.access import is_gated_read_axis
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
@@ -298,7 +298,7 @@ def finalize_data_resources(
         )
         finalized.append(metadata)
     resources_by_model = {item.model: item for item in finalized if item.model is not None}
-    edges_by_target = record_edges_by_target()
+    edges_by_target = record_edges_by_target(definition_for=declared_rebac_definition)
     return tuple(
         dataclasses.replace(
             item,
@@ -758,7 +758,7 @@ def _grantable_relations(
     if model is None or not issubclass(model, AngeeModel):
         return ()
     declaration = model.get_rebac_grantable()
-    definition = effective_rebac_definition(model)
+    definition = declared_rebac_definition(model)
     if not declaration or definition is None:
         return ()
     relations = {relation.name: relation for relation in definition.relations}
@@ -1036,7 +1036,7 @@ def relation_group_by_fields(
                 and isinstance(model_field, (models.CharField, models.TextField, models.UUIDField))
             ):
                 label_axis = f"{path}__{model_field.name}"
-                if is_gated_read_axis(model, label_axis):
+                if is_gated_read_axis(model, label_axis, definition_for=declared_rebac_definition):
                     continue
                 expanded.append(label_axis)
                 break

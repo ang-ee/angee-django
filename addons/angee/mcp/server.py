@@ -21,7 +21,7 @@ host defaults. Bearer + REBAC actor resolution remains the authorization boundar
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from functools import cache
 from typing import TYPE_CHECKING
 
@@ -30,7 +30,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from fastmcp import FastMCP
 
-from angee.addons import addon_facts, is_angee_addon, optional_addon_module, resolve_addon_reference
+from angee.base.addons import optional_addon_module
 from angee.mcp.middleware import ActorMiddleware
 from angee.mcp.verifier import RebacTokenVerifier
 
@@ -103,20 +103,12 @@ def _registrars() -> tuple[ToolRegistrar, ...]:
 
 
 def tool_registrar(app_config: AppConfig) -> ToolRegistrar | None:
-    """Load an addon's explicit MCP declaration or its conventional registrar."""
+    """Load the conventional registrar only from an enabled addon."""
 
-    if not is_angee_addon(app_config):
+    module = optional_addon_module(app_config, 'mcp_tools')
+    if module is None or not hasattr(module, 'register'):
         return None
-    facts = addon_facts(app_config.name).get("mcp", {})
-    if not isinstance(facts, Mapping):
-        raise ImproperlyConfigured(f"{app_config.name}: tool.angee.mcp must be a table")
-    if "tools" in facts:
-        registrar = resolve_addon_reference(app_config, facts["tools"], attr="mcp.tools")
-    else:
-        module = optional_addon_module(app_config, "mcp_tools")
-        if module is None or not hasattr(module, "register"):
-            return None
-        registrar = module.register
+    registrar = module.register
     if not callable(registrar):
-        raise ImproperlyConfigured(f"{app_config.name}.mcp.tools must reference a callable")
+        raise ImproperlyConfigured(f'{app_config.name}.mcp_tools.register must be callable')
     return registrar

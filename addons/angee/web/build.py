@@ -18,20 +18,21 @@ import json
 import os
 import re
 from collections.abc import Iterable, Mapping
+from graphlib import TopologicalSorter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from django.apps import AppConfig
+from django.apps import AppConfig, apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django_compose.serving import GENERATED_SENTINEL
 
-from angee.addons import addon_dependencies, is_angee_addon, resolve_package_roots
-from angee.compose.declarations import BuildIntegration
-from angee.compose.runtime import GENERATED_SENTINEL
+from angee.base.addons import is_angee_addon
 
 if TYPE_CHECKING:
-    from angee.compose.runtime import Runtime
-
+    from django.apps.registry import Apps
+    from django_compose.declarations import ModelsView
+    from django_compose.model_composition import ModelComposition
 CORE_WEB_PACKAGES: tuple[str, ...] = ("@angee/app", "@angee/ui")
 """Framework packages whose rendered sources and documents every host consumes."""
 
@@ -41,23 +42,18 @@ UI_LAYER_KEYS = frozenset({"menus", "containers", "shell"})
 """Manifest keys the deployment's ``ANGEE_UI`` setting may declare; ``@angee/app`` validates their values."""
 
 
-def addon_ancestors(app_configs: Iterable[AppConfig]) -> dict[str, tuple[str, ...]]:
-    """Project the host's dependency closure as sorted enabled-app ancestry."""
+def addon_ancestors(
+    app_configs: Iterable[AppConfig], dependencies: Mapping[str, Iterable[str]],
+) -> dict[str, tuple[str, ...]]:
+    """Project transitive ancestry from the compiler's already-resolved graph."""
 
-    configs = tuple(app_configs)
-    aliases = {
-        alias: config.name
-        for config in configs
-        for alias in (config.label, config.name, f"{type(config).__module__}.{type(config).__qualname__}")
-    }
-    packages = tuple({"name": config.name, "depends_on": addon_dependencies(config)} for config in configs)
-    return {
-        config.name: tuple(sorted(
-            package["name"] for package in resolve_package_roots((config.name,), packages, aliases=aliases)
-            if package["name"] != config.name
-        ))
-        for config in configs
-    }
+    ancestors: dict[str, set[str]] = {}
+    for name in TopologicalSorter(dependencies).static_order():
+        ancestors[name] = {
+            ancestor for dependency in dependencies.get(name, ())
+            for ancestor in (dependency, *ancestors[dependency])
+        }
+    return {config.name: tuple(sorted(ancestors[config.name])) for config in app_configs}
 
 
 class WebRuntime:
@@ -70,11 +66,13 @@ class WebRuntime:
         runtime_dir: Path | None = None,
         web_root: str = DEFAULT_WEB_ROOT,
         ui: Mapping[str, Any] | None = None,
+        dependencies: Mapping[str, Iterable[str]] | None = None,
     ) -> None:
         addons = tuple(addons)
         self.runtime_dir = runtime_dir
         self.web_root = web_root
-        ancestors = addon_ancestors(addons)
+        graph = settings.COMPOSE_SNAPSHOT.dependencies if dependencies is None else dependencies
+        ancestors = addon_ancestors(addons, graph)
         core_packages = [{"package": name, "sourceRoot": "src"} for name in CORE_WEB_PACKAGES]
         addon_packages: list[dict[str, Any]] = []
         codegen_entries: list[dict[str, Any]] = []
@@ -225,12 +223,18 @@ class WebRuntime:
         }
 
 
-class WebIntegration(BuildIntegration):
-    """Contribute Angee's web projections to the shared generated-file lifecycle."""
+class WebIntegration:
+    """Publish package/codegen transport inputs during the native ready phase."""
 
-    def render_sources(self, runtime: Runtime) -> Mapping[Path, str]:
-        """Render the existing web owner with the host's declared UI settings."""
+    external_root = "web"
+    phase = "ready"
 
-        return WebRuntime(
-            runtime.addons, runtime_dir=runtime.runtime_dir, ui=getattr(settings, "ANGEE_UI", None),
-        ).render_sources()
+    def render(self, composition: ModelComposition, models: ModelsView | Apps) -> Mapping[Path, bytes]:
+        del composition, models
+        return {
+            path: source.encode('utf-8')
+            for path, source in WebRuntime(
+                apps.get_app_configs(), runtime_dir=Path(settings.COMPOSE_OUTPUT_DIR),
+                ui=getattr(settings, 'ANGEE_UI', None),
+            ).render_sources().items()
+        }
