@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from django.apps import apps
-from django.conf import settings
 from django.db import models, transaction
 from django.utils import timezone
 from rebac import system_context
 
+from angee.addons import addon_entry_points
 from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeModel
 from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
@@ -48,7 +48,7 @@ class AddonCatalogManager(AngeeManager, VcsOutputManager):
     """Owns the reconcile of marketplace rows from an addon ``Source``."""
 
     def sync_from_source(self, source: Any) -> int:
-        """Discover ``addon.toml`` under ``source`` and reconcile ``platform.Addon`` rows.
+        """Discover ``pyproject.toml`` under ``source`` and reconcile ``platform.Addon`` rows.
 
         Mirrors ``TemplateManager.sync_from_source`` but writes into ``platform.Addon``
         (the one marketplace registry), tier-scoped so it never fights platform's own
@@ -65,8 +65,20 @@ class AddonCatalogManager(AngeeManager, VcsOutputManager):
         ).get(pk=source.repository_id)
         source.repository = repository
         vcs_bridge = repository.vcs_bridge
-        descriptors = vcs_bridge.discover(source, marker="addon.toml", parse=parse_addon_meta)
-        available = available_addons(getattr(settings, "ANGEE_ADDON_DIRS", ()))
+        documents = vcs_bridge.discover(source, marker="pyproject.toml", parse=lambda blob: {"blob": blob})
+        dependencies = {
+            entry.dist.metadata["Name"]: name for name, entry in addon_entry_points().items()
+            if entry.dist is not None
+        }
+        for document in documents:
+            facts = parse_addon_meta(document["blob"], dependencies={})
+            if facts:
+                dependencies.setdefault(facts["distribution"], facts["name"])
+        descriptors = [
+            {**facts, "path": document["path"]} for document in documents
+            if (facts := parse_addon_meta(document["blob"], dependencies=dependencies))
+        ]
+        available = available_addons()
         seen: set[str] = set()
         with system_context(reason="platform_integrate_vcs.catalog.sync"), transaction.atomic():
             for descriptor in descriptors:

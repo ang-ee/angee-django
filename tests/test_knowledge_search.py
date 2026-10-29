@@ -1,5 +1,4 @@
 """Run grouped retrieval contracts with composed, actor-scoped models."""
-
 import json
 import os
 import subprocess
@@ -9,6 +8,7 @@ from pathlib import Path
 from django.db import connection
 
 from tests.composed_host import COMPOSED_TEST_TIMEOUT
+from tests.package_metadata import write_addon_distribution
 
 
 def test_composed_knowledge_search(tmp_path: Path) -> None:
@@ -17,9 +17,7 @@ def test_composed_knowledge_search(tmp_path: Path) -> None:
     addon = tmp_path / "addons" / "example" / "retrieval_test"
     addon.mkdir(parents=True)
     (addon / "__init__.py").write_text("")
-    (addon / "addon.toml").write_text(
-        '[addon]\nname = "example.retrieval_test"\ndepends_on = ["angee.knowledge"]\n'
-    )
+    write_addon_distribution(addon , 'example.retrieval_test', depends_on=('angee.knowledge',))
     (addon / "autoconfig.py").write_text(
         'SETTINGS = {"ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES.reverse": "tests.knowledge_retrieval.ReverseRetrieval"}\n'
     )

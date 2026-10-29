@@ -10,7 +10,7 @@ copy of each one.
 | dir | kind | renders |
 |-----|------|---------|
 | `projects/` | `project` | a downstream host repo — `manage.py`, `settings.yaml`, the consumer-addon namespace, the web package; owns the project root |
-| `addons/` | `addon` | `web`: one complete source addon into `addons/<ns>/<label>/` — `addon.toml`, the abstract model and its ownership gate, `schema.py`, a demo resource row, a per-actor test under the addon's `tests/` (composed host, the default), and (optionally) the web fragment; `test_host=bare` instead renders the concrete bare-host test model and a `test_<label>.py` to move into the framework repository's `tests/`; `repository`: the root of a consumer addon repository — `AGENTS.md`, `CLAUDE.md`, the `addons/<ns>/` namespace. The operator lists but does not render addon templates; render them with Copier |
+| `addons/` | `addon` | `web`: one complete source addon into `addons/<ns>/<label>/` — `pyproject.toml`, the abstract model and its ownership gate, `schema.py`, a demo resource row, a per-actor test under the addon's `tests/` (composed host, the default), and (optionally) the web fragment; `test_host=bare` instead renders the concrete bare-host test model and a `test_<label>.py` to move into the framework repository's `tests/`; `repository`: the root of a consumer addon repository — `AGENTS.md`, `CLAUDE.md`, the `addons/<ns>/` namespace. The operator lists but does not render addon templates; render them with Copier |
 | `stacks/` | `stack` | a runnable `angee.yaml` the operator brings up on docker-compose / process-compose |
 | `workspaces/` | `workspace` | a set of sources + agentic config, materialized as files |
 | `services/` | `service` | one long-running service added to a stack |
@@ -200,8 +200,8 @@ renders the configuration; clone the framework before provisioning or starting
 the stack:
 
 ```sh
-mkdir -p ~/.angee/sources
-git clone https://github.com/ang-ee/angee-django ~/.angee/sources/angee
+mkdir -p ~/.core/angee/sources
+git clone https://github.com/ang-ee/angee-django ~/.core/angee/sources/angee
 angee stack init https://github.com/ang-ee/angee-django/tree/main/templates/stacks/local ~/.angee
 angee dev --root ~/.angee
 export ANGEE_OPERATOR_URL=http://127.0.0.1:9000
@@ -233,7 +233,7 @@ then update from the template:
 ```sh
 sed -i.bak \
   's#active: stacks/local#active: https://github.com/ang-ee/angee-django/tree/main/templates/stacks/local#' \
-  ~/.angee/angee.yaml
+  ~/.core/angee/angee.yaml
 angee stack update --root ~/.angee --template
 ```
 
@@ -253,8 +253,8 @@ database directory:
 
 ```sh
 angee down --root ~/.angee
-mkdir -p ~/.angee/data
-mv ~/.angee/pgdata ~/.angee/data/pgdata
+mkdir -p ~/.core/angee/data
+mv ~/.core/angee/pgdata ~/.core/angee/data/pgdata
 angee stack update --root ~/.angee --template
 angee dev --root ~/.angee
 ```

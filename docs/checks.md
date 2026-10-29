@@ -215,10 +215,12 @@ Management checks use `--no-sync` so invoking one cannot install or rebuild firs
 
 | Purpose | Command | Prerequisite / effect |
 |---|---|---|
-| Install/build for development | `uv sync` | Native Hatch editable build on a stopped/new host; no database operations |
-| Install for production | `uv sync --no-editable` | The same native Hatch hook validates the sealed project/history; no database operations |
-| Package the sealed project | `uv build` | Validates and bundles tracked native history and portable composed runtime |
-| Prepare the installed runtime | `uv run --no-sync python manage.py angee provision` | One prebuilt native process; the [command owner](../angee/management/commands/angee.py) defines ordering and options |
+| Install for development | `uv sync` | Installs native editable distributions on a stopped/new host; does not compose |
+| Build runtime for development | `uv run --no-sync python -m angee.build --root . --output runtime` | Explicit fresh-process compilation after dependency sync; no database operations |
+| Install for production | `uv sync --no-editable` | Installs native wheels; does not compose |
+| Build runtime for production | `uv run --no-sync python -m angee.build --root . --output runtime --check-history` | Validates tracked history offline before provision |
+| Build distribution wheels | `uv build --wheel --all-packages` | Native workspace package builds; runtime generation is a separate host job |
+| Prepare the installed runtime | `uv run --no-sync python manage.py angee provision` | One prebuilt native process; the [command owner](../core/angee/management/commands/angee.py) defines ordering and options |
 | Clean generated runtime | `uv run --no-sync python manage.py angee clean` | [Guarded whole-tree cleanup](composer.md#runtime-cleanup); preserves current migration directories |
 | Check composition drift | `uv run --no-sync python manage.py angee check` | Explicit read-only check of composer artifacts and addon upgrade declarations; startup never repairs output |
 | Author schema migrations | `uv run --no-sync python manage.py makemigrations <app-labels>` | After editable build; review and commit `runtime/<label>/migrations/` before packaging |

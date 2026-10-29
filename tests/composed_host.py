@@ -109,7 +109,7 @@ def boot(
     if include_examples:
         addon_dirs.append(source_root / "examples" / "addons")
     addon_dirs.extend(extra_addon_dirs)
-    sys.path[:0] = [str(source_root), *(str(path) for path in addon_dirs)]
+    sys.path[:0] = [str(source_root / "core"), str(source_root), *(str(path) for path in addon_dirs)]
     for name in tuple(os.environ):
         if name.startswith(("ANGEE_", "YAMLCONF_")) or name in {"DJANGO_SETTINGS_MODULE", "DATABASE_URL"}:
             os.environ.pop(name)
@@ -117,13 +117,15 @@ def boot(
     import django
     import yaml
     from django.conf import settings
-    from hatch_angee import discover
 
-    from angee.hatch import _compile
+    from angee.addons import addon_entry_points
+    from angee.build import build_runtime
     from angee.project import PROJECT_DIR_ENV
 
     installed_apps = (
-        list(root_apps) if root_apps is not None else [manifest.name for _, manifest in discover(addon_dirs)]
+        list(root_apps) if root_apps is not None else [
+            name for name in addon_entry_points() if include_examples or name.startswith("angee.")
+        ]
     )
     host_root = runtime_dir.parent
     host_root.mkdir(parents=True, exist_ok=True)
@@ -135,14 +137,14 @@ def boot(
         "INSTALLED_APPS": installed_apps,
         "ANGEE_MONEY_REFERENCE_CURRENCY": "USD",
     }, sort_keys=True), encoding="utf-8")
-    # The production Hatch worker is the sole compiler. It populates Django in
+    # The explicit host worker is the sole compiler. It populates Django in
     # its own interpreter; this interpreter then serves the prebuilt ordinary
     # models, just as the installed host does. No global registry is reset.
-    python_paths = [str(source_root), *(str(path) for path in addon_dirs)]
+    python_paths = [str(source_root / "core"), str(source_root), *(str(path) for path in addon_dirs)]
     if os.environ.get("PYTHONPATH"):
         python_paths.append(os.environ["PYTHONPATH"])
     os.environ["PYTHONPATH"] = os.pathsep.join(python_paths)
-    _compile(host_root, runtime_dir, check_history=False)
+    build_runtime(host_root, runtime_dir, check_history=False)
     # This temporary host is the deployment root as well as the authored root;
     # an ancestor checkout's stack is never this test process's deployment input.
     os.environ[PROJECT_DIR_ENV] = str(host_root)
@@ -435,7 +437,7 @@ def main() -> None:
         "--app",
         action="append",
         default=None,
-        help="Root app to compose (repeatable); dependencies are resolved from addon manifests.",
+        help="Root app to compose (repeatable); dependencies are resolved from installed package metadata.",
     )
     parser.add_argument(
         "--no-examples",

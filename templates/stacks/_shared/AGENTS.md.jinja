@@ -6,7 +6,7 @@ initialized: its authoritative manifest is `angee.yaml` beside this file.
 ## Stack Ownership
 
 - Do not run `angee init` in this directory or anywhere below it. In particular,
-  never create a nested `.angee/` inside `sources/`.
+  never create a nested `.core/angee/` inside `sources/`.
 - Source checkouts are not stack roots. Their own `AGENTS.md` files govern source
   changes, but they do not move stack or workspace lifecycle into the checkout.
 - All workspaces created for this stack belong under `ANGEE_ROOT/workspaces/`.

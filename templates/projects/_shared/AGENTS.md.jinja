@@ -22,7 +22,7 @@ Enable, disable or relocate an addon with the `angee-project` skill: it owns
 ## Consumer Addon Seams
 
 An addon under `addons/{{ addon_namespace }}/` composes the framework only through
-its declared seams: `addon.toml` (identity, `depends_on`, resource tiers), models
+its declared seams: `pyproject.toml` (native identity, requirements and capability tables), models
 on `angee.base` bases, `permissions.zed` and `permissions.extends.zed`,
 `schema.py` buckets, `resources/<tier>/` rows, `autoconfig.py` fragments, and a
 `web/` fragment declared with `defineBaseAddon`. It never edits framework addons,

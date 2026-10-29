@@ -60,7 +60,7 @@ actually unique to your product.
   default; signed-in users select an installed theme and color scheme without
   installing packages or rebuilding the app.
 - **Resources** — tiered, idempotent reference and seed data
-  (`master` / `install` / `demo`) declared in `addon.toml` `[resources]`
+  (`master` / `install` / `demo`) declared in `pyproject.toml` `[tool.angee.resources]`
   and applied by `manage.py resources load`.
 - **Admin** — a Django admin auto-emitted for every model from the same `Meta`,
   REBAC-scoped like everything else.

@@ -8,6 +8,6 @@ Moved from the backend guide. The loader contracts stayed there:
   A lookup by display name breaks on the first rename or translation; the
   [resource loading contract](../../../../docs/backend/guidelines.md#resource-loading)
   names the stable key as the only client-side selector.
-- **A resource yaml loads only when listed** in the addon's `addon.toml`
-  `[resources]` manifest (`{tier = [paths]}`); an unlisted file silently
+- **A resource yaml loads only when listed** in the addon's `pyproject.toml`
+  `[tool.angee.resources]` manifest (`{tier = [paths]}`); an unlisted file silently
   loads nothing.

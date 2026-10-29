@@ -7,12 +7,11 @@ from importlib.metadata import EntryPoint
 from pathlib import Path
 
 import pytest
-from hatch_angee import AddonManifest, ManifestError
 from rebac import system_context
 
 import tests.test_marketplace_graphql  # noqa: F401 -- register the fixture model graph before database setup
 from angee.platform_integrate_vcs.catalog import parse_addon_meta
-from tests.conftest import Addon, Repository, Source, VcsBridge, make_integration
+from tests.conftest import Addon, Repository, Source, VcsBridge, catalogue_package, make_integration
 
 
 @pytest.fixture()
@@ -20,13 +19,26 @@ def catalog_source(composed_tables: None, tmp_path: Path) -> tuple[Source, Path]
     """Provide a real local VCS source with a remote-only addon declaration."""
 
     del composed_tables
-    marker = tmp_path / "addons" / "base" / "addon.toml"
+    marker = tmp_path / "addons" / "base" / "pyproject.toml"
     marker.parent.mkdir(parents=True)
     marker.write_text(
-        '[addon]\nname = "catalog_remote.base"\ndescription = "Remote declaration"\n'
-        'keywords = ["catalogue"]\ncategory = "Integration"\n'
-        'depends_on = ["angee.iam", "catalog_remote.dependency"]\n'
+        (
+            '[project]\n'
+            'name = "catalog-remote-base"\n'
+            'version = "1.0.0"\n'
+            'description = "Remote declaration"\n'
+            'keywords = ["catalogue"]\n'
+            'dependencies = ["angee-iam", "catalog-remote-dependency"]\n'
+            '[project.entry-points."angee.addons"]\n'
+            '"catalog_remote.base" = "catalog_remote.base"\n'
+            '[tool.angee]\n'
+            'category = "Integration"\n'
+        )
     )
+    sibling = marker.parent.parent / "dependency" / "pyproject.toml"
+    sibling.parent.mkdir()
+    sibling.write_text('[project]\nname="catalog-remote-dependency"\nversion="1.0"\n'
+                       '[project.entry-points."angee.addons"]\n"catalog_remote.dependency"="catalog_remote.dependency"\n')
     bridge = make_integration(
         "addon-catalog",
         model=VcsBridge,
@@ -44,9 +56,18 @@ def test_parse_addon_meta_reads_the_addon_block() -> None:
     """The manifest's ``[addon]`` block becomes the catalog descriptor."""
 
     blob = (
-        b'[addon]\nname = "angee.demo"\ndescription = "A demo addon."\n'
-        b'keywords = ["catalog", "demo"]\ncategory = "Tools"\n'
-        b'depends_on = ["angee.iam", "angee.platform"]\n'
+        (
+            b'[project]\n'
+            b'name = "angee-demo"\n'
+            b'version = "1.0.0"\n'
+            b'description = "A demo addon."\n'
+            b'keywords = ["catalog", "demo"]\n'
+            b'dependencies = ["angee-iam", "angee-platform"]\n'
+            b'[project.entry-points."angee.addons"]\n'
+            b'"angee.demo" = "angee.demo"\n'
+            b'[tool.angee]\n'
+            b'category = "Data"\n'
+        )
     )
 
     meta = parse_addon_meta(blob)
@@ -56,42 +77,26 @@ def test_parse_addon_meta_reads_the_addon_block() -> None:
     assert meta["namespace"] == "angee"
     assert meta["description"] == "A demo addon."
     assert meta["keywords"] == ["catalog", "demo"]
-    assert meta["category"] == "Tools"
+    assert meta["category"] == "Data"
     assert meta["depends_on"] == ["angee.iam", "angee.platform"]
 
 
-def test_parse_addon_meta_coerces_a_bare_string_depends_on() -> None:
-    """A scalar ``depends_on`` is normalised to a one-element list (manifest convention)."""
-
-    assert parse_addon_meta(b'[addon]\nname = "x.y"\ndepends_on = "x.z"\n')["depends_on"] == ["x.z"]
-
-
-def test_parse_addon_meta_tolerates_a_bare_manifest() -> None:
-    """A minimal manifest has no invented Django identity or dependencies."""
-
-    meta = parse_addon_meta(b'[addon]\nname = "solo"\n')
-
-    assert meta["name"] == "solo"
-    assert "label" not in meta
-    assert meta["depends_on"] == []
-    assert meta["description"] == ""
+def test_parse_addon_meta_ignores_non_addon_projects() -> None:
+    assert parse_addon_meta((
+                                b'[project]\n'
+                                b'name="ordinary"\n'
+                                b'version="1.0"\n'
+                            )) == {}
 
 
-@pytest.mark.parametrize(
-    "blob,key",
-    [
-        (b'[addon]\nname="angee.demo"\nkeywords=[1]\n', "addon.keywords[0]"),
-        (b'[addon]\nname="angee.demo"\ndescription=3\n', "addon.description"),
-        (b'[addon]\n', "addon.name"),
-    ],
-)
-def test_catalogue_uses_native_manifest_validation(blob: bytes, key: str) -> None:
-    """Malformed remote metadata has the native declaration error contract."""
-
-    with pytest.raises(ManifestError) as caught:
-        parse_addon_meta(blob)
-    assert caught.value.key == key
-    assert caught.value.path == Path("addon.toml")
+def test_parse_addon_meta_projects_uninstalled_dependencies_through_known_identity_index() -> None:
+    blob = (
+        b'[project]\nname="example-remote"\nversion="1.0"\n'
+        b'dependencies=["example-dependency>=1", "angee-iam>=3; extra == \'feature\'"]\n'
+        b'[project.entry-points."angee.addons"]\n"example.remote"="example.remote"\n'
+    )
+    facts = parse_addon_meta(blob, dependencies={"example-dependency": "example.dependency", "angee-iam": "angee.iam"})
+    assert facts["depends_on"] == ["example.dependency"]
 
 
 def test_remote_catalogue_reconciles_metadata_and_retains_removed_declarations(
@@ -100,9 +105,9 @@ def test_remote_catalogue_reconciles_metadata_and_retains_removed_declarations(
     """Remote rows retain their declaration and provenance after disappearing."""
 
     source, marker = catalog_source
-    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda _dirs: {})
+    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda: {})
 
-    assert source.refresh() == 1
+    assert source.refresh() == 2
     with system_context(reason="test catalogue read"):
         row = Addon.objects.get(name="catalog_remote.base")
     assert row.label == ""
@@ -119,14 +124,14 @@ def test_remote_catalogue_reconciles_metadata_and_retains_removed_declarations(
     assert source.last_synced_at is not None
 
     marker.write_text(marker.read_text().replace("Remote declaration", "Updated declaration"))
-    assert source.refresh() == 1
+    assert source.refresh() == 2
     with system_context(reason="test catalogue read"):
         row.refresh_from_db()
         assert Addon.objects.filter(name=row.name).count() == 1
     assert row.description == "Updated declaration"
 
     marker.unlink()
-    assert source.refresh() == 0
+    assert source.refresh() == 1
     with system_context(reason="test catalogue read"):
         row.refresh_from_db()
     assert row.state == Addon.AddonState.REMOVED
@@ -143,22 +148,22 @@ def test_available_catalogue_updates_provenance_and_clears_runtime_facts_when_it
     """Available metadata wins until materialization disappears; remote rows have no live counts."""
 
     source, marker = catalog_source
-    manifest = AddonManifest(name="catalog_remote.base", depends_on=("local.dependency",))
+    manifest = catalogue_package(name="catalog_remote.base", depends_on=("local.dependency",))
     origin = (
         marker.parent
         if origin_kind == Addon.AddonSource.LOCAL
-        else EntryPoint(name=manifest.name, value=manifest.name, group="angee.addons")
+        else EntryPoint(name=manifest["name"], value=manifest["name"], group="angee.addons")
     )
-    available = {manifest.name: (manifest, origin)}
-    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda _dirs: available)
+    available = {manifest["name"]: (manifest, origin)}
+    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda: available)
     with system_context(reason="test catalogue setup"):
         row = Addon.objects.create(
-            name=manifest.name,
+            name=manifest["name"],
             label="native_label",
             source=origin_kind,
             state=Addon.AddonState.ENABLED,
             description="Available declaration",
-            depends_on=list(manifest.depends_on),
+            depends_on=list(manifest["depends_on"]),
             forced=True,
             pending=True,
             model_count=2,
@@ -168,7 +173,7 @@ def test_available_catalogue_updates_provenance_and_clears_runtime_facts_when_it
             depended_by=["local.consumer"],
         )
 
-    assert source.refresh() == 1
+    assert source.refresh() == 2
     with system_context(reason="test catalogue read"):
         row.refresh_from_db()
     assert row.source == origin_kind
@@ -182,7 +187,7 @@ def test_available_catalogue_updates_provenance_and_clears_runtime_facts_when_it
     assert row.vcs_path == "addons/base"
 
     available.clear()
-    assert source.refresh() == 1
+    assert source.refresh() == 2
     with system_context(reason="test catalogue read"):
         row.refresh_from_db()
     assert row.source == Addon.AddonSource.REMOTE
@@ -204,7 +209,14 @@ def test_remote_catalogue_keeps_unknown_identity_without_importing_the_remote_na
     """Remote declaration names never trigger local package or AppConfig imports."""
 
     source, marker = catalog_source
-    marker.write_text('[addon]\nname = "catalog_remote_identity.base"\ndepends_on = ["catalog_remote.dependency"]\n')
+    marker.write_text((
+                          '[project]\n'
+                          'name = "catalog-remote-identity-base"\n'
+                          'version = "1.0.0"\n'
+                          'dependencies = ["catalog-remote-dependency"]\n'
+                          '[project.entry-points."angee.addons"]\n'
+                          '"catalog_remote_identity.base" = "catalog_remote_identity.base"\n'
+                      ))
     package = tmp_path / "python" / "catalog_remote_identity" / "base"
     package.mkdir(parents=True)
     (package.parent / "__init__.py").write_text("")
@@ -216,10 +228,10 @@ def test_remote_catalogue_keeps_unknown_identity_without_importing_the_remote_na
         '    label = "remote_identity"\n'
     )
     monkeypatch.syspath_prepend(str(tmp_path / "python"))
-    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda _dirs: {})
+    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda: {})
     assert "catalog_remote_identity" not in sys.modules
 
-    assert source.refresh() == 1
+    assert source.refresh() == 2
     with system_context(reason="test catalogue read"):
         row = Addon.objects.get(name="catalog_remote_identity.base")
     assert row.label == ""

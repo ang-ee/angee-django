@@ -248,12 +248,11 @@ jobs:
     command: ["sh", "-c", "corepack enable pnpm && exec pnpm install"]
 {% endif %}{% endif %}
 
-  # Editable installation builds local artifacts; production installs the same
-  # hook's sealed wheel. Both use the host's native pyproject and lockfile.
+  # Install native distributions, then explicitly generate the existing runtime.
   runtime-build:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
-{% if runtime_mode == "process" %}    command: ["uv", "sync"]
-{% else %}    command: ["uv", "sync"{% if effective_serve_mode == "production" %}, "--no-editable"{% endif %}]
+{% if runtime_mode == "process" %}    command: ["sh", "-c", "uv sync && exec uv run --no-sync python -m angee.build --root . --output runtime"]
+{% else %}    command: ["sh", "-c", "uv sync{% if effective_serve_mode == "production" %} --no-editable{% endif %} && exec uv run --no-sync python -m angee.build --root . --output runtime{% if effective_serve_mode == "production" %} --check-history{% endif %}"]
 {% endif %}{% if stack_flavor == "framework" %}    depends_on: [deps]
 {% endif %}
 

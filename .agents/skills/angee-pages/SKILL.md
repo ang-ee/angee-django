@@ -23,7 +23,7 @@ design-system shape that declares intent and composes owners.
 |---|---|---|
 | `web/src/index.tsx` (`defineBaseAddon`) | Routes, menus, icons, i18n bundle, forms, widgets, containers: the one greppable seam | `addons/angee/tags/web/src/index.tsx:35-53` |
 | `packages/app/src/define-base-addon.ts` | `BaseAddonRoute`, `resourcePageRoutes` (list + `$id` pair, `console` layout), `defineBaseAddon` | `:20`, `:66`, `:162` |
-| `packages/app/src/define-addon.ts` | `AddonManifest` fields and `composeAddons` (fail-fast layering) | `:139`, `:295` |
+| `packages/app/src/define-addon.ts` | package metadata fields and `composeAddons` (fail-fast layering) | `:139`, `:295` |
 | `web/src/views/<Name>Page.tsx` | One routed page: declarations, container reads, domain glue only | `addons/angee/tags/web/src/views/TagsPage.tsx:13` |
 | `packages/ui/src/views/resource/resource-list/public.tsx` | `ResourceList`: routed record navigation, inline/modal record, create | `:236` |
 | `packages/ui/src/views/resource/list-view/frame.tsx`, `RowsListView.tsx` | `ListView` (server collection, grouping, views, `rowActions`), `RowsListView` (bounded in-memory rows) | `:39`, `:115` |

@@ -17,9 +17,9 @@ def test_manifest_adapter_is_safe_before_settings_and_model_loading() -> None:
     script = "\n".join((
         "import sys",
         "from django.conf import settings",
-        "from angee.build import ManifestDeclarations",
+        "from angee.build import PackageDeclarations",
         "from angee.compose.appgraph import AppGraph",
-        "configs = AppGraph(ManifestDeclarations()).resolve(('django.contrib.contenttypes',))",
+        "configs = AppGraph(PackageDeclarations()).resolve(('django.contrib.contenttypes',))",
         "assert len(configs) == 1",
         "assert not settings.configured",
         "assert 'rebac.mixins' not in sys.modules",

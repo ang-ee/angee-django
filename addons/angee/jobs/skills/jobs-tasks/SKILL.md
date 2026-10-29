@@ -46,7 +46,7 @@ that owns the state change. Reference examples are `addons/angee/parties/tasks.p
 
 ## Steps
 
-1. **Depend on jobs and name the task.** `addon.toml` `depends_on` includes `"angee.jobs"` (transitively
+1. **Depend on jobs and name the task.** `pyproject.toml` `depends_on` includes `"angee.jobs"` (transitively
    through `angee.integrate` for most capability addons). The task name is `"<label>.<verb>"`; keep it a
    constant when another module enqueues it (`addons/angee/messaging/constants.py` → `DELIVER_MESSAGE_TASK`).
    **Owner rule:** the name is a wire contract; one constant, read by the task, the enqueue call and the beat
@@ -191,7 +191,7 @@ the dispatch test proves on-commit send with the expected `queue`/`expires`, the
 
 <!--
 Docs: docs/stack.md #backend (Celery, channels, django-environ rows), #stack-serve-mode; docs/backend/guidelines.md sections Django-Native Rule, Composition owners, Integrations and workers, Persistence primitives, Naming (cited by anchor and bullet title); docs/composer.md #autoconfig; docs/checks.md #python-and-composition-contracts, #composition-and-schema, #browser-verification, #what-ci-actually-runs; docs/guidelines.md #put-behavior-on-the-owning-object; AGENTS.md (Run From The Root, Architecture Gate).
-Code: addons/angee/jobs/{__init__.py,addon.toml,autoconfig.py,celery.py,enqueue.py,locks.py,scheduler.py,timeouts.py,management/commands/celery.py};
+Code: addons/angee/jobs/{__init__.py,pyproject.toml,autoconfig.py,celery.py,enqueue.py,locks.py,scheduler.py,timeouts.py,management/commands/celery.py};
 addons/angee/provenance/{tasks.py,autoconfig.py:25}; addons/angee/parties/{tasks.py,autoconfig.py}; addons/angee/work/{tasks.py,autoconfig.py}; addons/angee/messaging/{tasks.py,delivery.py:36-90,autoconfig.py:1-35};
 addons/angee/workflows/tasks.py; addons/angee/integrate/{tasks.py:1-120,scheduler.py:1-80,queue.py,constants.py,impl.py:206-224,session_runner.py:27-50};
 tests/test_jobs.py; tests/test_changesets.py:238-262; tests/settings.py:140-149; templates/stacks/_shared/stack-body.yaml.jinja:425-450.

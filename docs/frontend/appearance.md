@@ -179,7 +179,7 @@ defineThemeContribution({
 
 ## Authoring a theme addon
 
-A model-less theme addon has the same `addon.toml` and web package structure as
+A model-less theme addon has the same `pyproject.toml` and web package structure as
 other addons. Its package exports the browser contribution at `.` and a pure
 Node-loadable definition entry at `./themes`:
 

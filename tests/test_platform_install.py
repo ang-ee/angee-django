@@ -25,14 +25,13 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
-from hatch_angee import AddonManifest
 from rebac import system_context, to_object_ref
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.platform import models as platform_models
 from angee.platform.installer import AddonInstallerBackend
 from angee.platform.models import _preview_revision
-from tests.conftest import SchemaAddon, execute_schema
+from tests.conftest import SchemaAddon, catalogue_package, execute_schema
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data
 
@@ -74,8 +73,9 @@ def test_change_impact_uses_addon_display_label(label: str | None, monkeypatch: 
 
     name = "example.remote"
     config = SimpleNamespace(label=label) if label is not None else None
-    monkeypatch.setattr(platform_models, "resolve_app_config", lambda *_args, **_kwargs: config)
-    impacts = Addon.objects._change_impacts([name], {name: AddonManifest(name=name)}, [name], {}, {})
+    impacts = Addon.objects._change_impacts(
+        [name], {name: catalogue_package(name=name)}, [name], {}, {name: config} if config is not None else {},
+    )
     assert impacts[0].label == (label or name)
 
 
@@ -162,7 +162,7 @@ def test_preview_revision_binds_every_change_decision() -> None:
     """A confirmation receipt cannot authorize another action, target, or snapshot."""
 
     revision = _preview_revision
-    manifest = AddonManifest(name="example.demo", description="original")
+    manifest = catalogue_package(name="example.demo", description="original")
     baseline = revision(
         "INSTALLED_APPS: []\n",
         (manifest,),
@@ -194,14 +194,14 @@ def test_preview_revision_binds_every_change_decision() -> None:
         ),
         revision(
             "INSTALLED_APPS: []\n",
-            (AddonManifest(name="example.demo", description="changed"),),
+            (catalogue_package(name="example.demo", description="changed"),),
             action="install",
             addon="example.demo",
             roots_after=("example.demo",),
         ),
         revision(
             "INSTALLED_APPS: []\n",
-            (AddonManifest(name="example.demo", description="original", depends_on=("example.dependency",)),),
+            (catalogue_package(name="example.demo", description="original", depends_on=("example.dependency",)),),
             action="install",
             addon="example.demo",
             roots_after=("example.demo",),
@@ -223,8 +223,8 @@ def test_dependants_canonicalize_aliases_without_duplicate_reverse_edges() -> No
     """Preview and catalogue share sorted reverse edges for authored app aliases."""
 
     manifests = (
-        AddonManifest(name="example.zebra", depends_on=("example.base",)),
-        AddonManifest(name="example.alpha", depends_on=("example.BaseConfig", "example.base")),
+        catalogue_package(name="example.zebra", depends_on=("example.base",)),
+        catalogue_package(name="example.alpha", depends_on=("example.BaseConfig", "example.base")),
     )
 
     assert Addon.objects._dependants(manifests, aliases={"example.BaseConfig": "example.base"}) == {

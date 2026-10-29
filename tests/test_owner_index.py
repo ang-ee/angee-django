@@ -25,8 +25,8 @@ FOUNDATION_MODULES = sorted(
     for module in (ADDONS / "base" / area).glob("*.py")
     if module.name != "__init__.py"
 )
-CITATION = re.compile(r"`(\w+)` ((?:addons|angee|packages|examples)/[\w./-]+):(\d+)")
-LOCATION = re.compile(r"(?<![\w/])((?:addons|angee|packages|examples)/[\w./-]+\.\w+)(?::(\d+))?")
+CITATION = re.compile(r"`(\w+)` ((?:addons|core/angee|packages|examples)/[\w./-]+):(\d+)")
+LOCATION = re.compile(r"(?<![\w/])((?:addons|core/angee|packages|examples)/[\w./-]+\.\w+)(?::(\d+))?")
 
 
 def owner_cells() -> list[str]:
@@ -58,8 +58,9 @@ def foundation_classes() -> list[tuple[str, str]]:
 def addons() -> list[tuple[str, str]]:
     """Return ``(declared name, repository folder)`` for every framework addon manifest."""
     return sorted(
-        (tomllib.loads(manifest.read_text())["addon"]["name"], manifest.parent.relative_to(ROOT).as_posix())
-        for manifest in ADDONS.glob("*/addon.toml")
+        (name, package.parent.relative_to(ROOT).as_posix())
+        for package in ADDONS.glob("*/pyproject.toml")
+        for name in tomllib.loads(package.read_text())["project"]["entry-points"]["angee.addons"]
     )
 
 

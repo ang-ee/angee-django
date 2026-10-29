@@ -10,14 +10,14 @@ Angee development uses Jujutsu (jj): each source store is a colocated jj
 repository, and every further workspace is a jj workspace of it. The operator
 does not manage jj yet, so **do not create workspaces with `angee ws create`**;
 its `angee ws` verbs address only the workspaces it created, such as this one.
-`angee/.agents/skills/angee-workspace/SKILL.md` owns the jj workflow.
+`core/angee/.agents/skills/angee-workspace/SKILL.md` owns the jj workflow.
 
 ## The slots
 
-- **`angee/`** — the consolidated framework repository. Its root `AGENTS.md`
+- **`core/angee/`** — the consolidated framework repository. Its root `AGENTS.md`
   carries the constitution for framework work. The main areas are:
 
-  - `angee/` — the Python core and composer;
+  - `core/angee/` — the Python core and composer;
   - `addons/` — standard `angee.*` folder addons and co-located web fragments;
   - `packages/` — schema-independent `@angee/*` React packages and workshops;
   - `examples/` — showcase consumer addons and the reference e2e suite;
@@ -66,4 +66,4 @@ installed `angee` CLI.
   single services. Apply dependency changes with the whole-application restart;
   never `uv sync` the stack's venv while the stack runs. Details and the
   operator API:
-  [Restart the running stack](angee/docs/howto/getstarted.md#restart-the-running-stack).
+  [Restart the running stack](core/angee/docs/howto/getstarted.md#restart-the-running-stack).

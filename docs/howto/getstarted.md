@@ -387,7 +387,7 @@ angee --root "$ANGEE_ROOT" restart django celery-worker
   `angee.yaml`. The job runs, then its downstream jobs, then every service that
   waits on them restarts. On a dev stack that sequence is:
   - `deps` runs `pnpm install`;
-  - `runtime-build` uses native `uv sync` and the Hatch runtime hook (editable in
+  - `runtime-build` installs with native `uv sync`, then explicitly runs the host build worker (editable in
     development, `--no-editable` in production);
   - `provision` consumes the built runtime in one process: read-only history drift
     validation, migrations, permission sync, checks and declared addon commands;

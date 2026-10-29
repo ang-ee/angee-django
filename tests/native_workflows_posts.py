@@ -1,5 +1,4 @@
 """Real eligibility, ACP, workflow and reply owners; fake inference and dispatch."""
-
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from datetime import datetime, timedelta
@@ -61,6 +60,7 @@ from angee.workflows.tasks import cancel as cancel_workflow
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.triggers import TriggerSource
 from angee.workflows_agents.steps import MAX_PENDING_REDISPATCHES, StartConversation, render_prompt
+from tests.package_metadata import write_addon_distribution
 
 Agent = apps.get_model("agents", "Agent")
 Workflow = apps.get_model("workflows", "Workflow")
@@ -285,9 +285,7 @@ class CommentReplyTests(TransactionTestCase):
         document["nodes"]["converse"]["config"]["agent"] = "agents.installed_reply_agent"
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "addon.toml").write_text(
-                '[addon]\nname = "tests.reply_install"\n[resources]\ninstall = [{path = "workflow.yaml"}]\n',
-            )
+            write_addon_distribution(root , 'tests.reply_install', depends_on=())
             (root / "workflow.yaml").write_text(
                 yaml.safe_dump(
                     {

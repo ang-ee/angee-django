@@ -8,7 +8,7 @@ authoritatively *derived*, never authored: ``settings.yaml`` (enabled) and
 ``uv.lock`` (available) remain the source of truth; this table is the queryable
 mirror that backs the console.
 
-The registry reconcile owns installed/local availability and running composition.
+The registry reconcile owns installed availability and running composition.
 The same ``Addon`` table also holds remote catalogue rows;
 ``platform_integrate_vcs`` supplies their declarations and provenance. Each source
 reconcile retains removed rows as history.
@@ -20,21 +20,19 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from importlib.metadata import EntryPoint
 from typing import Any
 
 from django.apps import AppConfig, apps
 from django.conf import settings
 from django.db import DatabaseError, models, transaction
-from hatch_angee import AddonManifest
 from rebac import system_context
 
-from angee.addons import addon_manifest, resolve_manifest_roots
+from angee.addons import addon_entry_points, facts_from_distribution, resolve_package_roots
 from angee.base.fields.state import StateField
 from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeModel
 from angee.platform import composed
-from angee.platform.discovery import available_addons, resolve_app_config
+from angee.platform.discovery import AddonCategory, available_addons
 from angee.platform.installer import (
     AddonInstaller,
     InstallResult,
@@ -164,11 +162,11 @@ class AddonManager[T: Addon](AngeeManager[T]):
                 data_inventory=(),
                 migration_warning=None,
             )
-        available = available_addons(getattr(settings, "ANGEE_ADDON_DIRS", ()))
+        available = available_addons()
         manifests = tuple(manifest for manifest, _origin in available.values())
         loaded_configs = {config.name: config for config in composed.addons()}
         roots_before = snapshot.names
-        aliases, configs = self._resolve_app_configs(roots_before)
+        aliases, configs = self._app_identity()
         canonical_roots = tuple(aliases.get(root, root) for root in roots_before)
         refusal: str | None = None
         if action == "install":
@@ -181,21 +179,21 @@ class AddonManager[T: Addon](AngeeManager[T]):
                 name, loaded=loaded_configs, declared=bool(declarations), aliases=aliases
             )
             roots_after = roots_before if refusal else tuple(root for root in roots_before if root not in declarations)
-        after = resolve_manifest_roots(roots_after, manifests, aliases=aliases)
-        after_by_name = {manifest.name: manifest for manifest in after}
+        after = resolve_package_roots(roots_after, manifests, aliases=aliases)
+        after_by_name = {manifest["name"]: manifest for manifest in after}
         loaded_names = set(loaded_configs)
         target_names = set(after_by_name)
         enabled = self._change_impacts(target_names - loaded_names, after_by_name, roots_after, aliases, configs)
         disabled_impacts = []
         for disabled_name in sorted(loaded_names - target_names):
             config = loaded_configs[disabled_name]
-            manifest = addon_manifest(config)
+            manifest = available.get(config.name, ({"depends_on": ()}, None))[0]
             disabled_impacts.append(
                 AddonChangeImpact(
                     name=config.name,
                     label=config.label,
                     root=bool(getattr(config, "compose_root", False)),
-                    depends_on=tuple(manifest.depends_on) if manifest else (),
+                    depends_on=tuple(manifest["depends_on"]) if manifest else (),
                 )
             )
         disabled = tuple(disabled_impacts)
@@ -222,13 +220,13 @@ class AddonManager[T: Addon](AngeeManager[T]):
         )
 
     @staticmethod
-    def _dependants(manifests: Iterable[AddonManifest | Addon], *, aliases: Mapping[str, str]) -> dict[str, list[str]]:
+    def _dependants(manifests: Iterable[Mapping[str, Any]], *, aliases: Mapping[str, str]) -> dict[str, list[str]]:
         """Invert the caller's declaration set using canonical dependency names."""
 
         depended_by: dict[str, list[str]] = {}
-        for manifest in sorted(manifests, key=lambda item: item.name):
-            for dependency in sorted({aliases.get(name, name) for name in manifest.depends_on}):
-                depended_by.setdefault(dependency, []).append(manifest.name)
+        for manifest in sorted(manifests, key=lambda item: item["name"]):
+            for dependency in sorted({aliases.get(name, name) for name in manifest["depends_on"]}):
+                depended_by.setdefault(dependency, []).append(manifest["name"])
         return depended_by
 
     def disable_block_reason(
@@ -244,7 +242,8 @@ class AddonManager[T: Addon](AngeeManager[T]):
         config = loaded.get(name)
         if config is not None and getattr(config, "compose_required", False):
             manifests = (
-                manifest for candidate in loaded.values() if (manifest := addon_manifest(candidate)) is not None
+                facts_from_distribution(entry_point.dist)
+                for app_name, entry_point in addon_entry_points().items() if app_name in loaded
             )
             required_by = ", ".join(self._dependants(manifests, aliases=aliases).get(name, ())) or "another enabled app"
             return f"{name} is required by {required_by} and cannot be disabled."
@@ -253,23 +252,22 @@ class AddonManager[T: Addon](AngeeManager[T]):
         return None
 
     @staticmethod
-    def _resolve_app_configs(declarations: Iterable[str]) -> tuple[dict[str, str], dict[str, AppConfig]]:
-        """Resolve authored declarations once, reusing the composed root aliases."""
+    def _app_identity() -> tuple[dict[str, str], dict[str, AppConfig]]:
+        """Read only loaded identity and installed entry-point aliases."""
 
-        aliases = {key: config.name for config in apps.get_app_configs() for key in (config.name, config.label)}
+        configs = {config.name: config for config in apps.get_app_configs()}
+        aliases = {
+            key: config.name for config in configs.values()
+            for key in (config.name, config.label, f"{type(config).__module__}.{type(config).__qualname__}")
+        }
         aliases.update(composed.root_app_aliases())
-        configs: dict[str, AppConfig] = {}
-        for declaration in sorted(set(declarations)):
-            config = resolve_app_config(aliases.get(declaration, declaration))
-            if config is not None:
-                aliases[declaration] = config.name
-                configs[config.name] = config
+        aliases.update({entry.value: name for name, entry in addon_entry_points().items()})
         return aliases, configs
 
     @staticmethod
     def _change_impacts(
         names: Iterable[str],
-        manifests: Mapping[str, AddonManifest],
+        manifests: Mapping[str, Mapping[str, Any]],
         roots: Iterable[str],
         aliases: Mapping[str, str],
         configs: Mapping[str, AppConfig],
@@ -277,13 +275,13 @@ class AddonManager[T: Addon](AngeeManager[T]):
         declarations = {aliases.get(root, root): root for root in roots}
         impacts = []
         for name in sorted(names):
-            config = configs.get(name) or resolve_app_config(name, expected_name=name)
+            config = configs.get(name)
             impacts.append(
                 AddonChangeImpact(
                     name=name,
                     label=get_addon_display_label(name, config.label if config is not None else ""),
                     root=name in declarations,
-                    depends_on=manifests[name].depends_on,
+                    depends_on=tuple(manifests[name]["depends_on"]),
                 )
             )
         return tuple(impacts)
@@ -338,9 +336,9 @@ class AddonManager[T: Addon](AngeeManager[T]):
         declarations and excludes removed declarers.
         """
 
-        available = available_addons(getattr(settings, "ANGEE_ADDON_DIRS", ()))
+        available = available_addons()
         loaded = {config.name: config for config in composed.addons()}
-        aliases, configs = self._resolve_app_configs(desired or ())
+        aliases, configs = self._app_identity()
         configs.update(loaded)
         canonical_desired = (
             None
@@ -348,9 +346,6 @@ class AddonManager[T: Addon](AngeeManager[T]):
             else frozenset(aliases.get(declaration, declaration) for declaration in desired)
         )
         manifests = {name: manifest for name, (manifest, _origin) in available.items()}
-        for name, loaded_config in loaded.items():
-            if (manifest := addon_manifest(loaded_config)) is not None:
-                manifests[name] = manifest
         counts = composed.resource_counts()
         rows = self.all()
         with transaction.atomic():
@@ -362,10 +357,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
                 **self.model.reset_runtime_facts(),
             )
             for name, manifest in sorted(manifests.items()):
-                origin = available[name][1] if name in available else None
                 config = configs.get(name)
-                if config is None:
-                    config = resolve_app_config(name, expected_name=name)
                 enabled = name in loaded
                 root = enabled and bool(getattr(config, "compose_root", False))
                 runtime_facts = self.model.reset_runtime_facts()
@@ -388,16 +380,14 @@ class AddonManager[T: Addon](AngeeManager[T]):
                         **runtime_facts,
                         "label": config.label if config is not None else "",
                         "namespace": name.split(".")[0],
-                        "description": manifest.description,
-                        "keywords": list(manifest.keywords),
-                        "category": manifest.category or "",
+                        "description": manifest["description"],
+                        "keywords": list(manifest["keywords"]),
+                        "category": manifest["category"] or "",
                         "kind": Addon.AddonKind.CONSUMER if root else Addon.AddonKind.REQUIRED,
-                        "source": (
-                            Addon.AddonSource.INSTALLED if isinstance(origin, EntryPoint) else Addon.AddonSource.LOCAL
-                        ),
+                        "source": Addon.AddonSource.INSTALLED,
                         "state": Addon.AddonState.ENABLED if enabled else Addon.AddonState.DISABLED,
                         "pending": pending,
-                        "depends_on": list(manifest.depends_on),
+                        "depends_on": list(manifest["depends_on"]),
                     },
                 )
 
@@ -411,11 +401,10 @@ class AddonManager[T: Addon](AngeeManager[T]):
         """
 
         rows = list(self.all())
-        aliases, _configs = self._resolve_app_configs(
-            dependency for row in rows if row.state != self.model.AddonState.REMOVED for dependency in row.depends_on
-        )
+        aliases, _configs = self._app_identity()
         incoming = self._dependants(
-            (row for row in rows if row.state != self.model.AddonState.REMOVED), aliases=aliases,
+            ({"name": row.name, "depends_on": row.depends_on}
+             for row in rows if row.state != self.model.AddonState.REMOVED), aliases=aliases,
         )
         for row in rows:
             value = incoming.get(row.name, [])
@@ -440,22 +429,22 @@ class AddonManager[T: Addon](AngeeManager[T]):
 
 def _preview_revision(
     text: str,
-    manifests: Iterable[AddonManifest],
+    manifests: Iterable[Mapping[str, Any]],
     *,
     action: str,
     addon: str,
     roots_after: tuple[str, ...],
 ) -> str:
-    """Bind the reviewed action and result to exact settings and manifest facts."""
+    """Bind the reviewed action and result to exact settings and package facts."""
 
     payload = [
         {
-            "name": manifest.name,
-            "depends_on": list(manifest.depends_on),
-            "description": manifest.description,
-            "category": manifest.category,
+            "name": manifest["name"],
+            "depends_on": list(manifest["depends_on"]),
+            "description": manifest["description"],
+            "category": manifest["category"],
         }
-        for manifest in sorted(manifests, key=lambda item: item.name)
+        for manifest in sorted(manifests, key=lambda item: item["name"])
     ]
     decision = {
         "settings": text,
@@ -488,7 +477,7 @@ class Addon(AngeeModel):
         """Where the available addon resolved from."""
 
         INSTALLED = "installed", "Installed"  # an installed bundle's entry point (uv.lock)
-        LOCAL = "local", "Local"  # an addon.toml under ANGEE_ADDON_DIRS
+        LOCAL = "local", "Local"  # historical source-directory catalogue entry
         REMOTE = "remote", "Remote"  # known from a VCS source, not materialised (platform_integrate_vcs)
 
     class AddonState(models.TextChoices):
@@ -501,12 +490,12 @@ class Addon(AngeeModel):
     name = models.CharField(max_length=200, unique=True)
     label = models.CharField(max_length=100, blank=True, default="")
     namespace = models.CharField(max_length=100, blank=True, default="")
-    # Manifest metadata (the addon's ``addon.toml``), reflected for the marketplace
-    # board: the freeform ``category`` it groups by and the ``description``/``keywords``
+    # Package metadata (the addon's ``pyproject.toml``), reflected for the marketplace
+    # board: the declared ``category`` it groups by and the ``description``/``keywords``
     # the cards show. The contract owns these; the reconcile only mirrors them.
     description = models.TextField(blank=True, default="")
     keywords = models.JSONField(default=list, blank=True)
-    category = models.CharField(max_length=100, blank=True, default="", db_index=True)
+    category = models.CharField(max_length=100, blank=True, default="", db_index=True, choices=AddonCategory.choices)
     kind = StateField(choices_enum=AddonKind, default=AddonKind.REQUIRED)
     source = StateField(choices_enum=AddonSource, default=AddonSource.INSTALLED)
     state = StateField(choices_enum=AddonState, default=AddonState.DISABLED, db_index=True)

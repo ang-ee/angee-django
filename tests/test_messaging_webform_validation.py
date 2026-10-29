@@ -9,17 +9,14 @@ import sys
 from pathlib import Path
 
 from tests.composed_host import COMPOSED_TEST_TIMEOUT
+from tests.package_metadata import write_addon_distribution
 
 
 def test_composed_webform_validation(tmp_path: Path) -> None:
     addon = tmp_path / "addons" / "example" / "webform_semantics"
     addon.mkdir(parents=True)
     (addon / "__init__.py").write_text("")
-    (addon / "addon.toml").write_text(
-        '[addon]\nname = "example.webform_semantics"\n'
-        'description = "Webform semantic validation test donor"\n'
-        'depends_on = ["angee.messaging"]\n'
-    )
+    write_addon_distribution(addon , 'example.webform_semantics', depends_on=('angee.messaging',))
     (addon / "models.py").write_text(
         "from datetime import date\n"
         "from django.core.exceptions import ValidationError\n"

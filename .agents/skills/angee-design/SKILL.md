@@ -84,7 +84,7 @@ concern and for consumers of any contract the feature changes.
 
 <details><summary>Changes under the build/host plan</summary>
 
-Under the planned build/host split `angee.base` owns the host: the index rows citing `angee/hooks.py` and `angee/compose/autoconfig.py`
+Under the planned build/host split `angee.base` owns the host: the index rows citing `core/angee/hooks.py` and `core/angee/compose/autoconfig.py`
 follow those modules into `angee.base`, and step 4 has no core below `angee.base`
 for host facts; `tests/test_owner_index.py` failing on the stale paths is the signal to re-cite.
 
@@ -137,8 +137,8 @@ that names a copy, a wrapper or an unowned fact.
 <!--
 AGENTS.md, docs/guidelines.md, docs/glossary.md (whole); docs/stack.md #backend; docs/backend/guidelines.md #django-native-rule, #package-layering, #composition-owners, #rules, #rebac, #persistence-primitives, #migration-history, #addon-websocket-endpoints, #graphql-actor-and-write-contracts, #integration-and-worker-contracts, #workflow-contracts, #naming, #checks;
 docs/frontend/guidelines.md #native-state-owners, #reserved-translation-namespace, #component-ontology, #rules, #addresses-kinds-and-inheritance, #authoring, #narrowing-and-when; docs/composer.md #addon-discovery, #autoconfig; docs/checks.md #choose-the-working-directory, #python-and-composition-contracts, #agent-methodology-and-documentation, #what-ci-actually-runs;
-addons/angee/base/{models,fields}/*.py docstrings and the class docstrings cited in references/owners.md; base/implementations.py:1-60, expressions.py, checks.py:26-38; graphql/trash.py:50-70; angee/hooks.py;
-money (README, autoconfig, fields); tags (models, zed, addon.toml, TagForm, index.tsx); READMEs of messaging, workflows, provenance, integrate, decisions, knowledge, storage; examples/addons/example/notes (README, models, mcp_tools);
+addons/angee/base/{models,fields}/*.py docstrings and the class docstrings cited in references/owners.md; base/implementations.py:1-60, expressions.py, checks.py:26-38; graphql/trash.py:50-70; core/angee/hooks.py;
+money (README, autoconfig, fields); tags (models, zed, pyproject.toml, TagForm, index.tsx); READMEs of messaging, workflows, provenance, integrate, decisions, knowledge, storage; examples/addons/example/notes (README, models, mcp_tools);
 tests/test_agent_methodology.py, tests/test_documentation_contracts.py; skills slice, angee-workspace; commands/lift.md;
 Mismatches: addon-level skills ship only for mcp, jobs, integrate, workflows, provenance and agents (addons/angee/<addon>/skills/<name>/SKILL.md); other engines keep only their README; the glossary has section anchors only; docs/backend/guidelines.md#graphql-actor-and-write-contracts (**Lines are owned parts, written as the user**) links `Stage` to addons/angee/work/models.py while the abstract owner is addons/angee/base/models/stages.py:37.
 -->

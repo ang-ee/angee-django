@@ -106,7 +106,7 @@ class ResourceQuerySet[LedgerT: Resource](AngeeQuerySet[LedgerT]):
     def retired_seed_keys(self, model_label: str) -> set[Any]:
         """Return the keys of ``model_label`` rows seeded by the installed addons that retire the model.
 
-        Those addons name it under ``retired_models`` in their addon.toml
+        Those addons name it under ``retired_models`` in their pyproject.toml
         ``[resources]`` (:func:`retired_models_for`); with none, no row is seeded.
         """
 

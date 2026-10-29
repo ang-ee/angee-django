@@ -20,7 +20,7 @@ from angee.workflows.definition import (
 )
 from angee.workflows.steps import Step
 from angee.workflows.testing.models import Workflow, WorkflowVersion
-from tests.conftest import make_addon, write_addon_manifest
+from tests.conftest import make_addon, write_addon_package
 
 pytestmark = pytest.mark.usefixtures("workflow_step_classes")
 
@@ -198,7 +198,7 @@ def test_resource_composes_extensions_without_editing_the_base_draft(
     workflow.refresh_from_db()
     assert workflow.published_id == changed_version and replay.skipped == 1
 
-    write_addon_manifest(consumer, resources={"demo": []})
+    write_addon_package(consumer, resources={"demo": []})
     Resource.objects.load_addons((base, consumer), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
     workflow.refresh_from_db()
     assert workflow.published_id != changed_version

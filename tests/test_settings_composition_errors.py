@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from angee.project import PROJECT_DIR_ENV, PROJECT_SETTINGS_ENV
+from tests.package_metadata import write_addon_distribution
 
 
 def _project(tmp_path: Path) -> None:
@@ -21,9 +22,7 @@ def _project(tmp_path: Path) -> None:
     addon = tmp_path / "addons" / "missing_dependency"
     addon.mkdir(parents=True)
     (addon / "__init__.py").write_text("", encoding="utf-8")
-    (addon / "addon.toml").write_text(
-        '[addon]\nname = "missing_dependency"\ndepends_on = ["unavailable_dependency"]\n', encoding="utf-8",
-    )
+    write_addon_distribution(addon , 'missing_dependency', depends_on=('unavailable_dependency',))
     (tmp_path / "settings.yaml").write_text(
         "SECRET_KEY: isolated-composition-test\n"
         "INSTALLED_APPS: [angee.money, missing_dependency]\n"

@@ -105,7 +105,7 @@ hand. For the full onboarding path
 
 This repository holds the framework's source surfaces together:
 
-- **`angee/`** — generic Django composition, host configuration and serving
+- **`core/angee/`** — generic Django composition, host configuration and serving
   entrypoints, and shared framework primitives.
 - **`addons/`** — the `angee.base` model foundation and capability addons,
   including provenance, jobs, web builds and GraphQL, with co-located web fragments.

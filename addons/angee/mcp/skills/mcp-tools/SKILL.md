@@ -14,7 +14,7 @@ through the same ambient actor.
 
 - "Expose notes / pages / <model> to agents over MCP."
 - "Add `list_<x>` / `read_<x>` / `create_<x>` tools to `<addon>`."
-- "Write `mcp_tools.py`" or "declare `[mcp].tools` in `addon.toml`."
+- "Write `mcp_tools.py`" or "declare `[tool.angee.mcp].tools` in `pyproject.toml`."
 - Not for the bearer→actor verifier, tool grants or the agent catalogue: those belong to `angee.agents`
   ([mcp_verifier](../../../agents/mcp_verifier.py), [grants](../../../agents/grants.py)).
 
@@ -23,13 +23,13 @@ through the same ambient actor.
 | File or module | Owns | Reference |
 |---|---|---|
 | `<addon>/mcp_tools.py` | `register(server: FastMCP) -> None`: which operations the addon exposes and how they project | `examples/addons/example/notes/mcp_tools.py:24` |
-| `addon.toml [mcp].tools` | Dotted override of the conventional `mcp_tools.register`; absent by convention | `addons/angee/mcp/addon.toml:14-15` |
+| `pyproject.toml [mcp].tools` | Dotted override of the conventional `mcp_tools.register`; absent by convention | `addons/angee/mcp/pyproject.toml:14-15` |
 | `angee.mcp.server` | The one process-wide `FastMCP`, registrar discovery in install order, `MOUNT_PATH` | `addons/angee/mcp/server.py:38,49,54,92` |
 | `angee.mcp.graphql` | `GraphQLTool` declaration, compiler, limits, actor-scoped execution | `addons/angee/mcp/graphql.py:70,73,83,189,226,368,518` |
 | `angee.mcp.middleware`, `angee.mcp.verifier` | Actor bracketing per call; bearer→`SubjectRef` through `ANGEE_MCP_ACTOR_VERIFIER` | `addons/angee/mcp/middleware.py:20`, `addons/angee/mcp/verifier.py:23,27` |
-| `angee.mcp.asgi`, `angee.asgi` | `http_mounts()` / `lifespans()` contribution; the host enters them | `addons/angee/mcp/asgi.py:19,29`, `angee/asgi.py:29,41` |
+| `angee.mcp.asgi`, `angee.asgi` | `http_mounts()` / `lifespans()` contribution; the host enters them | `addons/angee/mcp/asgi.py:19,29`, `core/angee/asgi.py:29,41` |
 | `angee.mcp.resource_tools`, `angee.mcp.apps` | Generated console readers, `RESOURCE_READER_TOOL_TAG`, check `angee.mcp.E001` | `addons/angee/mcp/resource_tools.py:35,49,136`, `addons/angee/mcp/apps.py:16` |
-| `angee.addons` | `optional_addon_module` / `resolve_addon_reference` used by every conventional seam | `angee/addons.py:79,91` |
+| `angee.addons` | `optional_addon_module` / `resolve_addon_reference` used by every conventional seam | `core/angee/addons.py:79,91` |
 | `tests/test_<addon>_mcp.py`, `<consumer>/tests/test_mcp.py` | Compile-and-register tests; StreamableHTTP round trip | `tests/test_knowledge_mcp.py:56,197`, `examples/addons/example/notes/tests/test_mcp.py:67,148` |
 
 ## Reuse first
@@ -50,8 +50,8 @@ through the same ambient actor.
 
 ## Steps
 
-1. **Depend on the server addon.** Add `"angee.mcp"` to `depends_on` in `addon.toml` (notes:
-   `examples/addons/example/notes/addon.toml:15`). Do not add a `[mcp]` table: the conventional
+1. **Depend on the server addon.** Add `"angee.mcp"` to `depends_on` in `pyproject.toml` (notes:
+   `examples/addons/example/notes/pyproject.toml:15`). Do not add a `[mcp]` table: the conventional
    `mcp_tools.py` is inferred (`addons/angee/mcp/server.py:92-104`); `tools = "<module>.<callable>"` exists only
    to rename the seam. **Owner rule:** the manifest declares, `angee.mcp.server` resolves
    ([composition owners](../../../../../docs/backend/guidelines.md#composition-owners)).
@@ -105,7 +105,7 @@ through the same ambient actor.
 
 5. **Mount and lifespan are inherited.** `angee.mcp.asgi.http_mounts()` mounts the StreamableHTTP app at
    `/mcp` and `lifespans()` contributes FastMCP's `app.lifespan` only when any addon registers tools
-   (`addons/angee/mcp/asgi.py:19-35`); `angee.asgi` enters them per serving process (`angee/asgi.py:29,41`).
+   (`addons/angee/mcp/asgi.py:19-35`); `angee.asgi` enters them per serving process (`core/angee/asgi.py:29,41`).
    An addon contributes no `asgi.py` for MCP. **Owner rule:** [Serving](../../../../../docs/composer.md#serving)
    owns mounts; the stack row owns the serve mode ([stack](../../../../../docs/stack.md#backend), the channels and FastMCP rows).
 
@@ -126,7 +126,7 @@ through the same ambient actor.
   ([Keep policy above detail](../../../../../docs/guidelines.md#keep-policy-above-detail)).
 - An actor, user id or tenant argument on a tool: `ActorMiddleware` supplies the actor ambiently (`addons/angee/mcp/middleware.py:20`; [GraphQL actor and write contracts](../../../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts)).
 - A second FastMCP instance, mount or lifespan in an addon: `angee.mcp.server.mcp_server` is the process-wide owner (`addons/angee/mcp/server.py:54`; [Serving](../../../../../docs/composer.md#serving)).
-- A tool registry, decorator or settings list beside `mcp_tools.register`: the conventional seam resolves through `angee.addons` (`angee/addons.py:79,91`; [composition owners](../../../../../docs/backend/guidelines.md#composition-owners)).
+- A tool registry, decorator or settings list beside `mcp_tools.register`: the conventional seam resolves through `angee.addons` (`core/angee/addons.py:79,91`; [composition owners](../../../../../docs/backend/guidelines.md#composition-owners)).
 - Hand-rolled CRUD readers for a console resource: generated readers already exist and the agents catalogue grants them (`addons/angee/mcp/resource_tools.py:49`, `addons/angee/agents/grants.py:116`; [DRY](../../../../../docs/guidelines.md#dont-repeat-yourself-dry)).
 - A list query without `limit_arg` or a page bound above `MAX_QUERY_LIMIT`: the compiler refuses the first and clamps the second (`addons/angee/mcp/graphql.py:73,528`).
 - Projecting owner-gated or nullable-sensitive fields in a tool every actor may call: field gates redact, the projection then fails (`examples/addons/example/notes/mcp_tools.py:17-19`; [field-backed conditional access](../../../../../docs/backend/guidelines.md#rebac)).
@@ -165,10 +165,10 @@ against console-schema drift (`addons/angee/mcp/resource_tools.py:136`).
 
 <!--
 Docs: docs/backend/guidelines.md sections Django-Native Rule, REBAC, GraphQL and authorization, GraphQL actor and write contracts (cited by anchor and bullet title); docs/stack.md #backend (pydantic-ai, channels, FastMCP rows), #stack-serve-mode, #tooling (@playwright/mcp row); docs/composer.md #addon-declarations, #serving; docs/checks.md #python-and-composition-contracts, #composition-and-schema, #browser-verification, #what-ci-actually-runs; docs/guidelines.md #dont-repeat-yourself-dry, #keep-policy-above-detail, #boundary-leaks-and-detail-driven-policy.
-Code: addons/angee/mcp/{__init__.py,server.py,mcp_tools.py,apps.py,autoconfig.py,addon.toml,middleware.py,verifier.py,asgi.py,graphql.py:1-110,185-232,290-416,518-548,resource_tools.py:1-80,136-160};
+Code: addons/angee/mcp/{__init__.py,server.py,mcp_tools.py,apps.py,autoconfig.py,pyproject.toml,middleware.py,verifier.py,asgi.py,graphql.py:1-110,185-232,290-416,518-548,resource_tools.py:1-80,136-160};
 addons/angee/agents/{mcp_verifier.py:1-40,autoconfig.py:47,grants.py:1-140}; addons/angee/agents_runtime_pydantic/toolsets.py:136,306-337; addons/angee/knowledge/mcp_tools.py:1-90;
-angee/addons.py:19-111; angee/asgi.py:20-150; angee/hooks.py:47,56; examples/addons/example/notes/{mcp_tools.py,addon.toml:15,tests/test_mcp.py};
+core/angee/addons.py:19-111; core/angee/asgi.py:20-150; core/angee/hooks.py:47,56; examples/addons/example/notes/{mcp_tools.py,pyproject.toml:15,tests/test_mcp.py};
 tests/test_mcp.py; tests/test_knowledge_mcp.py:50-202; tests/test_mcp_graphql.py:1-80; tests/test_mcp_resource_tools.py:1-60,253.
 Doc gaps: no docs/ walkthrough for authoring an MCP tool (the only prose is module docstrings and the Django-Native Rule's app-native paragraph naming mcp_tools.py); derived from notes and knowledge.
-Mismatches: addons/angee/mcp ships no README.md; the base manifest declares [mcp].tools although the convention would infer it (addons/angee/mcp/addon.toml:14-15 vs server.py:92-104); the only in-repo non-GraphQL tool (list_resources) reads the schema catalogue, so no addon example of a hand-written tool over model verbs exists.
+Mismatches: addons/angee/mcp ships no README.md; the base manifest declares [mcp].tools although the convention would infer it (addons/angee/mcp/pyproject.toml:14-15 vs server.py:92-104); the only in-repo non-GraphQL tool (list_resources) reads the schema catalogue, so no addon example of a hand-written tool over model verbs exists.
 -->

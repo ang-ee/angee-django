@@ -1,8 +1,8 @@
-"""The process-wide MCP server: one FastMCP instance, tools from addon manifests.
+"""The process-wide MCP server: one FastMCP instance, tools from addon packages.
 
 Each installed addon contributes tools through the ``mcp_tools`` seam — an
 ``mcp_tools.py`` module exposing a ``register(server: FastMCP) -> None`` callable,
-inferred by convention (an ``addon.toml`` ``[mcp].tools`` entry overrides the dotted
+inferred by convention (an ``pyproject.toml`` ``[tool.angee.mcp].tools`` entry overrides the dotted
 reference). It resolves the same way the GraphQL ``schemas`` seam does, through the
 shared :func:`angee.addons.resolve_addon_reference`. The server authenticates the inbound
 bearer with :class:`~angee.mcp.verifier.RebacTokenVerifier` and brackets every tool
@@ -21,7 +21,7 @@ host defaults. Bearer + REBAC actor resolution remains the authorization boundar
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import cache
 from typing import TYPE_CHECKING
 
@@ -30,7 +30,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from fastmcp import FastMCP
 
-from angee.addons import addon_manifest, optional_addon_module, resolve_addon_reference
+from angee.addons import addon_facts, is_angee_addon, optional_addon_module, resolve_addon_reference
 from angee.mcp.middleware import ActorMiddleware
 from angee.mcp.verifier import RebacTokenVerifier
 
@@ -105,11 +105,13 @@ def _registrars() -> tuple[ToolRegistrar, ...]:
 def tool_registrar(app_config: AppConfig) -> ToolRegistrar | None:
     """Load an addon's explicit MCP declaration or its conventional registrar."""
 
-    manifest = addon_manifest(app_config)
-    if manifest is None:
+    if not is_angee_addon(app_config):
         return None
-    if "tools" in manifest.mcp:
-        registrar = resolve_addon_reference(app_config, manifest.mcp["tools"], attr="mcp.tools")
+    facts = addon_facts(app_config.name).get("mcp", {})
+    if not isinstance(facts, Mapping):
+        raise ImproperlyConfigured(f"{app_config.name}: tool.angee.mcp must be a table")
+    if "tools" in facts:
+        registrar = resolve_addon_reference(app_config, facts["tools"], attr="mcp.tools")
     else:
         module = optional_addon_module(app_config, "mcp_tools")
         if module is None or not hasattr(module, "register"):

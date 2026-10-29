@@ -21,7 +21,7 @@ Run `angee-design` first for the owner map; `angee-models` and
 | File or module | Owns | Reference |
 |---|---|---|
 | `<addon>/schema.py` | Strawberry types, resources, authored roots, the `schemas` mapping | `addons/angee/tags/schema.py:44-72,205-261`, `addons/angee/money/schema.py:62-109`, `examples/addons/example/notes/schema.py:22-95` |
-| `<addon>/addon.toml` `schemas` | Only a non-default schema module reference; default is `schema.py` | `addons/angee/graphql/schema.py:668` (`_raw_schemas`) |
+| `<addon>/pyproject.toml` `schemas` | Only a non-default schema module reference; default is `schema.py` | `addons/angee/graphql/schema.py:668` (`_raw_schemas`) |
 | `addons/angee/graphql/schema.py` | Buckets `SCHEMA_PART_KEYS:75`, merge/build per name and finalized metadata `GraphQLSchemas:306`, error sanitizer `AngeeSchema:90` | `:237` `SchemaParts`, `:650` `schema_parts_for` |
 | `addons/angee/graphql/data/hasura.py` | `hasura_model_resource:1374`, `AngeeHasuraWriteBackend:201`, `HasuraLines:107`, `public_pk_decoder:644`, `declared_hasura_resource_fields:1005` | `:1796` writable-relation decode guard |
 | `addons/angee/graphql/data/pydantic_resource.py` | `hasura_pydantic_resource:50` (computed, read-only rows) | `addons/angee/iam/schema.py:692-709` |
@@ -184,7 +184,7 @@ Run `angee-design` first for the owner map; `angee-models` and
 Under the planned build/host split, SDL and
 metadata are emitted by `provision` in a plain Django process after migrate, `rebac sync`
 and resources; boot-time SDL writes and `emit_if_stale` are deleted. Step 8 then depends
-on provision, not on a served process. `angee/hooks.py` (the `ANGEE_GRAPHQL_RESOURCE_FILTERS`
+on provision, not on a served process. `core/angee/hooks.py` (the `ANGEE_GRAPHQL_RESOURCE_FILTERS`
 check in `graphql/apps.py:13`) follows the host into `angee.base`; re-cite on move.
 
 </details>

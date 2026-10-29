@@ -35,7 +35,7 @@ method, or convention that owns this fact?
 Use Django's native owners:
 
 - Django app identity and lifecycle live on `AppConfig`; addon declarations live
-  in `addon.toml` and are validated against that identity.
+  in `pyproject.toml` and are validated against that identity.
 - Model behavior lives on models, managers, and querysets.
 - Value coercion lives on fields.
 - Command dispatch lives in Django management commands and `argparse`.
@@ -50,7 +50,7 @@ A wrapper must prove it adds a real new concept. If it only forwards,
 normalizes, or renames a Django object, delete it.
 
 Django-native also means app-native. Addons are reusable Django apps with
-conventional files: `addon.toml` declares the addon contract (and its presence is
+conventional files: `pyproject.toml` declares the addon contract (and its presence is
 the marker that makes the app an addon), `models.py` owns data and row behavior,
 `managers.py` owns reusable row-set APIs when they outgrow the model module,
 `schema.py` owns Strawberry declarations, `permissions.zed` owns REBAC structure,
@@ -59,7 +59,7 @@ validation/presentation, `admin.py` owns Django admin presentation, and
 `management/commands/` owns CLI parsing. `apps.py` is optional; use it to customize
 native Django config or lifecycle hooks such as `ready()` / `import_models()`.
 An addon without that customization uses Django's auto-created config. Keep
-declaration facts in the manifest even when an explicit config exists. A proven
+requirements in package metadata and capability facts in their tool tables even when an explicit config exists. A proven
 gap requires extending the native owner or adding the smallest canonical
 composition seam at the owning level. It never authorizes a parallel registry,
 loader, or naming convention alongside the existing owner.
@@ -84,12 +84,12 @@ Before adding backend structure, pass the Django architecture gate:
 The framework wheel and the GraphQL folder addon have a one-way dependency rule
 that layering tests enforce:
 
-- Core modules under `angee/` never import folder addons, including test support.
+- Core modules under `core/angee/` never import folder addons, including test support.
   Reusable addon test compositions live in the owning addon.
 - Angee's model foundation (models, fields, mixins, managers, querysets, and
   native tracking mixins) must not import `angee.compose`, `angee.graphql`, or
   downstream consumer addons. Base composes its declared foundation dependencies,
-  including provenance-owned tracking mixins. The native `angee.hatch` adapters
+  including provenance-owned tracking mixins. The native `angee.build` adapters
   own host build and dependency projection; management and serving commands
   consume the finished registry.
 - `angee.graphql` is the `addons/angee/graphql` folder addon's GraphQL runtime (schema
@@ -100,8 +100,8 @@ that layering tests enforce:
   policy enter through its explicit adapter contracts; it never imports Angee's
   host loader, model toolkit, or addons. No serving module (`asgi`, `urls`,
   `views`, `consumers`, `signals`, `models`, `graphql`) may import the compiler.
-  Provisioning shares that restriction; explicit authoring and drift-check commands may load the compiler. The Hatch build hook dispatches
-  compilation explicitly; provisioning consumes its prebuilt output.
+  Provisioning shares that restriction; explicit authoring and drift-check commands may load the compiler. The explicit host build worker dispatches
+  compilation; provisioning consumes its prebuilt output.
 
 The same one-way rule extends downward to framework addons under `addons/angee/`
 (`angee.resources`, `angee.iam`, `angee.integrate`, `angee.operator`,
@@ -119,9 +119,9 @@ Use these owners instead of maintaining another contract in an addon:
 
 | Concern | Owner and durable rule |
 |---|---|
-| Addon discovery and declarations | [`angee.addons`](../../angee/addons.py) binds hatch-angee's native manifest to Django's config. `addon.toml` is the marker and declaration source; do not copy its configurable values onto `AppConfig`. |
+| Addon discovery and declarations | [`angee.addons`](../../core/angee/addons.py) reads native entry points, requirements and package TOML. Addon requirements stay in `[project].dependencies`; foreign app edges use `AppConfig.requires_apps`. |
 | Settings and app ordering | [Settings bootstrap and app graph](../composer.md#settings-bootstrap) compose one app set. Keep source-model imports out of settings loading; do not create separate build/run registries. |
-| Capability conventions | [Addon declarations](../composer.md#addon-declarations) identifies the readers. Each capability reads its own manifest section and conventional defaults; dependencies, resource tiers, and intent stay explicit. |
+| Capability conventions | [Addon declarations](../composer.md#addon-declarations) identifies the readers. Each capability reads its own `[tool.angee]` table and conventional defaults; dependencies, resource tiers, and intent stay explicit. |
 | Models and runtime import | [Runtime build and import](../composer.md#runtime-build-and-import) describes source selection and Django phase 2. Use narrow abstract contributors; let Django own inheritance, field cloning, managers, and registration. |
 | Migration history and cleanup | [Addon-owned runtime migrations](../composer.md#addon-owned-runtime-migrations) and [migration policy](#migration-history) distinguish replaceable generated models from version-controlled native Django history. |
 | Resource load hooks | [`ResourceLoadMixin`](../../addons/angee/resources/mixins.py) is the resources-owned terminal mixin. Contributors delegate exactly once through `super()`, even when skipping local work; an exception aborts the transaction, so never delegate in `finally`. A row whose state only an owner verb may write declares a `resource_class` adapter that persists through that verb as the row's named actor and records the result in the ledger ([workflow definitions](../../addons/angee/workflows/resources.py), [chatter](../../addons/angee/messaging/resources.py)). |
@@ -435,7 +435,7 @@ Use these owners instead of maintaining another contract in an addon:
   `registry_setting`** — the key→path mapping (e.g. `ANGEE_STORAGE_BACKEND_CLASSES`)
   is supplied by the owning addon's `autoconfig`, so every settings module that
   installs the addon must carry a **non-empty** mapping. Bare settings modules
-  call [`AutoConfig.apply_installed()`](../../angee/utils/autoconfig.py) before
+  call [`AutoConfig.apply_installed()`](../../core/angee/utils/autoconfig.py) before
   Django loads models, then add only their fixture implementations. An empty
   registry raises `ImproperlyConfigured` at import — give the addon a
   noop/null-object default so the set is never empty. The column stores the key
@@ -457,7 +457,7 @@ Use these owners instead of maintaining another contract in an addon:
   deterministic.
 - **Hooks are declared callable settings, separate from keyed registries.**
   The owning addon registers native Django checks for its specific callable
-  settings. [`angee.hooks`](../../angee/hooks.py) supplies shared import and
+  settings. [`angee.hooks`](../../core/angee/hooks.py) supplies shared import and
   validation with `check_hooks`, `resolve_hook` and ordered `resolve_hooks`.
   Checks import providers without executing them. There is no second list of
   hook-setting names; each capability owns its validation and invocation.
@@ -554,7 +554,7 @@ This project runs **fail-closed**: `REBAC_STRICT_MODE=True` and
 data through REBAC, never a queryset bypass.
 
 - **The local backend is the only supported REBAC backend.** Base
-  [autoconfig](../../angee/autoconfig.py) selects it because field- and
+  [autoconfig](../../core/angee/autoconfig.py) selects it because field- and
   const-backed relations, `authenticated`, and SQL read scopes are evaluated
   against the Django rows themselves, which no remote tuple store can see. Do not
   mirror column facts into tuples to keep another backend viable.
@@ -700,7 +700,7 @@ data through REBAC, never a queryset bypass.
   protected accounts additionally need `administer`.
 - **Read derived facts from their owner.** Native live ORM backing exposes
   user kind/activity, roster roles and selected tools without tuple mirrors.
-  Platform administration is an ordinary `angee/role:admin#member` grant to a
+  Platform administration is an ordinary `core/angee/role:admin#member` grant to a
   user or group, managed through IAM. Bootstrap explicitly creates that grant;
   `User.is_superuser` never creates or replaces role membership. Hosts may
   separately opt into the library's native superuser bypass.
@@ -812,10 +812,10 @@ data through REBAC, never a queryset bypass.
   `rebac.check_new`; prepared rows use the manager's native `insert` path and
   retain the verified actor on the instance.
 - Model universal-admin reach as a const-backed relation
-  (`relation admin: angee/role // rebac:const=admin`, no tuple or FK) resolving
-  membership in `angee/role:admin`. Admin-gate a table-less/synthetic resource
+  (`relation admin: core/angee/role // rebac:const=admin`, no tuple or FK) resolving
+  membership in `core/angee/role:admin`. Admin-gate a table-less/synthetic resource
   with a `managed=False` abstract anchor model (passes `rebac.E009`, emits no
-  table) plus that const admin, and keep an `| angee/role:admin#member` arm in
+  table) plus that const admin, and keep an `| core/angee/role:admin#member` arm in
   `member` or `rebac.W004` fires.
 - **Const-backing is the one canon for tuple-free role reach.** A resource that
   grants a *named* role (e.g. `storage_admin`, `<consumer>_reviewer`) declares a
@@ -890,7 +890,7 @@ data through REBAC, never a queryset bypass.
 - `REBAC_DEPTH_LIMIT` bounds compiled SQL nesting and inherited permission hops.
   On SQLite (default 8), access inherited through more than eight parent hops is
   denied: scoped lists omit those rows; point checks raise `PermissionDepthExceeded`.
-  Deeper hierarchies need PostgreSQL (default 16). [Base autoconfig](../../angee/autoconfig.py)
+  Deeper hierarchies need PostgreSQL (default 16). [Base autoconfig](../../core/angee/autoconfig.py)
   owns the defaults; explicit environment values take precedence over project settings.
 - Native `rebac --skip-checks sync --prune-stale --yes` retires removed
   package-managed declarations and their stored relationships in the same policy
@@ -1076,9 +1076,9 @@ strict mode refuses one without it. Entrypoints own boundaries, one per unit of
 work, and nothing else opens a `fresh` one except a deliberately separate logical
 write (merge, revert, seed): HTTP requests through `ChangesetMiddleware` on the
 stack's own sync or async path; WebSocket connections through
-`ChangesetScopeMiddleware`, composed in [`angee.asgi`](../../angee/asgi.py); Celery
+`ChangesetScopeMiddleware`, composed in [`angee.asgi`](../../core/angee/asgi.py); Celery
 tasks through [`angee.provenance.tasks.Task`](../../addons/angee/provenance/tasks.py); management
-commands through [`angee.management.main()`](../../angee/management/__init__.py),
+commands through [`angee.management.main()`](../../core/angee/management/__init__.py),
 which every rendered `manage.py` calls (`serve`, `runserver` and `test` are
 excluded because their requests, connections, tasks and tests own boundaries;
 interactive shells keep the command boundary); a bridge live-session run through
@@ -1307,7 +1307,7 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   upgraded databases remain supported. Native squashing needs its usual
   coordinated replacement period.
 - **History reset requires an explicit upgrade cutoff.**
-  [`reset_migration_history`](../../angee/compose/management/commands/reset_migration_history.py)
+  [`reset_migration_history`](../../core/angee/compose/management/commands/reset_migration_history.py)
   verifies a fully applied, model-clean graph before replacing selected histories
   and their applied records. It is an exceptional retirement procedure, never
   part of routine deployment, and a release that removes a Python owner old
@@ -1323,7 +1323,7 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   retires the data and removes the field or model; an empty column needs
   nothing, and neither does a table holding only rows its own resource files
   seeded once the addon names the model under `retired_models` in its
-  `addon.toml` `[resources]`.
+  `pyproject.toml` `[tool.angee.resources]`.
 - **`MIGRATION_MODULES` may be assigned during app populate only for generated
   runtime apps.** That exception belongs to composed settings/runtime boot; do
   not use it as an addon-local shortcut or a way to hide source-model migration
@@ -1384,13 +1384,13 @@ exception closes the rows as failed. Tests inherit a boundary from the root
 ### Development server
 
 - **`angee dev` serves via Angee's `runserver` override, not `uvicorn --reload`.**
-  [`angee.management.commands.runserver`](../../angee/management/commands/runserver.py)
+  [`angee.management.commands.runserver`](../../core/angee/management/commands/runserver.py)
   runs `ASGI_APPLICATION` under uvicorn supervised by Django's follow-imports
   autoreloader (mirroring Daphne's override). It needs no `--reload-dir`: Django
   watches imported source — consumer/framework addons, framework core, *and*
   editable deps — including imported prebuilt `runtime/` modules. Source declarations
-  are compiled by the explicit Hatch build before startup; a serving child imports
-  prebuilt models through the [native host AppConfig](../../angee/apps.py). Rebuild
+  are compiled by the explicit host build before startup; a serving child imports
+  prebuilt models through the [native host AppConfig](../../core/angee/apps.py). Rebuild
   structural model changes before restarting the service. Don't reintroduce
   `uvicorn --reload`/`--reload-dir` heuristics in the stack template. Django
   decides whether a file-change receiver handled an edit or the child must
@@ -1405,7 +1405,7 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   only builds the subscription routes of the installed schemas, so a live schema
   edit reaches the SDL (and Vite) only when `schema` runs again; `schema --check`
   is the drift gate. Generated trees (runtime sources and SDL) are written
-  atomically through the shared [`GeneratedTree`](../../angee/utils/artifacts.py).
+  atomically through the shared [`GeneratedTree`](../../core/angee/utils/artifacts.py).
   [Composition and schema](../checks.md#composition-and-schema) owns the commands.
 - **Session and CSRF cookie names are project-scoped.** The project template
   names them per project because localhost ports do not isolate browser cookies
@@ -1415,7 +1415,7 @@ exception closes the rows as failed. Tests inherit a boundary from the root
 
 Mount addon sockets through `asgi.websocket_urlpatterns` and compose
 `RebacChannelsConsumerMixin` to pin the cookie actor before creating tasks.
-The [shared router](../../angee/asgi.py) owns Origin trust and Django session
+The [shared router](../../core/angee/asgi.py) owns Origin trust and Django session
 authentication; never repeat those handshake checks per consumer. Long-lived
 protocols that accept writes must revalidate the session at each request and
 open fresh evaluator scopes for authorization and change-feed reads.
@@ -1716,12 +1716,13 @@ module-level constants. Add docstrings to private helpers when their role is not
 obvious from the function name and signature. Do not maintain a parallel spec, field inventory, or model
 API list for behavior that can live clearly beside the code.
 
-The addon's `addon.toml` owns declaration facts, parsed into hatch-angee's native
-manifest. AppConfig owns Django's identity, registration and lifecycle. Each
+Native package metadata owns addon identity and requirements; `pyproject.toml`
+ships capability declarations under `[tool.angee]`. AppConfig owns Django's
+identity customization, registration and lifecycle. Each
 capability owner interprets its own declarations and conventional defaults; it
-never creates a separately configurable manifest mirror. Model/manager behavior
+never creates a separately configurable package-fact mirror. Model/manager behavior
 stays with the native class, and composition lifecycle stays with the compiler.
-Keep the exact authoring forms in owner docstrings and the upstream manifest
+Keep the exact authoring forms in owner docstrings and the native package
 contract, rather than duplicating them in this guideline.
 
 Before decomposing backend code, classify each fact by its Django owner:
@@ -1730,7 +1731,7 @@ Before decomposing backend code, classify each fact by its Django owner:
   `TextChoices`.
 - Row-set behavior lives on managers and querysets.
 - Instance behavior lives on model methods and properties.
-- Addon declarations live in `addon.toml`; capability owners resolve their paths from Django `AppConfig.path`.
+- Addon declarations live in `pyproject.toml`; capability owners resolve their paths from Django `AppConfig.path`.
 - Management commands parse arguments and dispatch to the owning model, manager,
   service, or composer function.
 - Compatibility facades exist only for an explicit compatibility promise.
@@ -1749,11 +1750,11 @@ silently contribute settings to a nested project.
 Declare autoconfig `SETTINGS` with a source-owned `TypedDict`, including the
 normalized value types of `:append` contributions; annotate derived `settings()`
 results the same way. Preserve configurable unions and nullable values rather
-than inferring a contract from one default. The [typing adapter](../../angee/compose/typing.py)
-reads those native declarations through [yamlconf provenance](../../angee/utils/yamlconf.py).
+than inferring a contract from one default. The [typing adapter](../../core/angee/compose/typing.py)
+reads those native declarations through [yamlconf provenance](../../core/angee/utils/yamlconf.py).
 
 Keep the shared `angee.*` namespace open to every configured addon source.
-The core's [`angee/__init__.py`](../../angee/__init__.py) owns
+The core's [`core/angee/__init__.py`](../../core/angee/__init__.py) owns
 `pkgutil.extend_path`, preserving addon portions alongside the foundation
 package. Leave addon namespace roots such as `addons/angee/` without an
 `__init__.py`; they contribute to that namespace rather than replacing it.
@@ -2095,7 +2096,7 @@ it exactly.
   top-level `mcp` that shadows the real package — `ModuleNotFoundError: 'mcp' is not
   a package` during a test run, while a single-module run and `manage.py check` pass.
   Name such a module for its role, not the library (the MCP tool seam infers — or
-  resolves a `[mcp].tools` override to — `mcp_tools.py`, not `mcp.py`).
+  resolves a `[tool.angee.mcp].tools` override to — `mcp_tools.py`, not `mcp.py`).
 
 ## Checks
 
