@@ -192,6 +192,13 @@ class Queue(ImmutableFieldsMixin, metaclass=RebacModelBase):
         ("Duplicate", "neutral", 70, "duplicate"),
     )
 
+    @property
+    def is_personal(self) -> bool:
+        """Whether the queue has its creator's canonical personal-queue identity."""
+
+        queue = cast(Any, self)
+        return queue.created_by_id is not None and queue.slug == type(self).objects.personal_slug(queue.created_by)
+
     key = models.CharField(
         max_length=12,
         unique=True,

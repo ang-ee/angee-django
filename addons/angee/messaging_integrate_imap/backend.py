@@ -800,7 +800,11 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
         """Open, secure, and authenticate the IMAP session from config + credential."""
 
         client = self._open()
-        self._login_name = self._login(client)
+        try:
+            self._login_name = self._login(client)
+        except BaseException:
+            self.close()
+            raise
         self._client = client
         self._selected = ""
         return client
@@ -835,14 +839,19 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
             # IMAPClient's default converts INTERNALDATE to *naive local* time; the
             # parser needs the aware server-declared offset, so times stay honest on
             # any host timezone.
+            self._client = client
             client.normalise_times = False
             if security == "starttls":
                 client.starttls(context)
         except _TRANSIENT_ERRORS as error:
+            self.close()
             logger.exception("IMAP connection to %s failed.", host)
             raise ImapError(
                 f"IMAP connection to {host} failed. Check the host, port, and security settings."
             ) from error
+        except BaseException:
+            self.close()
+            raise
         return client
 
     @staticmethod
@@ -984,11 +993,9 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
 
         if self._client is None:
             return
-        try:
-            self._client.logout()
-        except Exception:  # noqa: BLE001 — a dead connection at logout is not a sync failure.
-            pass
-        self._client = None
+        client, self._client = self._client, None
+        client.__exit__(None, None, None)
+
         self._selected = ""
         self._login_name = ""
 

@@ -131,14 +131,14 @@ const integrate = defineBaseAddon({
       },
     },
     [`${INTEGRATION_MODEL}#actions`]: {
-      [INTEGRATION_PAUSE_ACTION_ID]: { sequence: 11, requiredFields: ["lifecycle"], content: <PauseIntegrationAction /> },
+      [INTEGRATION_PAUSE_ACTION_ID]: { sequence: 11, requiredFields: ["can_pause", "can_disconnect"], content: <PauseIntegrationAction /> },
       [INTEGRATION_RESUME_ACTION_ID]: {
         sequence: 12, requiredFields: ["can_resume"], content: <ResumeIntegrationAction />,
       },
     },
     [`${INTEGRATION_MODEL}#actions-menu`]: {
-      [INTEGRATION_DISCONNECT_ACTION_ID]: { sequence: 13, requiredFields: ["lifecycle"], content: <DisconnectIntegrationAction /> },
-      [INTEGRATION_TEST_CONNECTION_ACTION_ID]: { sequence: 14, requiredFields: ["lifecycle"], content: <TestConnectionAction /> },
+      [INTEGRATION_DISCONNECT_ACTION_ID]: { sequence: 13, requiredFields: ["can_pause", "can_disconnect"], content: <DisconnectIntegrationAction /> },
+      [INTEGRATION_TEST_CONNECTION_ACTION_ID]: { sequence: 14, requiredFields: ["can_pause", "can_disconnect"], content: <TestConnectionAction /> },
       [INTEGRATION_RETRY_DISCOVERY_ACTION_ID]: {
         sequence: 15, requiredFields: ["can_retry_discovery"], content: <RetryDiscoveryAction />,
       },

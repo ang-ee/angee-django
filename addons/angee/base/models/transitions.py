@@ -295,6 +295,36 @@ class StateTransitions:
     ) -> Any:
         """Execute the body, target write and success hook atomically."""
 
+        source, target = self._allowed_values(instance, spec)
+
+        with transaction.atomic():
+            result = method(instance, *args, **kwargs)
+            self._write_target(instance, target)
+            if spec.on_success is not None:
+                with _transition_save_context(instance, self.field.attname):
+                    spec.on_success(instance, source, target)
+        return result
+
+    def can_run(self, instance: models.Model, method_name: str) -> bool:
+        """Project a declared method's source, effective graph and pure conditions.
+
+        Does not invoke the method, mutate state, save or grant permission.
+        Permission and any method-body admissions remain with the model owner.
+        """
+
+        method = getattr(type(instance), method_name)
+        spec = getattr(method, "_angee_transition_spec", None)
+        if not isinstance(spec, _TransitionSpec) or spec.declaration is not self:
+            raise ImproperlyConfigured(f"{method_name!r} is not a transition guarded by {self.name}.")
+        try:
+            self._allowed_values(instance, spec)
+        except TransitionNotAllowed:
+            return False
+        return True
+
+    def _allowed_values(self, instance: models.Model, spec: _TransitionSpec) -> tuple[Any, Any]:
+        """Validate the single admission rule used by execution and projection."""
+
         source = self.field.to_python(getattr(instance, self.field.attname))
         target = self.field.to_python(spec.target)
         source_key = self._state_key(source)
@@ -307,13 +337,7 @@ class StateTransitions:
             if not condition(instance):
                 self._raise_not_allowed(source, target, "condition returned false")
 
-        with transaction.atomic():
-            result = method(instance, *args, **kwargs)
-            self._write_target(instance, target)
-            if spec.on_success is not None:
-                with _transition_save_context(instance, self.field.attname):
-                    spec.on_success(instance, source, target)
-        return result
+        return source, target
 
     def force_state(self, instance: models.Model, target: Any, *, reason: str) -> None:
         """Force this field to ``target`` while bypassing the declared graph.

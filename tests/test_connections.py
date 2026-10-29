@@ -11,6 +11,7 @@ from urllib import parse
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import IntegrityError, connection, connections, transaction
 from django.test.utils import CaptureQueriesContext
@@ -508,7 +509,12 @@ def test_link_owns_only_the_named_user_and_claims_an_unowned_identity() -> None:
     assert account.created_by_id == actor.pk and account.owner_id is None
 
     assert ExternalAccount.objects.link(oauth_client, "claim-sub", owner=user).owner_id == user.pk
-    assert ExternalAccount.objects.link(oauth_client, "claim-sub", owner=other).owner_id == user.pk
+    with pytest.raises(ValidationError) as refused:
+        ExternalAccount.objects.link(oauth_client, "claim-sub", owner=other, display_name="Unaccepted identity")
+    assert refused.value.code == "account_already_linked"
+    account.refresh_from_db()
+    assert account.owner_id == user.pk
+    assert account.display_name != "Unaccepted identity"
 
 
 @pytest.mark.django_db(transaction=True)

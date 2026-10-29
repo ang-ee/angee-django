@@ -13,7 +13,7 @@ const messagingIntegrateImap = defineChannelPollBridgeAddon({
   connectAction: <ConnectImapChannelAction />,
   i18n: { messaging: enMessagingImapMessages },
   recordActions: [
-    { id: "messaging-integrate-imap.credential", sequence: 20, content: <UpdateImapCredentialAction /> },
+    { id: "messaging-integrate-imap.credential", sequence: 20, requiredFields: ["can_disconnect"], content: <UpdateImapCredentialAction /> },
     { id: "messaging-integrate-imap.new-mail", sequence: 30, content: <PrepareImapNewMailAction /> },
     { id: "messaging-integrate-imap.sample", sequence: 40, content: <ImportImapSampleAction /> },
   ],

@@ -75,28 +75,28 @@ class OpenAIInferenceBackend(SDKInferenceBackend):
         """List OpenAI models and their broker-prefixed aliases."""
 
         specs: list[InferenceModelSpec] = []
-        client = self.client()
-        for model in client.models.list():
-            model_id = str(getattr(model, "id", "") or "").strip()
-            if not model_id:
-                continue
-            if not self._is_chat_model(model_id):
-                continue
-            config = {"provider_model": model_id, "source": self.key}
-            owned_by = str(getattr(model, "owned_by", "") or "").strip()
-            if owned_by:
-                config["owned_by"] = owned_by
-            discovery = self._model_discovery(client, model_id)
-            config.update(discovery.get("config", {}))
-            specs.extend(
-                self._model_specs(
-                    handle=model_id,
-                    display_name=model_id,
-                    model_use=str(discovery.get("model_use", "")),
-                    context_window=int(discovery.get("context_window", 0) or 0),
-                    config=config,
+        with self.client() as client:
+            for model in client.models.list():
+                model_id = str(getattr(model, "id", "") or "").strip()
+                if not model_id:
+                    continue
+                if not self._is_chat_model(model_id):
+                    continue
+                config = {"provider_model": model_id, "source": self.key}
+                owned_by = str(getattr(model, "owned_by", "") or "").strip()
+                if owned_by:
+                    config["owned_by"] = owned_by
+                discovery = self._model_discovery(client, model_id)
+                config.update(discovery.get("config", {}))
+                specs.extend(
+                    self._model_specs(
+                        handle=model_id,
+                        display_name=model_id,
+                        model_use=str(discovery.get("model_use", "")),
+                        context_window=int(discovery.get("context_window", 0) or 0),
+                        config=config,
+                    )
                 )
-            )
         return specs
 
     def _model_discovery(self, client: Any, model_id: str) -> dict[str, Any]:

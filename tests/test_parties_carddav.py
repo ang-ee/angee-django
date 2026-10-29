@@ -15,7 +15,9 @@ from rebac import system_context
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClient
 from angee.messaging.testing.models import Directory, Handle, Party, Person
+from angee.parties import schema as parties_schema
 from angee.parties_integrate_carddav import apps as carddav_apps
+from angee.parties_integrate_carddav import schema as carddav_schema
 from angee.parties_integrate_carddav.apps import check_expat_version
 from angee.parties_integrate_carddav.backend import (
     CardDavDirectoryBackend,
@@ -27,7 +29,7 @@ from angee.parties_integrate_carddav.backend import (
     _parse_vcard,
 )
 from tests import test_parties_graphql as parties_graphql
-from tests.conftest import Credential, Integration, Vendor, execute_schema
+from tests.conftest import Credential, Integration, Vendor, addon_schema, execute_schema
 
 _CONNECT_CARDDAV_MUTATION = """
 mutation ConnectCardDav(
@@ -254,7 +256,7 @@ def _connect_carddav(admin: Any) -> Any:
     """Execute the CardDAV connect mutation with one stable account payload."""
 
     return execute_schema(
-        parties_graphql._schema("console"),
+        addon_schema(parties_schema.schemas, "console", carddav_schema.schemas),
         _CONNECT_CARDDAV_MUTATION,
         {
             "name": "Ada Contacts",
@@ -358,3 +360,13 @@ def test_no_stable_key_yields_empty_uid() -> None:
 
     bare = "BEGIN:VCARD\nVERSION:3.0\nFN:Anonymous\nEMAIL:anon@example.com\nEND:VCARD"
     assert _parse(bare, href="").uid == ""
+
+
+@pytest.mark.parametrize("method", ["PROPFIND", "REPORT", "GET", "PUT", "DELETE"])
+def test_authenticated_dav_destinations_require_configured_origin(method):
+    class NoRequests:
+        def request(self, *args, **kwargs):
+            raise AssertionError("Cross-origin request must be refused before transport")
+    backend = _backend_with_http(NoRequests())
+    with pytest.raises(CardDavError, match="configured server origin"):
+        backend._request(method, "https://attacker.example/collection/card.vcf", "")

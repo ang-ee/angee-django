@@ -83,8 +83,8 @@ class GitHubBackend(VCSBackend):
             items = self._get(f"{base}?per_page={PER_PAGE}&page={page}") or []
             descriptors.extend(self._descriptor(item) for item in items)
             if len(items) < PER_PAGE:
-                break
-        return descriptors
+                return descriptors
+        raise GitHubApiError("Repository listing exceeded its page limit; inventory is incomplete.", status=0)
 
     def ls_tree(self, repository: Any, *, ref: str, path: str, recursive: bool = False) -> list[TreeEntry]:
         """List the tree under ``path`` at ``ref`` via the git-trees API."""

@@ -187,3 +187,10 @@ def test_verify_webhook_checks_hmac(monkeypatch: pytest.MonkeyPatch) -> None:
     assert backend.verify_webhook(vcs_bridge, bad) is False
     # No secret configured → never authentic.
     assert backend.verify_webhook(SimpleNamespace(webhook_secret=""), good) is False
+
+
+def test_repository_page_exhaustion_refuses_incomplete_inventory(monkeypatch):
+    monkeypatch.setattr(gh, "MAX_REPO_PAGES", 1)
+    monkeypatch.setattr(gh.GitHubBackend, "_get", lambda self, path: [_repo("acme/r")] * gh.PER_PAGE)
+    with pytest.raises(gh.GitHubApiError, match="inventory is incomplete"):
+        gh.GitHubBackend(_integration()).ls_repos()

@@ -49,7 +49,7 @@ export function RunWorkflowRecordActions(): React.ReactElement | null {
         return outcome;
       };
       return [{ id: workflow.id, label: workflow.name,
-        ...(schema.required?.length ? {
+        ...(Object.keys(schema.properties ?? {}).length ? {
           args: () => jsonSchemaActionArgs(published.input_schema, widgets), submit,
         } : { run: async () => { await settle(() => submit({})); } }),
       }];

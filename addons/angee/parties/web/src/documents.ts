@@ -285,20 +285,7 @@ export const DismissPartyStatement = graphql(`
   }
 `);
 
-export const ConnectCardDavDirectory = graphql(`
-  mutation ConnectCardDavDirectory(
-    $name: String!
-    $serverUrl: String!
-    $username: String!
-    $password: String!
-  ) {
-    connect_card_dav_directory(name: $name, server_url: $serverUrl, username: $username, password: $password) {
-      id
-      lifecycle
-      runtime_status
-    }
-  }
-`);
+
 
 export type MergePartyRecord = NonNullable<
   DocumentType<typeof PartyMergeComparison>["left"]
