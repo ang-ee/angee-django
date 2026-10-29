@@ -8,7 +8,7 @@ Deliberate shares remain independent of these derived permissions.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date
@@ -215,12 +215,20 @@ class _RoundRequesterWrites(models.QuerySet):
             raise ValidationError({"requester_party": "Change requester identity through the round instance."})
         return super().update(**kwargs)
 
-    def bulk_create(self, objs: Iterable[Any], *args: Any, **kwargs: Any) -> list[Any]:
-        if kwargs.get("update_conflicts") and {"requester_party", "requester_party_id"}.intersection(
-            kwargs.get("update_fields") or (),
-        ):
+    def bulk_create(
+        self,
+        objs: Iterable[Any],
+        batch_size: int | None = None,
+        ignore_conflicts: bool = False,
+        update_conflicts: bool = False,
+        update_fields: Collection[str] | None = None,
+        unique_fields: Collection[str] | None = None,
+    ) -> list[Any]:
+        if update_conflicts and {"requester_party", "requester_party_id"}.intersection(update_fields or ()):
             raise ValidationError({"requester_party": "Change requester identity through the round instance."})
-        return super().bulk_create(objs, *args, **kwargs)
+        return super().bulk_create(
+            objs, batch_size, ignore_conflicts, update_conflicts, update_fields, unique_fields,
+        )
 
 
 class _RoundBaseQuerySet(_RoundRequesterWrites, AngeeUnscopedQuerySet):

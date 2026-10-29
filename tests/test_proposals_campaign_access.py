@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import copy
 from typing import Any
 
 import pytest
@@ -775,3 +776,30 @@ def test_requester_identity_cannot_bypass_round_owner_through_collections(campai
         for manager in (Round.objects, Round._base_manager):
             with pytest.raises(ValidationError):
                 manager.filter(pk=round.pk).update(requester_party=party)
+
+
+@pytest.mark.parametrize("manager_path", ("base", "sudo"))
+@pytest.mark.parametrize("positional", (False, True))
+def test_requester_identity_cannot_bypass_round_owner_through_conflict_updates(
+    campaign: ProposalCampaign, manager_path: str, positional: bool,
+) -> None:
+    """Even an explicitly elevated native upsert must use the locked round owner."""
+
+    round = campaign.round()
+    with system_context(reason="tests.proposals.requester.conflict_party"):
+        party = Person.objects.for_user(campaign.person("requester"))
+    candidate = copy(round)
+    candidate.requester_party = party
+    manager = (
+        Round._base_manager if manager_path == "base"
+        else Round.objects.sudo(reason="tests.proposals.requester.conflict")
+    )
+    with pytest.raises(ValidationError, match="Change requester identity through the round instance"):
+        if positional:
+            manager.bulk_create([candidate], None, False, True, ["requester_party"], ["pk"])
+        else:
+            manager.bulk_create(
+                [candidate], update_conflicts=True, update_fields=["requester_party"], unique_fields=["pk"],
+            )
+    round.refresh_from_db()
+    assert round.requester_party_id is None

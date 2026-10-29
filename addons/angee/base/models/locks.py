@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from copy import copy
 from typing import Any, ClassVar, TypeVar, cast
 
@@ -18,7 +18,7 @@ from rebac.managers import RebacQuerySet
 
 from angee.base.exceptions import DomainError
 from angee.base.models.persistence import PersistenceMixin
-from angee.base.querysets import AngeeUnscopedQuerySet
+from angee.base.querysets import AngeeUnscopedQuerySet, by_key
 
 
 class ImmutableFieldsMixin(models.Model):
@@ -82,7 +82,8 @@ class _RowLockWritesQuerySet(models.QuerySet[_ModelT]):
         if self._lock_bypassed() or not kwargs:
             return super().update(**kwargs)
         rows = self.select_for_update()
-        with transaction.atomic(using=rows.db):
+        alias = rows.db
+        with transaction.atomic(using=alias):
             rows = rows.with_action("write").scoped() if isinstance(rows, RebacQuerySet) else rows
             fields: dict[str, models.Field[Any, Any]] = {}
             for name in kwargs:
@@ -103,23 +104,42 @@ class _RowLockWritesQuerySet(models.QuerySet[_ModelT]):
                 )
                 for index, (name, value) in enumerate(kwargs.items())
             }
+            validated = []
             for previous in rows.annotate(**projections):
                 candidate = copy(previous)
                 for index, field in enumerate(fields.values()):
                     setattr(candidate, field.attname, getattr(previous, f"_row_lock_value_{index}"))
                 cast(RowLockMixin, candidate).validate_row_lock(cast(RowLockMixin, previous).row_lock())
-            return super().update(**kwargs)
+                validated.append(previous.pk)
+            # READ COMMITTED may admit new predicate matches after validation.
+            # Only the locked, checked identities may reach downstream writers.
+            written = sum(
+                super(_RowLockWritesQuerySet, batch).update(**kwargs)
+                for batch in by_key(self.using(alias), validated)
+            )
+            self._result_cache = None
+            return written
 
-    def bulk_create(self, objs: Iterable[_ModelT], *args: Any, **kwargs: Any) -> list[_ModelT]:
+    def bulk_create(
+        self,
+        objs: Iterable[_ModelT],
+        batch_size: int | None = None,
+        ignore_conflicts: bool = False,
+        update_conflicts: bool = False,
+        update_fields: Collection[str] | None = None,
+        unique_fields: Collection[str] | None = None,
+    ) -> list[_ModelT]:
         """Admit new system-row state through the same instance invariant."""
 
         candidates = list(objs)
         if not self._lock_bypassed():
-            if kwargs.get("update_conflicts"):
+            if update_conflicts:
                 raise ValidationError("Row-locked conflict updates require checked instance saves.")
             for row in candidates:
                 cast(RowLockMixin, row).validate_row_lock(None)
-        return super().bulk_create(candidates, *args, **kwargs)
+        return super().bulk_create(
+            candidates, batch_size, ignore_conflicts, update_conflicts, update_fields, unique_fields,
+        )
 
 
 class RowLockQuerySet(_RowLockWritesQuerySet[_ModelT], RebacQuerySet[_ModelT]):
