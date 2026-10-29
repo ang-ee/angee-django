@@ -36,13 +36,23 @@ class Command(MakeMigrationsCommand):
 
         # Let Django validate these inputs before a mutating authoring step.
         name = options.get("name")
-        if options.get("merge") or (name and not name.isidentifier()):
+        if name and not name.isidentifier():
             super().handle(*app_labels, **options)
             return
         for label in app_labels:
             try:
                 apps.get_app_config(label)
             except LookupError:
+                super().handle(*app_labels, **options)
+                return
+
+        merging = bool(options.get("merge"))
+        if merging:
+            # Existing branches have no unambiguous leaf for new declarations.
+            # Django repairs that history before a subsequent staging command.
+            loader = MigrationLoader(None, ignore_no_migrations=True)
+            conflicts = loader.detect_conflicts()
+            if any(not app_labels or label in app_labels for label in conflicts):
                 super().handle(*app_labels, **options)
                 return
 
@@ -54,13 +64,33 @@ class Command(MakeMigrationsCommand):
         authored = RuntimeMigrations(apps.get_app_configs(), labels=labels)
         selected = app_labels or None
         try:
+            if merging and not (options.get("dry_run") or options.get("check_changes")):
+                pending = authored.plan(
+                    defer_drop_check=True, app_labels=selected, allow_missing_packages=True, for_merge=True,
+                )
+                if not pending:
+                    super().handle(*app_labels, **options)
+                    return
+                if not name:
+                    raise CommandError("Staging addon branches for --merge requires a unique --name.")
+                pending_labels = {plan.app_label for plan in pending}
+                if any(
+                    label in pending_labels and migration.endswith(f"_{name}")
+                    for label, migration in loader.disk_migrations
+                ):
+                    raise CommandError("Merge --name is already used in native history; choose a unique --name.")
             if options.get("dry_run") or options.get("check_changes"):
                 authored.check(app_labels=selected)
             else:
-                authored.materialize(apps=apps, app_labels=selected)
+                authored.materialize(apps=apps, app_labels=selected, for_merge=merging)
         except (RuntimeError, ImproperlyConfigured) as error:
             raise CommandError(str(error)) from error
         super().handle(*app_labels, **options)
+        if merging:
+            try:
+                authored.plan(apps=apps, app_labels=selected)
+            except (RuntimeError, ImproperlyConfigured) as error:
+                raise CommandError(str(error)) from error
 
     def write_migration_files(
         self,

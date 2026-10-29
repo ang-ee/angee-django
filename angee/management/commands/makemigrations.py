@@ -17,7 +17,7 @@ class Command(MakeMigrationsCommand):
 
         from angee.compose.management.commands.makemigrations import Command as BuildCommand
 
-        command = BuildCommand(
-            stdout=self.stdout, stderr=self.stderr, no_color=options["no_color"], force_color=options["force_color"],
-        )
+        command = BuildCommand(no_color=options["no_color"], force_color=options["force_color"])
+        command.stdout = self.stdout
+        command.stderr = self.stderr
         command.handle(*app_labels, **options)

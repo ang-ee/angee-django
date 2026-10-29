@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
@@ -1603,8 +1604,96 @@ def test_native_readonly_authoring_refuses_pending_sources_without_writes(
     assert {path: path.read_bytes() for path in runtime_dir.rglob("*.py")} == before
 
 
-def test_native_merge_bypasses_authored_binding(native_authoring_command, monkeypatch):
+@pytest.mark.parametrize("reverse_addons", [False, True])
+def test_native_merge_stages_two_addons_without_ordering_or_overwriting_history(
+    runtime_migration_probe, native_authoring_command, reverse_addons, monkeypatch,
+):
     command, materializer, runtime_dir = native_authoring_command
+    _, addon, source_path, _, source_root = runtime_migration_probe
+    peer_root = source_root.parent / "peer"
+    _write_module(peer_root / "__init__.py")
+    peer_source = peer_root / "add_marker.py"
+    _write_module(peer_source, '''from django.db import migrations, models
+
+def applies(state):
+    model = state.models.get(("resources", "legacy"))
+    return model is not None and "old_name" in model.fields and "marker" not in model.fields
+
+class Migration(migrations.Migration):
+    dependencies = []
+    operations = [migrations.AddField(model_name="legacy", name="marker", field=models.BooleanField(default=False))]
+''')
+    peer = make_addon(name="example.peer", path=peer_root, migrations=(
+        dict(name="add_marker", app_label="resources", module="add_marker"),
+    ))
+    materializer.addons = (peer, addon) if reverse_addons else (addon, peer)
+    directory = runtime_dir / "resources/migrations"
+    _write_module(directory / "0002_reserved.py", '''from django.db import migrations
+class Migration(migrations.Migration):
+    dependencies = [("resources", "0001_legacy")]
+    operations = []
+''')
+    before = {path: path.read_bytes() for path in directory.glob("*.py")}
+    sources = {path: path.read_bytes() for path in (source_path, peer_source)}
+
+    with pytest.raises(RuntimeError, match="multiple migration leaves"):
+        materializer.plan()
+    labels, options = _authoring_options(command, "resources", "--merge", "--name", "reserved", "--noinput")
+    with pytest.raises(CommandError, match="already used"):
+        command.handle(*labels, **options)
+    assert {path: path.read_bytes() for path in directory.glob("*.py")} == before
+
+    for flag in ("--dry-run", "--check"):
+        labels, options = _authoring_options(command, "resources", "--merge", "--name", "join_rehomes", flag)
+        with pytest.raises(CommandError, match="multiple migration leaves"):
+            command.handle(*labels, **options)
+        assert {path: path.read_bytes() for path in directory.glob("*.py")} == before
+
+    checked = []
+    check_drops = materializer._check_autodetected_drops
+
+    def check_merged_state(loader, from_state, to_state, *, app_labels):
+        assert loader.detect_conflicts() == {}
+        checked.append(True)
+        check_drops(loader, from_state, to_state, app_labels=app_labels)
+
+    monkeypatch.setattr(materializer, "_check_autodetected_drops", check_merged_state)
+    labels, options = _authoring_options(command, "resources", "--merge", "--name", "join_rehomes", "--noinput")
+    with _default_database(":memory:", DummyDatabaseWrapper):
+        command.handle(*labels, **options)
+
+    assert checked == [True]
+    loader = MigrationLoader(None, ignore_no_migrations=True)
+    baseline = [("resources", "0002_reserved")]
+    for name, source in (("rename_legacy", source_path), ("add_marker", peer_source)):
+        migration = loader.disk_migrations["resources", name]
+        assert migration.dependencies == baseline
+        assert (directory / f"{name}.py").read_bytes().startswith(sources[source])
+        assert migration.angee_source_sha256 == hashlib.sha256(sources[source]).hexdigest()
+    assert loader.graph.leaf_nodes("resources") == [("resources", "0002_join_rehomes")]
+    merge = loader.disk_migrations["resources", "0002_join_rehomes"]
+    assert set(merge.dependencies) == {("resources", "rename_legacy"), ("resources", "add_marker")}
+    assert merge.operations == []
+    fields = loader.project_state().models["resources", "legacy"].fields
+    assert {"new_name", "marker"} <= fields.keys()
+    assert "old_name" not in fields
+    assert {path: path.read_bytes() for path in sources} == sources
+    assert {path: path.read_bytes() for path in before} == before
+    assert materializer.plan(apps=apps) == ()
+    assert materializer.materialize(apps=apps) == ()
+
+
+def test_native_merge_bypasses_pending_binding_for_existing_host_branches(
+    native_authoring_command, monkeypatch,
+):
+    command, materializer, runtime_dir = native_authoring_command
+    directory = runtime_dir / "resources/migrations"
+    for name in ("0002_left", "0002_right"):
+        _write_module(directory / f"{name}.py", '''from django.db import migrations
+class Migration(migrations.Migration):
+    dependencies = [("resources", "0001_legacy")]
+    operations = []
+''')
     called = []
 
     def refuse_binding(**kwargs):
@@ -1616,7 +1705,7 @@ def test_native_merge_bypasses_authored_binding(native_authoring_command, monkey
     command.handle(*labels, **options)
 
     assert called == [("resources",)]
-    assert not (runtime_dir / "resources/migrations/rename_legacy.py").exists()
+    assert not (directory / "rename_legacy.py").exists()
 
 
 def test_native_writer_preflights_every_destination_before_writing(runtime_migration_probe):

@@ -263,12 +263,15 @@ class RuntimeMigrations:
         defer_drop_check: bool = False,
         app_labels: Iterable[str] | None = None,
         allow_missing_packages: bool = False,
+        for_merge: bool = False,
     ) -> tuple[RuntimeMigrationPlan, ...]:
         """Bind the complete graph before validating guards and native state.
 
         Planning is offline and read-only. A false guard is not evidence of a
         completed backfill: the host must retain its native chain or an explicit
         replacement baseline. Native migrate decides what has actually applied.
+        for_merge admits only pending branches sharing one existing host leaf,
+        with the combined-state/drop check deferred until native merge authoring.
         """
 
         selected = None if app_labels is None else frozenset(app_labels)
@@ -288,7 +291,13 @@ class RuntimeMigrations:
             label: names for label, names in loader.detect_conflicts().items()
             if selected is None or label in relevant or label in selected
         }
-        if conflicts:
+        if conflicts and not (
+            for_merge and defer_drop_check and all(
+                len(existing.graph.leaf_nodes(label)) == 1
+                and all((label, name) in sources for name in names)
+                for label, names in conflicts.items()
+            )
+        ):
             raise RuntimeError(f"multiple migration leaves: {conflicts}")
         outputs: set[Path] = set()
         for node in ordered:
@@ -436,7 +445,9 @@ class RuntimeMigrations:
         if plans := self.plan(app_labels=app_labels):
             raise RuntimeError("pending addon runtime migration " + ", ".join(plan.origin for plan in plans))
 
-    def materialize(self, *, apps: Apps, app_labels: Iterable[str] | None = None) -> tuple[Path, ...]:
+    def materialize(
+        self, *, apps: Apps, app_labels: Iterable[str] | None = None, for_merge: bool = False,
+    ) -> tuple[Path, ...]:
         """Stage validated sources, then guard autodetected drops before migrations.
 
         App-label adoption may need these staging nodes before the consumer can
@@ -444,11 +455,14 @@ class RuntimeMigrations:
         still stops the following makemigrations command. A missing custom
         package requires its immediate parent to be importable; deeper missing
         parent packages must be initialized explicitly before materialization.
+        With for_merge, independent pending branches may share one existing host
+        leaf. The caller must complete native merge authoring, then call plan
+        with apps to validate the combined graph and autodetected drops.
         """
 
         selected = None if app_labels is None else tuple(app_labels)
         plans = self.plan(
-            apps=apps, defer_drop_check=True, app_labels=selected, allow_missing_packages=True,
+            apps=apps, defer_drop_check=True, app_labels=selected, allow_missing_packages=True, for_merge=for_merge,
         )
         rendered = tuple((plan, self._render(plan)) for plan in plans)
         # All guards, destinations and source renders passed without writes.
@@ -462,7 +476,7 @@ class RuntimeMigrations:
         for plan, source in rendered:
             write_atomic(plan.output_path, source)
         importlib.invalidate_caches()
-        if remaining := self.plan(apps=apps, app_labels=selected):
+        if not for_merge and (remaining := self.plan(apps=apps, app_labels=selected)):
             raise RuntimeError(
                 "pending addon runtime migrations after materialization: "
                 + ", ".join(plan.origin for plan in remaining)
