@@ -36,10 +36,10 @@ its `angee ws` verbs address only the workspaces it created, such as this one.
   push continuously**, or the work is invisible everywhere else. When
   `.work/.jj` exists, use `jj` only there and follow `.work/AGENTS.md`.
 
-`hatch-angee` and `strawberry-django-hasura` remain independently published
-repositories, but normal framework development consumes their PyPI releases;
-this workspace does not materialize co-development slots for them. The Go
-operator likewise remains on its own release train and is consumed as the
+Framework development uses `angee/tools/hatch-angee/` through the repository's
+native uv workspace. `strawberry-django-hasura` remains an external dependency
+with its own release process; its owning package declares the consumed revision.
+The Go operator likewise remains on its own release train and is consumed as the
 installed `angee` CLI.
 
 ## Rules of the workspace
