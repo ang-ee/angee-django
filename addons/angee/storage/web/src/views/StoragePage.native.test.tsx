@@ -2,7 +2,7 @@
 
 import { createUiTestProviders } from "@angee/ui/testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from "@tanstack/react-router";
 import { ResourceQuery, type Row } from "@angee/metadata";
 import { OperationDocumentsProvider } from "@angee/refine";
@@ -113,6 +113,14 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
     forms.get("file-a")!.resolve({ data: records[0]! });
   });
   await screen.findByDisplayValue("Alpha");
+  const navigator = screen.getByRole("navigation", { name: "Files" });
+  const navigatorToolbar = within(navigator).getByRole("toolbar");
+  expect(navigator.firstElementChild?.contains(navigatorToolbar)).toBe(true);
+  expect(navigatorToolbar.contains(await screen.findByRole("combobox", { name: "Drive: Assets" }))).toBe(true);
+  expect(within(navigatorToolbar).getByRole("button", { name: "New" })).toBeTruthy();
+  expect(within(navigator).getByText("All files")).toBeTruthy();
+  expect(within(navigator).getByText("Trash")).toBeTruthy();
+  expect(navigatorToolbar.contains(within(navigator).getByRole("combobox", { name: "Filter records" }))).toBe(false);
   const header = screen.getAllByRole("heading", { level: 1, name: "Alpha" })[0]!;
   const frame = header.closest("header")?.parentElement ?? header.parentElement!.parentElement!;
   const tree = screen.getAllByRole("tree")[0];
