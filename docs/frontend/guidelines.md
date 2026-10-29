@@ -2024,15 +2024,16 @@ the current root, search, expansion and scroll position while another record in
 that root loads. A deliberate root change, or a resolved record belonging to a
 different root, may reset collection state for that new scope.
 
-[`ScopedExplorerPane`](../../packages/ui/src/views/tree/ScopedExplorerPane.tsx)
-composes the existing
+Explorer pages compose
 [`useScopedTreeExplorer`](../../packages/ui/src/views/tree/useScopedTreeExplorer.ts)
-selection owner. Routes own record identity; queries own loaded records;
-collection owners retain search and expansion. A controlled `rootId` remains
-the caller's responsibility: an unavailable detail response is not an instruction
-to pass an empty root. Consolidate shared retention behavior at the existing
-selection owner when migrating callers; do not add a parallel selection helper,
-row cache or navigator implementation.
+for retained root and tree selection, then pass its controller and hydrated query
+rows to [`ScopedExplorerPane`](../../packages/ui/src/views/tree/ScopedExplorerPane.tsx).
+The pane owns picker display. Routes own record identity; queries own loaded
+records; collection owners retain search and expansion. Resolved record roots
+update the shared selection owner; unresolved detail leaves its retained scope
+intact. A controlled `rootId` remains authoritative, including an explicit empty
+value. Do not mirror retained selection in addon state or add a parallel selection
+helper, row cache or navigator implementation.
 
 Keys that reset collection state must follow actual collection identity, never
 a temporary gap in detail data. Preserve navigator state separately from record

@@ -113,6 +113,8 @@ vi.mock("@angee/ui", async (importOriginal) => {
   const confirmAlways = async () => true;
   return {
     ...actual,
+    useRelationOptions: () => ({ options: storageData.drives.map((drive) => ({ value: drive.id, label: drive.name })),
+      list: { fetching: false } }),
     useRouteHref: () => routerMocks.routeHref,
     useRouteRecordId: () => routerMocks.params.id,
     // Mirror the real (memoized) translator so a published node keeps a stable
@@ -165,6 +167,7 @@ vi.mock("@angee/ui/views/RelationPicker", () => ({
         value={value ?? ""}
         onChange={(event) => onChange?.(event.currentTarget.value)}
       >
+        {!value ? <option value="">Choose a drive</option> : null}
         {options.map((option) => (
           <option key={option.value} value={option.value}>
             {option.label}
@@ -529,7 +532,7 @@ describe("StoragePage explorer wiring", () => {
     const view = render(pageTree());
     expect(routerState.getSearch().folder).toBe("folder-b");
     expect(screen.queryByRole("treeitem", { selected: true })).toBeNull();
-    expect(rootPickerValue()).toBe("drive-a");
+    expect(rootPickerValue()).toBe("");
     expect(fileListAttribute("data-can-upload")).toBe("false");
     expect(fileListAttribute("data-upload-drive")).toBe("");
     expect(fileListAttribute("data-upload-folder")).toBe("");
