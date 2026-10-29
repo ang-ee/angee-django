@@ -78,7 +78,7 @@ def test_record_readers_use_effective_people_index(
                     if field.python_name == "record_readers").base_resolver.wrapped_func
     rows = resolver(object(), object(), "projects/project", "project-1")
     assert [(row.subject, row.label) for row in rows] == [
-        (direct, "Direct"), (derived, "Derived"),
+        (str(direct), "Direct"), (str(derived), "Derived"),
     ]
     assert calls and calls[0][2:] == ("project-1",)
 
