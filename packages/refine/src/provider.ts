@@ -102,8 +102,10 @@ export function createAngeeGraphQLClient(
     fetch: baseFetch,
   });
   const authenticatedFetch = auth(baseFetch);
+  const requestFetch: FetchFn = (input, init) =>
+    authenticatedFetch(typeof options.url === "function" ? options.url() : input, init);
   return new GraphQLClient(typeof options.url === "string" ? options.url : "", {
-    fetch: (input, init) => authenticatedFetch(typeof options.url === "function" ? options.url() : input, init),
+    fetch: requestFetch,
     headers: options.headers,
     responseMiddleware(response) {
       if (response instanceof Error) throw boundedGraphQLTransportError(response, options.errorMessages);
