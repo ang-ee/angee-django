@@ -21,6 +21,42 @@ from mypy.types import Instance
 from angee.compose.typing import CompositionContext, CompositionPlugin
 
 
+@pytest.mark.parametrize("settings_module", ("tests.typing_settings", "tests.typing_app.settings"))
+def test_composition_context_discovers_native_registry_without_compiler_app(settings_module: str) -> None:
+    """Prebuilt and ordinary Django hosts need no installed compiler AppConfig."""
+
+    root = Path(__file__).resolve().parents[1]
+    env = {
+        name: value for name, value in os.environ.items()
+        if not name.startswith(("ANGEE_", "COMPOSE_")) and name not in {"DATABASE_URL", "DJANGO_SETTINGS_MODULE"}
+    }
+    env["PYTHONPATH"] = str(root)
+    result = subprocess.run(
+        [sys.executable, "-c", "\n".join([
+            # Initialize compiled mypy's import graph before importing its plugin API.
+            "from mypy import api",
+            "from angee.compose.typing import CompositionContext",
+            f"context = CompositionContext({settings_module!r})",
+            "assert not context.apps_registry.is_installed('angee.compose')",
+            "if context.django_settings_module == 'tests.typing_app.settings':",
+            "    assert not hasattr(context.settings, 'COMPOSE_RUNTIME_DIR')",
+            "    assert not context.composed",
+            "    assert not context.static_names",
+            "    assert not context.extends",
+            "    assert not context.contributions",
+            "    assert not context.required_parents",
+            "else:",
+            "    queue = context.apps_registry.get_model('work', 'Queue')",
+            "    assert context.composed['angee.work.models.Queue'] is queue",
+            "    assert context.get_model_class_by_fullname('angee.work.models.Queue') is queue",
+            "    assert context.static_names[queue] == 'angee.work.models.Queue'",
+            "    assert context.extends['angee.work.models.Queue'] == 'angee.spaces.models.Group'",
+            "    assert context.extends['angee.integrate.models.Bridge'] == 'angee.integrate.models.Integration'",
+        ])], cwd=root, env=env, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_abstract_self_fk_projection_has_the_same_unknown_pk_as_native_pk() -> None:
     with isolate_apps():
         class AbstractTree(models.Model):
