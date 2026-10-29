@@ -1067,7 +1067,10 @@ stack's own sync or async path; WebSocket connections through
 `ChangesetScopeMiddleware`, composed in the native ASGI contribution seam; Celery
 tasks through [`angee.provenance.tasks.Task`](../../addons/angee/provenance/tasks.py); management
 commands through the native launcher's `COMPOSE_COMMAND_CONTEXT` hooks, contributed by
-[`provenance`](../../addons/angee/provenance/contrib/angee/context.py) (`serve`, `runserver` and `test` are
+[`provenance`](../../addons/angee/provenance/contrib/angee/context.py). The
+[native launcher](../composer.md#flow) supplies the winning command's parsed,
+read-only options at its `execute` boundary; use those options for `--database`
+selection rather than parsing argv. (`serve`, `runserver` and `test` are
 excluded because their requests, connections, tasks and tests own boundaries;
 interactive shells keep the command boundary); a bridge live-session run through
 [`run_bridge_session_job`](../../addons/angee/integrate/session_runner.py). A
