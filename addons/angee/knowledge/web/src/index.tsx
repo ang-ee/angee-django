@@ -3,6 +3,7 @@ import { defineBaseAddon, resourcePageRoutes, type MenuDeclarations } from "@ang
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { BookOpen, FileStack, FileText, Library } from "lucide-react";
 
+import { PageReferencePreview } from "./PageReferencePreview";
 import { enKnowledgeMessages } from "./i18n";
 import { pageBacklinksGroup, pageBoundToGroup, recordPagesGroup } from "./RecordPagesPane";
 import { vaultCreateForm } from "./views/vault-form";
@@ -37,6 +38,7 @@ const knowledge = defineBaseAddon({
   menus: knowledgeMenu,
   i18n: { knowledge: enKnowledgeMessages },
   containers: {
+    "knowledge.Page#preview": { "knowledge.page-preview": { content: <PageReferencePreview /> } },
     // The Links tab: bound pages on every record type that carries bindings; on a
     // page, the pages that link to it and the records it is bound to.
     "related#groups": { "knowledge.pages": recordPagesGroup() },
