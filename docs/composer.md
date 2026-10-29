@@ -29,7 +29,7 @@ merges the ordered contributions. Deployment settings and secrets stay late-boun
    `import_models()` hooks run once, then the compiler emits and imports ordinary
    concrete modules before any `ready()` callback. Builds never provision a DB.
 2. **Serving startup** — Django imports generated `runtime.settings`, which calls
-   the same project settings loader. The normal composer AppConfig validates the
+   the same project settings loader. The host’s native `AngeeConfig` validates the
    built ordered native app identities, then imports prebuilt concrete modules
    during phase 2. It never scans source declarations, renders, writes or repairs.
    A changed app closure requires rebuilding, including plain or donor-only apps.
@@ -50,13 +50,13 @@ output fails clearly; installation through the Hatch hook creates the first arti
 |---|---|
 | Project-root discovery and project settings/bootstrap environment | [`ProjectContract`](../angee/conf.py), called by generated `runtime.settings` |
 | Bounded project YAML loading and accepted source provenance | [`ProjectContract`](../angee/conf.py) |
-| Native YAML settings merge and source inspection | [`angee.compose.yamlconf`](../angee/compose/yamlconf.py) |
+| Native YAML settings merge and source inspection | [`angee.utils.yamlconf`](../angee/utils/yamlconf.py) |
 | Overridable framework defaults and ordered always-on core apps | [`angee.defaults`](../angee/defaults.py) |
-| Reserved composed settings and final settings mutation | [`AutoConfig`](../angee/compose/autoconfig.py) owns reserved names; [`Composer`](../angee/compose/composer.py) assigns their values |
+| Reserved composed settings and final settings mutation | [`AutoConfig`](../angee/utils/autoconfig.py) owns reserved names; [`Composer`](../angee/compose/composer.py) assigns their values |
 | Django app discovery, identity aliases and root annotations | [`AppGraph`](../angee/compose/appgraph.py) |
 | Dependency ordering and cycle rejection for both discovery paths | `hatch_angee.order_app_dependencies` |
-| App settings fragments and declared host env overlays | [`AutoConfig`](../angee/compose/autoconfig.py) |
-| Host manifest adapter | [`ManifestDeclarations`](../angee/conf.py) implements [`AppDeclarationSource`](../angee/compose/declarations.py), selected by `COMPOSE_APP_DECLARATIONS` before app resolution |
+| App settings fragments and declared host env overlays | [`AutoConfig`](../angee/utils/autoconfig.py) |
+| Host manifest adapter | [`ManifestDeclarations`](../angee/build.py) implements [`AppDeclarationSource`](../angee/compose/declarations.py), selected by `COMPOSE_APP_DECLARATIONS` before app resolution |
 | Addon declarations and parsing | `addon.toml` and hatch-angee's native `AddonManifest`; [`angee.addons`](../angee/addons.py) binds the result to a native config |
 | Abstract-source discovery, donor order, parent relationships and collisions | [`ModelComposition`](../angee/compose/model_composition.py) |
 | Concrete class source text | [`angee.compose.rendering`](../angee/compose/rendering.py) |
@@ -71,7 +71,7 @@ output fails clearly; installation through the Hatch hook creates the first arti
 | Native package metadata and isolated compiler invocation | [`angee.hatch`](../angee/hatch.py) |
 | Prebuilt command lifecycle | [`angee.management`](../angee/management/__init__.py), native [`angee` command](../angee/management/commands/angee.py) |
 | Autodetected drop guards | [`RuntimeMigrations`](../angee/compose/migrations.py) refuses deleting a still-owned table at build; [`DropGuardAutodetector`](../angee/compose/migrations.py) refuses dropping a populated column or table in `makemigrations`, apart from rows the retiring addon declares seeded |
-| Runtime import during Django app population | [`ComposeConfig.import_models()`](../angee/compose/apps.py) |
+| Runtime import during Django app population | [`AngeeConfig.import_models()`](../angee/apps.py) |
 | HTTP route aggregation | [`angee.urls`](../angee/urls.py) |
 | WebSocket routes, HTTP sub-app mounts, mount lifespans | [`angee.asgi`](../angee/asgi.py) |
 | GraphQL schema declarations and SDL output | `angee.graphql` (the folder addon under `addons/angee/graphql`) |
@@ -85,7 +85,12 @@ This document should point there, not repeat the contract.
 Django imports generated `runtime.settings`, which delegates to `ProjectContract`.
 That owner finds the project root and loads project Python settings or a private YAML merge namespace,
 applies the bounded django-yamlconf adapter, evaluates Angee defaults, makes
-configured addon roots importable, and calls `Composer`. The native metadata hook uses the same declaration loader without populating Django.
+configured addon roots importable, and imports the build-selected native app
+configurations and autoconfig modules. It reconstructs the native manifest values
+emitted by the build and applies deployment-sensitive hooks through the same YAML
+merge owner. Serving never resolves the app graph or discovers manifests. The
+native metadata hook uses the declaration loader without populating Django; the
+explicit build adapter calls `Composer`.
 The compiler owns `COMPOSE_RUNTIME_DIR` and `COMPOSE_RUNTIME_MODULE`.
 Only canonical `COMPOSE_RUNTIME_*` names configure generated output. Native
 YAML provenance and reference expansion remain available. Ordered addon defaults
@@ -357,7 +362,7 @@ history offline and never authors it. Provisioning checks for model drift and
 uses native `migrate` for execution, database aliases, routing and recording.
 
 `makemigrations` never drops a column or a table that still holds data.
-`angee.compose` gives Django's `makemigrations` and `migrate` the shared
+The host’s explicit `makemigrations` authoring command loads the compiler’s
 [`DropGuardAutodetector`](../angee/compose/migrations.py), which refuses before
 any file is written:
 
@@ -468,7 +473,7 @@ DB. The [native history workflow](#addon-owned-runtime-migrations) explains auth
 
 ### Runtime cleanup
 
-The normal `ComposeConfig` only imports prebuilt concrete models. Explicit
+The host’s `AngeeConfig` only imports prebuilt concrete models. Explicit
 `BuildComposeConfig` uses the same compiler after native source model hooks and
 imports concrete models before `ready()`. Missing output never triggers serving
 repair.

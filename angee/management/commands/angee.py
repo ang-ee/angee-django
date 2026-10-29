@@ -11,7 +11,6 @@ from django.core.management.base import (
     CommandParser,
 )
 
-from angee.compose.runtime import Runtime
 from angee.management import provision
 
 
@@ -64,6 +63,8 @@ class Command(BaseCommand):
     def _handle_check(self, options: dict[str, Any]) -> None:
         """Check explicit build inputs once without registering a serving-time scan."""
 
+        from angee.compose.runtime import Runtime
+
         del options
         try:
             Runtime.from_django().check()
@@ -73,6 +74,8 @@ class Command(BaseCommand):
 
     def _handle_clean(self, options: dict[str, Any]) -> None:
         """Delete generated runtime sources."""
+
+        from angee.compose.runtime import Runtime
 
         del options
         try:

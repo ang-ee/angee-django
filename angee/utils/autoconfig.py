@@ -1,4 +1,4 @@
-"""Apply installed apps' autoconfig through django-yamlconf's settings merge."""
+"""Native YAML settings merge shared by compilation and prebuilt serving."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import module_has_submodule
 
-from angee.compose.yamlconf import (
+from angee.utils.yamlconf import (
     YAMLCONF_ATTRIBUTES,
     YAMLCONF_ENVIRONMENT_SOURCE,
     fail_on_yamlconf_errors,
@@ -65,13 +65,28 @@ class AutoConfig:
             app_config = entry if isinstance(entry, AppConfig) else AppConfig.create(entry)
             autoconfig.update_app(app_config)
 
+    @classmethod
+    def apply_modules(
+        cls, namespace: MutableMapping[str, Any], modules: tuple[str, ...], *, environment: bool = True,
+    ) -> None:
+        """Apply the build's ordered module list without runtime app discovery."""
+
+        autoconfig = cls(namespace, environment=environment)
+        for name in modules:
+            autoconfig.update_module(importlib.import_module(name), name.removesuffix(".autoconfig"))
+
     def update_app(self, app_config: AppConfig) -> None:
         """Apply one app config's optional autoconfig module."""
 
         if not module_has_submodule(app_config.module, "autoconfig"):
             return
         module = importlib.import_module(f"{app_config.name}.autoconfig")
-        declared, derived = self._module_settings(module, app_config)
+        self.update_module(module, app_config.name)
+
+    def update_module(self, module: ModuleType, app_name: str) -> None:
+        """Merge one declared module through native yamlconf."""
+
+        declared, derived = self._module_settings(module, app_name)
         contributed = {**declared, **derived}
 
         attributes: dict[str, object] = {}
@@ -81,7 +96,7 @@ class AutoConfig:
             name = setting_name(key)
             declared_names.add(name)
             if name in COMPOSER_OWNED_SETTINGS:
-                raise ImproperlyConfigured(f"{app_config.name}.autoconfig must not define {name}")
+                raise ImproperlyConfigured(f"{app_name}.autoconfig must not define {name}")
             if ":" not in key and "." not in key and name in self.namespace and not (
                 name in derived and name in self.environment
             ):
@@ -102,7 +117,7 @@ class AutoConfig:
 
         with fail_on_yamlconf_errors():
             if attributes:
-                django_yamlconf.add_attributes(settings_module, attributes, app_config.name)
+                django_yamlconf.add_attributes(settings_module, attributes, app_name)
             if env_attributes:
                 django_yamlconf.add_attributes(
                     settings_module,
@@ -116,7 +131,7 @@ class AutoConfig:
                 self.namespace[str(name)] = getattr(settings_module, name)
 
     def _module_settings(
-        self, module: ModuleType, app_config: AppConfig,
+        self, module: ModuleType, app_name: str,
     ) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
         """Return defaults and derived values, with environment input taking precedence.
 
@@ -127,13 +142,13 @@ class AutoConfig:
 
         contributed = getattr(module, "SETTINGS", {})
         if not isinstance(contributed, Mapping):
-            raise ImproperlyConfigured(f"{app_config.name}.autoconfig.SETTINGS must be a mapping")
+            raise ImproperlyConfigured(f"{app_name}.autoconfig.SETTINGS must be a mapping")
         derive = getattr(module, "settings", None)
         if derive is None:
             return contributed, {}
         if not callable(derive):
-            raise ImproperlyConfigured(f"{app_config.name}.autoconfig.settings must be callable")
+            raise ImproperlyConfigured(f"{app_name}.autoconfig.settings must be callable")
         derived = derive(ChainMap(self.environment, self.namespace))
         if not isinstance(derived, Mapping):
-            raise ImproperlyConfigured(f"{app_config.name}.autoconfig.settings() must return a mapping")
+            raise ImproperlyConfigured(f"{app_name}.autoconfig.settings() must return a mapping")
         return contributed, derived

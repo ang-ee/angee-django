@@ -253,19 +253,18 @@ def build_runtime(root: Path, output: Path, *, check_history: bool) -> None:
     from django.db.migrations.loader import MigrationLoader
     from django.db.migrations.state import ProjectState
 
-    from angee.apps import ProjectBuildConfig
-    from angee.conf import ProjectContract
+    from angee.build import ProjectBuildConfig, ProjectBuildContract
 
     root, output = root.resolve(), output.resolve()
     namespace: dict[str, Any] = {}
-    ProjectContract(namespace).compose(
-        root=root, runtime_dir=output, compose_config="angee.apps.ProjectBuildConfig", error_reporting=False,
+    ProjectBuildContract(namespace).compose(
+        root=root, runtime_dir=output, compose_config="angee.build.ProjectBuildConfig", error_reporting=False,
     )
     if check_history and any(not path.is_relative_to(root) for path in namespace["ANGEE_ADDON_DIRS"]):
         raise RuntimeError("The portable host snapshot must resolve addon sources inside its own root")
     settings.configure(**namespace)
     django.setup()
-    config = apps.get_app_config("compose")
+    config = apps.get_app_config("angee")
     if not isinstance(config, ProjectBuildConfig):
         raise RuntimeError("The host build must select ProjectBuildConfig")
     runtime = config.runtime

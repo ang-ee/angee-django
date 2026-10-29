@@ -119,7 +119,6 @@ def boot(
     from django.conf import settings
     from hatch_angee import discover
 
-    from angee.conf import ProjectContract
     from angee.hatch import _compile
 
     installed_apps = (
@@ -143,8 +142,12 @@ def boot(
         python_paths.append(os.environ["PYTHONPATH"])
     os.environ["PYTHONPATH"] = os.pathsep.join(python_paths)
     _compile(host_root, runtime_dir, check_history=False)
-    namespace: dict[str, Any] = {}
-    ProjectContract(namespace).compose(root=host_root, runtime_dir=runtime_dir, error_reporting=False)
+    import runpy
+
+    namespace = {
+        name: value for name, value in runpy.run_path(str(runtime_dir / "settings.py")).items()
+        if name.isupper()
+    }
     # Only the test runner's database differs from the offline build. It owns
     # the native test DB name and never projects credentials into the artifact.
     namespace["DATABASES"] = {"default": database}
@@ -270,12 +273,12 @@ def reset_migration_history_report() -> dict[str, Any]:
     from django.db.migrations.state import ProjectState
     from django.utils.module_loading import module_dir
 
-    from angee.compose.apps import ComposeConfig
+    from angee.apps import AngeeConfig
     from angee.compose.migrations import reset_migration_history
     from angee.compose.runtime import Runtime
 
-    config = apps.get_app_config("compose")
-    assert isinstance(config, ComposeConfig)
+    config = apps.get_app_config("angee")
+    assert isinstance(config, AngeeConfig)
     labels = tuple(sorted(config.labels))
     runtime = Runtime.from_django()
     call_command("makemigrations", *labels, interactive=False, include_header=False, verbosity=0)

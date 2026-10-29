@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from angee.compose.autoconfig import AutoConfig
 from angee.compose.composer import Composer
+from angee.utils.autoconfig import AutoConfig
 
-CORE_APP_NAMES = ["django_yamlconf", "angee.compose", "angee", "angee.base"]
+CORE_APP_NAMES = ["django_yamlconf", "angee.base", "angee"]
 
 
 def test_defaults_prefixes_the_ordered_core_app_set(tmp_path: Path) -> None:
@@ -22,7 +22,7 @@ def test_defaults_prefixes_the_ordered_core_app_set(tmp_path: Path) -> None:
         run_name="__test_core_defaults__",
     )
 
-    assert defaults["INSTALLED_APPS"] == [*CORE_APP_NAMES, "example.product"]
+    assert defaults["INSTALLED_APPS"] == ["django_yamlconf", "angee.base", "example.product", "angee"]
 
 
 def test_core_fixture_orders_composer_after_native_source_apps(tmp_path: Path) -> None:
@@ -36,7 +36,7 @@ def test_core_fixture_orders_composer_after_native_source_apps(tmp_path: Path) -
     Composer(settings).compose_settings()
 
     assert [config.name for config in settings["INSTALLED_APPS"]] == [
-        "django_yamlconf", "angee", "angee.base", "angee.compose",
+        "django_yamlconf", "angee.base", "angee",
     ]
 
 

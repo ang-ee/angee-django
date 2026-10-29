@@ -136,7 +136,7 @@ class Explicit(Capability):
         "from pathlib import Path\n"
         "SECRET_KEY = 'manager-typing'\n"
         "INSTALLED_APPS = ['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', "
-        "'angee', 'angee.base', 'manager_contract', 'angee.compose.apps.BuildComposeConfig']\n"
+        "'angee.base', 'manager_contract', 'angee.build.ProjectBuildConfig']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
         f"COMPOSE_RUNTIME_DIR = Path({str(tmp_path / 'manager_runtime')!r})\n"

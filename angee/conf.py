@@ -6,20 +6,19 @@ import importlib
 import os
 import runpy
 import sys
-from collections.abc import Iterable, Mapping, MutableMapping
+from collections.abc import Iterable, MutableMapping
 from copy import deepcopy
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import django_yamlconf
 import environ
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
+from hatch_angee import AddonManifest
 
-from angee.addons import addon_manifest
-from angee.compose import yamlconf
-from angee.compose.declarations import AppDeclarationSource, BuildIntegration
+from angee.addons import bind_addon_manifest
 from angee.project import (
     PROJECT_SETTINGS_ENV,
     PROJECT_YAML_NAME,
@@ -27,11 +26,9 @@ from angee.project import (
     find_project_dir,
     project_dir,
 )
+from angee.utils import yamlconf
+from angee.utils.autoconfig import AutoConfig
 from angee.utils.paths import resolve_path
-
-if TYPE_CHECKING:
-    from angee.compose.runtime import Runtime
-
 
 DEFAULTS_SETTINGS_MODULE = "angee.defaults"
 
@@ -60,7 +57,7 @@ def prepend_import_paths(paths: Iterable[Path]) -> None:
 
 
 class ProjectContract:
-    """Load a project's settings contract and ask Angee to compose Django settings."""
+    """Load project declarations and late deployment inputs for a prebuilt host."""
 
     def __init__(self, namespace: MutableMapping[str, Any]) -> None:
         """Store the settings module namespace being populated."""
@@ -69,44 +66,51 @@ class ProjectContract:
         self.env = environ.Env()
         self.project_apps: object = ()
 
-    def compose(
-        self, *, root: Path | None = None, runtime_dir: Path | None = None,
-        compose_config: str = "angee.compose.apps.ComposeConfig", error_reporting: bool = True,
-        authored_root: Path | None = None, authored_module: str | None = None, authored_yaml: Path | None = None,
+    def load_prebuilt(
+        self, *, runtime_dir: Path, authored_root: Path, authored_module: str | None,
+        authored_yaml: Path, project_apps: tuple[str, ...],
+        app_configs: tuple[tuple[str, bool, str | None, bool], ...],
+        autoconfig_modules: tuple[str, ...], manifests: dict[str, dict[str, Any]],
     ) -> None:
-        """Publish project defaults and addon settings only after composition succeeds.
+        """Load deployment values onto a build-resolved native application graph.
 
-        Django may inspect the importing settings module during app discovery.
-        Keeping work private prevents it from capturing a partial app graph, and
-        a failed reload leaves the previously published settings intact. Error
-        reporting starts with the composed addon policy, including when a
-        composition failure is about to propagate.
+        Only the explicit build selects apps, optional autoconfig modules and
+        manifest declarations. Deployment YAML and derived settings still run
+        through their native owners on every process startup.
         """
-
-        from angee.compose.composer import Composer
 
         published = self.namespace
         self.namespace = {}
         try:
-            root = self.load(
-                root=root, authored_root=authored_root, authored_module=authored_module, authored_yaml=authored_yaml,
-            )
-            if runtime_dir is not None:
-                # A build target owns only its output location; project roots,
-                # deployment values and native YAML precedence remain unchanged.
-                self.namespace["COMPOSE_RUNTIME_DIR"] = resolve_path(runtime_dir)
-            authored_root = root if authored_root is None else resolve_path(authored_root)
-            import_paths = (*self.namespace.get("ANGEE_ADDON_DIRS", ()), root)
+            root = self.load(authored_root=authored_root, authored_module=authored_module, authored_yaml=authored_yaml)
+            if isinstance(self.project_apps, str):
+                declared = (self.project_apps,)
+            elif isinstance(self.project_apps, Iterable):
+                declared = tuple(self.project_apps)
+            else:
+                raise ImproperlyConfigured("Project INSTALLED_APPS must be a string or iterable of app paths.")
+            if declared != project_apps:
+                raise ImproperlyConfigured("Project INSTALLED_APPS changed; rebuild the prebuilt runtime explicitly.")
+            self.namespace["COMPOSE_RUNTIME_DIR"] = runtime_dir.resolve()
+            import_paths = (*self.namespace.get("ANGEE_ADDON_DIRS", ()), root, runtime_dir.parent)
             if authored_root != root:
                 import_paths = (authored_root, *import_paths)
             prepend_import_paths(import_paths)
-            try:
-                Composer(self.namespace).compose_settings(
-                    project_apps=self.project_apps, compose_config=compose_config,
+            configs = []
+            for path, is_root, declaration, required in app_configs:
+                config = AppConfig.create(path)
+                setattr(config, "compose_root", is_root)
+                setattr(config, "compose_root_declaration", declaration)
+                setattr(config, "compose_required", required)
+                bind_addon_manifest(
+                    config, AddonManifest(**manifests[config.name]) if config.name in manifests else None,
                 )
+                configs.append(config)
+            self.namespace["INSTALLED_APPS"] = configs
+            try:
+                AutoConfig.apply_modules(self.namespace, autoconfig_modules)
             finally:
-                if error_reporting:
-                    self._start_error_reporting()
+                self._start_error_reporting()
             composed = self.namespace
         finally:
             self.namespace = published
@@ -116,8 +120,8 @@ class ProjectContract:
     def _start_error_reporting(self) -> None:
         """Start Sentry once per process when the deployment supplies ``SENTRY_DSN``.
 
-        Every Django, ASGI, Celery and management-command process composes
-        settings here, before ``django.setup()``, which is where Sentry's Django
+        Every Django, ASGI, Celery and management-command process loads
+        deployment settings here, before ``django.setup()``, which is where Sentry's Django
         and Celery integrations must start. The SDK reads ``SENTRY_DSN``,
         ``SENTRY_ENVIRONMENT`` and ``SENTRY_RELEASE`` itself.
 
@@ -195,6 +199,7 @@ class ProjectContract:
         self.project_apps = getattr(project_settings, "INSTALLED_APPS", ())
         self._apply_defaults(project_settings, root, predefined_settings=predefined_settings)
         self.namespace[PROJECT_YAML_SETTINGS] = project_yaml_settings
+        self.namespace["_ANGEE_PROJECT_APPS"] = self.project_apps
         return root
 
     def _read_project_env(self, root: Path) -> None:
@@ -411,55 +416,3 @@ class ProjectContract:
                 project_settings,
                 yamlconf.YAMLCONF_ATTRIBUTES,
             )
-
-
-class ManifestDeclarations(AppDeclarationSource):
-    """Project the host's canonical addon manifests into the compiler contract."""
-
-    def dependencies(self, app: AppConfig, *, refresh: bool = False) -> tuple[str, ...]:
-        manifest = addon_manifest(app, refresh=refresh)
-        return manifest.depends_on if manifest is not None else ()
-
-    def migrations(self, app: AppConfig) -> tuple[Mapping[str, Any], ...]:
-        manifest = addon_manifest(app)
-        return manifest.migrations if manifest is not None else ()
-
-
-def project_settings_source(*, authored_module: str | None, source_path: str = "..") -> str:
-    """Render ordinary settings wiring with portable authored-source references."""
-
-    return (
-        '"""Generated Django settings wiring; deployment inputs remain late-bound."""\n'
-        "from pathlib import Path\n\n"
-        "from angee.conf import ProjectContract\n\n"
-        "ProjectContract(globals()).compose(\n"
-        "    runtime_dir=Path(__file__).resolve().parent,\n"
-        f"    authored_root=(Path(__file__).resolve().parent / {source_path!r}).resolve(),\n"
-        f"    authored_module={authored_module!r},\n"
-        "    authored_yaml=Path(__file__).with_suffix('.yaml'),\n"
-        ")\n"
-    )
-
-
-class ProjectSettings(BuildIntegration):
-    """Emit raw authored settings and native wiring, never resolved deployment values."""
-
-    def render_sources(self, runtime: Runtime) -> Mapping[Path, str]:
-        from django.conf import settings
-
-        source_info = django_yamlconf.get_attr_info("SOURCE_DIR", settings)
-        if source_info is None:
-            # Native Django hosts using only the generic composer have no
-            # ProjectContract declarations to package.
-            return {}
-        source_root = Path(source_info["value"])
-        module = environ.Env().str(PROJECT_SETTINGS_ENV, default=PROJECT_YAML_NAME)
-        if not source_root.joinpath(*module.split(".")).with_suffix(".py").is_file():
-            module = None
-        source_yaml = source_root / "settings.yaml"
-        return {
-            Path("settings.py"): project_settings_source(
-                authored_module=module, source_path=os.path.relpath(source_root, runtime.runtime_dir),
-            ),
-            Path("settings.yaml"): source_yaml.read_text(encoding="utf-8") if source_yaml.is_file() else "{}\n",
-        }

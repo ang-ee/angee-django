@@ -10,6 +10,7 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -30,7 +31,6 @@ from django.utils import timezone
 
 from angee.addons import addon_manifest
 from angee.base.fields.identity import SqidField
-from angee.compose.apps import ComposeConfig
 from angee.compose.management.commands.makemigrations import Command as ComposedMakeMigrationsCommand
 from angee.compose.migrations import DropGuardAutodetector, RuntimeMigrations
 from angee.compose.runtime import Runtime
@@ -43,7 +43,7 @@ from tests.conftest import make_addon, write_addon_manifest
 def manifest_migration_declarations(settings):
     """These addon transition fixtures select the host's manifest adapter."""
 
-    settings.COMPOSE_APP_DECLARATIONS = "angee.conf.ManifestDeclarations"
+    settings.COMPOSE_APP_DECLARATIONS = "angee.build.ManifestDeclarations"
 
 
 def _write_module(path: Path, text: str = "") -> None:
@@ -1544,23 +1544,18 @@ class Migration(migrations.Migration):
 
 
 @pytest.fixture
-def native_authoring_command(runtime_migration_probe, monkeypatch):
+def native_authoring_command(runtime_migration_probe, monkeypatch, settings):
     command_module = importlib.import_module("angee.compose.management.commands.makemigrations")
     materializer, _, _, runtime_dir, _ = runtime_migration_probe
-    config = ComposeConfig("angee.compose", importlib.import_module("angee.compose"))
-    config.apps = apps
-    config.models = {}
-    config.labels = tuple(sorted(materializer.labels))
-    original_config = apps.get_app_config
-
-    def get_config(label):
-        return config if label == "compose" else original_config(label)
+    artifact = ModuleType("native_authoring_fixture")
+    artifact.RUNTIME_APPS = tuple(sorted(materializer.labels))
+    monkeypatch.setitem(sys.modules, artifact.__name__, artifact)
+    settings.COMPOSE_RUNTIME_MODULE = artifact.__name__
 
     def migrations_for(_addons, *, labels):
         assert frozenset(labels) == materializer.labels
         return materializer
 
-    monkeypatch.setattr(apps, "get_app_config", get_config)
     monkeypatch.setattr(command_module, "RuntimeMigrations", migrations_for)
     return ComposedMakeMigrationsCommand(), materializer, runtime_dir
 

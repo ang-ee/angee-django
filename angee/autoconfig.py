@@ -17,7 +17,7 @@ _Settings = TypedDict(
 )
 
 SETTINGS: _Settings = {
-    "COMPOSE_INTEGRATIONS:append": ["angee.conf.ProjectSettings"],
+    "COMPOSE_INTEGRATIONS:append": ["angee.build.ProjectSettings"],
     "ROOT_URLCONF": "angee.urls",
     "ASGI_APPLICATION": "angee.asgi.application",
     "MIDDLEWARE:prepend": ["django.middleware.security.SecurityMiddleware"],

@@ -59,7 +59,7 @@ INSTALLED_APPS = [
     "django.contrib.auth",
     "rebac",
     "probe.apps.ProbeConfig",
-    "angee",
+    "probe.apps.BareAngeeConfig",
 ]
 DATABASES = {{"default": {{"ENGINE": "django.db.backends.sqlite3", "NAME": {str(root / "probe.sqlite3")!r}}}}}
 """,
@@ -67,6 +67,8 @@ DATABASES = {{"default": {{"ENGINE": "django.db.backends.sqlite3", "NAME": {str(
     )
     (package / "apps.py").write_text(
         """from django.apps import AppConfig
+class BareAngeeConfig(AppConfig):
+    name = "angee"
 class ProbeConfig(AppConfig):
     name = "probe"
     def ready(self):
@@ -212,7 +214,7 @@ def test_makemigrations_writes_a_column_drop_only_after_its_data_is_gone(tmp_pat
         f"""import os
 SECRET_KEY = "drop-guard-probe"
 INSTALLED_APPS = ["django.contrib.contenttypes", "native_app",
-    "angee.compose.apps.BuildComposeConfig" if os.environ.get("COMPOSE_BUILD") else "angee.compose.apps.ComposeConfig"]
+    "angee.build.ProjectBuildConfig" if os.environ.get("COMPOSE_BUILD") else "angee.apps.AngeeConfig"]
 COMPOSE_RUNTIME_DIR = {str(tmp_path / "runtime")!r}
 COMPOSE_RUNTIME_MODULE = "runtime"
 DATABASES = {{"default": {{"ENGINE": "django.db.backends.sqlite3", "NAME": {str(database)!r}}}}}

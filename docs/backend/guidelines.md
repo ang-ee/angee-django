@@ -100,7 +100,7 @@ that layering tests enforce:
   policy enter through its explicit adapter contracts; it never imports Angee's
   host loader, model toolkit, or addons. No serving module (`asgi`, `urls`,
   `views`, `consumers`, `signals`, `models`, `graphql`) may import the compiler.
-  Host serving commands share that restriction. The Hatch build hook dispatches
+  Provisioning shares that restriction; explicit authoring and drift-check commands may load the compiler. The Hatch build hook dispatches
   compilation explicitly; provisioning consumes its prebuilt output.
 
 The same one-way rule extends downward to framework addons under `addons/angee/`
@@ -884,22 +884,29 @@ and current contracts before applying a historical example to a new deployment.
   other worker services), or run the whole-application restart; see
   [Restart the running stack](../howto/getstarted.md#restart-the-running-stack).
 - **`angee dev` serves via Angee's `runserver` override, not `uvicorn --reload`.**
-  `angee` ships a `runserver` that runs `ASGI_APPLICATION` under uvicorn
-  supervised by Django's follow-imports autoreloader (mirrors Daphne's override).
-  It needs no `--reload-dir`: Django watches imported source — consumer/framework addons,
-  framework core, *and* editable deps — and never the generated `runtime/` (each
-  child re-emits before its reloader snapshots), so a model edit reloads once. Don't
-  reintroduce `uvicorn --reload`/`--reload-dir` heuristics in the stack template. The
-  GraphQL ASGI hook regenerates the SDL when Django `DEBUG` is enabled, including
-  `runserver --noreload` and debug `serve`, so a live edit refreshes
-  `runtime/schemas/*.graphql` and Vite HMRs; `schema --check`
-  stays a real drift gate because management commands never import `angee.asgi`.
-  Generated files (runtime models + SDL) are written atomically via
-  `angee.utils.files.write_atomic`. Django decides whether a file-change receiver
-  handled an edit or the child must reload. When its native run loop exits, the
-  command requests Uvicorn shutdown and waits for the server thread, allowing ASGI
-  lifespans to release their non-daemon work before Python exits.
-  Install `pywatchman` for event-based (vs 1s-poll) reload.
+  [`angee.management.commands.runserver`](../../angee/management/commands/runserver.py)
+  runs `ASGI_APPLICATION` under uvicorn supervised by Django's follow-imports
+  autoreloader (mirroring Daphne's override). It needs no `--reload-dir`: Django
+  watches imported source — consumer/framework addons, framework core, *and*
+  editable deps — including imported prebuilt `runtime/` modules. Source declarations
+  are compiled by the explicit Hatch build before startup; a serving child imports
+  prebuilt models through the [native host AppConfig](../../angee/apps.py). Rebuild
+  structural model changes before restarting the service. Don't reintroduce
+  `uvicorn --reload`/`--reload-dir` heuristics in the stack template. Django
+  decides whether a file-change receiver handled an edit or the child must
+  reload. When its native run loop exits, the command requests Uvicorn shutdown
+  and waits for the server thread, allowing ASGI lifespans to release their
+  non-daemon work before Python exits.
+- **Serving never emits the GraphQL SDL.** [`GraphQLSdl`](../../addons/angee/graphql/sdl.py)
+  owns `runtime/schemas/<name>.graphql` and `<name>.metadata.json`; only the
+  explicit `schema` management command writes them, and the stack's provision
+  job runs `schema` after provisioning so the artifacts exist before dependent
+  services start. The [GraphQL ASGI hook](../../addons/angee/graphql/asgi.py)
+  only builds the subscription routes of the installed schemas, so a live schema
+  edit reaches the SDL (and Vite) only when `schema` runs again; `schema --check`
+  is the drift gate. Generated trees (runtime sources and SDL) are written
+  atomically through the shared [`GeneratedTree`](../../angee/utils/artifacts.py).
+  [Composition and schema](../checks.md#composition-and-schema) owns the commands.
 - **Each running stack needs a unique Compose project name and edge port.**
   Colliding names can merge containers into another stack's Compose project;
   colliding ingress ports can route requests to the wrong runtime. Inspect the
@@ -1322,7 +1329,7 @@ and current contracts before applying a historical example to a new deployment.
   `registry_setting`** — the key→path mapping (e.g. `ANGEE_STORAGE_BACKEND_CLASSES`)
   is supplied by the owning addon's `autoconfig`, so every settings module that
   installs the addon must carry a **non-empty** mapping. Bare settings modules
-  call [`AutoConfig.apply_installed()`](../../angee/compose/autoconfig.py) before
+  call [`AutoConfig.apply_installed()`](../../angee/utils/autoconfig.py) before
   Django loads models, then add only their fixture implementations. An empty
   registry raises `ImproperlyConfigured` at import — give the addon a
   noop/null-object default so the set is never empty. The column stores the key
@@ -2181,7 +2188,7 @@ Declare autoconfig `SETTINGS` with a source-owned `TypedDict`, including the
 normalized value types of `:append` contributions; annotate derived `settings()`
 results the same way. Preserve configurable unions and nullable values rather
 than inferring a contract from one default. The [typing adapter](../../angee/compose/typing.py)
-reads those native declarations through [yamlconf provenance](../../angee/compose/yamlconf.py).
+reads those native declarations through [yamlconf provenance](../../angee/utils/yamlconf.py).
 
 Keep the shared `angee.*` namespace open to every configured addon source.
 The core's [`angee/__init__.py`](../../angee/__init__.py) owns

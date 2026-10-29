@@ -10,8 +10,8 @@ from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 
 from angee.compose.appgraph import AppGraph
-from angee.compose.autoconfig import AutoConfig
 from angee.compose.declarations import AppDeclarationSource
+from angee.utils.autoconfig import AutoConfig
 from angee.utils.paths import resolve_path
 
 
@@ -32,11 +32,16 @@ class Composer:
         if installed_apps is None:
             raise ImproperlyConfigured("settings must define INSTALLED_APPS")
         root_apps = self._app_entries(installed_apps)
-        if compose_config is not None:
+        selected = AppConfig.create(compose_config) if compose_config is not None else None
+        if selected is not None:
             root_apps = tuple(
-                AppConfig.create(compose_config) if entry == "angee.compose" else entry
+                selected
+                if (entry if isinstance(entry, AppConfig) else AppConfig.create(entry)).name == selected.name
+                else entry
                 for entry in root_apps
             )
+            if selected not in root_apps:
+                root_apps = (*root_apps, selected)
         declared_apps = None if project_apps is None else self._app_entries(project_apps)
 
         runtime_setting = self.namespace.get("COMPOSE_RUNTIME_DIR")
@@ -49,8 +54,9 @@ class Composer:
         )
         # The compiler/importer is the final native phase-2 hook. Preserve
         # native identities and all dependency ordering among source apps.
-        installed = [config for config in app_configs if config.name != "angee.compose"]
-        installed.extend(config for config in app_configs if config.name == "angee.compose")
+        last = selected.name if selected is not None else "angee.compose"
+        installed = [config for config in app_configs if config.name != last]
+        installed.extend(config for config in app_configs if config.name == last)
         self.namespace["INSTALLED_APPS"] = installed
         self.namespace["COMPOSE_RUNTIME_DIR"] = runtime_dir
         runtime_parent = str(runtime_dir.parent.resolve())

@@ -48,10 +48,11 @@ class _Query:
 _PROBE = """
 import json
 import sentry_sdk
+from angee.build import ProjectBuildContract
 from angee.conf import ProjectContract
 
 try:
-    ProjectContract({"__name__": "probe_settings"}).compose()
+    ProjectBuildContract({"__name__": "probe_settings"}).compose()
     failure = None
 except Exception as error:
     failure = type(error).__name__

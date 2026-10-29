@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from django.apps import apps
+from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management.base import CommandError
 from django.core.management.commands.makemigrations import Command as MakeMigrationsCommand
@@ -22,7 +23,6 @@ from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.writer import MigrationWriter
 from django.utils.module_loading import module_dir
 
-from angee.compose.apps import ComposeConfig
 from angee.compose.migrations import DropGuardAutodetector, RuntimeMigrations
 
 
@@ -46,10 +46,12 @@ class Command(MakeMigrationsCommand):
                 super().handle(*app_labels, **options)
                 return
 
-        config = apps.get_app_config("compose")
-        if not isinstance(config, ComposeConfig):
-            raise CommandError("Migration authoring requires prebuilt models; build the project first.")
-        authored = RuntimeMigrations(apps.get_app_configs(), labels=config.labels)
+        try:
+            artifact = importlib.import_module(getattr(settings, "COMPOSE_RUNTIME_MODULE", "runtime"))
+            labels = artifact.RUNTIME_APPS
+        except (ImportError, AttributeError) as error:
+            raise CommandError("Migration authoring requires prebuilt models; build the project first.") from error
+        authored = RuntimeMigrations(apps.get_app_configs(), labels=labels)
         selected = app_labels or None
         try:
             if options.get("dry_run") or options.get("check_changes"):

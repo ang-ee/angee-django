@@ -17,7 +17,7 @@ def test_manifest_adapter_is_safe_before_settings_and_model_loading() -> None:
     script = "\n".join((
         "import sys",
         "from django.conf import settings",
-        "from angee.conf import ManifestDeclarations",
+        "from angee.build import ManifestDeclarations",
         "from angee.compose.appgraph import AppGraph",
         "configs = AppGraph(ManifestDeclarations()).resolve(('django.contrib.contenttypes',))",
         "assert len(configs) == 1",
@@ -66,7 +66,7 @@ def test_generic_autoconfig_environment_prefixes_belong_to_the_host(tmp_path, pr
     script = "\n".join((
         "import sys",
         f"sys.path.insert(0, {str(tmp_path)!r})",
-        "from angee.compose.autoconfig import AutoConfig",
+        "from angee.utils.autoconfig import AutoConfig",
         "from django.conf import settings",
         "namespace = {'INSTALLED_APPS': ['prefix_owner']}",
         f"prefixes = {prefixes!r}",

@@ -8,14 +8,13 @@ from pathlib import Path
 import environ
 from django.apps import AppConfig
 
-from angee.compose.autoconfig import AutoConfig
+from angee.utils.autoconfig import AutoConfig
 
 
-class BareComposeConfig(AppConfig):
-    """Register the core composer without emitting a generated runtime."""
+class BareAngeeConfig(AppConfig):
+    """Register source-only tests without importing a prebuilt application."""
 
-    name = "angee.compose"
-    label = "compose"
+    name = "angee"
 
 
 class BareGraphQLConfig(AppConfig):
@@ -33,8 +32,7 @@ INSTALLED_APPS = [
     "axes",
     "rebac",
     "simple_history",
-    "tests.settings.BareComposeConfig",
-    "angee",
+    "tests.settings.BareAngeeConfig",
     "angee.base",
     "angee.web",
     "angee.provenance",

@@ -37,7 +37,7 @@ def test_declared_settings_types_preserve_native_errors_and_warm_dependencies(tm
         "SETTINGS: _Defaults = {'ANGEE_VALUES:append': ['extra']}\n"
     )
     (tmp_path / "fixture_settings.py").write_text(
-        "from angee.compose.autoconfig import AutoConfig\n"
+        "from angee.utils.autoconfig import AutoConfig\n"
         "SECRET_KEY = 'settings-types'\n"
         "INSTALLED_APPS = ['django.contrib.contenttypes', 'settings_one', 'settings_two']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
