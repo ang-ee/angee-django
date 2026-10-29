@@ -547,7 +547,6 @@ class ProjectParticipantType(AuthoredRefMixin, AngeeNode):
     updated_at: auto
 
     project: ProjectType | None = actor_scoped_to_one("project")
-    links: list["ProjectLinkType"] = actor_scoped_to_many("links")
     party: PartyType | None = actor_scoped_to_one("party")
 
 

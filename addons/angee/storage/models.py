@@ -50,7 +50,7 @@ from django.core.exceptions import (
 )
 from django.core.files.base import ContentFile
 from django.core.files.base import File as DjangoFile
-from django.db import IntegrityError, models, transaction
+from django.db import router, IntegrityError, models, transaction
 from django.db.models import Q
 from django.db.models.signals import post_save
 from django.urls import reverse
@@ -177,7 +177,7 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel):
 
     objects = StorageMasterManager()
 
-    _storage_cache: ClassVar[OrderedDict[tuple[Any, Any], StorageBackend]] = OrderedDict()
+    _storage_cache: ClassVar[OrderedDict[tuple[Any, ...], StorageBackend]] = OrderedDict()
     """Resolved backend instances keyed by ``(pk, frozen resolved config)``."""
 
     class Meta:
@@ -212,19 +212,19 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel):
 
     @property
     def storage(self) -> StorageBackend:
-        """Return the resolved backend instance, cached per ``(row, config)``.
+        """Return the resolved backend instance, cached per database, row, implementation and config.
 
         The cache key includes the resolved config, so rotating an env-backed
         credential takes effect on the next lookup without a worker restart.
         """
 
         config = self.resolved_config()
-        key = (self.pk, _frozen(config))
+        backend_class = self.get_backend_class_impl()
+        key = (self._state.db, self.pk, backend_class, _frozen(config))
         cached = self._storage_cache.pop(key, None)
         if cached is not None:
             self._storage_cache[key] = cached
             return cached
-        backend_class = self.get_backend_class_impl()
         instance = backend_class(backend_config=config)
         self._storage_cache[key] = instance
         while len(self._storage_cache) > _STORAGE_CACHE_MAX_SIZE:
@@ -1725,9 +1725,16 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
 
         storage = self.storage
         key = self.storage_path
-        super().delete()
-        if not type(self).system_queryset().filter(drive_id=self.drive_id, storage_path=key).exists():
-            storage.discard(key, context="purge")
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        drive_id = self.drive_id
+        model = type(self)
+        super().delete(using=using)
+
+        def discard_unreferenced() -> None:
+            if not model.system_queryset().using(using).filter(drive_id=drive_id, storage_path=key).exists():
+                storage.discard(key, context="purge")
+
+        transaction.on_commit(discard_unreferenced, using=using)
 
     def _fail(self, *, reason: str) -> None:
         """Transition this row to FAILED, recording why for audit surfaces."""

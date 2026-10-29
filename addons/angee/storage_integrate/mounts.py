@@ -218,7 +218,11 @@ class LocalFolderMountBackend(MountBackend):
         """
 
         root = self.root
-        for directory, directory_names, file_names in os.walk(root, followlinks=False):
+        def fail_inventory(error: OSError) -> None:
+            self.scan_errors += 1
+            raise error
+
+        for directory, directory_names, file_names in os.walk(root, followlinks=False, onerror=fail_inventory):
             directory_path = Path(directory)
             directory_names[:] = sorted(
                 name for name in directory_names if not (directory_path / name).is_symlink()

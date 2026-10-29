@@ -66,7 +66,7 @@ How the ontology maps to this addon.
   model. The card uses the action model's field metadata.
   A model declares callable proposal methods once in its class-level
   `decision_methods` tuple. Ask-time validation requires a declared method with
-  no required arguments, rejects `delete`, and checks optional keyword
+  arguments supplied by the proposal, rejects `delete`, and checks declared keyword
   `arguments`. Field values, readable foreign-key identities and editability are
   validated when asking; state and server-owned fields cannot be written, and
   declared per-field write permissions apply to the asking actor. A field action

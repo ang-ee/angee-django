@@ -14,14 +14,14 @@ stack's owner of RFC-5545. The timezone/window contract is documented on
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, tzinfo
+from datetime import UTC, datetime
 
 from dateutil.rrule import rrule, rruleset, rrulestr
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
-_VALIDATION_ANCHOR = datetime(2000, 1, 1)
-"""A fixed naive anchor for grammar-only validation; its date never affects validity."""
+_VALIDATION_ANCHOR = datetime(2000, 1, 1, tzinfo=UTC)
+"""A fixed aware anchor for grammar-only validation; its date never affects validity."""
 
 
 class Recurrence:
@@ -89,21 +89,21 @@ class Recurrence:
 
         _require_aware(dtstart=dtstart, window_start=window_start, window_end=window_end)
         tz = timezone.get_default_timezone()
-        after = _to_local_naive(window_start, tz)
-        before = _to_local_naive(window_end, tz)
-        anchor = _to_local_naive(dtstart, tz)
+        after = window_start.astimezone(tz)
+        before = window_end.astimezone(tz)
+        anchor = dtstart.astimezone(tz)
         if self.rule:
             candidates = self._compile(anchor).between(after, before, inc=True)
         else:
             candidates = [anchor]
         return [
-            timezone.make_aware(naive, tz).astimezone(UTC)
-            for naive in candidates
-            if after <= naive < before
+            moment.astimezone(UTC)
+            for moment in candidates
+            if after <= moment < before
         ]
 
     def _compile(self, anchor: datetime) -> rrule | rruleset:
-        """Parse the rule anchored at a naive local ``anchor`` (a dateutil rrule/rruleset)."""
+        """Parse the rule anchored at an aware local ``anchor`` (a dateutil rrule/rruleset)."""
 
         return rrulestr(self.rule, dtstart=anchor)
 
@@ -124,8 +124,3 @@ def _require_aware(**moments: datetime) -> None:
             code="naive_datetime",
         )
 
-
-def _to_local_naive(moment: datetime, tz: tzinfo) -> datetime:
-    """Project an aware datetime into ``tz`` and drop the offset (naive local wall time)."""
-
-    return moment.astimezone(tz).replace(tzinfo=None)

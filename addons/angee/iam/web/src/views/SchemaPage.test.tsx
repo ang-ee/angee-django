@@ -39,11 +39,11 @@ const sdkMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@angee/refine", async (importOriginal) => {
-  const { documentName } = await import("./test-documents");
+  const { IamRebacSchema } = await import("../documents");
   return {
     ...(await importOriginal<typeof import("@angee/refine")>()),
     useAuthoredQuery: (document: unknown) =>
-      documentName(document) === "IamRebacSchema"
+      document === IamRebacSchema
         ? sdkMocks.schema
         : { data: undefined, isFetching: false, error: null, refetch: vi.fn() },
   };

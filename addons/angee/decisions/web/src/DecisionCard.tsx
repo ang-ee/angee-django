@@ -53,7 +53,7 @@ export function DecisionCard({ decision, selfId, highlighted, compact, detail = 
     const value = choice.values[id]?.[field];
     if (value !== undefined) (values[id] ??= {})[field] = value;
   }
-  const complete = chosen.length > 0 && chooseFields.every(({ id, field }) => values[id]?.[field] != null && values[id]?.[field] !== "");
+  const complete = chosen.length > 0 && chooseFields.every(({ id, field }) => Object.hasOwn(values[id] ?? {}, field));
   const setChosen = (keys: string[]) => setChoice((current) => ({ ...current, revision: decision.revision, keys, accepted: false }));
   const [error, setError] = useState<string>();
   useEffect(() => {

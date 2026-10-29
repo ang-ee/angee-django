@@ -608,39 +608,26 @@ def test_oauth_protocol_round_trips_over_the_real_pinned_transport(
     assert dialled == ["127.0.0.1"] * 4
 
 
-def test_verify_id_token_rejects_bad_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ID token verification rejects a mismatched issuer claim."""
+@pytest.mark.parametrize("claim,value", [("iss", "https://wrong.example"), ("aud", "other-client")])
+def test_verify_id_token_rejects_wrong_native_claim(claim: str, value: str) -> None:
+    """Native PyJWT verification enforces issuer/audience for actual signed tokens."""
 
     oidc = _stub_login_oauth_client()
-    monkeypatch.setattr(
-        oidc_protocol.jwt,
-        "decode",
-        lambda *args, **kwargs: {
-            "iss": "https://wrong.example",
-            "aud": oidc.oauth_client.client_id,
-            "nonce": "nonce",
-        },
-    )
-
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    claims = {
+        "iss": oidc.issuer,
+        "aud": oidc.client_id,
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 60,
+        "sub": "native-claim-test",
+        "nonce": "nonce",
+        claim: value,
+    }
+    token = oidc_protocol.jwt.encode(claims, private_key, algorithm="RS256")
     with pytest.raises(OAuthFlowError) as exc_info:
-        OAuthClientOidcProtocol(oidc).verify_id_token("token", nonce="nonce", jwks_client=_FakeJwksClient())
-
-    assert exc_info.value.code == INVALID_ID_TOKEN
-
-
-def test_verify_id_token_rejects_bad_audience(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ID token verification rejects a mismatched audience claim."""
-
-    oidc = _stub_login_oauth_client()
-    monkeypatch.setattr(
-        oidc_protocol.jwt,
-        "decode",
-        lambda *args, **kwargs: {"iss": oidc.issuer, "aud": "other-client", "nonce": "nonce"},
-    )
-
-    with pytest.raises(OAuthFlowError) as exc_info:
-        OAuthClientOidcProtocol(oidc).verify_id_token("token", nonce="nonce", jwks_client=_FakeJwksClient())
-
+        OAuthClientOidcProtocol(oidc).verify_id_token(
+            token, nonce="nonce", jwks_client=_FakeJwksClient(private_key.public_key()),
+        )
     assert exc_info.value.code == INVALID_ID_TOKEN
 
 
