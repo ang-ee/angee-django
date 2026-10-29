@@ -10,9 +10,9 @@ from django.core.exceptions import ImproperlyConfigured
 from hatch_angee import AddonManifest
 
 from angee.addons import addon_manifest, resolve_manifest_roots
+from angee.build import ManifestDeclarations
 from angee.compose.appgraph import AppGraph
 from angee.compose.declarations import AppDeclarationSource
-from angee.conf import ManifestDeclarations
 from tests.conftest import make_addon
 
 

@@ -296,7 +296,6 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
 
     assert _installed_paths(settings["INSTALLED_APPS"]) == [
         'django_yamlconf',
-        'angee.apps.AngeeConfig',
         'django.contrib.contenttypes.apps.ContentTypesConfig',
         'rebac.apps.RebacConfig',
         BASE_APP,
@@ -563,19 +562,17 @@ def test_compose_settings_module_reads_project_runtime(
 ) -> None:
     """The Django settings module can be Angee-owned and project-fed."""
 
-    project = ModuleType("settings")
-    project.__file__ = str(tmp_path / "settings.py")
-    project.SECRET_KEY = "bridge-secret"  # type: ignore[attr-defined]
-    project.DEBUG = True  # type: ignore[attr-defined]
-    project.ALLOWED_HOSTS = ["*"]  # type: ignore[attr-defined]
-    project.DATABASES = {  # type: ignore[attr-defined]
-        "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"},
-    }
-    project.ANGEE_DATA_DIR = tmp_path / "data"  # type: ignore[attr-defined]
-    project.INSTALLED_APPS = ("angee.resources",)  # type: ignore[attr-defined]
-    project.COMPOSE_RUNTIME_DIR = tmp_path / "runtime"  # type: ignore[attr-defined]
-
-    monkeypatch.setitem(sys.modules, project.__name__, project)
+    (tmp_path / "settings.py").write_text(
+        "SECRET_KEY = 'bridge-secret'\n"
+        "DEBUG = True\n"
+        "ALLOWED_HOSTS = ['*']\n"
+        "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
+        f"ANGEE_DATA_DIR = {str(tmp_path / 'data')!r}\n"
+        "INSTALLED_APPS = ('angee.resources',)\n"
+        f"COMPOSE_RUNTIME_DIR = {str(tmp_path / 'runtime')!r}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delitem(sys.modules, "settings", raising=False)
     monkeypatch.setenv("ANGEE_PROJECT_DIR", str(tmp_path))
 
     compose_settings = _load_project_settings_artifact()
@@ -1178,8 +1175,8 @@ def test_defaults_module_requires_compose_seed(
     assert not (tmp_path / ".angee").exists()
 
 
-def test_defaults_module_seeds_compose_installed_app(tmp_path: Path) -> None:
-    """Defaults seed the composer app before project app roots."""
+def test_defaults_module_seeds_host_after_project_app_roots(tmp_path: Path) -> None:
+    """Defaults install the host phase-2 hook after the project app roots."""
 
     defaults = runpy.run_module(
         "angee.defaults",
@@ -1188,7 +1185,7 @@ def test_defaults_module_seeds_compose_installed_app(tmp_path: Path) -> None:
     )
 
     assert defaults["INSTALLED_APPS"] == [
-        "django_yamlconf", "angee.compose", "angee", "angee.base", "angee.resources",
+        "django_yamlconf", "angee.base", "angee.resources", "angee",
     ]
     assert defaults["USE_TZ"] is True
     assert defaults["DEFAULT_AUTO_FIELD"] == "django.db.models.BigAutoField"
@@ -1950,13 +1947,13 @@ def test_mail_provider_environment_belongs_to_messaging(tmp_path, monkeypatch, i
 
 def test_plain_composer_preserves_host_choices_and_adds_no_capability_defaults(tmp_path):
     namespace = {
-        "INSTALLED_APPS": ("tests.settings.BareAngeeConfig",),
+        "INSTALLED_APPS": ("tests.linesdemo",),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
         "ROOT_URLCONF": "project.urls",
         "ASGI_APPLICATION": "project.asgi.application",
     }
     Composer(namespace).compose_settings()
-    assert [config.name for config in namespace["INSTALLED_APPS"]] == ["angee"]
+    assert [config.name for config in namespace["INSTALLED_APPS"]] == ["tests.linesdemo"]
     assert namespace["ROOT_URLCONF"] == "project.urls"
     assert namespace["ASGI_APPLICATION"] == "project.asgi.application"
     assert "MIDDLEWARE" not in namespace
