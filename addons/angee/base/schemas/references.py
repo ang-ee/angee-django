@@ -9,7 +9,7 @@ from referencing import Registry
 from referencing.exceptions import Unresolvable
 from referencing.jsonschema import DRAFT202012
 
-from angee.serialization import canonical_json
+from angee.base.serialization import canonical_json
 
 SCHEMA_ANNOTATIONS = frozenset({"title", "description", "default", "examples"})
 

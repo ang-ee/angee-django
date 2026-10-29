@@ -50,6 +50,7 @@ from strawberry_django_hasura.filtering import filter_queryset, where_to_q
 from strawberry_django_hasura.inputs import comparison_for_python_type
 
 from angee.base.fields.ordering import FractionalRankField
+from angee.base.hooks import resolve_hooks
 from angee.base.identity import public_data_id_field
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for, public_id_of
@@ -97,7 +98,6 @@ from angee.graphql.introspection import (
 )
 from angee.graphql.relations import RecordReferenceNode, actor_scoped_relation_expression, with_record_reference_access
 from angee.graphql.writes import write_queryset
-from angee.hooks import resolve_hooks
 
 if TYPE_CHECKING:
     from django.db.models.sql.compiler import _AsSqlType
