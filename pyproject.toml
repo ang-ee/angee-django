@@ -9,7 +9,78 @@ description = "Angee framework addons at one version"
 requires-python = ">=3.14"
 license = "LGPL-3.0-or-later"
 license-files = ["LICENSE", "LICENSE.GPL"]
-dependencies = ["angee-agents==3.0.0", "angee-agents-integrate-anthropic==3.0.0", "angee-agents-integrate-ollama==3.0.0", "angee-agents-integrate-openai==3.0.0", "angee-agents-runtime-pydantic==3.0.0", "angee-appearance==3.0.0", "angee-appearance-integrate==3.0.0", "angee-base==3.0.0", "angee-dashboards==3.0.0", "angee-decisions==3.0.0", "angee-extraction==3.0.0", "angee-graphql==3.0.0", "angee-iam==3.0.0", "angee-iam-integrate-oidc==3.0.0", "angee-intake==3.0.0", "angee-integrate==3.0.0", "angee-integrate-github==3.0.0", "angee-integrate-iphone==3.0.0", "angee-integrate-vcs==3.0.0", "angee-jobs==3.0.0", "angee-knowledge==3.0.0", "angee-knowledge-graph-pgvector==3.0.0", "angee-knowledge-integrate-notion==3.0.0", "angee-mcp==3.0.0", "angee-messaging==3.0.0", "angee-messaging-integrate-imap==3.0.0", "angee-messaging-integrate-slack==3.0.0", "angee-money==3.0.0", "angee-nexus==3.0.0", "angee-operator==3.0.0", "angee-parties==3.0.0", "angee-parties-integrate-carddav==3.0.0", "angee-platform==3.0.0", "angee-platform-integrate-operator==3.0.0", "angee-platform-integrate-vcs==3.0.0", "angee-pm==3.0.0", "angee-portfolio==3.0.0", "angee-posts==3.0.0", "angee-projects==3.0.0", "angee-proposals==3.0.0", "angee-proposals-work==3.0.0", "angee-provenance==3.0.0", "angee-resources==3.0.0", "angee-scheduling==3.0.0", "angee-sequence==3.0.0", "angee-server==3.0.0", "angee-spaces==3.0.0", "angee-storage==3.0.0", "angee-storage-integrate==3.0.0", "angee-storage-integrate-iphone==3.0.0", "angee-tags==3.0.0", "angee-theme-angee==3.0.0", "angee-theme-aurora==3.0.0", "angee-theme-carbon==3.0.0", "angee-theme-fyltr==3.0.0", "angee-theme-ledger==3.0.0", "angee-theme-midnight==3.0.0", "angee-theme-stock==3.0.0", "angee-theme-warm-red==3.0.0", "angee-timeline==3.0.0", "angee-uom==3.0.0", "angee-web==3.0.0", "angee-work==3.0.0", "angee-workflows==3.0.0", "angee-workflows-agents==3.0.0", "angee-workflows-extraction==3.0.0", "angee-workflows-integrate==3.0.0", "angee-workflows-messaging==3.0.0", "angee-workflows-parties==3.0.0", "angee-workflows-posts==3.0.0"]
+dependencies = [
+    "angee-agents==3.0.0",
+    "angee-agents-integrate-anthropic==3.0.0",
+    "angee-agents-integrate-ollama==3.0.0",
+    "angee-agents-integrate-openai==3.0.0",
+    "angee-agents-runtime-pydantic==3.0.0",
+    "angee-appearance==3.0.0",
+    "angee-appearance-integrate==3.0.0",
+    "angee-base==3.0.0",
+    "angee-dashboards==3.0.0",
+    "angee-decisions==3.0.0",
+    "angee-extraction==3.0.0",
+    "angee-graphql==3.0.0",
+    "angee-iam==3.0.0",
+    "angee-iam-integrate-oidc==3.0.0",
+    "angee-intake==3.0.0",
+    "angee-integrate==3.0.0",
+    "angee-integrate-github==3.0.0",
+    "angee-integrate-iphone==3.0.0",
+    "angee-integrate-vcs==3.0.0",
+    "angee-jobs==3.0.0",
+    "angee-knowledge==3.0.0",
+    "angee-knowledge-graph-pgvector==3.0.0",
+    "angee-knowledge-integrate-notion==3.0.0",
+    "angee-mcp==3.0.0",
+    "angee-messaging==3.0.0",
+    "angee-messaging-integrate-imap==3.0.0",
+    "angee-messaging-integrate-slack==3.0.0",
+    "angee-money==3.0.0",
+    "angee-nexus==3.0.0",
+    "angee-operator==3.0.0",
+    "angee-parties==3.0.0",
+    "angee-parties-integrate-carddav==3.0.0",
+    "angee-platform==3.0.0",
+    "angee-platform-integrate-operator==3.0.0",
+    "angee-platform-integrate-vcs==3.0.0",
+    "angee-pm==3.0.0",
+    "angee-portfolio==3.0.0",
+    "angee-posts==3.0.0",
+    "angee-projects==3.0.0",
+    "angee-proposals==3.0.0",
+    "angee-proposals-work==3.0.0",
+    "angee-provenance==3.0.0",
+    "angee-resources==3.0.0",
+    "angee-scheduling==3.0.0",
+    "angee-sequence==3.0.0",
+    "angee-server==3.0.0",
+    "angee-spaces==3.0.0",
+    "angee-storage==3.0.0",
+    "angee-storage-integrate==3.0.0",
+    "angee-storage-integrate-iphone==3.0.0",
+    "angee-tags==3.0.0",
+    "angee-theme-angee==3.0.0",
+    "angee-theme-aurora==3.0.0",
+    "angee-theme-carbon==3.0.0",
+    "angee-theme-fyltr==3.0.0",
+    "angee-theme-ledger==3.0.0",
+    "angee-theme-midnight==3.0.0",
+    "angee-theme-stock==3.0.0",
+    "angee-theme-warm-red==3.0.0",
+    "angee-timeline==3.0.0",
+    "angee-uom==3.0.0",
+    "angee-web==3.0.0",
+    "angee-work==3.0.0",
+    "angee-workflows==3.0.0",
+    "angee-workflows-agents==3.0.0",
+    "angee-workflows-extraction==3.0.0",
+    "angee-workflows-integrate==3.0.0",
+    "angee-workflows-messaging==3.0.0",
+    "angee-workflows-parties==3.0.0",
+    "angee-workflows-posts==3.0.0",
+]
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary,pool]>=3.2"]
@@ -170,7 +241,7 @@ cache_dir = ".mypy_cache"
 explicit_package_bases = true
 files = ["addons/angee"]
 ignore_missing_imports = true
-mypy_path = [".mypy_cache/typing_stubs", "addons", ".mypy_cache"]
+mypy_path = ["addons", ".mypy_cache"]
 warn_unused_ignores = true
 # Historical addon migrations are digest-pinned executable artifacts, like the
 # Ruff boundary above; integrity and execution tests validate their bodies.

@@ -9,7 +9,6 @@
 .mypy_cache
 .pytest_cache
 .ruff_cache
-examples
 .work
 docs/screenshots
 test-results

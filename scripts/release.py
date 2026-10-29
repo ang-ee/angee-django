@@ -59,14 +59,19 @@ def update_consumers(root: Path, members: tuple[Path, ...], targets: tuple[Path,
         path = member / "pyproject.toml"
         data = tomlkit.parse(path.read_text())
         project = data["project"]
+        # Mutate native arrays in place so comments and multiline presentation
+        # survive a release bump.
+        arrays = []
         if "dependencies" in project:
-            project["dependencies"] = [requirement(raw, pin=member == root) for raw in project["dependencies"]]
-        for extra, values in project.get("optional-dependencies", {}).items():
-            project["optional-dependencies"][extra] = [requirement(raw) for raw in values]
-        for name, values in data.get("dependency-groups", {}).items():
-            data["dependency-groups"][name] = [requirement(raw) if isinstance(raw, str) else raw for raw in values]
+            arrays.append((project["dependencies"], member == root))
+        arrays.extend((values, False) for values in project.get("optional-dependencies", {}).values())
+        arrays.extend((values, False) for values in data.get("dependency-groups", {}).values())
         if "build-system" in data:
-            data["build-system"]["requires"] = [requirement(raw) for raw in data["build-system"]["requires"]]
+            arrays.append((data["build-system"]["requires"], False))
+        for values, pin in arrays:
+            for index, raw in enumerate(values):
+                if isinstance(raw, str):
+                    values[index] = requirement(raw, pin=pin)
         path.write_text(tomlkit.dumps(data))
 
 
