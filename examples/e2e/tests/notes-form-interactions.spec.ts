@@ -54,7 +54,7 @@ test.describe("notes form — field interactions", () => {
         const bob = users.find((user) => user.username === "bob");
         if (!bob) throw new Error("The Notes reference stack must seed bob.");
         const grant = await grantRecordAccess(consoleApi, {
-          targetType: "notes.Note", targetId: note.id, relation: "reader", subject: bob.assignment_subject,
+          targetType: "notes/note", targetId: note.id, relation: "reader", subject: bob.assignment_subject,
         });
         try {
           const readerPage = await reader.newPage();
