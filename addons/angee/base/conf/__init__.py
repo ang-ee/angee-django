@@ -61,15 +61,8 @@ def configure(namespace: MutableMapping[str, Any]) -> None:
         if name == yamlconf.YAMLCONF_ATTRIBUTES or yamlconf.is_setting_name(name) and name not in bootstrap
     })
     namespace.setdefault("BASE_DIR", project)
-    # Native provenance includes dotted attributes and merge histories. Compiler
-    # inputs cannot acquire deployment-specific identities through env overlays.
-    for name in attributes:
-        setting = yamlconf.setting_name(name)
-        if (
-            setting in {"INSTALLED_APPS", "DEFAULT_AUTO_FIELD", "AUTH_USER_MODEL", "MIGRATION_MODULES"}
-            or setting.startswith("COMPOSE_") and setting != "COMPOSE_COMMAND_CONTEXT"
-        ) and yamlconf.YAMLCONF_ENVIRONMENT_SOURCE in yamlconf.setting_sources(target, name):
-            raise ImproperlyConfigured(f"Compiler input {setting} cannot be environment-sourced")
+    # Carry native yamlconf provenance into the compiler. Its protected-input
+    # owner validates direct environment values and environment-derived refs.
     namespace["ANGEE_PROJECT_YAML_SETTINGS"] = frozenset(
         name for name in django_yamlconf.defined_attributes(target)
         if django_yamlconf.get_attr_info(name, target).get("source") == str(project / "settings.yaml")
