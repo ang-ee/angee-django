@@ -1,10 +1,9 @@
 """Django's ``makemigrations`` with the composer's populated-column drop guard.
 
-Authored addon migrations enter the host graph before native autodetection.
-Django still owns detection, questions, naming and writing. Installed apps
-override core commands in Django's ``get_commands``, and ``angee.compose`` ships this one together with
-``migrate``: Django requires both commands to share one autodetector
-(``commands.E001``).
+A host without composed migration history first authors native initial schema.
+Authored addon transitions then enter the host graph before final autodetection.
+Django still owns detection, questions, naming and writing; the host command
+selects this build owner only for explicit migration authoring.
 """
 
 from __future__ import annotations
@@ -61,6 +60,16 @@ class Command(MakeMigrationsCommand):
             labels = artifact.RUNTIME_APPS
         except (ImportError, AttributeError) as error:
             raise CommandError("Migration authoring requires prebuilt models; build the project first.") from error
+        # Transitions require their target models in native prerequisite state.
+        # Bootstrap only an entirely unauthored composed graph, never a missing
+        # branch in existing history or a different native authoring intent.
+        if labels and not any(options.get(flag) for flag in (
+            "check_changes", "dry_run", "merge", "empty", "update",
+        )):
+            loader = MigrationLoader(None, ignore_no_migrations=True)
+            if not any(label in labels for label, _name in loader.disk_migrations):
+                super().handle(*app_labels, **options)
+                importlib.invalidate_caches()
         authored = RuntimeMigrations(apps.get_app_configs(), labels=labels)
         selected = app_labels or None
         try:

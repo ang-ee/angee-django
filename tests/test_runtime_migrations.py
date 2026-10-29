@@ -1865,3 +1865,100 @@ def test_host_migration_authoring_preserves_native_command_color_options(monkeyp
     command.handle(*labels, **options)
     assert captured == [(("resources",), color_flag == "--no-color", color_flag == "--force-color")]
     assert ("\x1b[" in output.getvalue()) is (color_flag == "--force-color")
+
+
+def test_fresh_host_authors_native_initials_before_guarded_transitions(tmp_path: Path) -> None:
+    """One public command writes schema prerequisites and retains the guarded data transition."""
+    root = Path(__file__).resolve().parents[1]
+    package = tmp_path / "bootstrap_app"
+    _write_module(package / "__init__.py")
+    _write_module(package / "addon.toml", """[addon]
+name = "bootstrap_app"
+[[migrations]]
+name = "record_bootstrap"
+app_label = "bootstrap_app"
+module = "runtime_migrations.record_bootstrap"
+""")
+    _write_module(package / "models.py", """from django.db import models
+class Entry(models.Model):
+    runtime = True
+    value = models.CharField(max_length=40)
+    class Meta:
+        abstract = True
+""")
+    _write_module(package / "runtime_migrations" / "__init__.py")
+    _write_module(package / "runtime_migrations" / "record_bootstrap.py", """from django.db import migrations
+def applies(state):
+    return ("bootstrap_app", "entry") in state.models
+def forwards(apps, schema_editor):
+    apps.get_model("bootstrap_app", "Entry")._base_manager.using(schema_editor.connection.alias).create(
+        value="transition ran",
+    )
+class Migration(migrations.Migration):
+    dependencies = []
+    operations = [migrations.RunPython(forwards, migrations.RunPython.noop)]
+""")
+    _write_module(tmp_path / "bootstrap_settings.py", f"""import os
+SECRET_KEY = "fresh-authoring"
+INSTALLED_APPS = ["bootstrap_app", "angee.build.ProjectBuildConfig" if os.environ.get("COMPOSE_BUILD")
+    else "angee.apps.AngeeConfig"]
+COMPOSE_APP_DECLARATIONS = "angee.build.ManifestDeclarations"
+COMPOSE_RUNTIME_MODULE = "runtime"
+COMPOSE_RUNTIME_DIR = {str(tmp_path / "runtime")!r}
+DATABASES = {{"default": {{"ENGINE": "django.db.backends.sqlite3", "NAME": {str(tmp_path / "fresh.sqlite3")!r}}}}}
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+""")
+    environment = {
+        name: value for name, value in os.environ.items()
+        if not name.startswith(("ANGEE_", "YAMLCONF_"))
+        and name not in {"DATABASE_URL", "DJANGO_SETTINGS_MODULE", "PYTHONPATH", "COMPOSE_BUILD"}
+    }
+    environment.update(
+        DJANGO_SETTINGS_MODULE="bootstrap_settings", PYTHONPATH=os.pathsep.join((str(tmp_path), str(root))),
+    )
+    built = subprocess.run(
+        [sys.executable, "-c", "import django; django.setup()"],
+        cwd=tmp_path, env={**environment, "COMPOSE_BUILD": "1"},
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert built.returncode == 0, built.stdout + built.stderr
+    result = subprocess.run(
+        [sys.executable, "-c", r"""
+from pathlib import Path
+import django
+django.setup()
+from django.apps import apps
+from django.core.management import call_command
+from django.core.management.base import CommandError
+from django.db import connection
+from django.db.migrations.loader import MigrationLoader
+from django.db.migrations.recorder import MigrationRecorder
+
+directory = Path("runtime/bootstrap_app/migrations")
+assert list(directory.glob("*.py")) == [directory / "__init__.py"]
+for flag in ("--check", "--dry-run", "--merge", "--empty", "--update"):
+    try:
+        call_command("makemigrations", "bootstrap_app", flag, interactive=False, verbosity=0)
+    except CommandError as error:
+        assert "not applicable" in str(error), str(error)
+    else:
+        raise AssertionError(f"{flag} silently accepted a transition without its initial prerequisite")
+    assert list(directory.glob("*.py")) == [directory / "__init__.py"]
+call_command("makemigrations", interactive=False, verbosity=0)
+loader = MigrationLoader(None, ignore_no_migrations=True)
+transition = loader.disk_migrations["bootstrap_app", "record_bootstrap"]
+assert transition.dependencies == [("bootstrap_app", "0001_initial")]
+assert transition.angee_origin == "bootstrap_app:record_bootstrap"
+assert MigrationRecorder(connection).applied_migrations() == {}
+frozen = {path: path.read_bytes() for path in directory.glob("*.py")}
+call_command("makemigrations", interactive=False, verbosity=0)
+call_command("makemigrations", check_changes=True, dry_run=True, interactive=False, verbosity=0)
+assert {path: path.read_bytes() for path in directory.glob("*.py")} == frozen
+call_command("migrate", interactive=False, verbosity=0)
+rows = apps.get_model("bootstrap_app", "Entry")._base_manager
+assert list(rows.values_list("value", flat=True)) == ["transition ran"]
+"""],
+        cwd=tmp_path, env=environment,
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

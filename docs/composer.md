@@ -294,9 +294,16 @@ an addon package such as `runtime_migrations/`, never the conventional
 `migrations/` package: Django would discover the latter as a migration of the
 abstract source app before the composer can attach it to the downstream graph.
 
-After an editable runtime build, the native `makemigrations` command binds
-declarations into Django's migration graph before evaluating guards or simulating
-model state. New native filenames use the
+After an editable runtime build, `makemigrations` first asks Django to author
+initial schema when none of the composed apps has native migration history.
+This bootstrap runs only for ordinary mutating authoring; read-only, merge,
+empty and update modes retain their existing intent. It authors files without
+applying or faking migrations. If later transition validation fails, these valid
+native initials remain for review and the next authoring attempt.
+
+The command then binds declarations into Django's migration graph before
+evaluating guards or simulating model state. Existing histories always bind
+transitions before native autodetection. New native filenames use the
 declared `name`, so a migration can depend on a pending transition through ordinary
 Django `dependencies`, for example `("resources", "copy_legacy")`. Manifest order
 is not an execution dependency. Declare cross-app dependencies and `run_before`
