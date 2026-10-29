@@ -1,12 +1,12 @@
 import { Filter, ResourceQuery, holdsPermission, useModelMetadata, type QueryFilter } from "@angee/metadata";
 import { useAuthoredQuery, useInvalidateAuthoredModels } from "@angee/refine";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import {
   CollectionTreeView, EmptyState, ErrorBanner, InlineTextAction, PaneToolbarMenu, RemovedRecords,
   ResourceViewProvider, ScopedExplorerPane, errorMessage, useAppRuntime, useBreadcrumbCollectionLink,
   useBreadcrumbLeafLabel, useListRecordNavigation, useRouteHref, useRouteRecordId, useRuntimeViewAs,
-  useResourceView, useRouteSearch, useLatestRef, parseRecordNavigationScope, recordNavigationSearch,
+  useResourceView, useRouteSearch, useLatestRef, useScopedTreeExplorer, parseRecordNavigationScope, recordNavigationSearch,
   type CollectionPageRequest, type ListViewNavigationScope, type ListViewProps, type ScopedExplorerController,
 } from "@angee/ui";
 import {
@@ -39,32 +39,35 @@ export function KnowledgePage() {
   const { defaultResourceFilter } = useAppRuntime();
   const scope = defaultResourceFilter?.resource === PAGE_MODEL ? defaultResourceFilter.filter : undefined;
   const home = href("knowledge.home");
-  const [selectedVault, setSelectedVault] = useState<string>();
   const [vaultSearch, setVaultSearch] = useState("");
-  const detail = useAuthoredQuery(KnowledgePageQuery, { id: openId ?? "" }, {
+  const handleRootChange = useCallback(() => {
+    setVaultSearch("");
+    void navigate({ to: home });
+  }, [home, navigate]);
+  const detailRead = useAuthoredQuery(KnowledgePageQuery, { id: openId ?? "" }, {
     enabled: Boolean(openId), models: PAGE_READ_MODELS,
-  }).data?.pages_by_pk;
-  const vaultId = (openId ? detail?.vault : undefined) ?? selectedVault;
-  useEffect(() => {
-    if (detail?.vault) setSelectedVault(detail.vault);
-  }, [detail?.vault]);
-  const vault = useAuthoredQuery(KnowledgeVault, { id: vaultId ?? "" }, {
-    enabled: Boolean(vaultId), models: ["knowledge.Vault"],
   });
+  const detail = detailRead.data?.pages_by_pk?.id === openId ? detailRead.data.pages_by_pk : undefined;
   const vaults = useAuthoredQuery(KnowledgeVaults, {
     limit: 50, where: vaultMetadata ? ResourceQuery.from(vaultMetadata).toWhere({
       is_trashed: { exact: false }, name: { iContains: vaultSearch },
       ...(Filter.from(scope).facetValues("vault").length ? { id: { inList: Filter.from(scope).facetValues("vault") } } : {}),
     }) : undefined,
   }, { enabled: Boolean(vaultMetadata), models: ["knowledge.Vault"] });
-  // The first readable vault seeds the selection once; later picker searches
-  // only change its options, never the selected vault.
-  const initialVaultId = !openId && selectedVault === undefined ? vaults.data?.vaults[0]?.id : undefined;
-  if (initialVaultId) setSelectedVault(initialVaultId);
+  const controller = useScopedTreeExplorer({
+    roots: vaults.data?.vaults ?? [], getRootId: rootId, getTreeRows: noRows,
+    selectedRootId: openId ? detail?.vault ?? null : undefined,
+    onRootIdChange: handleRootChange,
+  });
+  const activeVaultId = controller.rootId;
+  const [creating, setCreating] = useState<Insertion | null>(null);
+  if (creating && creating.vault !== activeVaultId) setCreating(null);
+  const vault = useAuthoredQuery(KnowledgeVault, { id: activeVaultId }, {
+    enabled: Boolean(activeVaultId), models: ["knowledge.Vault"],
+  });
   const roots = useMemo(() => [...new Map([
-    ...(vaults.data?.vaults ?? []), ...(vault.data?.vaults_by_pk ? [vault.data.vaults_by_pk] : []),
-  ].map((row) => [row.id, row])).values()], [vaults.data, vault.data]);
-  const activeVaultId = vaultId ?? initialVaultId ?? "";
+    ...(vaults.data?.vaults ?? []), ...(vault.data?.vaults_by_pk?.id === activeVaultId ? [vault.data.vaults_by_pk] : []),
+  ].map((row) => [row.id, row])).values()], [vaults.data, vault.data, activeVaultId]);
   useBreadcrumbLeafLabel(detail?.title ?? null);
   useBreadcrumbCollectionLink(home, openId ? home : null);
   const openPage = useCallback((id: string, context?: ListViewNavigationScope) => {
@@ -73,7 +76,6 @@ export function KnowledgePage() {
   }, [href, metadata, navigate]);
   const pager = useListRecordNavigation({ resource: PAGE_MODEL, recordId: openId, navigationScope, onSelect: openPage });
   const invalidate = useInvalidateAuthoredModels();
-  const [creating, setCreating] = useState<Insertion | null>(null);
   const latestCreation = useLatestRef(creating);
   const completeCreation = useCallback((id: string, insertion: Insertion) => {
     if (latestCreation.current !== insertion) return;
@@ -106,14 +108,13 @@ export function KnowledgePage() {
     filters={[{ field: "vault", operator: "eq", value: controller.rootId }, { field: "removed_root", operator: "eq", value: true }]} /> : null,
   [metadata?.resource]);
   return <ScopedExplorerPane<VaultRow, KnowledgeTreeRow>
-    roots={roots} getRootId={rootId} getRootLabel={rootLabel} getTreeRows={noRows}
-    rootId={activeVaultId} onRootIdChange={(id) => { setSelectedVault(id); setCreating(null); setVaultSearch(""); void navigate({ to: home }); }}
+    controller={controller} roots={roots} getRootId={rootId} getRootLabel={rootLabel}
     renderContentWithoutRoots={Boolean(openId)} navigatorLabel={t("nav.label")}
     rootPicker={{ "aria-label": t("vault.label"), placeholder: t("vault.placeholder"),
       searchPlaceholder: t("vault.searchPlaceholder"), onSearchChange: setVaultSearch,
       searchState: { pending: vaults.isFetching, error: vaults.error?.message, retry: () => void vaults.refetch() },
       create: scope ? undefined : { resource: "knowledge.Vault" },
-      onCreated: (id) => { invalidate(["knowledge.Vault"]); setSelectedVault(id); setCreating(null); void navigate({ to: home }); } }}
+      onCreated: () => invalidate(["knowledge.Vault"]) }}
     renderTree={renderTree} renderNavigatorFooter={removed}
     loading={vaults.isPending} emptyContent={vaults.error
       ? <ErrorBanner description={errorMessage(vaults.error, t("vaults.unavailableTitle"))} />

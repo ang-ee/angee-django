@@ -16,7 +16,10 @@ const emptyExplorer = {
   roots: [],
   getRootId: (root: { id: string }) => root.id,
   getRootLabel: (root: { id: string }) => root.id,
-  getTreeRows: () => [] as Array<{ id: string }>,
+  controller: {
+    rootId: "", setRootId: vi.fn(), treeRows: [] as Array<{ id: string }>,
+    selectedId: undefined, selectedRow: undefined, setSelectedId: vi.fn(),
+  },
   navigatorLabel: "Folders",
   rootPicker: { "aria-label": "Drive" },
   renderTree: () => null,
