@@ -14,14 +14,16 @@ import strawberry
 from asgiref.sync import async_to_sync, iscoroutinefunction, sync_to_async
 from channels.db import database_sync_to_async
 from django.apps import apps
+from django.core.management import ManagementUtility
+from django.core.management.base import BaseCommand
 from django.db import close_old_connections, connections
 from django.http import HttpResponse
 from django.test import RequestFactory
+from django_compose import management as manage
 from graphql import GraphQLError
 from rebac import actor_context, system_context, to_subject_ref
 from strawberry.types import ExecutionResult
 
-from angee import management as manage
 from angee.graphql.views import AngeeGraphQLView
 from angee.jobs.celery import app as celery_app
 from angee.provenance.context import (
@@ -44,7 +46,7 @@ pytestmark = [pytest.mark.entrypoint_boundaries, pytest.mark.django_db(transacti
 def management_changeset_context(settings):
     """Select the optional provenance policy for these attribution contracts."""
 
-    settings.ANGEE_MANAGEMENT_CONTEXT = "angee.provenance.contrib.angee.context.management_context"
+    settings.COMPOSE_COMMAND_CONTEXT = ("angee.provenance.contrib.angee.context.management_context",)
 
 
 def write(title: str = "captured") -> Any:
@@ -72,42 +74,51 @@ def test_require_changeset_refuses_missing_storage_and_returns_the_open_owner(se
         require_changeset()
 
 
+def _native_command(monkeypatch, operation):
+    """Use Django's winning command and parser with the native context dispatcher."""
+
+    class Command(BaseCommand):
+        requires_system_checks = []
+
+        def add_arguments(self, parser):
+            parser.add_argument("--noreload", action="store_true")
+            parser.add_argument("--database", default="default")
+
+        def handle(self, *args, **options):
+            operation()
+
+    monkeypatch.setattr(ManagementUtility, "fetch_command", lambda self, name: Command())
+
+
 @pytest.mark.parametrize("command", sorted(SERVER_COMMANDS))
-def test_servers_run_without_a_process_boundary(monkeypatch: pytest.MonkeyPatch, tmp_path: Any, command: str) -> None:
-    seen: list[Any] = []
-    monkeypatch.setenv("ANGEE_PROJECT_DIR", str(tmp_path))
-    monkeypatch.setattr(manage, "execute_from_command_line", lambda argv: seen.append(current_changeset()))
-    manage.main(["manage.py", command])
+def test_servers_run_without_a_process_boundary(monkeypatch, command):
+    seen = []
+    _native_command(monkeypatch, lambda: seen.append(current_changeset()))
+    manage.execute(["manage.py", command, *(["--noreload"] if command == "runserver" else [])])
     assert seen == [None]
 
 
 @pytest.mark.parametrize("command", ["shell", "migrate"])
-def test_main_attributes_a_command_to_one_closed_changeset(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, command: str
-) -> None:
-    monkeypatch.setenv("ANGEE_PROJECT_DIR", str(tmp_path))
-    monkeypatch.setattr(manage, "execute_from_command_line", lambda argv: write())
-    manage.main(["manage.py", command])
+def test_main_attributes_a_command_to_one_closed_changeset(monkeypatch, command):
+    _native_command(monkeypatch, write)
+    manage.execute(["manage.py", command])
     (context,) = changesets()
     assert changeset_of(OwnedRow.system_queryset().get()) == context
     assert (context.change_reason, context.activity, context.actor_ref) == (f"manage.{command}", "system", "")
     assert (context.state, context.outcome) == ("closed", "success")
 
 
-def test_a_thread_a_command_starts_writes_under_the_command_boundary(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
-) -> None:
-    """A whole-process entrypoint publishes its boundary: a plain thread writes under it, in its own row."""
+def test_a_thread_a_command_starts_writes_under_the_command_boundary(monkeypatch):
+    """Plain threads share the process attribution intent while storing their own rows."""
 
-    def command(argv: list[str]) -> None:
+    def command():
         write("main thread")
         thread = threading.Thread(target=lambda: (write("plain thread"), connections.close_all()))
         thread.start()
         thread.join()
 
-    monkeypatch.setenv("ANGEE_PROJECT_DIR", str(tmp_path))
-    monkeypatch.setattr(manage, "execute_from_command_line", command)
-    manage.main(["manage.py", "migrate"])
+    _native_command(monkeypatch, command)
+    manage.execute(["manage.py", "migrate"])
     rows = changesets()
     assert len(rows) == 2
     assert {row.change_reason for row in rows} == {"manage.migrate"}
@@ -117,7 +128,7 @@ def test_a_thread_a_command_starts_writes_under_the_command_boundary(
 
 def test_a_write_without_a_boundary_names_the_manage_py_remedy(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "argv", ["/srv/app/manage.py", "seed_lorem_notes"])
-    with pytest.raises(ChangesetRequired, match=r"manage\.py must call angee\.management\.main\(\)"):
+    with pytest.raises(ChangesetRequired, match=r"manage\.py must call django_compose\.management\.execute\(\)"):
         write()
     monkeypatch.setattr(sys, "argv", ["celery", "worker"])
     with pytest.raises(ChangesetRequired) as error:

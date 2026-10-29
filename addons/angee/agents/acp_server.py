@@ -413,7 +413,7 @@ class V1SessionAgent(SessionAgent):
         return v1.InitializeResponse.model_validate(
             {
                 "protocolVersion": 1,
-                "agentInfo": {"name": "angee", "version": metadata.version("django-angee")},
+                "agentInfo": {"name": "angee", "version": metadata.version("angee-agents")},
                 "agentCapabilities": {"loadSession": True, "sessionCapabilities": {"list": {}}},
             }
         )
@@ -491,7 +491,7 @@ class V2SessionAgent(SessionAgent):
         return v2.InitializeResponse.model_validate(
             {
                 "protocolVersion": 2,
-                "info": {"name": "angee", "version": metadata.version("django-angee")},
+                "info": {"name": "angee", "version": metadata.version("angee-agents")},
                 "capabilities": {"session": {}},
             }
         )

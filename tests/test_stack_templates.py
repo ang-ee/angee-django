@@ -1346,8 +1346,8 @@ def test_dev_stack_keeps_the_process_only_frontend_services() -> None:
 def test_dev_stack_runs_bare_uv_against_the_project_root_pyproject() -> None:
     """The project host IS the stack root; its pyproject owns framework resolution.
 
-    The chained projects/web pyproject resolves django-angee editable from the
-    framework slot (postgres extra baked into the dep) and pins uv's cache to the
+    The chained projects/web pyproject resolves the editable angee meta-distribution
+    from the framework slot (postgres extra baked into the dep) and pins uv's cache to the
     stack-owned caches/uv — so every uv invocation is bare: no ``--project``, no
     ``--extra``, no UV_CACHE_DIR override, in any layout. Provision uses a shell
     only to dispatch the one-process prebuilt provision command.

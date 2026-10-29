@@ -179,5 +179,3 @@ def test_websocket_addon_wrappers_are_optional_and_run_after_authentication(
 
     asyncio.run(exercise())
     assert seen == [*wrapper_names, "endpoint"]
-
-

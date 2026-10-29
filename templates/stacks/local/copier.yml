@@ -68,9 +68,9 @@ _angee:
         appearance_theme_id: "${inputs.appearance_theme_id}"
         appearance_color_scheme: "${inputs.appearance_color_scheme}"
         appearance_options: "${inputs.appearance_options}"
-        # The rendered pyproject resolves django-angee editable from the same
-        # checkout the framework=source stack runs, so `uv run manage.py` works
-        # bare from the instance root.
+        # The rendered pyproject resolves the editable angee meta-distribution
+        # from the checkout the framework=source stack runs, so `uv run manage.py`
+        # works bare from the instance root.
         framework_source_path: sources/angee
 
 # Machine name of the instance: the compose project's friendly label (the operator

@@ -126,11 +126,13 @@ USE_TZ = True
 # must use a shared cache; tests opt in explicitly so the state guard remains loud.
 ANGEE_INTEGRATE_ALLOW_LOCAL_OAUTH_STATE_CACHE = True
 ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER = True
+CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
 
 # These are ordinary Django source-fixture inputs. Composed-host tests below
 # exercise native configuration and generated receipts in a fresh interpreter.
 BASE_DIR = Path(__file__).resolve().parent.parent
 AUTH_USER_MODEL = "iam.User"
+AUTHENTICATION_BACKENDS = ["angee.iam.auth.ModelBackend"]
 ANGEE_CHANGESET_MODEL = "provenance.Changeset"
 ANGEE_GRAPHQL_WRITE_BACKEND_ADAPTER = "angee.provenance.graphql.write_backend"
 SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD = True
@@ -146,6 +148,9 @@ ANGEE_MERGE_GUARDS = ["angee.resources.managers.seeded_record_merge_guard"]
 ANGEE_TIMELINE_KINDS = ["angee.provenance.timeline.timeline_kinds"]
 STATIC_URL = "/static/"
 CELERY_BROKER_URL = "memory://"
+# Test workers have a finite budget; production policy is checked through native configure.
+CELERY_TASK_SOFT_TIME_LIMIT = 300
+CELERY_TASK_TIME_LIMIT = 360
 ANGEE_TEST_CONNECTION_CLASSES = {
     "connection": "tests.integrate_fixtures.ConnectionAdapter",
     "live": "tests.integrate_fixtures.LiveConnectionAdapter",
