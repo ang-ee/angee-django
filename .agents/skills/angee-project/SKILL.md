@@ -22,7 +22,7 @@ declare it. `angee-addon` owns an addon's local declarations; `angee-runtime` ow
 | `angee.yaml` + stack `AGENTS.md` | The stack: operator, sources, workspaces, jobs, services, secrets, ports; `ANGEE_ROOT` | `templates/stacks/_shared/{stack-body.yaml,AGENTS.md}.jinja` |
 | `templates/{stacks/dev,stacks/local,projects/web}/copier.yml` | Stack inputs (`runtime_mode`, `addons_profile`, `include_arp`, `postgres_mode`, `serve_mode`, `framework`); project inputs (`project_name`, `addon_namespace`, `web_path`, `framework_workspace`, `framework_source_path`) | the three `copier.yml` files |
 | `settings.yaml` | Root apps, addon roots, runtime and data dirs, dev defaults with `:jsonenv` markers | `templates/projects/web/template/settings.yaml.jinja` |
-| `angee/conf.py` `ProjectContract` | `load()`: `.env`, project YAML/py, `YAMLCONF_CONFFILE`, defaults, service URLs (`_apply_defaults`); `compose()`: addon settings; generated `runtime/settings.py` body (`project_settings_source`) | `angee/conf.py:60,70,141,210,238,343,426` |
+| `angee/conf.py` `ProjectContract` | `load()`: `.env`, project YAML/py, `YAMLCONF_CONFFILE`, defaults, service URLs (`_apply_defaults`); `compose()`: addon settings; generated `runtime/settings.py` body (`project_settings_source`) | `angee/conf.py:62,72,143,240,345,428` |
 | `angee/defaults.py`, `angee/project.py`, `manage.py` | Core app prefix, `COMPOSE_ENV_PREFIXES=("ANGEE_",)`, SQLite floor; root discovery, `runtime.settings`; thin `angee.management.main()` entrypoint | `angee/defaults.py:46,57,71`, `angee/project.py:15,27,75`, `angee/management/__init__.py:17` |
 | `angee/compose/autoconfig.py` | Addon settings merge; `COMPOSER_OWNED_SETTINGS` a project sets and an addon cannot | `angee/compose/autoconfig.py:26,29` |
 | `pyproject.toml` + `angee/hatch.py` | Host requirements = hook config + selected addons' `addon.toml` deps (`RuntimeMetadataHook`); the build hook; editable framework source and `uv` cache keys (template) | `templates/projects/web/template/pyproject.toml.jinja`, `angee/hatch.py:24,63,318` |
@@ -128,7 +128,7 @@ declare it. `angee-addon` owns an addon's local declarations; `angee-runtime` ow
    over the URL. A name an addon declares with the `ANGEE_` prefix is read from the environment as-is;
    any other needs `YAMLCONF_`. `YAMLCONF_CONFFILE` adds a whole overlay (the baked image uses it for
    `ANGEE_ADDON_DIRS:append`). A secret → stack `secrets:` and `${secret.<name>}`. **Owner rule:**
-   `ProjectContract` owns the precedence project YAML → overlay → environment → addon defaults ([django-environ row](../../../docs/stack.md#backend), `angee/conf.py:210,238,240`).
+   `ProjectContract` owns the precedence project YAML → overlay → environment → addon defaults ([django-environ row](../../../docs/stack.md#backend), `angee/conf.py:143,238-240,281`).
 
 5. **Leave `manage.py` and the generated settings alone.** `manage.py` only calls `angee.management.main()`;
    `project.bootstrap` finds the root (`ANGEE_PROJECT_DIR`, the `manage.py` directory, then ancestors with
@@ -183,8 +183,8 @@ Done means: `uv sync` from the stack root emits `runtime/` and `runtime/web/mani
 expected fragment; `angee provision` prints `angee provision: ok`; `angee --root "$ANGEE_ROOT" status --json`
 shows every service running and none completed; `check` and `schema --check` pass after codegen.
 
-- In a lane (jj workspace: no host, database or JS install): `tests/test_stack_templates.py` (`:921,974,1137`),
-  `tests/test_project_template_inputs.py`, `tests/test_settings.py` (`:656,871,947`), `tests/test_hatch.py`,
+- In a lane (jj workspace: no host, database or JS install): `tests/test_stack_templates.py` (`:907,962,1015`),
+  `tests/test_project_template_inputs.py`, `tests/test_settings.py` (`:631,845,944`), `tests/test_hatch.py`,
   `tests/test_agent_stack_root_policy.py`, ruff on touched files — [Python contracts](../../../docs/checks.md#python-and-composition-contracts).
 - Only on the integrated stack: `uv sync`, `angee check`, `angee provision`, `manage.py check`,
   `schema --check`, codegen, composed typecheck, browser — [composition](../../../docs/checks.md#composition-and-schema),
@@ -196,12 +196,12 @@ shows every service running and none completed; `check` and `schema --check` pas
 
 ## Pitfalls
 
-- An ancestor `settings.yaml` does not contribute to a nested project; the project file and `YAMLCONF_CONFFILE` load (`tests/test_settings.py:947`, [Settings bootstrap](../../../docs/composer.md#settings-bootstrap)).
-- `YAMLCONF_<NAME>` stays a string unless the YAML declares `<NAME>:jsonenv: true` (`tests/test_settings.py:871`).
-- A `DATABASE_URL` carrying `CONN_MAX_AGE` fails once `ANGEE_DB_POOL` is on; only production Django workers pool (`angee/conf.py:366`, [serve mode](../../../docs/stack.md#stack-serve-mode)).
-- Two localhost stacks with the same cookie names log each other out (`tests/test_stack_templates.py:891`).
+- An ancestor `settings.yaml` does not contribute to a nested project; the project file and `YAMLCONF_CONFFILE` load (`tests/test_settings.py:944`, [Settings bootstrap](../../../docs/composer.md#settings-bootstrap)).
+- `YAMLCONF_<NAME>` stays a string unless the YAML declares `<NAME>:jsonenv: true` (`tests/test_settings.py:845`).
+- A `DATABASE_URL` carrying `CONN_MAX_AGE` fails once `ANGEE_DB_POOL` is on; only production Django workers pool (`angee/conf.py:371`, [serve mode](../../../docs/stack.md#stack-serve-mode)).
+- Two localhost stacks with the same cookie names log each other out (`tests/test_stack_templates.py:932`).
 - The first `ANGEE_ADDON_DIRS` root that declares an addon name wins; a shadowing root silently changes requirements (`angee/hatch.py:57-58`, `tests/test_hatch.py:37`).
-- A `manage.py` that does not call `angee.management.main()` fails its first captured write; re-render it (`tests/test_stack_templates.py:1112`).
+- A `manage.py` that does not call `angee.management.main()` fails its first captured write; re-render it (`tests/test_stack_templates.py:1159`).
 
 ## Read next
 
@@ -212,13 +212,13 @@ shows every service running and none completed; `check` and `schema --check` pas
 ## Sources
 
 <!--
-Docs: AGENTS.md; stack-root + workspace AGENTS.md (read-only); docs/guidelines.md; docs/composer.md:20-44,83-200,448-487,534-600;
-docs/stack.md:10-30,82-90,159-220,335-345; docs/howto/getstarted.md; docs/checks.md:9-60,168-206; docs/backend/guidelines.md:82-100,395-410,805-830,2170-2180;
-docs/glossary.md:8-75,455-465; templates/README.md. Templates: templates/projects/web/**; templates/stacks/{dev,local,_shared}/**; templates/workspaces/src/copier.yml;
+Docs: AGENTS.md; stack-root + workspace AGENTS.md (read-only); docs/guidelines.md; docs/composer.md #flow, #settings-bootstrap, #app-graph-and-settings, #addon-discovery, #autoconfig, #foundation-and-provenance-upgrade-cutoff, #composed-addon-dependencies, #runtime-cleanup, #addon-declarations, #serving, #example-project-shape, #invariants;
+docs/stack.md #how-the-stack-is-locked, #backend, #stack-serve-mode, #tooling; docs/howto/getstarted.md; docs/checks.md #choose-the-working-directory, #python-and-composition-contracts, #agent-methodology-and-documentation, #composition-and-schema; docs/backend/guidelines.md #package-layering, #rules, #rebac, #naming;
+docs/glossary.md #composition, #frontend (`createApp`); templates/README.md. Templates: templates/projects/web/**; templates/stacks/{dev,local,_shared}/**; templates/workspaces/src/copier.yml;
 docker/addon-settings.yaml. Code: angee/{conf,project,defaults,hatch,apps}.py; angee/management/{__init__,provision}.py + commands/angee.py; angee/compose/
 {autoconfig,yamlconf,apps}.py; addons/angee/web/build.py; addons/angee/platform/{installer,autoconfig}.py; tests/test_stack_templates.py:621-1145; tests/test_hatch.py:1-60;
 tests/test_settings.py:640-1000; angee/management/provision.py:49-67. Shapes checked against a stack rendered from templates/stacks/dev (angee.yaml, settings.yaml,
 pyproject.toml, manage.py, pnpm-workspace.yaml, web/package.json, .copier-answers*.yml, runtime/web/manifest.json).
 Outstanding discrepancies: templates/projects/web/template/settings.yaml.jinja:5 cites docs/backend/guidelines.md for the `:jsonenv` marker, which no file under
-docs/ documents (owner: django-yamlconf; tests/test_settings.py:871). docs/glossary.md defines Project (:48) and Host (:62) but no Stack or Workspace term.
+docs/ documents (owner: django-yamlconf; tests/test_settings.py:845). docs/glossary.md#composition defines Project and Host but no Stack or Workspace term.
 -->
