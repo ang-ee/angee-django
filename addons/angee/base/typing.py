@@ -2,20 +2,37 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from functools import partial
 
+import django_yamlconf
 from django.db import models
-from mypy.nodes import ARG_NAMED_OPT, GDEF, Argument, NameExpr, PlaceholderNode, SymbolTableNode, TypeInfo, Var
+from django_compose.conf import setting_name
+from django_compose.typing import CompositionContext, CompositionPlugin
+from mypy.join import join_types
+from mypy.nodes import (
+    ARG_NAMED_OPT,
+    GDEF,
+    Argument,
+    Import,
+    ImportFrom,
+    MemberExpr,
+    MypyFile,
+    NameExpr,
+    PlaceholderNode,
+    SymbolTableNode,
+    TypeInfo,
+    Var,
+)
 from mypy.plugin import AttributeContext, ClassDefContext, DynamicClassDefContext
 from mypy.plugins.common import add_method_to_class
 from mypy.typeops import make_simplified_union
-from mypy.types import CallableType, Instance, NoneType, TypeType, get_proper_type
+from mypy.types import AnyType, CallableType, Instance, NoneType, TypedDictType, TypeType, get_proper_type
 from mypy.types import Type as MypyType
 from mypy_django_plugin.lib import fullnames, helpers
 
 from angee.base.fields.implementation import ImplClassField
-from angee.compose.typing import CompositionContext, CompositionPlugin
 
 
 class BaseCompositionContext(CompositionContext):
@@ -33,7 +50,104 @@ class BasePlugin(CompositionPlugin):
     """Project model-toolkit contracts for Angee hosts."""
 
     context_class = BaseCompositionContext
-    default_settings_module = "angee.defaults"
+    default_settings_module: str | None = "angee.base.autoconfig"
+
+    def get_additional_deps(self, file: MypyFile) -> list[tuple[int, str, int]]:
+        dependencies = super().get_additional_deps(file)
+        if any(
+            isinstance(item, ImportFrom) and item.id == "django.conf"
+            or isinstance(item, Import) and any(name == "django.conf" for name, _alias in item.ids)
+            for item in file.imports
+        ):
+            # Consumers require direct edges: adding/removing an autoconfig key
+            # does not alter django.conf's own static module interface.
+            dependencies.extend(
+                self._new_dependency(module.__name__)
+                for app in self.django_context.apps_registry.get_app_configs()
+                if (module := sys.modules.get(f"{app.name}.autoconfig")) is not None
+            )
+            if self.default_settings_module is not None and self.django_context.composed:
+                dependencies.append(self._new_dependency(self.default_settings_module))
+        return dependencies
+
+    def get_attribute_hook(self, fullname: str) -> Callable[[AttributeContext], MypyType] | None:
+        native = super().get_attribute_hook(fullname)
+        if fullname.rpartition(".")[0] == fullnames.DUMMY_SETTINGS_BASE_CLASS and native is not None:
+            return partial(self._autoconfig_setting, native=native)
+        return native
+
+    @staticmethod
+    def _whole_setting_types(declaration: TypedDictType, name: str) -> list[MypyType]:
+        # A dotted-key declaration describes one nested member, not the whole
+        # setting's type. Native configure owns normalization of the root name.
+        return [
+            value for key, value in declaration.items.items()
+            if "." not in key and setting_name(key) == name
+        ]
+
+    def _autoconfig_setting(
+        self, ctx: AttributeContext, *, native: Callable[[AttributeContext], MypyType],
+    ) -> MypyType:
+        """Project declared types from native yamlconf provenance, not runtime values."""
+        if not isinstance(ctx.context, MemberExpr):
+            return native(ctx)
+        name = ctx.context.name
+        modules = helpers.get_typechecker_api(ctx).modules
+        project = modules.get(self.django_context.django_settings_module)
+        if project is not None and name in project.names:
+            return native(ctx)
+        info = django_yamlconf.get_attr_info(name, self.django_context.settings)
+        sources = tuple(dict.fromkeys(
+            source
+            for source in (info.get("source"), *(source for _value, source in info.get("history", ())))
+            if isinstance(source, str)
+        )) if info else ()
+        if not sources:
+            defaults = (
+                modules.get(self.default_settings_module)
+                if self.default_settings_module is not None and self.django_context.composed else None
+            )
+            symbol = defaults.names.get(name) if defaults is not None else None
+            if symbol is not None and symbol.type is not None and not isinstance(
+                get_proper_type(symbol.type), AnyType,
+            ):
+                return symbol.type
+            if defaults is None:
+                return native(ctx)
+            sources = (defaults.fullname,)
+        candidates: list[MypyType] = []
+        for source in sources:
+            # Native configure records the declaration's module name already.
+            # Environment/internal records and YAML file paths have no module.
+            module = modules.get(source)
+            if module is None:
+                continue
+            symbol = module.names.get("SETTINGS")
+            declaration = get_proper_type(symbol.type) if symbol is not None else None
+            declared: list[MypyType] = []
+            if isinstance(declaration, TypedDictType):
+                declared = self._whole_setting_types(declaration, name)
+                candidates.extend(declared)
+            if not declared:
+                function = module.names.get("settings")
+                signature = get_proper_type(function.type) if function is not None else None
+                if isinstance(signature, CallableType):
+                    result = get_proper_type(signature.ret_type)
+                    if isinstance(result, TypedDictType):
+                        candidates.extend(self._whole_setting_types(result, name))
+                    elif (
+                        isinstance(result, Instance) and result.type.fullname == "builtins.dict"
+                        and len(result.args) == 2 and source == sources[0]
+                        and not isinstance(get_proper_type(result.args[1]), AnyType)
+                    ):
+                        candidates.append(result.args[1])
+        if not candidates:
+            return native(ctx)
+        result_type = candidates[0]
+        for candidate in candidates[1:]:
+            result_type = join_types(result_type, candidate)
+        return result_type
+
 
     def get_base_class_hook(self, fullname: str) -> Callable[[ClassDefContext], None] | None:
         native = super().get_base_class_hook(fullname)

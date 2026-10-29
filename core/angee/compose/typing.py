@@ -6,22 +6,17 @@ describes source composition and installed settings declarations.
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Callable
 from functools import partial
 from typing import TYPE_CHECKING, Literal
 
 from django.db import models
-from mypy.join import join_types
 from mypy.maptype import map_instance_to_supertype
 from mypy.mro import calculate_mro
 from mypy.nodes import (
     MDEF,
     Decorator,
     FuncDef,
-    Import,
-    ImportFrom,
-    MemberExpr,
     MypyFile,
     OverloadedFuncDef,
     PlaceholderNode,
@@ -30,19 +25,17 @@ from mypy.nodes import (
     Var,
 )
 from mypy.options import Options
-from mypy.plugin import AttributeContext, ClassDefContext, DynamicClassDefContext
+from mypy.plugin import ClassDefContext, DynamicClassDefContext
 from mypy.semanal_shared import PRIORITY_FALLBACKS, has_placeholder
 from mypy.server.trigger import make_trigger
 from mypy.typeops import expand_type, expand_type_by_instance
-from mypy.types import AnyType, CallableType, Instance, Overloaded, TypedDictType, TypeType, get_proper_type
+from mypy.types import CallableType, Instance, Overloaded, TypeType, get_proper_type
 from mypy.types import Type as MypyType
 from mypy.typevars import fill_typevars
 from mypy_django_plugin.django.context import DjangoContext
-from mypy_django_plugin.lib import fullnames, helpers
+from mypy_django_plugin.lib import helpers
 from mypy_django_plugin.main import NewSemanalDjangoPlugin
 from mypy_django_plugin.transformers.managers import create_new_manager_class_from_from_queryset_method
-
-from angee.utils.yamlconf import setting_name, setting_sources
 
 if TYPE_CHECKING:
     from mypy.checker import TypeChecker
@@ -150,8 +143,6 @@ class CompositionPlugin(NewSemanalDjangoPlugin):
 
     django_context: CompositionContext
     context_class: type[CompositionContext] = CompositionContext
-    default_settings_module: str | None = None
-
     def __init__(self, options: Options) -> None:
         super().__init__(options)
         self.django_context = self.context_class(self.plugin_config.django_settings_module)
@@ -163,80 +154,7 @@ class CompositionPlugin(NewSemanalDjangoPlugin):
             for module in self.django_context.member_modules.get(file.fullname, ())
             if module != file.fullname
         )
-        if any(
-            isinstance(item, ImportFrom) and item.id == "django.conf"
-            or isinstance(item, Import) and any(name == "django.conf" for name, _alias in item.ids)
-            for item in file.imports
-        ):
-            # Consumers need direct edges: django.conf's interface itself does
-            # not change when one autoconfig TypedDict changes.
-            dependencies.extend(
-                self._new_dependency(f"{app.name}.autoconfig")
-                for app in self.django_context.apps_registry.get_app_configs()
-                if f"{app.name}.autoconfig" in sys.modules
-            )
-            if self.default_settings_module is not None and self.django_context.composed:
-                dependencies.append(self._new_dependency(self.default_settings_module))
         return dependencies
-
-    def get_attribute_hook(self, fullname: str) -> Callable[[AttributeContext], MypyType] | None:
-        native = super().get_attribute_hook(fullname)
-        if fullname.rpartition(".")[0] == fullnames.DUMMY_SETTINGS_BASE_CLASS and native is not None:
-            return partial(self._autoconfig_setting, native=native)
-        return native
-
-    def _autoconfig_setting(
-        self, ctx: AttributeContext, *, native: Callable[[AttributeContext], MypyType],
-    ) -> MypyType:
-        if not isinstance(ctx.context, MemberExpr):
-            return native(ctx)
-        name = ctx.context.name
-        modules = helpers.get_typechecker_api(ctx).modules
-        project = modules.get(self.django_context.django_settings_module)
-        if project is not None and name in project.names:
-            return native(ctx)
-        sources = setting_sources(self.django_context.settings, name)
-        if not sources:
-            defaults = (modules.get(self.default_settings_module)
-                        if self.default_settings_module is not None and self.django_context.composed else None)
-            symbol = defaults.names.get(name) if defaults is not None else None
-            if symbol is not None and symbol.type is not None and not isinstance(
-                get_proper_type(symbol.type), AnyType,
-            ):
-                return symbol.type
-            return native(ctx)
-        candidates: list[MypyType] = []
-        for source in sources:
-            module = modules.get(f"{source}.autoconfig")
-            if module is None:
-                continue
-            symbol = module.names.get("SETTINGS")
-            declaration = get_proper_type(symbol.type) if symbol is not None else None
-            declared: list[MypyType] = []
-            if isinstance(declaration, TypedDictType):
-                declared = [value for key, value in declaration.items.items() if key.partition(":")[0] == name]
-                candidates.extend(declared)
-            if not declared:
-                function = module.names.get("settings")
-                signature = get_proper_type(function.type) if function is not None else None
-                if isinstance(signature, CallableType):
-                    result = get_proper_type(signature.ret_type)
-                    if isinstance(result, TypedDictType):
-                        candidates.extend(
-                            value for key, value in result.items.items() if setting_name(key) == name
-                        )
-                    elif (
-                        isinstance(result, Instance) and result.type.fullname == "builtins.dict"
-                        and len(result.args) == 2 and source == sources[0]
-                        and not isinstance(get_proper_type(result.args[1]), AnyType)
-                    ):
-                        candidates.append(result.args[1])
-        if not candidates:
-            return native(ctx)
-        result_type = candidates[0]
-        for candidate in candidates[1:]:
-            result_type = join_types(result_type, candidate)
-        return result_type
 
     def get_base_class_hook(self, fullname: str) -> Callable[[ClassDefContext], None] | None:
         native = super().get_base_class_hook(fullname)
