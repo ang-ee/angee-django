@@ -144,7 +144,10 @@ def test_skill_links_resolve_and_bundled_files_are_one_reference_level_deep(skil
 
 @pytest.mark.parametrize("skill", SKILLS, ids=lambda path: path.parent.name)
 def test_skill_declares_codex_invocation_policy(skill: Path) -> None:
-    """Only ``angee-design`` may be invoked implicitly; every other skill, including every addon-local guide, is explicit."""
+    """Only ``angee-design`` may be invoked implicitly.
+
+    Every other skill, including every addon-local guide, is explicit.
+    """
     policy = yaml.safe_load((skill.parent / "agents/openai.yaml").read_text())["policy"]
     allowed = policy["allow_implicit_invocation"]
     assert isinstance(allowed, bool), skill.parent.name
