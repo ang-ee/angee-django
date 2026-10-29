@@ -19,6 +19,7 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
+from django_compose.artifacts import atomic_write
 from rebac import RelationshipTuple, system_context, to_subject_ref, write_relationships
 from rebac.backends import backend
 from rebac.schema.parser import parse_zed, validate_schema
@@ -32,7 +33,6 @@ from angee.base.build import (
     render_zed,
 )
 from angee.base.testing.permissions import installed_field_owners
-from angee.utils.files import write_atomic
 from tests.conftest import make_addon, write_addon_package
 
 User = get_user_model()
@@ -340,7 +340,7 @@ def test_contributed_relation_syncs_and_resolves(tmp_path: Path, _restore_scoped
     source_map = extension_source_map(app_configs, field_owners=installed_field_owners(app_configs))
     assert merged_schema_relpath("tests.scopedemo") in source_map
     for relpath, text in source_map.items():
-        write_atomic(runtime_dir / relpath, text)
+        atomic_write(runtime_dir / relpath, text.encode("utf-8"))
     _apply_emitted_schema_paths(app_configs, runtime_dir, sources=source_map)
 
     scopedemo = _restore_scopedemo_schema
