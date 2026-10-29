@@ -42,7 +42,9 @@ def test_mcp_mount_composes_native_host_and_origin_guard(
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=server.mcp_app()), base_url="http://127.0.0.1",
                 ) as client:
-                    response = await client.post("/mcp", headers={"host": host, **({"origin": origin} if origin else {})})
+                    response = await client.post(
+                        "/mcp", headers={"host": host, **({"origin": origin} if origin else {})},
+                    )
                 return response.status_code
 
             assert asyncio.run(request()) == status
