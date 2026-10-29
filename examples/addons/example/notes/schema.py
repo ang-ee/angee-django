@@ -31,7 +31,7 @@ class NoteType(AuthoredRefMixin, AngeeNode):
     body: auto
     status: auto
     tags: auto
-    is_starred: auto
+    is_starred: bool | None
     reminder_at: auto
     created_at: auto
     updated_at: auto
