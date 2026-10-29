@@ -7,10 +7,7 @@ export function assertBrand(where, brand) {
   }
 }
 
-/** Refuse a malformed `ANGEE_UI.shell`, which would otherwise select the wrong app silently.
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
+/** Refuse a malformed `ANGEE_UI.shell`, which would otherwise select the wrong app silently. */
 export function assertShellSettings(shell) {
   const mapping = (value, where, keys) => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${where} must be a mapping.`);
