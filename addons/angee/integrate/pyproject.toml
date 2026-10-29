@@ -5,13 +5,12 @@ name = "angee-integrate"
 version = "3.0.0"
 description = "The integration substrate — OAuth connections, credentials, and the bridge/capability runtime"
 keywords = ["integrations", "oauth", "connections"]
-dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-resources>=3,<4", "angee-jobs>=3,<4", "angee-graphql>=3,<4", "angee-provenance>=3,<4", "angee-web>=3,<4", "authlib>=1.8.0", "deepdiff>=9.1.0", "httpcore2>=2.10,<3", "httpx2>=2.10,<3", "qrcode[pil]>=8.2", "django-angee>=3,<4"]
+dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-resources>=3,<4", "angee-jobs>=3,<4", "angee-graphql>=3,<4", "angee-provenance>=3,<4", "angee-web>=3,<4", "authlib>=1.8.0", "deepdiff>=9.1.0", "httpcore2>=2.10,<3", "httpx2>=2.10,<3", "qrcode[pil]>=8.2", "django-compose>=0.1.0.dev0,<0.2"]
 
 [project.entry-points]
 "angee.addons" = {"angee.integrate" = "angee.integrate"}
 
 [tool.angee]
-category = "Integration"
 
 [[tool.angee.resources.master]]
 path = "master/010_integrate.vendor.yaml"
@@ -20,3 +19,6 @@ adopt = "slug"
 [[tool.angee.resources.install]]
 path = "install/010_integrate.oauthclient.yaml"
 adopt = ["slug", "environment"]
+
+[tool.angee.platform]
+category = "Integration"

@@ -11,7 +11,6 @@ dependencies = ["angee-base>=3,<4", "angee-resources>=3,<4", "angee-graphql>=3,<
 "angee.addons" = {"angee.iam" = "angee.iam"}
 
 [tool.angee]
-category = "Foundation"
 
 [[tool.angee.resources.demo]]
 path = "demo/010_iam.user.yaml"
@@ -20,3 +19,6 @@ adopt = "username"
 [[tool.angee.resources.demo]]
 path = "demo/030_iam.admin_grant.yaml"
 kind = "grants"
+
+[tool.angee.platform]
+category = "Foundation"

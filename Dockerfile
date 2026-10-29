@@ -9,11 +9,13 @@
 # rebuilds the deps layer. The framework CODE is NOT baked here: it is mounted
 # (framework dev) or added by a derived image / installed as the wheel (downstream
 # project). Two targets share these stages: `final` is the deps-only base image
-# (`django-angee-base`, the container analogue of the `django-angee` wheel's deps);
+# (`django-angee-base`, the container analogue of the `angee` collection's dependencies);
 # the `runtime` target below is the derived image this comment foretells — it bakes
-# the framework code + `[postgres]` into `ghcr.io/ang-ee/django-angee`, the fuller
+# the framework distributions + `[postgres]` into `ghcr.io/ang-ee/django-angee`, the fuller
 # image the self-contained `local` stack runs.
 
+# Supply the native compiler checkout as a named build context:
+# docker build --build-context django-compose=../django-compose .
 ARG PYTHON_VERSION=3.14
 
 # --- base: the lean OS+python layer, shared by `deps` and `final` --------------
@@ -57,8 +59,9 @@ ARG DEV=
 # Native uv reads workspace members from the mounted build context; none of the
 # workspace distributions are installed in the dependency-only base layer.
 RUN --mount=type=bind,source=.,target=/src,readonly \
+    --mount=type=bind,from=django-compose,source=.,target=/django-compose,readonly \
     --mount=type=cache,target=/root/.cache/uv \
-    uv sync --project /src --frozen --no-install-workspace ${DEV} \
+    uv sync --project /src --frozen --no-install-workspace --no-editable ${DEV} \
     && chown -R angee:angee /opt/.venv
 
 # --- final: the lean base + the baked venv (git inherited for the dev uv sync) --
@@ -80,17 +83,14 @@ CMD ["python", "-c", "import django, sys; print('django-angee-base ready — pyt
 FROM deps AS runtime
 WORKDIR /opt/angee-src
 COPY --chown=angee:angee pyproject.toml uv.lock README.md LICENSE LICENSE.GPL ./
-COPY --chown=angee:angee core ./core
+COPY --chown=angee:angee tools ./tools
+COPY --from=django-compose --chown=angee:angee . /opt/django-compose
 COPY --chown=angee:angee addons ./addons
 COPY --chown=angee:angee examples/addons ./examples/addons
 COPY --chown=angee:angee tests/blankchoices ./tests/blankchoices
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable --extra postgres \
     && chown -R angee:angee /opt/.venv
-# Each addon is installed from its own wheel. The declared baked source root
-# remains available for project settings that reference authored source files.
-COPY docker/addon-settings.yaml ./addon-settings.yaml
-ENV YAMLCONF_CONFFILE=/opt/angee-src/addon-settings.yaml
 USER root
 WORKDIR /app
 ENTRYPOINT ["tini", "--", "/usr/local/bin/angee-django-entrypoint"]

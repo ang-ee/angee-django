@@ -5,10 +5,12 @@ name = "angee-dashboards"
 version = "3.0.0"
 description = "Composable resource, addon, and personal dashboards"
 keywords = ["dashboards", "analytics", "widgets"]
-dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-resources>=3,<4", "angee-graphql>=3,<4", "angee-provenance>=3,<4", "angee-web>=3,<4", "django-angee>=3,<4"]
+dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-resources>=3,<4", "angee-graphql>=3,<4", "angee-provenance>=3,<4", "angee-web>=3,<4"]
 
 [project.entry-points]
 "angee.addons" = {"angee.dashboards" = "angee.dashboards"}
 
 [tool.angee]
+
+[tool.angee.platform]
 category = "Data"

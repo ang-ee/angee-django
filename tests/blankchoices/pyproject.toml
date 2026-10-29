@@ -7,3 +7,5 @@ dependencies = ["angee-parties>=3,<4"]
 
 [project.entry-points]
 "angee.addons" = {"tests.blankchoices" = "tests.blankchoices"}
+
+[tool]

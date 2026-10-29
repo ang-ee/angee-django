@@ -158,7 +158,7 @@ StorageMasterManager = AngeeHistoryManager.from_queryset(StorageMasterQuerySet)
 """Default manager for the archivable storage master rows (Backend, Drive)."""
 
 
-class Backend(AuditMixin, ArchiveMixin, AngeeDataModel):
+class Backend(AuditMixin, ArchiveMixin, AngeeDataModel, concrete=True):
     """Credentialed storage backend instance.
 
     One row names a :class:`~angee.storage.backends.StorageBackend` subclass by
@@ -167,7 +167,6 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel):
     here, never on the drive.
     """
 
-    runtime = True
 
     sqid_prefix = "bkd_"
     slug = models.SlugField(unique=True)
@@ -308,7 +307,7 @@ class DriveManager[DriveT: Drive](_DriveManagerBase[DriveT]):
             return drive
 
 
-class Drive(OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeDataModel):
+class Drive(OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeDataModel, concrete=True):
     """Addressable storage volume on top of a backend.
 
     Object keys live under ``{prefix}/…`` inside the parent backend's
@@ -318,7 +317,6 @@ class Drive(OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeDataModel):
     underneath.
     """
 
-    runtime = True
     rebac_grantable = {"editor": "share", "viewer": "share"}
 
     sqid_prefix = "drv_"
@@ -522,7 +520,7 @@ class FolderManager[FolderT: Folder](_FolderManagerBase[FolderT]):
             return pruned
 
 
-class Folder(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
+class Folder(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """Tree node inside a drive, or a per-user smart folder.
 
     A real folder has a ``drive`` and filesystem-style uniqueness on
@@ -531,7 +529,6 @@ class Folder(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     query — Trash lists ``File.objects.trashed()`` — so it stores no edges.
     """
 
-    runtime = True
 
     sqid_prefix = "fld_"
     hierarchy_scope_fields = ("drive",)
@@ -636,7 +633,7 @@ class Folder(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
             raise ValidationError({"drive": "A folder requires a drive."})
 
 
-class MimeType(ResourceLoadMixin, AngeeDataModel):
+class MimeType(ResourceLoadMixin, AngeeDataModel, concrete=True):
     """Reference row for one MIME type.
 
     The master-tier taxonomy seed is the source of truth; rows are read-only
@@ -644,7 +641,6 @@ class MimeType(ResourceLoadMixin, AngeeDataModel):
     ledger, so any caller may read the catalogue.
     """
 
-    runtime = True
     catalogue = True
     catalogue_tier = "master"
 
@@ -1272,7 +1268,7 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
             locked.grant_record_access("viewer", user)
 
 
-class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
+class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """A stored asset, deduplicated per drive by content hash.
 
     ``owner`` grants access; ``created_by`` retains upload attribution.
@@ -1281,7 +1277,6 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
 
     _upload_nonce: str | None = None
 
-    runtime = True
     rebac_grantable = {"viewer": "share"}
     owner_container = "drive"
 
@@ -1874,7 +1869,7 @@ class FileAttachmentManager[AttachmentT: FileAttachment](AngeeHistoryManager[Att
         return attachment
 
 
-class FileAttachment(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel):
+class FileAttachment(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """Polymorphic edge attaching one :class:`File` to any model row.
 
     Consumers attach explicitly through :meth:`FileAttachmentManager.attach` or
@@ -1889,7 +1884,6 @@ class FileAttachment(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel):
 
     merge_policy = MergePolicy.MOVE
     merge_identity = (("file", "content_type", "object_id"),)
-    runtime = True
 
     sqid_prefix = "fat_"
     file = models.ForeignKey(

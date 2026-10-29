@@ -9,6 +9,7 @@ from typing import Any, ClassVar, Self, TypeVar
 from django.core import checks
 from django.core.exceptions import ValidationError
 from django.db import models, router, transaction
+from django_compose.models import Composable
 from rebac import (
     RebacMixin,
     RelationshipTuple,
@@ -38,7 +39,13 @@ _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
 class AngeeModel(
-    InputExtensionsMixin, StateTransitionsMixin, MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin
+    Composable,
+    InputExtensionsMixin,
+    StateTransitionsMixin,
+    MergeContractMixin,
+    PublicIdentity,
+    TimestampMixin,
+    RebacMixin,
 ):
     """Abstract base model for Angee source and runtime models."""
 
@@ -74,17 +81,6 @@ class AngeeModel(
         ):
             raise ValidationError(f"{self._meta.label} {self.pk}: live references or grants prevent removal.")
         self.delete()
-
-    extends: ClassVar[str | None] = None
-    """Optional ``app_label.ModelName`` target this source model extends."""
-
-    runtime: bool = False
-    """Whether this abstract source model materializes into the generated runtime.
-
-    The read is non-inherited: an abstract base can stay ``runtime = False`` and
-    a concrete source subclass opts in by declaring ``runtime = True`` itself.
-    Extensions use ``extends`` instead of this flag.
-    """
 
     rebac_grantable: Mapping[str, str] = {}
     """Direct relations clients may manage, mapped to their required permission.

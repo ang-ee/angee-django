@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar, cast
 
+from angee.base.serialization import strip_null_bytes
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -45,6 +46,7 @@ from django.db.models.functions import MD5, Coalesce, JSONArray
 from django.db.models.sql.compiler import SQLCompiler
 from django.utils import timezone
 from django.utils.text import capfirst
+from django_compose.models import Composable
 from rebac import (
     CheckItem,
     PermissionDenied,
@@ -104,7 +106,6 @@ from angee.provenance.statements import (
     SourceKind,
 )
 from angee.resources.mixins import ResourceLoadMixin
-from angee.serialization import strip_null_bytes
 from angee.tags.models import TaggedModel
 
 
@@ -1029,7 +1030,7 @@ class ThreadedModelMixin(models.Model):
 
 
 
-class Channel(Bridge):
+class Channel(Bridge, inherits="integrate.Integration"):
     """A connected message transport for inbound and outbound email or social data.
 
     An ``integrate.Integration`` child (credential / owner / status from the
@@ -1042,9 +1043,7 @@ class Channel(Bridge):
     own backend and overlay.
     """
 
-    runtime = True
     rebac_grantable = {"reader": "write", "replier": "write"}
-    extends: ClassVar[str | None] = "integrate.Integration"
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
     live_impl_field: ClassVar[str | None] = "backend_class"
 
@@ -1160,10 +1159,9 @@ class Channel(Bridge):
         return super()._next_sync_at(now=now)
 
 
-class ChannelWebform(models.Model):
+class ChannelWebform(Composable, extends="messaging.Channel"):
     """Same-row public-form configuration and message mapping for ``messaging.Channel``."""
 
-    extends: ClassVar[str | None] = "messaging.Channel"
 
     hasura_readable_fields: ClassVar[tuple[str, ...]] = (
         "slug",
@@ -1338,7 +1336,9 @@ class ChatterHistory(ModelHistory):
         return model._base_manager.using(using).filter(pk=object_id).first()
 
 
-class Thread(ChangeBroadcastMixin, SourceCopyMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel):
+class Thread(
+    ChangeBroadcastMixin, SourceCopyMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel, concrete=True
+):
     """An aggregation of related messages — an email conversation or a social post.
 
     Two orthogonal axes, both base-owned: ``modality`` (the *shape* — email thread /
@@ -1397,7 +1397,6 @@ class Thread(ChangeBroadcastMixin, SourceCopyMixin, HistoryMixin, TaggedModel, O
 
         return self.member_threads().aggregate(count=models.Sum("message_count"), latest=models.Max("last_message_at"))
 
-    runtime = True
     rebac_grantable = {"reader": "share"}
 
     class Modality(models.TextChoices):
@@ -1541,14 +1540,13 @@ class Thread(ChangeBroadcastMixin, SourceCopyMixin, HistoryMixin, TaggedModel, O
         )
 
 
-class ThreadAttachment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
+class ThreadAttachment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=True):
     """Polymorphic edge attaching one chatter thread to one model row."""
 
     history = ChatterHistory(inherit=True)
     merge_policy = MergePolicy.MOVE
     on_target_delete = models.CASCADE
     merge_identity = (("thread", "content_type", "object_id", "role"),)
-    runtime = True
 
     class AttachmentRole(models.TextChoices):
         """Why the thread is attached to the target record."""
@@ -1665,10 +1663,9 @@ class ThreadAttachment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel)
             return cls._base_manager.only(*cls.POINTER_COLUMNS).get(pk=edge_id)
 
 
-class FileSourceThreads(models.Model):
+class FileSourceThreads(Composable, extends="storage.File"):
     """Messaging-owned reverse edges from a Storage File to source conversations."""
 
-    extends: ClassVar[str | None] = "storage.File"
     source_thread_attachments = GenericRelation(
         "messaging.ThreadAttachment",
         content_type_field="content_type",
@@ -1680,7 +1677,7 @@ class FileSourceThreads(models.Model):
         abstract = True
 
 
-class ThreadFollower(AuditMixin, AngeeDataModel):
+class ThreadFollower(AuditMixin, AngeeDataModel, concrete=True):
     """A party's per-thread subscription row — subscription policy plus read receipt.
 
     The one row per ``(thread, party)``: it carries how the follower wants updates
@@ -1694,7 +1691,6 @@ class ThreadFollower(AuditMixin, AngeeDataModel):
     acknowledge individual inbox items, which own ``ThreadNotification.read_at``.
     """
 
-    runtime = True
 
     NotificationPolicy = NotificationPolicy
 
@@ -1763,7 +1759,7 @@ class ThreadFollower(AuditMixin, AngeeDataModel):
         )
 
 
-class MessageSubtype(AuditMixin, AngeeDataModel):
+class MessageSubtype(AuditMixin, AngeeDataModel, concrete=True):
     """A typed chatter event category, mirroring Odoo's message subtypes.
 
     Subtypes classify system notifications and comments so followers can later
@@ -1771,7 +1767,6 @@ class MessageSubtype(AuditMixin, AngeeDataModel):
     model; an empty value is a global subtype.
     """
 
-    runtime = True
 
     # The built-in subtype catalogue this base messaging slice ships: the closed set of
     # keys the chatter write path classifies messages under. The model owns the catalogue
@@ -1873,8 +1868,15 @@ class WebformSubmission:
 
 
 class Message(
-    ChangeBroadcastMixin, SourceCopyMixin, ResourceLoadMixin, TaggedModel, TrashMixin,
-    OptimisticLockMixin, AuditMixin, AngeeDataModel,
+    ChangeBroadcastMixin,
+    SourceCopyMixin,
+    ResourceLoadMixin,
+    TaggedModel,
+    TrashMixin,
+    OptimisticLockMixin,
+    AuditMixin,
+    AngeeDataModel,
+    concrete=True,
 ):
     """One message — the unit of a thread. The root post is itself a Message.
 
@@ -1904,7 +1906,6 @@ class Message(
     _inbox_attachment: ThreadAttachment | None = None
     """Authorized notification context set by the notification read owner."""
 
-    runtime = True
     resource_class = MessageResource
     rebac_grantable = {"reader": "write"}
     class Direction(models.TextChoices):
@@ -2517,7 +2518,7 @@ class Message(
         return thread is None or not thread.is_record_attached()
 
 
-class ThreadNotification(AuditMixin, AngeeDataModel):
+class ThreadNotification(AuditMixin, AngeeDataModel, concrete=True):
     """A recipient's delivery ledger and acknowledgement of one inbox item.
 
     ``read_at`` records acknowledgement of this notification independently of
@@ -2529,7 +2530,6 @@ class ThreadNotification(AuditMixin, AngeeDataModel):
     explicit followers; acknowledgement and the follower cursor remain independent.
     """
 
-    runtime = True
 
     class NotificationType(models.TextChoices):
         """How this notification should be delivered."""
@@ -2626,7 +2626,7 @@ class ThreadNotification(AuditMixin, AngeeDataModel):
         return f"{self.user_id} notified for {self.message_id}"
 
 
-class Fragment(AuditMixin, AngeeDataModel):
+class Fragment(AuditMixin, AngeeDataModel, concrete=True):
     """A content-addressed text node shared across messages.
 
     Email threads re-quote the same paragraphs in every reply; a hashed shared row
@@ -2643,7 +2643,6 @@ class Fragment(AuditMixin, AngeeDataModel):
     own, mirroring storage's unscoped ``MimeType`` catalogue.
     """
 
-    runtime = True
 
     class FragmentKind(models.TextChoices):
         """What a fragment of text is."""
@@ -2701,7 +2700,7 @@ class Fragment(AuditMixin, AngeeDataModel):
         return (self.text[:60] + "…") if len(self.text) > 60 else self.text
 
 
-class Part(AuditMixin, AngeeDataModel):
+class Part(AuditMixin, AngeeDataModel, concrete=True):
     """One recursive body node of a message (the MIME/JMAP part shape, one model).
 
     ``type``/``role`` is a genuine discriminator, not MTI: a ``multipart/*`` is a
@@ -2711,7 +2710,6 @@ class Part(AuditMixin, AngeeDataModel):
     forwarded bills arrive); inline images are ``disposition=inline`` + ``cid``.
     """
 
-    runtime = True
 
     class Disposition(models.TextChoices):
         """How a part is presented."""
@@ -2791,7 +2789,7 @@ class Part(AuditMixin, AngeeDataModel):
         return f"{self.type} ({self.role})"
 
 
-class MessageEdge(AuditMixin, AngeeDataModel):
+class MessageEdge(AuditMixin, AngeeDataModel, concrete=True):
     """One typed cross-message relation — the unified quote/reference graph.
 
     ``Message.parent`` stays the single-parent reply pointer and ``Thread`` is
@@ -2800,7 +2798,6 @@ class MessageEdge(AuditMixin, AngeeDataModel):
     direction indexes back the bulk BFS.
     """
 
-    runtime = True
 
     class EdgeKind(models.TextChoices):
         """The type of cross-message relation.
@@ -2863,7 +2860,7 @@ class MessageEdge(AuditMixin, AngeeDataModel):
         return f"{self.src_id} -{self.kind}-> {self.dst_id}"
 
 
-class Participant(AuditMixin, AngeeDataModel):
+class Participant(AuditMixin, AngeeDataModel, concrete=True):
     """A Handle-keyed membership of a thread/message — the queryable recipient row.
 
     The raw to/cc/bcc stays in ``Message.metadata`` as the lossless source; this is
@@ -2873,7 +2870,6 @@ class Participant(AuditMixin, AngeeDataModel):
     fact drops the moved copy (``merge_identity``).
     """
 
-    runtime = True
     merge_identity = (("message", "handle", "role"), ("thread", "handle", "role"))
 
     class ParticipantRole(models.TextChoices):
@@ -2935,7 +2931,7 @@ class Participant(AuditMixin, AngeeDataModel):
         return f"{self.handle_id} ({self.role})"
 
 
-class Reaction(AuditMixin, AngeeDataModel):
+class Reaction(AuditMixin, AngeeDataModel, concrete=True):
     """One attributed reaction to a message, keyed by the reactor's parties ``Handle``.
 
     This is the single per-actor reaction store: ``MessageManager.set_reaction``
@@ -2955,7 +2951,6 @@ class Reaction(AuditMixin, AngeeDataModel):
     drops the moved copy (``merge_identity``).
     """
 
-    runtime = True
     merge_identity = (("message", "handle", "reaction"),)
 
     sqid_prefix = "rxn_"
@@ -3014,10 +3009,9 @@ class Reaction(AuditMixin, AngeeDataModel):
         return cleaned
 
 
-class MessageStar(AuditMixin, AngeeDataModel):
+class MessageStar(AuditMixin, AngeeDataModel, concrete=True):
     """A user's Odoo-style star/favorite marker on a message."""
 
-    runtime = True
 
     sqid_prefix = "msr_"
     message = models.ForeignKey(

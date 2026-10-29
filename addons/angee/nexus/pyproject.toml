@@ -11,4 +11,6 @@ dependencies = ["angee-base>=3,<4", "angee-parties>=3,<4", "angee-messaging>=3,<
 "angee.addons" = {"angee.nexus" = "angee.nexus"}
 
 [tool.angee]
+
+[tool.angee.platform]
 category = "Data"

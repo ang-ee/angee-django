@@ -5,10 +5,12 @@ name = "angee-appearance-integrate"
 version = "3.0.0"
 description = "Extract bounded brand facts from a public website into Appearance"
 keywords = ["appearance", "theme", "website", "integration"]
-dependencies = ["angee-appearance>=3,<4", "angee-integrate>=3,<4", "angee-web>=3,<4", "django-angee>=3,<4"]
+dependencies = ["angee-appearance>=3,<4", "angee-integrate>=3,<4", "angee-web>=3,<4", "angee-base>=3,<4"]
 
 [project.entry-points]
 "angee.addons" = {"angee.appearance_integrate" = "angee.appearance_integrate"}
 
 [tool.angee]
+
+[tool.angee.platform]
 category = "Integration"

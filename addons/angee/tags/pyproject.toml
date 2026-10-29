@@ -11,7 +11,9 @@ dependencies = ["angee-base>=3,<4", "angee-provenance>=3,<4", "angee-iam>=3,<4",
 "angee.addons" = {"angee.tags" = "angee.tags"}
 
 [tool.angee]
-category = "Foundation"
 
 [tool.angee.resources]
 demo = ["demo/010_tags.tag.yaml"]
+
+[tool.angee.platform]
+category = "Foundation"

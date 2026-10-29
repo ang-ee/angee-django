@@ -11,4 +11,6 @@ dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-graphql>=3,<4"]
 "angee.addons" = {"angee.sequence" = "angee.sequence"}
 
 [tool.angee]
+
+[tool.angee.platform]
 category = "Foundation"

@@ -41,6 +41,7 @@ from collections.abc import Iterable, Sequence
 from contextlib import ExitStack
 from typing import Any, ClassVar, Self, cast
 
+from angee.base.hooks import resolve_hooks
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.db.models import ProtectedError, Q, RestrictedError
@@ -54,7 +55,6 @@ from angee.base.models.merge_references import MergePolicy, named_in_relationshi
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import instance_actor
 from angee.base.signals import pre_merge
-from angee.hooks import resolve_hooks
 
 MERGE_REASON = "merge"
 """The system-context reason a merge's moves record."""

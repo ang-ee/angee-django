@@ -11,4 +11,6 @@ dependencies = ["angee-knowledge>=3,<4", "angee-mcp>=3,<4"]
 "angee.addons" = {"angee.knowledge_graph_pgvector" = "angee.knowledge_graph_pgvector"}
 
 [tool.angee]
+
+[tool.angee.platform]
 category = "Integration"

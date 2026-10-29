@@ -11,4 +11,6 @@ dependencies = ["angee-storage-integrate>=3,<4", "angee-storage>=3,<4", "angee-i
 "angee.addons" = {"angee.storage_integrate_iphone" = "angee.storage_integrate_iphone"}
 
 [tool.angee]
+
+[tool.angee.platform]
 category = "Integration"

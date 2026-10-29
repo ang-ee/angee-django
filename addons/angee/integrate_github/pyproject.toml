@@ -11,8 +11,10 @@ dependencies = ["angee-integrate-vcs>=3,<4"]
 "angee.addons" = {"angee.integrate_github" = "angee.integrate_github"}
 
 [tool.angee]
-category = "Integration"
 
 [[tool.angee.resources.install]]
 path = "install/010_integrate.oauthclient.yaml"
 adopt = ["slug", "environment"]
+
+[tool.angee.platform]
+category = "Integration"

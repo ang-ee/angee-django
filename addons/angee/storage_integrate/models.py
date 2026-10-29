@@ -41,15 +41,13 @@ class MountMode(models.TextChoices):
     REFERENCE = "reference", "Leave files in place"
 
 
-class Mount(Bridge):
+class Mount(Bridge, inherits="integrate.Integration"):
     """An external storage source synchronized into a dedicated drive.
 
     Per-file freshness lives on the synchronized File rows, so each source run
     reads those current facts.
     """
 
-    runtime = True
-    extends: ClassVar[str | None] = "integrate.Integration"
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
     live_impl_field = "backend_class"
 

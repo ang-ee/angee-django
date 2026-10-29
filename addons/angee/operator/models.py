@@ -18,10 +18,9 @@ from angee.base.models.base import AngeeModel
 from angee.base.models.roles import role_anchor
 
 
-class OperatorConnection(AngeeModel):
+class OperatorConnection(AngeeModel, concrete=True):
     """Table-less REBAC type anchor for the operator daemon connection."""
 
-    runtime = True
 
     class Meta:
         abstract = True

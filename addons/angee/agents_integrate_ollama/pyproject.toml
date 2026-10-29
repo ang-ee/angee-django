@@ -11,7 +11,6 @@ dependencies = ["angee-agents>=3,<4", "angee-agents-integrate-openai>=3,<4", "an
 "angee.addons" = {"angee.agents_integrate_ollama" = "angee.agents_integrate_ollama"}
 
 [tool.angee]
-category = "Integration"
 
 [[tool.angee.resources.master]]
 path = "master/010_integrate.vendor.yaml"
@@ -30,3 +29,6 @@ adopt = ["provider", "name"]
 path = "demo/040_agents.inferencemodel.yaml"
 depends_on = "install/030_agents.inferenceprovider.yaml"
 adopt = ["provider", "name"]
+
+[tool.angee.platform]
+category = "Integration"

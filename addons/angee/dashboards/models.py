@@ -670,10 +670,10 @@ class Dashboard(
     OwnerMixin,
     HistoryMixin,
     AngeeDataModel,
+    concrete=True,
 ):
     """One installed baseline or actor-owned complete dashboard snapshot."""
 
-    runtime = True
     resource_class = DashboardResource
     immutable_fields = ("is_baseline",)
     sqid_prefix = "dsh_"
@@ -813,10 +813,9 @@ class DashboardWidgetQuerySet[WidgetT: DashboardWidget](ArchiveQuerySet[WidgetT]
 DashboardWidgetManager = AngeeHistoryManager.from_queryset(DashboardWidgetQuerySet)
 
 
-class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, HistoryMixin, AngeeDataModel):
+class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """One versioned widget specification inside a snapshot."""
 
-    runtime = True
     sqid_prefix = "dsw_"
 
     dashboard = models.ForeignKey("dashboards.Dashboard", on_delete=models.CASCADE, related_name="widgets")

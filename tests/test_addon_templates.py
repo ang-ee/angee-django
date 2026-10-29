@@ -99,7 +99,7 @@ def test_addon_template_renders_one_complete_source_addon() -> None:
     assert '{% if include_web %}\n  "angee-web>=3,<4",' in manifest
     model = (ADDON_TEMPLATE / "template" / "models.py.jinja").read_text(encoding="utf-8")
     for declaration in (
-        "runtime = True",
+        "concrete=True",
         "sqid_prefix = ",
         'rebac_resource_type = "{{ addon_id }}/{{ model_name | lower }}"',
     ):

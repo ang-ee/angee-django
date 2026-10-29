@@ -26,6 +26,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.db import models, transaction
 from django.utils import timezone
+from django_compose.models import Composable
 from pydantic_ai.messages import (
     BinaryContent,
     ModelMessage,
@@ -310,7 +311,7 @@ OPEN_TURN_STATUSES = (TurnStatus.PENDING, *ACTIVE_TURN_STATUSES)
 """Unfinished turns canceled when their session closes."""
 
 
-class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
+class InferenceProvider(Composable, ImplDefaultsMixin, metaclass=RebacModelBase, inherits="integrate.Integration"):
     """An LLM provider account, materialized as an integration child row.
 
     It draws its API credential from its inherited integration credential and
@@ -319,8 +320,6 @@ class InferenceProvider(ImplDefaultsMixin, metaclass=RebacModelBase):
     provider's models into :class:`InferenceModel` rows.
     """
 
-    runtime = True
-    extends: ClassVar[str | None] = "integrate.Integration"
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.FORM
 
     backend_class = ImplClassField(
@@ -422,7 +421,7 @@ class InferenceModelManager[ModelT: InferenceModel](AngeeHistoryManager[ModelT])
         return len(specs)
 
 
-class InferenceModel(ResourceLoadMixin, AuditMixin, AngeeDataModel):
+class InferenceModel(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
     """One model in a provider's catalogue, agents bind to by FK.
 
     ``publisher`` is the model's maker, reusing the ``integrate.Vendor`` catalogue
@@ -430,7 +429,6 @@ class InferenceModel(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     serve another maker's model).
     """
 
-    runtime = True
     catalogue = True
     catalogue_tier = "demo"
     catalogue_tiers = ("install", "demo")
@@ -646,14 +644,13 @@ class SkillManager(VcsOutputManager, AngeeHistoryManager):
         return len(descriptors)
 
 
-class Skill(VcsOutput, AuditMixin, AngeeDataModel):
+class Skill(VcsOutput, AuditMixin, AngeeDataModel, concrete=True):
     """One skill discovered under an ``integrate_vcs.Source`` (``source_kind="skill"``).
 
     The operator mounts the skill's directory into an agent's workspace; Django keeps
     the inventory only. Discovery reuses the integrate source walk.
     """
 
-    runtime = True
     source_kind = "skill"
     """Binds the ``skill`` source kind to this output model (see ``integrate_vcs.Source``)."""
 
@@ -680,14 +677,13 @@ class Skill(VcsOutput, AuditMixin, AngeeDataModel):
         return self.name or self.path or f"skill:{self.public_id}"
 
 
-class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel):
+class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
     """An MCP server an agent can reach — internal to the platform or external.
 
     An external server authenticates with an ``integrate.Credential``; the operator renders
     the selected servers and their authorized tools into an agent's MCP config.
     """
 
-    runtime = True
     catalogue = True
     catalogue_tier = "demo"
 
@@ -846,10 +842,9 @@ class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel):
         return sqid, digest
 
 
-class MCPTool(AuditMixin, AngeeDataModel):
+class MCPTool(AuditMixin, AngeeDataModel, concrete=True):
     """One tool an MCP server exposes; agents select the tools they may call."""
 
-    runtime = True
 
     sqid_prefix = "mct_"
     server = models.ForeignKey("agents.MCPServer", on_delete=models.CASCADE, related_name="tools")
@@ -892,7 +887,7 @@ class AgentManager[AgentT: Agent](AngeeHistoryManager[AgentT]):
             return next((agent for agent in candidates if agent.can_chat), None)
 
 
-class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
+class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """An agent definition (or, when ``is_template``, an agent template).
 
     The operator renders an agent into a workspace from ``workspace_template`` and a
@@ -910,7 +905,6 @@ class Agent(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     Sessions and turns derive delete authority from this agent in the Zed schema.
     """
 
-    runtime = True
     rebac_grantable = {"reader": "share", "editor": "share", "caller": "share_call"}
     resource_class = AgentResource
 
@@ -1901,7 +1895,7 @@ class AgentSessionManager[SessionT: AgentSession](AngeeHistoryManager[SessionT])
                 session._close_locked()
 
 
-class AgentSession(AuditMixin, AngeeDataModel):
+class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
     """Runtime-neutral conversation whose turns run once, without crash recovery.
 
     A pending turn retained across a rebuild runs first when the user next posts.
@@ -1910,7 +1904,6 @@ class AgentSession(AuditMixin, AngeeDataModel):
     Delete authority derives from the agent, independently of the session's user.
     """
 
-    runtime = True
 
     sqid_prefix = "ase_"
     agent = models.ForeignKey("agents.Agent", on_delete=models.CASCADE, related_name="sessions")
@@ -2217,10 +2210,9 @@ class AgentTurnQuerySet[TurnT: AgentTurn](AngeeHistoryQuerySet[TurnT]):
 _AgentTurnManager = AngeeHistoryManager.from_queryset(AgentTurnQuerySet)
 
 
-class AgentTurn(AuditMixin, AngeeDataModel):
+class AgentTurn(AuditMixin, AngeeDataModel, concrete=True):
     """One prompt-to-response cycle with append-only ACP updates."""
 
-    runtime = True
 
     sqid_prefix = "atn_"
     session = models.ForeignKey("agents.AgentSession", on_delete=models.CASCADE, related_name="turns")

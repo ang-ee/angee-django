@@ -9,6 +9,7 @@ from graphlib import CycleError, TopologicalSorter
 from itertools import groupby
 from typing import Any, ClassVar, cast
 
+from angee.base.serialization import canonical_json, canonical_json_sha256, json_safe
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -16,6 +17,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import models, transaction
 from django.utils import timezone
+from django_compose.models import Composable
 from rebac import (
     RebacMixin,
     RelationshipTuple,
@@ -52,7 +54,6 @@ from angee.provenance.statements import (
     SourceKind,
     StatementSourceMixin,
 )
-from angee.serialization import canonical_json, canonical_json_sha256, json_safe
 
 ProvenanceRole = role_anchor("provenance/role")
 
@@ -75,10 +76,9 @@ class StatementPrincipal(StatementSourceMixin, AngeeDataModel):
         abstract = True
 
 
-class Rule(StatementPrincipal):
+class Rule(StatementPrincipal, concrete=True):
     """Persisted principal for one registered rule or matcher, keyed by its name."""
 
-    runtime = True
     sqid_prefix = "rul_"
     statement_source_kind = cast(SourceKind, SourceKind.RULE)
 
@@ -87,10 +87,9 @@ class Rule(StatementPrincipal):
         rebac_resource_type = "provenance/rule"
 
 
-class Seed(StatementPrincipal):
+class Seed(StatementPrincipal, concrete=True):
     """Persisted principal for one seed load, keyed by that load's identity."""
 
-    runtime = True
     sqid_prefix = "sed_"
     statement_source_kind = cast(SourceKind, SourceKind.SEED)
 
@@ -99,7 +98,7 @@ class Seed(StatementPrincipal):
         rebac_resource_type = "provenance/seed"
 
 
-class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
+class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True):
     """One logical write's attribution and touched-model index; never historized.
 
     ``actor_ref`` stores the native SubjectRef wire representation in the historical
@@ -110,7 +109,6 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
 
     required_context_error: ClassVar[type[Exception]] = ChangesetRequired
 
-    runtime = True
     sqid_prefix = "cst_"
     merge_policy: ClassVar[MergePolicy] = MergePolicy.KEEP
     objects = ChangesetManager()

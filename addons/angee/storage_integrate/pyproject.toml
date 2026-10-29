@@ -11,8 +11,10 @@ dependencies = ["angee-base>=3,<4", "angee-storage>=3,<4", "angee-integrate>=3,<
 "angee.addons" = {"angee.storage_integrate" = "angee.storage_integrate"}
 
 [tool.angee]
-category = "Integration"
 
 [[tool.angee.resources.master]]
 path = "master/010_integrate.vendor.yaml"
 adopt = "slug"
+
+[tool.angee.platform]
+category = "Integration"

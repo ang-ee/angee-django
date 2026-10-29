@@ -78,6 +78,9 @@ jobs:
         with:
           context: .
           file: Dockerfile
+          # The compiler source must be provided by the calling build environment.
+          build-contexts: |
+            django-compose=../django-compose
           target: ${{ matrix.target }}
           platforms: linux/amd64,linux/arm64
           push: true

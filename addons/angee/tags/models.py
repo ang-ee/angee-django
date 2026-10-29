@@ -71,12 +71,11 @@ class TagQuerySet[TagT: Tag](
 TagManager = AngeeHistoryManager.from_queryset(TagQuerySet)
 
 
-class Tag(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel):
+class Tag(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel, concrete=True):
     """One label in a vocabulary shared by every non-anonymous actor."""
 
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
-    runtime = True
     sqid_prefix = "tag_"
 
     name = models.CharField(max_length=128)
@@ -210,7 +209,7 @@ class TagAssignmentManager[AssignmentT: TagAssignment](_TagAssignmentManagerBase
         return tag_row.canonical()
 
 
-class TagAssignment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
+class TagAssignment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=True):
     """Polymorphic edge attaching one :class:`Tag` to a record of a taggable type.
 
     The ``target`` generic foreign key stores :func:`rebac.generic_target`. Each
@@ -222,7 +221,6 @@ class TagAssignment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
     history_revert_permission = "delete"
     merge_policy = MergePolicy.MOVE
     merge_identity = (("tag", "content_type", "object_id"),)
-    runtime = True
     sqid_prefix = "tga_"
 
     tag = models.ForeignKey(

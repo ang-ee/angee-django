@@ -34,10 +34,9 @@ from angee.base.permissions import actor_user_id
 from angee.nexus.managers import CadenceManager, TieManager
 
 
-class Tie(AngeeDataModel):
+class Tie(AngeeDataModel, concrete=True):
     """A fully derived interaction edge between two canonically ordered parties."""
 
-    runtime = True
     sqid_prefix = "tie_"
 
     party_a = models.ForeignKey(
@@ -146,10 +145,9 @@ class Tie(AngeeDataModel):
         super().save(*args, **kwargs)
 
 
-class Cadence(AngeeDataModel):
+class Cadence(AngeeDataModel, concrete=True):
     """One user's human-authored stay-in-touch intent for one party."""
 
-    runtime = True
     sqid_prefix = "cad_"
 
     user = models.ForeignKey(

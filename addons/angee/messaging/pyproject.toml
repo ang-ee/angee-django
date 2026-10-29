@@ -5,13 +5,12 @@ name = "angee-messaging"
 version = "3.0.0"
 description = "Threads, messages, and channel bridges that ingest and deliver mail and social conversations"
 keywords = ["messaging", "channels", "chat"]
-dependencies = ["angee-base>=3,<4", "angee-timeline>=3,<4", "angee-provenance>=3,<4", "angee-iam>=3,<4", "angee-parties>=3,<4", "angee-integrate>=3,<4", "angee-resources>=3,<4", "angee-storage>=3,<4", "angee-tags>=3,<4", "angee-jobs>=3,<4", "angee-web>=3,<4", "django-anymail>=15.1", "requests>=2.32", "urllib3>=2.2", "django-angee>=3,<4"]
+dependencies = ["angee-base>=3,<4", "angee-timeline>=3,<4", "angee-provenance>=3,<4", "angee-iam>=3,<4", "angee-parties>=3,<4", "angee-integrate>=3,<4", "angee-resources>=3,<4", "angee-storage>=3,<4", "angee-tags>=3,<4", "angee-jobs>=3,<4", "angee-web>=3,<4", "django-anymail>=15.1", "requests>=2.32", "urllib3>=2.2", "django-compose>=0.1.0.dev0,<0.2"]
 
 [project.entry-points]
 "angee.addons" = {"angee.messaging" = "angee.messaging"}
 
 [tool.angee]
-category = "Data"
 
 [tool.angee.resources]
 retired_models = ["messaging.ActivityType"]
@@ -23,3 +22,6 @@ adopt = "key"
 path = "install/040_source_identity_grants.yaml"
 kind = "grants"
 depends_on = ["install/030_provenance.rule.yaml"]
+
+[tool.angee.platform]
+category = "Data"

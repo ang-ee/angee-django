@@ -100,9 +100,9 @@ jobs:
         with:
           python-version: ${{ inputs.python-version }}
       - run: uv run --locked python -m ruff check . --no-cache
-      - run: uv run --locked python -m mypy core/angee addons
+      - run: uv run --locked python -m mypy addons
         env:
-          PYTHONPATH: core:addons
+          PYTHONPATH: addons
 
   # The suite runs as six contiguous shards of equal stored time
   # (.test_durations, pytest-split); a test missing from it still runs in one.
@@ -376,10 +376,10 @@ jobs:
         working-directory: stack
         run: |
           uv sync
-          uv run --no-sync python -m angee.build --root . --output runtime
-          # Author disposable native history, then apply the operator's offline guard.
+          uv run --no-sync python manage.py compose
+          # Author disposable native history, then verify the native composition.
           uv run --no-sync python manage.py makemigrations --noinput
-          uv run --no-sync python -m angee.build --root . --output runtime --check-history
+          uv run --no-sync python manage.py compose --check
           uv run --no-sync python manage.py schema
       - name: Provision the composed stack
         working-directory: stack
@@ -415,7 +415,6 @@ jobs:
           from tests import typing_settings
 
           os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, (
-              str(framework / "core"),
               str(framework),
               *(str(path) for path in typing_settings.ANGEE_ADDON_DIRS),
               os.environ.get("PYTHONPATH"),

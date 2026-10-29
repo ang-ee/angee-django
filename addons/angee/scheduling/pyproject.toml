@@ -11,4 +11,6 @@ dependencies = ["angee-graphql>=3,<4", "python-dateutil>=2.9"]
 "angee.addons" = {"angee.scheduling" = "angee.scheduling"}
 
 [tool.angee]
+
+[tool.angee.platform]
 category = "Foundation"

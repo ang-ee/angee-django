@@ -1,14 +1,27 @@
-build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
 
 [project]
 name = "angee-integrate-iphone"
 version = "3.0.0"
 description = "Dependency-free reader for unencrypted Apple-device backups"
 keywords = ["apple", "iphone", "backup"]
-dependencies = ["django-angee>=3,<4"]
+dependencies = []
+requires-python = ">=3.14"
+license = "LGPL-3.0-or-later"
+license-files = ["LICENSE", "LICENSE.GPL"]
 
-[project.entry-points]
-"angee.addons" = {"angee.integrate_iphone" = "angee.integrate_iphone"}
+[tool.hatch.build]
+exclude = ["PKG-INFO", ".gitignore"]
 
-[tool.angee]
-category = "Integration"
+[tool.hatch.build.targets.wheel]
+include = ["*"]
+dev-mode-dirs = ["../.."]
+
+[tool.hatch.build.targets.wheel.sources]
+"" = "angee/integrate_iphone"
+
+[tool.hatch.build.targets.sdist]
+include = ["*"]

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
+from angee.addons import addon_entry_points, package_identity_index, requirement_addons
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
 from django.utils import timezone
+from django_compose.models import Composable
 from rebac import system_context
 
-from angee.addons import addon_entry_points, package_identity_index, requirement_addons
 from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeModel
 from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
@@ -18,7 +19,7 @@ from angee.platform.discovery import available_addons
 from angee.platform_integrate_vcs.catalog import parse_addon_meta
 
 
-class CatalogProvenance(models.Model):
+class CatalogProvenance(Composable, extends="platform.Addon"):
     """VCS provenance folded onto ``platform.Addon`` (the integrate ``Source`` extension pattern).
 
     Records the integrate ``Source`` a row was discovered from and its bearing
@@ -27,7 +28,6 @@ class CatalogProvenance(models.Model):
     seen it in a repo; a ``REMOTE`` row always carries them.
     """
 
-    extends: ClassVar[str | None] = "platform.Addon"
     hasura_readable_fields: ClassVar[tuple[str, ...]] = ("vcs_path",)
 
     vcs_source = models.ForeignKey(
@@ -146,7 +146,7 @@ class AddonCatalogManager(AngeeManager, VcsOutputManager):
         return len(descriptors)
 
 
-class AddonCatalog(VcsOutput, AngeeModel):
+class AddonCatalog(VcsOutput, AngeeModel, concrete=True):
     """The ``addon`` source kind — discovers marketplace rows into ``platform.Addon``.
 
     A table-less binding (``managed = False``): its ``source_kind`` registers the
@@ -155,7 +155,6 @@ class AddonCatalog(VcsOutput, AngeeModel):
     in ``platform.Addon`` — the marketplace is one registry, not a parallel table.
     """
 
-    runtime = True
     source_kind = "addon"
     """Binds the ``addon`` source kind to this model (see ``integrate_vcs.Source``)."""
 

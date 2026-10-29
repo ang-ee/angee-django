@@ -14,11 +14,9 @@ from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.knowledge_integrate_notion.backend import NotionBackend
 
 
-class NotionConnection(Bridge):
+class NotionConnection(Bridge, inherits="integrate.Integration"):
     """A Notion source whose replicas live in one owner-authorized knowledge vault."""
 
-    runtime = True
-    extends: ClassVar[str | None] = "integrate.Integration"
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.FORM
     backend_class = ImplClassField(NotionBackend, default="notion", create_only=True)
     rewrite_page_links = models.BooleanField(

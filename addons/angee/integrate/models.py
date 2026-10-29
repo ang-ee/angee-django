@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx2
+from angee.base.serialization import canonical_json
 from deepdiff import DeepDiff
 from django.apps import apps
 from django.conf import settings
@@ -40,6 +41,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import OperationalError, connection, models, transaction
 from django.db.models import OuterRef, Prefetch, Q, Subquery
 from django.utils import timezone
+from django_compose.models import Composable
 from rebac import (
     PermissionDenied,
     SubjectRef,
@@ -117,7 +119,6 @@ from angee.provenance.statements import (
     StatementSourceMixin,
 )
 from angee.resources.mixins import ResourceLoadMixin
-from angee.serialization import canonical_json
 
 logger = logging.getLogger(__name__)
 
@@ -289,7 +290,7 @@ class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAut
             raise ValueError(f"ANGEE_INTEGRATE_OAUTH_CLIENTS entry {index} is missing required field(s): {names}")
 
 
-class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
+class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
     """OAuth2 client registration for connecting an external account.
 
     The base of the connection substrate: enough to run the authorization-code and
@@ -304,7 +305,6 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel):
     not a foreign key into this one.
     """
 
-    runtime = True
 
     sqid_prefix = "clt_"
     slug = models.SlugField()
@@ -686,7 +686,7 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
         return instance
 
 
-class ExternalAccount(OwnerMixin, AngeeDataModel):
+class ExternalAccount(OwnerMixin, AngeeDataModel, concrete=True):
     """A user's identity at a provider, owned by the user it belongs to.
 
     Connection identity only: which client minted it (``oauth_client``), which
@@ -695,7 +695,6 @@ class ExternalAccount(OwnerMixin, AngeeDataModel):
     ``integrate.Integration``, which owns implementation health.
     """
 
-    runtime = True
 
     sqid_prefix = "eac_"
     oauth_client = models.ForeignKey(
@@ -1141,10 +1140,9 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         }
 
 
-class Credential(AuditMixin, AngeeDataModel):
+class Credential(AuditMixin, AngeeDataModel, concrete=True):
     """Per-user credential material for acting against a vendor OAuth client."""
 
-    runtime = True
 
     def check_disconnect(self) -> None:
         """Validate explicit disconnect; contributions raise a coded ``ValidationError``."""
@@ -1471,7 +1469,7 @@ class VendorManager[VendorT: Vendor](AngeeHistoryManager[VendorT]):
             ) from error
 
 
-class Vendor(ResourceLoadMixin, AuditMixin, AngeeDataModel):
+class Vendor(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
     """Admin-managed third-party catalogue (GitHub, Google, Slack, …).
 
     The single source of truth for "what is this third party" — branding and
@@ -1481,7 +1479,6 @@ class Vendor(ResourceLoadMixin, AuditMixin, AngeeDataModel):
     foreign key into this catalogue.
     """
 
-    runtime = True
     catalogue = True
     catalogue_tier = "master"
 
@@ -1704,7 +1701,7 @@ def _save_connected(instance: Integration, source: Any, target: Any, **kwargs: A
     instance.refresh_from_db()
 
 
-class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeDataModel):
+class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeDataModel, concrete=True):
     """A product/workspace integration to a vendor account.
 
     The first-class "what we're connected to and what runs over it": it draws a
@@ -1715,7 +1712,6 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     install is inserted with ``save(ownerless=True)`` and keeps no owner.
     """
 
-    runtime = True
     rebac_grantable = {"reader": "write"}
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = None
 
@@ -2771,7 +2767,7 @@ class IntegrationCreateMode(StrEnum):
     CONNECT = "connect"
 
 
-class Bridge(models.Model, metaclass=RebacModelBase):
+class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integration"):
     """Abstract base for child models that synchronize or subscribe to vendor data.
 
     Pure bridge state and behavior. A materialized bridge extends
@@ -2780,7 +2776,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     on the child.
     """
 
-    requires_parent: ClassVar[str] = "integrate.Integration"
 
     if TYPE_CHECKING:
         @property
@@ -3621,10 +3616,9 @@ class WebhookSubscriptionManager[WebhookSubscriptionT: WebhookSubscription](Ange
         return queryset.order_by("pk")
 
 
-class WebhookSubscription(OwnerMixin, AngeeDataModel):
+class WebhookSubscription(OwnerMixin, AngeeDataModel, concrete=True):
     """Outbound webhook endpoint owned by one user."""
 
-    runtime = True
 
     sqid_prefix = "whs_"
     target_url = models.URLField(max_length=2048, validators=(validate_public_url,))
@@ -3973,10 +3967,9 @@ class SyncStreamManager[SyncStreamT: SyncStream](AngeeHistoryManager[SyncStreamT
             return stream
 
 
-class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel):
+class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
     """An epoch's opaque progress and adapter-owned policy for one partition."""
 
-    runtime = True
     sqid_prefix = "sst_"
     integration = models.ForeignKey("integrate.Integration", on_delete=models.PROTECT, related_name="sync_streams")
     key = models.CharField(max_length=160)
@@ -4406,7 +4399,9 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
             return link
 
 
-class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, StatementLinkMixin, AngeeDataModel):
+class RecordLink(
+    RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, StatementLinkMixin, AngeeDataModel, concrete=True
+):
     """A remote identity retaining observations, application facts and run state.
 
     ``applied_base`` pins this link's own historical application snapshot; an
@@ -4427,7 +4422,6 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, State
 
     merge_policy = MergePolicy.MOVE
     accepts_any_record_target = True
-    runtime = True
     sqid_prefix = "rlk_"
     authority_related = ("stream",)
     stream = models.ForeignKey("integrate.SyncStream", on_delete=models.PROTECT, related_name="links")

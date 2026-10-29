@@ -27,7 +27,7 @@ def requirement_name(requirement: str) -> str:
 def declared_requirements() -> dict[str, set[str]]:
     """Map each declared Python dependency to the manifests that declare it."""
     owners: dict[str, set[str]] = {}
-    projects = [ROOT / "core/pyproject.toml", *sorted(ROOT.glob("addons/*/*/pyproject.toml"))]
+    projects = sorted(ROOT.glob("addons/*/*/pyproject.toml"))
     internal = {tomllib.loads(path.read_text())["project"]["name"] for path in projects}
     groups = {}
     for path in projects:
@@ -51,9 +51,9 @@ def test_stack_names_celery_not_procrastinate() -> None:
 
 
 def test_task_and_web_dependencies_belong_to_their_addons() -> None:
-    """Jobs owns task transport; core and GraphQL declare native Channels usage."""
+    """Jobs owns task transport; GraphQL owns Channels; server owns uvicorn."""
 
-    data = tomllib.loads((ROOT / "core/pyproject.toml").read_text(encoding="utf-8"))
+    data = tomllib.loads((ROOT / "addons/angee/base/pyproject.toml").read_text(encoding="utf-8"))
     dependencies = set(data["project"]["dependencies"])
 
     jobs = tomllib.loads((ROOT / "addons/angee/jobs/pyproject.toml").read_text())["project"]["dependencies"]
@@ -61,7 +61,9 @@ def test_task_and_web_dependencies_belong_to_their_addons() -> None:
     assert any(dependency.startswith("celery[redis]") for dependency in jobs)
     assert any(dependency.startswith("channels>=") for dependency in graphql)
     assert not any(dependency.startswith("celery") for dependency in dependencies)
-    assert any(dependency.startswith("channels>=") for dependency in dependencies)
+    assert not any(dependency.startswith("channels>=") for dependency in dependencies)
+    server = tomllib.loads((ROOT / "addons/angee/server/pyproject.toml").read_text())["project"]["dependencies"]
+    assert any(dependency.startswith("uvicorn[standard]") for dependency in server)
     assert not any(dependency.startswith("channels-redis") for dependency in dependencies)
     assert not any("procrastinate" in dependency for dependency in dependencies)
 

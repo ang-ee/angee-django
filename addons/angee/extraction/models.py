@@ -7,6 +7,7 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 
+from angee.base.serialization import canonical_json
 from django.core.exceptions import ValidationError
 from django.db import models
 
@@ -43,7 +44,6 @@ from angee.extraction.pointers import (
 )
 from angee.extraction.profiles import ExtractionProfile
 from angee.provenance.evidence import FactAuthority
-from angee.serialization import canonical_json
 
 
 class RetainedEvidence(AppendOnlyModel):
@@ -57,10 +57,9 @@ class RetainedEvidence(AppendOnlyModel):
         self._owner_insert()
 
 
-class ExtractionLineage(RetainedEvidence, AngeeModel):
+class ExtractionLineage(RetainedEvidence, AngeeModel, concrete=True):
     """Private row locked while allocating a revision and advancing its head."""
 
-    runtime = True
     identity = models.CharField(max_length=64, unique=True, editable=False)
     head = models.ForeignKey("extraction.Extraction", null=True, on_delete=models.PROTECT, related_name="+")
     objects = EvidenceManager()
@@ -76,10 +75,9 @@ class ExtractionLineage(RetainedEvidence, AngeeModel):
         self.head = extraction
 
 
-class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel):
+class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
     """One immutable schema candidate and the evidence supporting its facts."""
 
-    runtime = True
     sqid_prefix = "ext_"
     rebac_grantable = {"viewer": "share"}
     revision = models.PositiveIntegerField(default=1, editable=False)
@@ -511,10 +509,9 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel):
         return None
 
 
-class ExtractionSource(DerivedFrom):
+class ExtractionSource(DerivedFrom, concrete=True):
     """One derived-from source with retained position, digest and REBAC links."""
 
-    runtime = True
     sqid_prefix = "exs_"
     extraction = models.ForeignKey("extraction.Extraction", on_delete=models.PROTECT, related_name="sources")
     file = models.ForeignKey(
@@ -558,10 +555,9 @@ class ExtractionSource(DerivedFrom):
         )
 
 
-class ExtractionPage(RetainedEvidence, AngeeDataModel):
+class ExtractionPage(RetainedEvidence, AngeeDataModel, concrete=True):
     """One ordered page's recognized content and safe provider metadata."""
 
-    runtime = True
     sqid_prefix = "exp_"
     extraction = models.ForeignKey("extraction.Extraction", on_delete=models.PROTECT, related_name="pages")
     source = models.ForeignKey("extraction.ExtractionSource", on_delete=models.PROTECT, related_name="pages")
@@ -587,10 +583,9 @@ class ExtractionPage(RetainedEvidence, AngeeDataModel):
         )
 
 
-class ExtractionPart(RetainedEvidence, AngeeDataModel):
+class ExtractionPart(RetainedEvidence, AngeeDataModel, concrete=True):
     """One immutable text or structured carrier supporting a candidate."""
 
-    runtime = True
     sqid_prefix = "exr_"
     extraction = models.ForeignKey("extraction.Extraction", on_delete=models.PROTECT, related_name="parts")
     source = models.ForeignKey("extraction.ExtractionSource", on_delete=models.PROTECT, related_name="parts")

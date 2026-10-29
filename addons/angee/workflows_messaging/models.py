@@ -4,12 +4,12 @@ from typing import ClassVar
 
 from django.apps import apps
 from django.db import models
+from django_compose.models import Composable
 
 
-class TriggerMessaging(models.Model):
+class TriggerMessaging(Composable, extends="workflows.Trigger"):
     """Declare the protected channel required by a message source."""
 
-    extends: ClassVar[str | None] = "workflows.Trigger"
     hasura_readable_fields: ClassVar[tuple[str, ...]] = ("channel",)
     hasura_filterable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
     hasura_insertable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
@@ -23,10 +23,9 @@ class TriggerMessaging(models.Model):
         abstract = True
 
 
-class ChannelWorkflowTriggers(models.Model):
+class ChannelWorkflowTriggers(Composable, extends="messaging.Channel"):
     """Name the protected trigger rows in the channel owner's purge preview."""
 
-    extends: ClassVar[str | None] = "messaging.Channel"
 
     class Meta:
         abstract = True
