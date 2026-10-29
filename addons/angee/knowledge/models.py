@@ -56,7 +56,7 @@ from angee.base.permissions import actor_user_id
 from angee.base.querysets import row_lock_paths
 from angee.base.refs import RecordRef
 from angee.base.signals import send_created_batch
-from angee.knowledge.retrieval import RetrievalBackend
+from angee.knowledge.retrieval import MAX_SEARCH_PAGE_SIZE, RetrievalBackend
 from angee.messaging.models import ThreadedModelMixin
 from angee.provenance.context import changeset, changeset_model, require_changeset, write_group
 from angee.provenance.contrib.angee.history import HistoryMixin
@@ -68,7 +68,6 @@ _WIKILINK_RE = re.compile(r"\[\[([^\[\]\n]+?)\]\]")
 _WIKILINK_PREFIX = "wikilink:"
 logger = logging.getLogger(__name__)
 
-MAX_SEARCH_PAGE_SIZE = 100
 MAX_SEARCH_VAULTS = 100
 
 # CommonMark owns code, link syntax and outline tokens for the derived indexes.
@@ -156,6 +155,16 @@ _VaultManagerBase = AngeeHistoryManager.from_queryset(VaultQuerySet)
 
 class VaultManager[VaultT: Vault](_VaultManagerBase[VaultT]):
     """Factories for actor-owned vault writes."""
+
+    def for_resource(self, reference: str) -> VaultT:
+        """Resolve a declared resource identity to its current readable, live vault."""
+
+        ledger = apps.get_model("resources", "Resource")
+        target = ledger.objects.resolve(reference, model=self.model)
+        vault = self.untrashed().filter(pk=target.pk).first()
+        if vault is None:
+            raise ValueError("The notes vault is unavailable.")
+        return vault
 
     def create_for(self, owner: Any, **fields: Any) -> VaultT:
         """Create a vault owned by ``owner`` after the REBAC create preflight.

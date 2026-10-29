@@ -228,3 +228,21 @@ def test_remote_catalogue_keeps_unknown_identity_without_importing_the_remote_na
     assert not any(
         name == "catalog_remote_identity" or name.startswith("catalog_remote_identity.") for name in sys.modules
     )
+
+
+def test_catalogue_reverse_dependencies_include_live_remote_but_not_historical_declarers(composed_tables):
+    with system_context(reason="test live catalogue graph"):
+        target = Addon.objects.create(name="example.catalog_graph_target", state=Addon.AddonState.REMOVED)
+        remote = Addon.objects.create(name="example.remote", source=Addon.AddonSource.REMOTE,
+                                      state=Addon.AddonState.DISABLED,
+                                      depends_on=["example.catalog_graph_target", "example.catalog_graph_target"])
+        Addon.objects.create(name="example.removed", source=Addon.AddonSource.REMOTE,
+                             state=Addon.AddonState.REMOVED, depends_on=["example.catalog_graph_target"])
+        Addon.objects.reconcile_dependencies()
+        target.refresh_from_db()
+        assert target.depended_by == ["example.remote"]
+        remote.state = Addon.AddonState.REMOVED
+        remote.save(update_fields=["state"])
+        Addon.objects.reconcile_dependencies()
+        target.refresh_from_db()
+        assert target.depended_by == []

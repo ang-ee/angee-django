@@ -12,15 +12,6 @@ type OperatorDataProvider = ReturnType<typeof createAngeeHasuraDataProvider>;
 export const OPERATOR_PROVIDER = "operator";
 
 /**
- * Same-origin browser path to the daemon GraphQL surface. Django proxies it
- * (settings owner: `ANGEE_OPERATOR_GRAPHQL_ENDPOINT`), so queries and mutations
- * ride the console origin while the daemon's self-reported `endpoint` from
- * `operator_connection` is used only by the websocket/log transports that must
- * reach the daemon directly.
- */
-const OPERATOR_GRAPHQL_ENDPOINT = "/operator/graphql";
-
-/**
  * The `operator` refine data provider: a Hasura-shaped provider over the daemon
  * GraphQL endpoint, authed by the live bearer in {@link operatorToken}. Built
  * once at app composition; `bearerAuthFromGetter` reads the token per request so
@@ -31,7 +22,7 @@ const OPERATOR_GRAPHQL_ENDPOINT = "/operator/graphql";
  */
 export function createOperatorDataProvider(): OperatorDataProvider {
   return createAngeeHasuraDataProvider({
-    url: OPERATOR_GRAPHQL_ENDPOINT,
+    url: operatorToken.endpoint,
     auth: bearerAuthFromGetter(operatorToken.get),
     errorMessages: "all",
   });

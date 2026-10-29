@@ -27,9 +27,14 @@ afterEach(() => {
 });
 
 describe("createOperatorDataProvider", () => {
-  test("targets the same-origin daemon endpoint by default", () => {
+  test("reads the configured connection endpoint at request time", () => {
     createOperatorDataProvider();
-    expect(captured.options?.url).toBe("/operator/graphql");
+    const endpoint = captured.options?.url as () => string;
+    expect(() => endpoint()).toThrow("unavailable");
+    operatorToken.set("first", "/ops/graphql");
+    expect(endpoint()).toBe("/ops/graphql");
+    operatorToken.set("second", "https://daemon.example.test/graphql");
+    expect(endpoint()).toBe("https://daemon.example.test/graphql");
   });
 
   test("carries the live bearer per request, picking up rotation", async () => {

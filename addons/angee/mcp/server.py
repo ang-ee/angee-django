@@ -12,10 +12,11 @@ owns its lifespan, so the server holds no per-request lifecycle of its own.
 
 ``stateless_http`` keeps each call independent and ``json_response`` returns a
 buffered JSON body the agent's HTTP client folds without an SSE reader (both passed
-to :meth:`~fastmcp.FastMCP.http_app`). DNS-rebinding protection is off by default
-(FastMCP passes no transport-security settings); Django's ``ALLOWED_HOSTS`` already
-terminates the request and the bearer + REBAC actor resolution is the real
-authorization boundary.
+to :meth:`~fastmcp.FastMCP.http_app`). FastMCP's native host/origin guard protects this ASGI mount directly;
+Django request middleware does not run on mounted MCP requests. Django allowed
+host patterns and trusted browser origins supply deployment intent, translated
+to the native guard's glob semantics. The guard also admits its native local
+host defaults. Bearer + REBAC actor resolution remains the authorization boundary.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from functools import cache
 from typing import TYPE_CHECKING
 
 from django.apps import AppConfig, apps
+from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from fastmcp import FastMCP
 
@@ -69,7 +71,18 @@ def mcp_server() -> FastMCP:
 def mcp_app() -> StarletteWithLifespan:
     """Return the server's StreamableHTTP ASGI app (built once, lifespan owned by the entrypoint)."""
 
-    return mcp_server().http_app(path=MOUNT_PATH, stateless_http=True, json_response=True)
+    # Django's leading-dot suffix syntax includes the apex; native FastMCP uses
+    # globs. Leave header normalization and request/origin comparison upstream.
+    hosts = [
+        pattern
+        for host in settings.ALLOWED_HOSTS
+        for pattern in ((host[1:], f"*{host}") if host.startswith(".") else (host,))
+    ]
+    return mcp_server().http_app(
+        path=MOUNT_PATH, stateless_http=True, json_response=True,
+        host_origin_protection=True, allowed_hosts=hosts,
+        allowed_origins=list(settings.CSRF_TRUSTED_ORIGINS),
+    )
 
 
 def has_tools() -> bool:

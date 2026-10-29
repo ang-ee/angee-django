@@ -19,6 +19,7 @@ export const PlatformExplorer = graphql(`
         field_count
         resource_count
         depends_on
+        depended_by
         model_labels
       }
       models {

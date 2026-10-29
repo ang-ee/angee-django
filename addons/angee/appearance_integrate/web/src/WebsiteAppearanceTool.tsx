@@ -44,7 +44,7 @@ export function WebsiteAppearanceTool(): ReactElement {
         ...definition.options.defaults,
         brand,
         accent,
-        neutral: result.neutralTint ?? definition.options.defaults.neutral,
+        neutral: result.neutralTint || definition.options.defaults.neutral,
       },
     });
   }

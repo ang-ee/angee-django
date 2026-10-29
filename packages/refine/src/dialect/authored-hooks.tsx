@@ -13,6 +13,7 @@ import {
   useQueries,
   useQueryClient,
   type UseQueryResult,
+  type Query,
 } from "@tanstack/react-query";
 
 import {
@@ -70,7 +71,7 @@ export interface AuthoredQueryOptions extends AuthoredOperationOptions {
   /** Models whose changes match only through their event's related records. */
   relatedModels?: readonly string[];
   /** Native TanStack Query polling policy for durable external operations. */
-  refetchInterval?: number | false;
+  refetchInterval?: number | false | ((query: Pick<Query<unknown, Error>, "state">) => number | false | undefined);
   /**
    * Exact canonical model labels this bespoke read depends on; local writes and
    * live changes refetch it. This metadata-free package does no alias resolution:
@@ -153,19 +154,19 @@ export function useInvalidateAuthoredModels(): (
   }, [queryClient]);
 }
 
-/** Install an authoritative mutation result into one exact authored-read cache. */
+/** Cancel older snapshots before accepting a complete typed result at its exact native key. */
 export function useSetAuthoredQueryData(): <TDocument extends AuthoredDocument>(
   document: TDocument,
   variables: AuthoredVariables<TDocument> | undefined,
-  data: DocumentData<TDocument>,
-) => void {
+  data: DocumentData<TDocument> | ((current: DocumentData<TDocument> | undefined) => DocumentData<TDocument> | undefined),
+  options?: AuthoredOperationOptions,
+) => Promise<void> {
   const queryClient = useQueryClient();
   const activeProvider = useActiveDataProviderName();
-  return useCallback((document, variables, data) => {
-    queryClient.setQueryData(
-      authoredQueryKey(document, variables, activeProvider ?? "default"),
-      data,
-    );
+  return useCallback(async (document, variables, data, options) => {
+    const queryKey = authoredQueryKey(document, variables, options?.dataProviderName ?? activeProvider ?? "default");
+    await queryClient.cancelQueries({ queryKey, exact: true });
+    queryClient.setQueryData(queryKey, data);
   }, [activeProvider, queryClient]);
 }
 
@@ -197,6 +198,13 @@ export interface AuthoredMutationOptions<
   invalidateModels?: readonly string[];
   /** Resource invalidations prepared by the caller that owns resource metadata. */
   invalidates?: readonly InvalidateParams[];
+  /**
+   * Explicit response-backed completion: accept authoritative returned values at
+   * their native query owner before resolving, then refresh derived reads in the
+   * background. Omit to retain completion after awaited refresh. Rejected reads
+   * remain native Query errors and follow the existing read error policy.
+   */
+  acceptResponse?: (data: TData | undefined, variables: TVariables) => void | Promise<void>;
   /** Optional domain-level success guard before invalidating registered reads. */
   shouldInvalidate?: (data: TData | undefined, variables: TVariables) => boolean;
   /**
@@ -227,31 +235,35 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
   const queryClient = useQueryClient();
   const shouldInvalidate = options.shouldInvalidate;
   const errorFrom = options.errorFrom;
+  const acceptResponse = options.acceptResponse;
   const inFlight = useRef({ count: 0, transient: false });
   // Native context pins completion policy before transport starts; later renders
   // can update the next operation without retargeting this operation's writes.
   const captureMutationContext = () => ({
-    invalidate, invalidateModelLabels, invalidates, queryClient, shouldInvalidate, errorFrom,
+    invalidate, invalidateModelLabels, invalidates, queryClient, shouldInvalidate, errorFrom, acceptResponse,
   });
   const mutationOptions: NonNullable<UseCustomMutationProps<BaseRecord, HttpError, Variables>["mutationOptions"]> = {
     onMutate: captureMutationContext,
     async onSuccess(response, { values }, context) {
       // Refine exposes native mutation context as unknown; this hook supplies it.
-      const { invalidate, invalidateModelLabels, invalidates, queryClient, shouldInvalidate, errorFrom } =
+      const { invalidate, invalidateModelLabels, invalidates, queryClient, shouldInvalidate, errorFrom, acceptResponse } =
         context as ReturnType<typeof captureMutationContext>;
       const data = authoredOperationData<Data>(response.data);
       const resultError = errorFromAuthoredEnvelope(errorFrom?.(data, values));
       if (resultError) throw resultError;
+      if (acceptResponse) await acceptResponse(data, values);
+      if (!(shouldInvalidate?.(data, values) ?? true)) return;
       if (
         (invalidateModelLabels.length > 0 || invalidates.length > 0)
-        && (shouldInvalidate?.(data, values) ?? true)
       ) {
-        await Promise.all([
+        const refresh = Promise.all([
           ...invalidates.map((target) => invalidate(target)),
           ...(invalidateModelLabels.length > 0
             ? [invalidateAuthoredQueries(queryClient, invalidateModelLabels)]
             : []),
         ]);
+        if (acceptResponse) void refresh.catch(() => undefined);
+        else await refresh;
       }
     },
   };

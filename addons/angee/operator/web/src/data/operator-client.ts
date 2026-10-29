@@ -15,7 +15,7 @@ type OperatorWsClient = Client;
  * graphql-ws cannot swap connection params on a live socket.
  */
 export function createOperatorClient(
-  connection: OperatorConnectionInfo,
+  connection: Pick<OperatorConnectionInfo, "endpoint" | "token">,
 ): OperatorWsClient {
   return createWSClient({
     url: graphQLWebSocketUrl(connection.endpoint),

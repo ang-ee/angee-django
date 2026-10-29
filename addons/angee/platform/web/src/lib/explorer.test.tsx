@@ -180,6 +180,7 @@ const addons: PlatformAddonData[] = [
     field_count: 3,
     resource_count: 1,
     depends_on: ["angee.resources", "django.contrib.auth"],
+    depended_by: ["angee.operator"],
     model_labels: ["iam.user", "iam.group", "iam.user"],
   },
   {
@@ -191,6 +192,7 @@ const addons: PlatformAddonData[] = [
     field_count: 1,
     resource_count: 0,
     depends_on: ["angee.iam"],
+    depended_by: [],
     model_labels: ["operator.task"],
   },
   {
@@ -202,6 +204,7 @@ const addons: PlatformAddonData[] = [
     field_count: 0,
     resource_count: 0,
     depends_on: [],
+    depended_by: ["angee.iam"],
     model_labels: [],
   },
 ];

@@ -6,7 +6,7 @@ import { useMemo, useRef, type ReactElement } from "react";
 
 import { recordPagesTarget, type RecordPagesTarget } from "./RecordPagesPane";
 import {
-  KnowledgeCreateRecordNote, KnowledgeRecordNotes, KnowledgeVault, KnowledgeVaultByName,
+  KnowledgeCreateRecordNote, KnowledgeRecordNotes, KnowledgeVault, KnowledgeVaultForResource,
   PAGE_MODEL, PAGE_READ_MODELS, RECORD_BINDING_MODEL,
 } from "./data/documents";
 import { useKnowledgeT } from "./i18n";
@@ -16,8 +16,8 @@ const BINDING_MODELS = [RECORD_BINDING_MODEL, ...PAGE_READ_MODELS] as const;
 export interface RecordNotesStreamProps {
   target: RecordPagesTarget;
   role: string;
-  /** The vault new notes go to: its public id, or its declared name when the id differs per stack. */
-  vault: string | { name: string };
+  /** The vault new notes go to: its public id, or a canonical resource handle. */
+  vault: string | { resource: string };
   heading?: { label: string; hint?: string; audience?: string };
   composer?: { prompt?: string; submitLabel?: string; audience?: string };
 }
@@ -48,11 +48,11 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
   const vaultById = useAuthoredQuery(KnowledgeVault, { id: typeof vault === "string" ? vault : "" }, {
     enabled: Boolean(canBind && typeof vault === "string" && vault), models: ["knowledge.Vault"],
   });
-  const vaultByName = useAuthoredQuery(KnowledgeVaultByName, { name: typeof vault === "string" ? "" : vault.name }, {
-    enabled: Boolean(canBind && typeof vault !== "string" && vault.name), models: ["knowledge.Vault"],
+  const vaultByResource = useAuthoredQuery(KnowledgeVaultForResource, { reference: typeof vault === "string" ? "" : vault.resource }, {
+    enabled: Boolean(canBind && typeof vault !== "string" && vault.resource), models: ["knowledge.Vault"],
   });
-  const vaultQuery = typeof vault === "string" ? vaultById : vaultByName;
-  const writableVault = typeof vault === "string" ? vaultById.data?.vaults_by_pk : vaultByName.data?.vaults[0];
+  const vaultQuery = typeof vault === "string" ? vaultById : vaultByResource;
+  const writableVault = typeof vault === "string" ? vaultById.data?.vaults_by_pk : vaultByResource.data?.knowledge_vault_for_resource;
   const [createNote] = useAuthoredResourceMutation(KnowledgeCreateRecordNote, { invalidateModels: BINDING_MODELS });
   const pendingNote = useRef<{ fingerprint: string; key: string } | null>(null);
 

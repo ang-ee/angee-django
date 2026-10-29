@@ -63,7 +63,7 @@ function StoredDashboardPage({ target, registry, store }: {
   const routeHref = useRouteHref();
   const t = useDashboardsT();
   const trashRecord = useTrashRecord(useModelMetadata("dashboards.Dashboard")?.resource);
-  // Every page verb settles through the shared run: one pending state, toasts for the outcome.
+  // Commands settle through the shared run; trash already owns its outcome.
   const settle = useActionResultRun({ noResultTitle: t("common.actionFailed") });
   const state = binding.state;
   useBreadcrumbLeafLabel(state.status === "ready" ? state.name : null);
@@ -98,16 +98,21 @@ function StoredDashboardPage({ target, registry, store }: {
 
   const trash = () => {
     if (state.status !== "ready" || target.scope !== "personal") return;
-    void run(async () => {
-      // The shared verb confirms, moves the dashboard to the trash and settles the outcome.
-      if (!(await trashRecord.trash(target.id, state.name))) return;
-      await preferences.patchPreferences((current) => ({
-        ...current,
-        [ROUTE_SHORTCUTS_PREFERENCE_KEY]: readRuntimeRouteShortcuts(current).filter((shortcut) => shortcut.id !== shortcutId),
-        ...(current[HOME_PATH_PREFERENCE_KEY] === href ? { [HOME_PATH_PREFERENCE_KEY]: null } : {}),
-      }));
-      await navigate({ to: routeHref("dashboards.index") });
-    }, t("common.trashed"));
+    setPending(true);
+    void (async () => {
+      try {
+        // The shared verb confirms, moves the dashboard to the trash and settles the outcome.
+        if (!(await trashRecord.trash(target.id, state.name))) return;
+        await preferences.patchPreferences((current) => ({
+          ...current,
+          [ROUTE_SHORTCUTS_PREFERENCE_KEY]: readRuntimeRouteShortcuts(current).filter((shortcut) => shortcut.id !== shortcutId),
+          ...(current[HOME_PATH_PREFERENCE_KEY] === href ? { [HOME_PATH_PREFERENCE_KEY]: null } : {}),
+        }));
+        await navigate({ to: routeHref("dashboards.index") });
+      } finally {
+        setPending(false);
+      }
+    })();
   };
 
   const detailFields = React.useMemo<readonly DescriptorField[]>(() => [

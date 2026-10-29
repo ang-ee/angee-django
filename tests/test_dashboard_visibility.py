@@ -68,3 +68,17 @@ def test_declared_task_queue_scope_validates_in_a_widget_snapshot():
     assert snapshot["widgets"][0]["visibility"] == {
         "resource": "projects.Task", "key": "queue__slug", "value": "incoming",
     }
+
+
+def test_packing_refuses_a_layout_whose_canonical_bottom_exceeds_the_limit():
+    def widget(index):
+        return {"schemaVersion": 1, "id": str(index), "kind": "value", "kindVersion": 1,
+                "title": "Metric", "data": {"shape": "value", "source": {"resource": "projects.Task"}},
+                "options": {}, "x": 0, "y": 0, "w": 12, "h": 100, "isArchived": False}
+
+    admitted = {"schemaVersion": 1, "columns": 12, "widgets": [widget(index) for index in range(10)]}
+    canonical = canonical_dashboard_snapshot(admitted)
+    assert canonical_dashboard_snapshot(canonical) == canonical
+    assert canonical["widgets"][-1]["y"] + canonical["widgets"][-1]["h"] == 1000
+    with pytest.raises(ValidationError, match="Packed widgets exceed"):
+        canonical_dashboard_snapshot({**admitted, "widgets": [*admitted["widgets"], widget(10)]})

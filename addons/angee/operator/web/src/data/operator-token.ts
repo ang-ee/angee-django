@@ -8,6 +8,7 @@
 // single current token; the gate owns writes and the provider owns reads.
 
 let token: string | null = null;
+let endpoint: string | null = null;
 
 /** The current daemon bearer (read per request by the provider), or null. */
 export const operatorToken = {
@@ -16,7 +17,12 @@ export const operatorToken = {
     return token;
   },
   /** Set or rotate the live bearer; pass `null` to clear on disconnect. */
-  set(next: string | null): void {
+  endpoint(): string {
+    if (!endpoint) throw new Error("Operator connection is unavailable.");
+    return endpoint;
+  },
+  set(next: string | null, nextEndpoint: string | null = null): void {
     token = next;
+    endpoint = next ? nextEndpoint : null;
   },
 };

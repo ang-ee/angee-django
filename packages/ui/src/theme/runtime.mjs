@@ -134,10 +134,9 @@ export function resolveThemeOptions(definition, envelope) {
   assertThemeDefinition(definition);
   if (!definition.options) return { version: 0, value: Object.freeze({}), tokens: definition.tokens };
   const version = Number.isSafeInteger(envelope?.version) ? envelope.version : definition.options.version;
-  let raw = envelope?.value ?? definition.options.defaults;
+  const raw = envelope?.value ?? definition.options.defaults;
   if (version !== definition.options.version) {
-    if (version < definition.options.version && typeof definition.options.migrate === "function") raw = definition.options.migrate(raw, version);
-    else throw new TypeError(`Theme ${definition.id} options version ${version} is unsupported.`);
+    throw new TypeError(`Theme ${definition.id} options version ${version} is unsupported.`);
   }
   const value = definition.options.parse(raw);
   const resolved = definition.options.resolve(value);
@@ -231,17 +230,11 @@ export function createThemeCustomizationOptions(defaults, configuration = {}) {
   const normalizedDefaults = parseThemeCustomization(defaults);
   const version = configuration.version ?? 1;
   if (!Number.isSafeInteger(version) || version < 1) throw new TypeError("Theme customization version must be a positive integer.");
-  if (configuration.migrate !== undefined && typeof configuration.migrate !== "function") throw new TypeError("Theme customization migrate must be a function.");
   return {
     version,
     defaults: normalizedDefaults,
     capability: "palette-customization",
     parse: parseThemeCustomization,
-    ...(configuration.migrate ? {
-      migrate(value, fromVersion) {
-        return parseThemeCustomization(configuration.migrate(value, fromVersion, normalizedDefaults));
-      },
-    } : {}),
     resolve(value) {
       return resolveThemeCustomization(parseThemeCustomization(value), normalizedDefaults);
     },

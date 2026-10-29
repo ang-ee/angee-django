@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import strawberry
 from rebac import ObjectRef, current_actor
 from rebac.backends import backend
@@ -18,6 +20,7 @@ class OperatorConnectionInfo:
 
     endpoint: str
     token: str
+    expires_at: datetime
     restart_job: str | None
     """Template-selected entry job for restarting the application dependency chain."""
 
@@ -55,7 +58,8 @@ class OperatorQuery:
             return None
         return OperatorConnectionInfo(
             endpoint=daemon.endpoint,
-            token=token,
+            token=token.token,
+            expires_at=token.expires_at,
             restart_job=daemon.restart_job,
         )
 

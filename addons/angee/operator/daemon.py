@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, cast
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
@@ -13,6 +13,8 @@ from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from graphql import build_client_schema, get_introspection_query, print_schema
 
 from angee.integrate.errors import RequestNotSentError
@@ -160,6 +162,14 @@ class RemoteFile:
 
 
 @dataclass(frozen=True, slots=True)
+class ConnectionToken:
+    """The daemon's accepted bearer and authoritative expiration instant."""
+
+    token: str
+    expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class OperatorDaemon:
     """The operator daemon bridge resolved from settings.
 
@@ -194,7 +204,7 @@ class OperatorDaemon:
             restart_job=cls._setting("ANGEE_OPERATOR_RESTART_JOB"),
         )
 
-    def mint_token(self, actor: str) -> str | None:
+    def mint_token(self, actor: str) -> ConnectionToken | None:
         """Mint a short-lived, scoped connection token for ``actor``, or ``None``.
 
         Calls the daemon's ``POST /tokens/mint`` with the admin bearer (server-side
@@ -210,7 +220,7 @@ class OperatorDaemon:
             return None
         cache_key = self._token_cache_key(actor)
         cached = cache.get(cache_key)
-        if isinstance(cached, str) and cached:
+        if isinstance(cached, ConnectionToken) and cached.expires_at > timezone.now():
             return cached
         payload = {"actor": actor, "scope": list(self.scope), "ttl": self.ttl}
         try:
@@ -219,11 +229,20 @@ class OperatorDaemon:
             logger.warning("operator: connection token mint failed: %s", error)
             return None
         token = data.get("token")
-        if not isinstance(token, str) or not token:
+        expiry = data.get("expires_at")
+        try:
+            expires_at = parse_datetime(expiry) if isinstance(expiry, str) else None
+        except ValueError:
+            expires_at = None
+        if not isinstance(token, str) or not token or expires_at is None or timezone.is_naive(expires_at):
             return None
-        if timeout := _cache_timeout_seconds(self.ttl):
-            cache.set(cache_key, token, timeout=timeout)
-        return token
+        remaining = (expires_at - timezone.now()).total_seconds()
+        if remaining <= 0:
+            return None
+        issued = ConnectionToken(token=token, expires_at=expires_at)
+        timeout = remaining - min(_TOKEN_CACHE_SKEW_SECONDS, remaining / 2)
+        cache.set(cache_key, issued, timeout=timeout)
+        return issued
 
     def introspect_sdl(self) -> str | None:
         """Return the daemon's GraphQL SDL by introspecting it, or ``None``.
@@ -534,18 +553,3 @@ def _collection_items(value: Any) -> tuple[Any, ...] | list[Any]:
     if isinstance(value, dict) and isinstance(value.get("nodes"), list):
         return value["nodes"]
     return ()
-
-
-def _cache_timeout_seconds(ttl: str) -> int | None:
-    """Return a conservative cache timeout for simple daemon TTL strings."""
-
-    match = re.fullmatch(r"\s*(\d+)\s*([smhd]?)\s*", ttl)
-    if match is None:
-        return None
-    value = int(match.group(1))
-    unit = match.group(2) or "s"
-    seconds = value * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
-    if seconds <= 0:
-        return None
-    skew = min(_TOKEN_CACHE_SKEW_SECONDS, max(seconds // 2, 0))
-    return max(seconds - skew, 1)

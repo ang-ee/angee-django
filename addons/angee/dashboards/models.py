@@ -220,6 +220,8 @@ def canonical_dashboard_snapshot(value: Any) -> dict[str, Any]:
     packed_by_id: dict[str, dict[str, Any]] = {}
     for widget in active:
         x, y = _first_slot(placed, widget["w"], widget["h"], columns)
+        if y + widget["h"] > MAX_LAYOUT_ROWS:
+            raise ValidationError({"snapshot": "Packed widgets exceed dashboard layout limits."})
         packed = {**widget, "x": x, "y": y}
         placed.append(packed)
         packed_by_id[widget["id"]] = packed
@@ -850,7 +852,9 @@ class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, HistoryMixin,
                 condition=models.Q(w__gte=1, h__gte=1, h__lte=MAX_WIDGET_HEIGHT),
                 name="dashboard_widget_size",
             ),
-            models.CheckConstraint(condition=models.Q(y__lte=MAX_LAYOUT_ROWS), name="dashboard_widget_row"),
+            models.CheckConstraint(
+                condition=models.Q(y__lte=MAX_LAYOUT_ROWS - models.F("h")), name="dashboard_widget_row",
+            ),
         )
 
     def __str__(self) -> str:

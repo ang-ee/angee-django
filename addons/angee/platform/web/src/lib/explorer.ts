@@ -89,12 +89,7 @@ export function selectPlatformAddonDetail(
   return {
     addon,
     dependsOn: sortedUnique((addon?.depends_on ?? []).filter((dep) => ids.has(dep))),
-    dependedBy: id
-      ? addons
-          .filter((candidate) => candidate.depends_on.includes(id))
-          .map((candidate) => candidate.id)
-          .sort()
-      : [],
+    dependedBy: addon?.depended_by ?? [],
     modelLabels: sortedUnique(addon?.model_labels ?? []),
   };
 }
