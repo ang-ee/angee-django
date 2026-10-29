@@ -29,6 +29,7 @@ class Command(MakeMigrationsCommand):
     """Refuse autodetected drops of populated columns before any file is written."""
 
     autodetector = DropGuardAutodetector
+    _bootstrap_existing_labels: frozenset[str] = frozenset()
 
     def handle(self, *app_labels: str, **options: Any) -> None:
         """Bind reviewed sources before Django loads its autodetection graph."""
@@ -68,9 +69,14 @@ class Command(MakeMigrationsCommand):
         )):
             loader = MigrationLoader(None, ignore_no_migrations=True)
             selected_labels = set(labels).intersection(app_labels) if app_labels else set(labels)
-            initial_labels = selected_labels - {label for label, _name in loader.disk_migrations}
+            existing_labels = frozenset(label for label, _name in loader.disk_migrations)
+            initial_labels = selected_labels - existing_labels
             if initial_labels:
-                super().handle(*sorted(initial_labels), **options)
+                self._bootstrap_existing_labels = existing_labels
+                try:
+                    super().handle(*sorted(initial_labels), **options)
+                finally:
+                    self._bootstrap_existing_labels = frozenset()
                 importlib.invalidate_caches()
         authored = RuntimeMigrations(apps.get_app_configs(), labels=labels)
         selected = app_labels or None
@@ -110,6 +116,11 @@ class Command(MakeMigrationsCommand):
     ) -> None:
         """Preflight every native destination before any migration file is written."""
 
+        if expanded := self._bootstrap_existing_labels.intersection(changes):
+            raise CommandError(
+                "Initial schema depends on changes to existing apps; author their transitions first: "
+                + ", ".join(sorted(expanded))
+            )
         packages: set[tuple[str, str]] = set()
         paths: set[Path] = set()
         for label, migrations in changes.items():

@@ -1724,6 +1724,11 @@ def test_native_writer_preflights_every_destination_before_writing(runtime_migra
     assert {path: path.read_bytes() for path in directory.glob("*.py")} == before
     assert not (directory / "0002_safe.py").exists()
 
+    command._bootstrap_existing_labels = frozenset({"resources"})
+    with pytest.raises(CommandError, match="author their transitions first: resources"):
+        command.write_migration_files({"resources": [safe]})
+    assert {path: path.read_bytes() for path in directory.glob("*.py")} == before
+
 
 def test_native_readonly_writer_does_not_create_a_missing_custom_package(runtime_migration_probe, settings):
     _, _, _, runtime_dir, _ = runtime_migration_probe
