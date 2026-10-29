@@ -64,7 +64,8 @@ def configure(namespace: MutableMapping[str, Any]) -> None:
     # owner validates direct environment values and environment-derived refs.
     namespace["ANGEE_PROJECT_YAML_SETTINGS"] = frozenset(
         name for name in django_yamlconf.defined_attributes(target)
-        if django_yamlconf.get_attr_info(name, target).get("source") == str(project / "settings.yaml")
+        if (info := django_yamlconf.get_attr_info(name, target)) is not None
+        and info.get("source") == str(project / "settings.yaml")
     )
     _deployment_urls(namespace, env)
     origins = namespace.get("CSRF_TRUSTED_ORIGINS", ())
