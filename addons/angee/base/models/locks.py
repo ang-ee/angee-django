@@ -11,6 +11,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import DatabaseError, models, router, transaction
 from django.db.models import F
 from rebac import (
+    RebacMixin,
     system_context,
 )
 from rebac.actors import is_sudo
@@ -74,7 +75,7 @@ class _RowLockWritesQuerySet(models.QuerySet[_ModelT]):
     """Apply the row owner's invariant to native collection persistence."""
 
     def _lock_bypassed(self) -> bool:
-        return self.is_sudo() if isinstance(self, RebacQuerySet) else is_sudo()
+        return self.effective_actor(strict=True)[1] if isinstance(self, RebacQuerySet) else is_sudo()
 
     def update(self, **kwargs: Any) -> int:
         """Validate prospective values, including native SQL expressions, under row locks."""
@@ -157,7 +158,7 @@ def refuse_locked_row_delete(sender: Any, instance: RowLockMixin, origin: Any, *
     """Apply the row's declared direct/cascade delete policy in Django's collector."""
 
     del sender, kwargs
-    elevated = origin.is_sudo() if isinstance(origin, RebacQuerySet) else is_sudo()
+    elevated = origin.effective_actor(strict=True)[1] if isinstance(origin, (RebacQuerySet, RebacMixin)) else is_sudo()
     if elevated:
         return
     if instance.row_lock_cascade_parent:
@@ -261,10 +262,15 @@ class RowLockMixin(models.Model):
         if self.locked_fields():
             raise ValidationError(f"{self._locked_rows_label()} cannot be deleted.")
 
+    def _row_lock_bypassed(self) -> bool:
+        """Use native instance authority, including pinned actor precedence."""
+
+        return self.effective_actor()[1] if isinstance(self, RebacMixin) else is_sudo()
+
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Check a user write against the committed row's lock before persisting it."""
 
-        if not is_sudo():
+        if not self._row_lock_bypassed():
             persisted = None
             using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
             if self.pk is not None and not self._state.adding:
@@ -276,7 +282,7 @@ class RowLockMixin(models.Model):
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Refuse a user deleting a committed system row."""
 
-        if not is_sudo():
+        if not self._row_lock_bypassed():
             with system_context(reason=f"{self._meta.label_lower}.row_lock"):
                 using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
                 persisted = type(self)._base_manager.using(using).filter(pk=self.pk).first()

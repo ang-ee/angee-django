@@ -295,6 +295,7 @@ class CaptureCampaign(TransactionTestCase):
         needs = list(self.Need._base_manager.order_by("pk"))
         self.assertEqual(len(needs), 2)
         self.assertEqual(needs[0].party_id, needs[1].party_id)
+        self.assertEqual(apps.get_model("decisions", "Decision")._base_manager.count(), len(needs))
         user = apps.get_model("iam", "User")._base_manager.get(email=email)
         self.assertFalse(user.has_usable_password())
         self.assertFalse(

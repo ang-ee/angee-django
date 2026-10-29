@@ -114,3 +114,27 @@ def test_collection_write_excludes_rows_entering_predicate_after_validation(
     entered.refresh_from_db()
     assert editable.label == "Changed"
     assert entered.label == "Selected system"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_named_system_scope_and_pinned_actor_keep_native_row_lock_precedence(composed_tables: None) -> None:
+    """Ambient system work owns rows; a pinned user keeps the user invariant."""
+
+    user = create_user("row-lock-pinned-writer")
+    with system_context(reason="test.row_lock.native_authority"):
+        parent = Document.objects.create(title="Document")
+        row = PinnedLine.objects.create(document=parent, label="System", pinned=True)
+        pinned = PinnedLine.objects.with_actor(user).filter(pk=row.pk)
+        with pytest.raises(ValidationError):
+            pinned.update(label="User change")
+        with pytest.raises(ValidationError):
+            pinned.delete()
+        row.with_actor(user)
+        row.label = "User instance change"
+        with pytest.raises(ValidationError):
+            row.save(update_fields=("label",))
+        with pytest.raises(ValidationError):
+            row.delete()
+        PinnedLine.objects.filter(pk=row.pk).update(label="System change")
+        PinnedLine.objects.bulk_create([PinnedLine(document=parent, label="System bulk", pinned=True)])
+        assert PinnedLine.objects.filter(document=parent).delete()[0] == 2

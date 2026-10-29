@@ -170,6 +170,7 @@ class ChannelIntakeCaptureTests(TransactionTestCase):
         self.assertEqual(len(needs), 2)
         self.assertIsNotNone(needs[0].party_id)
         self.assertEqual(needs[0].party_id, needs[1].party_id)
+        self.assertEqual(apps.get_model("decisions", "Decision")._base_manager.count(), len(needs))
 
     def test_domain_capture_skips_requester_follow_without_record_read(self):
         channel = self.webform(domains=("example.com",))

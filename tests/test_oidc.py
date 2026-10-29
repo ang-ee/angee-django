@@ -56,6 +56,7 @@ from angee.integrate.oauth.errors import (
     TOKEN_EXCHANGE_FAILED,
     OAuthFlowError,
 )
+from angee.integrate.oauth.providers import GenericOAuth2
 from angee.messaging.testing.models import Handle as PartiesHandle
 from tests.conftest import (
     Credential,
@@ -315,6 +316,7 @@ def test_refresh_token_posts_refresh_grant() -> None:
     assert captured["url"] == "https://issuer.example/oauth/token"
     assert captured["fields"] == {
         "audience": "https://api.example",
+        "expires_in": 31536000,
         "client_id": "oidc-client",
         "client_secret": "secret",
         "grant_type": "refresh_token",
@@ -330,6 +332,7 @@ def test_fixed_public_client_never_reads_encrypted_secret(request_format: str, g
     captured: dict[str, Any] = {}
 
     class PublicClient:
+        provider = GenericOAuth2
         is_public_client = OAuthClient.is_public_client
         slug = "public-client"
         client_id = "public-client-id"
@@ -376,6 +379,7 @@ def test_confidential_json_client_keeps_unreadable_secret_fail_closed() -> None:
     """A confidential client still fails before exchange when its secret is unreadable."""
 
     class ConfidentialClient:
+        provider = GenericOAuth2
         is_public_client = OAuthClient.is_public_client
         slug = "confidential-client"
         client_id = "confidential-client-id"
