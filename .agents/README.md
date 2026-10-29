@@ -35,6 +35,12 @@ screenshots and logs go in the configured gitignored scratch directories.
   it and names the gaps that still do not.
 - `agents/` — canonical Markdown subagent definitions, surfaced via
   `.claude/agents`; generated TOML adapters are surfaced via `.codex/agents`.
+  Four reviewers (`architecture-reviewer`, `plan-reviewer`, `django-reviewer`,
+  `react-reviewer`) judge code or plans with read-only tools. Two roles build:
+  `coordinator` plans a multi-lane change, creates and integrates its lane
+  workspaces, and is the only writer of the plan ledger; `builder` implements
+  one lane under an explicit `framework` or `consumer` scope and reports in its
+  own lane file. Both boundaries are instruction plus review, see below.
 - `workflows/` — multi-agent workflow scripts. Surfaced via the
   `.claude/workflows` symlink. These require the optional host runner below.
 - `tools/` — small repo-scoped scripts and helpers used by agentic workflows.
@@ -64,17 +70,17 @@ authors an addon's tests; `angee-framework` routes a change to a framework seam;
 `angee-project` configures a customer system's host. Claude Code loads them
 through the `.claude/skills` link; Codex loads each skill's `agents/openai.yaml`,
 whose `allow_implicit_invocation` is `true` only for `angee-design`.
+Six capability guides live beside the engine they extend rather than here: `mcp-tools` (`addons/angee/mcp/skills/mcp-tools/SKILL.md`), `jobs-tasks` (`addons/angee/jobs/skills/jobs-tasks/SKILL.md`), `integrate-bridges` (`addons/angee/integrate/skills/integrate-bridges/SKILL.md`), `workflow-definitions` (`addons/angee/workflows/skills/workflow-definitions/SKILL.md`), `provenance-attribution` (`addons/angee/provenance/skills/provenance-attribution/SKILL.md`) and `agent-composition` (`addons/angee/agents/skills/agent-composition/SKILL.md`). Each carries the same frontmatter and `agents/openai.yaml` (implicit invocation `false`) and is reached by its explicit path from the
+`angee-design` and `angee-addon` *Read next* lists; no harness discovers an
+addon-local guide on its own, so a source checkout of this repository is the
+prerequisite for loading one. Delivering the guides with the installed wheel is a
+later phase.
 [`CONSTITUTION.md`](CONSTITUTION.md) maps each skill to the rule it enforces.
 
 ## Harness permissions
 
 Each harness enforces a different surface. Claude Code agent definitions in
 `.claude/agents/*.md` support a `tools:` frontmatter allowlist;
-Six capability guides live beside the engine they extend rather than here: `mcp-tools` (`addons/angee/mcp/skills/mcp-tools/SKILL.md`), `jobs-tasks` (`addons/angee/jobs/skills/jobs-tasks/SKILL.md`), `integrate-bridges` (`addons/angee/integrate/skills/integrate-bridges/SKILL.md`), `workflow-definitions` (`addons/angee/workflows/skills/workflow-definitions/SKILL.md`), `provenance-attribution` (`addons/angee/provenance/skills/provenance-attribution/SKILL.md`) and `agent-composition` (`addons/angee/agents/skills/agent-composition/SKILL.md`). Each carries the same frontmatter and `agents/openai.yaml` (implicit invocation `false`) and is reached by its explicit path from the
-`angee-design` and `angee-addon` *Read next* lists; no harness discovers an
-addon-local guide on its own, so a source checkout of this repository is the
-prerequisite for loading one. Delivering the guides with the installed wheel is a
-later phase.
 [`sync-adapters.py`](tools/sync-adapters.py) currently projects name,
 description and body only and does not emit it. Codex `agents/openai.yaml`
 carries invocation policy but no tool restriction. Hooks exist only on the
@@ -90,7 +96,7 @@ role boundaries are instructions plus review, not harness enforcement.
 
 ## Harness adapters
 
-Reviewer `.md` files own their prompts and metadata. `.mcp.json` owns the
+Agent `.md` files own their prompts and metadata. `.mcp.json` owns the
 repository's stdio MCP server configuration. Generate the reviewer `.toml`
 files and `.codex/config.toml` with `python .agents/tools/sync-adapters.py` in
 the repository's Python environment; `--check` reports drift without writing.
