@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any, ClassVar, cast
+from collections.abc import Iterable, Mapping
+from copy import copy
+from typing import Any, ClassVar, TypeVar, cast
 
+from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import DatabaseError, models, transaction
+from django.db import DatabaseError, models, router, transaction
 from django.db.models import F
 from rebac import (
     system_context,
 )
 from rebac.actors import is_sudo
+from rebac.managers import RebacQuerySet
+
+from angee.base.querysets import AngeeUnscopedQuerySet
 
 from angee.base.exceptions import DomainError
 from angee.base.models.persistence import PersistenceMixin
@@ -63,6 +68,78 @@ class ImmutableFieldsMixin(models.Model):
             self._allowed_immutable_fields = set()
 
 
+_ModelT = TypeVar("_ModelT", bound=models.Model)
+
+
+class _RowLockWritesQuerySet(models.QuerySet[_ModelT]):
+    """Apply the row owner's invariant to native collection persistence."""
+
+    def _lock_bypassed(self) -> bool:
+        return self.is_sudo() if isinstance(self, RebacQuerySet) else is_sudo()
+
+    def update(self, **kwargs: Any) -> int:
+        """Validate prospective values, including native SQL expressions, under row locks."""
+
+        if self._lock_bypassed() or not kwargs:
+            return super().update(**kwargs)
+        self._for_write = True
+        with transaction.atomic(using=self.db):
+            rows = self.with_action("write").scoped() if isinstance(self, RebacQuerySet) else self
+            fields = {name: self.model._meta.get_field(name) for name in kwargs}
+            projections = {
+                f"_row_lock_value_{index}": value if isinstance(value, (models.expressions.BaseExpression, models.F)) else models.Value(
+                    value, output_field=fields[name].target_field if fields[name].is_relation else fields[name],
+                )
+                for index, (name, value) in enumerate(kwargs.items())
+            }
+            for previous in rows.select_for_update().annotate(**projections):
+                candidate = copy(previous)
+                for index, field in enumerate(fields.values()):
+                    setattr(candidate, field.attname, getattr(previous, f"_row_lock_value_{index}"))
+                cast(RowLockMixin, candidate).validate_row_lock(cast(RowLockMixin, previous).row_lock())
+            return super().update(**kwargs)
+
+    def bulk_create(self, objs: Iterable[_ModelT], *args: Any, **kwargs: Any) -> list[_ModelT]:
+        """Admit new system-row state through the same instance invariant."""
+
+        candidates = list(objs)
+        if not self._lock_bypassed():
+            if kwargs.get("update_conflicts"):
+                raise ValidationError("Row-locked conflict updates require checked instance saves.")
+            for row in candidates:
+                cast(RowLockMixin, row).validate_row_lock(None)
+        return super().bulk_create(candidates, *args, **kwargs)
+
+
+class RowLockQuerySet(_RowLockWritesQuerySet[_ModelT], RebacQuerySet[_ModelT]):
+    """Compose before an Angee queryset for models with system-owned rows."""
+
+
+class _RowLockBaseQuerySet(_RowLockWritesQuerySet[_ModelT], AngeeUnscopedQuerySet[_ModelT]):
+    """Keep the same invariant on native unfiltered manager writes."""
+
+
+_RowLockBaseManager = models.Manager.from_queryset(_RowLockBaseQuerySet)
+
+
+def refuse_locked_row_delete(sender: Any, instance: RowLockMixin, origin: Any, **kwargs: Any) -> None:
+    """Apply the row's declared direct/cascade delete policy in Django's collector."""
+
+    del sender, kwargs
+    elevated = origin.is_sudo() if isinstance(origin, RebacQuerySet) else is_sudo()
+    if elevated:
+        return
+    if instance.row_lock_cascade_parent:
+        field = instance._meta.get_field(instance.row_lock_cascade_parent)
+        parent = field.related_model
+        parent_pk = field.value_from_object(instance)
+        if isinstance(origin, parent) and origin.pk == parent_pk:
+            return
+        if isinstance(origin, models.QuerySet) and origin.model is parent and origin.filter(pk=parent_pk).exists():
+            return
+    instance.validate_row_delete()
+
+
 class RowLockMixin(models.Model):
     """Lock a row's system-owned fields against user writes.
 
@@ -78,6 +155,10 @@ class RowLockMixin(models.Model):
     child write. Child nodes project the same fact as ``locked_fields``.
     """
 
+    _angee_base = _RowLockBaseManager()
+    row_lock_cascade_parent: ClassVar[str | None] = None
+    """An owning parent whose direct collector deletion may remove system children."""
+
     locked_rows_label: ClassVar[str | None] = None
     """Plural phrase naming the system rows in refusals; defaults to ``System <plural>``."""
 
@@ -85,6 +166,23 @@ class RowLockMixin(models.Model):
         """Django options for the shared system-row lock."""
 
         abstract = True
+
+    @classmethod
+    def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:
+        """Require all model collection writers to preserve the system-row invariant."""
+
+        errors = super().check(**kwargs)
+        if not cls._meta.abstract and not isinstance(cls._default_manager.get_queryset(), RowLockQuerySet):
+            errors.append(checks.Error(
+                f"{cls._meta.label}'s default manager must compose RowLockQuerySet.",
+                obj=cls, id="angee.E048",
+            ))
+        if not cls._meta.abstract and not isinstance(cls._base_manager.get_queryset(), _RowLockWritesQuerySet):
+            errors.append(checks.Error(
+                f"{cls._meta.label}'s base manager must preserve row-lock collection guards.",
+                obj=cls, id="angee.E049",
+            ))
+        return errors
 
     def locked_fields(self) -> tuple[str, ...]:
         """Return the fields this row's loaded state locks; empty when the row is unlocked."""
@@ -133,9 +231,10 @@ class RowLockMixin(models.Model):
 
         if not is_sudo():
             persisted = None
+            using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
             if self.pk is not None and not self._state.adding:
                 with system_context(reason=f"{self._meta.label_lower}.row_lock"):
-                    persisted = type(self)._base_manager.filter(pk=self.pk).first()
+                    persisted = type(self)._base_manager.using(using).filter(pk=self.pk).first()
             self.validate_row_lock(None if persisted is None else persisted.row_lock())
         super().save(*args, **kwargs)
 
@@ -144,7 +243,8 @@ class RowLockMixin(models.Model):
 
         if not is_sudo():
             with system_context(reason=f"{self._meta.label_lower}.row_lock"):
-                persisted = type(self)._base_manager.filter(pk=self.pk).first()
+                using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+                persisted = type(self)._base_manager.using(using).filter(pk=self.pk).first()
             (persisted or self).validate_row_delete()
         return cast(tuple[int, dict[str, int]], super().delete(*args, **kwargs))
 
@@ -229,7 +329,7 @@ class OptimisticLockMixin(PersistenceMixin, models.Model):
         if not issubclass(owner, PersistenceMixin):
             raise ImproperlyConfigured(f"{owner._meta.label} must own system queries for its revision counter.")
         manager = owner._base_manager.db_manager(hints={"instance": self})
-        using = manager.db
+        using = kwargs.get("using") or manager.db
         rows = owner.system_queryset().using(using).filter(pk=self._get_pk_val(owner._meta))
         update_fields = kwargs.get("update_fields")
         if update_fields is not None:

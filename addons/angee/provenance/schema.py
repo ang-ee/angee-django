@@ -320,10 +320,7 @@ def _statement_source_reference(version: Any) -> HistoryReferenceType | None:
 
     link = getattr(version, "_readable_statement_link", None)
     if link is not None:
-        stream = link.stream
-        stream_name = f"{stream.key} ({stream.partition})" if stream.partition else stream.key
-        label = f"{record_display_label(stream.integration)} · {stream_name} · {link.external_key}"
-        return _history_reference(link, label=label)
+        return _history_reference(link, label=link.statement_source_label)
     source = getattr(version, "_readable_asserting_source", None)
     return _history_reference(source) if source is not None else None
 
@@ -472,8 +469,7 @@ class RecordHistory:
         readable_links: dict[tuple[type[models.Model], Any], models.Model] = {}
         for link_model, ids in links_by_model.items():
             rows = require_rebac_queryset(link_model).with_actor(self.actor).with_action("read").filter(pk__in=ids)
-            if any(field.name == "stream" for field in link_model._meta.fields):
-                rows = rows.select_related("stream__integration")
+            rows = rows.select_related(*link_model.presentation_related)
             readable_links.update({(link_model, row.pk): row for row in rows})
         for version, link_model, pk in keyed_versions:
             version._readable_statement_link = readable_links.get((link_model, pk))

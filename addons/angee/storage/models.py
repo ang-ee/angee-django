@@ -178,7 +178,7 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel):
     objects = StorageMasterManager()
 
     _storage_cache: ClassVar[OrderedDict[tuple[Any, ...], StorageBackend]] = OrderedDict()
-    """Resolved backend instances keyed by ``(pk, frozen resolved config)``."""
+    """Resolved backend instances keyed by database, row, selected class and resolved config."""
 
     class Meta:
         """Django model options for storage backends."""
@@ -1714,7 +1714,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         return 1, {self._meta.label: 1}
 
     def purge(self) -> None:
-        """Really delete: remove the row, then the backend object.
+        """Really delete the row and discard unreferenced backend bytes after commit.
 
         A shared key stays until its last file row is purged. Backend failures
         never block the row deletion. A failed backend delete is accepted as
@@ -1725,7 +1725,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
 
         storage = self.storage
         key = self.storage_path
-        using = self._state.db or router.db_for_write(type(self), instance=self)
+        using = router.db_for_write(type(self), instance=self)
         drive_id = self.drive_id
         model = type(self)
         super().delete(using=using)

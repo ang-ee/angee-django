@@ -30,7 +30,7 @@ export {
 export { userDisplayName, type UserDisplayNameInput } from "./identity-labels";
 export { USER_SUBJECT_PREFIX, subjectUserId, userSubject } from "./subjects";
 export { ShareAccessCompact, ShareAccessDialog, ShareAccessRailGroup, useAccessRole, useAccessVisibility,
-  type AccessRoleOwnerProps, type AccessRoleState, type ShareAccessDialogProps } from "./ShareAccess";
+  useAccessPeople, type AccessPeopleState, type AccessPerson, type AccessRoleOwnerProps, type AccessRoleState, type ShareAccessDialogProps } from "./ShareAccess";
 export {
   assignmentSubjectOptions,
   useAssignmentSubjects,

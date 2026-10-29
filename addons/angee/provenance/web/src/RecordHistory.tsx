@@ -1,8 +1,8 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
 import { useAuthoredQuery } from "@angee/refine";
 import { useModelMetadata } from "@angee/metadata";
-import { Chip, Code, CodeBlock, ComparisonRows, EmptyState, ErrorBanner, LoadingPanel, PaneRow, PaneRows, PaneToolbar, RecordActionBar, RecordReference, ResourcePaneFooter, SectionEyebrow, StatusBadge, formatDateTime, formatJson, optionToken, useActionResultMutation, useChatter, useStatusTone, type ActionDescriptor, type ComparisonRow, type StatusIconTone } from "@angee/ui";
-import { useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { Chip, Code, CodeBlock, ComparisonRows, EmptyState, ErrorBanner, LoadingPanel, PaneRow, PaneRows, PaneToolbar, RecordActionBar, RecordReference, ResourcePaneFooter, SectionEyebrow, StatusBadge, formatDateTime, formatJson, optionToken, useActionResultMutation, useChatter, useContainer, useStatusTone, type ActionDescriptor, type ComparisonRow, type StatusIconTone } from "@angee/ui";
+import { useEffect, useMemo, useRef, useState, createElement, type ComponentType, type ReactElement, type ReactNode } from "react";
 
 import {
   RecordHistoryDocument,
@@ -339,17 +339,25 @@ function StatementVersions({ statements, record, t }: {
   );
 }
 
-function StatementReference({ reference, record }: {
+export interface StatementReferenceProps {
   reference: HistoryStatement["evidence"][number];
-  record: RecordHistory;
-}): ReactElement {
-  const sourceLink = reference.model.toLowerCase() === "integrate.recordlink";
-  return <span className="text-fg-muted"><RecordReference
-    model={sourceLink ? record.model : reference.model}
-    id={sourceLink ? record.id : reference.id}
-    label={reference.label}
-    search={sourceLink ? { chatterTab: "integrate.sources", source: reference.id } : undefined}
-  /></span>;
+  record: Pick<RecordHistory, "model" | "id">;
+}
+
+declare module "@angee/ui/runtime" {
+  interface ContainerKinds {
+    "statement-references": ComponentType<StatementReferenceProps>;
+  }
+}
+
+function StatementReference(props: StatementReferenceProps): ReactElement {
+  const owners = useContainer<ComponentType<StatementReferenceProps>>(
+    "provenance#statement-references", { models: [props.reference.model] },
+  );
+  if (owners.length > 1) throw new Error(`Multiple statement reference owners for ${props.reference.model}.`);
+  return <span className="text-fg-muted">{owners[0]
+    ? createElement(owners[0].content, props)
+    : <RecordReference {...props.reference} />}</span>;
 }
 
 function MergeFacts({ merge, t }: { merge: NonNullable<HistoryEntry["merge"]>; t: ProvenanceT }): ReactElement {

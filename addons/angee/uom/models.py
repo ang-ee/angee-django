@@ -120,7 +120,8 @@ class Uom(ResourceLoadMixin, ArchiveMixin, AngeeDataModel):
     unit itself carries ``ratio == 1``, ``offset == 0`` and
     ``is_reference == True``; at most one reference exists per category (the
     partial unique constraint below) and its identity map is check-enforced.
-    ``rounding`` is the decimal step conversions *into* this unit are quantized to.
+    ``ratio`` must be positive. ``rounding`` is a positive power-of-ten decimal
+    step conversions *into* this unit are quantized to; other increments are refused.
     """
 
     runtime = True

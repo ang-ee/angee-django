@@ -15,6 +15,7 @@ import { enProjectsMessages, useProjectsT } from "./i18n";
 import { TASK_MODEL } from "./resources";
 import {
   useTaskFormDeclaration,
+  TASK_ACTION_FIELDS,
   useTaskRowActions,
   useTaskRowHref,
   type TaskActionRow,
@@ -31,6 +32,7 @@ export function useTaskListDeclaration(options: Partial<Omit<ListProps<TaskActio
       defaultGroup={{ field: "project" }}
       order={{ sort_order: "ASC" }}
       rowActions={rowActions}
+      queryFields={TASK_ACTION_FIELDS}
       {...listOptions}
     >
       {children ?? <><Facet field="project" label={t("common.project")} />

@@ -21,7 +21,7 @@ export const RecordAccessDocument = graphql(`
 export const RecordReadersDocument = graphql(`
   query RecordReaders($targetType: String!, $targetId: ID!) {
     record_readers(target_type: $targetType, target_id: $targetId) {
-      subject label you following
+      subject label you
     }
   }
 `);

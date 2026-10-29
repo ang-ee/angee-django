@@ -29,6 +29,7 @@ class BaseConfig(AppConfig):
         from django.db.models.signals import pre_delete
         from rebac.field_backing import canonical_model
 
+        from angee.base.models.locks import RowLockMixin, refuse_locked_row_delete
         from angee.base.models.refs import delete_record_refs
         from angee.base.signals import connect_for_models
 
@@ -38,6 +39,12 @@ class BaseConfig(AppConfig):
             applies=lambda model: canonical_model(model) is not None
             or any(isinstance(field, GenericRelation) for field in model._meta.private_fields),
             dispatch_uid="angee.record_refs.target_delete",
+        )
+
+        connect_for_models(
+            pre_delete, refuse_locked_row_delete,
+            applies=lambda model: issubclass(model, RowLockMixin),
+            dispatch_uid="angee.row_lock.delete",
         )
 
         # Model-owned checks require completed app population.

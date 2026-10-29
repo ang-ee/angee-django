@@ -7,7 +7,7 @@ import * as React from "react";
 
 import { useProjectsT } from "../i18n";
 import { TASK_MODEL } from "../resources";
-import { useTaskRowActions, useTaskRowHref, type TaskActionRow } from "../task-actions";
+import { TASK_ACTION_FIELDS, useTaskRowActions, useTaskRowHref, type TaskActionRow } from "../task-actions";
 
 /**
  * The personal projection: the actor's open tasks are the page's one list, owning
@@ -32,6 +32,7 @@ export function MyWorkPage(): React.ReactElement {
       baseFilter={taskFilter}
       order={{ due_date: "ASC", sort_order: "ASC" }}
       rowActions={taskActions}
+      queryFields={TASK_ACTION_FIELDS}
       rowHref={rowHref}
       emptyContent={t("myWork.empty.tasks")}
     >
