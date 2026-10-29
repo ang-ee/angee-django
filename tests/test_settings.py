@@ -2110,3 +2110,26 @@ def test_project_settings_integration_retains_provenance_through_native_settings
     assert generated[Path("settings.yaml")] == "SECRET_KEY: authored-late-bound\n"
     assert "project_apps=('example.notes',)" in generated[Path("settings.py")]
     assert "authored_root=(Path(__file__).resolve().parent / '../source').resolve()" in generated[Path("settings.py")]
+
+
+@pytest.mark.parametrize("configured", (False, True))
+def test_native_mailers_replace_retired_email_environment_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, configured: bool,
+) -> None:
+    """Legacy environment inputs neither configure mail nor override native YAML."""
+
+    monkeypatch.setenv("EMAIL_URL", "retired-input-is-not-a-url")
+    monkeypatch.setenv("EMAIL_BACKEND", "retired.backend.DoesNotExist")
+    authored = "SECRET_KEY: native-mailers-test\nINSTALLED_APPS: []\n"
+    if configured:
+        authored += (
+            "MAILERS:\n"
+            "  default:\n"
+            "    BACKEND: django.core.mail.backends.locmem.EmailBackend\n"
+        )
+    (tmp_path / "settings.yaml").write_text(authored, encoding="utf-8")
+    namespace: dict[str, Any] = {}
+    ProjectBuildContract(namespace).load(root=tmp_path, authored_root=tmp_path, authored_module=None)
+    expected = {"default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}} if configured else None
+    assert namespace.get("MAILERS") == expected
+    assert not any(name.startswith("EMAIL_") for name in namespace)
