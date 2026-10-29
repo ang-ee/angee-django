@@ -14,9 +14,9 @@ _DEFAULTS = """\
 from typing import TypedDict
 from collections.abc import Mapping
 _Defaults = TypedDict('_Defaults', {
-    'ANGEE_COUNT': int, 'ANGEE_MAYBE': str | None, 'ANGEE_VALUES': list[str],
+    'ANGEE_COUNT': int, 'ANGEE_MAYBE': str | None, 'ANGEE_VALUES': list[str], 'ANGEE_REGISTRY': dict[str, int],
 })
-SETTINGS: _Defaults = {'ANGEE_COUNT': 17, 'ANGEE_MAYBE': None, 'ANGEE_VALUES': ['base']}
+SETTINGS: _Defaults = {'ANGEE_COUNT': 17, 'ANGEE_MAYBE': None, 'ANGEE_VALUES': ['base'], 'ANGEE_REGISTRY': {'base': 1}}
 class _Derived(TypedDict):
     ANGEE_DERIVED: str | None
 
@@ -35,19 +35,22 @@ def test_declared_settings_types_preserve_native_errors_and_warm_dependencies(tm
     source.write_text(_DEFAULTS)
     (tmp_path / "settings_two/autoconfig.py").write_text(
         "from typing import TypedDict\n"
-        "_Defaults = TypedDict('_Defaults', {'ANGEE_VALUES:append': list[str]})\n"
-        "SETTINGS: _Defaults = {'ANGEE_VALUES:append': ['extra']}\n"
+        "_Defaults = TypedDict('_Defaults', {'ANGEE_VALUES:append': list[str], 'ANGEE_REGISTRY.extension': int})\n"
+        "SETTINGS: _Defaults = {'ANGEE_VALUES:append': ['extra'], 'ANGEE_REGISTRY.extension': 2}\n"
     )
     (tmp_path / "fixture_settings.py").write_text(
-        "from angee.utils.autoconfig import AutoConfig\n"
+        "from pathlib import Path\n"
+        "from django_compose.conf import configure\n"
         "SECRET_KEY = 'settings-types'\n"
         "INSTALLED_APPS = ['django.contrib.contenttypes', 'settings_one', 'settings_two']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
-        "AutoConfig.apply_installed(globals(), environment=False)\n"
+        f"COMPOSE_OUTPUT_DIR=Path({str(tmp_path / 'typing_output')!r})\n"
+        "COMPOSE_OUTPUT_MODULE='typing_output'\n"
+        "configure(globals())\n"
     )
     config = tmp_path / "mypy.ini"
     config.write_text(
-        "[mypy]\nplugins = angee.compose.typing\n"
+        "[mypy]\nplugins = angee.base.typing\n"
         f"mypy_path = {tmp_path},{root},{root / 'addons'}\ncache_dir = {tmp_path / 'cache'}\n"
         "ignore_missing_imports = True\n"
         "[mypy.plugins.django-stubs]\ndjango_settings_module = fixture_settings\n"
@@ -59,6 +62,7 @@ def test_declared_settings_types_preserve_native_errors_and_warm_dependencies(tm
         "assert_type(settings.ANGEE_MAYBE, str | None)\n"
         "assert_type(settings.ANGEE_DERIVED, str | None)\n"
         "assert_type(settings.ANGEE_VALUES, list[str])\n"
+        "assert_type(settings.ANGEE_REGISTRY, dict[str, int])\n"
     )
     invalid = tmp_path / "invalid.py"
     invalid.write_text(
