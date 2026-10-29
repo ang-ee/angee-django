@@ -7,6 +7,7 @@ import strawberry_django
 from django.apps import apps
 from strawberry import auto
 
+from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.contracts import DataResourceSubtitleMetadata
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
@@ -36,6 +37,7 @@ class NoteType(AuthoredRefMixin, AngeeNode):
     updated_at: auto
     word_count: auto
     reviewer: UserType | None
+    permissions = permissions_field(("write", "share", "delete"))
 
 
 @strawberry.type
