@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from django import conf
 from django.apps import AppConfig
-from django.conf import settings
 
 if TYPE_CHECKING:
     from angee.base.provision import ProvisionContext
@@ -22,7 +22,7 @@ class ResourcesConfig(AppConfig):
         """Reload selected tiers idempotently; explicit project settings opt into demo."""
 
         context.call('resources', 'load', database=context.database,
-                     include_demo=settings.ANGEE_RESOURCE_INCLUDE_DEMO)
+                     include_demo=conf.settings.ANGEE_RESOURCE_INCLUDE_DEMO)
 
     def ready(self) -> None:
         super().ready()
