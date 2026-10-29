@@ -307,7 +307,7 @@ provides-extras = ["postgres"]
 dev = [
     { name = "daphne", specifier = ">=4.0" },
     { name = "django-stubs", extras = ["compatible-mypy"], git = "https://github.com/ang-ee/django-stubs.git?rev=423ed850e5f2d7ea9e67f3e0f9e8bee4be215988" },
-    { name = "django-zed-rebac", extras = ["caveats"], specifier = ">=0.30.0" },
+    { name = "django-zed-rebac", extras = ["caveats"], git = "https://github.com/ang-ee/django-zed-rebac.git?rev=610548cda530d1faca2def1190e000d2c7a883d6" },
     { name = "example-notes", editable = "examples/addons/example/notes" },
     { name = "example-theme", editable = "examples/addons/example/theme" },
     { name = "faker", specifier = ">=30.0" },
@@ -513,7 +513,7 @@ requires-dist = [
     { name = "django-environ", specifier = ">=0.12" },
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
-    { name = "django-zed-rebac", specifier = ">=0.30.0" },
+    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=610548cda530d1faca2def1190e000d2c7a883d6" },
     { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
     { name = "packaging", marker = "extra == 'testing'", specifier = ">=24" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
@@ -629,7 +629,7 @@ requires-dist = [
     { name = "angee-server", editable = "addons/angee/server" },
     { name = "channels", specifier = ">=4.0" },
     { name = "channels-redis", specifier = ">=4.2" },
-    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.30.0" },
+    { name = "django-zed-rebac", extras = ["strawberry-django"], git = "https://github.com/ang-ee/django-zed-rebac.git?rev=610548cda530d1faca2def1190e000d2c7a883d6" },
     { name = "graphql-core", specifier = ">=3.3.1,<3.4" },
     { name = "pydantic", specifier = ">=2.13" },
     { name = "sentry-sdk", specifier = ">=2.71.0" },
@@ -1350,7 +1350,7 @@ requires-dist = [
     { name = "angee-timeline", editable = "addons/angee/timeline" },
     { name = "angee-web", editable = "addons/angee/web" },
     { name = "django-compose", editable = "../django-compose" },
-    { name = "django-simple-history", specifier = ">=3.13" },
+    { name = "django-simple-history", git = "https://github.com/ang-ee/django-simple-history.git?rev=406461d07597b6fd3448f175817851da04d42818" },
 ]
 
 [[package]]
@@ -2675,14 +2675,10 @@ wheels = [
 
 [[package]]
 name = "django-simple-history"
-version = "3.13.0"
-source = { registry = "https://pypi.org/simple" }
+version = "3.13.0.post1.dev2+g406461d07"
+source = { git = "https://github.com/ang-ee/django-simple-history.git?rev=406461d07597b6fd3448f175817851da04d42818#406461d07597b6fd3448f175817851da04d42818" }
 dependencies = [
     { name = "django" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/6b/1c/0689c13c0aa36df828947692f4e309f93c58e075219735c423edbbf6227d/django_simple_history-3.13.0.tar.gz", hash = "sha256:ca3c1e4ccd5f16f45fbbef6015ee2a246465fd9bd924100df8e9dfb368c4f26c", size = 236759, upload-time = "2026-07-22T13:41:29.588Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/65/60/41b2055db523b18a7ef67d0ce7c7c3204bf1b01e388628c8ce578daca7ec/django_simple_history-3.13.0-py3-none-any.whl", hash = "sha256:1cf1d83054479f64aee022023afc1671843aa0a99888799c5c4c3966b0252521", size = 82040, upload-time = "2026-07-22T13:41:28.083Z" },
 ]
 
 [[package]]
@@ -2748,13 +2744,9 @@ wheels = [
 [[package]]
 name = "django-zed-rebac"
 version = "0.30.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=610548cda530d1faca2def1190e000d2c7a883d6#610548cda530d1faca2def1190e000d2c7a883d6" }
 dependencies = [
     { name = "django" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/a2/49/f1673ceb1a7005f227e15898c19b697f809776e7145241e501903c372054/django_zed_rebac-0.30.0.tar.gz", hash = "sha256:1076fef6672240dd5112155c44fcb4e40b6fbf10fb1e1061e116a48ef49546ea", size = 626414, upload-time = "2026-10-28T18:29:31.1Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ef/af/d6f5d998ce4bf6c4b3e4c057c6ffcd903af97cf0cb9f98337731be94a960/django_zed_rebac-0.30.0-py3-none-any.whl", hash = "sha256:beecdc57722be095b69ad71178dc3d67b06339b05cbfc77030ad11286e37fdf5", size = 324991, upload-time = "2026-10-28T18:29:29.685Z" },
 ]
 
 [package.optional-dependencies]

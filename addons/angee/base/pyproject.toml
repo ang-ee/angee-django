@@ -5,7 +5,7 @@ name = "angee-base"
 version = "3.0.0"
 description = "Django model, identity and permission foundation"
 keywords = ["models", "identity", "permissions"]
-dependencies = ["cryptography>=44", "django-sqids>=0.1", "django-zed-rebac>=0.30.0", "sqids>=0.4.1", "django-choices-field @ git+https://github.com/ang-ee/django-choices-field.git@b02c1488660d0bf1f4483d2e73bc842b41b70632", "jsonschema[format-nongpl]>=4.26", "pydantic>=2.13", "referencing>=0.37", "django-compose>=0.1.0.dev0,<0.2", "django>=6.1.2,<6.2", "django-yamlconf>=1.5.0", "django-environ>=0.12", "sentry-sdk>=2.71.0", "psycopg[binary,pool]>=3.2"]
+dependencies = ["cryptography>=44", "django-sqids>=0.1", "django-zed-rebac @ git+https://github.com/ang-ee/django-zed-rebac.git@610548cda530d1faca2def1190e000d2c7a883d6", "sqids>=0.4.1", "django-choices-field @ git+https://github.com/ang-ee/django-choices-field.git@b02c1488660d0bf1f4483d2e73bc842b41b70632", "jsonschema[format-nongpl]>=4.26", "pydantic>=2.13", "referencing>=0.37", "django-compose>=0.1.0.dev0,<0.2", "django>=6.1.2,<6.2", "django-yamlconf>=1.5.0", "django-environ>=0.12", "sentry-sdk>=2.71.0", "psycopg[binary,pool]>=3.2"]
 requires-python = ">=3.14"
 license = "LGPL-3.0-or-later"
 license-files = ["LICENSE", "LICENSE.GPL"]
