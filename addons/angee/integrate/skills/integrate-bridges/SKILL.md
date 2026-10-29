@@ -1,6 +1,6 @@
 ---
 name: integrate-bridges
-description: "Adds a bridge or sync source on angee.integrate: a BridgeImpl adapter selected by ImplClassField, StreamDefinition partitions and SyncStream cursors, RecordLink replicas, credentials and OAuth presets, live sessions, tests. Use for 'add a bridge', 'sync <vendor>', 'new channel backend'."
+description: "Adds a bridge or sync source on angee.integrate: a BridgeImpl adapter selected by ImplClassField, StreamDefinition partitions and SyncStream cursors, RecordLink replicas, credentials and OAuth presets, live sessions, tests. Use for 'add a bridge', 'sync a vendor', 'new channel backend'."
 ---
 
 # Integrate Bridges
@@ -53,9 +53,9 @@ source addon contributes one adapter class, its registry key and its tests. Refe
 ## Steps
 
 1. **Create the addon and pick the donor.** Folder `addons/angee/<capability>_integrate_<vendor>` (`angee-addon`);
-   `depends_on` names the capability, `angee.integrate` and the vendor client as `dependencies`
+   `[project].dependencies` names the capability/integrate distributions and vendor client
    (`addons/angee/messaging_integrate_imap/pyproject.toml`). If the capability has no concrete bridge yet → add it
-   there first as a `Bridge` child with `extends = "integrate.Integration"` and an `ImplClassField` selector
+   there first as a `Bridge` child declared with `inherits="integrate.Integration"` and an `ImplClassField` selector
    (`addons/angee/messaging/models.py:1032-1055`), never in the vendor addon. **Owner rule:** the capability owns
    the row, the vendor addon owns one implementation ([Repository Role](../../../../../AGENTS.md#repository-role)).
 

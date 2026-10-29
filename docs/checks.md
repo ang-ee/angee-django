@@ -35,29 +35,18 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Scope | Command |
 |---|---|
 | Focused Python test | `uv run --locked python -m pytest -q tests/<test_file>.py` |
-| Python/addon/template handoff: full SQLite suite; required for core changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
+| Python/addon/template handoff: full SQLite suite; required for shared foundation/composition changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
-| Python types | `PYTHONPATH=core:addons uv run --locked python -m mypy core/angee addons` |
+| Python types | `PYTHONPATH=addons uv run --locked python -m mypy addons` |
 | Dead-code review | `uv run --locked python -m vulture` |
 
-Mypy imports addon-owned plugins before its Django settings host runs. The
-invocation supplies the declared source roots on native `PYTHONPATH` so those
-plugin modules can load; `mypy_path` controls static resolution and does not
-change the interpreter's import paths. Consumer CI passes the framework's `core/`
-and source roots and the typing host's declared `ANGEE_ADDON_DIRS` to its mypy
-subprocess.
-
-The consumer CI lane uses the same framework mypy policy and
-[`tests.typing_settings`](../tests/typing_settings.py), with its existing
-[`tests.typing_host`](../tests/typing_host.py) projection of native history
-models. An explicit `ANGEE_PROJECT_DIR` reads the project's declared app roots
-and addon directories through `ProjectContract.load`; the typing host retains
-only those composition inputs and uses SQLite in memory, a synthetic secret,
-and `<project>/.mypy_cache/typing_runtime`. Without that explicit project, the
-host checks the full framework composition as before. The CI target is the
-consumer's entire `addons` directory, including optional addons when their
-declared composition is checked; it does not select only recently changed files.
+Mypy loads native compiler and addon-owned plugins through the declared Python
+installation and its configured source roots. `mypy_path` controls static
+resolution, not runtime imports. Use the owning CI invocation and typing settings;
+do not introduce a source-model append, generated stub directory or parallel
+model registry to make a missing native type visible. The composed typing host
+is isolated from the running stack and pytest's bare source-model settings.
 
 A declared addon transition is a temporary executable input: its materialized
 copy carries a source fingerprint until it is applied and the stack's history is
@@ -66,10 +55,8 @@ imports remain followed silently so their types are available. Do not change an
 applied copy or digest to fix checker diagnostics. The
 [runtime-migration mechanism tests](../tests/test_runtime_migrations.py) cover
 materialization, fingerprints, replay and guarded history replacement through
-neutral fixtures. Completed transition declarations and bodies are retired after
-the [snapshot/reset cutoff](composer.md#foundation-and-provenance-upgrade-cutoff),
-not retained indefinitely as compatibility APIs. Generated `typing_runtime`
-model declarations remain followed because they are required typing inputs.
+neutral fixtures. Retire completed transition declarations only through an explicit supported
+upgrade cutoff; preserve every historical Python import required by retained history.
 
 [`tests/test_layering.py`](../tests/test_layering.py) guards framework import
 boundaries and optional state-field declarations. See the
@@ -216,20 +203,19 @@ Management checks use `--no-sync` so invoking one cannot install or rebuild firs
 
 | Purpose | Command | Prerequisite / effect |
 |---|---|---|
-| Install for development | `uv sync` | Installs native editable distributions on a stopped/new host; does not compose |
-| Build runtime for development | `uv run --no-sync python -m angee.build --root . --output runtime` | Explicit fresh-process compilation after dependency sync; no database operations |
-| Install for production | `uv sync --no-editable` | Installs native wheels; does not compose |
-| Build runtime for production | `uv run --no-sync python -m angee.build --root . --output runtime --check-history` | Validates tracked history offline before provision |
-| Build distribution wheels | `uv build --wheel --all-packages` | Native workspace package builds; runtime generation is a separate host job |
-| Prepare the installed runtime | `uv run --no-sync python manage.py angee provision` | One prebuilt native process; the [command owner](../core/angee/management/commands/angee.py) defines ordering and options |
-| Clean generated runtime | `uv run --no-sync python manage.py angee clean` | [Guarded whole-tree cleanup](composer.md#runtime-cleanup); preserves current migration directories |
-| Check composition drift | `uv run --no-sync python manage.py angee check` | Explicit read-only check of composer artifacts and addon upgrade declarations; startup never repairs output |
-| Author schema migrations | `uv run --no-sync python manage.py makemigrations <app-labels>` | After editable build; review and commit `runtime/<label>/migrations/` before packaging |
+| Install for development | `uv sync --locked` | Installs native editable distributions on a stopped/new host; does not compose |
+| Compose models and artifacts | `uv run --no-sync python manage.py compose` | Fresh build-mode process through the native launcher; no database provisioning |
+| Install for production | `uv sync --locked --no-editable` | New/stopped host; installs distributions, does not compose |
+| Build distribution wheels | `uv build --wheel --all-packages` | Native workspace builds; composition is a separate job |
+| Provision database state | `uv run --no-sync python manage.py provision` | Base-owned native history checks, migrations, hooks and readiness record |
+| Read readiness | `uv run --no-sync python manage.py provision --check` | Read-only proof for the selected database |
+| Check composition drift | `uv run --no-sync python manage.py compose --check` | Native read-only artifact/receipt comparison |
+| Check migration drift/imports | `uv run --no-sync python manage.py check_migrations --imports` | Native retained-history integrity and Python import audit |
+| Author schema migrations | `uv run --no-sync python manage.py makemigrations <app-labels>` | After compose; review and commit `runtime/<label>/migrations/` before packaging |
 | Apply migrations | `uv run --no-sync python manage.py migrate` | Operates on the selected stack database |
 | Sync permissions | `uv run --no-sync python manage.py rebac sync` | After migrations when permissions change; `rebac sync --prune-stale` also retires removed definitions, the shape provision runs ([REBAC](backend/guidelines.md#rebac)) |
 | Load declared resource data | `uv run --no-sync python manage.py resources load` | After migrations when resource data changes |
 | Validate runtime contracts | `uv run --no-sync python manage.py check` | Includes construction of every named GraphQL schema; run against deployment code and settings before starting writer tiers |
-| Emit GraphQL SDL | `uv run --no-sync python manage.py schema` | Uses the emitted concrete models; provision reuses its prebuilt registry and checked schemas |
 | Check GraphQL SDL | `uv run --no-sync python manage.py schema --check` | Separate from the composer drift check |
 
 Run only lifecycle steps needed for the change and within the user's authorized
@@ -237,8 +223,9 @@ scope.
 For containerized stacks, use the declared service/job environment; a host shell
 without the runtime dependencies cannot run these commands directly.
 
-After a model change, rebuild through the native runtime-build job and author
-required native history before provision. Emit SDL, then run the host web
+After a model change, run native compose and author
+required native history before provision. Compose emits GraphQL SDL through its
+capability integration; then run the host web
 package's codegen **before** checking addon fragments. From the stack
 root, for the default `web_path=web`:
 
@@ -364,7 +351,7 @@ pushes to `main`. The current tiers are:
   composed stack's runtime dependencies plus the framework's locked check tools,
   as the consumer lane does; they do not resolve a second environment from the
   bridges' standalone generated addon dependency group. Its checked-in group
-  remains subject to the suite's manifest-drift guard.
+  remains subject to the suite's native package metadata guard.
   Framework composed-host tests create their own temporary hosts in the SQLite
   suite; the stack job does not repeat that framework suite.
 
@@ -389,7 +376,7 @@ The caller revision replaces its source ref; dependency revisions remain explici
 The full declared Python collection runs once across six `stack-shard` jobs,
 using native pytest-split `least_duration` assignment. Without stored consumer
 timings, the plugin balances test counts with equal weights. Each shard renders
-its own host, resolves native manifest dependencies, composes/provisions it, and
+its own host, resolves native distribution requirements, composes/provisions it, and
 collects the declared Python paths with `python_files=test*.py` on PostgreSQL.
 Four native pytest-xdist workers use `--dist worksteal` inside each shard, so long
 consumer intake modules can use every worker. Each worker loads the configured
@@ -435,3 +422,10 @@ Publish in dependency order:
 
 Local source checks do not establish that this publication chain or a remote CI
 run has completed.
+
+Native compiler co-development uses the declared sibling source slot. Until a
+published compiler distribution/source reference is available, hosted jobs must
+supply that source explicitly; a local lock/build is not evidence that hosted CI
+can resolve it. Docker local builds use the declared named build context. Do not
+invent a repository URL, silently skip the dependency or mark missing-source CI
+green.

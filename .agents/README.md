@@ -86,7 +86,7 @@ description and body only and does not emit it. Codex `agents/openai.yaml`
 carries invocation policy but no tool restriction. Hooks exist only on the
 Claude Code side. `tools/owner-map-guard.py` is an advisory Claude Code
 `PreToolUse` hook (wired in `.claude/settings.json`; Codex does not run it)
-that, on the first `Edit`/`Write` under `addons/`, `packages/`, `core/angee/` or
+that, on the first `Edit`/`Write` under `addons/`, `packages/`, `tools/` or
 `examples/` in a session, reminds the agent to run `angee-design` and write the
 owner map before continuing. It fires once per session, never blocks, and stays
 silent on tests, Markdown, migrations and malformed input; an agent that

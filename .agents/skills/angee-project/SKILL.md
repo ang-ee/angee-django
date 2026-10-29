@@ -1,206 +1,66 @@
 ---
 name: angee-project
-description: "Configures a customer system's host: stack root vs project vs workspace, angee.yaml profiles and include_* inputs, pyproject.toml, settings.yaml (INSTALLED_APPS, ANGEE_ADDON_DIRS, yamlconf, DATABASE_URL), secrets, first provision. Use for 'new project', 'enable addon', 'stack settings'."
+description: "Configures a customer system's host: stack root vs project vs workspace, angee.yaml profiles and include_* inputs, pyproject.toml, settings.yaml (INSTALLED_APPS, native uv sources, yamlconf, DATABASE_URL), secrets, first provision. Use for 'new project', 'enable addon', 'stack settings'."
 ---
 
 # Angee Project
 
-This skill owns host selection and settings: which addons a system composes and the files that
-declare it. `angee-addon` owns an addon's local declarations; `angee-runtime` owns execution on a live stack.
-
-## Use when
-
-- "Set up a new project / customer system / stack for `<product>`."
-- "Enable `arp.<x>` / `<ns>.<y>` in the system" or "add an addon repository."
-- "Change `settings.yaml`, `INSTALLED_APPS`, `ANGEE_ADDON_DIRS`, `ANGEE_UI`."
-- "Add a secret / set `DATABASE_URL`" or "why does the deployment ignore my setting?"
+Use for a project's authored settings, root apps, native requirements, host web
+package or stack profile. Addon-local declarations belong to `angee-addon`.
 
 ## Owners
 
-| File or module | Owns | Reference |
-|---|---|---|
-| `angee.yaml` + stack `AGENTS.md` | The stack: operator, sources, workspaces, jobs, services, secrets, ports; `ANGEE_ROOT` | `templates/stacks/_shared/{stack-body.yaml,AGENTS.md}.jinja` |
-| `templates/{stacks/dev,stacks/local,projects/web}/copier.yml` | Stack inputs (`runtime_mode`, `addons_profile`, `include_arp`, `postgres_mode`, `serve_mode`, `framework`); project inputs (`project_name`, `addon_namespace`, `web_path`, `framework_workspace`, `framework_source_path`) | the three `copier.yml` files |
-| `settings.yaml` | Root apps, addon roots, runtime and data dirs, dev defaults with `:jsonenv` markers | `templates/projects/web/template/settings.yaml.jinja` |
-| `core/angee/conf.py` `ProjectContract` | `load()`: `.env`, project YAML/py, `YAMLCONF_CONFFILE`, defaults, service URLs (`_apply_defaults`); `compose()`: addon settings; generated `runtime/settings.py` body (`project_settings_source`) | `core/angee/conf.py:62,72,143,240,345,428` |
-| `core/angee/defaults.py`, `core/angee/project.py`, `manage.py` | Core app prefix, `COMPOSE_ENV_PREFIXES=("ANGEE_",)`, SQLite floor; root discovery, `runtime.settings`; thin `angee.management.main()` entrypoint | `core/angee/defaults.py:46,57,71`, `core/angee/project.py:15,27,75`, `core/angee/management/__init__.py:17` |
-| `core/angee/compose/autoconfig.py` | Addon settings merge; `COMPOSER_OWNED_SETTINGS` a project sets and an addon cannot | `core/angee/compose/autoconfig.py:26,29` |
-| `pyproject.toml` + `core/angee/build.py` | Native project requirements and explicit isolated runtime build | `templates/projects/web/template/pyproject.toml.jinja`, `core/angee/build.py` |
-| `pnpm-workspace.yaml`, `web/package.json` | Which `web/` folders the stack's JS install links; the host SPA and `codegen` script | `templates/stacks/dev/template/pnpm-workspace.yaml.jinja`, `templates/projects/web/template/{{ web_path }}/package.json.jinja` |
+| Fact | Owner |
+|---|---|
+| Installed distributions and local sources | Project `pyproject.toml` and `uv.lock` |
+| Root apps and structural output identity | Project `settings.yaml` / `settings.py` |
+| Deployment YAML, `.env`, typed service URLs | `angee.base.conf.configure` |
+| Closure, ordered addon settings, build/serving mode | `django_compose.conf.configure` |
+| Management dispatch | `django_compose.management.execute` |
+| Database hooks and readiness | `angee.base.provision` |
+| Dependency chain and service holds | Controlling stack `angee.yaml` |
+| Fragment install membership | Stack `pnpm-workspace.yaml` |
+| Codegen and generated app entry | Host `web/package.json` and `@angee/app` CLI |
 
-## Reuse first
+## Work
 
-- Render rather than hand-write: `angee init` chains `projects/web` under a stack template;
-  the two `.copier-answers*.yml` files record every input, which is what a later
-  `angee stack update --template` re-renders from ([templates](../../../templates/README.md#kinds)).
-- `ProjectContract` and `angee.defaults` already map `DATABASE_URL`, `CACHE_URL`,
-  `ANGEE_DB_POOL*`, `ANGEE_PUBLIC_ORIGIN`, `SENTRY_DSN` ([stack rows](../../../docs/stack.md#backend)).
-- django-yamlconf owns overlays, `YAMLCONF_<NAME>`, `:jsonenv`, `:append`, dotted keys and provenance
-  ([Autoconfig](../../../docs/composer.md#autoconfig)); `AppGraph` expands `depends_on` ([App graph](../../../docs/composer.md#app-graph-and-settings)).
-- The operator owns secrets (`angee secret set|reveal`), ports and the job graph;
-  `AddonInstaller` (`addons/angee/platform/installer.py`) edits `INSTALLED_APPS` in place.
-
-## Steps
-
-1. **Find or create the stack root.** Walk up for `angee.yaml`
-   ([resolve the root](../angee-workspace/SKILL.md#resolve-the-controlling-stack-root)).
-   If one exists → it owns this checkout; configure there, because an `angee init`
-   below it creates a second stack root for the same sources
-   (`tests/test_agent_stack_root_policy.py:19`). If none and the user asked for a
-   new system → render once:
-
-   ```sh
-   angee init <dir> -t dev --input addons_profile=base --input include_arp=true   # framework-dev
-   angee stack init <template-url> <root> --input framework=source                # self-contained instance
-   ```
-
-   dev: `runtime_mode` process or docker, framework editable from `workspaces/src/angee`. local: docker
-   only, `framework=source|baked` from `sources/angee`. Both ignore generated `runtime/` output and track
-   `runtime/<label>/migrations/` (`templates/stacks/dev/template/.gitignore.jinja:11`,
-   `templates/stacks/local/template/.gitignore.jinja:8`): output is rebuilt, history is authored and committed.
-   **Owner rule:** the stack template owns layout and profile facts; the chained project template owns host files ([layouts](../../../templates/README.md#stacks-framework-dev-vs-local-instance)).
-
-2. **Keep native project requirements in `pyproject.toml`.** The host depends on
-   the `angee` meta-distribution and any consumer distributions. Each addon owns
-   its requirements in `[project].dependencies`; no metadata hook or generated
-   dependency group projects another copy. Development sources use native uv
-   workspace/path overrides for the selected member packages. Dependency sync
-   installs packages, then the operator's `runtime-build` job calls the explicit
-   host worker. **Owner rule:** package metadata owns installation and the host
-   build owner owns runtime generation
-   ([composed dependencies](../../../docs/composer.md#composed-addon-dependencies)).
-
-3. **Declare roots and structural paths in `settings.yaml`.** These are build
-   inputs: `ProjectContract.load` and the explicit build worker read them without Django.
-
-   ```yaml
-   INSTALLED_APPS:            # roots in precedence order; dependencies expand
-     - angee.iam
-     - angee.platform
-     - angee.operator
-     - <addon_namespace>.<app>          # consumer addons under addons/<addon_namespace>/
-     - arp.<app>                        # arpee, only with include_arp
-   ANGEE_ADDON_DIRS:          # importable roots, first match wins; NOT a second app list
-     - "{BASE_DIR}/addons"
-     - "{BASE_DIR}/workspaces/src/angee/addons"
-     - "{BASE_DIR}/workspaces/src/angee-arp/addons"
-   COMPOSE_RUNTIME_DIR: "{BASE_DIR}/runtime"
-   ANGEE_DATA_DIR: "{BASE_DIR}/data"
-   ```
-
-   The host prefixes `django_yamlconf`, `angee.compose`, `angee`, `angee.base`; do not list them. Another
-   addon repository → one stack `sources:` entry, one `ANGEE_ADDON_DIRS` line, its roots here, one pnpm glob
-   (step 6). **Owner rule:** `INSTALLED_APPS` is the one root-addon contract; `ANGEE_ADDON_DIRS` only makes
-   roots importable ([Settings bootstrap](../../../docs/composer.md#settings-bootstrap)).
-
-4. **Keep deployment values late-bound.** `settings.yaml` holds dev defaults; the
-   deployment overrides each through the environment — a second settings file
-   would be a second owner of the same value.
-
-   ```yaml
-   SECRET_KEY: <project_name>-dev-key     # YAMLCONF_SECRET_KEY replaces it (stack: ${secret.secret-key})
-   SESSION_COOKIE_NAME: <project_name>_sessionid   # and CSRF_COOKIE_NAME: localhost stacks share cookies
-   DEBUG: true
-   DEBUG:jsonenv: true                     # YAMLCONF_DEBUG is JSON-decoded; without the marker it stays a string
-   ANGEE_UI:                               # deployment shell layer; keys validated by addons/angee/web/build.py
-     shell: { brand: { name: <Brand> }, hosts: { app.example.test: <app> } }
-   ```
-
-   `DATABASE_URL`, `CACHE_URL` come from the process environment (stack `env:`; a
-   project-root `.env` serves host-run `manage.py`, process env winning); an explicit `DATABASES` wins
-   over the URL. A name an addon declares with the `ANGEE_` prefix is read from the environment as-is;
-   any other needs `YAMLCONF_`. `YAMLCONF_CONFFILE` adds a whole overlay (the baked image uses it for
-   `ANGEE_ADDON_DIRS:append`). A secret → stack `secrets:` and `${secret.<name>}`. **Owner rule:**
-   `ProjectContract` owns the precedence project YAML → overlay → environment → addon defaults ([django-environ row](../../../docs/stack.md#backend), `core/angee/conf.py:143,238-240,281`).
-
-5. **Leave `manage.py` and the generated settings alone.** `manage.py` only calls `angee.management.main()`;
-   `project.bootstrap` finds the root (`ANGEE_PROJECT_DIR`, the `manage.py` directory, then ancestors with
-   `settings.yaml`) and selects `runtime.settings`, whose generated body calls `ProjectContract.compose`. A
-   `settings.py` beside `manage.py` is optional (`ANGEE_PROJECT_SETTINGS`); YAML layers over it.
-   **Owner rule:** the host owns boot wiring ([Serving](../../../docs/composer.md#serving)).
-
-6. **Register JS packages at the stack root.** `pnpm-workspace.yaml` lists the host
-   package, local consumer fragments and every slot's fragments; the stack's `deps` job
-   runs `pnpm install` there.
-
-   ```yaml
-   packages:
-     - "web"
-     - "addons/*/*/web"
-     - "workspaces/src/angee/packages/*"
-     - "workspaces/src/angee/addons/angee/*/web"
-     - "workspaces/src/angee-arp/addons/arp/*/web"     # include_arp
-   ```
-
-   The host `web/package.json` keeps `@angee/app`, `@angee/ui`, `@angee/metadata`, `@angee/refine` as
-   `workspace:*` plus the `codegen` script; generated `runtime/web/app` imports fragments by path from
-   `runtime/web/manifest.json`, so a fragment needs a glob here, not a host dependency. **Owner rule:**
-   the stack root owns the JS install; an install inside a slot forks the dependency identity of every
-   linked package ([working directory](../../../docs/checks.md#choose-the-working-directory)).
-
-7. **Provision through the operator.** `angee dev` (or `angee up`) materializes sources, cuts
-   `workspaces/src`, then runs the stack's declared job graph
-   (`templates/stacks/_shared/stack-body.yaml.jinja:255,262,285,325`). The build (editable or
-   `--no-editable` by serve mode), migration authoring, provision, where codegen runs (the `codegen`
-   job on framework stacks, inside `frontend-build` on instance stacks) and the restart job are
-   `angee-runtime` steps 2–7; after a settings or roster change on a running stack, run that skill's
-   step 7. Which sync shape a live stack needs is `angee-permissions` step 7's decision, not this skill's.
-   **Owner rule:** the job graph owns ordering; `angee provision` owns the step list ([restart](../../../docs/howto/getstarted.md#restart-the-running-stack), `core/angee/management/provision.py:49`).
-
-## Do not
-
-- Run `angee init` or create `.core/angee/` under an existing stack or a source checkout ([Set it up](../../../docs/howto/getstarted.md#set-it-up), `tests/test_agent_stack_root_policy.py:19`).
-- `pnpm install` or bare `pnpm exec` inside a slot; install at the stack root ([working directory](../../../docs/checks.md#choose-the-working-directory)).
-- Edit `runtime/` or a generated block; rebuild from source ([Invariants](../../../docs/composer.md#invariants)).
-- Add a second addon list, env-driven discovery or a project-local settings loader beside `INSTALLED_APPS` + `ProjectContract` ([Settings bootstrap](../../../docs/composer.md#settings-bootstrap)).
-- Set `INSTALLED_APPS`, `COMPOSE_RUNTIME_DIR` or `COMPOSE_RUNTIME_MODULE` from an addon `autoconfig.py` (`core/angee/compose/autoconfig.py:26`).
-- Put secrets, machine paths or `.env` contents into `settings.yaml`; use `{BASE_DIR}`, `${secret.*}` and env ([composed dependencies](../../../docs/composer.md#composed-addon-dependencies)).
-- Start Django, Vite or workers by hand, or `uv sync` the venv while the stack runs ([Run from the root](../../../AGENTS.md#run-from-the-root), [restart](../../../docs/howto/getstarted.md#restart-the-running-stack)).
-- Choose a `rebac sync` shape (plain, `--prune-stale`, `--force-overwrite`) from a settings or roster change → `angee-permissions` step 7 owns the decision; provision schedules it (`core/angee/management/provision.py:58-60`, [REBAC](../../../docs/backend/guidelines.md#rebac) lines 825-830).
-- Hand-parse `.env` for a secret; `angee secret reveal` reads the backend ([run a local stack](../../../templates/README.md#run-a-local-stack)).
-- Declare caveated REBAC subjects anywhere in the system; `angee.E024` rejects them (`addons/angee/base/checks.py:37`), use field-backed conditional relations.
+1. Resolve the controlling stack with `angee-workspace`; never initialize a stack
+   under a source checkout. Read its rendered manifest before choosing a job.
+2. Add native requirements and portable uv source overrides at the project owner.
+   Local addons are real installed distributions; folder paths do not activate
+   them. Keep workspace member globs aligned with actual packages. The compiler
+   co-development slot is a declared sibling source, not an invented public URL.
+3. Declare root apps in `INSTALLED_APPS`. Requirements activate their required
+   addon providers; foreign Django app edges come from `AppConfig.requires_apps`.
+   Keep `COMPOSE_OUTPUT_DIR` and `COMPOSE_OUTPUT_MODULE` authored and importable.
+4. The rendered `settings.py` calls `angee.base.conf.configure(globals())`.
+   `manage.py` selects that authored settings module and calls the native launcher.
+   Addon `autoconfig` contributes settings, not a second project bootstrap.
+5. Deployment URLs and secrets belong in the stack's environment or explicit
+   YAML overlay. Native yamlconf provenance must survive expansion. Do not move
+   structural app/output identity into environment-derived values.
+6. Use native workspace/package membership for web fragments. The web projector
+   emits the manifest; the host's `angee-web-codegen` pass consumes emitted SDL.
+   Add a pnpm member for an external fragment rather than copying it into the host.
+7. On a running stack, invoke its whole chained dependency job through the
+   operator. Current framework templates use `deps`; instance templates use
+   `py-sync`. Sync holds Django/workers, then compose and provision run before
+   successful recovery. A plain held job intentionally leaves services stopped.
+   Never synchronize the running stack's venv by hand.
+8. Package install/removal uses the same `py-sync` job with native optional
+   inputs and chained restart. The platform preflight owns native uv planning and
+   migration-import auditing; the generic operator only owns job execution.
 
 ## Verify
 
-Done means: the stack's explicit `runtime-build` job emits `runtime/` and `runtime/web/manifest.json` lists every
-expected fragment; `angee provision` prints `angee provision: ok`; `angee --root "$ANGEE_ROOT" status --json`
-shows every service running and none completed; `check` and `schema --check` pass after codegen.
+Use [Composition and schema](../../../docs/checks.md#composition-and-schema)
+and [restart guidance](../../../docs/howto/getstarted.md#restart-the-running-stack).
+Verify authored roots, native installed metadata, generated artifacts, provision
+readiness, and web codegen at their separate owners. Do not claim a build or an
+editable install has provisioned a database. Preserve comments and Copier answers
+when editing existing project declarations.
 
-- In a lane (jj workspace: no host, database or JS install): `tests/test_stack_templates.py` (`:907,962,1015`),
-  `tests/test_project_template_inputs.py`, `tests/test_settings.py` (`:631,845,944`), `tests/test_hatch.py`,
-  `tests/test_agent_stack_root_policy.py`, ruff on touched files — [Python contracts](../../../docs/checks.md#python-and-composition-contracts).
-- Only on the integrated stack: `uv sync`, `angee check`, `angee provision`, `manage.py check`,
-  `schema --check`, codegen, composed typecheck, browser — [composition](../../../docs/checks.md#composition-and-schema),
-  [frontend](../../../docs/checks.md#frontend-packages-and-addon-fragments). Loop: `.agents/skills/slice/SKILL.md`.
-- False greens: `angee stack update --template` merges and keeps keys the template stopped emitting
-  ([shared servers](../../../templates/README.md#connect-framework-dev-stacks-to-shared-postgresql-and-redis-servers));
-  a green chained restart has synced the zed (`core/angee/management/provision.py:58`) but has not authored
-  missing migrations — provision refuses drift (`:62`; `angee-runtime` step 3).
-
-## Pitfalls
-
-- An ancestor `settings.yaml` does not contribute to a nested project; the project file and `YAMLCONF_CONFFILE` load (`tests/test_settings.py:944`, [Settings bootstrap](../../../docs/composer.md#settings-bootstrap)).
-- `YAMLCONF_<NAME>` stays a string unless the YAML declares `<NAME>:jsonenv: true` (`tests/test_settings.py:845`).
-- A `DATABASE_URL` carrying `CONN_MAX_AGE` fails once `ANGEE_DB_POOL` is on; only production Django workers pool (`core/angee/conf.py:371`, [serve mode](../../../docs/stack.md#stack-serve-mode)).
-- Two localhost stacks with the same cookie names log each other out (`tests/test_stack_templates.py:932`).
-- A `manage.py` that does not call `angee.management.main()` fails its first captured write; re-render it (`tests/test_stack_templates.py:1159`).
-
-## Read next
-
-- [Composer: Flow](../../../docs/composer.md#flow), [Example project shape](../../../docs/composer.md#example-project-shape), [Autoconfig](../../../docs/composer.md#autoconfig)
-- [Stack serve mode](../../../docs/stack.md#stack-serve-mode), [Get started](../../../docs/howto/getstarted.md#set-it-up), [Templates](../../../templates/README.md#stacks-framework-dev-vs-local-instance), [Glossary: Composition](../../../docs/glossary.md#composition)
-- Skills: `angee-design` (first), `angee-addon`, `angee-runtime`, `angee-workspace`, `slice`
-
-## Sources
-
-<!--
-Docs: AGENTS.md; stack-root + workspace AGENTS.md (read-only); docs/guidelines.md; docs/composer.md #flow, #settings-bootstrap, #app-graph-and-settings, #addon-discovery, #autoconfig, #foundation-and-provenance-upgrade-cutoff, #composed-addon-dependencies, #runtime-cleanup, #addon-declarations, #serving, #example-project-shape, #invariants;
-docs/stack.md #how-the-stack-is-locked, #backend, #stack-serve-mode, #tooling; docs/howto/getstarted.md; docs/checks.md #choose-the-working-directory, #python-and-composition-contracts, #agent-methodology-and-documentation, #composition-and-schema; docs/backend/guidelines.md #package-layering, #rules, #rebac, #naming;
-docs/glossary.md #composition, #frontend (`createApp`); templates/README.md. Templates: templates/projects/web/**; templates/stacks/{dev,local,_shared}/**; templates/workspaces/src/copier.yml;
-docker/addon-settings.yaml. Code: core/angee/{conf,project,defaults,build,apps}.py; core/angee/management/{__init__,provision}.py + commands/angee.py; core/angee/compose/
-{autoconfig,yamlconf,apps}.py; addons/angee/web/build.py; addons/angee/platform/{installer,autoconfig}.py; tests/test_stack_templates.py:621-1145; tests/test_hatch.py:1-60;
-tests/test_settings.py:640-1000; core/angee/management/provision.py:49-67. Shapes checked against a stack rendered from templates/stacks/dev (angee.yaml, settings.yaml,
-pyproject.toml, manage.py, pnpm-workspace.yaml, web/package.json, .copier-answers*.yml, runtime/web/manifest.json).
-Outstanding discrepancies: templates/projects/web/template/settings.yaml.jinja:5 cites docs/backend/guidelines.md for the `:jsonenv` marker, which no file under
-docs/ documents (owner: django-yamlconf; tests/test_settings.py:845). docs/glossary.md#composition defines Project and Host but no Stack or Workspace term.
--->
+`ANGEE_DB_POOL` is for production Django workers; database URLs with
+`CONN_MAX_AGE` conflict with native pooling. Celery and management jobs retain
+short-lived connections. The shared Python runtime include owns the process
+`.venv` or Docker shared `data/.venv-linux` selector.

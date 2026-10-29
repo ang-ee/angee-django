@@ -42,8 +42,8 @@ The reference example is `examples/addons/example/notes` (steps, rows, trigger, 
 
 ## Steps
 
-1. **Declare the dependencies.** `pyproject.toml` `depends_on` lists `angee.workflows`, `angee.decisions` when a step asks, and
-   `angee.provenance` (`examples/addons/example/notes/pyproject.toml:8-24`). **Owner rule:** the manifest owns dependency facts
+1. **Declare the dependencies.** `pyproject.toml` `[project].dependencies` lists `angee-workflows`, `angee-decisions` when a step asks, and
+   `angee-provenance` (`examples/addons/example/notes/pyproject.toml:8-24`). **Owner rule:** the manifest owns dependency facts
    ([composition owners](../../../../../docs/backend/guidelines.md#composition-owners)).
 
 2. **Write the step in `<addon>/steps.py`.** Type parameters are the input, output and config models (`None` accepts JSON);
@@ -133,7 +133,7 @@ The reference example is `examples/addons/example/notes` (steps, rows, trigger, 
        @classmethod
        def record_changed_grant_targets(cls, trigger: Any) -> tuple[TriggerGrantTarget, ...]:
            return (TriggerGrantTarget(ObjectRef("notes/role", "trigger_editor"), "member", "effective_member",
-                                      ObjectRef("core/angee/role", "admin")),)
+                                      ObjectRef("angee/role", "admin")),)
    ```
 
    The trigger row (`110_workflows.trigger.yaml`) names `workflow: example.notes.note_publish`, `source: record_changed`,

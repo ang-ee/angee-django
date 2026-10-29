@@ -1,6 +1,6 @@
 ---
 name: angee-resources
-description: "Declares and loads an addon's master, install and demo data: pyproject.toml [tool.angee.resources] tiers, resources/<tier>/NNN_<label>.<model>.yaml rows, adopt keys, cross-addon depends_on, grants files, catalogue tiers, resource_class adapters, retired_models. Use for seed, fixture, catalogue, demo data."
+description: "Declares and loads an addon's master, install and demo data: pyproject.toml [tool.angee.resources] tiers, tiered resource YAML rows, adopt keys, cross-addon depends_on, grants files, catalogue tiers, resource_class adapters, retired_models. Use for seed, fixture, catalogue, demo data."
 ---
 
 # Angee Resources
@@ -24,7 +24,7 @@ description: "Declares and loads an addon's master, install and demo data: pypro
 | `addons/angee/resources/mixins.py` | `resource_class`, `catalogue`/`catalogue_tier(s)`, cooperative `after_resource_load`, check `angee.E014` | `ResourceLoadMixin:17`, `is_catalogue_model:48`, `check:67`, `after_resource_load:97` |
 | `addons/angee/resources/models.py`, `managers.py` | the ledger `(source_addon, xref)`; validate/load/diff/`load_xref`/`resolve`; demo guard, exclusions, xref collisions, merge guard | `Resource:16`; `retired_seed_keys:106`, `seeded_record_merge_guard:121`, `ResourceManager:137`, `load_addons:221`, `load_xref:248`, `_check_load_tiers:318`, `_excluded_entry_keys:536`, `_check_xref_collisions:562` |
 | `addons/angee/resources/grants.py`, `management/commands/resources.py` | `kind = "grants"` rows into REBAC tuples, idempotent by tuple key; the `resources validate\|load\|diff` command and tier selection | `materialize_grant_groups:61`, docstring `:1-12`; `Command:17` |
-| `addons/angee/resources/build.py`, `core/angee/compose/migrations.py` | catalogue projection onto runtime models; the populated-table drop guard and its retirement exemption | `CatalogueIntegration:18`, `retired_primary_keys:38`; `DropGuardAutodetector:624` |
+| `addons/angee/resources/build.py`, `django_compose.migrations` | catalogue projection onto runtime models; the populated-table drop guard and its retirement exemption | `CatalogueIntegration:18`, `retired_primary_keys:38`; `DropGuardAutodetector:624` |
 
 ## Reuse first
 
@@ -48,14 +48,13 @@ description: "Declares and loads an addon's master, install and demo data: pypro
    A model several addons seed declares its tier once (`money/models.py:80-106`):
 
    ```python
-   class Currency(ResourceLoadMixin, ArchiveMixin, AngeeDataModel):
-       runtime = True
+   class Currency(ResourceLoadMixin, ArchiveMixin, AngeeDataModel, concrete=True):
        catalogue = True
        catalogue_tier = "master"          # or catalogue_tiers = ("master", "install")
        code = models.CharField(max_length=3, unique=True)
 
        class Meta:
-           abstract = True                # a runtime source must be abstract (model_composition.py:178-181)
+           abstract = True                # a composition source must be abstract (model_composition.py:178-181)
            rebac_resource_type = "money/currency"
    ```
    **Owner rule:** the model owns its tier, read without inheritance (`mixins.py:48`); a
@@ -109,7 +108,7 @@ description: "Declares and loads an addon's master, install and demo data: pypro
 
    ```yaml
    rows:
-     - resource: core/angee/role:admin           # iam/resources/demo/030_iam.admin_grant.yaml
+     - resource: angee/role:admin           # iam/resources/demo/030_iam.admin_grant.yaml
        relation: member
        subject: angee.iam.user_admin
    ```
@@ -195,12 +194,3 @@ new file and rows; `resources load` creates the rows and a second run reports 0 
 - [Resource loading](../../../docs/backend/guidelines.md#resource-loading), [Composition owners](../../../docs/backend/guidelines.md#composition-owners), [Migration history](../../../docs/backend/guidelines.md#migration-history)
 - [Addon declarations](../../../docs/composer.md#addon-declarations), [Addon-owned runtime migrations](../../../docs/composer.md#addon-owned-runtime-migrations)
 - [Composition and schema](../../../docs/checks.md#composition-and-schema), [Glossary: Resource file](../../../docs/glossary.md#backend); skills `angee-addon`, `angee-models`, `angee-permissions`, `angee-tests`, `slice`
-
-## Sources
-
-<!--
-Docs: AGENTS.md; docs/guidelines.md; docs/backend/guidelines.md #package-layering, #composition-owners, #rules, #persistence-primitives, #resource-loading; docs/glossary.md #backend (Resource entries); docs/composer.md #addon-owned-runtime-migrations, #addon-declarations, #serving; docs/checks.md #python-and-composition-contracts, #agent-methodology-and-documentation, #composition-and-schema; docs/stack.md #backend (cryptography row); docs/features.md #what-you-get--framework-primitives.
-Code (grep -n on the working tree): addons/angee/resources/{pyproject.toml,entries.py,tiers.py,kinds.py,mixins.py,models.py,managers.py:55-130,191-440,500-579,grants.py,widgets.py:206-302,build.py,loader.py:1-260,520-875,management/commands/resources.py,testing/*}; tests/test_catalogue_trait.py:36-224; core/angee/compose/migrations.py:624; core/angee/compose/model_composition.py:178-181; core/angee/management/provision.py:49-68; addons/angee/base/checks.py:16-37; addons/angee/tags/{pyproject.toml,resources/**}; addons/angee/money/{pyproject.toml,models.py:80-106,388-400,resources/**}; examples/addons/example/notes/{pyproject.toml,resources/**,models.py:22-53}; addons/angee/iam/{pyproject.toml:15-25,resources/demo/030_iam.admin_grant.yaml}; addons/angee/parties/pyproject.toml:28 + resources/install/020_statement_source_grants.yaml; addons/angee/messaging/pyproject.toml:39; addons/angee/integrate/models.py:1134-1225,1464-1500; addons/angee/workflows/{models.py:145-155,881,resources.py:1-135}; addons/angee/dashboards/models.py:786-812.
-Doc gaps: no [tool.angee.resources] key reference and no row-shape reference in docs/. Filename pattern is `[NNN_]<label>.<model>.<ext>` (entries.py:406).
-Mismatches: core/angee/management/provision.py:49-68 does not run `resources`; docs/checks.md#composition-and-schema lists it as a separate lifecycle step.
--->
