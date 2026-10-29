@@ -43,6 +43,7 @@ by hand. The `angee-runtime` skill owns build, migrations, provision,
 ## Skills
 
 `angee-project`, `angee-runtime` and `angee-workspace` live in the framework
-checkout's `.agents/skills/`: the `django-angee` source this host resolves
-(`[tool.uv.sources]` in `pyproject.toml`, or the stack's `workspaces/src/angee`
-slot). Addon work follows that checkout's `AGENTS.md` and its `angee-addon` route.
+checkout's `.agents/skills/`, normally the stack's `workspaces/src/angee`
+source slot. If `[tool.uv.sources]` resolves a different framework checkout,
+read its repository root. Addon work follows that checkout's `AGENTS.md` and its
+`angee-addon` route.

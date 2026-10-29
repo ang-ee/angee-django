@@ -341,10 +341,13 @@ Django and Celery processes. If `ollama_port` is changed or leased to a workspac
 set the Ollama inference provider row's `base_url` to
 `http://localhost:<ollama_port>/v1`.
 
-Native `uv sync` builds the editable host before startup; `uv build` packages its
-sealed runtime and reviewed history. One-shot management commands then consume
-that prebuilt host: run `uv run --no-sync python manage.py` from the controlling
-stack root to migrate, sync permissions, load data or check GraphQL SDL. [Checks](../checks.md#composition-and-schema)
+Native `uv sync` installs the project's packages; runtime composition is a
+separate step. On a new or stopped host, run the explicit worker with
+`uv run --no-sync python -m angee.build --root . --output runtime` after syncing;
+`uv build` builds distribution wheels without composing the runtime. One-shot
+management commands then consume that prebuilt runtime: run
+`uv run --no-sync python manage.py` from the controlling stack root to migrate,
+sync permissions, load data or check GraphQL SDL. [Checks](../checks.md#composition-and-schema)
 owns the prerequisites and ordering. A rendered `manage.py` only calls
 `angee.management.main()`, which attributes a one-shot command's writes to one
 changeset; a `manage.py` from before that entrypoint fails its first captured write
@@ -433,9 +436,10 @@ cooperate:
 - **The framework gives agents a native package build.** Inside the host, an agent
   changes source models and addons, runs the explicit `runtime-build` job for the editable runtime, and
   authors native migrations with `uv run --no-sync python manage.py makemigrations`.
-  Native `runtime/<label>/migrations/` packages are reviewed and committed. `uv build` validates
-  and packages that project-specific runtime and history. The operator's declared
-  DAG installs the runtime before running `angee provision`, then starts services.
+  Native `runtime/<label>/migrations/` packages are reviewed and committed. The
+  explicit worker validates tracked history with `--check-history`; `uv build`
+  builds distribution wheels. The operator's declared DAG installs packages and
+  builds the runtime before running `manage.py angee provision`, then starts services.
   Provision uses the prebuilt registry for read-only drift validation, migrate,
   policy sync and declared addon commands; it never compiles or rewrites history.
   Each capability and fact has one owner, so an agent changes that owner rather
