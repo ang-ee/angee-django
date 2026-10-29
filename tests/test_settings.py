@@ -2086,3 +2086,27 @@ def test_yaml_only_editable_settings_accept_native_initial_source_without_import
     assert info["source"] == str(tmp_path / "settings.yaml")
     assert (None, "settings") in info["history"]
     assert "settings" not in sys.modules
+
+
+def test_project_settings_integration_retains_provenance_through_native_settings(tmp_path: Path) -> None:
+    """Native lazy settings retain the authored source and project app declarations."""
+
+    from django.test import override_settings
+
+    from angee.build import ProjectSettings
+    from angee.compose.model_composition import ModelComposition
+    from angee.compose.runtime import Runtime
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "settings.yaml").write_text("SECRET_KEY: authored-late-bound\n", encoding="utf-8")
+    namespace = {
+        "_YAMLCONF_ATTRIBUTES": {"SOURCE_DIR": {"value": source}},
+        "_ANGEE_PROJECT_APPS": ("example.notes",),
+    }
+    runtime = Runtime((), ModelComposition({}, {}), runtime_dir=tmp_path / "runtime", integrations=())
+    with override_settings(**namespace):
+        generated = ProjectSettings().render_sources(runtime)
+    assert generated[Path("settings.yaml")] == "SECRET_KEY: authored-late-bound\n"
+    assert "project_apps=('example.notes',)" in generated[Path("settings.py")]
+    assert "authored_root=(Path(__file__).resolve().parent / '../source').resolve()" in generated[Path("settings.py")]

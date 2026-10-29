@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Mapping
 from copy import copy
-from typing import Any, ClassVar, TypeVar, cast
+from typing import Any, ClassVar, Self, TypeVar, cast
 
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
@@ -190,7 +190,7 @@ class RowLockMixin(models.Model):
     child write. Child nodes project the same fact as ``locked_fields``.
     """
 
-    _angee_base = _RowLockBaseManager()
+    _angee_base: ClassVar[models.Manager[Self]] = _RowLockBaseManager()
     row_lock_cascade_parent: ClassVar[str | None] = None
     """An owning parent whose direct collector deletion may remove system children."""
 

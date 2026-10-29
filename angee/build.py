@@ -19,6 +19,7 @@ from angee.compose.declarations import AppDeclarationSource, BuildIntegration, r
 from angee.conf import ProjectContract, prepend_import_paths
 from angee.project import PROJECT_SETTINGS_ENV, PROJECT_YAML_NAME
 from angee.utils.paths import resolve_path
+from angee.utils.yamlconf import YAMLCONF_ATTRIBUTES
 
 if TYPE_CHECKING:
     from angee.compose.runtime import Runtime
@@ -133,9 +134,10 @@ class ProjectSettings(BuildIntegration):
     def render_sources(self, runtime: Runtime) -> Mapping[Path, str]:
         from django.conf import settings
 
-        return self.project_sources(
-            runtime.addons, runtime_dir=runtime.runtime_dir, namespace=vars(settings._wrapped),
-        )
+        namespace = {YAMLCONF_ATTRIBUTES: django_yamlconf.get_cached_attributes(settings)}
+        if hasattr(settings, "_ANGEE_PROJECT_APPS"):
+            namespace["_ANGEE_PROJECT_APPS"] = getattr(settings, "_ANGEE_PROJECT_APPS")
+        return self.project_sources(runtime.addons, runtime_dir=runtime.runtime_dir, namespace=namespace)
 
     @staticmethod
     def project_sources(
