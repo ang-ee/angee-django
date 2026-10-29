@@ -31,7 +31,7 @@ from strawberry.types.scalar import ScalarDefinition
 from strawberry.types.union import StrawberryUnion
 from strawberry_django_hasura import hasura_config
 
-from angee.addons import addon_facts, is_angee_addon, optional_addon_module, resolve_addon_reference
+from angee.base.addons import addon_facts, is_angee_addon, optional_addon_module, resolve_addon_reference
 from angee.base.exceptions import DomainError, classify_error, validation_error
 from angee.base.models.locks import StaleRevisionError
 from angee.base.permissions import require_rebac_queryset
@@ -670,7 +670,7 @@ def _raw_schemas(app_config: AppConfig) -> object:
 
     if not is_angee_addon(app_config):
         return None
-    facts = addon_facts(app_config.name).get("graphql", {})
+    facts = addon_facts(app_config.name, "angee.graphql")
     if not isinstance(facts, Mapping):
         raise ImproperlyConfigured(f"{app_config.name}: tool.angee.graphql must be a table")
     if "schema" in facts:

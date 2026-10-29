@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from itertools import groupby
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
@@ -16,6 +16,7 @@ from rebac import (
     PermissionDenied,
     RebacMixin,
     RebacTrackedMixin,
+    database_context,
     system_context,
 )
 from rebac.actors import is_sudo
@@ -98,13 +99,21 @@ class ModelHistory(CaptureHistory):
     """Native history adapted to abstract sources and generated module names.
 
     Every concrete descendant of a tracked source owns a history table, including
-    MTI children. Native history construction receives a detached
+    MTI children. Source rows, history and their Changeset foreign keys share one
+    database; replay reads and locks that same source. Generic capture retains
+    native separate-history routing outside this Angee adapter.
+    Native history construction receives a detached
     snapshot with stored gated values, never the caller's redacted projection.
     """
 
     bases: tuple[type[models.Model], ...]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        if kwargs.get("use_base_model_db", True) is not True:
+            raise ImproperlyConfigured(
+                "Angee ModelHistory requires use_base_model_db=True for Changeset and replay storage."
+            )
+        kwargs["use_base_model_db"] = True
         super().__init__(*args, **kwargs)
         self.bases = (*self.bases, HistoricalReferenceMixin)
 
@@ -328,18 +337,21 @@ class ModelHistory(CaptureHistory):
         """Keep global attribution storage resolvable in isolated model registries."""
 
         extra = super().get_extra_fields(model, fields)
-        native_instance = extra["instance"].fget
+        native_instance = extra["get_instance"]
 
-        def get_instance(record: Any) -> Any:
+        def get_instance(record: Any, *, using: str | None = None) -> Any:
             # Native construction fills excluded columns (counters) from the stored
             # row through the default manager. That read rebuilds a snapshot for
             # replay, not a projection to the caller: a gated counter would refuse it.
-            if not record._history_excluded_fields:
-                return native_instance(record)
-            with system_context(reason="angee.history.instance"):
-                return native_instance(record)
+            alias = using if using is not None else record._state.db
+            with (
+                database_context(alias) if alias is not None else nullcontext(),
+                system_context(reason="angee.history.instance") if record._history_excluded_fields else nullcontext(),
+            ):
+                return native_instance(record, using=alias)
 
         extra["instance"] = property(get_instance)
+        extra["get_instance"] = get_instance
         return extra
 
 

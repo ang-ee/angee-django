@@ -181,7 +181,7 @@ class ModelHistory(HistoricalRecords):
     def set_changeset(self, instance: models.Model, history_instance: _ChangesetHistory, **kwargs: Any) -> None:
         """Bind attribution after native construction and before the history save."""
 
-        history_instance.changeset = current_changeset(required=True, record=True)
+        history_instance.changeset_id = current_changeset(required=True, record=True).pk
 
     def get_change_reason_for_object(self, instance: models.Model, history_type: str, using: str | None) -> str:
         """Honor a native instance override before the logical boundary's reason."""
