@@ -1,6 +1,8 @@
+import type { StatementReferenceProps } from "@angee/provenance";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   ErrorBanner,
+  RecordReference,
   NavLink,
   useResourceRecordHrefLookup,
   InlineEmpty,
@@ -76,3 +78,9 @@ export function RecordSourcesPane({ context }: { context: ChatterViewContext }):
   </PaneRows>;
 }
 
+
+/** Integrate owns navigation from retained source evidence to the record's Sources tab. */
+export function StatementRecordLinkReference({ reference, record }: StatementReferenceProps): React.ReactElement {
+  return <RecordReference model={record.model} id={record.id} label={reference.label}
+    search={{ chatterTab: "integrate.sources", source: reference.id }} />;
+}

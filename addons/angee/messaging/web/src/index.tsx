@@ -3,6 +3,7 @@ import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { Inbox, Mail, MessagesSquare, Send } from "lucide-react";
 
+import { AccessFollowers } from "./AccessFollowers";
 import { enMessagingMessages } from "./i18n";
 import { channelForm } from "./ChannelForm";
 import { messageForm } from "./MessageForm";
@@ -110,6 +111,9 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
   statusTones: { paired: "success", logged_out: "danger", duplicate_account: "danger", awaiting_scan: "info", awaiting_password: "warning" },
   forms: { "messaging.Channel": channelForm, "messaging.Message": messageForm },
   containers: {
+    "iam#access-roles": {
+      "messaging.followers": { content: AccessFollowers },
+    },
     // The Channels list's Connect menu: each vendor's child renders ActionTrigger or
     // ConnectChannelAction, with any dialog it opens inside it so focus returns to the menu.
     "messaging.channels#toolbar": {},

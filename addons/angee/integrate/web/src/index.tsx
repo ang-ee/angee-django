@@ -34,7 +34,7 @@ import {
   RetryDiscoveryAction,
   TestConnectionAction,
 } from "./IntegrationLifecycleActions";
-import { RECORD_SOURCES_GROUP_ID, recordSourcesGroup } from "./RecordSourcesPane";
+import { RECORD_SOURCES_GROUP_ID, recordSourcesGroup, StatementRecordLinkReference } from "./RecordSourcesPane";
 
 const INTEGRATE_ID = "integrate";
 
@@ -113,6 +113,9 @@ const integrate = defineBaseAddon({
   // handshake wherever an integration has credentials, and the addon that owns
   // the vendor contributes that against its own model.
   containers: {
+    "integrate.RecordLink#statement-references": {
+      "integrate.source": { content: StatementRecordLinkReference },
+    },
     // The Links tab's Sources group, on records that admit RecordLink edges.
     "related#groups": { [RECORD_SOURCES_GROUP_ID]: recordSourcesGroup },
     [`${INTEGRATION_MODEL}#sections`]: {
