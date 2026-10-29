@@ -2599,6 +2599,8 @@ version = "0.1.0.dev0"
 source = { editable = "../django-compose" }
 dependencies = [
     { name = "django" },
+    { name = "django-yamlconf" },
+    { name = "packaging" },
 ]
 
 [package.metadata]
@@ -2606,10 +2608,11 @@ requires-dist = [
     { name = "django", specifier = ">=6.1.2,<6.2" },
     { name = "django-stubs", extras = ["compatible-mypy"], marker = "extra == 'typing'", git = "https://github.com/ang-ee/django-stubs.git?rev=423ed850e5f2d7ea9e67f3e0f9e8bee4be215988" },
     { name = "django-stubs-ext", marker = "extra == 'typing'", git = "https://github.com/ang-ee/django-stubs.git?subdirectory=ext&rev=423ed850e5f2d7ea9e67f3e0f9e8bee4be215988" },
+    { name = "django-yamlconf", specifier = ">=1.5" },
     { name = "mypy", marker = "extra == 'typing'", git = "https://github.com/ang-ee/mypy.git?rev=ac3de6e4c34b04728e768e07d4842f4309ff6c45" },
-    { name = "packaging", marker = "extra == 'addons'", specifier = ">=26" },
+    { name = "packaging", specifier = ">=26" },
 ]
-provides-extras = ["addons", "typing"]
+provides-extras = ["typing"]
 
 [package.metadata.requires-dev]
 dev = [
