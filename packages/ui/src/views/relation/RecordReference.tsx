@@ -1,7 +1,7 @@
-import { createContext, useContext, useMemo, type ReactElement, type ReactNode } from "react";
+import { useMemo, type ReactElement, type ReactNode } from "react";
 import { useModelMetadata } from "@angee/metadata";
 
-import { useContainer, useResourceRecordHrefLookup, type CoreContainer } from "../../runtime";
+import { makeContext, useContainer, useResourceRecordHrefLookup, type CoreContainer } from "../../runtime";
 import { ContainerOutlet, containerHasContent } from "../../lib/container-outlet";
 import { PaneRow, type PaneRowProps } from "../../communication/pane-list";
 import { ChipList } from "../../ui/chip";
@@ -33,16 +33,14 @@ export const REFERENCE_CONTAINERS: readonly CoreContainer[] = [
   { address: "reference#preview", models: true },
 ];
 
-const ReferenceContext = createContext<RecordReferenceProps | null>(null);
+const ReferenceContext = makeContext<RecordReferenceProps>("RecordReferencePreview");
 
 /** Identity and navigation supplied to a model's preview contribution.
  * @kind null
  * @reason Runtime context for an addon-owned record preview.
  */
 export function useRecordReference(): RecordReferenceProps {
-  const reference = useContext(ReferenceContext);
-  if (!reference) throw new Error("Record previews require RecordReferencePreview.");
-  return reference;
+  return ReferenceContext.use();
 }
 
 /** Show the owning addon's preview when contributed, otherwise its canonical link.

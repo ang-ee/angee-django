@@ -6,6 +6,7 @@ import importlib
 from typing import Any
 
 import pytest
+from django.apps import apps
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context, to_subject_ref
@@ -775,3 +776,46 @@ def test_markdown_sidecar_preserves_its_native_relation() -> None:
     assert field.kind == "relation"
     assert field.relation_object
     assert resource.query.fields["markdown"].relation.model == "knowledge.MarkdownPage"
+
+
+def test_declared_vault_identity_ignores_same_named_vaults_and_rechecks_access(composed_tables: None) -> None:
+    alice, bob, outsider = create_user("xref-alice"), create_user("xref-bob"), create_user("xref-outsider")
+    intended = vault_for(alice, name="Shared label")
+    other = vault_for(bob, name="Shared label")
+    _grant(other, "viewer", alice)
+    ledger = apps.get_model("resources", "Resource")
+    with system_context(reason="knowledge declared destination test"):
+        ledger.objects.create(source_addon="angee.knowledge", source_path="notes.yaml", tier="install",
+                              xref="destination", content_hash="test", target_model="knowledge.Vault",
+                              target_id=str(intended.sqid))
+    query = 'query { knowledge_vault_for_resource(reference: "angee.knowledge.destination") { id } }'
+    assert result_data(execute_schema(_schema("console"), query, user=alice)) == {
+        "knowledge_vault_for_resource": {"id": str(intended.sqid)},
+    }
+    assert execute_schema(_schema("console"), query, user=outsider).errors
+    assert execute_schema(_schema("console"), query.replace("destination", "missing"), user=alice).errors
+    with system_context(reason="knowledge wrong-model resource test"):
+        ledger.objects.filter(xref="destination").update(target_model="iam.User", target_id=str(alice.sqid))
+    assert execute_schema(_schema("console"), query, user=alice).errors
+
+
+def test_markdown_relations_batch_selected_bodies_for_a_non_admin_reader(composed_tables: None) -> None:
+    owner, reader = create_user("body-batch-owner"), create_user("body-batch-reader")
+    vault = vault_for(owner)
+    with actor_context(owner):
+        pages = [Page.objects.create_in(vault, title=f"Batch {index}", body=f"Body {index}") for index in range(4)]
+    for page in pages:
+        _grant(page, "viewer", reader)
+    schema = _schema("console")
+    query = """query ($ids: [String!]!) {
+      pages(where: {id: {_in: $ids}}, order_by: [{title: asc}]) { id kind markdown { body body_hash } }
+    }"""
+    counts = []
+    for size in (1, 4):
+        variables = {"ids": [str(page.sqid) for page in pages[:size]]}
+        result_data(execute_schema(schema, query, variables, user=reader))
+        with CaptureQueriesContext(connection) as captured:
+            data = result_data(execute_schema(schema, query, variables, user=reader))["pages"]
+        counts.append(len(captured))
+        assert [row["markdown"]["body"] for row in data] == [f"Body {index}" for index in range(size)]
+    assert counts[0] == counts[1]

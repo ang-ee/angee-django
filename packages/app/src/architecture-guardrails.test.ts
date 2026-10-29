@@ -459,6 +459,16 @@ describe("React architecture guardrails", () => {
     ]))).toEqual(["@angee/a -> @angee/b -> @angee/a"]);
   });
 
+  test("shell validation has one native JS export for boot and codegen", () => {
+    const manifest = JSON.parse(readFileSync(resolve(MONOREPO_ROOT, "packages/app/package.json"), "utf8"));
+    expect(manifest.exports["./shell-runtime"]).toEqual({
+      types: "./src/shell-settings.d.mts", import: "./src/shell-settings.mjs",
+    });
+    expect(manifest.publishConfig.exports["./shell-runtime"]).toEqual({
+      types: "./dist/shell-settings.d.mts", default: "./dist/shell-settings.mjs",
+    });
+  });
+
   test("framework critical exports exist in their declared owners", () => {
     expect(invalidCriticalExports(FRAMEWORK_CRITICAL_EXPORTS)).toEqual([]);
   });

@@ -40,11 +40,17 @@ async function fixture(initial = detail()) {
   let failure: Error | null = null;
   let release: (() => void) | undefined;
   let pending: Promise<void> | undefined;
+  let readPending: Promise<void> | undefined;
+  let releaseRead: (() => void) | undefined;
   const client = createClient({ defaultOptions: { queries: { retry: false } } });
   const writes = vi.fn<(variables: Record<string, unknown>) => void>();
   const custom: NonNullable<RefineTestDataProvider["custom"]> = async ({ meta }) => {
     if (meta?.gqlQuery === KnowledgePages) return { data: { pages: [], pages_aggregate: { aggregate: { count: 0 } } } };
-    if (meta?.gqlMutation !== KnowledgeUpdatePageBody) return { data: { pages_by_pk: record } };
+    if (meta?.gqlMutation !== KnowledgeUpdatePageBody) {
+      const snapshot = record;
+      if (readPending) await readPending;
+      return { data: { pages_by_pk: snapshot } };
+    }
     const variables: Record<string, unknown> = meta.gqlVariables ?? {};
     writes(variables);
     if (pending) await pending;
@@ -77,6 +83,8 @@ async function fixture(initial = detail()) {
       record = next;
       await act(async () => { await client.invalidateQueries(); });
     },
+    deferReads: () => { readPending = new Promise<void>((resolve) => { releaseRead = resolve; }); },
+    resolveReads: async () => { await act(async () => { releaseRead?.(); await readPending; }); readPending = undefined; },
     fail: (error: Error | null) => { failure = error; },
     defer: () => { pending = new Promise<void>((resolve) => { release = resolve; }); },
     resolve: async () => { await act(async () => { release?.(); await pending; }); pending = undefined; },
@@ -201,4 +209,36 @@ test("changing page identity mounts a fresh native form", async () => {
   await screen.findByDisplayValue("Other page");
   expect(screen.getByDisplayValue("Published instructions")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+});
+
+test("the accepted response acknowledges Save while derived refresh is held", async () => {
+  const f = await fixture();
+  f.deferReads();
+  edit("Page title", "Accepted title");
+  edit("Page body", "Accepted body");
+  await save();
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).toBeNull());
+  expect(f.client.isFetching()).toBeGreaterThan(0);
+  expect(screen.getByDisplayValue("Accepted title")).toBeTruthy();
+  expect(screen.getByDisplayValue("Accepted body")).toBeTruthy();
+  edit("Page body", "Next accepted body");
+  await save();
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).toBeNull());
+  expect(f.writes).toHaveBeenLastCalledWith(expect.objectContaining({ expected_hash: "hash-1" }));
+  await f.resolveReads();
+  await waitFor(() => expect(f.client.isFetching()).toBe(0));
+  expect(screen.getByDisplayValue("Next accepted body")).toBeTruthy();
+});
+
+test("a read started before acceptance cannot replay the old body after Save", async () => {
+  const f = await fixture();
+  f.deferReads();
+  act(() => { void f.client.invalidateQueries(); });
+  await waitFor(() => expect(f.client.isFetching()).toBeGreaterThan(0));
+  edit("Page body", "Accepted after old read");
+  await save();
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).toBeNull());
+  await f.resolveReads();
+  await waitFor(() => expect(f.client.isFetching()).toBe(0));
+  expect(screen.getByDisplayValue("Accepted after old read")).toBeTruthy();
 });

@@ -148,6 +148,7 @@ class PlatformAddon:
     field_count: int
     resource_count: int
     depends_on: list[str]
+    depended_by: list[str]
     model_labels: list[str]
 
 

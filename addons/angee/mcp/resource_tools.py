@@ -18,7 +18,7 @@ from django.db import models
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from fastmcp import FastMCP
 from fastmcp.tools import Tool
-from graphql import GraphQLInputObjectType, GraphQLList, GraphQLNonNull
+from graphql import GraphQLInputObjectType, get_named_type
 from rebac.field_visibility import gated_read_fields
 from strawberry.utils.str_converters import to_snake_case
 
@@ -272,18 +272,11 @@ def _detail_id_arg(resource: DataResourceMetadata, field: Any) -> str:
     if "id" in field.args:
         return "id"
     for name, argument in field.args.items():
-        if isinstance(_unwrap(argument.type), GraphQLInputObjectType):
-            input_fields = _unwrap(argument.type).fields
+        input_type = get_named_type(argument.type)
+        if isinstance(input_type, GraphQLInputObjectType):
+            input_fields = input_type.fields
             if "id" in input_fields:
                 return str(name)
     raise ImproperlyConfigured(
         f"Resource {resource.model_label!r} detail {resource.roots.detail_name!r} has no public-id argument."
     )
-
-
-def _unwrap(graphql_type: Any) -> Any:
-    """Strip GraphQL list/non-null wrappers for registration-time inspection."""
-
-    while isinstance(graphql_type, GraphQLNonNull | GraphQLList):
-        graphql_type = graphql_type.of_type
-    return graphql_type

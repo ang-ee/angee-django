@@ -1,11 +1,13 @@
 import type { ChromeMenuExtra, ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
-import type { HiddenMenuItem, MenuItem, RemovedMenuItem, RuntimeBrand } from "@angee/ui/runtime";
+import type { HiddenMenuItem, MenuItem, RemovedMenuItem } from "@angee/ui/runtime";
 import { isQueryFilter, type QueryFilter } from "@angee/metadata";
 
 import { positionSiblings } from "@angee/ui/lib/position";
 
 import type { AddonRoute } from "./define-addon";
 import { DEPLOYMENT_LAYER_ID, assertMayAlter, layerAncestry, overridesField, routeOwners, type Layer } from "./layers";
+import { assertBrand } from "./shell-settings.mjs";
+export { assertBrand } from "./shell-settings.mjs";
 import { normalizeRoutePath } from "./route-paths";
 
 /** An included node, optionally rendered flat into the including node. */
@@ -247,15 +249,6 @@ function validateEntry(layer: string, id: string, entry: unknown): asserts entry
   }
   if (value.parent !== undefined && value.parent !== null && typeof value.parent !== "string") {
     throw new Error(`${where}: parent must be a menu id or null.`);
-  }
-}
-
-/** A brand names its product and a glyph; the glyph's registration is checked at app boot. */
-export function assertBrand(where: string, brand: unknown): asserts brand is RuntimeBrand {
-  const fields = typeof brand === "object" && brand !== null && !Array.isArray(brand) ? brand as Record<string, unknown> : undefined;
-  if (!fields || Object.keys(fields).some((key) => key !== "name" && key !== "mark")
-    || [fields.name, fields.mark].some((value) => typeof value !== "string" || !value.trim())) {
-    throw new Error(`${where}: brand must be { name, mark } with a non-empty name and mark.`);
   }
 }
 

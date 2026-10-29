@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { print } from "graphql";
 import { errorMessage } from "@angee/ui";
 import {
+  recordValue,
   useAuthoredMutation,
   useAuthoredQuery,
   useStableVariables,
@@ -43,10 +44,12 @@ import type {
 } from "./types";
 
 const CONSOLE_SCHEMA = "console";
-// Daemon connection tokens are short-lived (the daemon mints with a ~30m TTL).
-// Refresh the bridge token well before then and rebuild the daemon client, so a
-// long-running console never degrades to a dead token.
-const CONNECTION_REFRESH_MS = 15 * 60_000;
+/** Schedule rotation from the daemon-issued expiry, with a shrinking safety window. */
+export function operatorConnectionRefresh(data: unknown): number {
+  const expiry = recordValue(recordValue(data)?.operator_connection)?.expires_at;
+  const expiresAt = typeof expiry === "string" ? Date.parse(expiry) : NaN;
+  return Number.isFinite(expiresAt) ? Math.max(1000, (expiresAt - Date.now()) * 0.8) : 30_000;
+}
 
 type OperatorDocument = TypedDocumentNode<object, any>;
 type OperatorVariables<TDocument extends OperatorDocument> =
@@ -105,7 +108,7 @@ export function OperatorTransportProvider({
   const queryClient = useQueryClient();
   const connectionQuery = useAuthoredQuery(OperatorConnectionQuery, undefined, {
     dataProviderName: CONSOLE_SCHEMA,
-    refetchInterval: CONNECTION_REFRESH_MS,
+    refetchInterval: (query) => operatorConnectionRefresh(query.state.data),
   });
 
   const state = useMemo<OperatorConnectionState>(() => {
@@ -131,7 +134,7 @@ export function OperatorTransportProvider({
     const token = state.kind === "ready" ? state.connection.token : null;
     // Child effects can start requests before this effect runs. Retain the old
     // bearer until its replacement is installed, then publish the new state.
-    if (operatorToken.get() !== token) operatorToken.set(token);
+    operatorToken.set(token, state.kind === "ready" ? state.connection.endpoint : null);
     setCommittedState(state);
   }, [state]);
   useEffect(() => () => operatorToken.set(null), []);
@@ -348,11 +351,15 @@ function parseOperatorConnection(value: unknown): OperatorConnectionInfo | null 
   if (typeof endpoint !== "string" || typeof token !== "string") {
     throw new Error("operatorConnection is missing endpoint or token.");
   }
+  const expiresAt = value.expires_at;
+  if (typeof expiresAt !== "string" || !Number.isFinite(Date.parse(expiresAt))) {
+    throw new Error("operatorConnection is missing its issued expiry.");
+  }
   const restartJob = value.restart_job;
   if (restartJob != null && typeof restartJob !== "string") {
     throw new Error("operatorConnection returned an invalid restart job.");
   }
-  return { endpoint, token, restartJob };
+  return { endpoint, token, expiresAt, restartJob };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OperatorConnectionQuery } from "./documents";
 import { createOperatorClient } from "./operator-client";
 import { operatorToken } from "./operator-token";
-import { OperatorTransportProvider, useOperatorConnectionState, useOperatorQuery } from "./transport";
+import { operatorConnectionRefresh, OperatorTransportProvider, useOperatorConnectionState, useOperatorQuery } from "./transport";
 import { SERVICE_ENDPOINT_QUERY } from "./documents.daemon";
 
 const bridge = vi.hoisted(() => ({
@@ -44,6 +44,7 @@ function connectionData(token = "first-token"): DocumentData<typeof OperatorConn
     operator_connection: {
       endpoint: "http://daemon.test/graphql/",
       token,
+      expires_at: "2099-01-01T00:00:00Z",
       restart_job: "deps",
     },
   };
@@ -199,4 +200,12 @@ describe("useOperatorQuery", () => {
     renderTransport(<OperatorRead enabled={false} />);
     expect(bridge.operatorReads.at(-1)?.enabled).toBe(false);
   });
+});
+
+test("connection refresh follows minted short expiry with safety skew", () => {
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  expect(operatorConnectionRefresh({ operator_connection: { expires_at: new Date(now + 60_000).toISOString() } })).toBe(48_000);
+  expect(operatorConnectionRefresh({ operator_connection: { expires_at: new Date(now - 1000).toISOString() } })).toBe(1000);
+  clock.mockRestore();
 });

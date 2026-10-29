@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from importlib.metadata import EntryPoint
 from typing import Any
 
-from django.apps import AppConfig
+from django.apps import AppConfig, apps
 from django.conf import settings
 from django.db import DatabaseError, models, transaction
 from hatch_angee import AddonManifest
@@ -222,7 +222,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
         )
 
     @staticmethod
-    def _dependants(manifests: Iterable[AddonManifest], *, aliases: Mapping[str, str]) -> dict[str, list[str]]:
+    def _dependants(manifests: Iterable[AddonManifest | Addon], *, aliases: Mapping[str, str]) -> dict[str, list[str]]:
         """Invert the caller's declaration set using canonical dependency names."""
 
         depended_by: dict[str, list[str]] = {}
@@ -256,7 +256,8 @@ class AddonManager[T: Addon](AngeeManager[T]):
     def _resolve_app_configs(declarations: Iterable[str]) -> tuple[dict[str, str], dict[str, AppConfig]]:
         """Resolve authored declarations once, reusing the composed root aliases."""
 
-        aliases = composed.root_app_aliases()
+        aliases = {key: config.name for config in apps.get_app_configs() for key in (config.name, config.label)}
+        aliases.update(composed.root_app_aliases())
         configs: dict[str, AppConfig] = {}
         for declaration in sorted(set(declarations)):
             config = resolve_app_config(aliases.get(declaration, declaration))
@@ -333,8 +334,8 @@ class AddonManager[T: Addon](AngeeManager[T]):
         composition and loaded roots removed from that desired set are pending;
         loaded dependencies never queue a disable merely by being absent from the
         roots. When desired settings are unreadable (``None``), retain each row's
-        pending flag. ``depended_by`` inverts available declarations, including
-        disabled declarers; it is catalogue metadata.
+        pending flag. The shared dependency reconcile includes live local/remote
+        declarations and excludes removed declarers.
         """
 
         available = available_addons(getattr(settings, "ANGEE_ADDON_DIRS", ()))
@@ -350,7 +351,6 @@ class AddonManager[T: Addon](AngeeManager[T]):
         for name, loaded_config in loaded.items():
             if (manifest := addon_manifest(loaded_config)) is not None:
                 manifests[name] = manifest
-        depended_by = self._dependants(manifests.values(), aliases=aliases)
         counts = composed.resource_counts()
         rows = self.all()
         with transaction.atomic():
@@ -398,9 +398,29 @@ class AddonManager[T: Addon](AngeeManager[T]):
                         "state": Addon.AddonState.ENABLED if enabled else Addon.AddonState.DISABLED,
                         "pending": pending,
                         "depends_on": list(manifest.depends_on),
-                        "depended_by": depended_by.get(name, []),
                     },
                 )
+
+            self.reconcile_dependencies()
+
+    def reconcile_dependencies(self) -> None:
+        """Reflect current local and remote declarations; removed declarers are history.
+
+        Historical target rows retain current incoming edges, but their old
+        outgoing declarations no longer contribute to the live catalogue graph.
+        """
+
+        rows = list(self.all())
+        aliases, _configs = self._resolve_app_configs(
+            dependency for row in rows if row.state != self.model.AddonState.REMOVED for dependency in row.depends_on
+        )
+        incoming = self._dependants(
+            (row for row in rows if row.state != self.model.AddonState.REMOVED), aliases=aliases,
+        )
+        for row in rows:
+            value = incoming.get(row.name, [])
+            if row.depended_by != value:
+                self.filter(pk=row.pk).update(depended_by=value)
 
     def pending_changes(self) -> bool | None:
         """Return verified desired-vs-loaded drift, or ``None`` when settings are unreadable.
@@ -501,7 +521,7 @@ class Addon(AngeeModel):
     # Declared direct dependencies in every state, including the last known
     # manifest when removed.
     depends_on = models.JSONField(default=list, blank=True)
-    # Inverse of available declarations, including disabled declarers.
+    # Inverse of current local/remote declarations, including disabled declarers.
     depended_by = models.JSONField(default=list, blank=True)
     model_labels = models.JSONField(default=list, blank=True)
 

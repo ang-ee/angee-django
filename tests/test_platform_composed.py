@@ -56,7 +56,7 @@ def test_native_relation_cardinality_and_target_survive_projection() -> None:
 
     assert row.id == f"{line._meta.label_lower}.tags"
     assert row.model == line._meta.label_lower
-    assert row.addon == line._meta.app_label
+    assert row.addon == line._meta.app_config.name
     assert row.relation_target == tags.related_model._meta.label_lower
     assert row.relation_kind() == "many_to_many"
 
@@ -74,7 +74,7 @@ def test_nested_inherited_fields_keep_the_selected_child_identity() -> None:
 
     assert projected.id == f"{child._meta.label_lower}.{inherited.name}"
     assert projected.model == child._meta.label_lower
-    assert projected.addon == child._meta.app_label
+    assert projected.addon == child._meta.app_config.name
 
 
 def test_implementation_rows_use_registered_field_owners_without_reading_source(

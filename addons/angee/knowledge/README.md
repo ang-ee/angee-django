@@ -73,7 +73,12 @@ Pages compose the native `Form` with title and Markdown body fields. `FormView`
 owns the record header and toolbar, Save/Discard, validation, dirty state and
 navigation protection. Knowledge's submit adapter only translates the guarded
 body mutation into that form contract; title and body persist together through
-`MarkdownPageManager.write_body`. Folders use the generated page update.
+`MarkdownPageManager.write_body`. Its accepted response advances the exact typed
+page cache and native form baseline before derived reads finish refreshing;
+live invalidation and reconnect still refresh relations and permissions. Folders
+use the generated page update. Notes destinations use a public vault ID or a
+canonical resource handle (`vault: { resource: "addon.name.xref" }`), never a
+display name; the Knowledge owner resolves the ledger and rechecks current access.
 Backlinks and Bound to are Related groups using the shared pane rows; Bound to
 uses `RecordReferenceRow` for bounded labels and registered record links.
 

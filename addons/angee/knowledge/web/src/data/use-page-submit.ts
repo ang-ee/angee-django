@@ -1,15 +1,28 @@
+import { useSetAuthoredQueryData } from "@angee/refine";
 import { rowValueAtPath } from "@angee/metadata";
 import { acknowledgeFormSubmit, formSubmitError, useAuthoredResourceMutation, type FormSubmit } from "@angee/ui";
 
 import { useKnowledgeT } from "../i18n";
-import { KnowledgeUpdatePageBody, PAGE_READ_MODELS } from "./documents";
+import { KnowledgePage, KnowledgeUpdatePageBody, PAGE_READ_MODELS } from "./documents";
 
 /** Adapt Knowledge's atomic, hash-guarded body write to the native form contract. */
 export function usePageSubmit(): FormSubmit {
   const t = useKnowledgeT();
+  const acceptQuery = useSetAuthoredQueryData();
   const [write] = useAuthoredResourceMutation(KnowledgeUpdatePageBody, {
     invalidateModels: PAGE_READ_MODELS,
     shouldInvalidate: (data) => data?.update_page_body.ok === true,
+    acceptResponse: async (data, variables) => {
+      const result = data?.update_page_body;
+      if (!result?.ok || !result.markdown) return;
+      const accepted = result.markdown;
+      await acceptQuery(KnowledgePage, { id: variables.page }, (current) => {
+        const page = current?.pages_by_pk;
+        if (!page || !page.markdown) return current;
+        return { ...current, pages_by_pk: { ...page, title: accepted.title,
+          markdown: { ...page.markdown, body: accepted.body, body_hash: accepted.body_hash, word_count: accepted.word_count } } };
+      });
+    },
   });
   return async (data, context) => {
     if (!context.id || !context.baselineRecord) return formSubmitError(t("editor.saveFailed"));

@@ -37,7 +37,7 @@ vi.mock("@angee/messaging", () => ({
 }));
 
 import { RecordNotesStream, recordNotesTab } from "./RecordNotesStream";
-import { KnowledgeRecordNotes, KnowledgeVault, RECORD_BINDING_MODEL } from "./data/documents";
+import { KnowledgeRecordNotes, KnowledgeVault, KnowledgeVaultForResource, RECORD_BINDING_MODEL } from "./data/documents";
 
 const target = { modelLabel: "example.Record", recordId: "rec_1" };
 const context: ChatterViewContext = {
@@ -157,4 +157,16 @@ test("a transport retry reuses its receipt key; changing the draft starts a new 
   expect(sdk.createNote.mock.calls[1]![0].idempotency_key).toBe(first);
   await expect(submit({ body: "Changed" }, context)).rejects.toThrow("Offline");
   expect(sdk.createNote.mock.calls[2]![0].idempotency_key).not.toBe(first);
+});
+
+test("notes destinations use canonical resource identity instead of a display name", () => {
+  sdk.query.mockImplementation((document) => document === KnowledgeRecordNotes
+    ? { data: bindingData, isPending: false, error: null }
+    : document === KnowledgeVaultForResource
+      ? { data: { knowledge_vault_for_resource: { id: "vlt_declared", permissions: ["write"] } }, error: null }
+      : { data: undefined, error: null });
+  render(<RecordNotesStream target={target} role="notes" vault={{ resource: "example.notes.destination" }} />);
+  expect(sdk.query).toHaveBeenCalledWith(KnowledgeVaultForResource, { reference: "example.notes.destination" },
+    expect.objectContaining({ enabled: true }));
+  expect(lastChildSource().createAction?.record).toMatchObject({ id: "vlt_declared" });
 });

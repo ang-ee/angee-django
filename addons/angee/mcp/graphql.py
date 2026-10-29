@@ -43,7 +43,9 @@ from graphql import (
     GraphQLNonNull,
     GraphQLScalarType,
     Undefined,
+    assert_input_object_type,
     ast_from_value,
+    get_named_type,
     print_ast,
 )
 from pydantic import BaseModel
@@ -263,7 +265,7 @@ class _Projection(BaseModel):
         if not self.children:
             schema, _ = _json_type(node.fields[self.wire].type)
             return schema
-        child_node = _unwrap(node.fields[self.wire].type)
+        child_node = get_named_type(node.fields[self.wire].type)
         obj = {"type": "object", "properties": {child.key: child.json_schema(child_node) for child in self.children}}
         return {"type": "array", "items": obj} if self.is_list else obj
 
@@ -428,15 +430,11 @@ def _return_node(rtype: Any) -> tuple[Any, bool, str | None]:
 
     node = rtype.of_type if isinstance(rtype, GraphQLNonNull) else rtype
     if isinstance(node, GraphQLList):
-        element = node.of_type
-        while isinstance(element, GraphQLNonNull | GraphQLList):
-            element = element.of_type
+        element = get_named_type(node.of_type)
         return element, True, None
     fields = getattr(node, "fields", {})
     if "results" in fields:
-        element = fields["results"].type
-        while isinstance(element, GraphQLNonNull | GraphQLList):
-            element = element.of_type
+        element = get_named_type(fields["results"].type)
         return element, True, "results"
     return node, False, None
 
@@ -476,7 +474,7 @@ def _projection(node: Any, entry: ProjectionSpec) -> _Projection:
         key=name,
         wire=wire,
         is_list=_is_list_type(gql_field.type),
-        children=_plan(_unwrap(gql_field.type), children),
+        children=_plan(get_named_type(gql_field.type), children),
     )
 
 
@@ -495,7 +493,7 @@ def _flatten_fields(field: Any, spec: GraphQLTool) -> dict[str, str]:
 
     if spec.flatten is None:
         return {}
-    input_fields = _unwrap(field.args[spec.flatten].type).fields
+    input_fields = assert_input_object_type(get_named_type(field.args[spec.flatten].type)).fields
     return {to_snake_case(name): name for name in input_fields}
 
 
@@ -504,7 +502,7 @@ def _id_arg_is_input(field: Any, spec: GraphQLTool) -> bool:
 
     if spec.id_arg is None:
         return False
-    return isinstance(_unwrap(field.args[spec.id_arg].type), GraphQLInputObjectType)
+    return isinstance(get_named_type(field.args[spec.id_arg].type), GraphQLInputObjectType)
 
 
 def _limit_wire_arg(field: Any, spec: GraphQLTool) -> str | None:
@@ -537,7 +535,7 @@ def _validate(spec: GraphQLTool, field: Any, node: Any, *, op_type: str, is_list
     if unknown_args:
         raise ImproperlyConfigured(f"MCP tool {spec.name!r}: {spec.operation} takes no argument(s) {unknown_args}.")
     if spec.search_fields:
-        where = _unwrap(field.args["where"].type)
+        where = assert_input_object_type(get_named_type(field.args["where"].type))
         unknown_search_fields = [name for name in spec.search_fields if name not in where.fields]
         if unknown_search_fields:
             raise ImproperlyConfigured(
@@ -568,7 +566,7 @@ def _validate_fields(spec: GraphQLTool, node: Any, fields: tuple[ProjectionSpec,
                 f"MCP tool {spec.name!r}: projection {name!r} nests deeper than the 2-level "
                 f"limit (projected by {spec.operation})."
             )
-        _validate_fields(spec, _unwrap(node.fields[wire].type), children, depth=depth + 1)
+        _validate_fields(spec, get_named_type(node.fields[wire].type), children, depth=depth + 1)
     if unknown:
         raise ImproperlyConfigured(
             f"MCP tool {spec.name!r}: {node.name} has no field(s) {unknown} (projected by {spec.operation})."
@@ -597,7 +595,7 @@ def _input_schema(field: Any, spec: GraphQLTool) -> dict[str, Any]:
         properties["sqid"] = {"type": "string", "description": "Public id of the target record."}
         required.append("sqid")
     if spec.flatten:
-        for name, input_field in _unwrap(field.args[spec.flatten].type).fields.items():
+        for name, input_field in assert_input_object_type(get_named_type(field.args[spec.flatten].type)).fields.items():
             if name == "id":
                 properties["sqid"] = {"type": "string", "description": "Public id of the target record."}
                 required.append("sqid")
@@ -686,11 +684,3 @@ def _json_type(gql_type: Any) -> tuple[dict[str, Any], bool]:
     if isinstance(gql_type, GraphQLInputObjectType):
         return {"type": "object"}, False
     return {}, False
-
-
-def _unwrap(gql_type: Any) -> Any:
-    """Strip NonNull/List wrappers to the named type."""
-
-    while isinstance(gql_type, GraphQLNonNull | GraphQLList):
-        gql_type = gql_type.of_type
-    return gql_type

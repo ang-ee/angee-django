@@ -380,7 +380,7 @@ def test_web_runtime_carries_the_deployment_ui_layer() -> None:
         "shell": {
             "brand": {"name": "Suite", "mark": "suite"},
             "theme": "suite.light",
-            "apps": {"payables": {"rail": ("accounting", "files"), "home": "accounting.bills"}},
+            "apps": {"payables": {"rail": ("accounting", "files"), "home": "accounting.bills", "railExpanded": False}},
             "hosts": {"payables.example.test": "payables", "work.example.test": "pm"},
         }
     }
@@ -397,30 +397,15 @@ def test_web_runtime_carries_the_deployment_ui_layer() -> None:
         WebRuntime((addon,), ui=["shell"])
 
 
-@pytest.mark.parametrize(
-    ("shell", "message"),
-    [
-        (["pm"], "ANGEE_UI.shell must be a mapping"),
-        ({"home": "pm.home"}, "ANGEE_UI.shell declares unknown keys \\['home'\\]"),
-        ({"perspective": None}, "ANGEE_UI.shell declares unknown keys \\['perspective'\\]"),
-        ({"brand": {"name": "Suite"}}, "ANGEE_UI.shell.brand.mark must be a non-empty string"),
-        ({"brand": {"name": "Suite", "mark": "suite", "tone": "x"}}, "ANGEE_UI.shell.brand declares unknown keys"),
-        ({"theme": " "}, "ANGEE_UI.shell.theme must be a non-empty string"),
-        ({"apps": {"ap": {"rail": []}}}, "ANGEE_UI.shell.apps.ap.rail must be a non-empty list of menu root ids"),
-        ({"apps": {"ap": {"rail": "accounting"}}}, "ANGEE_UI.shell.apps.ap.rail must be a non-empty list"),
-        ({"apps": {"ap": {"rail": ["accounting", "accounting"]}}}, "ANGEE_UI.shell.apps.ap.rail lists a root twice"),
-        ({"apps": {"ap": {"rail": ["accounting"], "hosts": {}}}}, "ANGEE_UI.shell.apps.ap declares unknown keys"),
-        ({"apps": {"ap": {"rail": ["accounting"], "home": ""}}}, "ANGEE_UI.shell.apps.ap.home must be a non-empty"),
-        ({"hosts": {"AP.example.test": "ap"}}, 'shell.hosts\\["AP.example.test"\\] must be a lower-case hostname'),
-        ({"hosts": {"ap.example.test": None}}, 'shell.hosts\\["ap.example.test"\\] must be a non-empty string'),
-    ],
-)
-def test_web_runtime_refuses_a_malformed_deployment_shell(shell: object, message: str) -> None:
-    """``ANGEE_UI.shell`` fails the build when its shape would select the wrong app; ``@angee/app`` checks the rest."""
+def test_web_runtime_transports_shell_values_for_the_shared_js_validator() -> None:
+    """Python owns JSON transport; app boot and codegen share shell validation."""
 
     addon = make_addon(name="tests.addon", web={"package": "@demo/addon"})
-    with pytest.raises(ImproperlyConfigured, match=message):
-        WebRuntime((addon,), ui={"shell": shell})
+    assert WebRuntime((addon,), ui={"shell": {"apps": {"ap": {"railExpanded": False}}}}).manifest[
+        "deployment"
+    ]["shell"]["apps"]["ap"]["railExpanded"] is False
+    with pytest.raises(ImproperlyConfigured, match="only JSON values"):
+        WebRuntime((addon,), ui={"shell": {"not_json": object()}})
 
 
 def test_web_runtime_projects_external_codegen_entries() -> None:

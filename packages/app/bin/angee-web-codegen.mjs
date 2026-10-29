@@ -36,6 +36,8 @@ import {
   serializableThemeMetadata,
 } from "@angee/ui/theme-runtime";
 
+import { assertShellSettings } from "@angee/app/shell-runtime";
+
 const AGGREGATE_MEASURE_OPERATORS = ["sum", "avg", "min", "max"];
 const DELETE_PREVIEW_SELECTION =
   "total_deleted_count has_blockers refusals " +
@@ -56,6 +58,7 @@ const options = parseOptions(process.argv.slice(2));
 const webRoot = resolveFromCwd(options["web-root"] ?? ".");
 const runtimeDir = resolveFromCwd(options.runtime ?? "../runtime");
 const manifest = readManifest(runtimeDir);
+assertShellSettings(manifest.deployment?.shell ?? {});
 const addonSources = addonSourceDirectories(runtimeDir, webRoot, manifest);
 const externalEntries = Array.isArray(manifest.codegen) ? manifest.codegen : [];
 const djangoSchemas = schemaNamesFor(runtimeDir);

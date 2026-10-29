@@ -38,6 +38,7 @@ from angee.graphql.ids import (
     to_public_id,
 )
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
+from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch
 from angee.iam.identity import user_display_label, user_label, user_public_id
@@ -167,7 +168,7 @@ def _ancestors_prefetch(info: strawberry.Info) -> Prefetch:
 
     # The native optimizer clones the supplied queryset but declares its return
     # as QuerySet; retain Page's hierarchy API at that upstream type boundary.
-    rows = cast("PageQuerySet[PageModel]", optimize(PageType.get_queryset(Page.objects.untrashed(), info), info))
+    rows = cast("PageQuerySet[PageModel]", optimize(Page.objects.untrashed(), info))
     return rows.model.ancestors_prefetch(rows, to_attr="_knowledge_ancestors")
 
 
@@ -225,18 +226,11 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
             for link in cast(Any, self)._knowledge_wikilinks
         ]
 
-    @strawberry_django.field(only=["id", "markdown__kind"])
+    @strawberry_django.field(only=["id", "markdown__kind"], prefetch_related=["markdown"])
     def kind(self) -> str:
         """Return the concrete page kind."""
 
         return cast(str, cast(Any, self).kind)
-
-    @classmethod
-    def get_queryset(cls, queryset: Any, info: strawberry.Info) -> Any:
-        """Load concrete markdown identity with each page collection."""
-
-        del info
-        return queryset.select_related("markdown")
 
     @strawberry_django.field(only=["vault_id"])
     def vault(self) -> strawberry.ID:
@@ -261,14 +255,7 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
 
         return to_public_id(Page, cast(Any, self).parent_id)
 
-    @strawberry_django.field(only=["id"])
-    def markdown(self) -> MarkdownPageType | None:
-        """Return the concrete markdown body visible to the actor, if any."""
-
-        return cast(
-            MarkdownPageType | None,
-            MarkdownPage._default_manager.filter(pk=cast(Any, self).pk).first(),
-        )
+    markdown: MarkdownPageType | None = actor_scoped_to_one("markdown")
 
     @strawberry_django.field(only=["id"])
     def backlinks(self) -> list[BacklinkType]:
@@ -479,7 +466,6 @@ _PAGE_RESOURCE = hasura_model_resource(
         "parent": public_pk_decoder(Page),
     },
     write_backend=PageWriteBackend(Page, public_id_fields=("parent",)),
-    get_queryset=partial(PageType.get_queryset, Page.objects),
     subtitle=DataResourceSubtitleMetadata(word_count="markdown.word_count"),
 )
 
@@ -522,6 +508,12 @@ def _knowledge_for_binding(
 class KnowledgeQuery:
     """Knowledge content queries that span the page/body join."""
 
+    @strawberry.field(name="knowledge_vault_for_resource")
+    def vault_for_resource(self, reference: str) -> VaultType:
+        """Resolve a declared notes destination through the resource ledger."""
+
+        return cast(VaultType, Vault.objects.for_resource(reference))
+
     @strawberry.field
     def search_pages(
         self, info: strawberry.Info, query: str, vault: PublicID | None = None, first: int = 20,
@@ -533,7 +525,7 @@ class KnowledgeQuery:
             rows = rows.filter(pk=target.pk)
         ranked = rows.search_pages(query, first=first)
         # Backends own ranking; the selected Page projection owns native hints.
-        selected = optimize(PageType.get_queryset(Page.objects.filter(pk__in=[page.pk for page in ranked]), info), info)
+        selected = optimize(Page.objects.filter(pk__in=[page.pk for page in ranked]), info)
         pages = {page.pk: page for page in selected}
         return cast("list[PageType]", [pages[page.pk] for page in ranked if page.pk in pages])
 

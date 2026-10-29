@@ -2,14 +2,20 @@ import { defineBaseAddon } from "@angee/app";
 import { FieldLabel, FieldRoot, Select, useT } from "@angee/ui";
 import {
   defineThemeContribution,
+  resolveThemeOptions,
   type ThemeOptionsEditorProps,
 } from "@angee/ui/theme";
 
 import { themes } from "./themes.mjs";
 
-function PaperOptionsEditor({ value, disabled, onChange }: ThemeOptionsEditorProps) {
+function PaperOptionsEditor({ definition, value, disabled, onChange }: ThemeOptionsEditorProps) {
   const t = useT("themes");
-  const options = themes[0].options!.parse(value?.value ?? themes[0].options!.defaults);
+  let options;
+  try {
+    options = resolveThemeOptions(themes[0], value).value;
+  } catch {
+    options = themes[0].options!.defaults;
+  }
   return (
     <FieldRoot>
       <FieldLabel>{t("paper.tint")}</FieldLabel>
@@ -17,7 +23,7 @@ function PaperOptionsEditor({ value, disabled, onChange }: ThemeOptionsEditorPro
         aria-label={t("paper.tint")}
         disabled={disabled}
         value={options.paperTint}
-        onValueChange={(paperTint) => onChange({ version: 1, value: { paperTint } })}
+        onValueChange={(paperTint) => onChange({ version: definition.options!.version, value: { paperTint } })}
         options={[
           { label: t("paper.tint.cream"), value: "cream" },
           { label: t("paper.tint.white"), value: "white" },

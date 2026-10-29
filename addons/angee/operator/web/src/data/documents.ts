@@ -10,6 +10,7 @@ export const OperatorConnectionQuery = graphql(`
     operator_connection {
       endpoint
       token
+      expires_at
       restart_job
     }
   }

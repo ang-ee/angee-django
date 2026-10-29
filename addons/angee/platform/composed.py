@@ -47,7 +47,7 @@ class PlatformFieldRow(BaseModel):
             is_relation=bool(field.is_relation),
             relation_target=related._meta.label_lower if related else None,
             model=model._meta.label_lower,
-            addon=model._meta.app_label,
+            addon=model._meta.app_config.name if model._meta.app_config is not None else "",
         )
         row._field = field
         return row

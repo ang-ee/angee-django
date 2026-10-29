@@ -69,10 +69,10 @@ export const KnowledgeVault = graphql(`
   }
 `);
 
-/** A vault by its declared name, for a host whose vault id differs per stack. */
-export const KnowledgeVaultByName = graphql(`
-  query KnowledgeVaultByName($name: String!) {
-    vaults(where: { name: { _eq: $name }, is_trashed: { _eq: false } }, limit: 1) { id permissions }
+/** Resolve one declared resource handle; display names never select a write destination. */
+export const KnowledgeVaultForResource = graphql(`
+  query KnowledgeVaultForResource($reference: String!) {
+    knowledge_vault_for_resource(reference: $reference) { id permissions }
   }
 `);
 

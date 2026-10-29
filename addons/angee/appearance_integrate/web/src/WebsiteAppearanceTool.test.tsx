@@ -7,12 +7,14 @@ import { installTestLocalStorage, ShellPageTestProviders } from "@angee/app/test
 import { AppearanceProvider, useAppearance, type AppearanceState, type RuntimeUserPreferences, type RuntimeUserPreferencesPatch } from "@angee/ui";
 import { createThemeCustomizationOptions, defineTheme, defineThemeContribution, parseThemeCustomization } from "@angee/ui/theme";
 
+const palette = vi.hoisted(() => ({ neutralTint: "#667788" }));
+
 vi.mock("./documents", () => ({ AnalyseAppearance: {} }));
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@angee/refine")>()),
   useAuthoredQuery: (_document: unknown, _variables: unknown, { enabled }: { enabled: boolean }) => ({
     data: enabled ? { analyseAppearance: {
-      finalUrl: "https://example.test", title: "Example website", siteName: "", colors: ["#abcdef", "#123456"], neutralTint: "#667788", fonts: [], warnings: [],
+      finalUrl: "https://example.test", title: "Example website", siteName: "", colors: ["#abcdef", "#123456"], neutralTint: palette.neutralTint, fonts: [], warnings: [],
     } } : undefined,
     error: null, isFetching: false, refetch: vi.fn(),
   }),
@@ -38,10 +40,15 @@ const fixed = defineThemeContribution({
   }),
 });
 
-beforeEach(() => { installTestLocalStorage(); });
+beforeEach(() => { installTestLocalStorage(); palette.neutralTint = "#667788"; });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-test.each([paper, fixed])("applying a website palette from $definition.id edits the open draft until Save", async (selected) => {
+test.each([
+  { selected: paper, neutral: "#667788" },
+  { selected: fixed, neutral: "#667788" },
+  { selected: paper, neutral: "" },
+])("applying a website palette edits the draft and uses theme defaults for absent neutral", async ({ selected, neutral }) => {
+  palette.neutralTint = neutral;
   const saved = { version: 1, themeId: selected.definition.id, colorScheme: "dark" };
   let stored: RuntimeUserPreferences = { appearance: saved, unrelated: true };
   let current!: AppearanceState;
@@ -66,7 +73,7 @@ test.each([paper, fixed])("applying a website palette from $definition.id edits 
   fireEvent.click(screen.getByRole("button", { name: "Analyse" }));
   await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Customize paper.label" })); });
   expect(current.currentPreferences).toMatchObject({ themeId: paper.definition.id, colorScheme: "dark" });
-  expect(parseThemeCustomization(current.currentPreferences.options?.value)).toMatchObject({ brand: "#abcdef", accent: "#123456", neutral: "#667788" });
+  expect(parseThemeCustomization(current.currentPreferences.options?.value)).toMatchObject({ brand: "#abcdef", accent: "#123456", neutral: neutral || "#778899" });
   expect(current.preferences).toEqual(saved);
   expect(current.dirty).toBe(true);
   expect(current.saving).toBe(false);

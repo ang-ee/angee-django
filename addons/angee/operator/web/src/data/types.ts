@@ -45,6 +45,7 @@ export type TemplateInputDescriptor = TemplateDescriptor["inputs"][number];
 export interface OperatorConnectionInfo {
   endpoint: string;
   token: string;
+  expiresAt: string;
   restartJob?: string | null;
 }
 

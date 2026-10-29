@@ -1083,7 +1083,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `errorFrom` to `useAuthoredMutation` for `{error, error_code}` payloads; the
   hook throws before invalidating, so pages do not repeat result-error checks or
   accidentally refresh failed writes. Its native pending lifecycle includes
-  result validation and awaited invalidation. Clear settled failures through
+  result validation and awaited invalidation by default. A response-backed save
+  explicitly supplies `acceptResponse`: first merge accepted fields into the
+  existing complete typed query result with `useSetAuthoredQueryData`, which
+  cancels older reads at the exact native key; then the form acknowledges its
+  accepted baseline while derived reads refresh in the background. Keep live
+  invalidation and reconnect catch-up. Partial mutation data never replaces a
+  complete read projection, and background read failures retain native Query
+  error reporting. Clear settled failures through
   the hook's `reset`; resetting a pending mutation detaches its observer without
   cancelling the write, so a dismissing dialog must preserve that pending state.
 - Client-side gates are UX only. The server is the authorization boundary.
@@ -1604,6 +1611,7 @@ the toolbar through `RecordChromeContext.toolbarHost`
 | `resource#search` | separate controls over the list search model; page shortcuts are `page.*` extras | `SearchShortcut` |
 | `record#aside` | context-aside tabs (`strip: true`) and drill-ins (`strip: false`, with a target) | `ChatterTabContent` |
 | `timeline#kinds` | presentation of a timeline kind a Python source implements | `TimelineKindContent` |
+| `reference#preview`, `<model>#preview` | opt-in record previews composed by `RecordReferencePreview`; addon content reads `useRecordReference` identity/navigation | React node |
 | `related#groups`, `<model>#groups` | one group of the Links tab per edge: rows that link to their records and one verb | `RelatedGroupContent` |
 | `shell#notices` | notices below the console navigation | `ReactNode` |
 | `shell#user-menu` | user-menu items between the theme item and sign-out | `ReactNode` |

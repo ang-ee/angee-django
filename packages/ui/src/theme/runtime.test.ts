@@ -9,6 +9,7 @@ import {
   APPEARANCE_CACHE_SCHEMA,
   bootstrapAppearance,
   defineTheme,
+  resolveThemeOptions,
   type AppearanceBootstrapPayload,
   THEME_TOKEN_NAMES,
   type ThemeDefinition,
@@ -146,4 +147,13 @@ describe("first-paint appearance", () => {
     bootstrapAppearance(bootstrapPayload, window);
     expect(document.documentElement.style.getPropertyValue("--brand")).toBe("#112233");
   });
+});
+
+test("theme envelopes accept only their declared current option version", () => {
+  const definition = defineTheme({
+    ...themeWithToken("--brand", "#112233"),
+    options: { version: 2, defaults: {}, parse: (value: unknown) => value, resolve: () => ({}) },
+  });
+  expect(() => resolveThemeOptions(definition, { version: 1, value: {} })).toThrow("options version 1 is unsupported");
+  expect(resolveThemeOptions(definition, { version: 2, value: {} }).version).toBe(2);
 });

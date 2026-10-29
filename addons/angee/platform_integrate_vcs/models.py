@@ -102,6 +102,7 @@ class AddonCatalogManager(AngeeManager, VcsOutputManager):
                 .exclude(name__in=seen)
                 .update(state=addon.AddonState.REMOVED, **addon.reset_runtime_facts())
             )
+            addon.objects.reconcile_dependencies()
             source.last_synced_at = timezone.now()
             source.save(update_fields=["last_synced_at", "updated_at"])
         return len(descriptors)
