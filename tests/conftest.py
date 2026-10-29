@@ -25,7 +25,6 @@ from django.test import RequestFactory
 from rebac import ObjectRef, actor_context, system_context, to_object_ref
 from rebac.roles import grant as grant_role
 
-from angee.addons import addon_entry_points
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
 from angee.agents.testing import models as agents_models  # noqa: F401 -- register shared FK targets
 from angee.decisions.testing import models as decisions_models  # noqa: F401 -- register shared FK targets
@@ -83,6 +82,7 @@ from tests import (
     integrate_fixtures,  # noqa: F401 -- register discovery targets before database setup
 )
 from tests.extcontrib.models import Role
+from tests.package_metadata import write_addon_distribution
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 
 # Settings reloads in the suite compose through ProjectContract, which starts
@@ -871,35 +871,7 @@ def make_addon(
             key: value if key == "retired_models" else authored_source(value)
             for key, value in resources.items()
         }
-    entries = addon_entry_points()
-    requirements = []
-    foreign_apps = []
-    for dependency in depends_on:
-        entry = entries.get(dependency)
-        if entry is None:
-            foreign_apps.append(dependency)
-        else:
-            requirements.append(entry.dist.metadata["Name"])
-    distribution = name.replace(".", "-").replace("_", "-")
-    document = {
-        "project": {
-            "name": distribution, "version": "0.0.0", "dependencies": requirements,
-            "entry-points": {"angee.addons": {name: name}},
-        },
-        "tool": {"angee": tool},
-    }
-    (path / "pyproject.toml").write_text(tomlkit.dumps(document), encoding="utf-8")
-    dist_info = path / f"{distribution.replace('-', '_')}-0.0.0.dist-info"
-    dist_info.mkdir(exist_ok=True)
-    (dist_info / "METADATA").write_text(
-        f"Metadata-Version: 2.4\nName: {distribution}\nVersion: 0.0.0\n"
-        + "".join(f"Requires-Dist: {requirement}\n" for requirement in requirements), encoding="utf-8",
-    )
-    (dist_info / "entry_points.txt").write_text(f"[angee.addons]\n{name} = {name}\n", encoding="utf-8")
-    (dist_info / "direct_url.json").write_text(
-        json.dumps({"url": path.as_uri(), "dir_info": {"editable": True}}), encoding="utf-8",
-    )
-    dist = metadata.PathDistribution(dist_info)
+    dist = write_addon_distribution(path, name, depends_on=depends_on, capabilities=tool, metadata_root=path)
     previous = metadata.entry_points
     monkeypatch.setattr(metadata, "entry_points", lambda **params: metadata.EntryPoints((
         *(entry for entry in previous(**params) if entry.name != name), *dist.entry_points.select(**params),
@@ -913,8 +885,11 @@ def make_addon(
         if "codegen" in web:
             package["angee"] = {"codegen": web["codegen"]}
         (web_root / "package.json").write_text(json.dumps(package), encoding="utf-8")
-    config = AppConfig(name, module)
-    setattr(config, "requires_apps", tuple(foreign_apps))
+    # Foreign app edges belong to the selected native class, so rediscovery by
+    # dependency traversal sees the same declarations as the returned root.
+    monkeypatch.delitem(sys.modules, f"{name}.apps", raising=False)
+    _TEST_ADDON_CONTEXTS.callback(sys.modules.pop, f"{name}.apps", None)
+    config = AppConfig.create(name)
     if label is not None:
         config.label = label
     return config
