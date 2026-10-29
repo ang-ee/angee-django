@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
+import argparse
+import importlib
 import os
 from collections.abc import Mapping
-from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import django_yamlconf
 import environ
 from django.apps import AppConfig
+from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import module_has_submodule
 
-from angee.addons import addon_manifest
+from angee import addons
 from angee.compose.apps import BuildComposeConfig
-from angee.compose.declarations import AppDeclarationSource, BuildIntegration, render_literal
+from angee.compose.declarations import AppDeclarationSource, BuildIntegration
 from angee.conf import ProjectContract, prepend_import_paths
 from angee.project import PROJECT_SETTINGS_ENV, PROJECT_YAML_NAME
 from angee.utils.paths import resolve_path
@@ -59,6 +61,17 @@ class ProjectBuildContract(ProjectContract):
             if authored_root != root:
                 import_paths = (authored_root, *import_paths)
             prepend_import_paths(import_paths)
+            entries = addons.addon_entry_points()
+            selected_apps = []
+            for entry in self.namespace["INSTALLED_APPS"]:
+                if isinstance(entry, str) and entry in entries:
+                    config = AppConfig.create(entries[entry].value)
+                    if config.name != entry:
+                        raise ImproperlyConfigured(f"Addon entry point {entry!r} disagrees with AppConfig.name")
+                    selected_apps.append(config)
+                else:
+                    selected_apps.append(entry)
+            self.namespace["INSTALLED_APPS"] = selected_apps
             try:
                 Composer(self.namespace).compose_settings(
                     project_apps=self.project_apps, compose_config=compose_config,
@@ -92,22 +105,29 @@ class ProjectBuildConfig(BuildComposeConfig):
         return runtime
 
 
-class ManifestDeclarations(AppDeclarationSource):
-    """Project the host's canonical addon manifests into the compiler contract."""
+class PackageDeclarations(AppDeclarationSource):
+    """Adapt installed requirements and native source paths to the current compiler."""
 
     def dependencies(self, app: AppConfig, *, refresh: bool = False) -> tuple[str, ...]:
-        manifest = addon_manifest(app, refresh=refresh)
-        return manifest.depends_on if manifest is not None else ()
+        return addons.addon_dependencies(app, refresh=refresh)
 
     def migrations(self, app: AppConfig) -> tuple[Mapping[str, Any], ...]:
-        manifest = addon_manifest(app)
-        return manifest.migrations if manifest is not None else ()
+        """Discover sorted transitions without importing their executable sources."""
+
+        if not addons.is_angee_addon(app):
+            return ()
+        directory = Path(app.path) / "compose_migrations"
+        return tuple(
+            {"name": source.stem, "app_label": label.name,
+             "module": f"compose_migrations.{label.name}.{source.stem}"}
+            for label in sorted(directory.iterdir()) if label.is_dir()
+            for source in sorted(label.glob("*.py")) if source.name != "__init__.py"
+        ) if directory.is_dir() else ()
 
 
 def project_settings_source(
     *, authored_module: str | None, source_path: str = "..", project_apps: tuple[str, ...],
     app_configs: tuple[tuple[str, bool, str | None, bool], ...], autoconfig_modules: tuple[str, ...],
-    manifests: dict[str, Any],
 ) -> str:
     """Render native settings wiring from structural declarations only."""
 
@@ -123,7 +143,6 @@ def project_settings_source(
         f"    project_apps={project_apps!r},\n"
         f"    app_configs={app_configs!r},\n"
         f"    autoconfig_modules={autoconfig_modules!r},\n"
-        f"    manifests={render_literal(manifests)},\n"
         ")\n"
     )
 
@@ -160,7 +179,6 @@ class ProjectSettings(BuildIntegration):
         source_yaml = source_root / "settings.yaml"
         app_configs = []
         autoconfig_modules = []
-        manifests = {}
         for app in apps:
             if isinstance(app, BuildComposeConfig):
                 path = "angee.apps.AngeeConfig"
@@ -173,15 +191,86 @@ class ProjectSettings(BuildIntegration):
             ))
             if module_has_submodule(app.module, "autoconfig"):
                 autoconfig_modules.append(f"{app.name}.autoconfig")
-            if (manifest := addon_manifest(app)) is not None:
-                manifests[app.name] = asdict(manifest)
         roots = settings._ANGEE_PROJECT_APPS
         project_apps = (roots,) if isinstance(roots, str) else tuple(roots)
         return {
             Path("settings.py"): project_settings_source(
                 authored_module=module, source_path=os.path.relpath(source_root, runtime_dir),
                 project_apps=project_apps, app_configs=tuple(app_configs),
-                autoconfig_modules=tuple(autoconfig_modules), manifests=manifests,
+                autoconfig_modules=tuple(autoconfig_modules),
             ),
             Path("settings.yaml"): source_yaml.read_text(encoding="utf-8") if source_yaml.is_file() else "{}\n",
         }
+
+
+def build_runtime(root: Path, output: Path, *, check_history: bool) -> None:
+    """Compile once in a fresh interpreter; validate tracked native history offline.
+
+    This private worker never installs dependencies, authors migrations, opens a
+    database, or provisions a deployment. The dependency job installs requirements.
+    """
+
+    import django
+    from django.apps import apps
+    from django.conf import settings
+    from django.db.migrations.autodetector import MigrationAutodetector
+    from django.db.migrations.loader import MigrationLoader
+    from django.db.migrations.state import ProjectState
+
+    root, output = root.resolve(), output.resolve()
+    namespace: dict[str, Any] = {}
+    ProjectBuildContract(namespace).compose(
+        root=root, runtime_dir=output, compose_config="angee.build.ProjectBuildConfig", error_reporting=False,
+    )
+    settings.configure(**namespace)
+    django.setup()
+    config = apps.get_app_config("angee")
+    if not isinstance(config, ProjectBuildConfig):
+        raise RuntimeError("The host build must select ProjectBuildConfig")
+    runtime = config.runtime
+    if check_history:
+        migrated_labels = {label for label in runtime.labels if settings.MIGRATION_MODULES[label] is not None}
+        for label in runtime.labels:
+            module_name = settings.MIGRATION_MODULES[label]
+            if module_name is None:
+                continue
+            try:
+                module = importlib.import_module(module_name)
+            except ImportError as error:
+                raise RuntimeError(
+                    f"Missing tracked native migration package {module_name!r}; "
+                    "run manage.py makemigrations, review and commit history before runtime build."
+                ) from error
+            module_file = getattr(module, "__file__", None)
+            if not module_file or not Path(module_file).resolve().is_relative_to(root):
+                raise RuntimeError(
+                    f"Native migration package {module_name!r} must be authored inside this host project"
+                )
+        runtime.runtime_migrations().check()
+        loader = MigrationLoader(None, ignore_no_migrations=True)
+        if conflicts := loader.detect_conflicts():
+            raise RuntimeError(f"Conflicting tracked migration leaves: {conflicts}")
+        changes = MigrationAutodetector(loader.project_state(), ProjectState.from_apps(apps)).changes(
+            graph=loader.graph, trim_to_apps=migrated_labels, convert_apps=migrated_labels,
+        )
+        if changes:
+            raise RuntimeError(
+                "Tracked native migration history does not match composed models for "
+                f"{', '.join(sorted(changes))}; run manage.py makemigrations, "
+                "review and commit history before runtime build."
+            )
+
+
+def main() -> None:
+    """Build the host in a fresh process before generated settings exist."""
+
+    parser = argparse.ArgumentParser(description="Build the prebuilt Angee runtime from authored project settings")
+    parser.add_argument("--root", type=Path, required=True, help="Authored project directory")
+    parser.add_argument("--output", type=Path, required=True, help="Generated runtime directory")
+    parser.add_argument("--check-history", action="store_true", help="Validate native history offline")
+    options = parser.parse_args()
+    build_runtime(options.root, options.output, check_history=options.check_history)
+
+
+if __name__ == "__main__":
+    main()

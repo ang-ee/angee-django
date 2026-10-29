@@ -203,7 +203,7 @@ def test_framework_does_not_import_retired_ownership_owner() -> None:
             for name in _module_imports(path)
             if any(name == prefix or name.startswith(f"{prefix}.") for prefix in forbidden)
         )
-        for root in (PROJECT_ROOT / "angee", PROJECT_ROOT / "addons" / "angee")
+        for root in (PROJECT_ROOT / "core" / "angee", PROJECT_ROOT / "addons" / "angee")
         for path in sorted(root.rglob("*.py"))
     }
     assert not {path: names for path, names in violations.items() if names}
@@ -280,7 +280,7 @@ def test_blank_state_fields_use_null() -> None:
 
     violations = [
         f"{path.relative_to(PROJECT_ROOT).as_posix()}:{line}"
-        for root in (PROJECT_ROOT / "angee", PROJECT_ROOT / "addons/angee")
+        for root in (PROJECT_ROOT / "core" / "angee", PROJECT_ROOT / "addons/angee")
         for path, tree in _production_sources(root)
         for line in _blank_state_fields_without_null(tree)
     ]
@@ -328,7 +328,7 @@ def test_inference_backends_catalogue_without_their_vendor_sdks() -> None:
             "print(json.dumps(sorted(sys.modules)))",
         )
     )
-    paths = (PROJECT_ROOT, PROJECT_ROOT / "addons", PROJECT_ROOT / "examples" / "addons")
+    paths = (PROJECT_ROOT / "core", PROJECT_ROOT / "addons", PROJECT_ROOT / "examples" / "addons")
     result = subprocess.run(
         [sys.executable, "-c", script],
         cwd=PROJECT_ROOT,
@@ -362,11 +362,11 @@ def test_generated_host_startup_and_provision_dispatch_never_load_the_compiler(t
         }},
         "ANGEE_PROJECT_DIR": str(tmp_path),
         "PYTHONPATH": os.pathsep.join(map(str, (
-            PROJECT_ROOT, PROJECT_ROOT / "addons", PROJECT_ROOT / "examples/addons",
+            PROJECT_ROOT / "core", PROJECT_ROOT / "addons", PROJECT_ROOT / "examples/addons",
         ))),
     }
     build = (
-        "from pathlib import Path; from angee.hatch import build_runtime; "
+        "from pathlib import Path; from angee.build import build_runtime; "
         f"build_runtime(Path({str(tmp_path)!r}), Path({str(tmp_path / 'runtime')!r}), check_history=False)"
     )
     subprocess.run(
@@ -393,7 +393,7 @@ sys.meta_path.insert(0,Boundary())
 import hatch_angee
 
 def forbidden(*args,**kwargs):raise AssertionError('serving scanned build declarations or opened database')
-for name in ('discover','parse_manifest','order_app_dependencies'):
+for name in ('order_app_dependencies',):
  setattr(hatch_angee,name,forbidden)
 from django.db.backends.base.base import BaseDatabaseWrapper
 BaseDatabaseWrapper.ensure_connection=forbidden
@@ -401,14 +401,13 @@ import django
 django.setup()
 from django.apps import apps
 from django.conf import settings
-from angee.addons import addon_manifest
+from angee.addons import addon_facts
 assert settings.SECRET_KEY=='deployment-secret'
 assert settings.DEBUG is True
 assert settings.CELERY_BROKER_URL == 'redis://deployment.invalid:6379/3'
 assert len(tuple(apps.get_models()))>0
 for config in apps.get_app_configs():
- manifest=addon_manifest(config)
- assert manifest is None or isinstance(manifest,hatch_angee.AddonManifest)
+ assert isinstance(addon_facts(config.name),dict)
 import angee.asgi
 from angee.management.commands.angee import Command
 from angee.management import provision

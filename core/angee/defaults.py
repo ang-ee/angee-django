@@ -54,7 +54,7 @@ INSTALLED_APPS = [
 ]
 
 COMPOSE_ENV_PREFIXES = globals().get("COMPOSE_ENV_PREFIXES", ("ANGEE_",))
-COMPOSE_APP_DECLARATIONS = globals().get("COMPOSE_APP_DECLARATIONS", "angee.build.ManifestDeclarations")
+COMPOSE_APP_DECLARATIONS = globals().get("COMPOSE_APP_DECLARATIONS", "angee.build.PackageDeclarations")
 
 COMPOSE_RUNTIME_MODULE = globals().get("COMPOSE_RUNTIME_MODULE", "runtime")
 ANGEE_DATA_DIR = resolve_path(globals().get("ANGEE_DATA_DIR", BASE_DIR / ".angee" / "data"))

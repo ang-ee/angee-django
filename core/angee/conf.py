@@ -16,9 +16,7 @@ import django_yamlconf
 import environ
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
-from hatch_angee import AddonManifest
 
-from angee.addons import bind_addon_manifest
 from angee.project import (
     PROJECT_SETTINGS_ENV,
     PROJECT_YAML_NAME,
@@ -70,13 +68,13 @@ class ProjectContract:
         self, *, runtime_dir: Path, authored_root: Path, authored_module: str | None,
         authored_yaml: Path, project_apps: tuple[str, ...],
         app_configs: tuple[tuple[str, bool, str | None, bool], ...],
-        autoconfig_modules: tuple[str, ...], manifests: dict[str, dict[str, Any]],
+        autoconfig_modules: tuple[str, ...],
     ) -> None:
         """Load deployment values onto a build-resolved native application graph.
 
-        Only the explicit build selects apps, optional autoconfig modules and
-        manifest declarations. Deployment YAML and derived settings still run
-        through their native owners on every process startup.
+        Only the explicit build selects apps and optional autoconfig modules.
+        Deployment YAML and derived settings still run through their native
+        owners on every process startup.
         """
 
         published = self.namespace
@@ -102,9 +100,6 @@ class ProjectContract:
                 setattr(config, "compose_root", is_root)
                 setattr(config, "compose_root_declaration", declaration)
                 setattr(config, "compose_required", required)
-                bind_addon_manifest(
-                    config, AddonManifest(**manifests[config.name]) if config.name in manifests else None,
-                )
                 configs.append(config)
             self.namespace["INSTALLED_APPS"] = configs
             try:

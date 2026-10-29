@@ -26,7 +26,7 @@ class AngeeConfig(AppConfig):
             artifact = importlib.import_module(module_name)
         except ImportError as error:
             raise ImproperlyConfigured(
-                f"Cannot import prebuilt runtime {module_name!r}; run uv sync or uv build first."
+                f"Cannot import prebuilt runtime {module_name!r}; run the runtime-build job first."
             ) from error
         identities = getattr(artifact, "RUNTIME_APP_IDENTITIES", None)
         current = tuple((config.name, config.label) for config in self.apps.get_app_configs())

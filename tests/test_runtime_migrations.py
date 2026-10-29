@@ -31,22 +31,38 @@ from django.db.models.functions import Lower
 from django.test import override_settings
 from django.utils import timezone
 
-from angee.addons import addon_manifest
 from angee.base.fields.identity import SqidField
+from angee.compose.declarations import AppDeclarationSource
 from angee.compose.management.commands.makemigrations import Command as ComposedMakeMigrationsCommand
 from angee.compose.migrations import DropGuardAutodetector, RuntimeMigrations
 from angee.compose.runtime import Runtime
 from angee.management.commands.makemigrations import Command as HostMakeMigrationsCommand
 from angee.resources.entries import resource_manifest_for, retired_models_for
 from tests.composed_host import COMPOSED_TEST_TIMEOUT
-from tests.conftest import make_addon, write_addon_manifest
+from tests.conftest import make_addon
+
+
+class MigrationDeclarations(AppDeclarationSource):
+    """Test compiler declarations independently of host package discovery."""
+
+    entries: dict[str, tuple[dict[str, Any], ...]] = {}
+
+    def migrations(self, app):
+        return self.entries.get(app.name, ())
+
+
+def declare_migrations(config, *, migrations):
+    MigrationDeclarations.entries[config.name] = tuple(migrations)
 
 
 @pytest.fixture(autouse=True)
-def manifest_migration_declarations(settings):
-    """These addon transition fixtures select the host's manifest adapter."""
+def native_migration_declarations(settings):
+    """Compiler probes supply the neutral declaration-source contract directly."""
 
-    settings.COMPOSE_APP_DECLARATIONS = "angee.build.ManifestDeclarations"
+    MigrationDeclarations.entries = {}
+    settings.COMPOSE_APP_DECLARATIONS = "tests.test_runtime_migrations.MigrationDeclarations"
+    yield
+    MigrationDeclarations.entries = {}
 
 
 def _write_module(path: Path, text: str = "") -> None:
@@ -157,8 +173,10 @@ class Migration(migrations.Migration):
     addon = make_addon(
         name="example.demo",
         path=source_root,
-        migrations=({"name": "rename_legacy", "app_label": "resources", "module": "runtime_migrations.rename_legacy"},),
     )
+    declare_migrations(addon, migrations=(
+        {"name": "rename_legacy", "app_label": "resources", "module": "runtime_migrations.rename_legacy"},
+    ))
     materializer = RuntimeMigrations(
         (addon,),
         labels=("resources",),
@@ -182,7 +200,7 @@ class Migration(migrations.Migration):
     dependencies = []
     operations = [migrations.DeleteModel(name="Retired")]
 """)
-    write_addon_manifest(addon, migrations=({
+    declare_migrations(addon, migrations=({
         "name": "retire_last", "app_label": addon.label, "module": "runtime_migrations.retire_last",
     },))
     settings.MIGRATION_MODULES = {**settings.MIGRATION_MODULES, addon.label: f"{addon.name}.migrations"}
@@ -242,11 +260,13 @@ class Source(models.Model):
         package = addon_dir / "reset" / name
         _write_module(package / "__init__.py")
         _write_module(package / "models.py", body)
-        dependencies = ", ".join(repr(dependency) for dependency in depends_on)
-        _write_module(
-            package / "addon.toml",
-            f'[addon]\nname = "reset.{name}"\ndepends_on = [{dependencies}]\n',
-        )
+        _write_module(package / "apps.py", "from django.apps import AppConfig\n"
+            f"class TestConfig(AppConfig):\n    name = 'reset.{name}'\n    requires_apps = {depends_on!r}\n")
+        _write_module(package / "pyproject.toml", f'[project]\nname="reset-{name}"\nversion="3.0.0"\n'
+            f'[project.entry-points."angee.addons"]\n"reset.{name}"="reset.{name}"\n')
+        info = addon_dir / f"reset_{name}-3.0.0.dist-info"
+        _write_module(info / "METADATA", f"Metadata-Version: 2.4\nName: reset-{name}\nVersion: 3.0.0\n")
+        _write_module(info / "entry_points.txt", f"[angee.addons]\nreset.{name} = reset.{name}\n")
 
     _write_module(addon_dir / "reset" / "external" / "__init__.py")
     _write_module(addon_dir / "reset" / "external" / "migrations" / "__init__.py")
@@ -427,7 +447,7 @@ class Migration(migrations.Migration):
     )])]
 """)
         declarations.append(dict(name="consumer_cutover", app_label="resources", module="consumer_cutover"))
-    write_addon_manifest(addon, migrations=tuple(declarations))
+    declare_migrations(addon, migrations=tuple(declarations))
     importlib.invalidate_caches()
     materializer = RuntimeMigrations((addon,), labels=("resources", "integrate_vcs"))
 
@@ -640,7 +660,8 @@ def test_autodetected_table_drop_lets_rows_its_retiring_addon_seeded_go(monkeypa
     with pytest.raises(CommandError, match=refused):  # No addon vouches for the row yet.
         DropGuardAutodetector(history, current).changes(graph=graph)
 
-    monkeypatch.setitem(addon_manifest(owner).resources, "retired_models", ["probe.Retired"])
+    monkeypatch.setattr("angee.resources.entries.addon_facts",
+        lambda name: {"resources": {"retired_models": ["probe.Retired"]}})
     (migration,) = DropGuardAutodetector(history, current).changes(graph=graph)["probe"]
     assert [type(operation).__name__ for operation in migration.operations] == ["DeleteModel"]
 
@@ -666,7 +687,8 @@ def test_retired_models_are_a_resources_declaration_not_a_tier(monkeypatch) -> N
     messaging = apps.get_app_config("messaging")
     assert retired_models_for(messaging) == ("messaging.ActivityType",)
     assert "retired_models" not in resource_manifest_for(messaging)
-    monkeypatch.setitem(addon_manifest(messaging).resources, "retired_models", "messaging.ActivityType")
+    monkeypatch.setattr("angee.resources.entries.addon_facts",
+        lambda name: {"resources": {"retired_models": "messaging.ActivityType"}})
     with pytest.raises(ImproperlyConfigured, match="retired_models must be an array of model labels"):
         retired_models_for(messaging)
 
@@ -712,7 +734,7 @@ class Migration(migrations.Migration):
         declarations.append(
             dict(name="retire_old_name", app_label="resources", module="runtime_migrations.retire_old_name"),
         )
-    write_addon_manifest(addon, migrations=declarations)
+    declare_migrations(addon, migrations=declarations)
     importlib.invalidate_caches()
     history = MigrationLoader(None, ignore_no_migrations=True).project_state()
     legacy = history.apps.get_model("resources", "Legacy")
@@ -739,7 +761,7 @@ class Migration(migrations.Migration):
 
 @pytest.mark.parametrize("dependent_first", [False, True])
 def test_native_dependencies_order_same_app_transitions(runtime_migration_probe, dependent_first: bool) -> None:
-    """Manifest order never substitutes for the declared native dependency."""
+    """Declaration order never substitutes for the declared native dependency."""
 
     materializer, addon, _, runtime_dir, source_root = runtime_migration_probe
     _write_module(source_root / "runtime_migrations" / "add_marker.py", """\
@@ -753,7 +775,7 @@ class Migration(migrations.Migration):
 """)
     parent = dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy")
     child = dict(name="add_marker", app_label="resources", module="runtime_migrations.add_marker")
-    write_addon_manifest(addon, migrations=(child, parent) if dependent_first else (parent, child))
+    declare_migrations(addon, migrations=(child, parent) if dependent_first else (parent, child))
     importlib.invalidate_caches()
 
     written = materializer.materialize(apps=apps)
@@ -776,7 +798,7 @@ class Migration(migrations.Migration):
     dependencies = []
     operations = []
 """)
-    write_addon_manifest(addon, migrations=(
+    declare_migrations(addon, migrations=(
         dict(name="add_marker", app_label="resources", module="runtime_migrations.add_marker"),
         dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),
     ))
@@ -818,7 +840,7 @@ class Migration(migrations.Migration):
 """)
     dependent = dict(name="after_flag", app_label="resources", module="runtime_migrations.after_flag")
     prerequisite = dict(name="add_flag", app_label="tests", module="runtime_migrations.add_flag")
-    write_addon_manifest(addon, migrations=(dependent, prerequisite) if dependent_first else (prerequisite, dependent))
+    declare_migrations(addon, migrations=(dependent, prerequisite) if dependent_first else (prerequisite, dependent))
     monkeypatch.setitem(settings.MIGRATION_MODULES, "tests", f"{runtime_dir.name}.tests.migrations")
     importlib.invalidate_caches()
     materializer = RuntimeMigrations((addon,), labels=("resources", "tests"))
@@ -946,7 +968,7 @@ def test_changed_materialized_body_fails_instead_of_becoming_history(runtime_mig
 )
 def test_rejects_invalid_declarations(runtime_migration_probe, declaration, message: str) -> None:
     materializer, addon, _, _, _ = runtime_migration_probe
-    write_addon_manifest(addon, migrations=(declaration,))
+    declare_migrations(addon, migrations=(declaration,))
 
     with pytest.raises(RuntimeError, match=message):
         materializer.materialize(apps=apps)
@@ -955,7 +977,7 @@ def test_rejects_invalid_declarations(runtime_migration_probe, declaration, mess
 def test_rejects_duplicate_declared_origins(runtime_migration_probe) -> None:
     materializer, addon, _, _, _ = runtime_migration_probe
     declaration = dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy")
-    write_addon_manifest(addon, migrations=(declaration, declaration))
+    declare_migrations(addon, migrations=(declaration, declaration))
 
     with pytest.raises(RuntimeError, match="duplicate addon runtime migration origin example.demo:rename_legacy"):
         materializer.materialize(apps=apps)
@@ -1071,7 +1093,7 @@ class Migration(migrations.Migration):
     operations = []
 """,
     )
-    write_addon_manifest(
+    declare_migrations(
         addon,
         migrations=(
             dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),
@@ -1088,7 +1110,7 @@ class Migration(migrations.Migration):
 
 def test_rejects_source_in_djangos_conventional_migrations_package(runtime_migration_probe) -> None:
     materializer, addon, _, _, _ = runtime_migration_probe
-    write_addon_manifest(
+    declare_migrations(
         addon, migrations=(dict(name="rename_legacy", app_label="resources", module="migrations.rename_legacy"),)
     )
 
@@ -1139,7 +1161,7 @@ class Migration(migrations.Migration):
     ]
 """.rstrip("\n"),
     )
-    write_addon_manifest(
+    declare_migrations(
         addon,
         migrations=(
             dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),
@@ -1156,7 +1178,7 @@ class Migration(migrations.Migration):
 
 def test_materialized_origin_uses_app_config_name(runtime_migration_probe) -> None:
     materializer, addon, _, _, _ = runtime_migration_probe
-    write_addon_manifest(
+    declare_migrations(
         addon,
         migrations=(dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),),
     )
@@ -1188,9 +1210,9 @@ def test_rejects_malformed_dependency_with_origin(runtime_migration_probe) -> No
         ({"name": 3, "app_label": "resources", "module": "runtime_migrations.rename_legacy"}, "requires string name"),
     ],
 )
-def test_migration_owner_validates_native_manifest_fields(runtime_migration_probe, declaration, message) -> None:
+def test_migration_owner_validates_native_declaration_fields(runtime_migration_probe, declaration, message) -> None:
     materializer, addon, _, _, _ = runtime_migration_probe
-    write_addon_manifest(addon, migrations=[declaration])
+    declare_migrations(addon, migrations=[declaration])
     with pytest.raises(RuntimeError, match=message):
         materializer.plan()
 
@@ -1225,7 +1247,7 @@ class Migration(migrations.Migration):
     dependencies = [("resources", "missing_cutover")]
     operations = []
 """)
-    write_addon_manifest(addon, migrations=(
+    declare_migrations(addon, migrations=(
         dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),
         dict(name="after_missing", app_label="resources", module="runtime_migrations.after_missing"),
     ))
@@ -1264,7 +1286,7 @@ class Migration(migrations.Migration):
 """)
     parent = dict(name="first_data", app_label="tests", module="runtime_migrations.first_data")
     child = dict(name="second_data", app_label="resources", module="runtime_migrations.second_data")
-    write_addon_manifest(addon, migrations=(child, parent) if dependent_first else (parent, child))
+    declare_migrations(addon, migrations=(child, parent) if dependent_first else (parent, child))
     importlib.invalidate_caches()
     materializer = RuntimeMigrations((addon,), labels=("resources", "tests"))
 
@@ -1431,7 +1453,7 @@ def test_autodetected_drop_of_an_adopted_physical_table_is_refused(runtime_migra
     """Missing declaration graph and physical table ownership are separate guards."""
 
     materializer, addon, _, runtime_dir, _ = runtime_migration_probe
-    write_addon_manifest(addon, migrations=())
+    declare_migrations(addon, migrations=())
     loader = MigrationLoader(None, ignore_no_migrations=True)
     current = loader.project_state()
     adopted = current.models["resources", "legacy"].clone()
@@ -1623,9 +1645,8 @@ class Migration(migrations.Migration):
     dependencies = []
     operations = [migrations.AddField(model_name="legacy", name="marker", field=models.BooleanField(default=False))]
 ''')
-    peer = make_addon(name="example.peer", path=peer_root, migrations=(
-        dict(name="add_marker", app_label="resources", module="add_marker"),
-    ))
+    peer = make_addon(name="example.peer", path=peer_root)
+    declare_migrations(peer, migrations=(dict(name="add_marker", app_label="resources", module="add_marker"),))
     materializer.addons = (peer, addon) if reverse_addons else (addon, peer)
     directory = runtime_dir / "resources/migrations"
     _write_module(directory / "0002_reserved.py", '''from django.db import migrations
@@ -1800,7 +1821,7 @@ class Migration(migrations.Migration):
         ),
         encoding="utf-8",
     )
-    write_addon_manifest(addon, migrations=(
+    declare_migrations(addon, migrations=(
         dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),
         dict(name="prepare", app_label="integrate_vcs", module="prepare"),
     ))
@@ -1833,7 +1854,7 @@ class Migration(migrations.Migration):
     dependencies = []
     operations = [migrations.CreateModel(name="Unrelated", fields=[("id", models.AutoField(primary_key=True))])]
 ''')
-    write_addon_manifest(addon, migrations=(
+    declare_migrations(addon, migrations=(
         dict(name="rename_legacy", app_label="resources", module="runtime_migrations.rename_legacy"),
         dict(name="unrelated", app_label="integrate_vcs", module="unrelated"),
     ))
@@ -1878,13 +1899,8 @@ def fresh_authoring_host(tmp_path: Path):
     root = Path(__file__).resolve().parents[1]
     package = tmp_path / "bootstrap_app"
     _write_module(package / "__init__.py")
-    _write_module(package / "addon.toml", """[addon]
-name = "bootstrap_app"
-[[migrations]]
-name = "record_bootstrap"
-app_label = "bootstrap_app"
-module = "runtime_migrations.record_bootstrap"
-""")
+    _write_module(package / "pyproject.toml", '[project]\nname="bootstrap-app"\nversion="3.0.0"\n'
+        '[project.entry-points."angee.addons"]\nbootstrap_app="bootstrap_app"\n')
     _write_module(package / "models.py", """from django.db import models
 class Entry(models.Model):
     runtime = True
@@ -1892,8 +1908,9 @@ class Entry(models.Model):
     class Meta:
         abstract = True
 """)
-    _write_module(package / "runtime_migrations" / "__init__.py")
-    _write_module(package / "runtime_migrations" / "record_bootstrap.py", """from django.db import migrations
+    _write_module(package / "compose_migrations" / "bootstrap_app" / "__init__.py")
+    _write_module(
+        package / "compose_migrations" / "bootstrap_app" / "record_bootstrap.py", """from django.db import migrations
 def applies(state):
     return ("bootstrap_app", "entry") in state.models
 def forwards(apps, schema_editor):
@@ -1907,14 +1924,18 @@ class Migration(migrations.Migration):
     for source in sorted(package.rglob("*")):
         if source.is_file():
             _write_module(
-                tmp_path / "other_app" / source.relative_to(package),
-                source.read_text().replace("bootstrap_app", "other_app"),
+                tmp_path / "other_app" / str(source.relative_to(package)).replace("bootstrap_app", "other_app"),
+                source.read_text().replace("bootstrap_app", "other_app").replace("bootstrap-app", "other-app"),
             )
+    for app_name in ("bootstrap_app", "other_app"):
+        info = tmp_path / f"{app_name}-3.0.0.dist-info"
+        _write_module(info / "METADATA", f"Metadata-Version: 2.4\nName: {app_name.replace('_', '-')}\nVersion: 3.0.0\n")
+        _write_module(info / "entry_points.txt", f"[angee.addons]\n{app_name} = {app_name}\n")
     _write_module(tmp_path / "bootstrap_settings.py", f"""import os
 SECRET_KEY = "fresh-authoring"
 INSTALLED_APPS = ["bootstrap_app", "other_app"] + [
     "angee.build.ProjectBuildConfig" if os.environ.get("COMPOSE_BUILD") else "angee.apps.AngeeConfig"]
-COMPOSE_APP_DECLARATIONS = "angee.build.ManifestDeclarations"
+COMPOSE_APP_DECLARATIONS = "angee.build.PackageDeclarations"
 COMPOSE_RUNTIME_MODULE = "runtime"
 COMPOSE_RUNTIME_DIR = {str(tmp_path / "runtime")!r}
 DATABASES = {{"default": {{"ENGINE": "django.db.backends.sqlite3", "NAME": {str(tmp_path / "fresh.sqlite3")!r}}}}}
@@ -1926,7 +1947,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
         and name not in {"DATABASE_URL", "DJANGO_SETTINGS_MODULE", "PYTHONPATH", "COMPOSE_BUILD"}
     }
     environment.update(
-        DJANGO_SETTINGS_MODULE="bootstrap_settings", PYTHONPATH=os.pathsep.join((str(tmp_path), str(root))),
+        DJANGO_SETTINGS_MODULE="bootstrap_settings", PYTHONPATH=os.pathsep.join((str(tmp_path), str(root / "core"))),
     )
     built = subprocess.run(
         [sys.executable, "-c", "import django; django.setup()"],

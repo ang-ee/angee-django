@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import runpy
 import sys
 from collections.abc import Iterator
@@ -50,7 +51,7 @@ def _compose(tmp_path: Path) -> dict[str, Any]:
         "INSTALLED_APPS": _default_installed_apps(tmp_path, ("example.notes",)),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
     Composer(settings).compose_settings()
     return settings
 
@@ -155,7 +156,7 @@ def test_resources_root_expands_framework_dependencies(tmp_path: Path) -> None:
         "INSTALLED_APPS": _default_installed_apps(tmp_path, ("angee.resources",)),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
     Composer(settings).compose_settings()
     installed = _installed_paths(settings["INSTALLED_APPS"])
 
@@ -211,7 +212,7 @@ def test_iam_admin_role_default_preserves_project_policy(
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
         **overrides,
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
     Composer(settings).compose_settings()
 
     assert settings["REBAC_UNIVERSAL_ADMIN_ROLE"] == expected
@@ -271,7 +272,7 @@ def test_iam_auth_throttling_comes_from_axes(tmp_path: Path) -> None:
 
 
 def test_addons_are_sorted_by_declared_dependencies(tmp_path: Path) -> None:
-    """The host may list addons in any order; Their native manifests order them."""
+    """The host may list addons in any order; Their native requirements order them."""
 
     settings = _compose(tmp_path)
     installed = _installed_paths(settings["INSTALLED_APPS"])
@@ -385,7 +386,7 @@ def test_rebac_bare_prefetch_lint_can_be_enabled_by_project(tmp_path: Path) -> N
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
         "REBAC_LINT_BARE_PREFETCH": True,
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
     Composer(settings).compose_settings()
 
     assert settings["REBAC_LINT_BARE_PREFETCH"] is True
@@ -423,7 +424,7 @@ def test_graphql_ide_default_is_debug_only(tmp_path: Path) -> None:
         "COMPOSE_RUNTIME_DIR": tmp_path / "debug-runtime",
         "DEBUG": True,
     }
-    debug_settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
+    debug_settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
     Composer(debug_settings).compose_settings()
 
     assert debug_settings["ANGEE_GRAPHQL_IDE"] == "graphiql"
@@ -536,7 +537,7 @@ def test_runtime_settings_makes_runtime_package_importable(
         "INSTALLED_APPS": ("angee.resources",),
         "COMPOSE_RUNTIME_DIR": runtime_dir,
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
     Composer(settings).compose_settings()
 
     assert sys.path[0] == str(runtime_dir.parent)
@@ -550,7 +551,7 @@ def test_runtime_dir_string_matches_normalized_composer_path(tmp_path: Path) -> 
         "INSTALLED_APPS": ("angee.resources",),
         "COMPOSE_RUNTIME_DIR": str(runtime_dir),
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
     Composer(settings).compose_settings()
 
     assert settings["COMPOSE_RUNTIME_DIR"] == runtime_dir
@@ -1218,44 +1219,29 @@ def _write_addon(
                 "    default = True",
                 f"    name = {name!r}",
                 *([f"    label = {label!r}"] if label is not None else []),
+                f"    requires_apps = {depends_on!r}",
                 "",
             ]
         ),
         encoding="utf-8",
     )
-    (package / "addon.toml").write_text(_addon_toml(name, depends_on), encoding="utf-8")
+    (package / "pyproject.toml").write_text(
+        f'[project]\nname = {json.dumps(name)}\nversion = "3.0.0"\n'
+        f'[project.entry-points."angee.addons"]\n{json.dumps(name)} = {json.dumps(name)}\n',
+        encoding="utf-8",
+    )
+    info = root / f"{name}-3.0.0.dist-info"
+    info.mkdir(exist_ok=True)
+    (info / "METADATA").write_text(f"Metadata-Version: 2.4\nName: {name}\nVersion: 3.0.0\n")
+    (info / "entry_points.txt").write_text(f"[angee.addons]\n{name} = {name}\n")
     (package / "autoconfig.py").write_text(autoconfig, encoding="utf-8")
-
-
-def _addon_toml(name: str, depends_on: object) -> str:
-    """Render a temp addon's addon.toml manifest with its declared depends_on.
-
-    A bare string is written as a TOML string (not a one-element array), so the
-    reader's bare-string coercion is exercised end to end rather than pre-normalized
-    here.
-    """
-
-    if isinstance(depends_on, str):
-        rendered = f'"{depends_on}"'
-    else:
-        items = []
-        for item in depends_on:
-            if isinstance(item, str):
-                items.append(f'"{item}"')
-            elif isinstance(item, bool):
-                items.append("true" if item else "false")
-            else:
-                items.append(repr(item))
-        rendered = "[" + ", ".join(items) + "]"
-    return f'[addon]\nname = "{name}"\ndepends_on = {rendered}\n'
 
 
 def _addon_test_config(name: str) -> AppConfig:
     """Return an ``AppConfig`` for a temp addon package.
 
-    The temp package carries its contract in a co-located ``addon.toml`` (see
-    ``_write_addon``); the composer reads it from ``config.path``, and the manifest's
-    presence is what marks the app as an addon.
+    The temp package's native distribution entry point declares addon identity;
+    requires_apps on its config supplies foreign Django dependencies.
     """
 
     module = importlib.import_module(name)
@@ -1286,7 +1272,7 @@ def test_addon_autoconfig_applies_setting_fragments(
         "INSTALLED_APPS": ("alpha",),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
     Composer(settings).compose_settings()
 
     assert settings["ALPHA_SETTING"] == "ok"
@@ -1316,7 +1302,7 @@ def test_addon_autoconfig_merges_resource_source_classes(
             "path": "angee.resources.sources.PathSource",
         },
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
     Composer(settings).compose_settings()
 
     assert settings["ANGEE_RESOURCE_SOURCE_CLASSES"] == {
@@ -1358,7 +1344,7 @@ def test_addon_autoconfig_merges_sequences_in_dependency_order(
         "INSTALLED_APPS": ("beta",),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
     Composer(settings).compose_settings()
 
     assert settings["MIDDLEWARE"] == [
@@ -1371,11 +1357,11 @@ def test_addon_autoconfig_merges_sequences_in_dependency_order(
     ]
 
 
-def test_depends_on_treats_bare_string_as_one_app(
+def test_requires_apps_rejects_bare_string(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """A bare-string ``depends_on`` names one app, not its chars."""
+    """Native foreign app declarations use an explicit collection."""
 
     _write_addon(tmp_path, "alpha", depends_on="angee.compose")
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -1384,13 +1370,12 @@ def test_depends_on_treats_bare_string_as_one_app(
         "INSTALLED_APPS": ("alpha",),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
-    Composer(settings).compose_settings()
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
+    with pytest.raises(ImproperlyConfigured, match="requires_apps"):
+        Composer(settings).compose_settings()
 
-    assert "alpha.apps.TestConfig" in _installed_paths(settings["INSTALLED_APPS"])
 
-
-def test_depends_on_rejects_non_string_items(
+def test_requires_apps_rejects_non_string_items(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1403,8 +1388,8 @@ def test_depends_on_rejects_non_string_items(
         "INSTALLED_APPS": ("alpha",),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
-    with pytest.raises(ImproperlyConfigured, match="depends_on"):
-        settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
+    with pytest.raises(ImproperlyConfigured, match="requires_apps"):
+        settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
         Composer(settings).compose_settings()
 
 
@@ -1422,7 +1407,7 @@ def test_root_installed_apps_keep_project_order(
         "INSTALLED_APPS": ("beta", "alpha"),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
     Composer(settings).compose_settings()
     installed = _installed_paths(settings["INSTALLED_APPS"])
 
@@ -1443,7 +1428,7 @@ def test_later_root_app_labels_are_available_to_dependencies(
         "INSTALLED_APPS": ("alpha", "project_beta"),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
     Composer(settings).compose_settings()
     installed = _installed_paths(settings["INSTALLED_APPS"])
 
@@ -1465,15 +1450,15 @@ def test_composer_rejects_dependency_cycles(
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
     with pytest.raises(ImproperlyConfigured, match="Cycle"):
-        settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
+        settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
         Composer(settings).compose_settings()
 
 
 def test_addon_contribution_ignores_plain_django_dependency_urls() -> None:
-    """Only an Angee addon — one carrying a manifest — opts into route mounting.
+    """Only an Angee addon — one declared by an entry point — opts into route mounting.
 
     ``django.contrib.auth`` ships a real ``urls`` submodule with ``urlpatterns``, yet
-    contributes nothing: it has no ``addon.toml`` manifest, so the contract's presence
+    contributes nothing: it has no addon entry point, so the contract's presence
     (not a populated module, and not any dependency declaration) is the gate.
     """
 
@@ -1541,12 +1526,12 @@ def test_capability_owners_ignore_unbound_conventional_annotations(
     )
     monkeypatch.syspath_prepend(str(tmp_path))
 
-    from angee.addons import addon_manifest
+    from angee.addons import addon_facts
     from angee.graphql.schema import schema_parts_for
     from angee.mcp.server import tool_registrar
 
     config = _addon_test_config("alpha_annotations")
-    assert addon_manifest(config).schemas is None
+    assert addon_facts(config.name).get("graphql", {}) == {}
     assert schema_parts_for(config) == {}
     assert tool_registrar(config) is None
 
@@ -1634,7 +1619,7 @@ def test_plain_addon_autoconfig_keys_are_defaults(
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
         "ALPHA_SETTING": "project",
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
     Composer(settings).compose_settings()
 
     assert settings["ALPHA_SETTING"] == "project"
@@ -1728,7 +1713,7 @@ def test_addon_autoconfig_rejects_composer_owned_settings(
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
     with pytest.raises(ImproperlyConfigured, match="must not define INSTALLED_APPS"):
-        settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
+        settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
         Composer(settings).compose_settings()
 
 
@@ -1749,7 +1734,7 @@ def test_addon_autoconfig_can_set_graphql_ide(
         "INSTALLED_APPS": ("alpha",),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
     Composer(settings).compose_settings()
 
     assert settings["ANGEE_GRAPHQL_IDE"] == "custom"
@@ -1935,7 +1920,7 @@ def test_mail_provider_environment_belongs_to_messaging(tmp_path, monkeypatch, i
         "MAILERS": {"default": {"BACKEND": "anymail.backends.mailgun.EmailBackend"}},
         "ANYMAIL": {"MAILGUN_API_KEY": "project"},
     }
-    namespace["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
+    namespace["COMPOSE_APP_DECLARATIONS"] = "angee.build.PackageDeclarations"
     Composer(namespace).compose_settings()
     assert namespace["ANYMAIL"] == {"MAILGUN_API_KEY": "environment" if include_messaging else "project"}
     if include_messaging:
