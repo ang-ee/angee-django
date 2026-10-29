@@ -16,6 +16,12 @@ from hatch_angee import AddonManifest, ManifestError, order_app_dependencies, pa
 _MANIFEST_CACHE = "_angee_manifest"
 
 
+def bind_addon_manifest(app_config: AppConfig, manifest: AddonManifest | None) -> None:
+    """Bind one native parsed or prebuilt declaration to its Django config."""
+
+    app_config.__dict__[_MANIFEST_CACHE] = manifest
+
+
 def addon_manifest(app_config: AppConfig, *, refresh: bool = False) -> AddonManifest | None:
     """Bind the authoritative manifest to this native config for one composition.
 
@@ -42,7 +48,7 @@ def addon_manifest(app_config: AppConfig, *, refresh: bool = False) -> AddonMani
             raise ImproperlyConfigured(
                 f"{marker}: addon.name {manifest.name!r} disagrees with AppConfig.name {app_config.name!r}"
             )
-    app_config.__dict__[_MANIFEST_CACHE] = manifest
+    bind_addon_manifest(app_config, manifest)
     return manifest
 
 

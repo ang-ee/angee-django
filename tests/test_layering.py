@@ -20,7 +20,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CORE_SERVING_IMPORTS = (
     "angee.asgi",
     "angee",
-    "angee.compose",
+    "angee.apps",
+    "angee.conf",
 )
 RESOURCE_CONTRACT_IMPORTS = (
     "angee.graphql.data",
@@ -63,7 +64,6 @@ REMOVED_VENDOR_MODULES = (
     "tablib",
     "telethon",
     "vobject",
-    "yaml",
 )
 
 
@@ -342,3 +342,88 @@ def test_inference_backends_catalogue_without_their_vendor_sdks() -> None:
     assert {
         sdk for sdk in INFERENCE_VENDOR_SDKS if any(module == sdk or module.startswith(f"{sdk}.") for module in closure)
     } == set()
+
+
+def test_generated_host_startup_and_provision_dispatch_never_load_the_compiler(tmp_path: Path) -> None:
+    """A real built addon closure starts from sealed structure and late deployment values."""
+
+    from tests.composed_host import COMPOSED_TEST_TIMEOUT
+
+    (tmp_path / "manage.py").write_text("")
+    (tmp_path / "settings.yaml").write_text(json.dumps({
+        "SECRET_KEY": "build-input-secret", "INSTALLED_APPS": ["example.notes"],
+        "ANGEE_ADDON_DIRS": [str(PROJECT_ROOT / "addons"), str(PROJECT_ROOT / "examples/addons")],
+        "COMPOSE_RUNTIME_DIR": str(tmp_path / "runtime"),
+        "DATABASES": {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
+    }))
+    environment = {
+        **{key: value for key, value in os.environ.items() if key not in {
+            "DJANGO_SETTINGS_MODULE", "DATABASE_URL", "YAMLCONF_CONFFILE", "SENTRY_DSN",
+        }},
+        "ANGEE_PROJECT_DIR": str(tmp_path),
+        "PYTHONPATH": os.pathsep.join(map(str, (
+            PROJECT_ROOT, PROJECT_ROOT / "addons", PROJECT_ROOT / "examples/addons",
+        ))),
+    }
+    build = (
+        "from pathlib import Path; from angee.hatch import build_runtime; "
+        f"build_runtime(Path({str(tmp_path)!r}), Path({str(tmp_path / 'runtime')!r}), check_history=False)"
+    )
+    subprocess.run(
+        [sys.executable, "-c", build], cwd=PROJECT_ROOT, env=environment,
+        check=True, capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT,
+    )
+    script = """
+import importlib.abc,json,os,sys
+from pathlib import Path
+root=Path(sys.argv[1]); sys.path.insert(0,str(root))
+os.environ['ANGEE_PROJECT_DIR']=str(root)
+os.environ['DJANGO_SETTINGS_MODULE']='runtime.settings'
+os.environ['YAMLCONF_SECRET_KEY']='deployment-secret'
+os.environ['YAMLCONF_DEBUG']='true'
+os.environ['CELERY_BROKER_URL']='redis://deployment.invalid:6379/3'
+os.environ.pop('DATABASE_URL',None)
+os.environ.pop('YAMLCONF_CONFFILE',None)
+os.environ.pop('SENTRY_DSN',None)
+class Boundary(importlib.abc.MetaPathFinder):
+ def find_spec(self,fullname,path=None,target=None):
+  if fullname=='angee.compose' or fullname.startswith('angee.compose.'):
+   raise AssertionError('serving imported compiler: '+fullname)
+sys.meta_path.insert(0,Boundary())
+import hatch_angee
+
+def forbidden(*args,**kwargs):raise AssertionError('serving scanned build declarations or opened database')
+for name in ('discover','parse_manifest','order_app_dependencies'):
+ setattr(hatch_angee,name,forbidden)
+from django.db.backends.base.base import BaseDatabaseWrapper
+BaseDatabaseWrapper.ensure_connection=forbidden
+import django
+django.setup()
+from django.apps import apps
+from django.conf import settings
+from angee.addons import addon_manifest
+assert settings.SECRET_KEY=='deployment-secret'
+assert settings.DEBUG is True
+assert settings.CELERY_BROKER_URL == 'redis://deployment.invalid:6379/3'
+assert len(tuple(apps.get_models()))>0
+for config in apps.get_app_configs():
+ manifest=addon_manifest(config)
+ assert manifest is None or isinstance(manifest,hatch_angee.AddonManifest)
+import angee.asgi
+from angee.management.commands.angee import Command
+from angee.management import provision
+steps=[]
+provision.wait_for_database=lambda *args:None
+provision.call_command=lambda command,*args,**kwargs: steps.append(type(command).__module__)
+from io import StringIO
+provision.run(Command(stdout=StringIO()), {'wait_db':0,'force_rebac':False,'after_if_installed':[]})
+assert not any(name=='angee.compose' or name.startswith('angee.compose.') for name in sys.modules)
+assert steps[0]=='angee.management.commands.makemigrations',steps
+print(json.dumps({'apps':len(apps.get_app_configs()),'models':len(tuple(apps.get_models())),'provision_commands':steps,'compiler_modules':0,'deployment_overrides':'retained'}))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path)], cwd=PROJECT_ROOT, env=environment,
+        capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout.splitlines()[-1])["compiler_modules"] == 0

@@ -100,7 +100,7 @@ that layering tests enforce:
   policy enter through its explicit adapter contracts; it never imports Angee's
   host loader, model toolkit, or addons. No serving module (`asgi`, `urls`,
   `views`, `consumers`, `signals`, `models`, `graphql`) may import the compiler.
-  Host serving commands share that restriction. The Hatch build hook dispatches
+  Provisioning shares that restriction; explicit authoring and drift-check commands may load the compiler. The Hatch build hook dispatches
   compilation explicitly; provisioning consumes its prebuilt output.
 
 The same one-way rule extends downward to framework addons under `addons/angee/`
@@ -435,7 +435,7 @@ Use these owners instead of maintaining another contract in an addon:
   `registry_setting`** — the key→path mapping (e.g. `ANGEE_STORAGE_BACKEND_CLASSES`)
   is supplied by the owning addon's `autoconfig`, so every settings module that
   installs the addon must carry a **non-empty** mapping. Bare settings modules
-  call [`AutoConfig.apply_installed()`](../../angee/compose/autoconfig.py) before
+  call [`AutoConfig.apply_installed()`](../../angee/utils/autoconfig.py) before
   Django loads models, then add only their fixture implementations. An empty
   registry raises `ImproperlyConfigured` at import — give the addon a
   noop/null-object default so the set is never empty. The column stores the key
@@ -1387,10 +1387,10 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   runs `ASGI_APPLICATION` under uvicorn supervised by Django's follow-imports
   autoreloader (mirroring Daphne's override). It needs no `--reload-dir`: Django
   watches imported source — consumer/framework addons, framework core, *and*
-  editable deps — and never the generated `runtime/`, because each child process
-  re-emits the runtime sources while populating apps
-  ([`angee.compose` app config](../../angee/compose/apps.py)) before its reloader
-  snapshots, so a model edit reloads once. Don't reintroduce
+  editable deps — including imported prebuilt `runtime/` modules. Source declarations
+  are compiled by the explicit Hatch build before startup; a serving child imports
+  prebuilt models through the [native host AppConfig](../../angee/apps.py). Rebuild
+  structural model changes before restarting the service. Don't reintroduce
   `uvicorn --reload`/`--reload-dir` heuristics in the stack template. Django
   decides whether a file-change receiver handled an edit or the child must
   reload. When its native run loop exits, the command requests Uvicorn shutdown
@@ -1739,7 +1739,7 @@ Declare autoconfig `SETTINGS` with a source-owned `TypedDict`, including the
 normalized value types of `:append` contributions; annotate derived `settings()`
 results the same way. Preserve configurable unions and nullable values rather
 than inferring a contract from one default. The [typing adapter](../../angee/compose/typing.py)
-reads those native declarations through [yamlconf provenance](../../angee/compose/yamlconf.py).
+reads those native declarations through [yamlconf provenance](../../angee/utils/yamlconf.py).
 
 Keep the shared `angee.*` namespace open to every configured addon source.
 The core's [`angee/__init__.py`](../../angee/__init__.py) owns

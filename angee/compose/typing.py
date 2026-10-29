@@ -42,7 +42,7 @@ from mypy_django_plugin.lib import fullnames, helpers
 from mypy_django_plugin.main import NewSemanalDjangoPlugin
 from mypy_django_plugin.transformers.managers import create_new_manager_class_from_from_queryset_method
 
-from angee.compose.yamlconf import setting_name, setting_sources
+from angee.utils.yamlconf import setting_name, setting_sources
 
 if TYPE_CHECKING:
     from mypy.checker import TypeChecker

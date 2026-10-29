@@ -21,16 +21,18 @@ from rebac import schema_changes
 import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
 from angee.addons import addon_manifest
+from angee.apps import AngeeConfig
 from angee.base.build import PermissionIntegration, composed_grants
 from angee.base.models.base import AngeeModel
 from angee.base.models.roles import role_anchor
+from angee.build import ManifestDeclarations
 from angee.compose.appgraph import AppGraph
-from angee.compose.apps import BuildComposeConfig, ComposeConfig
+from angee.compose.apps import BuildComposeConfig
 from angee.compose.declarations import AppDeclarationSource, model_declaration
 from angee.compose.model_composition import ModelComposition
 from angee.compose.rendering import render_models
 from angee.compose.runtime import GENERATED_SENTINEL, Runtime
-from angee.conf import ManifestDeclarations, ProjectContract
+from angee.conf import ProjectContract
 from angee.management import provision
 from angee.management.commands.angee import Command
 from angee.provenance.contrib.angee.history import HistoryMixin
@@ -1987,7 +1989,7 @@ def test_prebuilt_runtime_refuses_a_changed_native_app_closure_before_model_impo
 ) -> None:
     """Plain apps and donor-only apps are structural inputs even without model output."""
 
-    config = ComposeConfig("angee.compose", compose_package)
+    config = AngeeConfig("angee", compose_package)
     config.apps = apps
     changed = SimpleNamespace(name=changed_app, label=changed_app.rsplit(".", 1)[1])
     baseline = (config,)
