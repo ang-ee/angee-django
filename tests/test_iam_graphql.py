@@ -1903,17 +1903,22 @@ def test_oidc_disconnect_policy_uses_the_persisted_credentials_database(tmp_path
     (package / "models.py").write_text("""
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.db import models
-from angee.iam_integrate_oidc.models import CredentialOidc
+from angee.iam_integrate_oidc.models import CredentialOidc, OAuthClientOidc
 
 class User(AbstractBaseUser):
     username = models.CharField(max_length=40, unique=True)
     USERNAME_FIELD = "username"
 
-class OAuthClient(models.Model):
-    login_enabled = models.BooleanField(default=True)
+class OAuthClient(OAuthClientOidc, models.Model):
+    is_enabled = models.BooleanField(default=True)
+    client_id = models.CharField(max_length=40, default="native-client")
+    authorize_endpoint = models.URLField(default="https://issuer.example/authorize")
+    token_endpoint = models.URLField(default="https://issuer.example/token")
+    discovery_url = models.URLField(blank=True)
 
 class ExternalAccount(models.Model):
-    pass
+    oauth_client = models.ForeignKey(OAuthClient, on_delete=models.CASCADE)
+    status = models.CharField(max_length=40, default="active")
 
 class NativeCredential(models.Model):
     kind = models.CharField(max_length=40, default="oauth")
@@ -1934,12 +1939,14 @@ class Credential(CredentialOidc, NativeCredential):
 import os
 os.environ.pop("DJANGO_SETTINGS_MODULE", None)
 from django.conf import settings
+from angee.integrate.autoconfig import SETTINGS as INTEGRATE_SETTINGS
 settings.configure(
     INSTALLED_APPS=["django.contrib.contenttypes", "rebac", "native_oidc"],
     AUTH_USER_MODEL="native_oidc.User",
     DATABASES={alias: {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
                for alias in ("default", "secondary")},
     SECRET_KEY="oidc-alias-regression",
+    ANGEE_OAUTH_PROVIDER_TYPE_CLASSES=INTEGRATE_SETTINGS["ANGEE_OAUTH_PROVIDER_TYPE_CLASSES"],
 )
 import django
 django.setup()
@@ -1955,7 +1962,7 @@ for alias in ("default", "secondary"):
     user = User.objects.using(alias).create(username="identity", password="usable" if alias == "default" else "!")
     client = OAuthClient.objects.using(alias).create(login_enabled=alias == "secondary")
     for _ in range(3 if alias == "default" else 2):
-        account = ExternalAccount.objects.using(alias).create()
+        account = ExternalAccount.objects.using(alias).create(oauth_client=client)
         Credential.objects.using(alias).create(user=user, oauth_client=client, external_account=account)
 
 with transaction.atomic(using="secondary"):

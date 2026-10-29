@@ -270,7 +270,7 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
                 updated_by_id=locked_message.updated_by_id,
             )
             need.full_clean(validate_unique=False, validate_constraints=False)
-            need.sudo(reason="intake.need.capture_message.create").save()
+            need.sudo(reason="intake.need.capture_message.create").save(_access_decision=True)
             attachment_model = apps.get_model("messaging", "ThreadAttachment")
             attachment_model.objects.bind_source_thread(task, locked_message.thread)
             try:
@@ -284,10 +284,14 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
                             system_reason=f"intake.requester_domain:{channel.slug}",
                         )
                     if need.party_id is not None:
-                        need.save(update_fields=("party",))
+                        need.save(_access_decision=True, update_fields=("party",))
             except DomainError, ValidationError, PermissionDenied:
                 logger.info("Requester linking was refused for need %s; capture is retained.", need.pk)
                 need.refresh_from_db()
+            # Capture owns the initial question only after identity hydration;
+            # no transient actorless question needs to be withdrawn.
+            need.access_decision = need._new_access_decision()
+            self.model.system_queryset().filter(pk=need.pk).update(access_decision=need.access_decision)
             return need
 
     def _create_triage_task(
@@ -562,8 +566,8 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
     def save(self, *, _access_decision: bool = False, **kwargs: Any) -> None:
         """Validate assignment, reset its old decision, and follow atomically.
 
-        The access verbs supply ``_access_decision`` after admitting or answering
-        their decision, so assignment persistence does not replace that question.
+        Capture and access verbs supply ``_access_decision`` when they own question
+        creation or answering, so assignment persistence does not replace it.
         Mixed edits stamp audit and revision once through the actor before the
         assignment-only ``save_base`` persists the authorized relation change.
         """
@@ -664,7 +668,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                         self.with_actor(actor)
             else:
                 super().save(**kwargs)
-            if previous is None or reset_decision:
+            if (previous is None and not _access_decision) or reset_decision:
                 # The row must exist before its decision can concern it.
                 # This owner-controlled FK write is part of the same save/revision.
                 self.access_decision = self._new_access_decision()
