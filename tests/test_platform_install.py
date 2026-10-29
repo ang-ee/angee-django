@@ -140,7 +140,7 @@ def test_enable_refuses_a_non_materialised_addon(
     result = _data(_execute(_schema(), _ENABLE, {"addon": "not.a.real.addon"}, user=admin))["enable"]
 
     assert result["ok"] is False
-    assert "not available" in result["message"]
+    assert "not installed and cannot be enabled" in result["message"]
     assert project_settings_yaml.read_text(encoding="utf-8") == before  # refusal never edits
 
 
@@ -399,8 +399,8 @@ def test_pending_changes_uses_configured_transport(
 
     settings.BASE_DIR = tmp_path
     settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
-    settings.ANGEE_ADDON_ENABLEER_BACKEND = "remote"
-    settings.ANGEE_ADDON_ENABLEER_BACKEND_CLASSES = {
+    settings.ANGEE_ADDON_INSTALLER_BACKEND = "remote"
+    settings.ANGEE_ADDON_INSTALLER_BACKEND_CLASSES = {
         "remote": "tests.test_platform_install._RemoteInstallerBackend",
     }
     monkeypatch.setattr(platform_models.composed, "root_app_names", lambda: loaded)

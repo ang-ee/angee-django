@@ -27,6 +27,8 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
+from django.core.exceptions import ValidationError
+from django.test import override_settings
 from django.utils import timezone
 from rebac import (
     RelationshipTuple, actor_context, database_context, system_context,
@@ -91,6 +93,43 @@ with database_context('default'), system_context(reason='tests.task.database.ope
     user = get_user_model()._base_manager.using('selected').get(username='actor')
     reader = get_user_model()._base_manager.using('selected').get(username='reader')
     with actor_context(user), changeset(fresh=True, using='selected'), database_context('default'):
+        # Native create() supplies using to save(), while ID-valued FKs leave
+        # the unsaved candidate unbound until its persistence owner prepares it.
+        direct = Task.objects.db_manager('selected').create(
+            title='Direct selected task', assignee_id=user.pk,
+            created_by_id=user.pk, activity_type_id='call')
+        assert direct._state.db == direct.queue._state.db == direct.stage._state.db == 'selected'
+        assert direct.queue.created_by_id == user.pk
+        original = Task._base_manager.using('default').first()
+        assert original is not None
+        original.stage_id = -1
+        try:
+            original.save(using='selected')
+        except ValidationError:
+            pass
+        else:
+            raise AssertionError('missing stage accepted')
+        assert original._state.db == 'default'
+        original_queue = Queue._base_manager.using('default').first()
+        original_queue.default_estimate = 0
+        original_queue.estimate_allow_zero = False
+        try:
+            original_queue.save(using='selected')
+        except ValidationError:
+            pass
+        else:
+            raise AssertionError('invalid queue estimate accepted')
+        assert original_queue._state.db == 'default'
+        class WriteSelectedRouter:
+            def db_for_read(self, model, **hints):
+                return 'default'
+            def db_for_write(self, model, **hints):
+                return 'selected'
+        with override_settings(DATABASE_ROUTERS=[WriteSelectedRouter()]):
+            queue = Queue._base_manager.using('selected').get(pk=direct.queue_id)
+            queue.name = 'Selected write router'
+            queue.save()
+            assert queue._state.db == 'selected'
         task = Task.objects.db_manager('selected').schedule(
             record, title='Selected task', assignee=user, activity_type='call')
         assert task._state.db == 'selected'
@@ -116,7 +155,7 @@ with database_context('default'), system_context(reason='tests.task.database.ope
         assert attachment._state.db == 'selected'
         assert attachment.record_ref.model_label == ChatterDoc._meta.label
         assert attachment.record_ref.public_id == record.sqid
-    assert Task._base_manager.using('selected').count() == 2
+    assert Task._base_manager.using('selected').count() == 3
     assert Message._base_manager.using('selected').filter(preview__contains='selected call done').exists()
     assert Message._base_manager.using('selected').filter(preview='selected note').count() == 1
     assert Notification._base_manager.using('selected').filter(message=message, user=reader).count() == 1

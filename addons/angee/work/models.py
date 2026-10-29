@@ -19,7 +19,7 @@ from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
-from django.db import IntegrityError, models, transaction
+from django.db import IntegrityError, models, router, transaction
 from django.db.models import F, Q
 from django.db.models.expressions import Combinable
 from django.utils import timezone
@@ -275,14 +275,21 @@ class Queue(ImmutableFieldsMixin, Composable, metaclass=RebacModelBase, inherits
         """Persist the queue and atomically provision its stage/numbering substrate."""
 
         adding = self._state.adding
-        self.key = self.key.strip().upper()
-        self._validate_default_stage()
-        self._validate_estimate_settings()
-        using = kwargs.get("using") or type(self)._base_manager.db_manager(hints={"instance": self}).db
-        with database_context(using), transaction.atomic(using=using):
-            super().save(*args, **kwargs)
-            if adding:
-                self._provision_workflow()
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        previous_database = self._state.db
+        self._state.db = using
+        kwargs["using"] = using
+        try:
+            self.key = self.key.strip().upper()
+            with database_context(using), transaction.atomic(using=using):
+                self._validate_default_stage()
+                self._validate_estimate_settings()
+                super().save(*args, **kwargs)
+                if adding:
+                    self._provision_workflow()
+        except BaseException:
+            self._state.db = previous_database
+            raise
 
     def task_sequence_key(self) -> str:
         """Return the stable sequence lookup key for this queue's task numbers."""
@@ -1179,30 +1186,37 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         self._reject_direct_status_write()
         update_fields = set(kwargs["update_fields"]) if kwargs.get("update_fields") is not None else None
         stage_written = self._state.adding or update_fields is None or bool({"stage", "stage_id"} & update_fields)
-        using = kwargs.get("using") or type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
-        with database_context(using), transaction.atomic(using=using):
-            defaulted = self._apply_queue_and_stage_defaults(provision=True)
-            defaulted.update(self._validate_estimate(update_fields=update_fields))
-            if not stage_written:
-                defaulted.discard("stage")
-            previous, following = self._reject_reserved_stage_transition(lock=True, stage_written=stage_written)
-            self.validate_stage_scope()
-            self.validate_cycle_scope()
-            projected = self._project_stage_lifecycle(previous, following) if stage_written else set()
-            allocated = False
-            if self._state.adding and self.queue_id is not None and self.number is None:
-                queue = self.queue
-                assert queue is not None
-                self.number = queue.next_task_number()
-                allocated = True
-            if update_fields is not None:
-                update_fields.update(projected)
-                update_fields.update(defaulted)
-                if allocated:
-                    update_fields.add("number")
-                kwargs["update_fields"] = update_fields
-            super().save(*args, **kwargs)
-            object.__setattr__(self, "_work_status_assigned", False)
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        previous_database = self._state.db
+        self._state.db = using
+        kwargs["using"] = using
+        try:
+            with database_context(using), transaction.atomic(using=using):
+                defaulted = self._apply_queue_and_stage_defaults(provision=True)
+                defaulted.update(self._validate_estimate(update_fields=update_fields))
+                if not stage_written:
+                    defaulted.discard("stage")
+                previous, following = self._reject_reserved_stage_transition(lock=True, stage_written=stage_written)
+                self.validate_stage_scope()
+                self.validate_cycle_scope()
+                projected = self._project_stage_lifecycle(previous, following) if stage_written else set()
+                allocated = False
+                if self._state.adding and self.queue_id is not None and self.number is None:
+                    queue = self.queue
+                    assert queue is not None
+                    self.number = queue.next_task_number()
+                    allocated = True
+                if update_fields is not None:
+                    update_fields.update(projected)
+                    update_fields.update(defaulted)
+                    if allocated:
+                        update_fields.add("number")
+                    kwargs["update_fields"] = update_fields
+                super().save(*args, **kwargs)
+                object.__setattr__(self, "_work_status_assigned", False)
+        except BaseException:
+            self._state.db = previous_database
+            raise
         self._work_snapshot_loaded_values(fields=update_fields)
 
     @transaction.atomic
