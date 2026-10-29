@@ -351,7 +351,7 @@ function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel, o
     onAddRole={onAddRole}
     onRemovePerson={onRemovePerson}
     fetching={query.isFetching || readers.isFetching || contributorStates.some((state) => state.fetching)}
-    error={query.error ?? readers.error ?? contributorStates.find((state) => state.error)?.error}
+    error={query.error ?? readers.error ?? contributorStates.find((state) => state.error)?.error ?? null}
     onRetry={() => { retry(); void readers.refetch(); contributorStates.forEach((state) => state.onRetry?.()); }}
     onGrant={grantAccess}
     onRevoke={revokeAccess}
