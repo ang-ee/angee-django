@@ -1724,6 +1724,11 @@ def test_native_writer_preflights_every_destination_before_writing(runtime_migra
     assert {path: path.read_bytes() for path in directory.glob("*.py")} == before
     assert not (directory / "0002_safe.py").exists()
 
+    command._bootstrap_existing_labels = frozenset({"resources"})
+    with pytest.raises(CommandError, match="author their transitions first: resources"):
+        command.write_migration_files({"resources": [safe]})
+    assert {path: path.read_bytes() for path in directory.glob("*.py")} == before
+
 
 def test_native_readonly_writer_does_not_create_a_missing_custom_package(runtime_migration_probe, settings):
     _, _, _, runtime_dir, _ = runtime_migration_probe
@@ -1867,8 +1872,9 @@ def test_host_migration_authoring_preserves_native_command_color_options(monkeyp
     assert ("\x1b[" in output.getvalue()) is (color_flag == "--force-color")
 
 
-def test_fresh_host_authors_native_initials_before_guarded_transitions(tmp_path: Path) -> None:
-    """One public command writes schema prerequisites and retains the guarded data transition."""
+@pytest.fixture
+def fresh_authoring_host(tmp_path: Path):
+    """Build two independent apps with guarded data transitions and no native history."""
     root = Path(__file__).resolve().parents[1]
     package = tmp_path / "bootstrap_app"
     _write_module(package / "__init__.py")
@@ -1898,10 +1904,16 @@ class Migration(migrations.Migration):
     dependencies = []
     operations = [migrations.RunPython(forwards, migrations.RunPython.noop)]
 """)
+    for source in sorted(package.rglob("*")):
+        if source.is_file():
+            _write_module(
+                tmp_path / "other_app" / source.relative_to(package),
+                source.read_text().replace("bootstrap_app", "other_app"),
+            )
     _write_module(tmp_path / "bootstrap_settings.py", f"""import os
 SECRET_KEY = "fresh-authoring"
-INSTALLED_APPS = ["bootstrap_app", "angee.build.ProjectBuildConfig" if os.environ.get("COMPOSE_BUILD")
-    else "angee.apps.AngeeConfig"]
+INSTALLED_APPS = ["bootstrap_app", "other_app"] + [
+    "angee.build.ProjectBuildConfig" if os.environ.get("COMPOSE_BUILD") else "angee.apps.AngeeConfig"]
 COMPOSE_APP_DECLARATIONS = "angee.build.ManifestDeclarations"
 COMPOSE_RUNTIME_MODULE = "runtime"
 COMPOSE_RUNTIME_DIR = {str(tmp_path / "runtime")!r}
@@ -1922,9 +1934,19 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
         capture_output=True, text=True, timeout=60, check=False,
     )
     assert built.returncode == 0, built.stdout + built.stderr
+    return tmp_path, environment
+
+
+@pytest.mark.parametrize("selected_apps", [False, True])
+def test_fresh_host_authors_native_initials_before_guarded_transitions(
+    fresh_authoring_host, selected_apps: bool,
+) -> None:
+    """Public authoring handles all apps together or independent selected apps in succession."""
+    tmp_path, environment = fresh_authoring_host
     result = subprocess.run(
         [sys.executable, "-c", r"""
 from pathlib import Path
+import sys
 import django
 django.setup()
 from django.apps import apps
@@ -1947,11 +1969,21 @@ for flag in ("--check", "--dry-run", "--merge", "--empty", "--update"):
     else:
         assert flag == "--dry-run", f"{flag} silently accepted an uninitialized graph"
     assert list(directory.glob("*.py")) == [directory / "__init__.py"]
-call_command("makemigrations", interactive=False, verbosity=0)
+if sys.argv[1] == "selected":
+    call_command("makemigrations", "bootstrap_app", interactive=False, verbosity=0)
+    first_sources = {path: path.read_bytes() for path in directory.glob("*.py")}
+    second_directory = Path("runtime/other_app/migrations")
+    assert list(second_directory.glob("*.py")) == [second_directory / "__init__.py"]
+    call_command("makemigrations", "other_app", interactive=False, verbosity=0)
+    assert {path: path.read_bytes() for path in directory.glob("*.py")} == first_sources
+else:
+    call_command("makemigrations", interactive=False, verbosity=0)
 loader = MigrationLoader(None, ignore_no_migrations=True)
 transition = loader.disk_migrations["bootstrap_app", "record_bootstrap"]
 assert transition.dependencies == [("bootstrap_app", "0001_initial")]
 assert transition.angee_origin == "bootstrap_app:record_bootstrap"
+if sys.argv[1] == "selected":
+    assert loader.disk_migrations["other_app", "record_bootstrap"].dependencies == [("other_app", "0001_initial")]
 assert MigrationRecorder(connection).applied_migrations() == {}
 frozen = {path: path.read_bytes() for path in directory.glob("*.py")}
 call_command("makemigrations", interactive=False, verbosity=0)
@@ -1960,8 +1992,48 @@ assert {path: path.read_bytes() for path in directory.glob("*.py")} == frozen
 call_command("migrate", interactive=False, verbosity=0)
 rows = apps.get_model("bootstrap_app", "Entry")._base_manager
 assert list(rows.values_list("value", flat=True)) == ["transition ran"]
-"""],
+if sys.argv[1] == "selected":
+    rows = apps.get_model("other_app", "Entry")._base_manager
+    assert list(rows.values_list("value", flat=True)) == ["transition ran"]
+""", "selected" if selected_apps else "all"],
         cwd=tmp_path, env=environment,
         capture_output=True, text=True, timeout=60, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_fresh_app_initial_refuses_native_dependency_expansion_into_existing_history(fresh_authoring_host) -> None:
+    """A new app's FK cannot silently move an existing app's changes ahead of its transitions."""
+    tmp_path, environment = fresh_authoring_host
+    first = subprocess.run(
+        [sys.executable, "-c", "import django; django.setup(); "
+         "from django.core.management import call_command; "
+         "call_command('makemigrations', 'bootstrap_app', interactive=False, verbosity=0)"],
+        cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert first.returncode == 0, first.stdout + first.stderr
+    source = tmp_path / "bootstrap_app/models.py"
+    source.write_text(source.read_text() + "\nclass Added(models.Model):\n    runtime = True\n"
+                      "    value = models.CharField(max_length=40)\n    class Meta:\n        abstract = True\n")
+    other = tmp_path / "other_app/models.py"
+    other.write_text(other.read_text().replace(
+        "    class Meta:",
+        '    added = models.ForeignKey("bootstrap_app.Added", null=True, on_delete=models.CASCADE)\n    class Meta:',
+    ))
+    rebuilt = subprocess.run(
+        [sys.executable, "-c", "import django; django.setup()"],
+        cwd=tmp_path, env={**environment, "COMPOSE_BUILD": "1"},
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert rebuilt.returncode == 0, rebuilt.stdout + rebuilt.stderr
+    histories = tuple((tmp_path / "runtime").glob("*/migrations/*.py"))
+    before = {path: path.read_bytes() for path in histories}
+    refused = subprocess.run(
+        [sys.executable, "-c", "import django; django.setup(); "
+         "from django.core.management import call_command; "
+         "call_command('makemigrations', 'other_app', interactive=False, verbosity=0)"],
+        cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert refused.returncode != 0
+    assert "author their transitions first: bootstrap_app" in refused.stderr
+    assert {path: path.read_bytes() for path in (tmp_path / "runtime").glob("*/migrations/*.py")} == before

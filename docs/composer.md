@@ -295,7 +295,11 @@ an addon package such as `runtime_migrations/`, never the conventional
 abstract source app before the composer can attach it to the downstream graph.
 
 After an editable runtime build, `makemigrations` first asks Django to author
-initial schema when none of the composed apps has native migration history.
+initial schema for selected composed apps that have no native migration history.
+Previously authored app histories remain unchanged; separately selecting fresh
+apps in successive commands follows the same native label-selection contract.
+If Django expands an initial migration to changes in an existing app, bootstrap
+refuses before writing: author that app's transitions and changes first.
 This bootstrap runs only for ordinary mutating authoring; read-only, merge,
 empty and update modes retain their existing intent. It authors files without
 applying or faking migrations. If later transition validation fails, these valid
