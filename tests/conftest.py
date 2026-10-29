@@ -9,7 +9,6 @@ import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import ExitStack
-from importlib import metadata
 from importlib.util import spec_from_file_location
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -871,11 +870,8 @@ def make_addon(
             key: value if key == "retired_models" else authored_source(value)
             for key, value in resources.items()
         }
-    dist = write_addon_distribution(path, name, depends_on=depends_on, capabilities=tool, metadata_root=path)
-    previous = metadata.entry_points
-    monkeypatch.setattr(metadata, "entry_points", lambda **params: metadata.EntryPoints((
-        *(entry for entry in previous(**params) if entry.name != name), *dist.entry_points.select(**params),
-    )))
+    write_addon_distribution(path, name, depends_on=depends_on, label=label, capabilities=tool, metadata_root=path)
+    monkeypatch.syspath_prepend(str(path))
     if web is not None:
         web_root = path / "web"
         web_root.mkdir(exist_ok=True)
@@ -890,8 +886,6 @@ def make_addon(
     monkeypatch.delitem(sys.modules, f"{name}.apps", raising=False)
     _TEST_ADDON_CONTEXTS.callback(sys.modules.pop, f"{name}.apps", None)
     config = AppConfig.create(name)
-    if label is not None:
-        config.label = label
     return config
 
 
