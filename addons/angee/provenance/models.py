@@ -9,12 +9,13 @@ from graphlib import CycleError, TopologicalSorter
 from itertools import groupby
 from typing import Any, ClassVar, cast
 
+from angee.base.serialization import canonical_json, canonical_json_sha256, json_safe
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.utils import timezone
 from rebac import (
     RebacMixin,
@@ -52,7 +53,6 @@ from angee.provenance.statements import (
     SourceKind,
     StatementSourceMixin,
 )
-from angee.serialization import canonical_json, canonical_json_sha256, json_safe
 
 ProvenanceRole = role_anchor("provenance/role")
 
@@ -235,7 +235,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         if not self.scope or not self.key:
             raise RuntimeError("Only a claimed changeset can record a created row.")
         self.created_row = row
-        type(self)._base_manager.db_manager(hints={"instance": self}).filter(pk=self.pk).update(
+        type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).filter(pk=self.pk).update(
             created_content_type_id=self.created_content_type_id,
             created_object_id=self.created_object_id,
         )
@@ -273,8 +273,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         """
 
         inserting = self._state.adding
-        manager = type(self)._base_manager.db_manager(hints={"instance": self})
-        alias = manager.db
+        alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
         recording = inserting and current_changeset() is self
         with (
             transaction.atomic(using=alias),
@@ -306,7 +305,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         self.state = self.State(self.State.CLOSED)
         self.outcome = self.Outcome(outcome)
         self.touched = sorted(set(self.touched))
-        type(self)._base_manager.filter(pk=self.pk).update(
+        type(self)._base_manager.using(self._state.db).filter(pk=self.pk).update(
             state=self.state,
             outcome=self.outcome,
             touched=self.touched,
@@ -322,7 +321,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
     def history_rows(self) -> Any:
         """Yield touched owners and their native versions in deterministic order."""
 
-        using = type(self)._base_manager.db_manager(hints={"instance": self}).db
+        using = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
         for label in sorted(set(self.touched)):
             model = apps.get_model(label)
             if model_history(model) is None:
@@ -364,7 +363,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         digest = canonical_json_sha256(chunks=(text,))
         if self.hash != digest:
             self.hash = digest
-            type(self)._base_manager.filter(pk=self.pk).update(hash=digest)
+            type(self)._base_manager.using(self._state.db).filter(pk=self.pk).update(hash=digest)
         return text
 
     def revert(self) -> Any:
@@ -376,14 +375,14 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         detection queues the corrected projection on the next sync.
         """
 
-        using = type(self)._base_manager.db_manager(hints={"instance": self}).db
+        using = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
         actor = instance_actor(self) or current_actor()
         if self.state != self.State.CLOSED or self.outcome != self.Outcome.SUCCESS:
             raise ValidationError("Only a successfully closed changeset can be reverted.")
         with (
             actor_context(actor) if actor is not None else nullcontext(),
             transaction.atomic(using=using),
-            changeset(fresh=True, activity="revert", origin=self),
+            changeset(fresh=True, activity="revert", origin=self, using=using),
         ):
             histories = []
             subjects: dict[tuple[type[models.Model], Any], Any] = {}
