@@ -15,6 +15,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from pydantic import BaseModel, Field, ValidationError
 from rebac import actor_context
 
+from angee.base.serialization import canonical_json_sha256
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.discovery import ConnectionDiscovery
 from angee.integrate.errors import IntegrationError
@@ -24,7 +25,6 @@ from angee.integrate.states import StreamDefinition, StreamKind, SyncFailureKind
 from angee.integrate.streams import ApplyResult, CursorInvalid, RecordChange, SemanticError, StreamPage
 from angee.knowledge.models import Page
 from angee.knowledge_integrate_notion.markdown import NotionMarkdownConverter
-from angee.serialization import canonical_json_sha256
 
 
 class NotionUser(BaseModel):

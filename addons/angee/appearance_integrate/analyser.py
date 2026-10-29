@@ -10,7 +10,7 @@ from urllib.parse import urljoin, urlunsplit
 from django.core.cache import cache
 from rebac import current_actor
 
-from angee.cache import increment_window
+from angee.base.cache import increment_window
 from angee.integrate.http import HttpClient, OutboundBudget, OutboundBudgetState
 from angee.integrate.net import parse_http_url
 

@@ -12,7 +12,7 @@ _Settings = TypedDict(
         "ANGEE_CHANGESET_MODEL": str,
         "MIDDLEWARE:append": list[str],
         "ANGEE_CELERY_TASK_CLASS": str,
-        "ANGEE_MANAGEMENT_CONTEXT": str,
+        "COMPOSE_COMMAND_CONTEXT:append": list[str],
         "ANGEE_TIMELINE_KINDS:append": list[str],
     },
 )
@@ -23,6 +23,6 @@ SETTINGS: _Settings = {
     "ANGEE_CHANGESET_MODEL": "provenance.Changeset",
     "MIDDLEWARE:append": ["angee.provenance.middleware.ChangesetMiddleware"],
     "ANGEE_CELERY_TASK_CLASS": "angee.provenance.tasks:Task",
-    "ANGEE_MANAGEMENT_CONTEXT": "angee.provenance.contrib.angee.context.management_context",
+    "COMPOSE_COMMAND_CONTEXT:append": ["angee.provenance.contrib.angee.context.management_context"],
     "ANGEE_TIMELINE_KINDS:append": ["angee.provenance.timeline.timeline_kinds"],
 }

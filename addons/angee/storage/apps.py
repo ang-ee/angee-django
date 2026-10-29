@@ -17,6 +17,7 @@ class StorageConfig(AppConfig):
 
     default = True
     name = "angee.storage"
+    compose_urls = "angee.storage.urls"
     requires_apps = ('django.contrib.contenttypes',)
 
     def ready(self) -> None:

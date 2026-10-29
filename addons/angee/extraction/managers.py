@@ -18,6 +18,7 @@ from angee.base.models.identity import public_id_of
 from angee.base.permissions import actor_user_id
 from angee.base.querysets import AngeeQuerySet
 from angee.base.refs import RecordRef
+from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.base.validators import validate
 from angee.extraction.acquisition import ExtractionConfig, PageCarrier, PartCarrier, PreparedDocument, prepare_pages
 from angee.extraction.contracts import (
@@ -31,7 +32,6 @@ from angee.extraction.contracts import (
 from angee.extraction.enums import ExtractionErrorCode, ExtractionRole, ExtractionStatus
 from angee.extraction.pointers import json_pointer_value, result_selectors
 from angee.provenance.evidence import EvidenceReference, readable_records
-from angee.serialization import canonical_json_sha256, strip_null_bytes
 
 if TYPE_CHECKING:
     from angee.extraction.models import Extraction

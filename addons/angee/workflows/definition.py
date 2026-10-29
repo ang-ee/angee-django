@@ -18,9 +18,9 @@ from angee.base.fields.text import ModelLabelField
 from angee.base.refs import generic_pointer_model
 from angee.base.schemas.forms import relation_positions
 from angee.base.schemas.references import schemas_match
+from angee.base.serialization import canonical_json, canonical_json_sha256
 from angee.base.validators import validate, validator
 from angee.provenance.evidence import EvidenceReference
-from angee.serialization import canonical_json, canonical_json_sha256
 from angee.workflows.bindings import (
     ABSENT,
     InputBinding,

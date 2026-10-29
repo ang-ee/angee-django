@@ -140,6 +140,7 @@ REBAC_STRICT_MODE = True
 REBAC_FIELD_READ_MODE = "redact"
 REBAC_ALLOW_SUDO = True
 REBAC_SUPERUSER_BYPASS = False
+REBAC_UNIVERSAL_ADMIN_ROLE = "angee/role:admin"
 REBAC_LINT_BARE_PREFETCH = False
 ANGEE_MERGE_GUARDS = ["angee.resources.managers.seeded_record_merge_guard"]
 ANGEE_TIMELINE_KINDS = ["angee.provenance.timeline.timeline_kinds"]

@@ -22,7 +22,7 @@ from graphlib import TopologicalSorter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from django.apps import AppConfig, apps
+from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django_compose.serving import GENERATED_SENTINEL
@@ -234,7 +234,7 @@ class WebIntegration:
         return {
             path: source.encode('utf-8')
             for path, source in WebRuntime(
-                apps.get_app_configs(), runtime_dir=Path(settings.COMPOSE_OUTPUT_DIR),
+                settings.COMPOSE_CLOSURE.app_configs, runtime_dir=Path(settings.COMPOSE_OUTPUT_DIR),
                 ui=getattr(settings, 'ANGEE_UI', None),
             ).render_sources().items()
         }

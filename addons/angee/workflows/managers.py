@@ -32,6 +32,7 @@ from angee.base.models.identity import public_id_of
 from angee.base.models.locks import StaleRevisionError, require_revision
 from angee.base.permissions import actor_user_id
 from angee.base.querysets import AngeeQuerySet, by_key, query_batch_size, row_lock_paths
+from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.base.signals import bulk_updated
 from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.publishing import changes_muted, mute_changes, publish_change
@@ -39,7 +40,6 @@ from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.evidence import EvidenceReference, readable_records
-from angee.serialization import canonical_json_sha256, strip_null_bytes
 from angee.workflows.definition import (
     MAP_BODY_SUFFIX,
     Body,

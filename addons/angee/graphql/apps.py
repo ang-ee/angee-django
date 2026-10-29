@@ -18,6 +18,7 @@ class GraphQLConfig(AppConfig):
 
     default = True
     name = "angee.graphql"
+    compose_urls = "angee.graphql.urls"
     requires_apps = ('channels', 'django.contrib.auth', 'django.contrib.sessions')
 
     def compose_asgi(self):

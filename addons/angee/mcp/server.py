@@ -1,14 +1,10 @@
 """The process-wide MCP server: one FastMCP instance, tools from addon packages.
 
-Each installed addon contributes tools through the ``mcp_tools`` seam — an
-``mcp_tools.py`` module exposing a ``register(server: FastMCP) -> None`` callable,
-inferred by convention (an ``pyproject.toml`` ``[tool.angee.mcp].tools`` entry overrides the dotted
-reference). It resolves the same way the GraphQL ``schemas`` seam does, through the
-shared :func:`angee.addons.resolve_addon_reference`. The server authenticates the inbound
-bearer with :class:`~angee.mcp.verifier.RebacTokenVerifier` and brackets every tool
-call in the authenticated REBAC actor with :class:`~angee.mcp.middleware.ActorMiddleware`.
-It is mounted as a StreamableHTTP ASGI app by :mod:`angee.mcp.asgi`; :mod:`angee.asgi`
-owns its lifespan, so the server holds no per-request lifecycle of its own.
+Enabled addons contribute a conventional ``mcp_tools.register(server)`` callable.
+The server authenticates inbound bearers through RebacTokenVerifier and carries
+the actor through ActorMiddleware. MCPConfig supplies the HTTP mount and native
+FastMCP lifespan to django-compose's ASGI contribution owner. The inner HTTP
+application serves its root; the native mount owns the external ``/mcp`` prefix.
 
 ``stateless_http`` keeps each call independent and ``json_response`` returns a
 buffered JSON body the agent's HTTP client folds without an SSE reader (both passed
@@ -79,7 +75,7 @@ def mcp_app() -> StarletteWithLifespan:
         for pattern in ((host[1:], f"*{host}") if host.startswith(".") else (host,))
     ]
     return mcp_server().http_app(
-        path=MOUNT_PATH, stateless_http=True, json_response=True,
+        path="/", stateless_http=True, json_response=True,
         host_origin_protection=True, allowed_hosts=hosts,
         allowed_origins=list(settings.CSRF_TRUSTED_ORIGINS),
     )

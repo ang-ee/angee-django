@@ -7,7 +7,7 @@ from functools import partial
 from django.apps import AppConfig
 from django.core import checks
 
-from angee.hooks import check_hooks
+from angee.base.hooks import check_hooks
 
 check_settings = partial(check_hooks, ("ANGEE_PARTIES_SHARED_SENDER_PROVIDERS", "ANGEE_PARTIES_SIGNING_PROVIDERS"))
 

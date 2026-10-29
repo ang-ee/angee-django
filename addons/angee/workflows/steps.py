@@ -16,10 +16,10 @@ from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, PydanticInvalidForJsonSchema
 
 from angee.base.implementations import ImplBase, check_impl_registry, resolve_impl_class
+from angee.base.serialization import strip_null_bytes
 from angee.base.validators import check_schema, get_type_adapter, validate, validate_value, validator
 from angee.decisions.contracts import DecisionRequest
 from angee.jobs.timeouts import TASK_SETTLEMENT_RESERVE_SECONDS, task_time_budget
-from angee.serialization import strip_null_bytes
 from angee.workflows.states import (
     DONE_OUTCOME,
     ERROR_OUTCOME,

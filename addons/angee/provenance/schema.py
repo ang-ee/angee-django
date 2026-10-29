@@ -32,6 +32,7 @@ from angee.base.models.base import record_display_label
 from angee.base.models.identity import public_id_for, public_id_of
 from angee.base.permissions import require_rebac_queryset
 from angee.base.refs import generic_pointer_model
+from angee.base.serialization import json_safe
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.data.metadata import (
     DataResourceContribution,
@@ -52,7 +53,6 @@ from angee.provenance.statements import (
     StatementSourceMixin,
     prime_readable_statement_records,
 )
-from angee.serialization import json_safe
 
 Changeset = changeset_model()
 
