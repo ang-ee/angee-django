@@ -797,37 +797,37 @@ def test_native_cross_app_prerequisite_state_precedes_guard(
     """Pending cross-app nodes participate in the graph before applicability runs."""
 
     _, addon, _, runtime_dir, source_root = runtime_migration_probe
-    compose_migrations = runtime_dir / "compose" / "migrations"
-    _write_module(runtime_dir / "compose" / "__init__.py")
-    _write_module(compose_migrations / "__init__.py")
+    other_migrations = runtime_dir / "tests" / "migrations"
+    _write_module(runtime_dir / "tests" / "__init__.py")
+    _write_module(other_migrations / "__init__.py")
     _write_module(source_root / "runtime_migrations" / "after_flag.py", """\
 from django.db import migrations
 def applies(project_state):
-    return ("compose", "flag") in project_state.models
+    return ("tests", "flag") in project_state.models
 class Migration(migrations.Migration):
-    dependencies = [("compose", "add_flag")]
+    dependencies = [("tests", "add_flag")]
     operations = [migrations.RunPython(migrations.RunPython.noop, migrations.RunPython.noop)]
 """)
     _write_module(source_root / "runtime_migrations" / "add_flag.py", """\
 from django.db import migrations, models
 def applies(project_state):
-    return ("compose", "flag") not in project_state.models
+    return ("tests", "flag") not in project_state.models
 class Migration(migrations.Migration):
     dependencies = []
     operations = [migrations.CreateModel(name="Flag", fields=[("id", models.AutoField(primary_key=True))])]
 """)
     dependent = dict(name="after_flag", app_label="resources", module="runtime_migrations.after_flag")
-    prerequisite = dict(name="add_flag", app_label="compose", module="runtime_migrations.add_flag")
+    prerequisite = dict(name="add_flag", app_label="tests", module="runtime_migrations.add_flag")
     write_addon_manifest(addon, migrations=(dependent, prerequisite) if dependent_first else (prerequisite, dependent))
-    monkeypatch.setitem(settings.MIGRATION_MODULES, "compose", f"{runtime_dir.name}.compose.migrations")
+    monkeypatch.setitem(settings.MIGRATION_MODULES, "tests", f"{runtime_dir.name}.tests.migrations")
     importlib.invalidate_caches()
-    materializer = RuntimeMigrations((addon,), labels=("resources", "compose"))
+    materializer = RuntimeMigrations((addon,), labels=("resources", "tests"))
 
     written = materializer.materialize(apps=apps)
 
     assert [path.name for path in written] == ["add_flag.py", "after_flag.py"]
     loader = MigrationLoader(None, ignore_no_migrations=True)
-    assert ("compose", "add_flag") in loader.disk_migrations["resources", "after_flag"].dependencies
+    assert ("tests", "add_flag") in loader.disk_migrations["resources", "after_flag"].dependencies
     assert materializer.materialize(apps=apps) == ()
 
 
@@ -836,11 +836,11 @@ def test_symbolic_dependency_is_frozen_to_its_native_node(
     runtime_migration_probe, monkeypatch, settings, symbolic: str, resolved: str,
 ) -> None:
     materializer, _, source_path, runtime_dir, _ = runtime_migration_probe
-    compose_migrations = runtime_dir / "compose" / "migrations"
-    _write_module(runtime_dir / "compose" / "__init__.py")
-    _write_module(compose_migrations / "__init__.py")
-    for name, dependencies in (("0001_start", []), ("0004_current", [("compose", "0001_start")])):
-        _write_module(compose_migrations / f"{name}.py", f"""\
+    other_migrations = runtime_dir / "tests" / "migrations"
+    _write_module(runtime_dir / "tests" / "__init__.py")
+    _write_module(other_migrations / "__init__.py")
+    for name, dependencies in (("0001_start", []), ("0004_current", [("tests", "0001_start")])):
+        _write_module(other_migrations / f"{name}.py", f"""\
 from django.db import migrations
 class Migration(migrations.Migration):
     dependencies = {dependencies!r}
@@ -848,23 +848,23 @@ class Migration(migrations.Migration):
 """)
     source_path.write_text(
         source_path.read_text(encoding="utf-8").replace(
-            "dependencies = []", f'dependencies = [("compose", "{symbolic}")]', 1,
+            "dependencies = []", f'dependencies = [("tests", "{symbolic}")]', 1,
         ), encoding="utf-8",
     )
-    monkeypatch.setitem(settings.MIGRATION_MODULES, "compose", f"{runtime_dir.name}.compose.migrations")
+    monkeypatch.setitem(settings.MIGRATION_MODULES, "tests", f"{runtime_dir.name}.tests.migrations")
     importlib.invalidate_caches()
 
     (output,) = materializer.materialize(apps=apps)
 
     loader = MigrationLoader(None, ignore_no_migrations=True)
     assert loader.disk_migrations["resources", "rename_legacy"].dependencies == [
-        ("compose", resolved), ("resources", "0001_legacy"),
+        ("tests", resolved), ("resources", "0001_legacy"),
     ]
     frozen = output.read_bytes()
-    _write_module(compose_migrations / "0005_later.py", """\
+    _write_module(other_migrations / "0005_later.py", """\
 from django.db import migrations
 class Migration(migrations.Migration):
-    dependencies = [("compose", "0004_current")]
+    dependencies = [("tests", "0004_current")]
     operations = []
 """)
     importlib.invalidate_caches()
@@ -872,7 +872,7 @@ class Migration(migrations.Migration):
     assert output.read_bytes() == frozen
     assert MigrationLoader(None, ignore_no_migrations=True).disk_migrations[
         "resources", "rename_legacy"
-    ].dependencies == [("compose", resolved), ("resources", "0001_legacy")]
+    ].dependencies == [("tests", resolved), ("resources", "0001_legacy")]
 
 
 def test_materialization_is_idempotent(runtime_migration_probe) -> None:
@@ -1246,11 +1246,11 @@ def test_data_only_migrations_keep_their_explicit_cross_app_order(
     """RunPython order is declared even when neither operation changes ProjectState."""
 
     _, addon, _, runtime_dir, source_root = runtime_migration_probe
-    _write_module(runtime_dir / "compose" / "__init__.py")
-    _write_module(runtime_dir / "compose" / "migrations" / "__init__.py")
-    monkeypatch.setitem(settings.MIGRATION_MODULES, "compose", f"{runtime_dir.name}.compose.migrations")
+    _write_module(runtime_dir / "tests" / "__init__.py")
+    _write_module(runtime_dir / "tests" / "migrations" / "__init__.py")
+    monkeypatch.setitem(settings.MIGRATION_MODULES, "tests", f"{runtime_dir.name}.tests.migrations")
     for name, dependencies in (
-        ("first_data", []), ("second_data", [("compose", "first_data")]),
+        ("first_data", []), ("second_data", [("tests", "first_data")]),
     ):
         _write_module(source_root / "runtime_migrations" / f"{name}.py", f"""\
 from django.db import migrations
@@ -1262,25 +1262,25 @@ class Migration(migrations.Migration):
     dependencies = {dependencies!r}
     operations = [migrations.RunPython(migrations.RunPython.noop, migrations.RunPython.noop)]
 """)
-    parent = dict(name="first_data", app_label="compose", module="runtime_migrations.first_data")
+    parent = dict(name="first_data", app_label="tests", module="runtime_migrations.first_data")
     child = dict(name="second_data", app_label="resources", module="runtime_migrations.second_data")
     write_addon_manifest(addon, migrations=(child, parent) if dependent_first else (parent, child))
     importlib.invalidate_caches()
-    materializer = RuntimeMigrations((addon,), labels=("resources", "compose"))
+    materializer = RuntimeMigrations((addon,), labels=("resources", "tests"))
 
     written = materializer.materialize(apps=apps)
 
     assert [path.name for path in written] == ["first_data.py", "second_data.py"]
     loader = MigrationLoader(None, ignore_no_migrations=True)
-    assert ("compose", "first_data") in loader.disk_migrations["resources", "second_data"].dependencies
+    assert ("tests", "first_data") in loader.disk_migrations["resources", "second_data"].dependencies
     order = loader.graph.forwards_plan(("resources", "second_data"))
-    assert order.index(("compose", "first_data")) < order.index(("resources", "second_data"))
+    assert order.index(("tests", "first_data")) < order.index(("resources", "second_data"))
 
 
 def test_run_before_latest_is_frozen_without_rebinding(runtime_migration_probe, monkeypatch, settings) -> None:
     materializer, _, source_path, runtime_dir, _ = runtime_migration_probe
-    directory = runtime_dir / "compose" / "migrations"
-    _write_module(runtime_dir / "compose" / "__init__.py")
+    directory = runtime_dir / "tests" / "migrations"
+    _write_module(runtime_dir / "tests" / "__init__.py")
     _write_module(directory / "__init__.py")
     _write_module(directory / "0001_target.py", """\
 from django.db import migrations
@@ -1288,11 +1288,11 @@ class Migration(migrations.Migration):
     dependencies = []
     operations = []
 """)
-    monkeypatch.setitem(settings.MIGRATION_MODULES, "compose", f"{runtime_dir.name}.compose.migrations")
+    monkeypatch.setitem(settings.MIGRATION_MODULES, "tests", f"{runtime_dir.name}.tests.migrations")
     source_path.write_text(
         source_path.read_text().replace(
             "    dependencies = []",
-            '    dependencies = []\n    run_before = [("compose", "__latest__")]',
+            '    dependencies = []\n    run_before = [("tests", "__latest__")]',
             1,
         ), encoding="utf-8",
     )
@@ -1302,12 +1302,12 @@ class Migration(migrations.Migration):
 
     frozen = output.read_bytes()
     loader = MigrationLoader(None, ignore_no_migrations=True)
-    assert loader.disk_migrations["resources", "rename_legacy"].run_before == [("compose", "0001_target")]
-    assert ("resources", "rename_legacy") in loader.graph.forwards_plan(("compose", "0001_target"))
+    assert loader.disk_migrations["resources", "rename_legacy"].run_before == [("tests", "0001_target")]
+    assert ("resources", "rename_legacy") in loader.graph.forwards_plan(("tests", "0001_target"))
     _write_module(directory / "0002_later.py", """\
 from django.db import migrations
 class Migration(migrations.Migration):
-    dependencies = [("compose", "0001_target")]
+    dependencies = [("tests", "0001_target")]
     operations = []
 """)
     importlib.invalidate_caches()
@@ -1315,7 +1315,7 @@ class Migration(migrations.Migration):
     assert output.read_bytes() == frozen
     assert MigrationLoader(None, ignore_no_migrations=True).disk_migrations[
         "resources", "rename_legacy"
-    ].run_before == [("compose", "0001_target")]
+    ].run_before == [("tests", "0001_target")]
 
 
 def test_materialization_uses_custom_native_migration_package(runtime_migration_probe, monkeypatch, settings) -> None:

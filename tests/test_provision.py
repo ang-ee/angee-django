@@ -255,7 +255,12 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
     ) in refused.stderr
     assert sorted(path.name for path in (app / "migrations").glob("0*.py")) == ["0001_initial.py"]
     pending = django_admin("migrate")
-    assert pending.returncode == 1 and "unsafe autodetected column drop" in pending.stderr
+    assert pending.returncode == 0, pending.stderr
+    assert "No migrations to apply" in pending.stdout
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("select value, legacy from native_app_entry order by value").fetchall() == [
+            ("a", ""), ("b", "kept"),
+        ]
 
     with sqlite3.connect(database) as connection:
         connection.execute("update native_app_entry set legacy = ''")

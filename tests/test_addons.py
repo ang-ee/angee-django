@@ -25,8 +25,8 @@ import angee.addons as addon_module
 import angee.platform.discovery as discovery_module
 import tests.test_platform_install  # noqa: F401 -- register the fixture model graph before database setup
 from angee.addons import addon_manifest, resolve_manifest_roots
+from angee.build import ManifestDeclarations
 from angee.compose.appgraph import AppGraph
-from angee.conf import ManifestDeclarations
 from angee.platform import models as platform_models
 from angee.platform.discovery import available_addons, resolve_app_config
 from angee.resources.models import Resource as AbstractResource

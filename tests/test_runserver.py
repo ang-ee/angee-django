@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from django.apps import apps
 from django.core.management import get_commands
 from django.core.management.commands.runserver import Command as DjangoRunserver
 
@@ -24,8 +25,9 @@ def test_runserver_is_a_django_runserver_subclass() -> None:
 def test_native_command_precedes_staticfiles_when_foundation_is_first(settings: Any) -> None:
     """Django discovers the host override even with the competing contrib command."""
 
+    host = apps.get_app_config("angee")
     settings.INSTALLED_APPS = [
-        "angee", "django.contrib.staticfiles", *(entry for entry in settings.INSTALLED_APPS if entry != "angee"),
+        host, "django.contrib.staticfiles", *(config for config in apps.get_app_configs() if config is not host),
     ]
     assert get_commands()["runserver"] == "angee"
     assert get_commands()["serve"] == "angee"
