@@ -11,11 +11,12 @@ import inspect
 from typing import Any
 
 from django.apps import AppConfig, apps
+from django.conf import settings
 from django.db import connections, router
 from django.db.models import Field, Model
+from django_compose.addons import installed_addons
 from pydantic import BaseModel, PrivateAttr
 
-from angee.addons import is_angee_addon
 from angee.base.fields.implementation import ImplClassField
 from angee.base.implementations import ImplChoice, impl_choices
 
@@ -214,30 +215,26 @@ class PlatformImplementationDetail(PlatformImplementationRow):
 def addons() -> list[AppConfig]:
     """Return the composed Angee addon app configs, sorted by name."""
 
+    closure = getattr(settings, "COMPOSE_CLOSURE", None)
+    names = closure.addons if closure is not None else installed_addons("angee.addons").providers
     return sorted(
-        (config for config in apps.get_app_configs() if is_angee_addon(config)),
+        (config for config in apps.get_app_configs() if config.name in names),
         key=lambda config: config.name,
     )
 
 
 def root_app_names() -> frozenset[str]:
-    """Return effective root declarations recorded by the composed app graph."""
+    """Read root names from the compiler's authored-root and snapshot facts."""
 
-    return frozenset(
-        declaration
-        for config in apps.get_app_configs()
-        if (declaration := getattr(config, "compose_root_declaration", None)) is not None
-    )
+    return frozenset(root_app_aliases().values())
 
 
 def root_app_aliases() -> dict[str, str]:
-    """Map exact authored root declarations to their normalized AppConfig names."""
+    """Project authored native app spellings through the frozen identity entries."""
 
-    return {
-        declaration: config.name
-        for config in apps.get_app_configs()
-        if (declaration := getattr(config, "compose_root_declaration", None)) is not None
-    }
+    snapshot = getattr(settings, "COMPOSE_SNAPSHOT", None)
+    entries = {} if snapshot is None else {entry.entry: entry.name for entry in snapshot.entries}
+    return {root: entries.get(root, root) for root in getattr(settings, "COMPOSE_ROOTS", ())}
 
 
 def is_historical(model: type[Model]) -> bool:

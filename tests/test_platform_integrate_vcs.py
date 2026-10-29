@@ -14,7 +14,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
 import tests.test_marketplace_graphql  # noqa: F401 -- register the fixture model graph before database setup
-from angee.addons import addon_entry_points, facts_from_distribution
+from angee.platform.discovery import facts_from_distribution, installed_entry_points
 from angee.platform_integrate_vcs.catalog import parse_addon_meta
 from tests.conftest import Addon, Repository, Source, VcsBridge, catalogue_package, make_addon, make_integration
 
@@ -36,7 +36,7 @@ def catalog_source(composed_tables: None, tmp_path: Path) -> tuple[Source, Path]
             'dependencies = ["angee-iam", "catalog-remote-dependency"]\n'
             '[project.entry-points."angee.addons"]\n'
             '"catalog_remote.base" = "catalog_remote.base"\n'
-            '[tool.angee]\n'
+            '[tool.angee.platform]\n'
             'category = "Integration"\n'
         )
     )
@@ -70,7 +70,7 @@ def test_parse_addon_meta_reads_the_addon_block() -> None:
             b'dependencies = ["angee-iam", "angee-platform"]\n'
             b'[project.entry-points."angee.addons"]\n'
             b'"angee.demo" = "angee.demo"\n'
-            b'[tool.angee]\n'
+            b'[tool.angee.platform]\n'
             b'category = "Data"\n'
         )
     )
@@ -364,7 +364,7 @@ def test_catalogue_rejects_another_sources_conflicting_identity_or_ownership(cat
 def test_installed_and_source_declarations_share_one_native_identity(catalog_source, monkeypatch):
     source, marker = catalog_source
     installed = make_addon(name="example.installed")
-    facts = facts_from_distribution(addon_entry_points()[installed.name].dist)
+    facts = facts_from_distribution(installed_entry_points()[installed.name].dist)
     marker.write_text(_catalogue_document(installed.name, facts["distribution"]))
     (marker.parent.parent / "dependency" / "pyproject.toml").unlink()
     monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda: {installed.name: (facts, None)})

@@ -22,24 +22,27 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from angee.addons import (
-    addon_entry_points,
-    facts_from_distribution,
-    package_identity_index,
-    requirement_addons,
-    resolve_package_roots,
-)
-from angee.base.serialization import canonical_json_sha256
 from django.apps import AppConfig, apps
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import DatabaseError, models, transaction
-from rebac import system_context
+from django_compose.addons import installed_addons
+from rebac import database_context, system_context
 
 from angee.base.fields.state import StateField
 from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeModel
+from angee.base.serialization import canonical_json_sha256
 from angee.platform import composed
-from angee.platform.discovery import AddonCategory, available_addons
+from angee.platform.discovery import (
+    AddonCategory,
+    available_addons,
+    facts_from_distribution,
+    installed_entry_points,
+    package_identity_index,
+    requirement_addons,
+    resolve_catalogue_roots,
+)
 from angee.platform.installer import (
     AddonInstaller,
     InstallResult,
@@ -110,22 +113,38 @@ class AddonChangePreview:
 
 
 class AddonManager[T: Addon](AngeeManager[T]):
-    """Manager owning reflection, change previews, and install/disable flow."""
+    """Manager owning reflection, authored roots, and native dependency jobs."""
 
-    def install(self, name: str, revision: str | None = None) -> InstallResult:
+    def enable(self, name: str, revision: str | None = None) -> InstallResult:
         """Validate and queue an addon root through the same plan the preview shows."""
 
-        return self._apply_change(name, "install", revision)
+        return self._apply_change(name, "enable", revision)
 
     def disable(self, name: str, revision: str | None = None) -> InstallResult:
         """Queue root removal, refusing an addon the running graph still requires."""
 
         return self._apply_change(name, "disable", revision)
 
+    def install(self, name: str) -> dict[str, Any]:
+        """Queue the native held dependency job; activation is a separate root edit."""
+
+        return self._dependency_change(name, remove=False)
+
+    def uninstall(self, name: str) -> dict[str, Any]:
+        """Delegate package removal admission and execution to the native job owner."""
+
+        return self._dependency_change(name, remove=True)
+
+    def _dependency_change(self, name: str, *, remove: bool) -> dict[str, Any]:
+        distribution = self.only("distribution").get(name=name).distribution
+        if not distribution:
+            raise ValidationError(f"{name} has no native distribution identity.")
+        return addon_installer().backend.queue_dependency_change(distribution, remove=remove)
+
     def _apply_change(self, name: str, action: str, revision: str | None) -> InstallResult:
         """Validate one plan, write its exact roots, then reconcile the committed intent."""
 
-        with system_context(reason=f"platform.addon.{action}"):
+        with database_context(self.db), system_context(reason=f"platform.addon.{action}"):
             installer = addon_installer()
             preview = self.change_preview(name, action, installer=installer)
             if not preview.can_apply or (revision is not None and preview.revision != revision):
@@ -150,7 +169,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
     ) -> AddonChangePreview:
         """Forecast one settings edit against the loaded graph without changing state."""
 
-        if action not in {"install", "disable"}:
+        if action not in {"enable", "disable"}:
             raise ValueError(f"Unknown addon change action {action!r}")
         bound_installer = installer or addon_installer()
         snapshot = bound_installer.installed_apps_snapshot()
@@ -175,9 +194,9 @@ class AddonManager[T: Addon](AngeeManager[T]):
         aliases, configs = self._app_identity()
         canonical_roots = tuple(aliases.get(root, root) for root in roots_before)
         refusal: str | None = None
-        if action == "install":
+        if action == "enable":
             if name not in available:
-                refusal = f"{name} is not available to install."
+                refusal = f"{name} is not installed and cannot be enabled."
             roots_after = roots_before if refusal or name in canonical_roots else (*roots_before, name)
         else:
             declarations = tuple(root for root in roots_before if aliases.get(root, root) == name)
@@ -185,7 +204,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
                 name, loaded=loaded_configs, declared=bool(declarations), aliases=aliases
             )
             roots_after = roots_before if refusal else tuple(root for root in roots_before if root not in declarations)
-        after = resolve_package_roots(roots_after, manifests, aliases=aliases)
+        after = resolve_catalogue_roots(roots_after, manifests, aliases=aliases)
         after_by_name = {manifest["name"]: manifest for manifest in after}
         loaded_names = set(loaded_configs)
         target_names = set(after_by_name)
@@ -198,15 +217,16 @@ class AddonManager[T: Addon](AngeeManager[T]):
                 AddonChangeImpact(
                     name=config.name,
                     label=config.label,
-                    root=bool(getattr(config, "compose_root", False)),
+                    root=config.name in composed.root_app_names(),
                     depends_on=tuple(manifest["depends_on"]) if manifest else (),
                 )
             )
         disabled = tuple(disabled_impacts)
         inventory = self._data_inventory((impact.name for impact in disabled))
         warning = (
-            "Provisioning may generate and apply schema migrations that remove model data or contributed fields; "
-            "the exact database effect cannot be forecast safely before migration planning."
+            "Disabling addons may require schema migrations that remove model data or contributed fields. "
+            "Review and author migration history before provisioning; "
+            "provision refuses schema drift without authored migration history."
             if disabled else None
         )
         revision = _preview_revision(snapshot.text, manifests, action=action, addon=name, roots_after=roots_after)
@@ -246,11 +266,11 @@ class AddonManager[T: Addon](AngeeManager[T]):
         """Refuse loaded dependencies or unknown targets, ignoring stale catalogue flags."""
 
         config = loaded.get(name)
-        if config is not None and getattr(config, "compose_required", False):
+        if config is not None and name not in composed.root_app_names():
+            index = installed_addons("angee.addons")
             manifests = (
-                facts_from_distribution(entry_point.dist)
-                for app_name, entry_point in addon_entry_points().items()
-                if app_name in loaded and entry_point.dist is not None
+                facts_from_distribution(index.distributions[provider], index=index)
+                for app_name, provider in index.providers.items() if app_name in loaded
             )
             required_by = ", ".join(self._dependants(manifests, aliases=aliases).get(name, ())) or "another enabled app"
             return f"{name} is required by {required_by} and cannot be disabled."
@@ -268,7 +288,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
             for key in (config.name, config.label, f"{type(config).__module__}.{type(config).__qualname__}")
         }
         aliases.update(composed.root_app_aliases())
-        aliases.update({entry.value: name for name, entry in addon_entry_points().items()})
+        aliases.update({entry.value: name for name, entry in installed_entry_points().items()})
         return aliases, configs
 
     @staticmethod
@@ -318,7 +338,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
         return tuple(inventories)
 
     def reconcile_loaded_registry(self) -> None:
-        """Converge after startup using the effective roots recorded by AppGraph."""
+        """Converge after startup using the effective roots recorded by the native snapshot."""
 
         self.reconcile_from_registry(desired=composed.root_app_names())
 
@@ -355,7 +375,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
         manifests = {name: manifest for name, (manifest, _origin) in available.items()}
         counts = composed.resource_counts()
         rows = self.all()
-        with transaction.atomic():
+        with database_context(self.db), transaction.atomic(using=self.db):
             package_identity_index((
                 *((row.distribution, row.name) for row in rows.select_for_update() if row.distribution),
                 *((package["distribution"], name) for name, package in manifests.items()),
@@ -370,12 +390,12 @@ class AddonManager[T: Addon](AngeeManager[T]):
             for name, manifest in sorted(manifests.items()):
                 config = configs.get(name)
                 enabled = name in loaded
-                root = enabled and bool(getattr(config, "compose_root", False))
+                root = enabled and name in composed.root_app_names()
                 runtime_facts = self.model.reset_runtime_facts()
                 if enabled:
                     data_models = composed.data_models(loaded[name])
                     runtime_facts.update(
-                        forced=bool(getattr(config, "compose_required", False)),
+                        forced=not root,
                         model_count=len(data_models),
                         field_count=sum(len(composed.own_fields(model)) for model in data_models),
                         resource_count=counts.get(name, 0),
@@ -415,10 +435,10 @@ class AddonManager[T: Addon](AngeeManager[T]):
         snapshot until their source or installed distribution refreshes.
         """
 
-        with transaction.atomic():
+        with database_context(self.db), transaction.atomic(using=self.db):
             rows = list(self.select_for_update().order_by("name"))
             identities = package_identity_index((
-                *((entry.dist.metadata["Name"], name) for name, entry in addon_entry_points().items()
+                *((entry.dist.metadata["Name"], name) for name, entry in installed_entry_points().items()
                   if entry.dist is not None),
                 *((row.distribution, row.name) for row in rows if row.distribution),
             ))

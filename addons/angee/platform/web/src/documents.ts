@@ -103,7 +103,7 @@ export type PlatformImplementationData = NonNullable<
   DocumentType<typeof PlatformImplementation>["platform_implementation"]
 >;
 
-// Marketplace board mutations. The platform backend owns the install source
+// Marketplace board mutations. The platform backend owns authored app roots
 // (`settings.yaml` INSTALLED_APPS) through the AddonInstaller; the VCS marketplace
 // tier (`platform_integrate_vcs`) contributes `add_source`/`scan` onto the same
 // console schema. The board consumes them all through the one generated console
@@ -158,9 +158,9 @@ export const AddonChangePreview = graphql(`
 export type AddonChangePreviewData = DocumentType<typeof AddonChangePreview>["addon_change_preview"];
 
 /** Add an addon root to `settings.yaml`; the row reflects `pending` until the next boot. */
-export const InstallAddon = graphql(`
-  mutation InstallAddon($addon: String!, $revision: String) {
-    install(addon: $addon, revision: $revision) {
+export const EnableAddon = graphql(`
+  mutation EnableAddon($addon: String!, $revision: String) {
+    enable(addon: $addon, revision: $revision) {
       ok
       message
     }
@@ -174,5 +174,18 @@ export const DisableAddon = graphql(`
       ok
       message
     }
+  }
+`);
+
+/** Queue a held native package job; its operation remains operator-owned. */
+export const InstallAddon = graphql(`
+  mutation InstallAddon($addon: String!) {
+    install(addon: $addon)
+  }
+`);
+
+export const UninstallAddon = graphql(`
+  mutation UninstallAddon($addon: String!) {
+    uninstall(addon: $addon)
   }
 `);
