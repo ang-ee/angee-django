@@ -37,7 +37,7 @@ from datetime import date
 from django.apps import apps
 from django.db import models
 from django.utils import timezone
-from rebac import system_context
+from rebac import database_context, system_context
 
 from angee.base.fields.state import StateField
 from angee.base.managers import AngeeManager
@@ -68,10 +68,10 @@ class SequenceManager[SequenceT: Sequence](AngeeManager[SequenceT]):
         """
 
         draw_date = on_date or timezone.localdate()
-        with system_context(reason="sequence.next_value"):
+        with database_context(self.db), system_context(reason="sequence.next_value"):
             sequence = self.get(key=key)
             period = sequence.period_key(draw_date)
-            value = self._counter_model().objects.draw(sequence, period)
+            value = self._counter_model().objects.db_manager(sequence._state.db).draw(sequence, period)
             return sequence.format_number(value, draw_date)
 
     def preview_next(self, key: str, *, on_date: date | None = None) -> str | None:
@@ -86,12 +86,12 @@ class SequenceManager[SequenceT: Sequence](AngeeManager[SequenceT]):
         """
 
         draw_date = on_date or timezone.localdate()
-        with system_context(reason="sequence.preview_next"):
+        with database_context(self.db), system_context(reason="sequence.preview_next"):
             sequence = self.filter(key=key).first()
             if sequence is None or not sequence.preview_enabled:
                 return None
             period = sequence.period_key(draw_date)
-            current = self._counter_model().objects.peek(sequence, period)
+            current = self._counter_model().objects.db_manager(sequence._state.db).peek(sequence, period)
             return sequence.format_number(current + 1, draw_date)
 
     def _counter_model(self) -> type[SequenceCounter]:
@@ -177,7 +177,7 @@ class SequenceCounterManager[CounterT: SequenceCounter](AngeeManager[CounterT]):
         re-read under the lock — landing on the one row and serializing there.
         """
 
-        counters = self.all()
+        counters = self.db_manager(self._db or sequence._state.db).all()
         row = counters.lock_if_supported().filter(sequence=sequence, period=period).first()
         if row is None:
             counters.bulk_create(
@@ -189,13 +189,16 @@ class SequenceCounterManager[CounterT: SequenceCounter](AngeeManager[CounterT]):
             # mid-draw), rather than silently returning None.
             row = counters.locked_get(sequence=sequence, period=period)
         row.value += 1
-        row.save(update_fields=["value", "updated_at"])
+        row.save(using=row._state.db, update_fields=["value", "updated_at"])
         return row.value
 
     def peek(self, sequence: models.Model, period: str) -> int:
         """Return the current value for this pair without locking, ``0`` if none."""
 
-        return self.filter(sequence=sequence, period=period).values_list("value", flat=True).first() or 0
+        return (
+            self.db_manager(self._db or sequence._state.db).filter(sequence=sequence, period=period)
+            .values_list("value", flat=True).first() or 0
+        )
 
 
 class SequenceCounter(AngeeModel, concrete=True):
