@@ -8,8 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import tomlkit
-
-from angee.addons import addon_entry_points
+from packaging.utils import canonicalize_name
 
 
 def write_addon_distribution(
@@ -17,15 +16,16 @@ def write_addon_distribution(
     name: str,
     *,
     depends_on: tuple[str, ...] = (),
+    label: str | None = None,
     capabilities: dict[str, Any] | None = None,
     metadata_root: Path | None = None,
 ) -> metadata.PathDistribution:
     """Write real package data and dist-info discoverable on the fixture source root."""
 
-    entries = addon_entry_points()
+    entries = {entry.name: entry for entry in metadata.entry_points(group="angee.addons")}
     requirements = [entries[app].dist.metadata["Name"] for app in depends_on if app in entries]
     foreign = tuple(app for app in depends_on if app not in entries)
-    distribution = name.replace(".", "-").replace("_", "-")
+    distribution = canonicalize_name(name)
     project = {
         "name": distribution, "version": "0.0.0", "dependencies": requirements,
         "entry-points": {"angee.addons": {name: name}},
@@ -44,10 +44,11 @@ def write_addon_distribution(
     (dist_info / "direct_url.json").write_text(json.dumps({
         "url": package.as_uri(), "dir_info": {"editable": True},
     }), encoding="utf-8")
-    if foreign:
+    if foreign or label is not None:
         (package / "apps.py").write_text(
             "from django.apps import AppConfig\n"
             "class FixtureConfig(AppConfig):\n"
-            f"    name = {name!r}\n    requires_apps = {foreign!r}\n", encoding="utf-8",
+            f"    name = {name!r}\n    requires_apps = {foreign!r}\n"
+            + (f"    label = {label!r}\n" if label is not None else ""), encoding="utf-8",
         )
     return metadata.PathDistribution(dist_info)
