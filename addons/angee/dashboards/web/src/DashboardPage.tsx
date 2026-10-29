@@ -5,6 +5,7 @@ import {
   ActionTrigger,
   Button,
   DashboardSurface,
+  errorMessage,
   DropdownMenu,
   Glyph,
   HOME_PATH_PREFERENCE_KEY,
@@ -22,6 +23,7 @@ import {
   useRouteHref,
   useRuntimeUserPreferences,
   useTrashRecord,
+  useToast,
   type DescriptorField,
   type MutationDialogValues,
 } from "@angee/ui";
@@ -62,6 +64,7 @@ function StoredDashboardPage({ target, registry, store }: {
   const navigate = useNavigate();
   const routeHref = useRouteHref();
   const t = useDashboardsT();
+  const toast = useToast();
   const trashRecord = useTrashRecord(useModelMetadata("dashboards.Dashboard")?.resource);
   // Commands settle through the shared run; trash already owns its outcome.
   const settle = useActionResultRun({ noResultTitle: t("common.actionFailed") });
@@ -103,12 +106,18 @@ function StoredDashboardPage({ target, registry, store }: {
       try {
         // The shared verb confirms, moves the dashboard to the trash and settles the outcome.
         if (!(await trashRecord.trash(target.id, state.name))) return;
-        await preferences.patchPreferences((current) => ({
-          ...current,
-          [ROUTE_SHORTCUTS_PREFERENCE_KEY]: readRuntimeRouteShortcuts(current).filter((shortcut) => shortcut.id !== shortcutId),
-          ...(current[HOME_PATH_PREFERENCE_KEY] === href ? { [HOME_PATH_PREFERENCE_KEY]: null } : {}),
-        }));
-        await navigate({ to: routeHref("dashboards.index") });
+        try {
+          await preferences.patchPreferences((current) => ({
+            ...current,
+            [ROUTE_SHORTCUTS_PREFERENCE_KEY]: readRuntimeRouteShortcuts(current).filter((shortcut) => shortcut.id !== shortcutId),
+            ...(current[HOME_PATH_PREFERENCE_KEY] === href ? { [HOME_PATH_PREFERENCE_KEY]: null } : {}),
+          }));
+        } finally {
+          // The dashboard is gone even if its preference cleanup failed.
+          await navigate({ to: routeHref("dashboards.index") });
+        }
+      } catch (error) {
+        toast.danger({ title: errorMessage(error, t("common.actionFailed")) });
       } finally {
         setPending(false);
       }
