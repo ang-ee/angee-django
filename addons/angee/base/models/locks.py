@@ -81,9 +81,9 @@ class _RowLockWritesQuerySet(models.QuerySet[_ModelT]):
 
         if self._lock_bypassed() or not kwargs:
             return super().update(**kwargs)
-        self._for_write = True
-        with transaction.atomic(using=self.db):
-            rows = self.with_action("write").scoped() if isinstance(self, RebacQuerySet) else self
+        rows = self.select_for_update()
+        with transaction.atomic(using=rows.db):
+            rows = rows.with_action("write").scoped() if isinstance(rows, RebacQuerySet) else rows
             fields: dict[str, models.Field[Any, Any]] = {}
             for name in kwargs:
                 field = self.model._meta.get_field(name)
@@ -103,7 +103,7 @@ class _RowLockWritesQuerySet(models.QuerySet[_ModelT]):
                 )
                 for index, (name, value) in enumerate(kwargs.items())
             }
-            for previous in rows.select_for_update().annotate(**projections):
+            for previous in rows.annotate(**projections):
                 candidate = copy(previous)
                 for index, field in enumerate(fields.values()):
                     setattr(candidate, field.attname, getattr(previous, f"_row_lock_value_{index}"))
