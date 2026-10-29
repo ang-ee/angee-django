@@ -62,12 +62,10 @@ class CompositionContext(DjangoContext):
         self.member_origins: dict[str, dict[str, str]] = {}
         self.member_receivers: dict[str, dict[str, str]] = {}
         self.member_modules: dict[str, tuple[str, ...]] = {}
-        if not self.apps_registry.is_installed("angee.compose"):
-            return
-        # Runtime owns declarations; serving models retain their native classes.
-        from angee.compose.runtime import Runtime
+        # Native app hooks retain declarations in both build and prebuilt hosts.
+        from angee.compose.model_composition import ModelComposition
 
-        composition = Runtime.from_django().composition
+        composition = ModelComposition.discover(self.apps_registry.get_app_configs())
         self.required_parents = composition.required_parents
         for source in composition.ordered_models:
             fullname = f"{source.__module__}.{source.__qualname__}"
