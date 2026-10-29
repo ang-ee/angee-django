@@ -114,7 +114,7 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
   });
   await screen.findByDisplayValue("Alpha");
   const navigator = screen.getByRole("navigation", { name: "Files" });
-  const navigatorToolbar = within(navigator).getByRole("toolbar");
+  const navigatorToolbar = within(navigator).getByRole("toolbar", { name: "" });
   expect(navigator.firstElementChild?.contains(navigatorToolbar)).toBe(true);
   expect(navigatorToolbar.contains(await screen.findByRole("combobox", { name: "Drive: Assets" }))).toBe(true);
   expect(within(navigatorToolbar).getByRole("button", { name: "New" })).toBeTruthy();
