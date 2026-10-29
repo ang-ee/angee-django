@@ -57,7 +57,7 @@ from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
+from angee.base.models.base import AngeeDataModel, record_display_label
 from angee.base.models.implementations import ImplDefaultsMixin
 from angee.base.models.merge_references import MergePolicy, references
 from angee.base.models.ownership import OwnerMixin, OwnerQuerySet
@@ -4431,6 +4431,16 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, State
     sqid_prefix = "rlk_"
     authority_related = ("stream",)
     stream = models.ForeignKey("integrate.SyncStream", on_delete=models.PROTECT, related_name="links")
+
+    presentation_related: ClassVar[tuple[str, ...]] = ("stream__integration",)
+
+    @property
+    def statement_source_label(self) -> str:
+        """Name the connection and stream retaining this remote statement evidence."""
+
+        stream = self.stream
+        stream_name = f"{stream.key} ({stream.partition})" if stream.partition else stream.key
+        return f"{record_display_label(stream.integration)} · {stream_name} · {self.external_key}"
 
     @property
     def authoritative(self) -> bool:

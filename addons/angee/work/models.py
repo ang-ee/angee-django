@@ -32,10 +32,11 @@ from angee.base.fields.state import StateField
 from angee.base.managers import AngeeManager
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
-from angee.base.models.locks import ImmutableFieldsMixin, RowLockMixin
+from angee.base.models.locks import ImmutableFieldsMixin, RowLockMixin, RowLockQuerySet
 from angee.base.models.stages import Stage as StagePrimitive
 from angee.base.models.stages import StagedModelMixin
 from angee.base.permissions import actor_user_id, instance_actor
+from angee.base.querysets import AngeeQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 from angee.sequence.models import PeriodReset
 from angee.spaces.managers import GroupManager
@@ -340,6 +341,13 @@ class Queue(ImmutableFieldsMixin, metaclass=RebacModelBase):
             raise ValidationError({"default_estimate": "Default estimate cannot be zero when zero is disallowed."})
 
 
+class StageQuerySet[StageT: Stage](RowLockQuerySet[StageT], AngeeQuerySet[StageT]):
+    """Keep system-stage guards on queryset mutations and direct row writes."""
+
+
+StageManager = AngeeManager.from_queryset(StageQuerySet)
+
+
 class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
     """One ordered, user-named pipeline stage owned by a queue.
 
@@ -347,6 +355,9 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
     own their name and category, and no user write — the queue's stage lines
     included — may change them, delete such a stage, or create one.
     """
+
+    row_lock_cascade_parent = "queue"
+    objects = StageManager()
 
     runtime = True
     sqid_prefix = "wst_"
