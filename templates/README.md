@@ -48,7 +48,7 @@ the chain instead of restarting against incomplete generated state.
   git `sources:` and the `src` workspace; `angee dev` materializes their clone
   caches, cuts the workspace, and runs Django/Celery/Vite/Storybook as local
   processes against those worktrees. The rendered pyproject resolves
-  `django-angee` editable from the consolidated `angee` slot, so
+  the `angee` meta-distribution editable from the consolidated `angee` slot, so
   `uv run manage.py` works bare from the root. For developing the framework —
   or a consumer project against live framework source.
 - **`stacks/local`** (`runtime_mode: docker`) — a self-contained instance run on
@@ -169,15 +169,17 @@ Commit what you author; ignore what a tool regenerates:
   other runtime output · dist/ · data/ · .env · run/ · sources/ · docker-compose.yaml · process-compose.yaml
 ```
 
-`runtime/<label>/migrations/` is **committed**; other runtime output is ignored. The native Hatch hook builds disposable runtime
-sources during `uv sync` and packages the project-specific runtime with reviewed
-history during `uv build`. Author model changes after the editable build with
-native `makemigrations`, then review and commit history before packaging.
+`runtime/<label>/migrations/` is **committed**; other runtime output is ignored.
+`uv sync` installs the declared distributions. The stack's explicit `runtime-build`
+job generates the runtime; `uv build` builds Python distribution archives.
+After rebuilding changed models, author native migrations with `makemigrations`,
+then review and commit history before provisioning.
 Generated runtime, resolved secrets, compiled compose files and materialized
 sources stay out of git. The database is a stack service and the app
-reads `DATABASE_URL`, so no SQLite file lives in the tree. Add the framework's
-in-repo example later by including `sources/angee/examples/addons` in
-discovery and enabling it in `INSTALLED_APPS`.
+reads `DATABASE_URL`, so no SQLite file lives in the tree. To add a framework
+example, declare its distribution and local source in the host's `pyproject.toml`,
+install it through the stack's dependency workflow, and enable its app in
+`INSTALLED_APPS`. A source directory alone does not install a distribution.
 
 > **Status.** The `local` template now *is* this shape: a thin `kind: stack` that
 > chains `projects/web` and includes the shared manifest body in `docker` mode. By
@@ -200,8 +202,8 @@ renders the configuration; clone the framework before provisioning or starting
 the stack:
 
 ```sh
-mkdir -p ~/.core/angee/sources
-git clone https://github.com/ang-ee/angee-django ~/.core/angee/sources/angee
+mkdir -p ~/.angee/sources
+git clone https://github.com/ang-ee/angee-django ~/.angee/sources/angee
 angee stack init https://github.com/ang-ee/angee-django/tree/main/templates/stacks/local ~/.angee
 angee dev --root ~/.angee
 export ANGEE_OPERATOR_URL=http://127.0.0.1:9000
@@ -233,7 +235,7 @@ then update from the template:
 ```sh
 sed -i.bak \
   's#active: stacks/local#active: https://github.com/ang-ee/angee-django/tree/main/templates/stacks/local#' \
-  ~/.core/angee/angee.yaml
+  ~/.angee/angee.yaml
 angee stack update --root ~/.angee --template
 ```
 
@@ -253,8 +255,8 @@ database directory:
 
 ```sh
 angee down --root ~/.angee
-mkdir -p ~/.core/angee/data
-mv ~/.core/angee/pgdata ~/.core/angee/data/pgdata
+mkdir -p ~/.angee/data
+mv ~/.angee/pgdata ~/.angee/data/pgdata
 angee stack update --root ~/.angee --template
 angee dev --root ~/.angee
 ```
