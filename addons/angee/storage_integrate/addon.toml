@@ -9,3 +9,8 @@ depends_on = ["angee.base", "angee.storage", "angee.integrate", "angee.web"]
 
 [resources]
 master = [{ path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" }]
+
+[[migrations]]
+name = "retire_mount_cursor"
+app_label = "storage_integrate"
+module = "runtime_migrations.retire_mount_cursor"

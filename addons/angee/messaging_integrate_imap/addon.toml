@@ -13,3 +13,8 @@ dependencies = [
 
 [resources]
 master = [{ path = "resources/master/010_integrate.vendor.yaml", adopt = "slug" }]
+
+[[migrations]]
+name = "retire_channel_cursor"
+app_label = "messaging"
+module = "runtime_migrations.retire_channel_cursor"

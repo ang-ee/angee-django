@@ -11,14 +11,11 @@ from django.db import models, transaction
 from rebac import system_context
 
 from angee.base.fields.state import StateField
-from angee.base.models import (
-    AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
-    AppendOnlyModel,
-    AppendOnlyQuerySet,
-    OwnerMixin,
-)
+from angee.base.managers import AngeeManager
+from angee.base.models.append_only import AppendOnlyModel, AppendOnlyQuerySet
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.ownership import OwnerMixin
+from angee.base.querysets import AngeeQuerySet
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.operator.daemon import OperatorDaemon, OperatorDaemonError
 from angee.operator_backup.archives import archive_mount, validate_archive_destination
