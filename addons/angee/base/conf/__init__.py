@@ -107,6 +107,8 @@ def _deployment_urls(namespace: MutableMapping[str, Any], env: environ.Env) -> N
         namespace.setdefault("DATABASES", {"default": database})
     if "CACHE_URL" in os.environ:
         namespace.setdefault("CACHES", {"default": env.cache()})
+    if "REDIS_URL" in os.environ:
+        namespace.setdefault("REDIS_URL", env.str("REDIS_URL"))
     if "CELERY_BROKER_URL" in os.environ:
         namespace.setdefault("CELERY_BROKER_URL", env.str("CELERY_BROKER_URL"))
 
