@@ -50,7 +50,7 @@ from django.core.exceptions import (
 )
 from django.core.files.base import ContentFile
 from django.core.files.base import File as DjangoFile
-from django.db import router, IntegrityError, models, transaction
+from django.db import IntegrityError, models, router, transaction
 from django.db.models import Q
 from django.db.models.signals import post_save
 from django.urls import reverse

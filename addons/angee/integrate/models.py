@@ -57,7 +57,7 @@ from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
+from angee.base.models.base import AngeeDataModel, record_display_label
 from angee.base.models.implementations import ImplDefaultsMixin
 from angee.base.models.merge_references import MergePolicy, references
 from angee.base.models.ownership import OwnerMixin, OwnerQuerySet
@@ -642,7 +642,8 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
         """Create or update one ``(oauth_client, external_id)`` external account.
 
         ``owner`` owns a new account and claims an unowned one: the caller has
-        verified that the user controls the identity. An owned account keeps its owner.
+        verified that the user controls the identity. An account claimed by another
+        owner is refused before any identity update.
         """
 
         reason = "integrate.connections.link"
@@ -664,15 +665,24 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
             **update_values,
         }
         with system_context(reason=reason), transaction.atomic():
-            instance, _created = self.update_or_create(
+            instance, created = self.select_for_update().get_or_create(
                 oauth_client_id=oauth_client.pk,
                 external_id=external_id,
-                defaults=update_values,
-                create_defaults=create_values,
+                defaults=create_values,
             )
-            if owner is not None and instance.owner_id is None:
-                instance.owner = owner
-                instance.save(update_fields=["owner", "updated_at"])
+            if owner is not None and instance.owner_id not in (None, owner.pk):
+                raise ValidationError(
+                    "This external account is already linked to another user.", code="account_already_linked",
+                )
+            if not created:
+                for name, value in update_values.items():
+                    setattr(instance, name, value)
+                if owner is not None and instance.owner_id is None:
+                    instance.owner = owner
+                    update_values["owner"] = owner
+                if update_values:
+                    instance.save(update_fields=[*update_values, "updated_at"])
+
         return instance
 
 
@@ -1965,6 +1975,16 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         self.require_access("write", actor)
         if not self.can_connect(actor):
             raise PermissionDenied("Integration OAuth Connect is unavailable to the current user.")
+
+    def can_pause(self) -> bool:
+        """Whether the guarded Pause verb is eligible for this row."""
+
+        return self.lifecycle_transitions.can_run(self, "pause")
+
+    def can_disconnect(self) -> bool:
+        """Whether the guarded Disconnect verb is eligible for this row."""
+
+        return self.lifecycle_transitions.can_run(self, "disconnect")
 
     def can_resume(self) -> bool:
         """Operator Resume reuses an attached grant and never substitutes for consent."""
@@ -4411,6 +4431,16 @@ class RecordLink(RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, State
     sqid_prefix = "rlk_"
     authority_related = ("stream",)
     stream = models.ForeignKey("integrate.SyncStream", on_delete=models.PROTECT, related_name="links")
+
+    presentation_related: ClassVar[tuple[str, ...]] = ("stream__integration",)
+
+    @property
+    def statement_source_label(self) -> str:
+        """Name the connection and stream retaining this remote statement evidence."""
+
+        stream = self.stream
+        stream_name = f"{stream.key} ({stream.partition})" if stream.partition else stream.key
+        return f"{record_display_label(stream.integration)} · {stream_name} · {self.external_key}"
 
     @property
     def authoritative(self) -> bool:

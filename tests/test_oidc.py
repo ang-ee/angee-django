@@ -2289,3 +2289,41 @@ def test_oidc_userinfo_email_link_requires_matching_subject(
             identity.complete_login(client, code="code", state_token=token, redirect_uri=redirect)
         with system_context(reason="test untrusted userinfo never linked"):
             assert not ExternalAccount.objects.filter(oauth_client=client).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("domains,allowed", [(["corp.example"], False), ([], True)])
+def test_signup_without_email_respects_provider_domain_policy(
+    composed_tables: None, domains: list[str], allowed: bool,
+) -> None:
+    client = _oauth_client(create_on_login=True, allowed_email_domains=domains)
+    if allowed:
+        user = identity.resolve(client, sub="without-email", email=None, claims={"sub": "without-email"})
+        assert user.email == ""
+    else:
+        with pytest.raises(OAuthFlowError) as caught:
+            identity.resolve(client, sub="without-email", email=None, claims={"sub": "without-email"})
+        assert caught.value.code == IDENTITY_RESOLUTION_FAILED
+        assert not ExternalAccount.system_queryset().filter(external_id="without-email").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("unusable", ["revoked", "expired", "disabled"])
+def test_disconnect_does_not_count_unusable_oidc_alternatives(composed_tables: None, unusable: str) -> None:
+    user = get_user_model().objects.create_user("unusable-alternative")
+    client = _oauth_client()
+    account = ExternalAccount.objects.link(client, "working-subject", owner=user)
+    credential = Credential.objects.upsert_for_user(
+        user, client, "oauth", {"access_token": "token"}, external_account=account,
+    )
+    other_client = _oauth_client(slug="other-unusable")
+    other = ExternalAccount.objects.link(other_client, "other-subject", owner=user)
+    Credential.objects.upsert_for_user(user, other_client, "oauth", {"access_token": "other"}, external_account=other)
+    with system_context(reason="test.oidc.unusable_alternative"):
+        if unusable == "disabled":
+            type(other_client).objects.filter(pk=other_client.pk).update(is_enabled=False)
+        else:
+            type(other).objects.filter(pk=other.pk).update(status=unusable)
+    with pytest.raises(ValidationError) as caught:
+        credential.check_disconnect()
+    assert caught.value.code == "only_sign_in_method"

@@ -10,7 +10,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
-from django.db import models, transaction
+from django.db import models, router, transaction
 from rebac import (
     PermissionDenied,
     RebacMixin,
@@ -274,12 +274,12 @@ class OwnerMixin(AuditMixin, PersistenceMixin):
         actor = instance_actor(self)
         if actor is None:
             raise PermissionDenied("Ownership transfer requires an acting user.")
-        using = self._state.db
+        using = router.db_for_write(type(self), instance=self)
+        if not isinstance(self, AngeeModel):
+            raise ImproperlyConfigured("Ownership transfer requires AngeeModel's record-access contract.")
 
         with transaction.atomic(using=using):
-            locked = type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
-            if not isinstance(locked, AngeeModel):
-                raise ImproperlyConfigured("Ownership transfer requires AngeeModel's record-access contract.")
+            locked = self.lock_for_record_access(using=using)
             locked.with_actor(actor)
             owner_model = locked._meta.get_field("owner").model
             target: OwnerMixin = locked

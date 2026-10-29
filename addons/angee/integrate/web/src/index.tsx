@@ -34,7 +34,7 @@ import {
   RetryDiscoveryAction,
   TestConnectionAction,
 } from "./IntegrationLifecycleActions";
-import { RECORD_SOURCES_GROUP_ID, recordSourcesGroup } from "./RecordSourcesPane";
+import { RECORD_SOURCES_GROUP_ID, recordSourcesGroup, StatementRecordLinkReference } from "./RecordSourcesPane";
 
 const INTEGRATE_ID = "integrate";
 
@@ -113,6 +113,9 @@ const integrate = defineBaseAddon({
   // handshake wherever an integration has credentials, and the addon that owns
   // the vendor contributes that against its own model.
   containers: {
+    "integrate.RecordLink#statement-references": {
+      "integrate.source": { content: StatementRecordLinkReference },
+    },
     // The Links tab's Sources group, on records that admit RecordLink edges.
     "related#groups": { [RECORD_SOURCES_GROUP_ID]: recordSourcesGroup },
     [`${INTEGRATION_MODEL}#sections`]: {
@@ -131,14 +134,14 @@ const integrate = defineBaseAddon({
       },
     },
     [`${INTEGRATION_MODEL}#actions`]: {
-      [INTEGRATION_PAUSE_ACTION_ID]: { sequence: 11, requiredFields: ["lifecycle"], content: <PauseIntegrationAction /> },
+      [INTEGRATION_PAUSE_ACTION_ID]: { sequence: 11, requiredFields: ["can_pause", "can_disconnect"], content: <PauseIntegrationAction /> },
       [INTEGRATION_RESUME_ACTION_ID]: {
         sequence: 12, requiredFields: ["can_resume"], content: <ResumeIntegrationAction />,
       },
     },
     [`${INTEGRATION_MODEL}#actions-menu`]: {
-      [INTEGRATION_DISCONNECT_ACTION_ID]: { sequence: 13, requiredFields: ["lifecycle"], content: <DisconnectIntegrationAction /> },
-      [INTEGRATION_TEST_CONNECTION_ACTION_ID]: { sequence: 14, requiredFields: ["lifecycle"], content: <TestConnectionAction /> },
+      [INTEGRATION_DISCONNECT_ACTION_ID]: { sequence: 13, requiredFields: ["can_pause", "can_disconnect"], content: <DisconnectIntegrationAction /> },
+      [INTEGRATION_TEST_CONNECTION_ACTION_ID]: { sequence: 14, requiredFields: ["can_pause", "can_disconnect"], content: <TestConnectionAction /> },
       [INTEGRATION_RETRY_DISCOVERY_ACTION_ID]: {
         sequence: 15, requiredFields: ["can_retry_discovery"], content: <RetryDiscoveryAction />,
       },

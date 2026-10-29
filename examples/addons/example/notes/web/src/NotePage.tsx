@@ -47,7 +47,7 @@ function noteList(agentsHref: string | undefined, t: NotesT): React.ReactElement
 
 function noteForm(t: NotesT): React.ReactElement {
   return (
-    <Form resource={MODEL}>
+    <Form resource={MODEL} returning={["is_starred"]}>
       <Field name="title" widget="text" title />
       <Field name="status" widget="statusbar" status />
       <Group label={t("form.details")} columns={2}>

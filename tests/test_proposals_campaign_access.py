@@ -753,3 +753,25 @@ def test_subscription_gate_drops_sealed_answer_events_and_redacts_disclosed_offe
         assert event is not None
         assert event.changed_values == {"state": "draft"}
         assert set(event.changed_fields or ()) == {"state"}
+
+
+def test_requester_reassignment_rejects_an_existing_responder(campaign: ProposalCampaign) -> None:
+    c = campaign
+    round = c.round()
+    c.admit(round, "responder", track=True)
+    with system_context(reason="tests.proposals.requester.reverse_admission"):
+        round.requester_party = Person.objects.for_user(c.person("responder"))
+        with pytest.raises(RecordAccessSubjectRefused):
+            round.save(update_fields=("requester_party",))
+    round.refresh_from_db()
+    assert round.requester_party_id is None
+
+
+def test_requester_identity_cannot_bypass_round_owner_through_collections(campaign: ProposalCampaign) -> None:
+    c = campaign
+    round = c.round()
+    with system_context(reason="tests.proposals.requester.collection"):
+        party = Person.objects.for_user(c.person("requester"))
+        for manager in (Round.objects, Round._base_manager):
+            with pytest.raises(ValidationError):
+                manager.filter(pk=round.pk).update(requester_party=party)

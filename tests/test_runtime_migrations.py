@@ -9,6 +9,7 @@ import subprocess
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
+from io import StringIO
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -34,6 +35,7 @@ from angee.base.fields.identity import SqidField
 from angee.compose.management.commands.makemigrations import Command as ComposedMakeMigrationsCommand
 from angee.compose.migrations import DropGuardAutodetector, RuntimeMigrations
 from angee.compose.runtime import Runtime
+from angee.management.commands.makemigrations import Command as HostMakeMigrationsCommand
 from angee.resources.entries import resource_manifest_for, retired_models_for
 from tests.composed_host import COMPOSED_TEST_TIMEOUT
 from tests.conftest import make_addon, write_addon_manifest
@@ -1757,3 +1759,20 @@ class Migration(migrations.Migration):
     assert not (other / "unrelated.py").exists()
     with pytest.raises(RuntimeError, match="multiple migration leaves"):
         materializer.plan()
+
+
+@pytest.mark.parametrize("color_flag", ["--no-color", "--force-color"])
+def test_host_migration_authoring_preserves_native_command_color_options(monkeypatch, color_flag: str) -> None:
+    output = StringIO()
+    command = HostMakeMigrationsCommand(stdout=output)
+    labels, options = _authoring_options(command, "resources", color_flag, "--noinput")
+    captured = []
+
+    def delegate(self, *app_labels, **parsed_options):
+        captured.append((app_labels, parsed_options["no_color"], parsed_options["force_color"]))
+        self.stdout.write(self.style.SUCCESS("Delegated"))
+
+    monkeypatch.setattr(ComposedMakeMigrationsCommand, "handle", delegate)
+    command.handle(*labels, **options)
+    assert captured == [(("resources",), color_flag == "--no-color", color_flag == "--force-color")]
+    assert ("\x1b[" in output.getvalue()) is (color_flag == "--force-color")

@@ -33,7 +33,6 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Any, ClassVar
-from urllib.parse import urljoin
 
 import httpcore2
 import httpx2
@@ -282,36 +281,31 @@ class HttpClient:
         state = budget_state or OutboundBudgetState(budget)
         if state.budget != budget:
             raise ValueError("A shared outbound budget state must use the supplied budget.")
-        current = url
         response_redirects = 0
         redirect_limit = budget.redirects if max_redirects is None else max_redirects
-        while True:
-            parse_http_url(current)
-            remaining = state.remaining_seconds()
-            if remaining <= 0 or state.requests >= budget.requests:
-                return None
-            state.requests += 1
-            try:
-                with httpx2.Client(
-                    transport=self.transport_factory(allow_private=allow_private),
-                    timeout=min(float(HTTP_TIMEOUT_SECONDS), remaining),
-                ) as client:
-                    with client.stream(
-                        "GET",
-                        current,
-                        headers=_request_headers(headers, capped=True),
-                        follow_redirects=False,
-                    ) as response:
-                        if response.status_code in {301, 302, 303, 307, 308}:
-                            location = response.headers.get("location")
+        parse_http_url(url)
+        with httpx2.Client(transport=self.transport_factory(allow_private=allow_private)) as client:
+            request = client.build_request("GET", url, headers=_request_headers(headers, capped=True))
+            while True:
+                parse_http_url(str(request.url))
+                remaining = state.remaining_seconds()
+                if remaining <= 0 or state.requests >= budget.requests:
+                    return None
+                request.extensions["timeout"] = httpx2.Timeout(min(float(HTTP_TIMEOUT_SECONDS), remaining)).as_dict()
+                state.requests += 1
+                try:
+                    response = client.send(request, stream=True, follow_redirects=False)
+                    try:
+                        if response.is_redirect:
                             if (
-                                not location or response_redirects >= redirect_limit
+                                response.next_request is None or response_redirects >= redirect_limit
                                 or state.redirects >= budget.redirects
                             ):
                                 return None
                             response_redirects += 1
                             state.redirects += 1
-                            current = urljoin(str(response.url), location)
+                            # Native redirect construction owns auth, cookies and Host.
+                            request = response.next_request
                             continue
                         if not response.is_success:
                             return None
@@ -328,10 +322,12 @@ class HttpClient:
                             content_type=response.headers.get("content-type", ""),
                             status_code=response.status_code,
                         )
-            except RequestNotSentError as error:
-                if response_redirects:
-                    raise httpx2.TransportError("HTTP request failed after an earlier request was sent.") from error
-                raise
+                    finally:
+                        response.close()
+                except RequestNotSentError as error:
+                    if response_redirects:
+                        raise httpx2.TransportError("HTTP request failed after an earlier request was sent.") from error
+                    raise
 
     def post(
         self,

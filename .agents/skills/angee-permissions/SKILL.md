@@ -18,7 +18,7 @@ description: "Declares and wires REBAC permissions for an Angee addon: permissio
 | File or module | Owns | Reference |
 |---|---|---|
 | `<addon>/permissions.zed` | Every definition the addon owns: relations, permissions, revision header | `examples/addons/example/notes/permissions.zed:10` (`notes/note`), `:32-33` (ownership gate) |
-| `<addon>/permissions.extends.zed` | Relations and arms this addon contributes to definitions owned elsewhere | `examples/addons/example/notes/permissions.extends.zed`, `tests/extcontrib/permissions.extends.zed` |
+| `<addon>/permissions.extends.zed` | Relations, uniquely owned permission declarations and arms contributed to definitions owned elsewhere | `examples/addons/example/notes/permissions.extends.zed`, `tests/extcontrib/permissions.extends.zed` |
 | `Model.Meta.rebac_resource_type` | Binds a model to its definition | `examples/addons/example/notes/models.py:22` (class), `:67` (option) |
 | `angee.base.models.roles.role_anchor` | Table-less anchor model for a `<ns>/role` namespace | `addons/angee/base/models/roles.py:14`, `addons/angee/tags/models.py:341` |
 | `Model.rebac_grantable` + `AngeeModel.grant_record_access` | The direct-share surface and its permission policy | `addons/angee/base/models/base.py:88`, `:160`, `:312` (`require_access`) |
@@ -106,7 +106,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
    If the condition is a request value (time, IP, a flag the caller passes) → it is not expressible; scoped querysets carry no caveat context (`angee.E024`, `checks.py:37`). Put the fact on a column and back the relation with it.
    **Owner rule:** the column owns the fact and the zed reads it (`docs/backend/guidelines.md#rebac`, "no tuple mirrors the column", line 702; `docs/guidelines.md#put-behavior-on-the-owning-object`). A tuple mirror or a Python re-decision of the same condition is a second implementation; orchestrating the verb around the check is not.
 
-4. **Contribute to another addon's definition from `permissions.extends.zed`** (sibling file, own revision header). Name only existing definitions; add relations and union arms into permissions the base declares.
+4. **Contribute to another addon's definition from `permissions.extends.zed`** (sibling file, own revision header). Name only existing definitions; add relations and uniquely owned capability permissions, and union arms into permissions the base declares. New field gates additionally require that same addon's concrete donor column.
    ```zed
    // @rebac_package: notes
    // @rebac_schema_revision: 3
@@ -121,7 +121,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
        permission read_granted = note_record->read   // the owner derives read from read_granted
    }
    ```
-   If your role must be elevated → union it into `iam/protected#member`; if it manages people → union into `auth/user#list`/account verbs (`tests/extcontrib/permissions.extends.zed`). If the model composes `TaggedModel` → declare the `target`-backed relation on `tags/tag_assignment` or `tags.E002` (`addons/angee/tags/models.py:296`) fails startup. Collisions (same relation twice, an arm on an undeclared permission, an unknown target) raise `SchemaExtensionError` (`build.py:98`).
+   If your role must be elevated → union it into `iam/protected#member`; if it manages people → union into `auth/user#list`/account verbs (`tests/extcontrib/permissions.extends.zed`). If the model composes `TaggedModel` → declare the `target`-backed relation on `tags/tag_assignment` or `tags.E002` (`addons/angee/tags/models.py:296`) fails startup. Collisions (reused relation or newly introduced permission names), unknown targets, and native-invalid references raise `SchemaExtensionError` (`build.py:98`).
    **Owner rule:** the target addon owns the seam, the contributor owns its vocabulary and revision (`docs/backend/guidelines.md#rebac`, "A consumer addon contributes…", line 765, and the revision rule at line 788). The composer emits the merged `runtime/permissions/<package>.zed` (`docs/composer.md#flow`); do not hand-edit or commit it.
 
 5. **Declare direct sharing and field gates on the model.** `rebac_grantable` maps a stored (unbacked) relation to the permission that manages it; `angee.E015-E017` (`base.py:373-406`) validate it against the effective definition. Field gates are `read__<field>` / `write__<field>` permissions in the zed (`write__<field>` is enforced on update only; keep protected creation values out of insert inputs).

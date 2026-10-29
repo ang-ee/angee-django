@@ -30,7 +30,7 @@ const mocks = vi.hoisted(() => ({
     refetch: vi.fn(),
   },
   readerQuery: {
-    data: { record_readers: [{ subject: "auth/user:ada", label: "Ada", you: true, following: true }] },
+    data: { record_readers: [{ subject: "auth/user:ada", label: "Ada", you: true }] },
     isFetching: false,
     error: null,
     refetch: vi.fn(),
@@ -86,7 +86,7 @@ vi.mock("@angee/ui", () => ({
   useUiT: () => (key: string) => key,
 }));
 
-import { ShareAccessCompact, ShareAccessDialog, ShareListChrome, ShareRecordChrome, useAccessRole, useAccessVisibility } from "./ShareAccess";
+import { ShareAccessCompact, ShareAccessDialog, ShareListChrome, ShareRecordChrome, useAccessPeople, useAccessRole, useAccessVisibility } from "./ShareAccess";
 
 const resource = {
   modelLabel: "notes.Note",
@@ -126,7 +126,7 @@ describe("shared record access chrome", () => {
     mocks.queryOptions = null;
     mocks.readerOptions = null;
     mocks.query.data.record_access = [];
-    mocks.readerQuery.data.record_readers = [{ subject: "auth/user:ada", label: "Ada", you: true, following: true }];
+    mocks.readerQuery.data.record_readers = [{ subject: "auth/user:ada", label: "Ada", you: true }];
     mocks.dialogProps = null;
     mocks.roleEntries = [];
     mocks.visibilityEntries = [];
@@ -143,7 +143,7 @@ describe("shared record access chrome", () => {
     expect(mocks.queryOptions).toMatchObject({ enabled: false });
     expect(mocks.readerOptions).toMatchObject({ enabled: true });
     expect(mocks.dialogProps?.peopleLoaded).toBe(true);
-    expect(mocks.dialogProps?.people).toMatchObject([{ label: "Ada", you: true, following: true }]);
+    expect(mocks.dialogProps?.people).toMatchObject([{ label: "Ada", you: true }]);
 
     fireEvent.click(trigger);
     expect(mocks.queryOptions).toMatchObject({ enabled: true });
@@ -249,6 +249,33 @@ describe("shared record access chrome", () => {
     render(<ShareRecordChrome />);
 
     expect(screen.queryByRole("button", { name: "Open access dialog" })).toBeNull();
+  });
+
+  test("reader-only contributions never create Share availability", () => {
+    function Followers() { return null; }
+    mocks.roleEntries = [{ id: "messaging.followers", content: { kind: "people", render: Followers } }];
+    mocks.record.record = { id: "note-1", title: "Welcome", permissions: [] };
+    render(<ShareRecordChrome />);
+    expect(screen.queryByRole("button", { name: "Open access dialog" })).toBeNull();
+  });
+
+  test("merges owner follower annotations onto existing readers and surfaces retryable errors", async () => {
+    const onRetry = vi.fn();
+    const error = new Error("Follower lookup failed");
+    const state = { people: [
+      { subject: "auth/user:ada", label: "Ada", following: true },
+      { subject: "auth/user:hidden", label: "Hidden", following: true },
+    ], error, fetching: false, onRetry };
+    function Followers() { useAccessPeople("messaging.followers", state); return null; }
+    mocks.roleEntries = [{ id: "messaging.followers", content: { kind: "people", render: Followers } }];
+    render(<ShareRecordChrome />);
+    fireEvent.click(screen.getByRole("button", { name: "Open access dialog" }));
+    await waitFor(() => expect(mocks.dialogProps?.people).toMatchObject([{ label: "Ada", following: true }]));
+    expect(mocks.dialogProps?.people).toHaveLength(1);
+    expect(mocks.dialogProps?.roles).toEqual([]);
+    expect(mocks.dialogProps?.error).toBe(error);
+    (mocks.dialogProps?.onRetry as () => void)();
+    expect(onRetry).toHaveBeenCalledOnce();
   });
 
   test("loads a model-scoped role without direct grant relations", async () => {

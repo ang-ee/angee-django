@@ -628,10 +628,11 @@ class TieManager[TieT: Tie](_TieManagerBase[TieT]):
         participant_model = apps.get_model("messaging", "Participant")
         message_model = apps.get_model("messaging", "Message")
         edge_model = apps.get_model("messaging", "MessageEdge")
+        published = message_model.objects.sudo(reason="nexus.interaction.evidence").published().values("pk")
         interaction_at = Coalesce("message__sent_at", "message__created_at")
         addressed = (
             participant_model._base_manager.filter(
-                message__isnull=False,
+                message_id__in=published,
                 role__in=(
                     participant_model.ParticipantRole.TO,
                     participant_model.ParticipantRole.CC,
@@ -663,6 +664,8 @@ class TieManager[TieT: Tie](_TieManagerBase[TieT]):
         reply_at = Coalesce("sent_at", "created_at")
         replies = (
             message_model._base_manager.filter(
+                pk__in=published,
+                parent_id__in=published,
                 sender__party__isnull=False,
                 parent__sender__party__isnull=False,
                 thread__attachments__isnull=True,
@@ -690,6 +693,8 @@ class TieManager[TieT: Tie](_TieManagerBase[TieT]):
         mention_at = Coalesce("src__sent_at", "src__created_at")
         mentions = (
             edge_model._base_manager.filter(
+                src_id__in=published,
+                dst_id__in=published,
                 kind=edge_model.EdgeKind.MENTION,
                 src__sender__party__isnull=False,
                 dst__sender__party__isnull=False,

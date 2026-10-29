@@ -25,14 +25,14 @@ import {
 export function useTaskListDeclaration(options: Partial<Omit<ListProps<TaskActionRow>, "resource">> = {}): React.ReactElement {
   const t = useProjectsT();
   const rowActions = useTaskRowActions<TaskActionRow>();
-  const { children, ...listOptions } = options;
+  const { children, fields, ...listOptions } = options;
   return (
     <List<TaskActionRow>
       resource={TASK_MODEL}
       defaultGroup={{ field: "project" }}
       order={{ sort_order: "ASC" }}
       rowActions={rowActions}
-      queryFields={TASK_ACTION_FIELDS}
+      fields={["status", ...TASK_ACTION_FIELDS, ...(fields ?? [])]}
       {...listOptions}
     >
       {children ?? <><Facet field="project" label={t("common.project")} />

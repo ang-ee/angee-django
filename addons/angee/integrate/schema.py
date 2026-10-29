@@ -1043,6 +1043,18 @@ def _connection_credential(info: Any) -> Prefetch:
 class IntegrationConnectionMixin:
     """Connection admissions consume batched authority and credential-owned health."""
 
+    @strawberry_django.field(only=["lifecycle"])
+    def can_pause(self) -> bool:
+        """Project the guarded transition owner; action permissions remain enforced."""
+
+        return bool(cast(Any, self).can_pause())
+
+    @strawberry_django.field(only=["lifecycle"])
+    def can_disconnect(self) -> bool:
+        """Project eligibility from the same declaration that executes Disconnect."""
+
+        return bool(cast(Any, self).can_disconnect())
+
     @strawberry_django.field(
         only=["owner_id", "vendor_id", "concrete_type_id", "credential_id"],
         extensions=[PermissionsExtension(("write",))],

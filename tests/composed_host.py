@@ -120,6 +120,7 @@ def boot(
     from hatch_angee import discover
 
     from angee.hatch import _compile
+    from angee.project import PROJECT_DIR_ENV
 
     installed_apps = (
         list(root_apps) if root_apps is not None else [manifest.name for _, manifest in discover(addon_dirs)]
@@ -142,6 +143,9 @@ def boot(
         python_paths.append(os.environ["PYTHONPATH"])
     os.environ["PYTHONPATH"] = os.pathsep.join(python_paths)
     _compile(host_root, runtime_dir, check_history=False)
+    # This temporary host is the deployment root as well as the authored root;
+    # an ancestor checkout's stack is never this test process's deployment input.
+    os.environ[PROJECT_DIR_ENV] = str(host_root)
     import runpy
 
     namespace = {

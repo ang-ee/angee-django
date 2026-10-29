@@ -3,7 +3,7 @@ import * as React from "react";
 import { ActionTrigger, MutationDialog, mutationDialogValueCodecs, type DescriptorField, type MutationDialogValues } from "@angee/ui";
 
 import { ConnectCardDavDirectory } from "./documents";
-import { usePartiesT } from "./i18n";
+import { useCardDavT } from "./i18n";
 
 const MODEL = "parties.Directory";
 
@@ -13,7 +13,7 @@ export function ConnectCardDavAction(): React.ReactElement {
   const [connect] = useAuthoredMutation(ConnectCardDavDirectory, {
     invalidateModels: [MODEL],
   });
-  const t = usePartiesT();
+  const t = useCardDavT();
   const fields = React.useMemo<readonly DescriptorField[]>(
     () => [
       {

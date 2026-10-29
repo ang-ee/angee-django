@@ -14,9 +14,7 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
-from django.db import transaction
 from django.db.models import Exists, OuterRef, Prefetch
-from rebac import system_context
 from rebac.graphql.strawberry_django import optimize
 from strawberry import auto
 from strawberry_django.fields.field import StrawberryDjangoField
@@ -36,7 +34,7 @@ from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
-from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
+from angee.iam.permissions import session_user
 from angee.integrate.schema import BridgeTypeMixin
 from angee.parties.managers import DisplayAvatarPrefetches
 from angee.parties.models import Party as PartyModel
@@ -567,78 +565,6 @@ class PartiesIdentityMutation:
         return cast(SameAsStatementType, Party.same_as.for_pair(party_a, party_b).dismiss(aspect="same_as"))
 
 
-@strawberry.type
-class PartiesDirectoryMutation:
-    """Connect and manage contacts directories."""
-
-    @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
-    def connect_card_dav_directory(
-        self,
-        info: strawberry.Info,
-        name: str,
-        server_url: str,
-        username: str,
-        password: str,
-    ) -> DirectoryType:
-        """Create a Basic-auth credential and a connected CardDAV directory to sync.
-
-        ``server_url`` is the account/server URL — discovery finds the address
-        books, so no exact collection URL is needed. The directory is created
-        ``connected`` and owned by the calling admin; ``syncIntegration`` then pulls its
-        contacts into one :class:`~angee.parties.models.Folder` per address book.
-        """
-
-        user = session_user(info)
-        credential_model = apps.get_model("integrate", "Credential")
-        vendor_model = apps.get_model("integrate", "Vendor")
-        credential_name = f"CardDAV — {name}"
-        credential_material = {"username": username, "password": password}
-        directory_values = {
-            "owner": user,
-            "backend_class": "carddav",
-            "display_name": name,
-            "config": {"server_url": server_url},
-            "lifecycle": "connected",
-            "created_by_id": user.pk,
-        }
-
-        # Complete validation and network discovery before opening the database
-        # transaction. Both rows are intentionally unsaved probe inputs.
-        probe_credential = credential_model.objects.prepare_local_credential(
-            user,
-            kind="basic_auth",
-            name=credential_name,
-            material=credential_material,
-        )
-        Directory(credential=probe_credential, **directory_values).backend.probe()
-
-        # Persist every owned row in one write-only transaction after the probe.
-        with system_context(reason="parties.graphql.connect_carddav"), transaction.atomic():
-            credential = credential_model.objects.create_local_credential(
-                user,
-                kind="basic_auth",
-                name=credential_name,
-                material=credential_material,
-            )
-            vendor, _created = vendor_model.objects.get_or_create(slug="carddav", defaults={"display_name": "CardDAV"})
-            directory = Directory.objects.create(
-                vendor=vendor,
-                credential=credential,
-                **directory_values,
-            )
-            # The connected account's own login address is the admin's own handle:
-            # claim it (control + normal person identity statement). Synced
-            # *contacts'* handles get neither fact — only this connected account's.
-            if username.strip():
-                Handle.objects.claim_control(
-                    user,
-                    platform=Handle.Platform.for_value(username),
-                    value=username.strip(),
-                    asserted_by=user,
-                    evidence=[directory],
-                    display_name=name,
-                )
-        return cast(DirectoryType, directory)
 
 
 _PARTY_RESOURCE = hasura_model_resource(
@@ -1042,7 +968,6 @@ _PARTIES_SCHEMA_BUCKET = {
         _DIRECTORY_RESOURCE.query,
     ],
     "mutation": [
-        PartiesDirectoryMutation,
         PartiesIdentityMutation,
         _PARTY_RESOURCE.mutation,
         _PERSON_RESOURCE.mutation,

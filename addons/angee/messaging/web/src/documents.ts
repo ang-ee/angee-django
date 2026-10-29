@@ -783,3 +783,12 @@ export type SuggestedRecipientRow =
   NonNullable<RecordThreadPayload["suggested_recipients"]>[number];
 export type RecipientUserRow =
   NonNullable<DocumentType<typeof MessagingRecipientUsersDocument>["colleagues"]>[number];
+
+
+export const MessagingAccessFollowersDocument = graphql(`
+  query MessagingAccessFollowers($modelLabel: String!, $recordId: ID!) {
+    record_thread(input: { model_label: $modelLabel, record_id: $recordId, message_limit: 1 }) {
+      followers { user { assignment_subject username } }
+    }
+  }
+`);

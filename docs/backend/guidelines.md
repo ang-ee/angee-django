@@ -741,9 +741,9 @@ data through REBAC, never a queryset bypass.
   they are not copied into followers. See
   [`ThreadedModelMixin`](../../addons/angee/messaging/models.py) and
   [`ThreadNotificationManager`](../../addons/angee/messaging/managers.py).
-- **Posture is data, not schema.** `permissions.extends.zed` fragments union
-  permission arms and add no permission other than an owned field gate, so
-  narrowable defaults ship as seeded tuples. Platform-wide tuple-driven visibility
+- **Posture is data, not schema.** `permissions.extends.zed` declares addon-owned
+  capability permissions and unions existing permission arms; deployment-specific
+  narrowable defaults still ship as seeded tuples. Platform-wide tuple-driven visibility
   uses a const-backed singleton relation on each row (for example,
   `auth/user#directory` → `iam/directory:main`) plus grants on that singleton
   (`iam/directory:main#reader` names people managers), never base schema arms or
@@ -845,12 +845,13 @@ data through REBAC, never a queryset bypass.
   emits the merged effective zed to `runtime/permissions/<package>.zed`, and
   repoints that package's `AppConfig.rebac_schema` at it, so `rebac sync` /
   `rebac check` both read the additive superset. The merge fails fast on a relation-name collision (base or two
-  contributors), an arm whose permission the base does not declare, and a target
-  no installed package declares; contributors merge in sorted package order.
-  The only new permission a fragment may declare is a field gate,
-  `read__<field>` or `write__<field>`, on a concrete column that the same
-  package's donor contributes to the target model; no other package may extend
-  that gate. [`angee.base.build.field_gate_owners`](../../addons/angee/base/build.py)
+  contributors), a new permission name introduced by two contributors or
+  colliding with a relation, and a target no installed package declares;
+  contributors merge in sorted package order. New capability permission names
+  belong to one introducing addon; references pass native schema validation.
+  A new field gate, `read__<field>` or `write__<field>`, additionally requires a
+  concrete column that the same package's donor contributes to the target model;
+  no other package may extend that declaration. [`angee.base.build.field_gate_owners`](../../addons/angee/base/build.py)
   interprets the compiler's neutral donor-field provenance for REBAC.
   Functional drift is caught by `rebac sync` (content hash) and `angee check`
   (the emitted file); the contribution is revisioned by the contributing
@@ -1472,8 +1473,11 @@ open fresh evaluator scopes for authorization and change-feed reads.
   invariants separate users from system writers composes
   [`RowLockMixin`](../../addons/angee/base/models/locks.py): `locked_fields()` names what its
   state locks, user writes may not change those fields, delete the row or create
-  one, and `HasuraLines` checks the same lock before each elevated child write.
-  Its node projects `locked_fields`, advertised as the lines' `lock_field`. Never
+  one. Its default manager composes `RowLockQuerySet` so native collection
+  writes enforce the same owner rule; the declared base manager retains that
+  guard. A collector may remove locked children only through the model's explicit
+  owning-parent cascade contract. `HasuraLines` checks the same lock before each
+  intentionally elevated child write. Its node projects `locked_fields`, advertised as the lines' `lock_field`. Never
   guard a child on `is_sudo()` alone; [`Stage`](../../addons/angee/work/models.py)
   is the reference. A nested insert only inserts beside children the parent's own
   save provisions.
@@ -1618,6 +1622,13 @@ open fresh evaluator scopes for authorization and change-feed reads.
   declarations, so a narrow list selection costs the same at any row count.
 
 ### Direct record access
+
+Direct grants and ownership transfers acquire their model's cooperative
+`lock_for_record_access` hook before fresh subject admission. An addon with a
+domain lock order acquires its prerequisite rows there and delegates; validators
+stay usable independently of a write transaction. See
+[`AngeeModel`](../../addons/angee/base/models/base.py) and the
+[Proposals owners](../../addons/angee/proposals/models.py).
 
 [`RecordRefMixin`](../../addons/angee/base/models/refs.py)
 owns the generic pointer's model contract, accepted targets, merge policy and

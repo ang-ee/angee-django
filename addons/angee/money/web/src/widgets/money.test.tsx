@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { moneyWidget } from "./money";
+import { formatMoney, moneyWidget } from "./money";
 
 // Rendering runs under happy-dom in the environment's default locale (en-US on
 // CI, full ICU). The assertions lean on currency-driven facts — the symbol and
@@ -93,4 +93,9 @@ describe("moneyWidget.edit", () => {
     }));
     expect((getByRole("textbox") as HTMLInputElement).value).toBe("60.123400");
   });
+});
+
+
+it("preserves exact Decimal digits through the shared formatter", () => {
+  expect(formatMoney("123456789012.123456", "USD", { fractionDigits: 6 })).toMatch(/123456$/);
 });

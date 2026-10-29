@@ -74,7 +74,7 @@ test("lists the server's workflows for the concrete and canonical record models"
   }));
 });
 
-test("starts a workflow without required input at once and settles its outcome once", async () => {
+test("starts a workflow with an empty input form at once and settles its outcome once", async () => {
   mount(); await openWorkflows();
   fireEvent.click(await screen.findByRole("menuitem", { name: "Quiet" }));
   await waitFor(() => expect(mocks.start).toHaveBeenCalledExactlyOnceWith("wfl_quiet", {
@@ -140,4 +140,18 @@ test("inherits the record's dirty form gate", async () => {
   expect(item.getAttribute("aria-disabled")).toBe("true");
   fireEvent.click(item);
   expect(mocks.start).not.toHaveBeenCalled();
+});
+
+
+test("optional input opens the shared schema form before starting", async () => {
+  mount({ workflow: [{ id: "wfl_optional", name: "Optional", published: { input_schema: {
+    type: "object", properties: { note: { type: "string", title: "Note" } },
+  } } }] });
+  await openWorkflows();
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Optional" }));
+  const dialog = await screen.findByRole("dialog", { name: "Optional" });
+  expect(mocks.start).not.toHaveBeenCalled();
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Note" }), { target: { value: "Keep this" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Optional" }));
+  await waitFor(() => expect(mocks.start).toHaveBeenCalledWith("wfl_optional", expect.objectContaining({ input: { note: "Keep this" } })));
 });

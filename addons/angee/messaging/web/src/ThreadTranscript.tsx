@@ -171,6 +171,8 @@ function TranscriptBody({
 
   const virtualizer = useVirtualizer({
     count: messages.length,
+    getItemKey: (index) => messages[index]!.id,
+    anchorTo: conversation ? "end" : "start",
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ESTIMATED_ROW_HEIGHT,
     // Seed a viewport so rows window before the scroll element measures (also lets
@@ -184,23 +186,14 @@ function TranscriptBody({
   // Conversation mode keeps the viewport anchored when "Load older" prepends
   // earlier turns. Open at the selected message, or at the latest turn by default.
   const scrolledThreadRef = React.useRef<string | null>(null);
-  const prependAnchorRef = React.useRef<number | null>(null);
   React.useLayoutEffect(() => () => {
     // The virtualizer cancels pending scroll reconciliation on effect teardown.
     // A StrictMode replay with cached rows must request the initial position again.
     scrolledThreadRef.current = null;
-    prependAnchorRef.current = null;
   }, []);
   React.useLayoutEffect(() => {
     const scroll = scrollRef.current;
     if (!conversation || scroll === null || messages.length === 0) return;
-    if (prependAnchorRef.current !== null) {
-      // Restore the distance from the bottom captured before the prepend, so the row
-      // the reader was on stays put while older turns fill in above it.
-      scroll.scrollTop = scroll.scrollHeight - prependAnchorRef.current;
-      prependAnchorRef.current = null;
-      return;
-    }
     if (scrolledThreadRef.current !== threadId) {
       const anchorIndex = anchor.startsWith("message:")
         ? messages.findIndex((message) => message.id === anchor.slice(8))
@@ -215,10 +208,6 @@ function TranscriptBody({
 
   function loadOlder(): void {
     if (!transcript.hasNextPage || transcript.isFetching) return;
-    const scroll = scrollRef.current;
-    // Capture the pre-prepend distance from the bottom so the anchor effect can restore it.
-    if (conversation && scroll !== null)
-      prependAnchorRef.current = scroll.scrollHeight - scroll.scrollTop;
     void transcript.fetchNextPage({ cancelRefetch: false });
   }
   const olderButton = hasOlder ? (

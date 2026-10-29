@@ -32,6 +32,9 @@ type AccessVisibility = NonNullable<ManageAccessDialogProps["visibility"]>[numbe
 /** An owner's role adapter contributes its list and verbs to one open panel. */
 export interface AccessPeopleState {
   people: readonly AccessPerson[];
+  fetching?: boolean;
+  error?: Error | null;
+  onRetry?: () => void;
 }
 
 export interface AccessRoleState extends AccessPeopleState {
@@ -43,7 +46,7 @@ export interface AccessRoleState extends AccessPeopleState {
 declare module "@angee/ui/runtime" {
   interface ContainerKinds {
     /** A model's access-role owner, mounted headless to register its role (`<model>#access-roles`). */
-    "access-roles": React.ComponentType<AccessRoleOwnerProps>;
+    "access-roles": AccessRoleContribution;
     /** A model's visibility owner, mounted headless (`<model>#access-visibility`). */
     "access-visibility": React.ComponentType<AccessRoleOwnerProps>;
   }
@@ -53,6 +56,16 @@ export interface AccessRoleOwnerProps {
   targetId: string;
   record: Row | null | undefined;
   resource: DataResourceMetadata;
+}
+
+/** Reader-only contributors enrich an existing Share surface without offering access roles. */
+export type AccessRoleContribution = React.ComponentType<AccessRoleOwnerProps> | {
+  kind: "people";
+  render: React.ComponentType<AccessRoleOwnerProps>;
+};
+
+function peopleContribution(value: AccessRoleContribution): value is Extract<AccessRoleContribution, { kind: "people" }> {
+  return typeof value === "object" && value !== null && "kind" in value && value.kind === "people";
 }
 
 const AccessRoleRegistration = React.createContext<((id: string, value: AccessPeopleState | null) => void) | null>(null);
@@ -102,7 +115,7 @@ function mayShowShare(record: Row | null | undefined, resource: DataResourceMeta
 function useShareModel(resource: string): {
   model: ReturnType<typeof useModelMetadata>;
   accessResource: string;
-  roleEntries: ReturnType<typeof useContainer>;
+  roleEntries: ReturnType<typeof useContainer<AccessRoleContribution>>;
   visibilityEntries: ReturnType<typeof useContainer>;
 } {
   const listed = useModelMetadata(resource);
@@ -111,7 +124,7 @@ function useShareModel(resource: string): {
     : listed?.resource.canonicalLabel ?? resource;
   const model = useModelMetadata(accessResource);
   const accessModels = React.useMemo(() => [accessResource], [accessResource]);
-  const roleEntries = useContainer("iam#access-roles", { models: accessModels });
+  const roleEntries = useContainer<AccessRoleContribution>("iam#access-roles", { models: accessModels });
   const visibilityEntries = useContainer("iam#access-visibility", { models: accessModels });
   return { model, accessResource, roleEntries, visibilityEntries };
 }
@@ -120,7 +133,7 @@ function useShareModel(resource: string): {
 export function ShareRecordChrome(): React.ReactElement | null {
   const record = useRecordChromeContext();
   const { model, roleEntries, visibilityEntries } = useShareModel(record.resource);
-  if (!mayShowShare(record.record, model?.resource, [...roleEntries, ...visibilityEntries])) return null;
+  if (!mayShowShare(record.record, model?.resource, [...roleEntries.filter((entry) => !peopleContribution(entry.content)), ...visibilityEntries])) return null;
   return <ShareAccess
     resource={record.resource}
     targetIds={[record.recordId]}
@@ -132,7 +145,7 @@ export function ShareRecordChrome(): React.ReactElement | null {
 export function ShareAccessCompact(): React.ReactElement | null {
   const record = useRecordChromeContext();
   const { model, roleEntries, visibilityEntries } = useShareModel(record.resource);
-  if (!mayShowShare(record.record, model?.resource, [...roleEntries, ...visibilityEntries])) return null;
+  if (!mayShowShare(record.record, model?.resource, [...roleEntries.filter((entry) => !peopleContribution(entry.content)), ...visibilityEntries])) return null;
   return <ShareAccess resource={record.resource} targetIds={[record.recordId]}
     record={record.record} compact />;
 }
@@ -171,7 +184,8 @@ function ShareAccess(props: Omit<ShareAccessDialogProps, "open" | "onOpenChange"
 export function ShareAccessDialog({ resource, targetIds, ...props }: ShareAccessDialogProps): React.ReactElement | null {
   const { model, accessResource, roleEntries, visibilityEntries } = useShareModel(resource);
   if (!model?.resource.resourceType ||
-    (!model.resource.grantable?.length && !roleEntries.length && !visibilityEntries.length)) return null;
+    (!model.resource.grantable?.length
+      && !roleEntries.some((entry) => !peopleContribution(entry.content)) && !visibilityEntries.length)) return null;
   return <BoundShareAccess
     key={`${accessResource}:${JSON.stringify(targetIds)}`}
     resource={model.resource}
@@ -184,7 +198,7 @@ export function ShareAccessDialog({ resource, targetIds, ...props }: ShareAccess
 
 function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel, open, onOpenChange, trigger, compact, roleEntries, visibilityEntries }: Omit<ShareAccessDialogProps, "resource"> & {
   resource: DataResourceMetadata;
-  roleEntries: ReturnType<typeof useContainer>;
+  roleEntries: ReturnType<typeof useContainer<AccessRoleContribution>>;
   visibilityEntries: ReturnType<typeof useContainer>;
 }): React.ReactElement {
   const t = useUiT();
@@ -212,6 +226,7 @@ function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel, o
       return current[id] === value ? current : { ...current, [id]: value };
     });
   }, []);
+  const contributorStates = roleEntries.flatMap((entry) => roleStates[entry.id] ?? []);
   const roles = roleEntries.flatMap((entry) => accessRole(roleStates[entry.id])?.role ?? []);
   const visibility = visibilityEntries.flatMap((entry) => visibilityStates[entry.id] ?? []);
   const rolePeople = roleEntries.flatMap((entry) => roleStates[entry.id]?.people ?? []);
@@ -312,7 +327,7 @@ function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel, o
       : undefined);
   return <AccessRoleRegistration.Provider value={registerRole}><AccessVisibilityRegistration.Provider value={registerVisibility}>
     {open && stableTargetIds.length === 1 ? roleEntries.map((entry) =>
-      <React.Fragment key={entry.id}>{React.createElement(entry.content as React.ComponentType<AccessRoleOwnerProps>, {
+      <React.Fragment key={entry.id}>{React.createElement(peopleContribution(entry.content) ? entry.content.render : entry.content, {
         targetId: stableTargetIds[0]!, record, resource,
       })}</React.Fragment>) : null}
     {open && stableTargetIds.length === 1 ? visibilityEntries.map((entry) =>
@@ -335,9 +350,9 @@ function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel, o
     directShare
     onAddRole={onAddRole}
     onRemovePerson={onRemovePerson}
-    fetching={query.isFetching || readers.isFetching}
-    error={query.error ?? readers.error}
-    onRetry={() => { retry(); void readers.refetch(); }}
+    fetching={query.isFetching || readers.isFetching || contributorStates.some((state) => state.fetching)}
+    error={query.error ?? readers.error ?? contributorStates.find((state) => state.error)?.error}
+    onRetry={() => { retry(); void readers.refetch(); contributorStates.forEach((state) => state.onRetry?.()); }}
     onGrant={grantAccess}
     onRevoke={revokeAccess}
     />
