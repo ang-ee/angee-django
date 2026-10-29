@@ -311,7 +311,7 @@ OPEN_TURN_STATUSES = (TurnStatus.PENDING, *ACTIVE_TURN_STATUSES)
 """Unfinished turns canceled when their session closes."""
 
 
-class InferenceProvider(Composable, ImplDefaultsMixin, metaclass=RebacModelBase, inherits="integrate.Integration"):
+class InferenceProvider(ImplDefaultsMixin, Composable, metaclass=RebacModelBase, inherits="integrate.Integration"):
     """An LLM provider account, materialized as an integration child row.
 
     It draws its API credential from its inherited integration credential and

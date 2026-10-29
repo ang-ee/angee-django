@@ -1951,7 +1951,7 @@ class ProjectBindingsMixin(models.Model):
         abstract = True
 
 
-class FolderProjects(Composable, ProjectBindingsMixin, extends="storage.Folder"):
+class FolderProjects(ProjectBindingsMixin, Composable, extends="storage.Folder"):
     """Compose project binding collection onto storage folders."""
 
 
@@ -1959,7 +1959,7 @@ class FolderProjects(Composable, ProjectBindingsMixin, extends="storage.Folder")
         abstract = True
 
 
-class DriveProjects(Composable, ProjectBindingsMixin, extends="storage.Drive"):
+class DriveProjects(ProjectBindingsMixin, Composable, extends="storage.Drive"):
     """Projects-owned reverse collection for storage-drive bindings."""
 
 
@@ -1967,7 +1967,7 @@ class DriveProjects(Composable, ProjectBindingsMixin, extends="storage.Drive"):
         abstract = True
 
 
-class IntegrationProjects(Composable, ProjectBindingsMixin, extends="integrate.Integration"):
+class IntegrationProjects(ProjectBindingsMixin, Composable, extends="integrate.Integration"):
     """Projects-owned reverse collection for canonical messaging-channel bindings."""
 
 
@@ -1975,7 +1975,7 @@ class IntegrationProjects(Composable, ProjectBindingsMixin, extends="integrate.I
         abstract = True
 
 
-class ThreadProjects(Composable, ProjectBindingsMixin, extends="messaging.Thread"):
+class ThreadProjects(ProjectBindingsMixin, Composable, extends="messaging.Thread"):
     """Projects-owned reverse collection for messaging-thread bindings."""
 
 
@@ -1983,7 +1983,7 @@ class ThreadProjects(Composable, ProjectBindingsMixin, extends="messaging.Thread
         abstract = True
 
 
-class VaultProjects(Composable, ProjectBindingsMixin, extends="knowledge.Vault"):
+class VaultProjects(ProjectBindingsMixin, Composable, extends="knowledge.Vault"):
     """Projects-owned reverse collection for knowledge-vault bindings."""
 
 
