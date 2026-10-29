@@ -10,6 +10,7 @@ from typing import Any
 import django_yamlconf
 import environ
 from django.core.exceptions import ImproperlyConfigured
+from django_compose.conf import expand_attribute_refs
 
 from angee.base.conf import yamlconf
 from angee.base.paths import resolve_path
@@ -54,7 +55,7 @@ def configure(namespace: MutableMapping[str, Any]) -> None:
                 if os.access(path, os.R_OK):
                     django_yamlconf.load_conffile(attributes, target, loader, kwargs, str(path))
         django_yamlconf.load_envdefs(attributes, target)
-        django_yamlconf.expand_attribute_refs(attributes)
+        expand_attribute_refs(attributes)
         django_yamlconf.inject_attr(attributes, target)
     namespace.update({
         name: value for name, value in vars(target).items()
