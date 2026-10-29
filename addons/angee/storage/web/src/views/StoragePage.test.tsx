@@ -499,7 +499,7 @@ describe("StoragePage explorer wiring", () => {
     routerState.setSearch({ folder: "folder-a" });
     render(pageTree());
     const navigator = screen.getByRole("navigation", { name: "Files" });
-    const toolbar = within(navigator).getByRole("toolbar");
+    const toolbar = within(navigator).getByRole("toolbar", { name: "" });
     expect(toolbar.contains(screen.getByTestId("root-picker"))).toBe(true);
     expect(within(toolbar).getByRole("button", { name: "New" })).toBeTruthy();
     fireEvent.click(within(toolbar).getByRole("button", { name: "More" }));
