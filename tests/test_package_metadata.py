@@ -57,7 +57,8 @@ def test_disabled_catalogue_uses_distribution_paths_without_imports(tmp_path, mo
     dist, _ = distribution(tmp_path, monkeypatch, "probe-poison", editable=editable)
     facts = addons.facts_from_distribution(dist)
     assert facts == {
-        "name": "probe.poison", "distribution": "probe-poison", "description": "Installed description",
+        "name": "probe.poison", "distribution": "probe-poison", "requirements": (),
+        "description": "Installed description",
         "keywords": ("one", "two"), "category": "Data", "depends_on": (),
     }
     assert "probe.poison" not in sys.modules
@@ -130,3 +131,25 @@ def test_prebuilt_settings_carry_only_plain_graph_facts():
     assert "manifest" not in source
     assert "depends_on" not in source
     assert "app_configs=" in source
+
+
+@pytest.mark.parametrize("identities", [
+    (("Example_Foo_Bar", "example.foo_bar"), ("example-foo-bar", "example.foo.bar")),
+    (("example-first", "example.same"), ("example-second", "example.same")),
+])
+def test_native_identity_index_refuses_ambiguous_distribution_or_app_claims(identities):
+    with pytest.raises(ImproperlyConfigured, match="claims both addon|claimed by distributions"):
+        addons.package_identity_index(identities)
+
+
+def test_identity_index_accepts_the_same_installed_and_catalogue_identity():
+    assert addons.package_identity_index((
+        ("Example_Foo_Bar", "example.foo_bar"), ("example-foo-bar", "example.foo_bar"),
+    )) == {"example-foo-bar": "example.foo_bar"}
+
+
+def test_requirement_projection_refuses_canonical_alias_collisions_before_lookup():
+    with pytest.raises(ImproperlyConfigured, match="claims both addon"):
+        addons.requirement_addons(("example-foo-bar>=1",), {
+            "Example_Foo_Bar": "example.foo_bar", "example-foo-bar": "example.foo.bar",
+        })

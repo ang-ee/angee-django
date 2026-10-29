@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from importlib.metadata import EntryPoint
 from pathlib import Path
 
 import pytest
+from django.core.exceptions import ImproperlyConfigured
+from django.db import IntegrityError, connection, transaction
+from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
 import tests.test_marketplace_graphql  # noqa: F401 -- register the fixture model graph before database setup
+from angee.addons import addon_entry_points, facts_from_distribution
 from angee.platform_integrate_vcs.catalog import parse_addon_meta
-from tests.conftest import Addon, Repository, Source, VcsBridge, catalogue_package, make_integration
+from tests.conftest import Addon, Repository, Source, VcsBridge, catalogue_package, make_addon, make_integration
 
 
 @pytest.fixture()
@@ -258,3 +263,125 @@ def test_catalogue_reverse_dependencies_include_live_remote_but_not_historical_d
         Addon.objects.reconcile_dependencies()
         target.refresh_from_db()
         assert target.depended_by == []
+
+
+
+def _catalogue_document(app: str, distribution: str, requirements: tuple[str, ...] = ()) -> str:
+    """Native source metadata with explicit distribution and application identities."""
+
+    return (
+        f"[project]\nname={json.dumps(distribution)}\nversion=\"1.0\"\n"
+        f"dependencies={json.dumps(requirements)}\n"
+        f"[project.entry-points.\"angee.addons\"]\n{json.dumps(app)}={json.dumps(app)}\n"
+    )
+
+
+@pytest.mark.parametrize("dependency_first", [False, True])
+def test_catalogue_reprojects_retained_native_requirements_across_sources(
+    catalog_source, monkeypatch, dependency_first,
+):
+    source, root_marker = catalog_source
+    root_marker.write_text(_catalogue_document("example.root", "example-root", ("example-foo-bar>=1",)))
+    (root_marker.parent.parent / "dependency" / "pyproject.toml").unlink()
+    repository_root = root_marker.parents[2]
+    dependency_marker = repository_root / "second-source" / "dependency" / "pyproject.toml"
+    dependency_marker.parent.mkdir(parents=True)
+    dependency_marker.write_text(_catalogue_document("example.foo_bar", "example-foo-bar"))
+    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda: {})
+    with system_context(reason="test cross-source catalogue"):
+        second = Source.objects.create(repository=source.repository, kind="addon", path="second-source")
+    first, last = (second, source) if dependency_first else (source, second)
+    assert first.refresh() == 1
+    assert last.refresh() == 1
+    with system_context(reason="test cross-source catalogue read"):
+        root = Addon.objects.get(name="example.root")
+        dependency = Addon.objects.get(name="example.foo_bar")
+        assert root.distribution == "example-root"
+        assert root.requirements == ["example-foo-bar>=1"]
+        assert root.depends_on == ["example.foo_bar"]
+        assert dependency.depended_by == ["example.root"]
+    root_marker.write_text(_catalogue_document("example.root", "example-root"))
+    assert source.refresh() == 1
+    with system_context(reason="test cross-source catalogue reread"):
+        root.refresh_from_db()
+        dependency.refresh_from_db()
+        assert root.requirements == []
+        assert root.depends_on == []
+        assert dependency.depended_by == []
+
+
+@pytest.mark.parametrize("collision", ["canonical_distribution", "duplicate_app"])
+def test_catalogue_rejects_ambiguous_source_documents_before_catalogue_writes(catalog_source, collision):
+    source, marker = catalog_source
+    marker.write_text(_catalogue_document("example.foo_bar", "example-foo-bar"))
+    second = marker.parent.parent / "dependency" / "pyproject.toml"
+    other = "example.foo.bar" if collision == "canonical_distribution" else "example.foo_bar"
+    second.write_text(_catalogue_document(other, "example-foo-bar"))
+    with system_context(reason="test catalogue collision snapshot"):
+        before = list(Addon.objects.order_by("pk").values())
+    with CaptureQueriesContext(connection) as queries:
+        with pytest.raises(ImproperlyConfigured, match="claims both addon|Duplicate catalogue addon"):
+            source.refresh()
+    assert not [
+        query["sql"] for query in queries
+        if query["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))
+        and any(f'"{model._meta.db_table}"' in query["sql"] for model in (Addon, Source))
+    ]
+    with system_context(reason="test catalogue collision unchanged"):
+        assert list(Addon.objects.order_by("pk").values()) == before
+        source.refresh_from_db()
+        assert source.last_synced_at is None
+
+
+@pytest.mark.parametrize("same_identity", [False, True])
+def test_catalogue_rejects_another_sources_conflicting_identity_or_ownership(catalog_source, same_identity):
+    source, marker = catalog_source
+    marker.write_text(_catalogue_document("example.foo_bar", "example-foo-bar"))
+    (marker.parent.parent / "dependency" / "pyproject.toml").unlink()
+    assert source.refresh() == 1
+    second_marker = marker.parents[2] / "second-source" / "pyproject.toml"
+    second_marker.parent.mkdir()
+    second_marker.write_text(_catalogue_document(
+        "example.foo_bar" if same_identity else "example.foo.bar", "example-foo-bar",
+    ))
+    with system_context(reason="test competing source setup"):
+        second = Source.objects.create(repository=source.repository, kind="addon", path="second-source")
+        before = list(Addon.objects.order_by("pk").values())
+    with CaptureQueriesContext(connection) as queries:
+        with pytest.raises(ImproperlyConfigured, match="claims both addon|already owned by source"):
+            second.refresh()
+    assert not [
+        query["sql"] for query in queries
+        if query["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))
+        and any(f'"{model._meta.db_table}"' in query["sql"] for model in (Addon, Source))
+    ]
+    with system_context(reason="test competing source unchanged"):
+        assert list(Addon.objects.order_by("pk").values()) == before
+        second.refresh_from_db()
+        assert second.last_synced_at is None
+
+
+def test_installed_and_source_declarations_share_one_native_identity(catalog_source, monkeypatch):
+    source, marker = catalog_source
+    installed = make_addon(name="example.installed")
+    facts = facts_from_distribution(addon_entry_points()[installed.name].dist)
+    marker.write_text(_catalogue_document(installed.name, facts["distribution"]))
+    (marker.parent.parent / "dependency" / "pyproject.toml").unlink()
+    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda: {installed.name: (facts, None)})
+    with system_context(reason="test installed catalogue row"):
+        row = Addon.objects.create(name=installed.name, distribution=facts["distribution"], requirements=[])
+    assert source.refresh() == 1
+    with system_context(reason="test installed catalogue identity"):
+        row.refresh_from_db()
+        assert Addon.objects.filter(name=installed.name).count() == 1
+        assert row.vcs_source_id == source.pk
+        assert row.distribution == facts["distribution"]
+
+
+
+def test_catalogue_distribution_uniqueness_is_enforced_by_the_model(composed_tables):
+    with system_context(reason="test catalogue native identity constraint"):
+        Addon.objects.create(name="example.foo_bar", distribution="example-foo-bar")
+        with pytest.raises(IntegrityError), transaction.atomic():
+            Addon.objects.create(name="example.foo.bar", distribution="example-foo-bar")
+        assert not Addon.objects.filter(name="example.foo.bar").exists()

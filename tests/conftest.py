@@ -933,8 +933,9 @@ def catalogue_package(name: str, *, depends_on: tuple[str, ...] = (), descriptio
     """One already-projected catalogue value for isolated marketplace tests."""
 
     return {
-        "name": name, "distribution": name.replace(".", "-"), "description": description,
+        "name": name, "distribution": name.replace(".", "-").replace("_", "-"), "description": description,
         "keywords": (), "category": "", "depends_on": depends_on,
+        "requirements": tuple(dependency.replace(".", "-").replace("_", "-") for dependency in depends_on),
     }
 
 

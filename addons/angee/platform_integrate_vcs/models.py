@@ -5,11 +5,12 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from django.apps import apps
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
 from django.utils import timezone
 from rebac import system_context
 
-from angee.addons import addon_entry_points
+from angee.addons import addon_entry_points, package_identity_index, requirement_addons
 from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeModel
 from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
@@ -47,6 +48,16 @@ class CatalogProvenance(models.Model):
 class AddonCatalogManager(AngeeManager, VcsOutputManager):
     """Owns the reconcile of marketplace rows from an addon ``Source``."""
 
+    @staticmethod
+    def _check_source_owner(row: Any, source_id: int) -> None:
+        """Refuse another live source's claim, including after native row-lock acquisition."""
+
+        if row.vcs_source_id not in (None, source_id) and row.state != row.AddonState.REMOVED:
+            raise ImproperlyConfigured(
+                f"Catalogue addon {row.name!r} is already owned by source "
+                f"{row.vcs_source_id} at {row.vcs_path!r}"
+            )
+
     def sync_from_source(self, source: Any) -> int:
         """Discover ``pyproject.toml`` under ``source`` and reconcile ``platform.Addon`` rows.
 
@@ -66,21 +77,32 @@ class AddonCatalogManager(AngeeManager, VcsOutputManager):
         source.repository = repository
         vcs_bridge = repository.vcs_bridge
         documents = vcs_bridge.discover(source, marker="pyproject.toml", parse=lambda blob: {"blob": blob})
-        dependencies = {
-            entry.dist.metadata["Name"]: name for name, entry in addon_entry_points().items()
-            if entry.dist is not None
-        }
+        descriptors = []
+        claims: dict[str, str] = {}
         for document in documents:
             facts = parse_addon_meta(document["blob"], dependencies={})
-            if facts:
-                dependencies.setdefault(facts["distribution"], facts["name"])
-        descriptors = [
-            {**facts, "path": document["path"]} for document in documents
-            if (facts := parse_addon_meta(document["blob"], dependencies=dependencies))
-        ]
+            if not facts:
+                continue
+            name = facts["name"]
+            if name in claims:
+                raise ImproperlyConfigured(
+                    f"Duplicate catalogue addon {name!r}: {claims[name]!r} and {document['path']!r}"
+                )
+            claims[name] = document["path"]
+            descriptors.append({**facts, "path": document["path"]})
         available = available_addons()
         seen: set[str] = set()
         with system_context(reason="platform_integrate_vcs.catalog.sync"), transaction.atomic():
+            known = list(addon.objects.select_for_update().order_by("name"))
+            identities = package_identity_index((
+                *((entry.dist.metadata["Name"], name) for name, entry in addon_entry_points().items()
+                  if entry.dist is not None),
+                *((row.distribution, row.name) for row in known if row.distribution),
+                *((descriptor["distribution"], descriptor["name"]) for descriptor in descriptors),
+            ))
+            for row in known:
+                if row.name in claims:
+                    self._check_source_owner(row, source.pk)
             for descriptor in descriptors:
                 name = str(descriptor.get("name", ""))
                 if not name:
@@ -90,25 +112,29 @@ class AddonCatalogManager(AngeeManager, VcsOutputManager):
                 if name in available:
                     addon.objects.filter(name=name).update(**provenance)
                     continue
-                addon.objects.update_or_create(
-                    name=name,
-                    defaults={
-                        "label": "",
-                        "namespace": str(descriptor.get("namespace", "")),
-                        # The board groups by ``category`` and renders ``description``/
-                        # ``keywords`` — a discovered marketplace row carries the same
-                        # manifest metadata the parser read, never a blank-category lane.
-                        "description": str(descriptor.get("description", "")),
-                        "keywords": list(descriptor.get("keywords", [])),
-                        "category": str(descriptor.get("category", "")),
-                        "kind": addon.AddonKind.REQUIRED,
-                        "source": addon.AddonSource.REMOTE,
-                        "state": addon.AddonState.DISABLED,
-                        "depends_on": list(descriptor.get("depends_on", [])),
-                        **addon.reset_runtime_facts(),
-                        **provenance,
-                    },
-                )
+                defaults = {
+                    "label": "",
+                    "distribution": descriptor["distribution"],
+                    "requirements": list(descriptor["requirements"]),
+                    "namespace": str(descriptor.get("namespace", "")),
+                    # The board groups by ``category`` and renders ``description``/
+                    # ``keywords`` — a discovered marketplace row carries the same
+                    # manifest metadata the parser read, never a blank-category lane.
+                    "description": str(descriptor.get("description", "")),
+                    "keywords": list(descriptor.get("keywords", [])),
+                    "category": str(descriptor.get("category", "")),
+                    "kind": addon.AddonKind.REQUIRED,
+                    "source": addon.AddonSource.REMOTE,
+                    "state": addon.AddonState.DISABLED,
+                    "depends_on": list(requirement_addons(descriptor["requirements"], identities)),
+                    **addon.reset_runtime_facts(),
+                    **provenance,
+                }
+                row, created = addon.objects.select_for_update().get_or_create(name=name, defaults=defaults)
+                if not created:
+                    self._check_source_owner(row, source.pk)
+                    addon.objects.update_or_create(name=name, defaults=defaults)
+
             (
                 addon.objects.filter(vcs_source=source, source=addon.AddonSource.REMOTE)
                 .exclude(name__in=seen)

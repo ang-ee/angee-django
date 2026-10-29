@@ -27,7 +27,13 @@ from django.conf import settings
 from django.db import DatabaseError, models, transaction
 from rebac import system_context
 
-from angee.addons import addon_entry_points, facts_from_distribution, resolve_package_roots
+from angee.addons import (
+    addon_entry_points,
+    facts_from_distribution,
+    package_identity_index,
+    requirement_addons,
+    resolve_package_roots,
+)
 from angee.base.fields.state import StateField
 from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeModel
@@ -243,7 +249,8 @@ class AddonManager[T: Addon](AngeeManager[T]):
         if config is not None and getattr(config, "compose_required", False):
             manifests = (
                 facts_from_distribution(entry_point.dist)
-                for app_name, entry_point in addon_entry_points().items() if app_name in loaded
+                for app_name, entry_point in addon_entry_points().items()
+                if app_name in loaded and entry_point.dist is not None
             )
             required_by = ", ".join(self._dependants(manifests, aliases=aliases).get(name, ())) or "another enabled app"
             return f"{name} is required by {required_by} and cannot be disabled."
@@ -349,6 +356,10 @@ class AddonManager[T: Addon](AngeeManager[T]):
         counts = composed.resource_counts()
         rows = self.all()
         with transaction.atomic():
+            package_identity_index((
+                *((row.distribution, row.name) for row in rows.select_for_update() if row.distribution),
+                *((package["distribution"], name) for name, package in manifests.items()),
+            ))
             pending_by_name = dict(rows.values_list("name", "pending")) if canonical_desired is None else {}
             rows.filter(source__in=(Addon.AddonSource.INSTALLED, Addon.AddonSource.LOCAL)).exclude(
                 name__in=manifests
@@ -380,6 +391,8 @@ class AddonManager[T: Addon](AngeeManager[T]):
                         **runtime_facts,
                         "label": config.label if config is not None else "",
                         "namespace": name.split(".")[0],
+                        "distribution": manifest["distribution"],
+                        "requirements": list(manifest["requirements"]),
                         "description": manifest["description"],
                         "keywords": list(manifest["keywords"]),
                         "category": manifest["category"] or "",
@@ -394,22 +407,36 @@ class AddonManager[T: Addon](AngeeManager[T]):
             self.reconcile_dependencies()
 
     def reconcile_dependencies(self) -> None:
-        """Reflect current local and remote declarations; removed declarers are history.
+        """Reproject live native requirements, then reflect reverse catalogue edges.
 
-        Historical target rows retain current incoming edges, but their old
-        outgoing declarations no longer contribute to the live catalogue graph.
+        A newly discovered package can resolve requirements retained from an older
+        source refresh. Removed declarers keep historical forward edges but do
+        not contribute outgoing edges. Rows predating native metadata retain their
+        snapshot until their source or installed distribution refreshes.
         """
 
-        rows = list(self.all())
-        aliases, _configs = self._app_identity()
-        incoming = self._dependants(
-            ({"name": row.name, "depends_on": row.depends_on}
-             for row in rows if row.state != self.model.AddonState.REMOVED), aliases=aliases,
-        )
-        for row in rows:
-            value = incoming.get(row.name, [])
-            if row.depended_by != value:
-                self.filter(pk=row.pk).update(depended_by=value)
+        with transaction.atomic():
+            rows = list(self.select_for_update().order_by("name"))
+            identities = package_identity_index((
+                *((entry.dist.metadata["Name"], name) for name, entry in addon_entry_points().items()
+                  if entry.dist is not None),
+                *((row.distribution, row.name) for row in rows if row.distribution),
+            ))
+            live = [row for row in rows if row.state != self.model.AddonState.REMOVED]
+            for row in live:
+                if row.distribution:
+                    projected = list(requirement_addons(row.requirements, identities))
+                    if row.depends_on != projected:
+                        self.filter(pk=row.pk).update(depends_on=projected)
+                        row.depends_on = projected
+            aliases, _configs = self._app_identity()
+            incoming = self._dependants(
+                ({"name": row.name, "depends_on": row.depends_on} for row in live), aliases=aliases,
+            )
+            for row in rows:
+                value = incoming.get(row.name, [])
+                if row.depended_by != value:
+                    self.filter(pk=row.pk).update(depended_by=value)
 
     def pending_changes(self) -> bool | None:
         """Return verified desired-vs-loaded drift, or ``None`` when settings are unreadable.
@@ -493,6 +520,12 @@ class Addon(AngeeModel):
     # Package metadata (the addon's ``pyproject.toml``), reflected for the marketplace
     # board: the declared ``category`` it groups by and the ``description``/``keywords``
     # the cards show. The contract owns these; the reconcile only mirrors them.
+    distribution = models.CharField(max_length=200, blank=True, default="")
+    """Canonical native distribution identity; empty until metadata is refreshed."""
+
+    requirements = models.JSONField(default=list, blank=True)
+    """Native PEP 508 requirements, retained so other catalogue sources can resolve them."""
+
     description = models.TextField(blank=True, default="")
     keywords = models.JSONField(default=list, blank=True)
     category = models.CharField(max_length=100, blank=True, default="", db_index=True, choices=AddonCategory.choices)
@@ -518,6 +551,12 @@ class Addon(AngeeModel):
         """Django model options."""
 
         abstract = True
+        constraints = (
+            models.UniqueConstraint(
+                fields=("distribution",), condition=~models.Q(distribution=""),
+                name="%(app_label)s_%(class)s_distribution_uniq",
+            ),
+        )
         ordering = ("name",)
         rebac_resource_type = "platform/addon"
 

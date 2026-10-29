@@ -31,25 +31,50 @@ def addon_entry_points() -> dict[str, metadata.EntryPoint]:
     """
 
     result: dict[str, metadata.EntryPoint] = {}
-    distributions: set[str] = set()
     for entry in sorted(metadata.entry_points(group=ADDON_ENTRY_POINT_GROUP), key=lambda item: (item.name, item.value)):
         if entry.name in result:
             raise ImproperlyConfigured(f"Duplicate installed addon entry point {entry.name!r}")
         if entry.dist is None:
             raise ImproperlyConfigured(f"Addon entry point {entry.name!r} has no distribution")
-        distribution = canonicalize_name(entry.dist.metadata["Name"])
-        if distribution in distributions:
-            raise ImproperlyConfigured(f"Distribution {distribution!r} declares multiple addon entry points")
-        distributions.add(distribution)
         result[entry.name] = entry
+    package_identity_index(
+        (entry.dist.metadata["Name"], name) for name, entry in result.items() if entry.dist is not None
+    )
     return result
 
 
-def _dependency_names(requirements: Iterable[str], dependencies: Mapping[str, str]) -> tuple[str, ...]:
-    """Project native requirements active without extras onto addon identities."""
+def package_identity_index(identities: Iterable[tuple[str, str]]) -> dict[str, str]:
+    """Index canonical distribution names, refusing conflicting addon identities.
+
+    Installed metadata and catalogue documents may describe the same identity.
+    Repeating that pair is harmless; assigning a canonical distribution to two
+    apps, or an app to two distributions, is ambiguous and fails before lookup.
+    """
+
+    result: dict[str, str] = {}
+    distributions: dict[str, str] = {}
+    for distribution, app in identities:
+        canonical = canonicalize_name(distribution)
+        previous_app = result.get(canonical)
+        if previous_app is not None and previous_app != app:
+            raise ImproperlyConfigured(
+                f"Distribution {canonical!r} claims both addon {previous_app!r} and {app!r}"
+            )
+        previous_distribution = distributions.get(app)
+        if previous_distribution is not None and previous_distribution != canonical:
+            raise ImproperlyConfigured(
+                f"Addon {app!r} is claimed by distributions {previous_distribution!r} and {canonical!r}"
+            )
+        result[canonical] = app
+        distributions[app] = canonical
+    return result
+
+
+def requirement_addons(requirements: Iterable[str], dependencies: Mapping[str, str]) -> tuple[str, ...]:
+    """Project requirements active without extras through declared addon identities."""
 
     names: set[str] = set()
-    lookup = {canonicalize_name(name): app for name, app in dependencies.items()}
+    lookup = package_identity_index(dependencies.items())
     for value in requirements:
         requirement = Requirement(value)
         if requirement.marker is None or requirement.marker.evaluate({"extra": ""}):
@@ -59,10 +84,10 @@ def _dependency_names(requirements: Iterable[str], dependencies: Mapping[str, st
 
 
 def _distribution_names() -> dict[str, str]:
-    return {
-        canonicalize_name(entry.dist.metadata["Name"]): name
+    return package_identity_index(
+        (entry.dist.metadata["Name"], name)
         for name, entry in addon_entry_points().items() if entry.dist is not None
-    }
+    )
 
 
 def _identity(document: Mapping[str, Any]) -> tuple[str, str] | None:
@@ -90,8 +115,10 @@ def facts_from_toml(
     """Project catalogue facts from package TOML, skipping ordinary projects.
 
     ``dependencies`` maps distribution names to declared addon app identities.
-    A VCS catalogue supplies its complete document index; installed callers use
-    the native entry-point index. Capability tables remain owned by their addons.
+    Catalogue callers supply installed and retained source identities. Original
+    requirements remain in the projection so another source refresh can resolve
+    them later. Installed callers use the native entry-point index; capability
+    tables remain owned by their addons.
     """
 
     identity = _identity(document)
@@ -104,11 +131,12 @@ def facts_from_toml(
         raise ImproperlyConfigured(f"Addon {name!r} must use its app name as its distribution name")
     return {
         "name": name,
-        "distribution": distribution,
+        "distribution": canonicalize_name(distribution),
+        "requirements": tuple(project.get("dependencies", ())),
         "description": project.get("description", ""),
         "keywords": tuple(project.get("keywords", ())),
         "category": _tool_facts(document).get("category", ""),
-        "depends_on": _dependency_names(
+        "depends_on": requirement_addons(
             project.get("dependencies", ()), _distribution_names() if dependencies is None else dependencies,
         ),
     }
@@ -190,7 +218,7 @@ def addon_dependencies(app_config: AppConfig, *, refresh: bool = False) -> tuple
 
     entries = addon_entry_points()
     entry = entries.get(app_config.name)
-    names = () if entry is None or entry.dist is None else _dependency_names(
+    names = () if entry is None or entry.dist is None else requirement_addons(
         entry.dist.requires or (),
         {item.dist.metadata["Name"]: name for name, item in entries.items() if item.dist is not None},
     )

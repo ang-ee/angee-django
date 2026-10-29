@@ -161,6 +161,8 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
             addon.AddonSource.INSTALLED,
             addon.AddonKind.CONSUMER,
         )
+        assert enabled.distribution == "fakeaddon-loaded"
+        assert enabled.requirements == []
         assert enabled.depends_on == []
         assert enabled.depended_by == ["fakeaddon.base"]
         assert enabled.forced is False
