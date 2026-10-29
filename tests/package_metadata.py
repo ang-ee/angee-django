@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from importlib import metadata
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,8 @@ def write_addon_distribution(
     *,
     depends_on: tuple[str, ...] = (),
     capabilities: dict[str, Any] | None = None,
-) -> None:
+    metadata_root: Path | None = None,
+) -> metadata.PathDistribution:
     """Write real package data and dist-info discoverable on the fixture source root."""
 
     entries = addon_entry_points()
@@ -31,7 +33,7 @@ def write_addon_distribution(
     (package / "pyproject.toml").write_text(tomlkit.dumps({
         "project": project, "tool": {"angee": capabilities or {}},
     }), encoding="utf-8")
-    source_root = package.parents[len(name.split(".")) - 1]
+    source_root = metadata_root if metadata_root is not None else package.parents[len(name.split(".")) - 1]
     dist_info = source_root / f"{distribution.replace('-', '_')}-0.0.0.dist-info"
     dist_info.mkdir(exist_ok=True)
     (dist_info / "METADATA").write_text(
@@ -48,3 +50,4 @@ def write_addon_distribution(
             "class FixtureConfig(AppConfig):\n"
             f"    name = {name!r}\n    requires_apps = {foreign!r}\n", encoding="utf-8",
         )
+    return metadata.PathDistribution(dist_info)

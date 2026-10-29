@@ -309,7 +309,7 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         'django.contrib.sessions.apps.SessionsConfig',
         'angee.iam.apps.IAMConfig',
         'django_celery_beat.apps.BeatConfig',
-        'angee.jobs',
+        'angee.jobs.apps.JobsConfig',
         'angee.timeline.apps.TimelineConfig',
         'simple_history',
         'angee.provenance.apps.ProvenanceConfig',

@@ -69,6 +69,16 @@ def test_app_dependency_order_preserves_root_and_dependency_precedence(tmp_path:
     ]
 
 
+def test_fixture_foreign_dependencies_survive_native_config_rediscovery(tmp_path: Path) -> None:
+    """A fixture config's class owns edges needed before their packages are installed."""
+
+    declared = make_addon(name="example.forward", path=tmp_path / "forward", depends_on=("example.required",))
+    rediscovered = AppConfig.create(declared.name)
+
+    assert type(rediscovered) is type(declared)
+    assert addon_dependencies(rediscovered) == ("example.required",)
+
+
 @pytest.mark.parametrize("catalogue_only", (False, True))
 @pytest.mark.parametrize("self_cycle", (False, True))
 def test_app_dependency_cycles_are_rejected_for_both_discovery_paths(
