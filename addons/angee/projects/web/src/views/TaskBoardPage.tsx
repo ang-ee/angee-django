@@ -27,7 +27,7 @@ export function TaskBoardPage(): React.ReactElement {
         order={{ sort_order: "ASC" }}
         laneSource={{ field: "assignee", rankField: "sort_order", rankInputField: "task_order" }}
         rowActions={rowActions}
-      queryFields={TASK_ACTION_FIELDS}
+      fields={["status", ...TASK_ACTION_FIELDS]}
         emptyContent={{
           icon: "task-board",
           title: t("board.empty.title"),

@@ -1830,3 +1830,26 @@ def test_storage_preview_does_not_mint_download_urls(
         assert "errors" not in data
         assert data["data"]["files_by_pk"]["url"].startswith("/storage/download/")
         mint.assert_called_once()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_purge_preserves_bytes_when_an_enclosing_transaction_rolls_back(tmp_path: Path, drive: Any) -> None:
+    row = _proxy_upload(drive, PNG_BYTES)
+    pk, key = row.pk, row.storage_path
+    with pytest.raises(RuntimeError), transaction.atomic(), system_context(reason="test.storage.purge.rollback"):
+        row.purge()
+        assert (tmp_path / key).exists()
+        raise RuntimeError("rollback enclosing work")
+    assert File._base_manager.filter(pk=pk).exists()
+    assert (tmp_path / key).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_backend_cache_includes_selected_implementation(tmp_path: Path, drive: Any) -> None:
+    backend = drive.backend
+    first = backend.storage
+    with system_context(reason="test.storage.change_implementation"):
+        Backend.objects.filter(pk=backend.pk).update(backend_class="local_folder")
+        backend.refresh_from_db()
+    assert isinstance(backend.storage, LocalFolderBackend)
+    assert backend.storage is not first

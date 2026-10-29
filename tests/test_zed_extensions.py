@@ -4,7 +4,7 @@ A consumer addon contributes relations and permission arms to a definition owned
 by another addon through a sibling ``permissions.extends.zed`` fragment, instead
 of editing the owner's ``permissions.zed``. These tests pin the merge semantics
 (carries the relation, unions the arm, fails fast on collision / missing target /
-missing arm, deterministic), the round-trip renderer, and the full wiring:
+uniquely owned declarations, deterministic), the round-trip renderer, and the full wiring:
 emit + repoint + ``rebac sync`` so a tuple on the contributed relation resolves
 through the local evaluator.
 """
@@ -171,16 +171,65 @@ def test_two_contributors_same_relation_collides(tmp_path: Path) -> None:
         merged_schemas([base, first, second])
 
 
-def test_arm_without_base_permission_fails_fast(tmp_path: Path) -> None:
-    """A fragment can only union into an existing permission, not introduce one."""
+def test_fragment_introduces_its_owned_permission_without_a_base_placeholder(tmp_path: Path) -> None:
+    """An optional capability owns its permission declaration beside its contributed relation."""
 
     base = _base_addon(tmp_path)
     contrib = _contrib_addon(
         tmp_path,
-        "definition demo/thing {\n    relation reviewer: auth/user\n    permission approve = reviewer\n}\n",
+        "definition demo/thing { relation reviewer: auth/user permission approve = reviewer }",
     )
-    with pytest.raises(SchemaExtensionError, match="approve"):
+    definition = merged_schemas([base, contrib])["base"].get_definition("demo/thing")
+    approve = next(permission for permission in definition.permissions if permission.name == "approve")
+    assert _render_expr_names(approve) == {"reviewer"}
+    assert {permission.name for permission in definition.permissions} == {"read", "write", "approve"}
+
+
+def test_two_contributors_cannot_introduce_the_same_permission(tmp_path: Path) -> None:
+    base = _base_addon(tmp_path)
+    first = _contrib_addon(
+        tmp_path, "definition demo/thing { permission approve = owner }", name="contrib_a",
+    )
+    second = _contrib_addon(
+        tmp_path, "definition demo/thing { permission approve = owner }", name="contrib_b",
+    )
+    with pytest.raises(SchemaExtensionError, match="approve.*already declared"):
+        merged_schemas([base, first, second])
+
+
+@pytest.mark.parametrize("name", ["owner", "reviewer"])
+def test_new_permission_cannot_collide_with_a_base_or_contributed_relation(tmp_path: Path, name: str) -> None:
+    base = _base_addon(tmp_path)
+    contrib = _contrib_addon(
+        tmp_path,
+        f"definition demo/thing {{ relation reviewer: auth/user permission {name} = owner }}",
+    )
+    with pytest.raises(SchemaExtensionError, match=name):
         merged_schemas([base, contrib])
+
+
+def test_new_permission_references_still_pass_native_final_validation(tmp_path: Path) -> None:
+    base = _base_addon(tmp_path)
+    contrib = _contrib_addon(tmp_path, "definition demo/thing { permission approve = reviewre }")
+    with pytest.raises(SchemaExtensionError, match="reviewre"):
+        merged_schemas([base, contrib])
+
+
+def test_new_permission_order_is_deterministic_and_existing_arms_remain_native(tmp_path: Path) -> None:
+    base = _base_addon(tmp_path)
+    first = _contrib_addon(
+        tmp_path, "definition demo/thing { permission approve = owner }", name="contrib_a",
+    )
+    second = _contrib_addon(
+        tmp_path,
+        "definition demo/thing { relation reviewer: auth/user permission audit = reviewer permission read = reviewer }",
+        name="contrib_b",
+    )
+    rendered = render_zed("base", merged_schemas([base, first, second])["base"])
+    assert rendered == render_zed("base", merged_schemas([base, second, first])["base"])
+    definition = parse_zed(rendered).get_definition("demo/thing")
+    read = next(permission for permission in definition.permissions if permission.name == "read")
+    assert _render_expr_names(read) == {"owner", "reviewer"}
 
 
 def test_merge_is_deterministic(tmp_path: Path) -> None:

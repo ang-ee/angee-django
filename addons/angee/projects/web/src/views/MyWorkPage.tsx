@@ -32,7 +32,7 @@ export function MyWorkPage(): React.ReactElement {
       baseFilter={taskFilter}
       order={{ due_date: "ASC", sort_order: "ASC" }}
       rowActions={taskActions}
-      queryFields={TASK_ACTION_FIELDS}
+      fields={["status", ...TASK_ACTION_FIELDS]}
       rowHref={rowHref}
       emptyContent={t("myWork.empty.tasks")}
     >

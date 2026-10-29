@@ -112,7 +112,7 @@ export const defineMessagingAddon = ({ submitKey = "enter" }: MessagingAddonOpti
   forms: { "messaging.Channel": channelForm, "messaging.Message": messageForm },
   containers: {
     "iam#access-roles": {
-      "messaging.followers": { content: AccessFollowers },
+      "messaging.followers": { content: { kind: "people", render: AccessFollowers } },
     },
     // The Channels list's Connect menu: each vendor's child renders ActionTrigger or
     // ConnectChannelAction, with any dialog it opens inside it so focus returns to the menu.

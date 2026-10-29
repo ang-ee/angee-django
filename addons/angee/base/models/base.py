@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from typing import Any, ClassVar, Self, TypeVar
 
 from django.core import checks
@@ -189,19 +190,42 @@ class AngeeModel(
         type(self).record_access_permission(relation)
         self._write_declared_record_access(relation, subject)
 
-    def _write_declared_record_access(self, relation: str, subject: models.Model | SubjectRef) -> None:
-        """Validate the subject and write the declared relationship tuple."""
+    def lock_for_record_access(self, *, using: str) -> Self:
+        """Lock and reload this grant target in its owning domain's lock order.
 
-        self.validate_record_access_subject(relation, subject)
-        write_relationships(
-            [
-                RelationshipTuple(
-                    resource=to_object_ref(self),
-                    relation=relation,
-                    subject=_relationship_subject(subject),
-                )
-            ]
-        )
+        The write owner calls this inside its transaction. Contributors acquire
+        prerequisite domain rows before delegating; validation itself stays a
+        pure admission check usable by non-write callers.
+        """
+
+        return type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
+
+    def _write_declared_record_access(self, relation: str, subject: models.Model | SubjectRef) -> None:
+        """Keep fresh subject admission and the native relationship write under owner locks."""
+
+        using = router.db_for_write(type(self), instance=self)
+        relationships_using = router.db_for_write(active_relationship_model())
+        with transaction.atomic(using=using), (
+            transaction.atomic(using=relationships_using) if relationships_using != using else nullcontext()
+        ):
+            actor, elevated = self.effective_actor()
+            target = self.lock_for_record_access(using=using)
+            if elevated:
+                target.sudo(reason="base.record_access.admitted")
+            elif actor is not None:
+                target.with_actor(actor)
+            else:
+                target.unsudo()
+            target.validate_record_access_subject(relation, subject)
+            write_relationships(
+                [
+                    RelationshipTuple(
+                        resource=to_object_ref(target),
+                        relation=relation,
+                        subject=_relationship_subject(subject),
+                    )
+                ]
+            )
 
     def revoke_record_access(self, relation: str, subject: models.Model | SubjectRef) -> None:
         """Idempotently revoke ``subject`` from one declared direct relation."""

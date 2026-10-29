@@ -50,26 +50,15 @@ describe("decision context", () => {
     expect(screen.queryByRole("button", { name: "Evidence file" })).toBeNull();
   });
 
-  test("renders a knowledge page title and first paragraph through its record link", async () => {
-    const getOne = vi.fn(async () => ({ data: {
-      id: "knp_policy", title: "Posting policy",
-      markdown: { body: "# Internal heading\nBills require approval before posting.\n\nThis paragraph stays on the page." },
-    } }));
-    render(<Provider dataProvider={{ getOne }}><ShellPageTestProviders runtime={{ ...runtime, widgets: defaultWidgets }}>
+  test("uses a retained reference label when no model preview is composed", async () => {
+    const getOne = vi.fn();
+    render(<Provider dataProvider={{ getOne }}><ShellPageTestProviders runtime={runtime}>
       <DecisionContext context={{ references: [{
         model: "knowledge.Page", id: "knp_policy", pointer: "", label: "Retained page label",
       }] }} />
     </ShellPageTestProviders></Provider>);
-
-    const link = await screen.findByRole("link", { name: "Posting policy" });
-    expect(link.getAttribute("href")).toBe("/knowledge/knp_policy");
-    expect(await screen.findByText("Bills require approval before posting.")).toBeTruthy();
-    expect(screen.queryByText("Internal heading")).toBeNull();
-    expect(screen.queryByText("This paragraph stays on the page.")).toBeNull();
-    expect(getOne).toHaveBeenCalledWith(expect.objectContaining({
-      resource: "pages", id: "knp_policy",
-      meta: expect.objectContaining({ fields: ["id", "title", { markdown: ["body"] }] }),
-    }));
+    expect(screen.getByRole("link", { name: "Retained page label" }).getAttribute("href")).toBe("/knowledge/knp_policy");
+    expect(getOne).not.toHaveBeenCalled();
   });
 
   test("renders nothing for empty context", () => {

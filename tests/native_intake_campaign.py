@@ -77,7 +77,8 @@ class IntakeCampaign(IntakeAccessCase):
             previous.refresh_from_db()
             self.assertEqual(need.access_verdict, None)
             if was_pending:
-                self.assertTrue(previous.is_open)
+                self.assertFalse(previous.is_open)
+                self.assertEqual(previous.verdict, [])
             else:
                 self.assertEqual(previous.verdict, resolution)
             self.assertIsNone(need.access_answered_at)

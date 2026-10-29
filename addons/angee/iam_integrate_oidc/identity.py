@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.base_user import AbstractBaseUser
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import system_context
 
@@ -187,27 +188,40 @@ class OidcIdentityResolver:
         Account = apps.get_model("integrate", "ExternalAccount")
 
         manager = Account.objects
-        with system_context(reason="iam_integrate_oidc.resolve"), transaction.atomic():
-            account = manager.filter(oauth_client=self.oauth_client, external_id=sub).first()
-            if account is not None:
-                # A revoked/expired/disabled account or a deactivated user must not log in.
-                if not type(self.oauth_client).login_accounts(manager.filter(pk=account.pk)).exists():
-                    raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
-                owner = account.owner
-                if owner is None or not can_authenticate_user(owner):
-                    raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
-                return owner
-
-            normalized_email = get_user_model().objects.normalize_email(email)
-            email_verified = claims.get("email_verified") is True
-            email_allowed = self.oauth_client.allows_email_domain(normalized_email) and (
-                not normalized_email or email_verified
-            )
-            if normalized_email and email_allowed:
-                user = self._find_by_email(normalized_email)
-                if user is not None:
-                    if not self.oauth_client.link_on_email_match or not can_authenticate_user(user):
+        try:
+            with system_context(reason="iam_integrate_oidc.resolve"), transaction.atomic():
+                account = manager.filter(oauth_client=self.oauth_client, external_id=sub).first()
+                if account is not None:
+                    # A revoked/expired/disabled account or a deactivated user must not log in.
+                    if not type(self.oauth_client).login_accounts(manager.filter(pk=account.pk)).exists():
                         raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
+                    owner = account.owner
+                    if owner is None or not can_authenticate_user(owner):
+                        raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
+                    return owner
+
+                normalized_email = get_user_model().objects.normalize_email(email)
+                email_verified = claims.get("email_verified") is True
+                email_allowed = self.oauth_client.allows_email_domain(normalized_email) and (
+                    not normalized_email or email_verified
+                )
+                if normalized_email and email_allowed:
+                    user = self._find_by_email(normalized_email)
+                    if user is not None:
+                        if not self.oauth_client.link_on_email_match or not can_authenticate_user(user):
+                            raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
+                        manager.link(
+                            self.oauth_client,
+                            sub,
+                            owner=user,
+                            email=normalized_email,
+                            identity_claims=claims,
+                            display_name=Account.display_name_from_claims(claims, normalized_email),
+                        )
+                        return user
+
+                if self.oauth_client.create_on_login and email_allowed:
+                    user = self._create_for_identity(normalized_email, sub, claims=claims)
                     manager.link(
                         self.oauth_client,
                         sub,
@@ -217,18 +231,10 @@ class OidcIdentityResolver:
                         display_name=Account.display_name_from_claims(claims, normalized_email),
                     )
                     return user
-
-            if self.oauth_client.create_on_login and email_allowed:
-                user = self._create_for_identity(normalized_email, sub, claims=claims)
-                manager.link(
-                    self.oauth_client,
-                    sub,
-                    owner=user,
-                    email=normalized_email,
-                    identity_claims=claims,
-                    display_name=Account.display_name_from_claims(claims, normalized_email),
-                )
-                return user
+        except ValidationError as error:
+            if getattr(error, "code", None) == "account_already_linked":
+                raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 409) from error
+            raise
 
         raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403)
 

@@ -25,7 +25,6 @@ from django.db.models import Q
 
 from angee.base.implementations import ImplBase
 
-
 MAX_SEARCH_PAGE_SIZE = 100
 
 

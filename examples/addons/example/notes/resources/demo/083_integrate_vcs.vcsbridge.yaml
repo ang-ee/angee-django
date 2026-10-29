@@ -1,12 +1,9 @@
-# The local-template VCS bridge. `config.local_root` is resolved against BASE_DIR
-# (the stack root) by LocalVCSBackend; the consolidated framework checkout is
-# the source that now owns templates/.
+# The portable local-template bridge starts unconfigured. The project supplies
+# config.local_root/config.local_name, then connects after demo load; see README.md.
+# LocalVCSBackend resolves relative project-owned paths against BASE_DIR.
 - xref: vcs_local_templates
   owner: iam.user_admin
   vendor: notes.vendor_local
   backend_class: local
   credential: notes.cred_local_templates
-  lifecycle: connected
-  config:
-    local_root: "sources/angee-django"
-    local_name: angee-django
+  lifecycle: disconnected

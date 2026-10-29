@@ -189,3 +189,19 @@ def test_model_composing_the_field_migrates_cleanly() -> None:
 
     rendered = MigrationWriter(migration).as_string()
     assert "angee.scheduling.fields.RecurrenceField" in rendered
+
+
+@override_settings(TIME_ZONE="America/New_York")
+def test_utc_until_validates_and_bounds_aware_wall_clock_recurrence() -> None:
+    rule = Recurrence("FREQ=DAILY;UNTIL=20260309T130000Z")
+    rule.validate()
+    assert rule.occurrences(
+        _local("America/New_York", 2026, 3, 7, 9),
+        _utc(2026, 3, 7), _utc(2026, 3, 11),
+    ) == [_utc(2026, 3, 7, 14), _utc(2026, 3, 8, 13), _utc(2026, 3, 9, 13)]
+
+
+@pytest.mark.parametrize("until", ["20261029", "20261029T000000"])
+def test_floating_until_is_refused_for_the_aware_recurrence_contract(until: str) -> None:
+    with pytest.raises(ValidationError):
+        Recurrence(f"FREQ=DAILY;UNTIL={until}").validate()

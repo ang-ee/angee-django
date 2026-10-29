@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, TypedDict, cast
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, models, transaction
+from django.db import IntegrityError, models, router, transaction
 from django.db.models.expressions import Combinable
 from django.db.models.functions import JSONObject, Lower
 from django.db.models.lookups import Exact
@@ -54,7 +54,7 @@ from angee.base.models.ownership import OwnerQuerySet
 from angee.base.models.roles import role_anchor
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.permissions import actor_user_id, instance_actor, subject_reaches_user
-from angee.base.querysets import AngeeQuerySet
+from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet
 from angee.base.validators import validate_value
 from angee.iam.identity import user_label_expression, user_label_queryset
 from angee.messaging.models import ThreadedModelMixin
@@ -207,7 +207,30 @@ class RosterEntry:
     track_status: str | None = None
 
 
-class RoundQuerySet[T: Round](AngeeQuerySet[T]):
+class _RoundRequesterWrites(models.QuerySet):
+    """Reserve requester identity changes for the round's locked instance owner."""
+
+    def update(self, **kwargs: Any) -> int:
+        if {"requester_party", "requester_party_id"}.intersection(kwargs):
+            raise ValidationError({"requester_party": "Change requester identity through the round instance."})
+        return super().update(**kwargs)
+
+    def bulk_create(self, objs: Iterable[Any], *args: Any, **kwargs: Any) -> list[Any]:
+        if kwargs.get("update_conflicts") and {"requester_party", "requester_party_id"}.intersection(
+            kwargs.get("update_fields") or (),
+        ):
+            raise ValidationError({"requester_party": "Change requester identity through the round instance."})
+        return super().bulk_create(objs, *args, **kwargs)
+
+
+class _RoundBaseQuerySet(_RoundRequesterWrites, AngeeUnscopedQuerySet):
+    """Keep native unfiltered manager writes under the requester identity contract."""
+
+
+_RoundBaseManager = models.Manager.from_queryset(_RoundBaseQuerySet)
+
+
+class RoundQuerySet[T: Round](_RoundRequesterWrites, AngeeQuerySet[T]):
     """Round collection scopes shared by record projections."""
 
     def active_for_project(self, project: Project) -> Self:
@@ -319,7 +342,7 @@ class RoundManager[T: Round](_RoundManagerBase[T]):
                 round.admit(responder, track=round_template.tracks)
         return round.with_actor(actor)
 
-    def for_track(self, project_id: Any) -> T | None:
+    def for_track(self, project_id: Any, *, lock: bool = False) -> T | None:
         """Return the round whose admitted shell owns ``project_id`` as its track, else ``None``.
 
         Track items keep the round's holder ceiling and manager-only sharing; an
@@ -328,7 +351,10 @@ class RoundManager[T: Round](_RoundManagerBase[T]):
 
         if project_id is None:
             return None
-        return self.model.system_queryset().filter(proposals__track_id=project_id).order_by("pk").first()
+        return (
+            self.model.system_queryset(lock=("self",) if lock else None).using(self._db)
+            .filter(proposals__track_id=project_id).order_by("pk").first()
+        )
 
 
 def _copy_persisted_state(instance: models.Model, source: models.Model, fields: Iterable[str]) -> None:
@@ -406,6 +432,8 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         on_delete=models.PROTECT,
         related_name="facilitated_proposal_rounds",
     )
+    _angee_base = _RoundBaseManager()
+
     requester_party = models.ForeignKey(
         "parties.Party",
         null=True,
@@ -632,13 +660,64 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         if self.requester_party_id is None:
             return None
         return (
-            apps.get_model("parties", "Person").system_queryset()
+            apps.get_model("parties", "Person").system_queryset().using(self._state.db)
             .filter(
                 pk=self.requester_party_id,
             )
             .values_list("user_id", flat=True)
             .first()
         )
+
+    def _build_collections(self) -> list[tuple[models.QuerySet[AngeeModel], bool]]:
+        """Return the retained shell/answer and owned track content this round governs."""
+
+        tracks = apps.get_model("projects", "Project").system_queryset().using(self._state.db).filter(
+            source_proposal__round_id=self.pk,
+        )
+        drives = apps.get_model("storage", "Drive").system_queryset().using(self._state.db).filter(
+            project_bindings__project_id__in=tracks.values("pk"),
+        )
+        return [
+            (apps.get_model("proposals", "Proposal").system_queryset().using(self._state.db).filter(
+                round_id=self.pk,
+            ), False),
+            (apps.get_model("proposals", "Answer").system_queryset().using(self._state.db).filter(
+                proposal__round_id=self.pk,
+            ), False),
+            (tracks, True),
+            (apps.get_model("projects", "Task").system_queryset().using(self._state.db).filter(
+                project_id__in=tracks.values("pk"),
+            ), True),
+            (drives, True),
+            (apps.get_model("storage", "File").system_queryset().using(self._state.db).filter(
+                drive_id__in=drives.values("pk"),
+            ), True),
+        ]
+
+    def _validate_requester_exclusion(self) -> None:
+        """Reject a requester who already holds responder or explicitly granted build access."""
+
+        requester = self.requester_user_id()
+        if requester is None:
+            return
+        if self.current_responders().using(self._state.db).filter(pk=requester).exists():
+            raise RecordAccessSubjectRefused()
+        relationships = active_relationship_model().objects.using(self._state.db)
+        for rows, owned in self._build_collections():
+            if owned:
+                assert isinstance(rows, OwnerQuerySet)
+                if rows.filter(owner_id=requester).exists():
+                    raise RecordAccessSubjectRefused()
+            shares = relationships.filter(
+                resource_type=model_resource_type(rows.model),
+                resource_id__in=[str(pk) for pk in rows.order_by().values_list("pk", flat=True)],
+                relation__in=tuple(rows.model.rebac_grantable),
+            )
+            for share in shares:
+                if subject_reaches_user(SubjectRef.of(
+                    share.subject_type, share.subject_id, share.optional_subject_relation,
+                ), requester):
+                    raise RecordAccessSubjectRefused()
 
     def validate_build_subject(self, subject: Any) -> None:
         """Refuse holders that would admit the requester to build content."""
@@ -704,28 +783,15 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             proposal.allow_immutable_save("retired_at", "retired_by_id")
             proposal.save(update_fields=("retired_at", "retired_by", "updated_at"))
             task_model = apps.get_model("projects", "Task")
-            answer_model = apps.get_model("proposals", "Answer")
             clarification_tasks = task_model.objects.filter(clarification_round=self)
-            tracks = apps.get_model("projects", "Project").objects.filter(source_proposal__round=self)
-            track_tasks = task_model.objects.filter(project_id__in=tracks.values("pk"))
-            for tasks in (clarification_tasks, track_tasks):
-                tasks.filter(assignee=user).update(assignee=None)
-            collections: list[tuple[models.QuerySet[AngeeModel], bool]] = [
-                (type(self).objects.filter(pk=self.pk), False),
-                (apps.get_model("proposals", "Proposal").objects.filter(round=self), False),
-                (answer_model.objects.filter(proposal__round=self), False),
+            collections = [
+                (type(self).system_queryset().filter(pk=self.pk), False),
                 (clarification_tasks, False),
+                *self._build_collections(),
             ]
-            drive_model = apps.get_model("storage", "Drive")
-            drives = drive_model.objects.filter(project_bindings__project_id__in=tracks.values("pk"))
-            collections.extend(
-                [
-                    (tracks, True),
-                    (track_tasks, True),
-                    (drives, True),
-                    (apps.get_model("storage", "File").objects.filter(drive_id__in=drives.values("pk")), True),
-                ]
-            )
+            for rows, owned in collections:
+                if rows.model is task_model:
+                    rows.filter(assignee=user).update(assignee=None)
             subject = to_subject_ref(user)
             relationships = active_relationship_model().objects
             for rows, track_rows in collections:
@@ -1018,48 +1084,60 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         self._validate_lifecycle_receipts()
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist while keeping target/deadline and opened-policy facts coherent."""
+        """Persist coherent round policy, serializing requester changes with shell admission."""
 
-        self._validate_target()
-        self._validate_dates()
-        update_fields = kwargs.get("update_fields")
-        boundaries = [
-            name
-            for name in ("opens_after", "clarifications_shared_until")
-            if (update_fields is None or {name, f"{name}_id"}.intersection(update_fields))
-            and f"{name}_id" in self.__dict__
-        ]
-        previous = (
-            {}
-            if self._state.adding or not boundaries
-            else (type(self).system_queryset().filter(pk=self.pk).values(*(f"{name}_id" for name in boundaries)).get())
-        )
-        changed_ids = {
-            name: getattr(self, f"{name}_id")
-            for name in boundaries
-            if getattr(self, f"{name}_id") is not None
-            and (self._state.adding or previous[f"{name}_id"] != getattr(self, f"{name}_id"))
-        }
-        if changed_ids:
-            project = self.target_project()
-            valid = set() if project is None else set(
-                apps.get_model("projects", "Milestone").system_queryset()
-                .filter(
-                    pk__in=changed_ids.values(),
-                    project_id=project.pk,
-                )
-                .values_list("pk", flat=True)
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        with transaction.atomic(using=using):
+            fields = kwargs.get("update_fields")
+            requester_write = fields is None or bool({"requester_party", "requester_party_id"}.intersection(fields))
+            if not self._state.adding and requester_write and "requester_party_id" in self.__dict__:
+                locked = type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
+                if locked.requester_party_id != self.requester_party_id:
+                    locked.requester_party_id = self.requester_party_id
+                    locked._validate_requester_exclusion()
+            self._validate_target()
+            self._validate_dates()
+            update_fields = kwargs.get("update_fields")
+            boundaries = [
+                name
+                for name in ("opens_after", "clarifications_shared_until")
+                if (update_fields is None or {name, f"{name}_id"}.intersection(update_fields))
+                and f"{name}_id" in self.__dict__
+            ]
+            previous = (
+                {}
+                if self._state.adding or not boundaries
+                else type(self).system_queryset().filter(pk=self.pk).values(
+                    *(f"{name}_id" for name in boundaries),
+                ).get()
             )
-            for name, identifier in changed_ids.items():
-                if identifier not in valid:
-                    raise ValidationError({name: "The milestone must belong to the target project."})
-        if self.pk is not None and not self._state.adding:
-            # Opening-policy immutability depends on the committed lifecycle state.
-            with system_context(reason="proposals.round.opening_policy"):
-                persisted = type(self)._base_manager.filter(pk=self.pk).values("status", "opening_policy").first()
-            if persisted is not None and persisted["status"] == RoundStatus.COLLECTING:
-                self.allow_immutable_save("opening_policy")
-        super().save(*args, **kwargs)
+            changed_ids = {
+                name: getattr(self, f"{name}_id")
+                for name in boundaries
+                if getattr(self, f"{name}_id") is not None
+                and (self._state.adding or previous[f"{name}_id"] != getattr(self, f"{name}_id"))
+            }
+            if changed_ids:
+                project = self.target_project()
+                valid = set() if project is None else set(
+                    apps.get_model("projects", "Milestone").system_queryset()
+                    .filter(
+                        pk__in=changed_ids.values(),
+                        project_id=project.pk,
+                    )
+                    .values_list("pk", flat=True)
+                )
+                for name, identifier in changed_ids.items():
+                    if identifier not in valid:
+                        raise ValidationError({name: "The milestone must belong to the target project."})
+            if self.pk is not None and not self._state.adding:
+                # Opening-policy immutability depends on the committed lifecycle state.
+                with system_context(reason="proposals.round.opening_policy"):
+                    persisted = type(self)._base_manager.filter(pk=self.pk).values("status", "opening_policy").first()
+                if persisted is not None and persisted["status"] == RoundStatus.COLLECTING:
+                    self.allow_immutable_save("opening_policy")
+            super().save(*args, **kwargs)
+
 
     def delete_blocker(self) -> str | None:
         """Return why this Round's own lifecycle prevents deletion."""
@@ -1856,6 +1934,12 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
                 self.disclosed_at = timezone.now()
             super().save(*args, **kwargs)
 
+    def lock_for_record_access(self, *, using: str) -> Self:
+        """Serialize shell grants with requester changes before locking the shell."""
+
+        apps.get_model("proposals", "Round").system_queryset(lock=("self",)).using(using).get(pk=self.round_id)
+        return super().lock_for_record_access(using=using)
+
     def validate_record_access_subject(self, relation: str, subject: Any) -> None:
         """Apply the round's holder invariant to shells and explicit shares."""
         super().validate_record_access_subject(relation, subject)
@@ -2285,6 +2369,12 @@ class ProjectProposalAccess(models.Model):
             passed_on=passed_on,
         )
 
+    def lock_for_record_access(self, *, using: str) -> Self:
+        """A track's round precedes its project row in the grant/ownership lock order."""
+
+        apps.get_model("proposals", "Round").objects.db_manager(using).for_track(self.pk, lock=True)
+        return super().lock_for_record_access(using=using)
+
     def validate_record_access_subject(self, relation: str, subject: Any) -> None:
         """Keep the requester's ceiling on track projects."""
         super().validate_record_access_subject(relation, subject)
@@ -2523,6 +2613,16 @@ class TaskProposalAccess(ImmutableFieldsMixin):
                 raise ClarificationWidenBlocked()
             return super()._message_post(body, **kwargs)
 
+    def lock_for_record_access(self, *, using: str) -> Self:
+        """Lock the current track's round before its task, refusing a concurrent reparent."""
+
+        project_id = type(self).system_queryset().using(using).values_list("project_id", flat=True).get(pk=self.pk)
+        apps.get_model("proposals", "Round").objects.db_manager(using).for_track(project_id, lock=True)
+        locked = super().lock_for_record_access(using=using)
+        if locked.project_id != project_id:
+            raise ValidationError({"project": "The task moved; reload it before granting access."})
+        return locked
+
     def validate_record_access_subject(self, relation: str, subject: Any) -> None:
         """Keep the requester's ceiling on track items; other tasks and questions stay native.
 
@@ -2676,18 +2776,28 @@ class DriveProposalAccess(models.Model):
     class Meta:
         abstract = True
 
+    def _proposal_rounds(self, *, using: str | None = None) -> models.QuerySet:
+        """The rounds whose retained track binding makes this drive build content."""
+
+        model = apps.get_model("proposals", "Round")
+        bindings = model.system_queryset().using(using or self._state.db).filter(
+            proposals__track__resource_bindings__content_type=generic_target(self).content_type,
+            proposals__track__resource_bindings__object_id=self.pk,
+        )
+        return model.system_queryset().using(using or self._state.db).filter(pk__in=bindings.values("pk"))
+
+    def lock_for_record_access(self, *, using: str) -> Self:
+        """Acquire all bound rounds deterministically before locking this drive."""
+
+        for _round in self._proposal_rounds(using=using).order_by("pk").select_for_update():
+            pass
+        return super().lock_for_record_access(using=using)
+
     def validate_record_access_subject(self, relation: str, subject: Any) -> None:
         """Ask every bound track's round before granting this drive."""
         super().validate_record_access_subject(relation, subject)
         with system_context(reason="proposals.drive.subject"):
-            rounds = (
-                apps.get_model("proposals", "Round")
-                ._base_manager.filter(
-                    proposals__track__resource_bindings__content_type=generic_target(self).content_type,
-                    proposals__track__resource_bindings__object_id=self.pk,
-                )
-                .distinct()
-            )
+            rounds = self._proposal_rounds()
             for round in rounds:
                 round.validate_build_subject(subject)
 
@@ -2700,6 +2810,17 @@ class FileProposalAccess(models.Model):
 
     class Meta:
         abstract = True
+
+    def lock_for_record_access(self, *, using: str) -> Self:
+        """Lock the current drive's rounds before its file, refusing a concurrent move."""
+
+        drive_id = type(self).system_queryset().using(using).values_list("drive_id", flat=True).get(pk=self.pk)
+        drive = apps.get_model("storage", "Drive").system_queryset().using(using).get(pk=drive_id)
+        drive.lock_for_record_access(using=using)
+        locked = super().lock_for_record_access(using=using)
+        if locked.drive_id != drive_id:
+            raise ValidationError({"drive": "The file moved; reload it before granting access."})
+        return locked
 
     def validate_record_access_subject(self, relation: str, subject: Any) -> None:
         """Delegate the invariant through the file's owning drive."""
@@ -2733,6 +2854,13 @@ class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataMod
     body = models.TextField(blank=True, default="")
     visibility = StateField(choices_enum=AnswerVisibility, default=AnswerVisibility.ROUND)
     shared_with_responders = models.BooleanField(default=False, editable=False)
+
+    def lock_for_record_access(self, *, using: str) -> Self:
+        """Answer grants share the proposal's round-first lock order."""
+
+        proposal = apps.get_model("proposals", "Proposal").system_queryset().using(using).get(pk=self.proposal_id)
+        proposal.lock_for_record_access(using=using)
+        return super().lock_for_record_access(using=using)
 
     def validate_record_access_subject(self, relation: str, subject: Any) -> None:
         """Apply the same requester ceiling as the proposal."""

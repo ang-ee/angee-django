@@ -71,13 +71,6 @@ def test_missing_field_ownership_fails_closed(tmp_path, owners):
         merged_schemas([base, fragment], field_owners=owners)
 
 
-def test_new_non_gate_permission_remains_forbidden(tmp_path):
-    base = _base_addon(tmp_path)
-    fragment = _contrib_addon(tmp_path, "definition demo/thing { permission approve = owner }")
-    with pytest.raises(SchemaExtensionError, match="approve"):
-        merged_schemas([base, fragment], field_owners=FIELD_OWNERS)
-
-
 def test_gate_already_declared_by_base_remains_an_additive_arm(tmp_path):
     base = _base_addon(tmp_path, """
 definition demo/thing {

@@ -12,6 +12,8 @@
   "dependencies": {
     "@angee/agents": "workspace:*",
     "@angee/app": "workspace:*",
+    "@angee/metadata": "workspace:*",
+    "@refinedev/core": "^5.0.12",
     "@angee/provenance": "workspace:*",
     "@angee/ui": "workspace:*",
     "date-fns": "^4.1.0",

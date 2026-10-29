@@ -15,10 +15,12 @@ export function AccessFollowers({ targetId, resource }: AccessRoleOwnerProps): n
     records: [{ model: resource.modelLabel, id: targetId }],
   });
   const people = React.useMemo<readonly AccessPerson[]>(() =>
-    (query.data?.record_thread.followers ?? []).flatMap(({ user }) => user
+    (query.data?.record_thread?.followers ?? []).flatMap(({ user }) => user
       ? [{ subject: user.assignment_subject, label: user.username, following: true }]
       : []), [query.data]);
-  const state = React.useMemo(() => ({ people }), [people]);
+  const onRetry = React.useCallback(() => { void query.refetch(); }, [query.refetch]);
+  const state = React.useMemo(() => ({ people, fetching: query.isFetching, error: query.error, onRetry }),
+    [people, query.isFetching, query.error, onRetry]);
   useAccessPeople("messaging.followers", state);
   return null;
 }

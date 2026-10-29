@@ -27,12 +27,13 @@ package name):
   name already present on the base — or contributed by two fragments — is a
   hard collision (fail fast).
 - Contributed **permission arms** are unioned (``+``) into the base permission
-  of the same name, contributors in sorted order. A fragment permission whose
-  name the base does not declare is a hard error, except a field gate on a
-  concrete column contributed by that same package's donor. New gates accept
-  only canonical Django field names, never attnames or many-to-many fields.
-  A second package cannot extend a contributed gate; base-declared gates keep
-  the ordinary union-arm behavior. Missing field ownership fails closed.
+  of the same name, contributors in sorted order. A fragment may introduce a
+  new capability permission; exactly one contributing package owns that name.
+  New field gates additionally require a concrete column contributed by that
+  same package's donor, using canonical Django field names rather than attnames
+  or many-to-many fields. A second package cannot extend a contributed
+  declaration; base-declared permissions keep the ordinary union-arm behavior.
+  Missing field ownership and all declaration-name collisions fail closed.
 - Extending a definition no installed package declares is a hard error.
 
 The merged definition's identity changes whenever any contribution changes: the
@@ -270,21 +271,21 @@ def _merge_definition(
     *,
     field_owners: Mapping[str, Mapping[str, str]] | None,
 ) -> Definition:
-    """Merge ordinary arms, then add gates belonging to each contributor's columns."""
+    """Extend base arms natively and append each addon's uniquely owned declarations."""
 
     merged = base
     base_permissions = {permission.name for permission in base.permissions}
     owners = (field_owners or {}).get(base.resource_type, {})
-    gates: dict[str, Permission] = {}
+    declarations: dict[str, Permission] = {}
     for package, extension in contributed:
         arms: list[Permission] = []
         for permission in extension.permissions:
             verb, separator, field = permission.name.partition("__")
-            if permission.name in base_permissions or not separator or verb not in {"read", "write"}:
+            if permission.name in base_permissions:
                 arms.append(permission)
                 continue
             owner = owners.get(field)
-            if owner != package:
+            if separator and verb in {"read", "write"} and owner != package:
                 canonical = field.removesuffix("_id")
                 detail = (
                     "no field ownership map supplied" if field_owners is None
@@ -297,11 +298,11 @@ def _merge_definition(
                     f"{package}: {base.resource_type} field gate {permission.name!r} on {field!r} "
                     f"must belong to this package; {detail}"
                 )
-            if permission.name in gates:
+            if permission.name in declarations:
                 raise SchemaExtensionError(
-                    f"{package}: field gate {base.resource_type}#{permission.name} already declared"
+                    f"{package}: permission {base.resource_type}#{permission.name} already declared by a contributor"
                 )
-            gates[permission.name] = permission
+            declarations[permission.name] = permission
         try:
             merged = merged.extend(
                 relations=extension.relations,
@@ -309,12 +310,16 @@ def _merge_definition(
             )
         except ValueError as error:
             raise SchemaExtensionError(f"{package}: {error}") from error
-    collisions = gates.keys() & {relation.name for relation in merged.relations}
+    collisions = declarations.keys() & {relation.name for relation in merged.relations}
     if collisions:
-        raise SchemaExtensionError(f"{base.resource_type}: field gates collide with relations: {sorted(collisions)}")
-    if not gates:
+        raise SchemaExtensionError(
+            f"{base.resource_type}: permission declarations collide with relations: {sorted(collisions)}"
+        )
+    if not declarations:
         return merged
-    return replace(merged, permissions=(*merged.permissions, *gates.values()))
+    return replace(merged, permissions=tuple(sorted(
+        (*merged.permissions, *declarations.values()), key=lambda permission: permission.name,
+    )))
 
 
 def _clone_schema(schema: Schema) -> Schema:

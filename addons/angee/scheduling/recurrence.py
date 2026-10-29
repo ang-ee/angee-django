@@ -125,4 +125,3 @@ def _require_aware(**moments: datetime) -> None:
             "is naive.",
             code="naive_datetime",
         )
-

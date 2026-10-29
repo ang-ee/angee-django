@@ -17,8 +17,8 @@ from django.core.exceptions import ValidationError
 from django.db import models
 
 from angee.base.fields.state import StateField
-from angee.base.models.base import AngeeDataModel
 from angee.base.managers import AngeeManager
+from angee.base.models.base import AngeeDataModel
 from angee.base.models.locks import RowLockMixin, RowLockQuerySet
 from angee.base.querysets import AngeeQuerySet
 

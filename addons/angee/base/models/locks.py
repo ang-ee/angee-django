@@ -16,10 +16,9 @@ from rebac import (
 from rebac.actors import is_sudo
 from rebac.managers import RebacQuerySet
 
-from angee.base.querysets import AngeeUnscopedQuerySet
-
 from angee.base.exceptions import DomainError
 from angee.base.models.persistence import PersistenceMixin
+from angee.base.querysets import AngeeUnscopedQuerySet
 
 
 class ImmutableFieldsMixin(models.Model):
@@ -85,10 +84,22 @@ class _RowLockWritesQuerySet(models.QuerySet[_ModelT]):
         self._for_write = True
         with transaction.atomic(using=self.db):
             rows = self.with_action("write").scoped() if isinstance(self, RebacQuerySet) else self
-            fields = {name: self.model._meta.get_field(name) for name in kwargs}
+            fields: dict[str, models.Field[Any, Any]] = {}
+            for name in kwargs:
+                field = self.model._meta.get_field(name)
+                if not isinstance(field, models.Field):
+                    raise ValidationError({name: "Collection writes require a stored field."})
+                fields[name] = field
+            output_fields = {
+                name: field.target_field if isinstance(field, models.ForeignKey) else field
+                for name, field in fields.items()
+            }
             projections = {
-                f"_row_lock_value_{index}": value if isinstance(value, (models.expressions.BaseExpression, models.F)) else models.Value(
-                    value, output_field=fields[name].target_field if fields[name].is_relation else fields[name],
+                f"_row_lock_value_{index}": (
+                    value if isinstance(value, (models.expressions.BaseExpression, models.F)) else models.Value(
+                        value.pk if isinstance(value, models.Model) else value,
+                        output_field=output_fields[name],
+                    )
                 )
                 for index, (name, value) in enumerate(kwargs.items())
             }
@@ -131,6 +142,8 @@ def refuse_locked_row_delete(sender: Any, instance: RowLockMixin, origin: Any, *
         return
     if instance.row_lock_cascade_parent:
         field = instance._meta.get_field(instance.row_lock_cascade_parent)
+        if not isinstance(field, models.ForeignKey) or field.related_model is None:
+            raise ImproperlyConfigured("The row-lock cascade owner must be a forward foreign key.")
         parent = field.related_model
         parent_pk = field.value_from_object(instance)
         if isinstance(origin, parent) and origin.pk == parent_pk:
@@ -148,7 +161,9 @@ class RowLockMixin(models.Model):
     unlocked fields: it cannot change a locked field, delete the row, or turn a
     new or unlocked row into a system row. System writers (provisioning and
     resource loads under ``system_context``) own system rows and are not
-    checked. An elevation that only authorizes a user's write still checks:
+    checked. The default manager composes ``RowLockQuerySet``; the base manager
+    and native collector retain the same invariant. An elevation that only
+    authorizes a user's write still checks:
     editable lines write their children elevated under the parent's write
     permission, so :class:`~angee.graphql.data.hasura.HasuraLines` calls
     :meth:`validate_row_lock` and :meth:`validate_row_delete` itself before each

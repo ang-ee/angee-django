@@ -44,7 +44,6 @@ from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
 from angee.base.querysets import AngeeQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 
-
 _ROUNDING_STEPS = tuple(Decimal(10) ** exponent for exponent in range(-6, 6))
 
 

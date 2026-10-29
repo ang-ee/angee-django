@@ -47,6 +47,7 @@ from angee.provenance.querysets import model_history
 from angee.provenance.statements import (
     SourceKind,
     Statement,
+    StatementLinkMixin,
     StatementsMixin,
     StatementSourceMixin,
     prime_readable_statement_records,
@@ -468,8 +469,10 @@ class RecordHistory:
             keyed_versions.append((version, link_model, version.link_id))
         readable_links: dict[tuple[type[models.Model], Any], models.Model] = {}
         for link_model, ids in links_by_model.items():
+            assert issubclass(link_model, StatementLinkMixin)
             rows = require_rebac_queryset(link_model).with_actor(self.actor).with_action("read").filter(pk__in=ids)
-            rows = rows.select_related(*link_model.presentation_related)
+            if link_model.presentation_related:
+                rows = rows.select_related(*link_model.presentation_related)
             readable_links.update({(link_model, row.pk): row for row in rows})
         for version, link_model, pk in keyed_versions:
             version._readable_statement_link = readable_links.get((link_model, pk))

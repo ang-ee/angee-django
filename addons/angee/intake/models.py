@@ -479,6 +479,13 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         """Project the readable decision's retained answer time."""
         return self.access_decision.answered_at if self.access_decision is not None else None
 
+    def _withdraw_access_decision(self, decision_id: Any, *, actor: Any) -> None:
+        """Close a replaced unanswered question through its existing lifecycle owner."""
+
+        if decision_id is not None:
+            with system_context(reason="intake.need.replace_access_question"):
+                apps.get_model("decisions", "Decision").objects.withdraw(decision_id, actor=actor)
+
     def _new_access_decision(self) -> Any:
         """Ask one question assigned to the target's current sharers."""
         with system_context(reason="intake.need.access_question"):
@@ -581,6 +588,15 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                 super().save(**kwargs)
                 return
         with transaction.atomic():
+            observed_decision = None
+            if not self._state.adding:
+                observed_decision = type(self).system_queryset().filter(pk=self.pk).values_list(
+                    "access_decision_id", flat=True,
+                ).get()
+                if observed_decision is not None:
+                    apps.get_model("decisions", "Decision").objects.sudo(
+                        reason="intake.need.assignment_question",
+                    ).locked_get(pk=observed_decision)
             previous: Mapping[str, object] | None = (
                 None
                 if self._state.adding
@@ -589,10 +605,12 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                     .objects.sudo(reason="intake.need.assignment_before")
                     .lock_if_supported()
                     .filter(pk=self.pk)
-                    .values("task_id", "project_id", "party_id")
+                    .values("task_id", "project_id", "party_id", "access_decision_id")
                     .first()
                 )
             )
+            if previous is not None and previous["access_decision_id"] != observed_decision:
+                raise ValidationError({"revision": "The access question has changed; reload it."})
             assignment_names: Final = ("task_id", "project_id", "party_id")
             values = {
                 name: getattr(self, name)
@@ -602,9 +620,9 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             }
             candidate = type(self)(pk=self.pk, **values)
             candidate.clean()
-            assignment_changed = values != previous and (
-                values["party_id"] is not None or (previous is not None and previous["party_id"] is not None)
-            )
+            assignment_changed = (
+                previous is None or any(values[name] != previous[name] for name in assignment_names)
+            ) and (values["party_id"] is not None or (previous is not None and previous["party_id"] is not None))
             if assignment_changed:
                 actor, elevated = self.effective_actor()
                 if elevated:
@@ -655,6 +673,8 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                     access_decision=self.access_decision,
                     admitted_user=None,
                 )
+            if reset_decision and previous is not None:
+                self._withdraw_access_decision(previous["access_decision_id"], actor=instance_actor(self))
             if reset_decision:
                 apps.get_model("messaging", "ThreadFollower").objects.end_unreadable_for_record(self.target)
             if assignment_changed and values["task_id"] is not None and values["party_id"] is not None:
@@ -791,7 +811,16 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             raise ValidationError({"confirmed": "Confirm resetting requester access."})
         actor = instance_actor(self)
         with actor_context(actor), transaction.atomic():
+            observed_decision = type(self).system_queryset().filter(pk=self.pk).values_list(
+                "access_decision_id", flat=True,
+            ).get()
+            if observed_decision is not None:
+                apps.get_model("decisions", "Decision").objects.sudo(
+                    reason="intake.need.reset_question",
+                ).locked_get(pk=observed_decision)
             locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+            if locked.access_decision_id != observed_decision:
+                raise ValidationError({"revision": "The access question has changed; reload it."})
             if not locked.with_actor(actor).has_access("write") or not locked.target.with_actor(actor).has_access(
                 "share",
             ):
@@ -805,6 +834,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                 update_fields=("admitted_user", "updated_at"),
             )
             type(self).system_queryset().filter(pk=locked.pk).update(access_decision=decision)
+            locked._withdraw_access_decision(observed_decision, actor=actor)
             apps.get_model("messaging", "ThreadFollower").objects.end_unreadable_for_record(locked.target)
         self.refresh_from_db()
         return self
