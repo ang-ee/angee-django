@@ -1940,9 +1940,12 @@ for flag in ("--check", "--dry-run", "--merge", "--empty", "--update"):
     try:
         call_command("makemigrations", "bootstrap_app", flag, interactive=False, verbosity=0)
     except CommandError as error:
+        assert flag not in ("--check", "--dry-run")
         assert "not applicable" in str(error), str(error)
+    except SystemExit as error:
+        assert flag == "--check" and error.code == 1
     else:
-        raise AssertionError(f"{flag} silently accepted a transition without its initial prerequisite")
+        assert flag == "--dry-run", f"{flag} silently accepted an uninitialized graph"
     assert list(directory.glob("*.py")) == [directory / "__init__.py"]
 call_command("makemigrations", interactive=False, verbosity=0)
 loader = MigrationLoader(None, ignore_no_migrations=True)
