@@ -57,7 +57,10 @@ PROJECT_SETTINGS_TEMPLATE = ROOT / "templates" / "projects" / "web" / "template"
 # Services both stack templates render from the one shared body.
 SHARED_SERVICES = {"operator", "postgres", "redis", "django", "celery-worker"}
 DJANGO_READY = {
-    "cmd": ["uv", "run", "--no-sync", "python", "manage.py", "provision", "--check"],
+    "cmd": [
+        "uv", "run", "--no-sync", "python", "-c",
+        "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/ready', timeout=2).close()",
+    ],
     "interval": "5s",
     "timeout": "3s",
     "start_period": "30s",
@@ -415,6 +418,7 @@ def _render_local_stack(
 def _render_dev_stack(
     *,
     project_path: str = ".",
+    django_port: int = 8000,
     framework_path: str = "workspaces/src/angee",
     addons_profile: str = "base",
     include_arp: bool = False,
@@ -464,7 +468,7 @@ def _render_dev_stack(
         "celery_queues": celery_queues,
         "caddy_image": "caddy:2.9-alpine",
         "django_image": "ghcr.io/ang-ee/django-angee-base:latest",
-        "django_port": "8000",
+        "django_port": str(django_port),
         "edge_port": "80",
         "enable_ollama": "true" if enable_ollama else "",
         "framework_path": framework_path,
@@ -1589,7 +1593,13 @@ def test_readiness_is_owned_by_long_running_http_and_django_services() -> None:
             command_text = command if isinstance(command, str) else " ".join(map(str, command))
             assert "django_migrations" not in command_text
 
-    assert process["services"]["django"]["ready"] == DJANGO_READY
+    assert process["services"]["django"]["ready"] == {
+        "http": {"port": 8000, "path": "/health/ready"},
+        **{key: value for key, value in DJANGO_READY.items() if key != "cmd"},
+    }
+    assert _render_dev_stack(django_port=9321)["services"]["django"]["ready"]["http"]["port"] == 9321
+    for stack in (framework, instance):
+        assert "manage.py" not in " ".join(stack["services"]["django"]["ready"]["cmd"])
     assert {name for name, service in framework["services"].items() if "ready" in service} == {
         "django",
         "frontend",

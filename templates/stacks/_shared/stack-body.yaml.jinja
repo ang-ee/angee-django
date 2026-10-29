@@ -406,7 +406,7 @@ services:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="true" %}
 {% if runtime_mode == "process" %}    command: ["uv", "run", "--no-sync", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
     ready:
-      cmd: ["uv", "run", "--no-sync", "python", "manage.py", "provision", "--check"]
+      http: { port: {{ django_port }}, path: /health/ready }
 {% else %}    # Trust the connected Compose network, not a frontend IP that can change
     # independently when the frontend container restarts.
     command:
@@ -416,7 +416,7 @@ services:
         {% if stack_flavor == "framework" and effective_serve_mode == "development" %}exec uv run --no-sync python manage.py runserver 0.0.0.0:8000{% else %}TRUSTED_PROXY_CIDR=$$(uv run --no-sync python -c 'import ipaddress as ip, socket; peer = ip.ip_address(socket.gethostbyname("{% if stack_flavor == "framework" %}frontend{% else %}caddy{% endif %}")); routes = (line.split() for line in open("/proc/net/route").read().splitlines()[1:]); networks = (ip.ip_network((ip.IPv4Address(int.from_bytes(bytes.fromhex(row[1]), "little")), int.from_bytes(bytes.fromhex(row[7]), "little").bit_count()), strict=False) for row in routes if row[7] != "00000000"); print(next(str(network) for network in networks if peer in network))')
         && exec uv run --no-sync python manage.py serve --host 0.0.0.0 --port 8000 --forwarded-allow-ips "$$TRUSTED_PROXY_CIDR" --workers {% if effective_serve_mode == "production" %}{{ serve_workers }} --production{% else %}1{% endif %}{% endif %}
     ready:
-      cmd: ["uv", "run", "--no-sync", "python", "manage.py", "provision", "--check"]
+      cmd: ["uv", "run", "--no-sync", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/ready', timeout=2).close()"]
 {% endif %}      interval: 5s
       timeout: 3s
       start_period: 30s
