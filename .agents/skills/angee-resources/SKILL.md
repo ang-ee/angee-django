@@ -178,10 +178,7 @@ new file and rows; `resources load` creates the rows and a second run reports 0 
 - Loop: `.agents/skills/slice/SKILL.md`. False greens: `validate` is a rolled-back dry run that
   skips `after_resource_load` (`managers.py:406-407`), omits `demo` without `--include-demo`, and counts zero rows for an unlisted file.
 
-<details><summary>Changes under the build/host plan</summary>
-`provision` runs resources loading after `rebac sync` in one plain Django process; the
-manifest, file shapes and ledger contract above do not change.
-</details>
+
 
 ## Pitfalls
 

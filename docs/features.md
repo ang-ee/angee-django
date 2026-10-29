@@ -18,7 +18,7 @@ actually unique to your product.
 - **Addon-based** — every capability is one addon: Django source (abstract models
   + GraphQL + REBAC + resources) plus, when it has UI, a co-located `web/`
   fragment (routes, views, widgets, menus, i18n).
-- **Composed, not patched** — native Hatch builds merge addons by Python MRO into
+- **Composed, not patched** — explicit runtime builds merge addons by Python MRO into
   a generated `runtime/`. Deterministic (byte-identical, CI-checked); no
   monkey-patching, no runtime registration.
 - **Headless backend, React frontend** — Python owns data, permissions, and the
@@ -36,7 +36,7 @@ actually unique to your product.
 
 ## What you get — framework primitives
 
-- **Compose** — the addon system and the native Hatch build pipeline that turns
+- **Compose** — the addon system and the explicit runtime build pipeline that turns
   abstract addons into one running app: concrete Django models, one GraphQL
   schema, one permission schema, typed TS.
 - **Data modeling** — abstract models with opaque `sqid` IDs and a `StateField`,

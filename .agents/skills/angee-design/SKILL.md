@@ -82,13 +82,7 @@ concern and for consumers of any contract the feature changes.
 
 8. **Continue** with the artifact skill that owns the result where the repository ships one, else the owning guide section from the owner map; run `slice` when the user requested it. The route for a feature is `angee-addon` → `angee-models` and `angee-permissions` → `angee-graphql` and `angee-resources` → `angee-forms` and `angee-pages`, with `angee-tests` beside each step → `angee-project` → `angee-runtime` → acceptance; a seam change starts at `angee-framework`.
 
-<details><summary>Changes under the build/host plan</summary>
 
-Under the planned build/host split `angee.base` owns the host: the index rows citing `core/angee/hooks.py` and `core/angee/compose/autoconfig.py`
-follow those modules into `angee.base`, and step 4 has no core below `angee.base`
-for host facts; `tests/test_owner_index.py` failing on the stale paths is the signal to re-cite.
-
-</details>
 
 ## Do not
 

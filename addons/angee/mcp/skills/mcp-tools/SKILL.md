@@ -1,6 +1,6 @@
 ---
 name: mcp-tools
-description: "Authors an Angee addon's MCP tools: mcp_tools.py with register(server), the [mcp].tools override, GraphQLTool specs compiled from a schema bucket, actor scope and permission delegation, mount and lifespan facts, tool tests. Use for 'add an MCP tool', 'expose <model> to agents', 'mcp_tools.py'."
+description: "Authors an Angee addon's MCP tools: mcp_tools.py with register(server), the [tool.angee.mcp].tools override, GraphQLTool specs compiled from a schema bucket, actor scope and permission delegation, mount and lifespan facts, tool tests. Use for 'add an MCP tool', 'expose <model> to agents', 'mcp_tools.py'."
 ---
 
 # MCP Tools
@@ -23,7 +23,7 @@ through the same ambient actor.
 | File or module | Owns | Reference |
 |---|---|---|
 | `<addon>/mcp_tools.py` | `register(server: FastMCP) -> None`: which operations the addon exposes and how they project | `examples/addons/example/notes/mcp_tools.py:24` |
-| `pyproject.toml [mcp].tools` | Dotted override of the conventional `mcp_tools.register`; absent by convention | `addons/angee/mcp/pyproject.toml:14-15` |
+| `pyproject.toml [tool.angee.mcp].tools` | Dotted override of the conventional `mcp_tools.register`; absent by convention | `addons/angee/mcp/pyproject.toml:14-15` |
 | `angee.mcp.server` | The one process-wide `FastMCP`, registrar discovery in install order, `MOUNT_PATH` | `addons/angee/mcp/server.py:38,49,54,92` |
 | `angee.mcp.graphql` | `GraphQLTool` declaration, compiler, limits, actor-scoped execution | `addons/angee/mcp/graphql.py:70,73,83,189,226,368,518` |
 | `angee.mcp.middleware`, `angee.mcp.verifier` | Actor bracketing per call; bearer→`SubjectRef` through `ANGEE_MCP_ACTOR_VERIFIER` | `addons/angee/mcp/middleware.py:20`, `addons/angee/mcp/verifier.py:23,27` |
@@ -50,8 +50,8 @@ through the same ambient actor.
 
 ## Steps
 
-1. **Depend on the server addon.** Add `"angee.mcp"` to `depends_on` in `pyproject.toml` (notes:
-   `examples/addons/example/notes/pyproject.toml:15`). Do not add a `[mcp]` table: the conventional
+1. **Depend on the server addon.** Add `"angee-mcp>=3,<4"` to `[project].dependencies` in `pyproject.toml` (notes:
+   `examples/addons/example/notes/pyproject.toml:15`). Do not add a `[tool.angee.mcp]` table: the conventional
    `mcp_tools.py` is inferred (`addons/angee/mcp/server.py:92-104`); `tools = "<module>.<callable>"` exists only
    to rename the seam. **Owner rule:** the manifest declares, `angee.mcp.server` resolves
    ([composition owners](../../../../../docs/backend/guidelines.md#composition-owners)).
@@ -170,5 +170,5 @@ addons/angee/agents/{mcp_verifier.py:1-40,autoconfig.py:47,grants.py:1-140}; add
 core/angee/addons.py:19-111; core/angee/asgi.py:20-150; core/angee/hooks.py:47,56; examples/addons/example/notes/{mcp_tools.py,pyproject.toml:15,tests/test_mcp.py};
 tests/test_mcp.py; tests/test_knowledge_mcp.py:50-202; tests/test_mcp_graphql.py:1-80; tests/test_mcp_resource_tools.py:1-60,253.
 Doc gaps: no docs/ walkthrough for authoring an MCP tool (the only prose is module docstrings and the Django-Native Rule's app-native paragraph naming mcp_tools.py); derived from notes and knowledge.
-Mismatches: addons/angee/mcp ships no README.md; the base manifest declares [mcp].tools although the convention would infer it (addons/angee/mcp/pyproject.toml:14-15 vs server.py:92-104); the only in-repo non-GraphQL tool (list_resources) reads the schema catalogue, so no addon example of a hand-written tool over model verbs exists.
+Mismatches: addons/angee/mcp ships no README.md; the MCP package uses the conventional registrar unless an explicit override is needed (addons/angee/mcp/pyproject.toml:14-15 vs server.py:92-104); the only in-repo non-GraphQL tool (list_resources) reads the schema catalogue, so no addon example of a hand-written tool over model verbs exists.
 -->

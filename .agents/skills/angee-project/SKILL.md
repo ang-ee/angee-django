@@ -197,7 +197,7 @@ shows every service running and none completed; `check` and `schema --check` pas
 Docs: AGENTS.md; stack-root + workspace AGENTS.md (read-only); docs/guidelines.md; docs/composer.md #flow, #settings-bootstrap, #app-graph-and-settings, #addon-discovery, #autoconfig, #foundation-and-provenance-upgrade-cutoff, #composed-addon-dependencies, #runtime-cleanup, #addon-declarations, #serving, #example-project-shape, #invariants;
 docs/stack.md #how-the-stack-is-locked, #backend, #stack-serve-mode, #tooling; docs/howto/getstarted.md; docs/checks.md #choose-the-working-directory, #python-and-composition-contracts, #agent-methodology-and-documentation, #composition-and-schema; docs/backend/guidelines.md #package-layering, #rules, #rebac, #naming;
 docs/glossary.md #composition, #frontend (`createApp`); templates/README.md. Templates: templates/projects/web/**; templates/stacks/{dev,local,_shared}/**; templates/workspaces/src/copier.yml;
-docker/addon-settings.yaml. Code: core/angee/{conf,project,defaults,hatch,apps}.py; core/angee/management/{__init__,provision}.py + commands/angee.py; core/angee/compose/
+docker/addon-settings.yaml. Code: core/angee/{conf,project,defaults,build,apps}.py; core/angee/management/{__init__,provision}.py + commands/angee.py; core/angee/compose/
 {autoconfig,yamlconf,apps}.py; addons/angee/web/build.py; addons/angee/platform/{installer,autoconfig}.py; tests/test_stack_templates.py:621-1145; tests/test_hatch.py:1-60;
 tests/test_settings.py:640-1000; core/angee/management/provision.py:49-67. Shapes checked against a stack rendered from templates/stacks/dev (angee.yaml, settings.yaml,
 pyproject.toml, manage.py, pnpm-workspace.yaml, web/package.json, .copier-answers*.yml, runtime/web/manifest.json).

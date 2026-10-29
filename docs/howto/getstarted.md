@@ -431,7 +431,7 @@ cooperate:
   This loop is described in full under
   [What "Self-Building" Looks Like](https://docs.angee.ai/guide/concepts#what-self-building-looks-like).
 - **The framework gives agents a native package build.** Inside the host, an agent
-  changes source models and addons, runs `uv sync` for the editable runtime, and
+  changes source models and addons, runs the explicit `runtime-build` job for the editable runtime, and
   authors native migrations with `uv run --no-sync python manage.py makemigrations`.
   Native `runtime/<label>/migrations/` packages are reviewed and committed. `uv build` validates
   and packages that project-specific runtime and history. The operator's declared

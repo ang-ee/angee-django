@@ -64,7 +64,7 @@ default Host; a project *is* the Host's source. The operator is Host-agnostic â€
 it, a project is just a git Source.
 
 **Addon contract** â€” the addon facts declared in `pyproject.toml`, parsed by
-hatch-angee and consumed by composition and capability owners. Fields, executable
+native metadata readers and consumed by their capability owners. Fields, executable
 behavior and native library objects remain in their Python or web modules;
 manifest references and conventional defaults connect those implementations.
 

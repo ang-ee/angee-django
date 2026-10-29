@@ -333,7 +333,7 @@ calendar.
 | Pick | Owns | Angee adds |
 |---|---|---|
 | Cobra | `angee` CLI implementation | Dev supervisor, init, workspaces, templates |
-| hatchling | Native Python distribution metadata and wheel/editable/sdist build lifecycle | The core wheel uses the native backend; composed hosts opt into the framework's Hatch hooks for manifest-derived requirements and runtime artifacts. Packaging does not provision databases |
+| hatchling | Native Python distribution metadata and wheel/editable/sdist build lifecycle | The core uses the native backend; addon distributions compose hatch-angee layout defaults. Runtime generation is a separate explicit host job. Packaging does not provision databases |
 | hatch-angee >= 1, < 2 | In-place addon layout defaults over hatchling; native PEP 517 wheel/editable/sdist hooks | One addon entry point determines package layout; explicit Hatch configuration wins. The current compiler temporarily retains the published `order_app_dependencies` helper |
 | ruff | Python lint and format | Repo checks |
 | mypy + django-stubs[compatible-mypy] | Python and Django ORM type checking, model descriptors, manager factories, generic constructors, and TextChoices enums | Immutable upstream corrections pinned by the dev manifest preserve native manager contracts and relation identities; the host model plugin and optional `angee.provenance.typing` plugin compose through mypy's native plugin list; the native Django plugin uses the full composer-owned model registry in [`tests.typing_settings`](../tests/typing_settings.py), isolated from the live stack and pytest |

@@ -200,7 +200,7 @@ fragment's `index.test.ts` passes; `runtime/web/manifest.json` (`addons/angee/we
 
 <!--
 Docs: AGENTS.md; docs/guidelines.md; docs/backend/guidelines.md #django-native-rule, #package-layering, #composition-owners, #naming, #checks; docs/composer.md #addon-discovery, #autoconfig, #addon-declarations, #serving; docs/frontend/guidelines.md #stack, #package-layering, #reserved-translation-namespace, #rules; docs/checks.md #choose-the-working-directory, #python-and-composition-contracts, #source-addon-test-models, #agent-methodology-and-documentation, #composition-and-schema, #frontend-packages-and-addon-fragments; docs/glossary.md #composition.
-Code (grep -n on the working tree): installed hatch_angee manifest.py:33,189; core/angee/addons.py:19,73,79,91; core/angee/compose/autoconfig.py:29;
+Code (grep -n on the working tree): native package readers in core/angee/addons.py; core/angee/addons.py:19,73,79,91; core/angee/compose/autoconfig.py:29;
 core/angee/compose/declarations.py:126; core/angee/conf.py:421; addons/angee/base/{autoconfig.py:23-24,42,apps.py:15-22,build.py:133,checks.py:16-37};
 addons/angee/graphql/schema.py:650-680; addons/angee/mcp/server.py:92-101; addons/angee/resources/entries.py:111; addons/angee/web/build.py:77,101,115,149,242;
 addons/angee/money/apps.py:17-30; addons/angee/tags/{pyproject.toml,testing/models.py,web/src/*}; examples/addons/example/notes/{pyproject.toml,autoconfig.py,README.md,web/*};
