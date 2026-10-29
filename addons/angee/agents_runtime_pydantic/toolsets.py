@@ -18,12 +18,11 @@ from typing import Any
 from asgiref.sync import sync_to_async
 from django.core.exceptions import ImproperlyConfigured
 from fastmcp.client.transports import StreamableHttpTransport
-from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import ToolError, ValidationError
 from fastmcp.tools import Tool as FastMCPTool
 from fastmcp.tools import ToolResult
 from fastmcp.tools.function_tool import FunctionTool
 from mcp.types import TextContent
-from pydantic import ValidationError
 from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.tools import ToolDefinition

@@ -228,10 +228,13 @@ def test_anthropic_addon_owns_install_provider_and_demo_models() -> None:
     config = AppConfig("angee.agents_integrate_anthropic", module)
     manifest = resource_manifest_for(config)
 
-    assert manifest["install"] == ({
-        "path": "resources/install/030_agents.inferenceprovider.yaml",
-        "depends_on": ("integrate:resources/master/010_integrate.vendor.yaml",),
-    },)
+    assert manifest["install"] == (
+        {"path": "resources/install/010_integrate.oauthclient.yaml", "adopt": ("slug", "environment")},
+        {
+            "path": "resources/install/030_agents.inferenceprovider.yaml",
+            "depends_on": ("integrate:resources/master/010_integrate.vendor.yaml",),
+        },
+    )
     assert [item["path"] for item in manifest["demo"]] == [
         "resources/demo/010_integrate.credential.yaml",
         "resources/demo/040_agents.inferencemodel.yaml",
