@@ -66,7 +66,7 @@ reminds once per session on the first source edit; it is advisory.
 | Thin callers; debt removed at its owner | the owner map template records the thin-caller and debt checks the gate requires | — | `architecture-reviewer`, `django-reviewer` | — |
 | Stop and ask when a shape is still ambiguous | `angee-design` step 7 | — | the architect | — |
 | Tests are authored with the artifact | `angee-tests`; each artifact skill points at it | the checks per area | — | — |
-| Skills stay honest | every skill cites definition lines and names sources; transition notes only in `<details>`; no private history in bodies | `test_agent_methodology.py` (YAML frontmatter, skill-internal links only as `references/<file>`, `openai.yaml` policy true only for the guard, the `.claude/skills` link); `test_owner_index.py`; `test_agent_owner_map_guard.py` | the prose properties (owner rules cite a rule with its condition, no absolutes, no private history, no time-sensitive wording) are review obligations on every skill change | — |
+| Skills stay honest | every skill cites definition lines and names sources; the [current-contract and proposal rule](../AGENTS.md#constitution) owns instructional scope | `test_agent_methodology.py` (YAML frontmatter, skill-internal links only as `references/<file>`, `openai.yaml` policy true only for the guard, the `.claude/skills` link); `test_owner_index.py`; `test_agent_owner_map_guard.py` | the prose properties (owner rules cite a rule with its condition, no absolutes, no private history, no time-sensitive wording) are review obligations on every skill change | — |
 
 ## End-to-end route for a complete addon
 

@@ -354,11 +354,12 @@ requires a deliberate support cutoff and retirement of superseded declarations.
 
 Normal serving only imports prebuilt artifacts. The explicit `angee check`
 compares generated output and reports pending declarations without writing files.
-Use an editable `uv sync` to compose models, then native `makemigrations` to bind
-authored transitions and generate remaining lossless changes. Review and commit
-the resulting native history before `uv build`: packaging validates the sealed
-history offline and never authors it. Provisioning checks for model drift and
-uses native `migrate` for execution, database aliases, routing and recording.
+Install editable distributions with `uv sync`, then run the explicit runtime-build
+worker before native `makemigrations` binds authored transitions and generates
+remaining lossless changes. Review and commit the resulting native history. The
+worker's `--check-history` validates tracked history offline; `uv build` builds
+distribution archives. Provisioning checks for model drift and uses native
+`migrate` for execution, database aliases, routing and recording.
 
 `makemigrations` never drops a column or a table that still holds data.
 The host’s explicit `makemigrations` authoring command loads the compiler’s
