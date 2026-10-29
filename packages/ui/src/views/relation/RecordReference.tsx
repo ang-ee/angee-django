@@ -28,7 +28,9 @@ export function RecordReference({ model, id, label, tab, search }: RecordReferen
   return href ? <NavLink href={recordTargetHref(href, { tab, search })} variant="inline" className={className}>{content}</NavLink> : <span className={className}>{content}</span>;
 }
 
-/** Opt-in record previews contributed by the record's addon. */
+/** Opt-in record previews contributed by the record's addon.
+ * @kind contribution
+ */
 export const REFERENCE_CONTAINERS: readonly CoreContainer[] = [
   { address: "reference#preview", models: true },
 ];
