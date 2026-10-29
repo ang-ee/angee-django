@@ -39,13 +39,13 @@ _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
 class AngeeModel(
-    Composable,
     InputExtensionsMixin,
     StateTransitionsMixin,
     MergeContractMixin,
     PublicIdentity,
     TimestampMixin,
     RebacMixin,
+    Composable,
 ):
     """Abstract base model for Angee source and runtime models."""
 
