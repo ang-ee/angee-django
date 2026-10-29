@@ -110,10 +110,6 @@ that owns the state change. Reference examples are `addons/angee/parties/tasks.p
    **Owner rule:** code owns the schedule, the database owns run state; user-authored cadence is a workflow
    Trigger ([Autoconfig](../../../../../docs/composer.md#autoconfig), `addons/angee/jobs/scheduler.py:17-23`).
 
-   <details><summary>Changes under the build/host plan</summary>Static `SETTINGS` dicts (including
-   `CELERY_BEAT_SCHEDULE:append`) become hatch-angee build input; `settings(namespace)` callables such as
-   `angee.jobs.autoconfig.settings` become settings-module code.</details>
-
 5. **Budget time, choose the queue.** Worker limits are `CELERY_TASK_SOFT_TIME_LIMIT=840` / `CELERY_TASK_TIME_LIMIT=900`
    (`addons/angee/jobs/autoconfig.py:16-17`). A bounded body stops at `task_time_budget()` and a persisted claim
    fence outlives both limits by `task_claim_lease()` (`addons/angee/jobs/timeouts.py:11,18`; users:

@@ -1300,12 +1300,13 @@ exception closes the rows as failed. Tests inherit a boundary from the root
 
 - **Each project owns durable native Django migration history.** After an
   editable runtime build, `makemigrations` materializes applicable addon
-  transitions before native autodetection. Review and commit that history;
-  `uv build` validates and packages it, and provisioning applies it without
-  authoring new files. Released migration names and bodies are immutable: make
-  corrections with forward migrations and keep original chains while partially
-  upgraded databases remain supported. Native squashing needs its usual
-  coordinated replacement period.
+  transitions before native autodetection. Review and commit that history. The
+  explicit runtime-build worker validates tracked history offline with
+  `--check-history`; packaging builds distribution archives, and provisioning
+  applies native history without authoring new files. Released migration names
+  and bodies are immutable: make corrections with forward migrations and keep
+  original chains while partially upgraded databases remain supported. Native
+  squashing needs its usual coordinated replacement period.
 - **History reset requires an explicit upgrade cutoff.**
   [`reset_migration_history`](../../core/angee/compose/management/commands/reset_migration_history.py)
   verifies a fully applied, model-clean graph before replacing selected histories

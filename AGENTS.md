@@ -80,9 +80,12 @@ highest standard.
   framework seam instead of editing a framework/base-addon file to name a product
   concept. `tests/extcontrib` is the living REBAC extension example.
 - **Docs teach intent; code explains concrete contracts.** Public APIs explain
-  their current behavior in names, types, and docstrings. A mismatch requires
-  [reconciliation](docs/guidelines.md#reconcile-code-docs-and-tests), not automatic
-  acceptance of either stale prose or defective code.
+  their current behavior in names, types, and docstrings. Operational and
+  contributor instructions describe current implemented contracts. Proposals and
+  private history stay in the [resolved work-state](#where-knowledge-lives);
+  delete superseded guidance when its replacement implementation lands. A mismatch
+  requires [reconciliation](docs/guidelines.md#reconcile-code-docs-and-tests), not
+  automatic acceptance of either stale prose or defective code.
 
 If no Angee pattern exists, follow the underlying framework. When a new
 architectural convention still has multiple plausible shapes after researching
