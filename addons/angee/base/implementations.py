@@ -2,16 +2,13 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
-from functools import cache
 from typing import Any, ClassVar, cast
 
-from django.apps import AppConfig
 from django.conf import settings
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import models
 from django.utils.module_loading import import_string
 from pydantic import BaseModel
 
@@ -120,9 +117,7 @@ class ImplBase:
             icon=cls.icon,
             category=cls.category,
             defaults=cls.effective_defaults(config_schema=schema),
-            config_schema=config_form_spec(schema, owner=cls.__name__, json_fields=cls.config_form_spec_json_fields)
-            if schema is not None
-            else None,
+            config_schema=cls.config_form_spec(config_schema=schema),
         )
 
     @classmethod
@@ -143,10 +138,10 @@ class ImplBase:
         return validated.model_dump(mode="json", by_alias=True) if validated is not None else {}
 
     @classmethod
-    def config_form_spec(cls) -> dict[str, Any] | None:
+    def config_form_spec(cls, *, config_schema: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """Translate Pydantic's supported JSON Schema subset into FormSpec."""
 
-        schema = cls.config_json_schema()
+        schema = cls.config_json_schema() if config_schema is None else config_schema
         return (
             config_form_spec(schema, owner=cls.__name__, json_fields=cls.config_form_spec_json_fields)
             if schema is not None
@@ -161,15 +156,6 @@ def impl_registry(registry_setting: str) -> dict[str, str]:
     if not isinstance(mapping, Mapping):
         raise ImproperlyConfigured(f"settings.{registry_setting} must be a mapping of key to dotted path.")
     return {str(key): str(value) for key, value in mapping.items()}
-
-
-def declared_impl_registries() -> tuple[str, ...]:
-    """Return dotted implementation bases listed by installed addons."""
-
-    declared = getattr(settings, "ANGEE_IMPL_REGISTRIES", ())
-    if not isinstance(declared, list | tuple) or not all(isinstance(path, str) for path in declared):
-        raise ImproperlyConfigured("settings.ANGEE_IMPL_REGISTRIES must be a list of dotted base classes.")
-    return tuple(declared)
 
 
 def resolve_impl_class[T](base_class: type[T], key: str) -> type[T]:
@@ -213,8 +199,15 @@ def resolve_all_impl_classes[T](
     invalid declaration while ordinary callers retain fail-fast resolution.
     """
 
+    return tuple(impl for _key, impl in _impl_classes(base_class, on_error=on_error))
+
+
+def _impl_classes[T](
+    base_class: type[T], *, on_error: Callable[[Exception], None] | None = None,
+) -> Iterator[tuple[str, type[T]]]:
+    """Enumerate trusted keyed classes once for checks and metadata projections."""
+
     registry_setting = getattr(base_class, "registry_setting")
-    classes: list[type[T]] = []
     for key in sorted(impl_registry(registry_setting)):
         try:
             impl = resolve_impl_class(base_class, key)
@@ -223,14 +216,14 @@ def resolve_all_impl_classes[T](
                 raise
             on_error(error)
             continue
-        classes.append(impl)
-    return tuple(classes)
+        yield key, impl
 
 
 def check_impl_registry(
     base_class: type[object],
     *,
     obj: object | None = None,
+    **kwargs: object,
 ) -> list[checks.CheckMessage]:
     """Check registry declarations and offered config forms, including rowless registries.
 
@@ -238,6 +231,7 @@ def check_impl_registry(
     require entries, and consumers own any required selected-key policy.
     """
 
+    del kwargs
     errors: list[checks.CheckMessage] = []
     try:
         classes = resolve_all_impl_classes(
@@ -261,41 +255,20 @@ def check_impl_registry(
     return errors
 
 
-def impl_choices(base_class: type[object]) -> list[ImplChoice]:
+def impl_choices(
+    base_class: type[object], *, include: Callable[[type[object]], bool] | None = None,
+) -> list[ImplChoice]:
     """Project pickable metadata in registry-key order, without requiring a column."""
 
-    registry_setting = getattr(base_class, "registry_setting")
     choices: list[ImplChoice] = []
-    for key in sorted(impl_registry(registry_setting)):
-        impl = resolve_impl_class(base_class, key)
+    for key, impl in _impl_classes(base_class):
+        if include is not None and not include(impl):
+            continue
         if issubclass(impl, ImplBase):
             choices.append(replace(impl.choice(), key=key))
         else:
             choices.append(ImplChoice(key=key, label=key, icon="", category="", defaults={}, config_schema=None))
     return choices
-
-
-def impl_choices_enum(base_class: type[object]) -> type[models.TextChoices]:
-    """Return the shared native enum for the current non-empty registry key set."""
-
-    registry_setting = getattr(base_class, "registry_setting")
-    keys = tuple(sorted(impl_registry(registry_setting)))
-    if not keys:
-        raise ImproperlyConfigured(
-            f"Implementation registry settings.{registry_setting} is empty; "
-            "at least one implementation is required to build its enum."
-        )
-    return _impl_choices_enum(registry_setting, keys)
-
-
-@cache
-def _impl_choices_enum(registry_setting: str, keys: tuple[str, ...]) -> type[models.TextChoices]:
-    """Share enum identity across projections while settings changes select new keys."""
-
-    core = registry_setting.removeprefix("ANGEE_").removesuffix("_CLASSES")
-    camel = "".join(part.capitalize() for part in core.split("_") if part)
-    members = [(key.upper(), (key, key)) for key in keys]
-    return models.TextChoices(f"{camel or 'Impl'}Impl", members)
 
 
 def _config_defaults(schema: dict[str, Any] | None) -> dict[str, Any]:
@@ -306,38 +279,3 @@ def _config_defaults(schema: dict[str, Any] | None) -> dict[str, Any]:
         for name, field in schema["properties"].items()
         if field.get("default") not in (None, "")
     }
-
-
-def check_impl_registries(
-    app_configs: Sequence[AppConfig] | None = None,
-    **kwargs: object,
-) -> list[checks.CheckMessage]:
-    """Validate every keyed registry declared by installed addons."""
-
-    del app_configs, kwargs
-    try:
-        paths = declared_impl_registries()
-    except ImproperlyConfigured as error:
-        return [checks.Error(str(error), id="angee.E031")]
-    errors: list[checks.CheckMessage] = []
-    for dotted in paths:
-        try:
-            base = import_string(dotted)
-        except ImportError as error:
-            errors.append(
-                checks.Error(
-                    f"ANGEE_IMPL_REGISTRIES entry {dotted!r} cannot be imported: {error}",
-                    id="angee.E031",
-                )
-            )
-            continue
-        if not isinstance(base, type) or not getattr(base, "registry_setting", ""):
-            errors.append(
-                checks.Error(
-                    f"ANGEE_IMPL_REGISTRIES entry {dotted!r} must name a registry base with registry_setting.",
-                    id="angee.E031",
-                )
-            )
-            continue
-        errors.extend(check_impl_registry(base))
-    return errors

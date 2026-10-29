@@ -1,9 +1,4 @@
-import {
-  defineBaseAddon,
-  resourcePageRoutes,
-  type BaseAddonRoute,
-} from "@angee/app";
-import type { BaseMenuItem } from "@angee/ui";
+import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute, type MenuDeclarations } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { Tag as TagIcon, Tags as TagsIcon } from "lucide-react";
 
@@ -23,22 +18,10 @@ const tagsRoutes: readonly BaseAddonRoute[] = [
   ),
 ];
 
-const tagsMenu: readonly BaseMenuItem[] = [
-  {
-    id: TAGS_ID,
-    label: "Tags",
-    icon: "tags-group",
-    group: "platform",
-    children: [
-      {
-        id: "tags.tags",
-        label: "Tags",
-        icon: "tags-tag",
-        route: "tags.tags",
-      },
-    ],
-  },
-];
+const tagsMenu: MenuDeclarations = {
+  [TAGS_ID]: { label: "Tags", icon: "tags-group", group: "platform" },
+  "tags.tags": { label: "Tags", icon: "tags-tag", route: "tags.tags", parent: TAGS_ID },
+};
 
 /**
  * The `@angee/tags` rendered addon: the tag vocabulary page and the tag form

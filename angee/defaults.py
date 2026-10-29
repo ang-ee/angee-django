@@ -22,7 +22,7 @@ def _sequence(value: Any) -> tuple[Any, ...]:
 
 _BASE_DIR = globals().get("BASE_DIR")
 if _BASE_DIR is None:
-    raise ImproperlyConfigured("angee.defaults must be evaluated by angee.settings")
+    raise ImproperlyConfigured("angee.defaults must be evaluated by the project settings loader")
 
 BASE_DIR = resolve_path(_BASE_DIR)
 DEBUG = bool(globals().get("DEBUG", False))
@@ -45,17 +45,16 @@ if isinstance(_configured_installed_apps, str):
 # every project-declared addon root.
 _CORE_INSTALLED_APPS_PREFIX = (
     "django_yamlconf",
-    "angee.compose",
-    "angee",
     "angee.base",
 )
 INSTALLED_APPS = [
     *_CORE_INSTALLED_APPS_PREFIX,
-    *(entry for entry in _configured_installed_apps if entry not in _CORE_INSTALLED_APPS_PREFIX),
+    *(entry for entry in _configured_installed_apps if entry not in (*_CORE_INSTALLED_APPS_PREFIX, "angee")),
+    "angee",
 ]
 
 COMPOSE_ENV_PREFIXES = globals().get("COMPOSE_ENV_PREFIXES", ("ANGEE_",))
-COMPOSE_APP_DECLARATIONS = globals().get("COMPOSE_APP_DECLARATIONS", "angee.conf.ManifestDeclarations")
+COMPOSE_APP_DECLARATIONS = globals().get("COMPOSE_APP_DECLARATIONS", "angee.build.ManifestDeclarations")
 
 COMPOSE_RUNTIME_MODULE = globals().get("COMPOSE_RUNTIME_MODULE", "runtime")
 ANGEE_DATA_DIR = resolve_path(globals().get("ANGEE_DATA_DIR", BASE_DIR / ".angee" / "data"))

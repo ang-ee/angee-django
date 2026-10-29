@@ -1,6 +1,5 @@
 import type { BaseAddonRoute } from "@angee/app";
-import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
-import type { BaseMenuItem } from "@angee/ui";
+import { defineBaseAddon, resourcePageRoutes, type MenuDeclarations } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { BookOpen, FileStack, FileText, Library } from "lucide-react";
 
@@ -25,18 +24,11 @@ const knowledgeRoutes: readonly BaseAddonRoute[] = [
   },
 ];
 
-const knowledgeMenu: readonly BaseMenuItem[] = [
-  {
-    id: KNOWLEDGE_ID,
-    label: "Knowledge",
-    icon: "knowledge",
-    route: "knowledge.home",
-    children: [
-      { id: "knowledge.home", label: "Wiki", icon: "knowledge", route: "knowledge.home" },
-      { id: "knowledge.settings", label: "Settings", icon: "vault", route: "knowledge.settings" },
-    ],
-  },
-];
+const knowledgeMenu: MenuDeclarations = {
+  [KNOWLEDGE_ID]: { label: "Knowledge", icon: "knowledge", route: "knowledge.home" },
+  "knowledge.home": { label: "Wiki", icon: "knowledge", route: "knowledge.home", parent: KNOWLEDGE_ID },
+  "knowledge.settings": { label: "Settings", icon: "vault", route: "knowledge.settings", parent: KNOWLEDGE_ID },
+};
 
 // Glyphs the wiki reaches for that the base registry doesn't carry.
 const knowledge = defineBaseAddon({

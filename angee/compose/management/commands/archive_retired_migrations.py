@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 
-from angee.compose.runtime import Runtime
+from angee.compose.migrations import archive_retired_migrations
+from angee.compose.runtime import _generated_tree, _runtime_directory
 
 
 class Command(BaseCommand):
@@ -27,8 +30,12 @@ class Command(BaseCommand):
 
         del args
         try:
-            names = Runtime.from_django().archive_retired_migrations(
+            runtime_module = getattr(settings, "COMPOSE_RUNTIME_MODULE", "runtime")
+            names = archive_retired_migrations(
                 options["app_label"],
+                runtime_tree=_generated_tree(_runtime_directory(), {}),
+                runtime_module=runtime_module,
+                labels=import_module(runtime_module).RUNTIME_APPS,
                 archive_dir=options["archive_dir"],
                 dry_run=options["dry_run"],
             )

@@ -8,8 +8,6 @@ from typing import TypedDict
 _Settings = TypedDict(
     "_Settings",
     {
-        "ANGEE_HOOKS:append": list[str],
-        "ANGEE_IMPL_REGISTRIES:append": list[str],
         "ANGEE_INFERENCE_BACKEND_CLASSES": dict[str, str],
         "ANGEE_INFERENCE_APPROVED_DEPLOYMENTS": Mapping[str, Sequence[Mapping[str, object]]] | None,
         "ANGEE_AGENT_RUNTIME_CLASSES": dict[str, str],
@@ -20,8 +18,6 @@ _Settings = TypedDict(
 )
 
 SETTINGS: _Settings = {
-    "ANGEE_HOOKS:append": ["ANGEE_MCP_ACTOR_VERIFIER"],
-    "ANGEE_IMPL_REGISTRIES:append": ["angee.agents.backends.InferenceBackend", "angee.agents.runtimes.AgentRuntime"],
     # Inference providers select their backend with a provider-owned
     # ``backend_class`` field. ``manual`` lists no models; its catalogue is
     # hand-curated.

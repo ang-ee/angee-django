@@ -12,7 +12,7 @@ from django.db import models
 from django.db.models.functions import Cast
 from rebac import to_subject_ref
 
-from angee.base.identity import public_id_for
+from angee.base.models.identity import public_id_for
 from angee.base.pagination import KeysetOrder, keyset_signer
 from angee.base.refs import generic_pointer_target
 from angee.graphql.ids import PublicID
@@ -62,12 +62,14 @@ def _union(branches: list[models.QuerySet], *columns: str) -> models.QuerySet:
     history/chatter alongside independently readable targets). Preserve those
     eagerly scoped operands with Django's native QuerySet, then project only
     the common columns. No actor or model policy is applied across the union.
+    Clear inherited ordering on the combined result; callers order by its
+    projected columns.
     """
     first, *rest = [rows.values(*columns) for rows in branches]
     native = models.QuerySet[models.Model](
         model=first.model, query=first.query.clone(), using=first.db,
     ).values(*columns)
-    return native.union(*rest, all=True) if rest else native
+    return native.union(*rest, all=True).order_by()
 
 
 class Timeline:

@@ -1,4 +1,4 @@
-"""Concrete demo models exercising :class:`~angee.base.models.HierarchyMixin`.
+"""Concrete demo models exercising :class:`~angee.base.models.hierarchy.HierarchyMixin`.
 
 ``HierNode`` is a plain (REBAC-untyped) tree so the pure hierarchy behaviours —
 inclusive ``subtree_of`` / exclusive ``ancestors_of``, padded-segment prefix
@@ -14,7 +14,10 @@ from __future__ import annotations
 
 from django.db import models
 
-from angee.base.models import AngeeDataModel, AngeeManager, AngeeQuerySet, HierarchyMixin, HierarchyQuerySet
+from angee.base.managers import AngeeManager
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
+from angee.base.querysets import AngeeQuerySet
 
 
 class HierNodeQuerySet(HierarchyQuerySet["HierNode"], AngeeQuerySet["HierNode"]):

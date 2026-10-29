@@ -16,7 +16,7 @@ from strawberry import auto
 from strawberry.types import get_object_definition
 from strawberry_django.optimizer import DjangoOptimizerExtension
 
-from angee.base.models import AngeeDataModel
+from angee.base.models.base import AngeeDataModel
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Angee Pages"
+  short_description: "Compose a page in an Angee addon web fragment."
+  default_prompt: "Use $angee-pages to compose this page in the addon's web fragment."
+policy:
+  allow_implicit_invocation: false

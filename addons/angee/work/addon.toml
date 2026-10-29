@@ -14,16 +14,6 @@ depends_on = [
   "angee.web",
 ]
 
-[[migrations]]
-name = "stage_public_identity"
-app_label = "resources"
-module = "runtime_migrations.stage_public_identity"
-
-[[migrations]]
-name = "stage_fractional_position"
-app_label = "work"
-module = "runtime_migrations.stage_fractional_position"
-
 [resources]
 master = []
 demo = [

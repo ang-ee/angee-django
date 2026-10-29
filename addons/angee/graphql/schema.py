@@ -32,9 +32,9 @@ from strawberry.types.union import StrawberryUnion
 from strawberry_django_hasura import hasura_config
 
 from angee.addons import addon_manifest, optional_addon_module, resolve_addon_reference
-from angee.base.models import StaleRevisionError
+from angee.base.exceptions import DomainError, classify_error, validation_error
+from angee.base.models.locks import StaleRevisionError
 from angee.base.permissions import require_rebac_queryset
-from angee.errors import DomainError, classify_error, validation_error
 from angee.graphql.data.contracts import DataResourceMetadata
 from angee.graphql.data.metadata import (
     data_resource_contributions,
@@ -48,7 +48,15 @@ from angee.graphql.introspection import (
     surface_name,
 )
 from angee.graphql.view_as import ViewAsReadOnlyExtension
-from graphql import GraphQLError, GraphQLObjectType, GraphQLSchema, assert_input_type, coerce_input_value
+from graphql import (
+    GraphQLError,
+    GraphQLObjectType,
+    GraphQLSchema,
+    Undefined,
+    assert_input_type,
+    coerce_input_value,
+    validate_input_value,
+)
 
 DEFAULT_SCHEMA_NAME = "public"
 """Default GraphQL schema name served by Angee hosts."""
@@ -391,6 +399,10 @@ class GraphQLSchemas:
                     graphql_type = assert_input_type(self.graphql_schema(name).get_type(definition.name))
                     try:
                         coerced = coerce_input_value(value, graphql_type)
+                        if coerced is Undefined:
+                            errors: list[GraphQLError] = []
+                            validate_input_value(value, graphql_type, lambda error, _path: errors.append(error))
+                            raise ValidationError([error.message for error in errors])
                         where = convert_argument(
                             coerced,
                             definition.origin,

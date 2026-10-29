@@ -2,7 +2,7 @@
 
 Run this file directly so Django constructs the real generated models without
 sharing pytest's hand-built source-addon models or global app registry. Only the
-temporary runtime directory is written. Native addon tests use Django's test
+temporary host (authored config/history and generated runtime) is written. Native addon tests use Django's test
 runner with SQLite by default; ``--test-postgresql`` accepts the runner's
 PostgreSQL DATABASE_URL and creates a separate native test database.
 """
@@ -13,7 +13,6 @@ import argparse
 import importlib
 import json
 import os
-import runpy
 import subprocess
 import sys
 from contextlib import nullcontext
@@ -112,37 +111,47 @@ def boot(
     addon_dirs.extend(extra_addon_dirs)
     sys.path[:0] = [str(source_root), *(str(path) for path in addon_dirs)]
     for name in tuple(os.environ):
-        if name.startswith("ANGEE_") or name in {"DJANGO_SETTINGS_MODULE", "DATABASE_URL"}:
+        if name.startswith(("ANGEE_", "YAMLCONF_")) or name in {"DJANGO_SETTINGS_MODULE", "DATABASE_URL"}:
             os.environ.pop(name)
 
     import django
+    import yaml
     from django.conf import settings
     from hatch_angee import discover
 
-    from angee.compose.composer import Composer
-    from angee.conf import prepend_import_paths
+    from angee.hatch import _compile
 
     installed_apps = (
         list(root_apps) if root_apps is not None else [manifest.name for _, manifest in discover(addon_dirs)]
     )
-    namespace = runpy.run_module(
-        "angee.defaults",
-        init_globals={
-            "BASE_DIR": runtime_dir.parent,
-            "SECRET_KEY": "isolated-composition-check",
-            "COMPOSE_RUNTIME_DIR": runtime_dir,
-            "ANGEE_ADDON_DIRS": tuple(addon_dirs),
-            "INSTALLED_APPS": installed_apps,
-            "DATABASES": {"default": database},
-            "ANGEE_MONEY_REFERENCE_CURRENCY": "USD",
-        },
-    )
-    namespace = {name: value for name, value in namespace.items() if name.isupper() and not name.startswith("_")}
+    host_root = runtime_dir.parent
+    host_root.mkdir(parents=True, exist_ok=True)
+    declarations = host_root / "settings.yaml"
+    declarations.write_text(yaml.safe_dump({
+        "SECRET_KEY": "isolated-composition-check",
+        "COMPOSE_RUNTIME_DIR": str(runtime_dir),
+        "ANGEE_ADDON_DIRS": [str(path) for path in addon_dirs],
+        "INSTALLED_APPS": installed_apps,
+        "ANGEE_MONEY_REFERENCE_CURRENCY": "USD",
+    }, sort_keys=True), encoding="utf-8")
+    # The production Hatch worker is the sole compiler. It populates Django in
+    # its own interpreter; this interpreter then serves the prebuilt ordinary
+    # models, just as the installed host does. No global registry is reset.
+    python_paths = [str(source_root), *(str(path) for path in addon_dirs)]
+    if os.environ.get("PYTHONPATH"):
+        python_paths.append(os.environ["PYTHONPATH"])
+    os.environ["PYTHONPATH"] = os.pathsep.join(python_paths)
+    _compile(host_root, runtime_dir, check_history=False)
+    import runpy
+
+    namespace = {
+        name: value for name, value in runpy.run_path(str(runtime_dir / "settings.py")).items()
+        if name.isupper()
+    }
+    # Only the test runner's database differs from the offline build. It owns
+    # the native test DB name and never projects credentials into the artifact.
+    namespace["DATABASES"] = {"default": database}
     settings.configure(**namespace)
-    prepend_import_paths(addon_dirs)
-    Composer(namespace).compose_settings()
-    for name, value in namespace.items():
-        setattr(settings, name, value)
     django.setup()
     if root_apps is None:
         importlib.import_module("tests.statement_models")
@@ -259,17 +268,27 @@ def reset_migration_history_report() -> dict[str, Any]:
     from django.db import connection
     from django.db.migrations.autodetector import MigrationAutodetector
     from django.db.migrations.executor import MigrationExecutor
+    from django.db.migrations.loader import MigrationLoader
     from django.db.migrations.recorder import MigrationRecorder
     from django.db.migrations.state import ProjectState
+    from django.utils.module_loading import module_dir
 
+    from angee.apps import AngeeConfig
+    from angee.compose.migrations import reset_migration_history
     from angee.compose.runtime import Runtime
 
+    config = apps.get_app_config("angee")
+    assert isinstance(config, AngeeConfig)
+    labels = tuple(sorted(config.labels))
     runtime = Runtime.from_django()
-    labels = tuple(sorted(runtime.labels))
     call_command("makemigrations", *labels, interactive=False, include_header=False, verbosity=0)
+    history_dirs = {
+        label: Path(module_dir(importlib.import_module(MigrationLoader.migrations_module(label)[0])))
+        for label in labels
+    }
     # A fresh initial need not have the same key as the stack's applied one.
     for label in labels:
-        initial = runtime.runtime_dir / label / "migrations" / "0001_initial.py"
+        initial = history_dirs[label] / "0001_initial.py"
         source = initial.read_text().replace("'0001_initial'", "'0001_previous'")
         initial.rename(initial.with_name("0001_previous.py"))
         initial.with_name("0001_previous.py").write_text(source)
@@ -313,7 +332,7 @@ def reset_migration_history_report() -> dict[str, Any]:
         return {
             path: path.read_bytes()
             for label in labels
-            for path in (runtime.runtime_dir / label / "migrations").glob("*.py")
+            for path in history_dirs[label].glob("*.py")
         }
 
     original_sources = migration_sources()
@@ -326,12 +345,12 @@ def reset_migration_history_report() -> dict[str, Any]:
             original(*args, **kwargs)
             raise RuntimeError("injected reset failure")
 
-        target = "angee.compose.runtime.call_command" if phase == "generation" else (
+        target = "angee.compose.migrations.call_command" if phase == "generation" else (
             "django.db.migrations.recorder.MigrationRecorder.record_unapplied"
         )
         with patch(target, autospec=True, side_effect=fail_after_write):
             try:
-                runtime.reset_migration_history()
+                reset_migration_history(labels)
             except RuntimeError as error:
                 if str(error) != "injected reset failure":
                     raise
@@ -356,7 +375,7 @@ def reset_migration_history_report() -> dict[str, Any]:
     files = {
         label: sorted(
             path.name
-            for path in (runtime.runtime_dir / label / "migrations").glob("*.py")
+            for path in history_dirs[label].glob("*.py")
             if path.name != "__init__.py"
         )
         for label in labels
@@ -372,13 +391,10 @@ def reset_migration_history_report() -> dict[str, Any]:
         trim_to_apps=set(labels),
         convert_apps=set(labels),
     )
-    # This temporary host has no dependency-group document; isolate the migration
-    # check from the source checkout's unrelated project contract.
-    runtime.project_dir = runtime.runtime_dir.parent
     runtime.check()
     reset_sources = migration_sources()
     reset_records = list(recorder.migration_qs.order_by("pk").values())
-    runtime.reset_migration_history()
+    reset_migration_history(labels)
     replay_unchanged = (
         migration_sources() == reset_sources
         and list(recorder.migration_qs.order_by("pk").values()) == reset_records

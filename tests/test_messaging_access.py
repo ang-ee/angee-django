@@ -15,10 +15,9 @@ from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_r
 from rebac.backends import backend
 from rebac.evaluator import evaluator_scope
 
-from angee.base.build import apply_schema_paths, extension_source_map
-from angee.base.testing.permissions import installed_field_owners
+from angee.base.build import extension_source_map
+from angee.base.testing.permissions import emit_permissions, installed_field_owners
 from angee.messaging.testing.models import Channel, Message, Part, Thread, ThreadAttachment
-from angee.utils.files import write_atomic
 from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import File, Vendor
 from tests.test_messaging import _storage_drive
@@ -32,9 +31,7 @@ def messaging_access_schema(request: pytest.FixtureRequest, tmp_path: Path, tran
     originals = {config: getattr(config, "rebac_schema", None) for config in configs}
     sources = extension_source_map(configs, field_owners=installed_field_owners(configs))
     runtime = tmp_path / "messaging-access-runtime"
-    for relative, source in sources.items():
-        write_atomic(runtime / relative, source)
-    apply_schema_paths(configs, runtime, sources=sources)
+    emit_permissions(configs, runtime, sources=sources)
     try:
         with override_settings(REBAC_LOCAL_BACKEND_STORAGE=request.param):
             call_command("rebac", "sync", verbosity=0)

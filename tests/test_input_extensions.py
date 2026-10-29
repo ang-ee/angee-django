@@ -6,7 +6,8 @@ from django.db.migrations.state import ModelState
 from django.test.utils import isolate_apps
 from rebac import RebacMixin
 
-from angee.base.models import AngeeModel, InputExtensionsMixin
+from angee.base.models.base import AngeeModel
+from angee.base.models.inputs import InputExtensionsMixin
 from angee.tags.models import TaggedModel
 
 

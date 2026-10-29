@@ -58,14 +58,17 @@ host checks the full framework composition as before. The CI target is the
 consumer's entire `addons` directory, including optional addons when their
 declared composition is checked; it does not select only recently changed files.
 
-Digest-pinned `runtime_migrations` are historical executable artifacts, so native
-mypy recursive discovery excludes their bodies, matching the Ruff source
-boundary. Imports from migration-integrity tests use `follow_imports = "silent"`:
-their exported types remain available and caller errors remain visible. Do not
-edit applied migration digests for checker diagnostics. The
-[runtime-migration integrity tests](../tests/test_runtime_migrations.py) retain
-their execution and immutability coverage. Generated `typing_runtime` model
-declarations remain followed because they are required typing inputs.
+A declared addon transition is a temporary executable input: its materialized
+copy carries a source fingerprint until it is applied and the stack's history is
+consolidated. Native mypy/Ruff discovery excludes those bodies; integrity-test
+imports remain followed silently so their types are available. Do not change an
+applied copy or digest to fix checker diagnostics. The
+[runtime-migration mechanism tests](../tests/test_runtime_migrations.py) cover
+materialization, fingerprints, replay and guarded history replacement through
+neutral fixtures. Completed transition declarations and bodies are retired after
+the [snapshot/reset cutoff](composer.md#foundation-and-provenance-upgrade-cutoff),
+not retained indefinitely as compatibility APIs. Generated `typing_runtime`
+model declarations remain followed because they are required typing inputs.
 
 [`tests/test_layering.py`](../tests/test_layering.py) guards framework import
 boundaries and optional state-field declarations. See the
@@ -143,6 +146,38 @@ through their native app lifecycle. Decisions-only suites use
 test modules `test_<concern>.py` and tests
 `test_<behavior>` so native discovery and focused file selection agree.
 
+### Owner Search
+
+Before adding a backend abstraction, search for the native owner first. Run the
+scans from the **framework source root**; narrow with paths or `-g` globs when
+the hit list is long:
+
+- `rg "AppConfig|schemas|permissions|resources|autoconfig"` finds the addon
+  declaration and composition owners: app configs, schema buckets, permission
+  and resource manifests, autoconfig.
+- `rg "QuerySet|Manager.from_queryset"` finds the manager or queryset that
+  already owns a row rule or read policy.
+- `rg "apps.get_model|get_app_configs"` finds existing registry lookups, so a
+  new one composes the same app-registry seam instead of a private registry.
+
+The [design skill](../.agents/skills/angee-design/SKILL.md) owns the owner-map
+procedure these scans feed.
+
+### Outbound TLS Trust
+
+Checks that make real outbound HTTPS calls (real-socket transport tests, OAuth
+round trips, bridge probes) need a CA store in the environment that runs them;
+the [TLS contract](backend/guidelines.md#integration-and-worker-contracts) keeps
+trust there, never in call sites. A dev mac trusts through Homebrew
+`ca-certificates`. Repair a minimal container or a bare CI/agent sandbox once,
+at bootstrap of the shell that runs the checks, by installing the OS
+`ca-certificates` package or pointing OpenSSL at the selected environment's
+bundled store:
+
+```sh
+export SSL_CERT_FILE="$(python -m certifi)"
+```
+
 ## Agent Methodology And Documentation
 
 For changes limited to instructions, tool adapters, or their tests, run from the
@@ -150,12 +185,16 @@ For changes limited to instructions, tool adapters, or their tests, run from the
 
 ```sh
 uv run --locked python .agents/tools/sync-adapters.py --check
-uv run --locked python -m pytest -p no:django --noconftest -c /dev/null --rootdir=. -q tests/test_agent_stack_root_policy.py tests/test_agent_work_state_policy.py tests/test_agent_methodology.py tests/test_documentation_contracts.py
+uv run --locked python -m pytest -p no:django --noconftest -c /dev/null --rootdir=. -q tests/test_agent_stack_root_policy.py tests/test_agent_work_state_policy.py tests/test_agent_methodology.py tests/test_documentation_contracts.py tests/test_owner_index.py tests/test_agent_owner_map_guard.py
 git diff --check
 ```
 
 These tests exercise documentation links/commands, template input agreement,
 adapter parity, and mocked helper behavior without starting the application.
+`tests/test_owner_index.py` validates the owner index citations: every cited
+`path:line` in `.agents/skills/angee-design/references/owners.md` declares the
+named symbol, and every public class a foundation models or fields module
+declares, and every addon manifest, has a row.
 Disabling pytest-django, application configuration, and conftest intentionally
 isolates these tests; use normal pytest for application or template behavior.
 If template source changes too, run its contract tests and the Python suite above. A prose-only
@@ -169,28 +208,36 @@ Django, Vite, ASGI servers, workers, or watchers separately. The following
 one-shot commands run from the **stack root**, through its host environment.
 They are distinct lifecycle operations, not a mandatory sequence for every task:
 
+Install the environment only on a new or stopped host. For a running stack, use
+its declared restart job through the operator; see
+[Restart the running stack](howto/getstarted.md#restart-the-running-stack).
+Management checks use `--no-sync` so invoking one cannot install or rebuild first.
+
 | Purpose | Command | Prerequisite / effect |
 |---|---|---|
-| Prepare the complete runtime | `uv run manage.py angee provision` | Builds, then runs the remaining preparation in one fresh process; the [command owner](../angee/management/commands/angee.py) defines ordering and options |
-| Build composed runtime | `uv run manage.py angee build` | Updates generated runtime, prunes obsolete generated sources, updates host dependency declarations and materializes pending addon migrations |
-| Clean generated runtime | `uv run manage.py angee clean` | [Guarded whole-tree cleanup](composer.md#runtime-cleanup); preserves all migration directories |
-| Archive retired history | `uv run manage.py archive_retired_migrations <label> --archive-dir /path/to/new-archive --dry-run` | [Retirement guards](composer.md#addon-owned-runtime-migrations) check every configured database; omit `--dry-run` to archive without changing migration records |
-| Check composition drift | `uv run --locked manage.py angee build --check` | Checks composer-owned artifacts, dependency projection, and addon declarations; Django bootstrap can repair runtime sources before dispatch |
-| Author schema migrations | `uv run manage.py makemigrations <app-labels>` | After composition |
-| Apply migrations | `uv run manage.py migrate` | Operates on the selected stack database |
-| Sync permissions | `uv run manage.py rebac sync` | After migrations when permissions change |
-| Load declared resource data | `uv run manage.py resources load` | After migrations when resource data changes |
-| Validate runtime contracts | `uv run --locked manage.py check` | Includes construction of every named GraphQL schema; run against deployment code and settings before starting writer tiers |
-| Emit GraphQL SDL | `uv run manage.py schema` | Uses the emitted concrete models; provision reuses its post-build registry and checked schemas |
-| Check GraphQL SDL | `uv run --locked manage.py schema --check` | Separate from the composer drift check |
+| Install/build for development | `uv sync` | Native Hatch editable build on a stopped/new host; no database operations |
+| Install for production | `uv sync --no-editable` | The same native Hatch hook validates the sealed project/history; no database operations |
+| Package the sealed project | `uv build` | Validates and bundles tracked native history and portable composed runtime |
+| Prepare the installed runtime | `uv run --no-sync python manage.py angee provision` | One prebuilt native process; the [command owner](../angee/management/commands/angee.py) defines ordering and options |
+| Clean generated runtime | `uv run --no-sync python manage.py angee clean` | [Guarded whole-tree cleanup](composer.md#runtime-cleanup); preserves all migration directories |
+| Archive retired history | `uv run --no-sync python manage.py archive_retired_migrations <label> --archive-dir /path/to/new-archive --dry-run` | Verify every configured database and table retirement; omit `--dry-run` for recoverable archival |
+| Check composition drift | `uv run --no-sync python manage.py angee check` | Explicit read-only check of composer artifacts and addon upgrade declarations; startup never repairs output |
+| Author schema migrations | `uv run --no-sync python manage.py makemigrations <app-labels>` | After editable build; review and commit `runtime/<label>/migrations/` before packaging |
+| Apply migrations | `uv run --no-sync python manage.py migrate` | Operates on the selected stack database |
+| Sync permissions | `uv run --no-sync python manage.py rebac sync` | After migrations when permissions change; `rebac sync --prune-stale` also retires removed definitions, the shape provision runs ([REBAC](backend/guidelines.md#rebac)) |
+| Load declared resource data | `uv run --no-sync python manage.py resources load` | After migrations when resource data changes |
+| Validate runtime contracts | `uv run --no-sync python manage.py check` | Includes construction of every named GraphQL schema; run against deployment code and settings before starting writer tiers |
+| Emit GraphQL SDL | `uv run --no-sync python manage.py schema` | Uses the emitted concrete models; provision reuses its prebuilt registry and checked schemas |
+| Check GraphQL SDL | `uv run --no-sync python manage.py schema --check` | Separate from the composer drift check |
 
 Run only lifecycle steps needed for the change and within the user's authorized
 scope.
 For containerized stacks, use the declared service/job environment; a host shell
 without the runtime dependencies cannot run these commands directly.
 
-After a schema change, emit runtime sources as needed, emit SDL, then run the
-host web package's codegen **before** checking addon fragments. From the stack
+After a model change, rebuild through the native runtime-build job and author
+required native history before provision. Emit SDL, then run the host web
+package's codegen **before** checking addon fragments. From the stack
 root, for the default `web_path=web`:
 
 ```sh
@@ -240,6 +287,20 @@ The UI catalog test exercises the generator's drift-check CLI; Storybook's
 `catalog:check` also verifies specimen reachability, guideline story links and
 the token deletion findings.
 
+For page or addon changes, run a primitive-drift scan and explain every hit
+outside `@angee/ui`. A hit is not automatically wrong, but it must either compose
+the shared primitive or identify the owning framework gap to fix first. From the
+framework source root; include `../angee-messaging-bridges/addons` in the scan
+when that optional slot is present and affected:
+
+```sh
+rg -n '<table\b|<thead\b|<tbody\b|<tr\b|<td\b|<th\b|role="grid"|useReactTable|manualPagination' packages addons examples -g '*.tsx'
+rg -n 'useAuthored(Query|Mutation)<|interface .*Data|interface .*Variables|fetch\([^)]*graphql|gql`' packages addons examples -g '*.ts' -g '*.tsx'
+```
+
+Run the architecture guardrail above when changing package layering, public
+shared owners, or addon manifests.
+
 The framework root has no generic `build` script. Package-filtered builds and the
 distribution checks above are the handoff path for published surfaces. A package
 script can be invoked only if its own `package.json` defines it.
@@ -278,7 +339,7 @@ pushes to `main`. The current tiers are:
   pytest-split cuts into contiguous chunks of equal stored time from the
   committed [durations](../.test_durations), so each test file stays in one or two
   shards. Each shard runs
-  `-n auto --dist loadfile` with a 40-minute limit and prints its 25 slowest test
+  `-n auto --dist loadfile` with a 60-minute limit and prints its 25 slowest test
   durations, with migrations enabled and `DATABASE_URL` unset. Structural tests
   remain part of this suite. Per-file scheduling keeps a file on one worker, so the
   heaviest files (the proposals access, owner-gate adopters and agents GraphQL
@@ -286,7 +347,7 @@ pushes to `main`. The current tiers are:
   Their cost is per-test fixture setup, a `rebac sync` before every test; making
   that setup cheaper is how the limit comes down.
 - **PostgreSQL:** in three shards of its own beside the SQLite ones, split the
-  same way and with the same limit, the named workflow, decision and agent session
+  same way and with a 40-minute limit, the named workflow, decision and agent session
   selection runs with `-n 4 --dist loadfile --nomigrations` and prints its 25
   slowest test durations; each shard writes JUnit output and checks that it did
   not skip tests. Its server runs with `max_locks_per_transaction = 256`, since
@@ -330,7 +391,7 @@ its own host, resolves native manifest dependencies, composes/provisions it, and
 collects the declared Python paths with `python_files=test*.py` on PostgreSQL.
 Four native pytest-xdist workers use `--dist worksteal` inside each shard, so long
 consumer intake modules can use every worker. Each worker loads the configured
-host through `angee.settings`; pytest-django owns its separate test
+host through generated `runtime.settings`; pytest-django owns its separate test
 database. Pytest emits a thread dump after five minutes in one test protocol,
 including setup and teardown, without changing its outcome. Shared test plugins
 must defer model imports until Django's app registry is populated. Check tools

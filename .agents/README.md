@@ -13,8 +13,9 @@ Private task state follows `AGENTS.md` and the **Resolve Work-State** section of
 `skills/angee-workspace/SKILL.md`: use the optional workspace `work-state` slot,
 which lives beside this checkout in the src template. It may be a clone, a
 local-source symlink, or a Jujutsu workspace of a shared store. If absent, keep task state in the conversation. Durable
-conventions and pitfalls go in owning `docs/` guidelines; screenshots and logs
-go in the configured gitignored scratch directories.
+invariants and contracts go in the owning `docs/` guideline, pitfalls and
+procedures in the owning skill's `references/` file, commands in `docs/checks.md`;
+screenshots and logs go in the configured gitignored scratch directories.
 
 ## Layout
 
@@ -26,10 +27,20 @@ go in the configured gitignored scratch directories.
   for ancestor-based discovery; a task started at the parent workspace may need
   to load these skills explicitly. Keep shared workflow logic in one owner skill;
   both Codex aliases and non-Codex command shims delegate to it.
-  Small alias skills (with `agents/openai.yaml`) exist only to make Codex
-  slash-list entries discoverable.
+  Every skill carries `agents/openai.yaml` for Codex discovery and invocation
+  policy; small alias skills exist only to make Codex slash-list entries
+  discoverable.
+- `CONSTITUTION.md` — the enforcement map: `AGENTS.md` owns the rules, this
+  file maps each rule to the skill step, check, test or reviewer that enforces
+  it and names the gaps that still do not.
 - `agents/` — canonical Markdown subagent definitions, surfaced via
   `.claude/agents`; generated TOML adapters are surfaced via `.codex/agents`.
+  Four reviewers (`architecture-reviewer`, `plan-reviewer`, `django-reviewer`,
+  `react-reviewer`) judge code or plans with read-only tools. Two roles build:
+  `coordinator` plans a multi-lane change, creates and integrates its lane
+  workspaces, and is the only writer of the plan ledger; `builder` implements
+  one lane under an explicit `framework` or `consumer` scope and reports in its
+  own lane file. Both boundaries are instruction plus review, see below.
 - `workflows/` — multi-agent workflow scripts. Surfaced via the
   `.claude/workflows` symlink. These require the optional host runner below.
 - `tools/` — small repo-scoped scripts and helpers used by agentic workflows.
@@ -40,12 +51,52 @@ go in the configured gitignored scratch directories.
 - No secrets here, and nothing that names a private, unpublished repo — this
   directory is public. Private task history follows the resolved work-state
   location described above.
-- `.claude/commands`, `.claude/agents`, and `.claude/workflows` are symlinks into
-  this directory — edit the files here, not under `.claude/`.
+- `.claude/commands`, `.claude/agents`, `.claude/skills`, and `.claude/workflows`
+  are symlinks into this directory — edit the files here, not under `.claude/`.
+
+## Skills
+
+The guard skill [`angee-design`](skills/angee-design/SKILL.md) is meant to run
+before any model, field, page, permission, job, helper or module and writes the
+owner map; whether a harness invokes it from its description is harness-dependent
+(Claude Code may; Codex allows implicit invocation), so the Architecture Gate in
+`AGENTS.md` names it and the advisory hook reminds once per session. The eleven artifact skills are invoked by name: `angee-addon` wires a
+new addon's declarations and web fragment; `angee-models` builds a Django model;
+`angee-permissions` declares REBAC permissions; `angee-graphql` exposes a source
+over GraphQL and the resource UI; `angee-resources` declares seed and catalogue
+data; `angee-pages` composes a page from the standard views; `angee-forms` builds
+forms and widgets; `angee-runtime` runs the stack lifecycle; `angee-tests`
+authors an addon's tests; `angee-framework` routes a change to a framework seam;
+`angee-project` configures a customer system's host. Claude Code loads them
+through the `.claude/skills` link; Codex loads each skill's `agents/openai.yaml`,
+whose `allow_implicit_invocation` is `true` only for `angee-design`.
+Six capability guides live beside the engine they extend rather than here: `mcp-tools` (`addons/angee/mcp/skills/mcp-tools/SKILL.md`), `jobs-tasks` (`addons/angee/jobs/skills/jobs-tasks/SKILL.md`), `integrate-bridges` (`addons/angee/integrate/skills/integrate-bridges/SKILL.md`), `workflow-definitions` (`addons/angee/workflows/skills/workflow-definitions/SKILL.md`), `provenance-attribution` (`addons/angee/provenance/skills/provenance-attribution/SKILL.md`) and `agent-composition` (`addons/angee/agents/skills/agent-composition/SKILL.md`). Each carries the same frontmatter and `agents/openai.yaml` (implicit invocation `false`) and is reached by its explicit path from the
+`angee-design` and `angee-addon` *Read next* lists; no harness discovers an
+addon-local guide on its own, so a source checkout of this repository is the
+prerequisite for loading one. Delivering the guides with the installed wheel is a
+later phase.
+[`CONSTITUTION.md`](CONSTITUTION.md) maps each skill to the rule it enforces.
+
+## Harness permissions
+
+Each harness enforces a different surface. Claude Code agent definitions in
+`.claude/agents/*.md` support a `tools:` frontmatter allowlist;
+[`sync-adapters.py`](tools/sync-adapters.py) currently projects name,
+description and body only and does not emit it. Codex `agents/openai.yaml`
+carries invocation policy but no tool restriction. Hooks exist only on the
+Claude Code side. `tools/owner-map-guard.py` is an advisory Claude Code
+`PreToolUse` hook (wired in `.claude/settings.json`; Codex does not run it)
+that, on the first `Edit`/`Write` under `addons/`, `packages/`, `angee/` or
+`examples/` in a session, reminds the agent to run `angee-design` and write the
+owner map before continuing. It fires once per session, never blocks, and stays
+silent on tests, Markdown, migrations and malformed input; an agent that
+ignores it is caught by review, not by the hook
+(`tests/test_agent_owner_map_guard.py`). Until a permission mapping is added,
+role boundaries are instructions plus review, not harness enforcement.
 
 ## Harness adapters
 
-Reviewer `.md` files own their prompts and metadata. `.mcp.json` owns the
+Agent `.md` files own their prompts and metadata. `.mcp.json` owns the
 repository's stdio MCP server configuration. Generate the reviewer `.toml`
 files and `.codex/config.toml` with `python .agents/tools/sync-adapters.py` in
 the repository's Python environment; `--check` reports drift without writing.
@@ -81,6 +132,7 @@ need two supporting votes to be confirmed or two refuting votes to be refuted;
 all other outcomes remain unverified. Votes summarize model review, not
 independent evidence. Synthesis failure returns the adjudicated claims.
 
-`tests/test_agent_methodology.py` checks adapter parity, workspace example
+`tests/test_agent_methodology.py` checks adapter parity, skill frontmatter,
+links and invocation policy, the `.claude/skills` link, workspace example
 inputs, and helper/workflow behavior with mocked browser and runner interfaces.
 See [verification commands and execution roots](../docs/checks.md).

@@ -39,15 +39,18 @@ from simple_history.utils import get_history_manager_for_model
 from angee.base.fields.state import StateField
 from angee.base.lineage import most_derived_concrete
 from angee.base.managers import AngeeManager
-from angee.base.models.identity import SqidMixin, TimestampMixin, update_fields_with_auto_now
+from angee.base.models.identity import SqidMixin
 from angee.base.models.locks import OptimisticLockMixin
 from angee.base.models.merge_references import MergeContractMixin
+from angee.base.models.persistence import PersistenceMixin
+from angee.base.models.timestamps import TimestampMixin, update_fields_with_auto_now
 from angee.base.models.trash import TrashMixin, TrashQuerySet
 from angee.base.permissions import instance_actor, require_rebac_queryset
-from angee.base.querysets import AngeeUnscopedQuerySet, SystemQuerysetMixin, by_key, query_batch_size
+from angee.base.querysets import by_key, query_batch_size
 from angee.base.validators import validate_value
 from angee.provenance.context import current_changeset
 from angee.provenance.contrib.angee.history import HistoryDocumentMixin, HistoryMixin, ModelHistory
+from angee.provenance.contrib.angee.managers import AngeeHistoryUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet, AngeeHistoryUnscopedQuerySet
 from angee.provenance.evidence import (
     EvidenceReference,
@@ -75,22 +78,8 @@ def _statement_foreign_key(model: type[models.Model], name: str) -> models.Forei
     return field
 
 
-class StatementQuerySet[T: Statement](AngeeHistoryUnscopedQuerySet[T]):
-    """Chainable assertion scopes; the manager owns subject admission."""
-
-    _statement_reader: object | None = None
-
-    def _clone(self) -> Self:
-        clone = super()._clone()
-        clone._statement_reader = getattr(self, "_statement_reader", None)
-        return clone
-
-    def _fetch_all(self) -> None:
-        fresh = self._result_cache is None
-        super()._fetch_all()
-        reader = getattr(self, "_statement_reader", None)
-        if fresh and reader is not None and self._result_cache and issubclass(self._iterable_class, ModelIterable):
-            prime_readable_statement_records(self._result_cache, reader)
+class _StatementQuerySet[T: Statement](models.QuerySet[T]):
+    """Assertion operations shared by scoped and native base-manager querysets."""
 
     def update(self, **kwargs: Any) -> int:
         """Attribute the rows to the writing changeset, as ``Statement.save`` does.
@@ -103,6 +92,23 @@ class StatementQuerySet[T: Statement](AngeeHistoryUnscopedQuerySet[T]):
         if "changeset" not in kwargs and "changeset_id" not in kwargs:
             kwargs["changeset"] = current_changeset(required=True, record=True)
         return super().update(**kwargs)
+
+    def delete(self) -> Any:
+        raise ValidationError("Statements are retained; withdraw them instead.")
+
+    _statement_reader: object | None = None
+
+    def _clone(self, **kwargs: Any) -> Self:
+        clone = super()._clone(**kwargs)
+        clone._statement_reader = getattr(self, "_statement_reader", None)
+        return clone
+
+    def _fetch_all(self) -> None:
+        fresh = self._result_cache is None
+        super()._fetch_all()
+        reader = getattr(self, "_statement_reader", None)
+        if fresh and reader is not None and self._result_cache and issubclass(self._iterable_class, ModelIterable):
+            prime_readable_statement_records(self._result_cache, reader)
 
     def current(self) -> Self:
         return self.filter(superseded__isnull=True)
@@ -159,8 +165,22 @@ class StatementQuerySet[T: Statement](AngeeHistoryUnscopedQuerySet[T]):
             raise FieldDoesNotExist(f"No aspect owns {field!r}.")
         return self.current().filter(aspect__in=aspects, applied=True)
 
-    def delete(self) -> Any:
-        raise ValidationError("Statements are retained; withdraw them instead.")
+
+class _StatementUnscopedQuerySet[T: Statement](_StatementQuerySet[T], AngeeHistoryUnscopedQuerySet[T]):
+    """Native unfiltered base-manager access retains statement rules and history."""
+
+
+_StatementUnscopedManager = AngeeHistoryUnscopedManager.from_queryset(_StatementUnscopedQuerySet)
+
+
+class StatementQuerySet[T: Statement](_StatementQuerySet[T], AngeeHistoryQuerySet[T]):
+    """Chainable assertion scopes; the manager owns subject admission."""
+
+    def for_reader(self, actor: Any) -> Self:
+        """Keep the explicit reader on native statement reads and endpoint scopes."""
+
+        rows = super().for_reader(actor)
+        return rows if actor is None else rows.with_actor(actor)
 
 
 def prime_readable_statement_records(rows: Sequence[Any], actor: Any) -> None:
@@ -214,7 +234,7 @@ def prime_readable_statement_records(rows: Sequence[Any], actor: Any) -> None:
         row._readable_asserting_source = readable_sources.get(source_key) if source_key is not None else None
 
 
-_StatementManagerBase = models.Manager.from_queryset(StatementQuerySet)
+_StatementManagerBase = AngeeManager.from_queryset(StatementQuerySet)
 
 
 class StatementManager[T: Statement](_StatementManagerBase[T]):
@@ -230,7 +250,12 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
 
     def get_queryset(self) -> StatementQuerySet[T]:
         rows = cast(StatementQuerySet[T], super().get_queryset())
-        return rows if self.instance is None else rows.filter(subject=self.instance)
+        if self.instance is None:
+            return rows
+        actor = self.instance.actor() if isinstance(self.instance, RebacMixin) else None
+        if actor is not None:
+            rows = rows.with_actor(actor)
+        return rows.filter(subject=self.instance)
 
     def set(
         self,
@@ -552,7 +577,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
             self.db_manager(rows.db).resolve(subject=subject)
 
 
-_StatementPairManagerBase = models.Manager.from_queryset(AngeeUnscopedQuerySet)
+_StatementPairManagerBase = AngeeManager.from_queryset(AngeeHistoryQuerySet)
 
 
 class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
@@ -566,8 +591,8 @@ class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
         if instance is not None:
             self._db = instance._state.db
 
-    def get_queryset(self) -> AngeeUnscopedQuerySet[T]:
-        rows = cast(AngeeUnscopedQuerySet[T], super().get_queryset())
+    def get_queryset(self) -> AngeeHistoryQuerySet[T]:
+        rows = super().get_queryset()
         return (
             rows if self.instance is None else rows.filter(models.Q(left=self.instance) | models.Q(right=self.instance))
         )
@@ -770,7 +795,7 @@ class Aspect:
         return members
 
 
-class StatementsMixin(SystemQuerysetMixin, HistoryDocumentMixin):
+class StatementsMixin(PersistenceMixin, HistoryDocumentMixin):
     """Subject-owned eligibility and application hooks for typed statements."""
 
     class Meta:
@@ -1079,7 +1104,7 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
 
     history = StatementHistory(inherit=True)
     objects = StatementManager()
-    _angee_base = StatementManager()
+    _angee_base = _StatementUnscopedManager()
     statement_subject_model: type[StatementsMixin]
     statement_aspects: dict[str, Aspect]
     statement_link: str | None
@@ -1336,11 +1361,16 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
         cls.objects.db_manager(rows.db).merge(reference, rows, survivor=survivor)
 
 
-class StatementPairQuerySet(TrashQuerySet, AngeeHistoryUnscopedQuerySet):
+class StatementPairQuerySet(TrashQuerySet, AngeeHistoryQuerySet):
     """Retained pair carriers use the same removal scopes as canonical subjects."""
 
 
+class _StatementPairUnscopedQuerySet(TrashQuerySet, AngeeHistoryUnscopedQuerySet):
+    """Native unfiltered pair access retains removal scopes and capture."""
+
+
 _StatementPairManager = StatementPairManager.from_queryset(StatementPairQuerySet)
+_StatementPairUnscopedManager = AngeeHistoryUnscopedManager.from_queryset(_StatementPairUnscopedQuerySet)
 
 
 class StatementPair(
@@ -1351,7 +1381,7 @@ class StatementPair(
     history = StatementPairHistory(inherit=True)
 
     objects = _StatementPairManager()
-    _angee_base = _StatementPairManager()
+    _angee_base = _StatementPairUnscopedManager()
     left: Any
     right: Any
     pair_name: str

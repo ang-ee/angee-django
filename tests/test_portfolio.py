@@ -9,7 +9,7 @@ from django.db import models, transaction
 from rebac import SubjectRef, actor_context, system_context
 from rebac.models import active_relationship_model
 
-from angee.base.models import AngeeDataModel
+from angee.base.models.base import AngeeDataModel
 from angee.portfolio.models import InitiativeProject
 from angee.portfolio.testing.models import Product
 from tests.hierdemo.models import HierNode

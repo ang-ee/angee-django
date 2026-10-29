@@ -29,15 +29,12 @@ from rebac.actors import is_sudo
 from rebac.mixins import RebacModelBase
 
 from angee.base.fields.state import StateField
-from angee.base.models import (
-    AngeeDataModel,
-    AngeeManager,
-    AuditMixin,
-    ImmutableFieldsMixin,
-    RowLockMixin,
-    StagedModelMixin,
-)
-from angee.base.models import Stage as StagePrimitive
+from angee.base.managers import AngeeManager
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.locks import ImmutableFieldsMixin, RowLockMixin
+from angee.base.models.stages import Stage as StagePrimitive
+from angee.base.models.stages import StagedModelMixin
 from angee.base.permissions import actor_user_id, instance_actor
 from angee.resources.mixins import ResourceLoadMixin
 from angee.sequence.models import PeriodReset
@@ -1771,7 +1768,7 @@ class TaskWork(StagedModelMixin[Stage]):
         return self.stage_model().for_container(queue).filter(category=category, rule_owned=True).first()
 
     def _base_verb(self, name: str, *args: Any, **kwargs: Any) -> Any:
-        """Run a projects-only lifecycle verb for a legacy queue-less task."""
+        """Delegate a task without a queue to its projects-owned lifecycle."""
 
         with self._work_verb_write():
             return getattr(super(), name)(*args, **kwargs)

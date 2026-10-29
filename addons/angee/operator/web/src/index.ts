@@ -1,5 +1,5 @@
-import type { BaseMenuItem } from "@angee/ui";
-import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute } from "@angee/app";
+
+import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute, type MenuDeclarations } from "@angee/app";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { createElement } from "react";
 import { Server } from "lucide-react";
@@ -68,59 +68,17 @@ const operatorRoutes: readonly BaseAddonRoute[] = [
   },
 ];
 
-// Operator owns its Settings category. It keeps `route: "operator.overview"`
-// as its target so the route's `menu: OPERATOR_ID` crumb still resolves to it.
-const operatorRootMenu: BaseMenuItem = {
-  id: OPERATOR_ID,
-  label: OPERATOR_TITLE,
-  icon: "terminal",
-  group: "platform",
-  route: "operator.overview",
-  children: [
-    {
-      label: "Overview",
-      route: "operator.overview",
-      icon: "home",
-    },
-    {
-      label: "Services",
-      route: "operator.services",
-      icon: "grid",
-    },
-    {
-      label: "Workspaces",
-      route: "operator.workspaces",
-      icon: "files",
-    },
-    {
-      label: "Sources",
-      route: "operator.sources",
-      icon: "share",
-    },
-    {
-      label: "GitOps",
-      route: "operator.gitops",
-      icon: "activity",
-    },
-    {
-      label: "Operations",
-      route: "operator.operations",
-      icon: "list",
-    },
-    {
-      label: "Templates",
-      route: "operator.templates",
-      icon: "columns",
-    },
-    {
-      label: "Secrets",
-      route: "operator.secrets",
-      icon: "auth",
-    },
-  ],
+const operatorMenu: MenuDeclarations = {
+  [OPERATOR_ID]: { label: OPERATOR_TITLE, icon: "terminal", group: "platform", route: "operator.overview" },
+  "operator.overview": { label: "Overview", route: "operator.overview", icon: "home", parent: OPERATOR_ID },
+  "operator.services": { label: "Services", route: "operator.services", icon: "grid", parent: OPERATOR_ID },
+  "operator.workspaces": { label: "Workspaces", route: "operator.workspaces", icon: "files", parent: OPERATOR_ID },
+  "operator.sources": { label: "Sources", route: "operator.sources", icon: "share", parent: OPERATOR_ID },
+  "operator.gitops": { label: "GitOps", route: "operator.gitops", icon: "activity", parent: OPERATOR_ID },
+  "operator.operations": { label: "Operations", route: "operator.operations", icon: "list", parent: OPERATOR_ID },
+  "operator.templates": { label: "Templates", route: "operator.templates", icon: "columns", parent: OPERATOR_ID },
+  "operator.secrets": { label: "Secrets", route: "operator.secrets", icon: "auth", parent: OPERATOR_ID },
 };
-
-const operatorMenu: readonly BaseMenuItem[] = [operatorRootMenu];
 
 const operator = defineBaseAddon({
   id: OPERATOR_ID,
@@ -134,7 +92,7 @@ const operator = defineBaseAddon({
   menus: operatorMenu,
   i18n: {
     operator: {
-      ...enOperatorBundleForMenu(operatorRootMenu).operator,
+      ...enOperatorBundleForMenu(operatorMenu, OPERATOR_ID).operator,
       ...enOperatorMessages,
     },
   },

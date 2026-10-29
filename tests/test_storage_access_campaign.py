@@ -15,8 +15,8 @@ from rebac.checks import check_field_backed_relations
 from rebac.errors import PermissionDenied
 from rebac.models import active_relationship_model
 
+from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.base.identity import public_subject_ref
-from angee.base.permissions import RecordAccessSubjectRefused
 from angee.graphql.relations import actor_scoped_public_id, actor_scoped_to_one
 from angee.storage import exceptions, views
 from angee.storage import schema as storage_schema

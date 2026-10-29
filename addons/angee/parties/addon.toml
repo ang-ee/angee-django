@@ -22,16 +22,6 @@ dependencies = [
   "pycountry>=26,<27",
 ]
 
-[[migrations]]
-name = "handle_controller"
-app_label = "parties"
-module = "runtime_migrations.handle_controller"
-
-[[migrations]]
-name = "owner_column"
-app_label = "parties"
-module = "runtime_migrations.owner_column"
-
 [resources]
 install = [
   { path = "resources/install/010_provenance.rule.yaml", adopt = "key" },

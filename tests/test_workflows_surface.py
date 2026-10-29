@@ -15,7 +15,8 @@ from django.db.models.deletion import PROTECT
 from pydantic import BaseModel
 
 import angee.workflows as workflows
-from angee.base.models import DerivedFrom, RecordRefMixin
+from angee.base.models.derived import DerivedFrom
+from angee.base.models.refs import RecordRefMixin
 from angee.decisions.contracts import DecisionFact, DecisionRecordReference, DecisionRequest
 from angee.provenance.evidence import EvidenceFact, EvidenceReference, FactAuthority, readable_records
 from angee.workflows.managers import PublishResult
@@ -53,10 +54,10 @@ EXPECTED_VERBS = {
         "extend_deadline fenced for_map item_counts nodes settle terminal_runs to_ready to_running "
         "to_waiting undispatched"
     ),
-    "workflows.StepWatch.manager": "record_change register wait_kind",
+    "workflows.StepWatch.manager": "record_change record_changes register wait_kind",
     "workflows.Trigger.manager": "admit disable drain enable enable_preview lock_grants reconcile_grants revoke_grant",
     "workflows.Trigger.queryset": "bulk_create update",
-    "workflows.TriggerEvent.manager": "record_change",
+    "workflows.TriggerEvent.manager": "record_change record_changes",
     "workflows.TriggerEvent.queryset": "pending",
     "workflows.Workflow.manager": "authoring_outcomes install_definition publish save_draft save_identity",
     "workflows.WorkflowRun.manager": (
@@ -85,12 +86,12 @@ EXPECTED_RUNNER = tuple(
 )
 
 EXPECTED_SETTINGS = {
-    "extraction": "ANGEE_EXTRACTION_MAX_BYTES ANGEE_EXTRACTION_PROFILE_CLASSES ANGEE_IMPL_REGISTRIES:append",
+    "extraction": "ANGEE_EXTRACTION_MAX_BYTES ANGEE_EXTRACTION_PROFILE_CLASSES",
     "workflows": (
-        "ANGEE_IMPL_REGISTRIES:append ANGEE_WORKFLOW_MAP_CONCURRENCY ANGEE_WORKFLOW_MAX_DISPATCHES "
+        "ANGEE_WORKFLOW_MAP_CONCURRENCY ANGEE_WORKFLOW_MAX_DISPATCHES "
         "ANGEE_WORKFLOW_RETENTION_DAYS ANGEE_WORKFLOW_STEP_CLASSES ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES"
     ),
-    "workflows_integrate": "ANGEE_IMPL_REGISTRIES:append ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES",
+    "workflows_integrate": "ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES",
 }
 
 EXPECTED_TEST_DRIVERS = (
@@ -183,7 +184,6 @@ def test_workflows_public_surface() -> None:
         names = tuple(sorted(
             key for key in declared
             if (key.startswith(("ANGEE_WORKFLOW_", "ANGEE_EXTRACTION_")) and "." not in key)
-            or (config.label in EXPECTED_SETTINGS and key == "ANGEE_IMPL_REGISTRIES:append")
         ))
         if names:
             settings[config.label] = names

@@ -31,12 +31,20 @@ from angee.provenance.context import (
     current_changeset,
     require_changeset,
 )
+from angee.provenance.contrib.angee.context import SERVER_COMMANDS
 from angee.provenance.middleware import ChangesetMiddleware, ChangesetScopeMiddleware
 from angee.provenance.tasks import Task
 from tests.conftest import create_user
 from tests.core_persistence import OwnedRow
 
 pytestmark = [pytest.mark.entrypoint_boundaries, pytest.mark.django_db(transaction=True)]
+
+
+@pytest.fixture(autouse=True)
+def management_changeset_context(settings):
+    """Select the optional provenance policy for these attribution contracts."""
+
+    settings.ANGEE_MANAGEMENT_CONTEXT = "angee.provenance.contrib.angee.context.management_context"
 
 
 def write(title: str = "captured") -> Any:
@@ -64,7 +72,7 @@ def test_require_changeset_refuses_missing_storage_and_returns_the_open_owner(se
         require_changeset()
 
 
-@pytest.mark.parametrize("command", sorted(manage.SERVER_COMMANDS))
+@pytest.mark.parametrize("command", sorted(SERVER_COMMANDS))
 def test_servers_run_without_a_process_boundary(monkeypatch: pytest.MonkeyPatch, tmp_path: Any, command: str) -> None:
     seen: list[Any] = []
     monkeypatch.setenv("ANGEE_PROJECT_DIR", str(tmp_path))

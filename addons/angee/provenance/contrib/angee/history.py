@@ -15,12 +15,14 @@ from django.db.models.fields.reverse_related import ManyToOneRel
 from rebac import (
     PermissionDenied,
     RebacMixin,
+    RebacTrackedMixin,
     system_context,
 )
 from rebac.actors import is_sudo
 from rebac.errors import SchemaError
 from rebac.field_backing import resolve_field_backing
 from rebac.field_visibility import gated_read_fields, redacted_fields
+from rebac.managers import RebacManager
 from rebac.resources import model_resource_type
 from rebac.schema import ConstBinding, FieldBinding
 from simple_history.exceptions import NotHistoricalModelError
@@ -28,10 +30,10 @@ from simple_history.manager import HistoryManager
 from simple_history.utils import get_history_manager_for_model
 
 from angee.base.lineage import concrete_child_models, concrete_lineage
-from angee.base.managers import AngeeManager, AngeeUnscopedManager
 from angee.base.models.merge_references import MergeContractMixin
+from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.trash import TrashMixin
-from angee.base.querysets import SystemQuerysetMixin, candidate_relationships
+from angee.base.permissions import candidate_relationships
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
 from angee.provenance.history import (
     _UNLOADED,
@@ -341,14 +343,12 @@ class ModelHistory(CaptureHistory):
         return extra
 
 
-class HistoryMixin(CaptureHistoryMixin, SystemQuerysetMixin, HistoryDocumentMixin):
-    """Track concrete models through django-simple-history's inherited descriptor."""
+class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, HistoryDocumentMixin):
+    """Compose native tracked instance writes with inherited simple-history capture."""
 
     history = ModelHistory(inherit=True)
-    objects: ClassVar[models.Manager[Self]] = AngeeHistoryManager()
+    objects: ClassVar[RebacManager[Self]] = AngeeHistoryManager()
     _angee_base: ClassVar[models.Manager[Self]] = AngeeHistoryUnscopedManager()
-    _base_manager: ClassVar[AngeeUnscopedManager[Self]]
-    _default_manager: ClassVar[AngeeManager[Self]]
     if TYPE_CHECKING:
         save_without_historical_record = models.Model.save
 

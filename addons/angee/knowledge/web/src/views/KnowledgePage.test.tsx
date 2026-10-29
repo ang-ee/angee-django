@@ -44,6 +44,7 @@ afterEach(() => { cleanup(); clearClients(); });
 function fixture(options: {
   detail?: KnowledgePageDetail; noVaults?: boolean; writable?: boolean; scope?: QueryFilter;
   beforeVaultSearch?: () => Promise<void>;
+  beforePageRead?: (id: string) => Promise<void>;
 } = {}) {
   const vaults = options.noVaults ? [] : [{ id: "vlt_1", name: "Reference", permissions: options.writable === false ? [] : ["write"], is_trashed: false }];
   const rows = [{ ...folder, navigation_root: true }, { ...folder, id: "pg_child", title: "Child", kind: "note", parent: folder.id, has_children: false, navigation_root: false }];
@@ -51,7 +52,10 @@ function fixture(options: {
   const custom = vi.fn<NonNullable<RefineTestDataProvider["custom"]>>(async ({ meta }) => {
     const variables = meta?.gqlVariables ?? {};
     if (meta?.gqlMutation === KnowledgeCreatePage) return { data: await create() };
-    if (meta?.gqlQuery === PageDocument) return { data: { pages_by_pk: options.detail ?? null } };
+    if (meta?.gqlQuery === PageDocument) {
+      await options.beforePageRead?.(String(variables.id));
+      return { data: { pages_by_pk: options.detail ?? rows.find((row) => row.id === variables.id) ?? null } };
+    }
     if (meta?.gqlQuery === KnowledgeVault) return { data: { vaults_by_pk: vaults.find((vault) => vault.id === variables.id) ?? null } };
     if (meta?.gqlQuery === KnowledgeVaults) {
       await options.beforeVaultSearch?.();
@@ -108,6 +112,38 @@ test("a directly opened page owns the vault after a prior picker selection", asy
   await waitFor(() => expect(f.custom).toHaveBeenCalledWith(expect.objectContaining({
     meta: expect.objectContaining({ gqlQuery: KnowledgeVault, gqlVariables: { id: "vlt_2" } }),
   })));
+});
+
+test.each([null, "pg_parent"])("opening a page preserves the vault, navigator and search while it loads (from %s)", async (initialPage) => {
+  route.id = initialPage;
+  let resolvePage!: () => void;
+  const pending = new Promise<void>((resolve) => { resolvePage = resolve; });
+  const pageRead = vi.fn(async (id: string) => { if (id === "pg_child") await pending; });
+  const f = fixture({ beforePageRead: pageRead });
+  const picker = await screen.findByRole("combobox", { name: "Vault: Reference" });
+  await screen.findByText("Projects");
+  const input = screen.getByRole("combobox", { name: "Filter records" });
+  fireEvent.input(input, { target: { value: "Child" }, inputType: "insertText" });
+  fireEvent.click(await screen.findByRole("option", { name: "Search Page title for: Child" }));
+  fireEvent.click(await screen.findByText("Child"));
+  await waitFor(() => expect(route.navigate).toHaveBeenCalledWith(expect.objectContaining({ to: "/knowledge/pg_child" })));
+  const tree = screen.getByRole("tree");
+
+  route.id = "pg_child";
+  f.rerender();
+  await waitFor(() => expect(pageRead).toHaveBeenCalledWith("pg_child"));
+  expect(screen.getByRole("combobox", { name: "Vault: Reference" })).toBe(picker);
+  expect(screen.getByRole("combobox", { name: "Filter records" })).toBe(input);
+  expect(screen.getByRole("tree")).toBe(tree);
+  expect(screen.getByText("Child")).toBeTruthy();
+  expect(screen.queryByText("Projects")).toBeNull();
+
+  resolvePage();
+  await waitFor(() => expect(screen.getByRole("treeitem", { selected: true }).textContent).toContain("Child"));
+  expect(screen.getByRole("combobox", { name: "Vault: Reference" })).toBe(picker);
+  expect(screen.getByRole("combobox", { name: "Filter records" })).toBe(input);
+  expect(screen.getByRole("tree")).toBe(tree);
+  expect(screen.queryByText("Projects")).toBeNull();
 });
 
 test("vault search keeps the initial vault and a clearable picker through pending and empty results", async () => {

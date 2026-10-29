@@ -20,6 +20,7 @@ from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, Val
 from django.db import models
 from django.db.models.functions import Upper
 from django.test import RequestFactory
+from django.test.utils import isolate_apps
 from django_choices_field import IntegerChoicesField
 from graphql import GraphQLEnumType, GraphQLError, GraphQLObjectType, get_named_type
 from rebac import (
@@ -40,8 +41,9 @@ from rebac.middleware import ActorMiddleware
 from strawberry.django.views import GraphQLView
 from strawberry.extensions import SchemaExtension
 
+from angee.base.exceptions import TransitionNotAllowed
 from angee.base.fields.state import StateField
-from angee.base.models import AngeeModel, TransitionNotAllowed
+from angee.base.models.base import AngeeModel
 from angee.base.permissions import require_rebac_queryset
 from angee.graphql import schema as schema_module
 from angee.graphql.data import hasura as hasura_data
@@ -166,19 +168,6 @@ class GatedWriteThing(AngeeModel):
 
         app_label = "tests"
         rebac_resource_type = "tests/gated-write"
-
-
-class UnmanagedThing(RebacMixin):
-    """Concrete REBAC model with an unsafe default manager."""
-
-    objects = models.Manager()
-    name = models.CharField(max_length=32)
-
-    class Meta:
-        """Django model options for the unmanaged test model."""
-
-        app_label = "tests"
-        rebac_resource_type = "tests/unmanaged"
 
 
 class WorkflowItem(models.Model):
@@ -366,18 +355,6 @@ class ManagedThingType:
         "DjangoDefinition",
         (),
         {"model": ManagedThing},
-    )()
-
-
-@strawberry.type
-class UnmanagedThingType:
-    """GraphQL type exposing an unsafely managed REBAC model."""
-
-    name: str
-    __strawberry_django_definition__ = type(
-        "DjangoDefinition",
-        (),
-        {"model": UnmanagedThing},
     )()
 
 
@@ -850,7 +827,7 @@ def test_variable_coercion_errors_preserve_client_details_without_logging(caplog
     assert result.errors is not None
     assert result.errors[0].formatted == {
         "message": (
-            "Variable '$value' got invalid value 'not-an-int-secret'; "
+            "Variable '$value' has invalid value: "
             "Int cannot represent non-integer value: 'not-an-int-secret'"
         ),
         "locations": [{"line": 1, "column": 9}],
@@ -941,8 +918,26 @@ def test_graphql_identity_exports_public_node() -> None:
     assert definition.name == "Node"
 
 
+@isolate_apps()
 def test_rebac_graphql_types_require_rebac_default_manager() -> None:
     """GraphQL-exposed REBAC models fail fast without the native query contract."""
+
+    class UnmanagedThing(RebacMixin):
+        """Invalid model confined to this test's native app registry."""
+
+        objects = models.Manager()
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "tests"
+            rebac_resource_type = "tests/unmanaged"
+
+    @strawberry.type
+    class UnmanagedThingType:
+        """GraphQL type exposing the deliberately unsafe model."""
+
+        name: str
+        __strawberry_django_definition__ = type("DjangoDefinition", (), {"model": UnmanagedThing})()
 
     assert isinstance(ManagedThing._default_manager, RebacManager)
     GraphQLSchemas(

@@ -229,15 +229,12 @@ workspaces:
 {% endif %}
 
 {# The template chooses the entry job; the operator follows only declared edges. #}
-{% set restart_job = "deps" %}{% if stack_flavor == "instance" %}{% set restart_job = "provision" %}{% endif %}
-{% set python_sync = "" %}{% set python_bootstrap = "" %}
-{% if runtime_mode == "docker" %}{% if stack_flavor == "framework" %}{% set python_sync = "uv sync --inexact && " %}{% set python_bootstrap = "uv sync --inexact && python -m angee.management.bootstrap && uv sync --inexact && " %}{% else %}{% if framework == "source" %}{% set python_sync = "uv sync --frozen --inexact --extra postgres --project sources/angee && uv sync --inexact && " %}{% set python_bootstrap = "uv sync --frozen --inexact --extra postgres --project sources/angee && python -m angee.management.bootstrap && uv sync --inexact && " %}{% endif %}{% endif %}{% endif %}
+{% set restart_job = "deps" %}{% if stack_flavor == "instance" %}{% set restart_job = "runtime-build" %}{% endif %}
+{% set python_sync = "uv sync --frozen --inexact --no-build && " %}{% if effective_serve_mode == "production" %}{% set python_sync = "uv sync --frozen --inexact --no-build --no-editable && " %}{% endif %}
 
-# Jobs finish successfully before their dependents start. Re-running the entry
-# job with chained_restart applies this same graph to the running application.
-# `manage.py angee provision` owns runtime preparation and the fresh
-# post-build process boundary. Development loads demo data; production serving
-# runs with DEBUG off, where the resource loader refuses demo data, so it loads none.
+# Hatch builds the project runtime during native installation. Provision consumes
+# that artifact without compiling models or writing native migration history.
+# The operator follows only these declared edges and stops on a failed job.
 jobs:
   # One logical database owned by this stack. The operator chooses the private
   # output directory; pg_restore validates the dump before capture can succeed.
@@ -279,27 +276,34 @@ jobs:
     command: ["sh", "-c", "corepack enable pnpm && exec pnpm install"]
 {% endif %}{% endif %}
 
-  # Bootstrap the addon dependency group before Django imports, then let the
-  # provision command own its lifecycle and database wait in a fresh interpreter.
+  # Editable installation builds local artifacts; production installs the same
+  # hook's sealed wheel. Both use the host's native pyproject and lockfile.
+  runtime-build:
+{% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
+{% if runtime_mode == "process" %}    command: ["uv", "sync"]
+{% else %}    command: ["uv", "sync"{% if effective_serve_mode == "production" %}, "--no-editable"{% endif %}]
+{% endif %}{% if stack_flavor == "framework" %}    depends_on: [deps]
+{% endif %}
+
   provision:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
 {% if stack_flavor == "instance" %}      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_USERNAME: "admin"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_EMAIL: "admin@example.com"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_PASSWORD: "${secret.admin-password}"
-{% endif %}{% if runtime_mode == "process" %}    command: ["sh", "-c", "uv run python -m angee.management.bootstrap && uv sync && exec uv run python manage.py angee provision --force-rebac --after-if-installed 'resources load --include-demo' --after-if-installed schema"]
-    depends_on: [deps, operator]
+{% endif %}{% if runtime_mode == "process" %}    command: ["sh", "-c", "exec uv run --no-sync python manage.py angee provision --force-rebac --after-if-installed 'resources load --include-demo' --after-if-installed schema"]
+    depends_on: [runtime-build, operator]
 {% else %}    command:
       - sh
       - "-c"
       - >-
-        {{ python_bootstrap }}exec python manage.py angee provision {% if stack_flavor == "framework" %}--force-rebac --after-if-installed 'resources load{% if effective_serve_mode != "production" %} --include-demo{% endif %}'{% else %}--after-if-installed 'resources load'{% endif %} --after-if-installed schema{% if stack_flavor != "framework" %} --after-if-installed bootstrap_admin{% endif %}
-    depends_on: [{% if postgres_mode == "external" %}{% else %}postgres, {% endif %}operator{% if stack_flavor == "framework" %}, deps{% endif %}]
+        {{ python_sync }}exec python manage.py angee provision {% if stack_flavor == "framework" %}--force-rebac --after-if-installed 'resources load{% if effective_serve_mode != "production" %} --include-demo{% endif %}'{% else %}--after-if-installed 'resources load'{% endif %} --after-if-installed schema{% if stack_flavor != "framework" %} --after-if-installed bootstrap_admin{% endif %}
+    depends_on: [{% if postgres_mode == "external" %}{% else %}postgres, {% endif %}operator, runtime-build]
 {% endif %}
 
   # Codegen consumes both the provisioned Django SDL and this live daemon SDL.
   operator-schema:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
-{% if runtime_mode == "process" %}    command: ["uv", "run", "python", "manage.py", "operator_schema"]
+{% if runtime_mode == "process" %}    command: ["uv", "run", "--no-sync", "python", "manage.py", "operator_schema"]
 {% else %}    command: ["sh", "-c", "{{ python_sync }}exec python manage.py operator_schema"]
 {% endif %}    depends_on: [operator, provision]
 
@@ -426,7 +430,7 @@ services:
   # Each container syncs its own venv; the provision job already prepared the host.
   django:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="true" %}
-{% if runtime_mode == "process" %}    command: ["uv", "run", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
+{% if runtime_mode == "process" %}    command: ["uv", "run", "--no-sync", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
     ready:
       tcp: { port: {{ django_port }} }
 {% else %}    # Trust the connected Compose network, not a frontend IP that can change
@@ -461,7 +465,7 @@ services:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
     # Let Celery finish a warm shutdown, then bound native supervisor updates.
     stop_grace_period: 30s
-{% if runtime_mode == "process" %}    command: ["uv", "run", "python", "manage.py", "celery", "worker", {% if role == "worker" %}"--beat"{% else %}"-Q", "{{ celery_queues }}", "--pool", "threads", "--concurrency", "{{ celery_queues|split:","|length * 8 }}"{% endif %}, "--loglevel=INFO"]
+{% if runtime_mode == "process" %}    command: ["uv", "run", "--no-sync", "python", "manage.py", "celery", "worker", {% if role == "worker" %}"--beat"{% else %}"-Q", "{{ celery_queues }}", "--pool", "threads", "--concurrency", "{{ celery_queues|split:","|length * 8 }}"{% endif %}, "--loglevel=INFO"]
     after: [provision]
 {% else %}    command:
       - sh

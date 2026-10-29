@@ -80,7 +80,7 @@ children follow their immutable aggregate parent for absence and retries; the
 adapter owns child application evidence. Neither reconciliation nor generation
 changes silently discard open failures or domain rows.
 
-See the [Record sync guideline](../../../docs/backend/guidelines.md#record-sync)
+See the [Integration and worker contracts](../../../docs/backend/guidelines.md#integration-and-worker-contracts)
 for invariants, the owners above for exact contracts, and
 [`preview_push`](streams.py) for read-only push inspection. The
 [Directory addon](../parties/README.md) composes this protocol for CardDAV.

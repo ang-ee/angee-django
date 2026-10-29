@@ -74,6 +74,21 @@ public vault id. See the [knowledge addon](../../addons/angee/knowledge/README.m
 - Record display representation is a backend-emitted metadata fact in the
   `angee.resources` artifact. Frontend code reads that field and keeps only the
   `id` floor; it does not probe candidate display fields.
+- The composed web manifest is the Tailwind source list: the composer emits
+  `runtime/web/tailwind.sources.css` from the declared package sources,
+  resolving workspace links to real directories so the dev watcher sees edits.
+  Runtime CSS is never hand-edited; every addon web package enters that manifest
+  and the stack-owned dependency graph.
+- Installed `@angee/*` packages are prebundled by source signature. Vite's
+  optimizer hash covers only the lockfile and manifests, so
+  `defineAngeeWebViteConfig` (`@angee/app/vite`) hashes each package's on-disk
+  source and sets `optimizeDeps.force` when that signature differs from its
+  persisted marker; the in-repo example links `@angee/*` source (HMR) and is
+  excluded.
+- Operator daemon types are generated, never authored: the
+  [operator manifest](../../addons/angee/operator/addon.toml) contributes the
+  committed daemon SDL and document glob to the shared codegen pass, and daemon
+  actions return `MutationResult{status}`.
 - Layering and unconsumed-owner guardrails are Vitest checks over the locked
   package graph. Do not add a boundary-lint dependency without updating
   [the opinionated stack](../stack.md) and the manifests together.
@@ -124,6 +139,8 @@ namespace-relative messages under their own namespace; even an empty `ui`
 bundle is rejected by [`composeAddons`](../../packages/app/src/define-addon.ts).
 Use the owning addon's namespace with `createNamespaceT`; do not override
 shared UI copy through an addon bundle.
+
+**Plural copy uses native i18next suffixes:** declare `key_one`/`key_other` in the bundle and call `t("key", { count })` with a numeric count; `createNamespaceT` supplies the declared native plural defaults, including in provider-less renders. A missing category falls back to `_other`; zero uses the locale's category unless the bundle explicitly declares `_zero`.
 
 ## Component ontology
 
@@ -332,7 +349,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   Settings. Never add a landing flag or fall back to route order.
 - Rendered resource pages use `resourcePageRoutes(name, path, component,
   resource?)` from `@angee/app`; the helper owns the list + `$id` child pair and
-  the default `"console"` layout. An explicit `detailComponent` gets a native
+  the default `"console"` layout. A layout binds its own schema
+  (`RefineLayoutConfig.schema`): console-only fields need the console client, so
+  a layout rendering them sets `defaultSchema: "console"` while the public/login
+  layout stays `public`. An explicit `detailComponent` gets a native
   router index page for the list, so its record page replaces the list. Without
   it the list surface keeps owning the selected record through the child param.
   Addon manifest tests call
@@ -408,7 +428,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   because there the canvas is the subject and the inspector its editor). The
   drawers are tools: session-scoped and record-independent (agents, logs). A
   candidate that fails its region's test belongs elsewhere. Related records
-  navigate the middle and the explorer keeps the place; the aside drills in for
+  navigate the middle and the explorer keeps the place (see
+  [Explorer navigation continuity](#explorer-navigation-continuity)); the aside drills in for
   a bounded question about one object in the record's context (this run, this
   changeset, this decision, this conversation) and links to the object's page
   for the open-ended work. Aside publishers compose by owner for their mounted lifetime:
@@ -438,7 +459,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   inside its layout's `<Outlet/>`, so the chrome stays mounted. The previous page
   stays mounted but hidden meanwhile; its portaled control band and statusline
   hide with it ([layout band](../../packages/ui/src/layouts/layout-band.tsx)).
-  Link intent preloads the chunk, so the fallback shows only for slow loads. Do not hand-roll
+  Link intent preloads the chunk, so the fallback shows only for slow loads.
+  Intent preloading also runs each matched route's `beforeLoad`, so a
+  `beforeLoad` only reads and redirects; session side effects belong to a router
+  event (`?debug` uses `onBeforeLoad`). Do not hand-roll
   `React.lazy` + a manual `<Suspense>`
   around a route's `<Outlet/>`. Lighter manifest content (container children,
   forms, glyphs) stays eager. Keep a registered form and its descriptor in an
@@ -614,18 +638,21 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `use<Addon>T()` in an addon (created with `createNamespaceT(ns, fallback)`),
   with namespace-relative English keys in the namespace bundle. A prop whose default is a
   label defaults to `undefined` and resolves `?? t("key")` in the body — never call
-  `t()` in a default parameter. No hardcoded copy in a component. Four boundaries
+  `t()` in a default parameter. No hardcoded copy in a component. Three boundaries
   stay plain English: an addon's declarative manifest menu/route `label:` and
   chatter/drawer contribution labels (chrome data, not in-component copy — none
-  are routed), a form registered via `forms:` (a statically parsed element,
-  never rendered as a component, so a hook cannot reach its `<Field label>`),
-  and a dashboard widget row-column `label` (authored resource data).
+  are routed) and a dashboard widget row-column `label` (authored resource data).
+  A form registered via `forms:` is a component (`RegisteredFormView` renders it),
+  so `use<Addon>T()` reaches its `<Field label>`.
 - Every icon is a registered glyph rendered via `<Glyph name="…">` (or the
   `renderGlyph(icon)` slot adapter). A component never imports `lucide-react`
   directly: base glyphs live in `chrome/icon-registry.ts`; an addon contributes its
   own lucide components through the manifest `icons:` field (the registry seam), not
   by rendering them. Glyph ids are lowercase/kebab-case; the lookup normalizes
   requested names to lowercase, so camelCase registry keys do not resolve.
+  Glyph composition is fail-fast on id: base composes first, an addon cannot
+  re-register another's glyph, and a name added to `baseIcons` collides with any
+  addon already contributing it.
 - Use shared page, resource, form, table, widget, and layout primitives before
   adding new local state. Never hand-roll a resource list (grid/list/group/board),
   form, or detail in an addon — compose the shared resource actions
@@ -645,6 +672,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   owners. Small size does not excuse duplication. Pages do not own table
   mechanics, duplicate route params, cache state, bespoke loading/error surfaces,
   or local copies of shared resource-view state.
+- **A list selects only declared fields.** The selection owner
+  (`requestedFieldPaths`) fetches the paths its columns declare plus the
+  `ListView fields={[…]}` extras and nothing else; a render callback reads only
+  those fields.
 - A row verb is a `rowActions` declaration on `ListView`/`RowsListView`, never a
   hand-rolled trailing column with local `useConfirm`/`toast.danger` ceremony.
   Declare `presentation="icon"`, `"label"`, or `"both"`; labelled text is the default
@@ -944,25 +975,22 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   field-by-field permission query or render a misleading empty value.
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
-  "integrate.OAuthClient" }` (one route per resource, build-time fail-fast) — and the
+  "integrate.OAuthClient" }` (declared route claims are checked during composition) — and the
   relation widget resolves its registered record route. Read-only fields render
   `RecordReference` links; editable pickers show a "follow" arrow. Refine owns the route
   trail, while the routed record surface replaces the generic action leaf with
   the model's `recordRepresentation`. A resource with no routed page simply shows
   the retained label without a link.
-- Register a resource's create form once via `defineAddon`'s
-  `forms: { "integrate.OAuthClient": <…Field/Group children…> }`; the standard renderer uses it
-  wherever that resource is created, including the relation-picker inline create. Use
-  it when the create input diverges from the read projection (write-only secrets,
-  scalar-id pickers, a kind discriminator). With a registered form,
-  `RelationPicker`'s `create` needs only `{ resource }` (the override supersedes any
-  passed `fields` on create); pass inline `fields` only for a data-dependent form
-  whose options are fetched at runtime and so cannot be a static registration.
-  `RelationPicker` also offers inline **edit** (a pencil beside the picker opens the
-  *selected* record in a form dialog) — wired by `RelationFieldWidget` from the
-  related model's fields, so a relation is created, edited, and followed without
-  leaving the parent form. The create-form override stays create-only: an edit
-  dialog renders the passed `fields` (the registered form is not reused for edit).
+- Register a resource's complete form once with
+  [`registerForm`](../../packages/ui/src/views/form/registered-form.ts), and
+  contribute that registration through `defineAddon`'s `forms` dictionary.
+  Its component composes `Form`, `Field` and `Group` and receives
+  `RegisteredFormProps`; it owns any create/edit distinction through the record
+  `id`. Collection routes and relation-picker create/edit dialogs use that same
+  form, so a caller declares the resource instead of repeating its fields.
+  Inline `fields` remain for a caller-specific form; they are not a second
+  per-model registration. Relation pickers also follow the selected record's
+  registered route, so creation, editing and navigation compose the same owners.
 - **An MTI parent's inline create chooses a kind.** A picker on a model whose
   metadata lists `concreteKinds` creates through one dialog with a kind switcher,
   and selects the new row under the parent. The switcher decides only what is
@@ -1059,9 +1087,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   the hook's `reset`; resetting a pending mutation detaches its observer without
   cancelling the write, so a dismissing dialog must preserve that pending state.
 - Client-side gates are UX only. The server is the authorization boundary.
-- **Presence reflects permissions; it never gates.** A menu entry (app roots
-  and legacy list items too; dependents and the deployment may set it like any
-  declaration field) or a container child may name `requires:
+- **Presence reflects permissions; it never gates.** A menu entry (dependents and the deployment may set it like any declaration
+  field) or a container child may name `requires:
   "<app_label.ModelName>#<permission>"`. The identity read asks
   `current_user.permitted` about every composed ref; an entry the session
   lacks leaves the rail, menus and palette with its subtree, a child leaves its
@@ -1071,6 +1098,328 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   child's per-row `permission`; data stays with querysets and field values with
   their gates. See [IAM presence](../../addons/angee/iam/README.md#presence).
 - No Python view DSL, no frontend metadata hidden in backend decorators.
+- **Server preference writes are live but not transactional across tabs:** each delivered `changes()` event rebases later patches immediately, while whole-document writes already in flight can still be accepted in server order and the last accepted write wins.
+- **Effect cleanup must not permanently kill a memoized resource:** StrictMode's simulated mount → cleanup → remount leaves it dead; own the resource inside the effect or explicitly re-arm it on mount, as the preference patch queue does.
+- **Collection state follows the surface owner.** An unrouted `List`,
+  `RowsListView`, or `ResourceList` explicitly passed `presentation="embedded"`
+  defaults to local `pageSize`, sorting, grouping, filtering, and view state;
+  nesting alone does not infer that presentation. `DrawerResourceList` is always
+  local by contract. Routed and page/workspace collections inherit their ambient
+  state or own the unnamespaced route query; a page with multiple route-backed
+  collections must give each an explicit state owner rather than sharing those
+  keys.
+- **Optional operations travel with their owning addon.** Keep documents and their
+  transport UI in the addon contributing the schema fields; a base fragment must
+  codegen without optional dependents. Every agent uses the one
+  [ACP runtime](../../addons/angee/agents/web/src/useAcpRuntime.ts), selecting the
+  SDK version from its endpoint.
+- **Agent sessions are URL selections, created on intent.** The
+  [sessions page](../../addons/angee/agents/web/src/views/AgentSessionsPage.tsx)
+  owns `?session=` through route search; the ACP runtime restores known/newest
+  sessions and creates on first send or New session. Native Query pages own the list.
+- **ACP view context follows the protocol owner.** The
+  [runtime](../../addons/angee/agents/web/src/useAcpRuntime.ts) derives Current view
+  attachment from the session's sent prompts: first/changed views attach automatically,
+  sending consumes the badge, and users can remove or reattach it. Replayed history
+  without a known normalized envelope starts unsent. V2 sends context on session
+  creation and attached prompts for server rendering; v1 retains its rendered carrier.
+  Native assistant-ui thread/message identities follow ACP session/message ids.
+- **Relation widgets follow the SDL field kind** — a nested object FK
+  (`kind:"relation"`) auto-wires to a creatable `many2one` picker; a to-one FK a
+  node projects as a bare `ID` scalar auto-wires too, but as a scalar-id relation:
+  the backend classifies it `kind:"scalar"`, `scalar:"ID"`, `widget:"select"` while
+  keeping its `relationModelLabel`, so `relationFieldInfo` still resolves the picker
+  and label (see the [ID-scalar to-one pitfall](../../.agents/skills/angee-forms/references/pitfalls.md)). A bare `ID` scalar with **no**
+  relation target (a record's own id) stays a leaf with no widget.
+- **A to-many relation is a relation multi-select, not a `tagInput`** — a
+  `kind:"list"` field that carries a relation target (an M2M, e.g. a team's
+  `members` or a line's `tags`) defaults to the `many2many` widget, on record forms
+  and editable lines alike. Both render it through `relationListFieldInfo` +
+  `RelationMultiFieldWidget`: when editable, one field-shaped line holding the
+  picked records as removable chips, an inline search over the related model
+  (the multiple `Combobox` primitive) and a caret; linked chips when read-only. A
+  related model whose `color` field is a colour (`recordColorField`) fills its
+  chips with each record's colour, in forms and list cells alike. Inline create
+  derives from the related model's metadata by the same rule as the to-one picker
+  (`useRelationForms`; pass `create={null}` to decline it): an unmatched query
+  offers "Create “query”", which creates the record from that name at once when
+  nothing else is required (`useRelationQuickCreate`), and "Create and edit…",
+  which opens the create form prefilled with it. Nothing sits beside the line
+  except an authored `actionLabel` button (a lines cell, which has no search,
+  keeps an icon create). Reads select the related records' identity and
+  representation; writes send an array of public ids (`relationIdList`), from the
+  form's `mutationData` or the lines diff. A form keeps a re-picked equal set as
+  its baseline, so it is not dirty. A `kind:"list"` field with *no* relation target
+  (a plain string array) stays the `tagInput`. This mirrors the to-one
+  `relationFieldInfo` + `RelationFieldWidget` — compose those, never hand-roll a
+  relation-list control.
+- **Tags show only where an owner places them, never as a chatter tab, and save
+  with the record.** An owner composes the backend's `TaggedModel` on the model
+  and declares its type's `tags/tag_assignment` relation, `TaggedNode` on its
+  console node and `tags_input_extensions(resource)` on its console insert and
+  set inputs, then places `<Field name="tags" />` on its record form and
+  `<Column field="tags" hiddenByDefault />` on its list. Resource
+  metadata projects `tags` as a writable relation list to `tags.Tag`, so the form
+  edits it as its standard to-many chips field: a pick or removal dirties the
+  form, Save writes the id list with the row (the backend diffs the edges in the
+  row's transaction) and Discard drops it, on create forms too. No tags-specific
+  widget exists; the list cell keeps the shared relation-list chips.
+- **Resource relation pickers support server-backed search.** Compose
+  `RelationFieldWidget`; its
+  [relation-options owner](../../packages/ui/src/views/relation/relation-options.ts)
+  handles lazy reads, debouncing, and selected-label resolution against
+  `ResourceQuery`'s executable text fields. `RelationField`/`RelationPicker`
+  expose remote search through `onSearchChange` and `searchState`. Non-resource
+  searches, such as host repository candidates, keep their authored-operation
+  adapter with the owning addon and use Refine's query/mutation lifecycle.
+- **Use the shared Refine/TanStack Query data path.** Django resources and the
+  operator's request/response calls use declared Refine providers. Operator
+  subscriptions feed the same Query cache; raw log streams stay with their
+  streaming transport. Do not introduce a second application cache/live engine.
+- **react-query freshness rides invalidation, not mount-refetch.** `createApp`
+  sets an app-wide `staleTime` (via refine's `reactQuery.clientConfig`, which
+  layers `refetchOnWindowFocus:false` + `placeholderData:keepPreviousData`
+  underneath — do not restate them), so cross-actor edits surface through the live
+  provider's `changes()` subscription and mutation invalidation, not every
+  remount. A model with **no** `changes()` subscription only reflects cross-actor
+  edits on explicit invalidation or once `staleTime` expires; a query that must be
+  always-fresh sets its own per-hook `queryOptions`, not a new app default.
+- **Generated schema metadata loads before app composition.** The codegen-owned
+  `loadComposedSchemas()` fetches metadata JSON assets in parallel. The host
+  passes it to `@angee/app`'s `bootApp`, which shows the shared loading state and
+  retries fetch failures before calling synchronous `createApp`. Addon manifests
+  still compose synchronously; errors from metadata validation or route creation
+  propagate as programming errors. The `@angee/app/vite` config preloads the
+  metadata assets in built HTML.
+- **Vendored third-party UI records its provenance beside the code.** Keep the
+  upstream license and an `UPSTREAM.md` naming the pinned source, original file
+  hashes and every local adaptation, and list both in the package's published
+  `files`. Adapt primitives, glyphs, tokens and types; leave upstream algorithms
+  intact. The [ReUI Gantt](../../packages/ui/src/views/gantt/UPSTREAM.md) is the
+  reference.
+- **`ResourceList` owns the record surface.** Use a `<Form>` child or `formFields`
+  for generated forms, including read-only records; use `renderRecord` for a
+  domain-owned transcript or detail surface. An all-read-only form never assembles
+  an update mutation. Delete affordances are
+  schema-capability gated: if the resource has no `delete` root, `ResourceList`/`ListView`
+  omit record and bulk delete instead of requiring a delete-only `crud(...)`.
+- **An addon contributes one menu root.** The app rail renders apps and their
+  included, non-flattened sub-apps, at most two levels. The selected app's own
+  items live in [`AppMenu`](../../packages/ui/src/chrome/AppMenu.tsx) in the top
+  bar; deeper items use the shared dropdown menu and labelled groups. The bar
+  leads with the app's name (or Settings) as a title, set apart from its menus
+  and never marked current. The breadcrumb strip under the bar appears only for
+  nested navigation, a record and deeper
+  ([`useNestedBreadcrumbItems`](../../packages/ui/src/chrome/Breadcrumb.tsx)):
+  a menu destination is already named by the bar, so the trail starts at the
+  current menu page, with the list's return link.
+  The app menu never scrolls: [`useOverflowCount`](../../packages/ui/src/lib/use-overflow-count.ts)
+  measures the ordered menus followed by developer removed markers, and excess
+  entries go into More. The current trail's menu keeps the last visible slot;
+  when no entries fit, More holds them all and is marked current when it holds
+  the current page. A route-less menu with one child is the same link in the row
+  and in More. Icon-only rail links show supplementary name tooltips; developer
+  descriptions follow the name. Both rail modes compose
+  [`RailSortable`](../../packages/ui/src/chrome/RailSortable.tsx) for the app
+  roots: dragging a root's link or Alt+Arrow reorders the one persisted rail
+  order, a long press makes it the default app, and the root's tooltip gives
+  that hint. The Settings, single-app and drawer trees stay plain.
+  [`ChromeMenuNode`](../../packages/ui/src/chrome/menu-tree.ts) owns `isApp`,
+  `appChildren()` and `menuItems()`. A node with `group:"platform"` at any depth
+  contributes to the shared **Settings place** in every console: the rail and
+  chooser expose one synthetic Settings entry, and the expanded rail swaps to
+  the platform tree with a back header. Settings and the expansion toggle sit
+  below the scrolling list, and the rail is viewport-sticky so both remain
+  reachable. The expanded desktop
+  header also composes the same expansion toggle, and opening the rail's app
+  chooser expands a collapsed desktop rail. At desktop widths, a
+  plain second activation of a nav link that already points at the current
+  page toggles expansion. When the viewport fits only the icon rail, activating
+  a root with visible included apps opens those sub-apps temporarily in the
+  shell's shared navigation drawer; leaf apps and sub-apps navigate directly.
+  Settings opens its platform roots in that drawer. Mobile uses it through the
+  top-bar navigation button. Temporary navigation never changes the desktop expansion
+  preference (`railLinkToggleProps` in `chrome/app-rail-model.ts` owns link
+  activation; modified clicks keep the browser default). Workbench primary
+  panes are reserved for page-published explorers; `TopMenuTabs` is reserved
+  for explicit collection-view state, not derived menu children.
+  `ChromeMenuNode.isApp` identifies non-platform roots and included apps.
+  [`MenuTree.railMenuItems()`](../../packages/ui/src/chrome/menu-tree.ts) lists
+  every root, or with an app selected the rail `MenuTree.confineTo(rootIds)`
+  projects; the rail filters platform roots, anchors and hidden nodes. An
+  included app receives compiler-emitted `app: true`; authors do not declare
+  that field. A branded single-root rail shows the brand and included apps
+  instead of the app chooser. Addons rearrange
+  other addons' menus only through the `menus` dict's declared verbs (include,
+  flatten, remove, hide, only, position), along their dependencies; see
+  [`compileMenus`](../../packages/app/src/menus.ts). Never re-declare or copy
+  another addon's items or routes.
+  `route.menu` identifies a route's owning item when references are ambiguous.
+  Multiple references do not throw; without an anchor they provide no
+  menu-derived trail or metadata, and references from different roots leave the
+  route with no owning root; anchor it with `route.menu`, which a root's `home`
+  on such a route requires. To give another app its own copy of a page, mount
+  it. `useChromePlace()` shares one memoized
+  `MenuTree.match(pathname, searchStr, includeHidden, activeMenuId)` across the rail and top bar.
+  Chrome currently selects the nearest visible app on that match's
+  trail, and every place reader (rail, top bar, Settings-only notices) asks
+  `useChromePlace().railPlace`, never a bare path.
+- **A page renders in the place of the menu node it declares.** A route's
+  `route.menu` anchor (inherited by record children) wins over another item's
+  path prefix, even when the anchor's own target lies elsewhere. Only the
+  page's own destinations beat its anchor: an item targeting its exact path, as
+  a more specific preset or parameterized target. Then rank by path length,
+  search params, sitting at or under the anchor, depth and pre-order; an anchor
+  on an app root keeps the page on its own item there. The route projection
+  publishes the winning `activeMenuId`; the Refine router binding uses that same
+  destination for native breadcrumbs. Breadcrumbs occupy the sheet strip below
+  the top bar; pane toggles stay in the top bar. Explorers whose selected records
+  live in route search publish their ancestry with `useBreadcrumbTrail`; they
+  use the shell's existing breadcrumbs rather than adding Back/Open navigation
+  to the record toolbar. A route whose anchor and path
+  fall in different places (an app and Settings, as when composition lifts the
+  page its path nests under into Settings) fails composition
+  ([`AppRouteProjection`](../../packages/app/src/resource-projection.ts)),
+  naming the route, its anchor and the item its path nests under: give the
+  route a path under its anchor's. Operational pages keep their app's chrome;
+  configuration stays in Settings, reached from the gear or an explicit link on
+  the operational page that composes the resource's record href (the work
+  queues' "Queue settings", which the PM suite calls "Team settings").
+- **An addon composes other addons under its own app by absorbing or
+  borrowing.** Absorb with `include`: the included app moves under the
+  composing node and leaves its place on the rail (the PM suite). Borrow with
+  `mount`: the composing addon declares its own node,
+  `"x.people": { parent: "x", mount: "iam.users", path: "people" }`, and
+  [`mountRoutes`](../../packages/app/src/mounts.ts) emits an alias route named
+  after it (`x.people`, plus `x.people.record` for the mounted route's record
+  child) at its app's `path` joined with the node's. The app is the node's
+  nearest ancestor declared at the top of the rail, so a mount keeps its path
+  when another addon includes that app; an app's `path` defaults to `/<app id>`,
+  since its own target may itself be a mount. The alias reuses the mounted route's
+  lazy page, detail page, layout and model (as `recordModel`, so the canonical
+  claim stays with its owner); the source app keeps its own page. A node targets
+  one of `route` (a link), `mount` (a borrowed page) and `to` (an external URL),
+  and an addon mounts only routes of addons it depends on. The alias is a real
+  route anchored to its node, so `useActiveRoute`, `when: { route }`, route
+  vocabulary and the menu trail are the borrowing app's. Inside the alias
+  family `useRouteHref()` composes [`aliasRouteHref`](../../packages/ui/src/runtime/route-href.ts):
+  the mounted route's names build the alias's (`iam.users` → `x.people`), so the
+  borrowed page's own links stay in the borrowing app. The node's
+  `defaultResourceView` and `recordMatch` go onto the alias.
+- **Record ownership has one order.** A record link opens at the `recordMatch`
+  claim its row matches, from every app; otherwise at the active app's own
+  claim (with an app selected, each rail root claims its own routes);
+  otherwise at the canonical route
+  ([`AppRouteProjection.resourceRoutes`](../../packages/app/src/resource-projection.ts)).
+  Two claims on one resource with the same field and value fail at boot; a row
+  two different claims match fails where it renders. Lists read every claimed
+  field (`useResourceRecordMatchFields`) so the row can choose.
+- **Words and `when: { app }` follow the whole app trail.** A page's trail
+  holds its root and every included app on the way, flattened ones too.
+  Vocabulary composes the scopes of every app on it, outermost first, then route
+  scopes, and a vocabulary `app` may name any of those apps; a container
+  condition's `app` matches any of them.
+- **Keep the navigation accordion and selectable ARIA tree distinct.**
+  `AppRailTree` owns app-chrome parent activation, expansion, routing, and
+  temporary-drawer behavior. `ui/tree.tsx` owns selectable-tree keyboard
+  semantics and selection state. Keep both; never replace either with a private
+  approximation of the other.
+- **A group names the resource's canonical query axis.** `ResourceQuery` owns
+  the translation from that axis to relation identity, label selections, server
+  inputs and bucket keys. Never derive those transport names from casing or
+  display labels. Use the resource query's advertised axes; the
+  [query owner](../../packages/metadata/src/query.ts) and its
+  [identity/label tests](../../packages/metadata/src/query.test.ts) define the
+  contract.
+- **Live cross-actor refresh requires a `changes()` subscription.** A list/picker
+  auto-invalidates from `<model>Changed` on the subscription schema, gated on the
+  schema actually declaring it — so a model without
+  `changes(Model, field="<model>Changed")` in its `schema.py` refreshes on local
+  writes only (no live push, no error). Add the subscription to opt a model into
+  live updates; omit it and you simply get local-write invalidation.
+- **`Workbench` (`layouts/Workbench.tsx`) is the collapsible inner-shell owner;
+  `Explorer` is removed.** Every multi-pane content region (console body, storage,
+  knowledge, iam schema, agents sessions) composes `Workbench` over `page/SplitPanes`
+  (v4) — `primary` is the navigator pane, `children` the content, `secondary` the
+  aside, with size/collapse persistence via `autoSave`. Do not
+  hand-roll a fixed `grid`/`w-60` multi-pane shell or a pointer/arrow resize handle;
+  the library owns sizing/collapse/persistence and Workbench owns the composition.
+- **`barVariants` (`layouts/bar.ts`) owns bar chrome.** Bar height/edge/pad/tone/
+  justify/text live once; `TopBar`/`BreadcrumbBar`/`ControlBand`/`PageToolbar`/
+  `PageHeader`/`PageFooter`/`Statusline`/`ChatBar` compose it. Never hand-spell a
+  bar's `h-*`/`px-*`/`py-*`/`border-b|t`/`bg-sheet*` again — route it through the
+  recipe so the bars stay in lockstep.
+- **Console side-pane controls stay local.** Primary and secondary panes isolate
+  their ControlBand providers from the main host. An embedded collection opts
+  into native toolbar wrapping; its band and toolbar must both grow with their
+  contents. Opening a main record must not move a finder toolbar across panes.
+- **Form controls `extend` `widget-control`; never re-hand-roll
+  invalid/readOnly/disabled.** `widgetControlSurfaceVariants` (over the
+  `interactiveSurfaceVariants` base) owns the control surface — focus ring,
+  invalid, readOnly, disabled. Inputs/textarea/number-field/select/checkbox `extend`
+  it (tv `extend`); a control that re-spells those states drifts from the owner.
+- **`toneText(tone)` (`lib/tones.ts`) owns per-tone text color.** It is wired into
+  `toneFill` so each tone's `text-*-text` literal lives once; never re-spell a
+  `text-<tone>-text` map or a phantom `text-brand-text` (use `text-brand` /
+  `text-brand-soft-text`). A `*-text` token is a foreground color, never a
+  background — use `toneSolidBg`/`bg-<tone>` for fills.
+- **One type scale, one name per size:** `text-2xs` (11), `text-12`, `text-13`,
+  `text-sm` (14), `text-15`, `text-base` (16), `text-lg` (18), `text-22`, `text-28`,
+  `text-34` — every step reads a public `--fs-*`/`--lh-*` theme token. Tailwind's
+  `text-xs` is not bridged; 12px is `text-12`. No arbitrary `text-[Npx]`.
+- **Control heights are tokens:** `h-control-xs` (28px) is the pane control — tabs,
+  toggles, pane toolbar buttons, tree rows, select triggers; `h-btn-sm/md/lg` are
+  26/30/36. Never a raw `h-7`/`size-7` on a control.
+- **Brand-adjacent tokens derive from `--brand`:** link, focus border, brand line,
+  brand tint and `--chart-1` follow a theme's brand without separate overrides; the
+  rail hover and kbd-on-rail overlays and the whole `--fs/--lh` scale are public
+  theme tokens (`THEME_TOKEN_NAMES`).
+- **One radius scale: `rounded-N`** (the pixel-token scale `2/4/6/8/10/12`). Do not
+  introduce the legacy `rounded`/`rounded-sm|md|lg|xl` aliases in new or rewritten
+  markup.
+- **Pane / Aside / primary-secondary / Panel — one name per concept.** A *Pane* is a
+  `SplitPanes` split region; an *Aside* is the Chatter in the shell's secondary pane,
+  whose tabs are `record#aside` children or page tabs published with
+  `useChatterContent`; *primary*/*secondary* are the Workbench sidebars; a *Panel* is
+  a content `Card`. Don't reuse one term for another's concept across components,
+  props, or slots.
+- **Message projections have one owner.** A peer addon that lists messages spreads
+  the fragments messaging exports (sender, parts + file + mime, reaction groups,
+  feed window) instead of re-authoring the selection; three copies of the same
+  sub-selection already existed across messaging, nexus and posts.
+- **One keyset feed hook.** Compose `useAuthoredKeysetFeed` from `@angee/refine`;
+  domain adapters supply documents, scopes, live interests and presentation order.
+  Native Query pages own loaded history; do not introduce a second row cache.
+  Live feeds supply retained-ID revalidation; explicit remote snapshots can omit
+  it and configure native freshness/refetch options on the same owner. Use its
+  restart operation for a fresh snapshot, rather than remount keys or manual page
+  accumulation. See the [IMAP sample preview](../../addons/angee/messaging_integrate_imap/README.md).
+- **Enum casing is decided once.** `useEnumOptions` owns read/write casing; a
+  caller that re-uppercases option values is working around the owner. Select its
+  casing option for authored enum actions and retain lowercase CRUD inputs.
+- **No `useParams(...) as {...}` casts.** Read generated typed routes directly or
+  use `useRouteParam` at UI’s existing router integration for a named string param.
+- **No `navigate({ search: ... as never })`.** Compose `updateRouteSearch` with
+  relative router navigation; preserve unrelated flat search keys. Addons retain
+  their own scope vocabulary and validation.
+- **Master-detail is `ResourceList`.** A list beside its detail composes routed or
+  controlled `ResourceList`, never `ListView` plus a `useState` selection and a
+  snapshot lift.
+- **Graph + inspector pages use the shell panes.** Navigator to the primary pane,
+  inspector to the secondary pane, as `iam` schema page does; an in-content
+  `SplitPanes` or `Workbench` with its own inspector is the copy. A Chatter tab's
+  children render straight into the panel, which owns scroll and padding while the
+  pane owns width, border and background; `RailPanel` owns the inspector card. Lay
+  out a bounded graph — the selection or a capped neighbourhood — never a whole
+  schema. Bound relationships as well as nodes: layout and canvas initialization
+  both occupy the main thread. The [platform graph](../../addons/angee/platform/web/src/lib/explorer.ts)
+  pages incident relationships while keeping every model and relationship reachable.
+- **A connect action is one ceremony.** Pass the button as `MutationDialog.trigger`
+  so the dialog owns open state, reset and native focus pairing. Addons retain
+  vendor pairing and source selection.
+- **`ActionResult` selections are a fragment**, or derived via `useActionMutation`;
+  never hand-write `…Result`/`…Variables` interfaces and cast to
+  `TypedDocumentNode`.
 
 ## Containers
 
@@ -1489,6 +1838,14 @@ const containers = containersFromChildren(RESOURCE_CONTAINERS, {
 render(<AppRuntimeProvider runtime={{ containers }}><ResourceViewUtilities value={value} /></AppRuntimeProvider>);
 ```
 
+A data-bound view story declares `parameters.angeeFixture` with its schemas,
+resources, runtime and operation documents; the preview mounts the shared
+[`RuntimeFixture`](../../packages/storybook/src/stories/runtime-fixtures.tsx).
+Transport fixtures use `storySchema(fetch)` and `jsonResponse`. A routed fixture
+reused by tests sets `angeeOwnRuntime: true` and passes
+`appearance={storyAppearance(context.globals)}` into the same owner. Each story
+has one provider stack — appearance, data, toasts and modals.
+
 ### Developer mode
 
 Developer mode's composition dialog lists container narrowing (each layer's
@@ -1512,11 +1869,6 @@ owners so permitted actions remain visible but disabled, including keyboard,
 submit and upload paths. The app resets actor-bound queries on enter and exit;
 change subscriptions stay closed during preview because WebSockets retain their
 handshake actor. See [the provider](../../packages/app/src/providers/view-as.ts).
-
-Composed toolbar workflows save through `context.form.submitForm()`. It runs
-native form validation and returns the acknowledged record, or `null` when no
-save was accepted. Await that result before starting a dependent record action;
-never infer success from dirty state or replace the form's save pipeline.
 
 `FormView` treats an existing record as read-only when its resource has no update
 root and the caller supplies no custom submit handler. A create-only resource can
@@ -1550,6 +1902,15 @@ embedded list, however small or ordered it is. Never split one owned collection
 into several lists to protect some of its rows; lock those rows instead. See
 [QueuesPage](../../addons/angee/work/web/src/views/QueuesPage.tsx).
 
+The lines composer owns the line wire shape at the diff boundary
+([editable-lines](../../packages/ui/src/views/form/editable-lines.ts)):
+`lineFieldValue` lower-cases an enum cell's write because the child line input
+types a choices column as `String`, so an untouched UPPERCASE read serializes as
+the lowercase model value; `lineToInput` owns the blank-cell rule — a blank
+non-String cell (`""` seed or widget-cleared `null`) is omitted on a created row
+so input and model defaults apply, ships `null` on an existing row, and only a
+String-scalar cell's `""` is a real wire value sent verbatim.
+
 A line row the backend locks is a system row. The child model owns the fact
 (`RowLockMixin.locked_fields`), its node projects it, and the lines metadata
 names it as `lockField`; [EditableLines](../../packages/ui/src/views/form/EditableLines.tsx)
@@ -1559,493 +1920,74 @@ or remove, and keeps its locked cells read-only while its other cells edit. Neve
 re-derive a lock from a category or name in the page; the backend refuses the same
 writes regardless of what the composer shows.
 
+**A `createDefaults` seed submits on create even when `readOnly`.** `ResourceList`'s
+`createDefaults` seeds the create form, and `form-view-model.ts`'s `mutationData` submits a create
+seed even for a `readOnly`/`createOnly` field — whether the seed is the field's own
+`defaultValue` or a page-level `createDefaults` entry — so a seeded read-only field is
+no longer silently dropped from the create payload. Prefer `createOnly` (editable on
+create carrying the seed, locked on edit) when the value should stay visible-but-fixed;
+`readOnly` + `createDefaults` also works for a value the form never renders editable.
+(`editOnly` fields stay excluded on create.)
+
 ## Pitfalls
 
-Hard-won traps — the wise learn from others' mistakes
-([Development Guidelines](../guidelines.md)).
+The traps that lived here moved to the skills that own the work: page, route,
+navigation and rendering traps to [angee-pages](../../.agents/skills/angee-pages/references/pitfalls.md),
+form, widget and save traps to [angee-forms](../../.agents/skills/angee-forms/references/pitfalls.md),
+story and vitest traps to [angee-tests](../../.agents/skills/angee-tests/references/web-pitfalls.md), and
+build, codegen, install and package-layering traps to [angee-framework](../../.agents/skills/angee-framework/references/web-pitfalls.md).
+The contracts and invariants that sat beside them stayed in this guide under
+[Rules](#rules), [Form save contracts](#form-save-contracts) and
+[Reserved translation namespace](#reserved-translation-namespace).
 
-- **Plural copy uses native i18next suffixes:** declare `key_one`/`key_other` in the bundle and call `t("key", { count })` with a numeric count; `createNamespaceT` supplies the declared native plural defaults, including in provider-less renders. A missing category falls back to `_other`; zero uses the locale's category unless the bundle explicitly declares `_zero`.
-- **A container query never matches the container itself:** a rule for `.x` inside `@container` on `.x` queries an ancestor container, usually none. Put width-dependent rules on the container's children, as [`.resource-toolbar`](../../packages/ui/src/styles/index.css) does.
-- **Server preference writes are live but not transactional across tabs:** each delivered `changes()` event rebases later patches immediately, while whole-document writes already in flight can still be accepted in server order and the last accepted write wins.
-- **Effect cleanup must not permanently kill a memoized resource:** StrictMode's simulated mount → cleanup → remount leaves it dead; own the resource inside the effect or explicitly re-arm it on mount, as the preference patch queue does.
-- **A render callback may only read fields some column declares or the `ListView fields={[…]}` extras name:** the selection owner (`requestedFieldPaths`) fetches column-declared paths plus those extras and nothing else — an undeclared read is `undefined` on every row (a link built from it throws, a caption silently blanks). Still null-guard values a row may legitimately lack.
-- **Collection state follows the surface owner.** An unrouted `List`,
-  `RowsListView`, or `ResourceList` explicitly passed `presentation="embedded"`
-  defaults to local `pageSize`, sorting, grouping, filtering, and view state;
-  nesting alone does not infer that presentation. `DrawerResourceList` is always
-  local by contract. Routed and page/workspace collections inherit their ambient
-  state or own the unnamespaced route query; a page with multiple route-backed
-  collections must give each an explicit state owner rather than sharing those
-  keys.
-- **Generated documents are an explicit prerequisite for addon checks.** Neither
-  root nor package typecheck/test scripts regenerate them automatically. After a
-  schema change, refresh the host's SDL and codegen before checking consumers;
-  [Checks](../checks.md) owns the command order and working directories. Addon
-  fragments resolve the composed stack's generated documents first. The
-  repository-local `.angee/runtime` fallback may be stale in a workspace slot.
-- **Optional operations travel with their owning addon.** Keep documents and their
-  transport UI in the addon contributing the schema fields; a base fragment must
-  codegen without optional dependents. Every agent uses the one
-  [ACP runtime](../../addons/angee/agents/web/src/useAcpRuntime.ts), selecting the
-  SDK version from its endpoint.
-- **Agent sessions are URL selections, created on intent.** The
-  [sessions page](../../addons/angee/agents/web/src/views/AgentSessionsPage.tsx)
-  owns `?session=` through route search; the ACP runtime restores known/newest
-  sessions and creates on first send or New session. Native Query pages own the list.
-- **ACP view context follows the protocol owner.** The
-  [runtime](../../addons/angee/agents/web/src/useAcpRuntime.ts) derives Current view
-  attachment from the session's sent prompts: first/changed views attach automatically,
-  sending consumes the badge, and users can remove or reattach it. Replayed history
-  without a known normalized envelope starts unsent. V2 sends context on session
-  creation and attached prompts for server rendering; v1 retains its rendered carrier.
-  Native assistant-ui thread/message identities follow ACP session/message ids.
-- **Relation widgets follow the SDL field kind** — a nested object FK
-  (`kind:"relation"`) auto-wires to a creatable `many2one` picker; a to-one FK a
-  node projects as a bare `ID` scalar auto-wires too, but as a scalar-id relation:
-  the backend classifies it `kind:"scalar"`, `scalar:"ID"`, `widget:"select"` while
-  keeping its `relationModelLabel`, so `relationFieldInfo` still resolves the picker
-  and label (see the ID-scalar to-one pitfall below). A bare `ID` scalar with **no**
-  relation target (a record's own id) stays a leaf with no widget.
-- **An `ID`-scalar to-one is selected as a leaf, not an object.** Any FK a node
-  projects as a bare `ID!` rather than a nested object is a scalar on the wire:
-  FormView must select it *without* a sub-selection, or the detail query fails to
-  build with a "must not have a selection" GraphQL error. The owner is the
-  field-classification/metadata layer (`angee.graphql.data.field_classification` +
-  the metadata projection): a to-one relation the node projects as a bare scalar id
-  classifies as a `scalar` LEAF (so the form/detail query selects it as a scalar)
-  carrying a `select` scalar-id widget and the relation target, and the frontend
-  `relationFieldInfo` (`@angee/ui`'s `model-metadata-defaults`) resolves that
-  scalar-id shape to the same relation picker/label as an object relation. The
-  scalar-id form reads/writes the flat id; the object form reads the nested `{id}`.
-- **An enum field reads UPPERCASE but writes lowercase** — a `StateField`/
-  `ImplClassField` column serializes the enum *member name* on read (`GITHUB`,
-  `ACTIVE`) yet its create/patch input is a `String` keyed by the lowercase
-  *value* (`github`, `active`). A bare metadata-driven `select` submits the member
-  name, which the String input rejects. On a create form pass `options` with
-  lower-cased values (the member name is `key.upper()`, so
-  `value.toLowerCase()`) and mark the field `createOnly`, so the read-side casing
-  never has to round-trip back through the select. To keep the field *editable*
-  instead, the `select`/`combobox` widgets reconcile the UPPERCASE read back to the
-  authored option via `canonicalOptionValue` (a case-insensitive unique match), so
-  lower-cased `options` round-trip correctly without `createOnly`. For status verbs
-  prefer an `<Action set={{status:"disabled"}}>` over an editable status field.
-  The F6 lines composer applies the same rule per cell but at the *diff boundary*,
-  not with `createOnly`: `editable-lines.ts`'s `lineFieldValue` lower-cases an enum
-  line cell's write (the child line input types the choices column as `String`), so
-  even an untouched UPPERCASE read serializes as the lowercase model value. The
-  same boundary owns the blank-cell rule (`lineToInput`): a blank non-String cell
-  (`""` seed or widget-cleared `null`) is omitted on a created row so input/model
-  defaults apply — Strawberry rejects `""` for Decimal/Int/Date — and ships `null`
-  on an existing row (the honest "cleared" value); only a String-scalar cell's
-  `""` is a real wire value and ships verbatim.
-- **A to-many relation is a relation multi-select, not a `tagInput`** — a
-  `kind:"list"` field that carries a relation target (an M2M, e.g. a team's
-  `members` or a line's `tags`) defaults to the `many2many` widget, on record forms
-  and editable lines alike. Both render it through `relationListFieldInfo` +
-  `RelationMultiFieldWidget`: when editable, one field-shaped line holding the
-  picked records as removable chips, an inline search over the related model
-  (the multiple `Combobox` primitive) and a caret; linked chips when read-only. A
-  related model whose `color` field is a colour (`recordColorField`) fills its
-  chips with each record's colour, in forms and list cells alike. Inline create
-  derives from the related model's metadata by the same rule as the to-one picker
-  (`useRelationForms`; pass `create={null}` to decline it): an unmatched query
-  offers "Create “query”", which creates the record from that name at once when
-  nothing else is required (`useRelationQuickCreate`), and "Create and edit…",
-  which opens the create form prefilled with it. Nothing sits beside the line
-  except an authored `actionLabel` button (a lines cell, which has no search,
-  keeps an icon create). Reads select the related records' identity and
-  representation; writes send an array of public ids (`relationIdList`), from the
-  form's `mutationData` or the lines diff. A form keeps a re-picked equal set as
-  its baseline, so it is not dirty. A `kind:"list"` field with *no* relation target
-  (a plain string array) stays the `tagInput`. This mirrors the to-one
-  `relationFieldInfo` + `RelationFieldWidget` — compose those, never hand-roll a
-  relation-list control.
-- **Tags show only where an owner places them, never as a chatter tab, and save
-  with the record.** An owner composes the backend's `TaggedModel` on the model
-  and declares its type's `tags/tag_assignment` relation, `TaggedNode` on its
-  console node and `tags_input_extensions(resource)` on its console insert and
-  set inputs, then places `<Field name="tags" />` on its record form and
-  `<Column field="tags" hiddenByDefault />` on its list. Resource
-  metadata projects `tags` as a writable relation list to `tags.Tag`, so the form
-  edits it as its standard to-many chips field: a pick or removal dirties the
-  form, Save writes the id list with the row (the backend diffs the edges in the
-  row's transaction) and Discard drops it, on create forms too. No tags-specific
-  widget exists; the list cell keeps the shared relation-list chips.
-- **Resource relation pickers support server-backed search.** Compose
-  `RelationFieldWidget`; its
-  [relation-options owner](../../packages/ui/src/views/relation/relation-options.ts)
-  handles lazy reads, debouncing, and selected-label resolution against
-  `ResourceQuery`'s executable text fields. `RelationField`/`RelationPicker`
-  expose remote search through `onSearchChange` and `searchState`. Non-resource
-  searches, such as host repository candidates, keep their authored-operation
-  adapter with the owning addon and use Refine's query/mutation lifecycle.
-- **A FormView create dialog under the console layout** needs
-  `<ControlBandProvider host={undefined}>` to keep its Save band inline instead of
-  portaling into the layout's band.
-- **Layouts bind their own schema** (`RefineLayoutConfig.schema`): console-only fields
-  need the console client — set `defaultSchema: "console"` and pin the
-  public/login layout to `public`.
-- **Use the shared Refine/TanStack Query data path.** Django resources and the
-  operator's request/response calls use declared Refine providers. Operator
-  subscriptions feed the same Query cache; raw log streams stay with their
-  streaming transport. Do not introduce a second application cache/live engine.
-- **react-query freshness rides invalidation, not mount-refetch.** `createApp`
-  sets an app-wide `staleTime` (via refine's `reactQuery.clientConfig`, which
-  layers `refetchOnWindowFocus:false` + `placeholderData:keepPreviousData`
-  underneath — do not restate them), so cross-actor edits surface through the live
-  provider's `changes()` subscription and mutation invalidation, not every
-  remount. A model with **no** `changes()` subscription only reflects cross-actor
-  edits on explicit invalidation or once `staleTime` expires; a query that must be
-  always-fresh sets its own per-hook `queryOptions`, not a new app default.
-- **Route code-splitting touches three things.** (1) `defaultPendingComponent` is
-  the *app-wide* pending surface — it renders for every non-root match while its
-  chunk loads, and (after `defaultPendingMs`) for any future `loader`-bearing
-  route, not just lazy pages. Intent preloading runs each matched route's
-  `beforeLoad` on hover (an already-active ancestor with the current search), so a
-  `beforeLoad` only reads and redirects; session side effects belong to a router
-  event, as `?debug` does with `onBeforeLoad`. A future `loader` would also run on
-  hover, at most once per `defaultPreloadStaleTime`. (2) The addon-index imports in `runtime/web/app.ts`
-  stay eager — manifests compose synchronously; only each manifest's *page*
-  imports go through `lazyRouteComponent`. (3) A test that renders a routed page
-  *through the router* (`createApp`/`RouterProvider`) must await the lazy boundary
-  (`findBy*`); a test that imports the page component directly is unaffected, and a
-  manifest assertion (`component` is a function) still holds for a lazy component.
-  Project TypeScript configs must allow importing `.ts`/`.tsx` extensions because
-  the generated runtime imports addon index source files by their package export
-  paths.
-- **Generated schema metadata loads before app composition.** The codegen-owned
-  `loadComposedSchemas()` fetches metadata JSON assets in parallel. The host
-  passes it to `@angee/app`'s `bootApp`, which shows the shared loading state and
-  retries fetch failures before calling synchronous `createApp`. Addon manifests
-  still compose synchronously; errors from metadata validation or route creation
-  propagate as programming errors. The `@angee/app/vite` config preloads the
-  metadata assets in built HTML.
-- **Generate operator types from the daemon-owned SDL.** The operator's
-  [addon manifest](../../addons/angee/operator/addon.toml) contributes the
-  committed SDL and daemon document glob to the shared codegen pass. Do not
-  hand-author daemon result types; actions return `MutationResult{status}`.
-- **Expose every addon web package through the composed web manifest** — the
-  composer emits `runtime/web/tailwind.sources.css` from declared package
-  sources, resolving workspace links to real directories so the dev watcher sees
-  edits. Do not hand-edit runtime CSS; a package missing from the manifest will
-  miss its unique arbitrary Tailwind classes.
-- **Shared/generic icon glyphs live in the base `chrome/icon-registry.ts`** —
-  composition is fail-fast on id, so an addon cannot re-register another's glyph,
-  **and adding a name to `baseIcons` collides with any addon already contributing
-  it** (base composes first). This throws only at app boot — `typecheck`/`build`
-  miss it — so verify the full composed app still boots after touching `baseIcons`
-  or an addon's `icons`; `tsc` alone cannot catch the collision. Use the browser
-  verification path in [Checks](../checks.md).
-- **A new web package must enter the composed manifest and dependency graph.**
-  Declare it through the addon/template owners, refresh the stack-owned install
-  and generated composition, and restart the frontend through the operator
-  (`angee --root "$ANGEE_ROOT" restart frontend`, or the whole-application
-  restart after an install; see
-  [Restart the running stack](../howto/getstarted.md#restart-the-running-stack))
-  so Vite sees the new package. See [Checks](../checks.md) for environment setup
-  and safe script invocation.
-- **Install JS dependencies once at the owning stack workspace root.** Never run
-  `pnpm install` inside a source slot, `packages/`, `addons/`, or `examples/`: a
-  nested install forks linked
-  `vite`/`vitest` identities and can produce `Excessive stack depth comparing
-  types 'UserConfig' and 'UserConfig'` in `vitest.shared.ts`. Fix that environment
-  by removing the nested package `node_modules` and reinstalling at the root;
-  do not weaken the types. Every workspace package must resolve through the one
-  root virtual store.
-- **Prebundled `@angee/*` source edits are cache-busted by source signature, not
-  a manual wipe.** A project that consumes `@angee/*` as installed packages
-  (`prebundleAngeePackages: true`) prebundles them; Vite's optimizer hash comes
-  from the lockfile + manifests, never package source, so a workspace edit to a
-  linked `@angee/*` package (same version) would otherwise be served stale (the
-  slice-1 live-verify trap). `defineAngeeWebViteConfig` (`@angee/app/vite`) hashes
-  each package's on-disk source mtimes and sets `optimizeDeps.force` when it
-  changed vs a persisted marker — a source edit re-optimizes, an unchanged tree
-  stays cached. The in-repo example excludes `@angee/*` (linked source, HMR) so
-  this never applies there.
-- **Vendored third-party UI records its provenance beside the code.** Keep the
-  upstream license and an `UPSTREAM.md` naming the pinned source, original file
-  hashes and every local adaptation, and list both in the package's published
-  `files`. Adapt primitives, glyphs, tokens and types; leave upstream algorithms
-  intact. The [ReUI Gantt](../../packages/ui/src/views/gantt/UPSTREAM.md) is the
-  reference.
-- **Start new addon web packages from `templates/addons/web`.** The Copier template
-  owns the current ceremony: `defineBaseAddon`, `resourcePageRoutes`, lazy routed
-  pages, `createNamespaceT`, `expectValidBaseAddon`, and package/test wiring.
-  Don't copy an older addon and then manually chase drift.
-- **Architecture guardrails are tests, not review folklore.** After changing a
-  framework package edge, addon package dependency, or newly exported shared owner,
-  update `packages/app/src/architecture-guardrails.test.ts` deliberately. It owns
-  both the package tree and the explicit addon/example roots. Record the intended
-  edge or public-export allowance; do not bypass it with an undeclared import or
-  a second local implementation.
-- **`ResourceList` owns the record surface.** Use a `<Form>` child or `formFields`
-  for generated forms, including read-only records; use `renderRecord` for a
-  domain-owned transcript or detail surface. An all-read-only form never assembles
-  an update mutation. Delete affordances are
-  schema-capability gated: if the resource has no `delete` root, `ResourceList`/`ListView`
-  omit record and bulk delete instead of requiring a delete-only `crud(...)`.
-- **An addon contributes one menu root.** The app rail renders apps and their
-  included, non-flattened sub-apps, at most two levels. The selected app's own
-  items live in [`AppMenu`](../../packages/ui/src/chrome/AppMenu.tsx) in the top
-  bar; deeper items use the shared dropdown menu and labelled groups. The bar
-  leads with the app's name (or Settings) as a title, set apart from its menus
-  and never marked current. The breadcrumb strip under the bar appears only for
-  nested navigation, a record and deeper
-  ([`useNestedBreadcrumbItems`](../../packages/ui/src/chrome/Breadcrumb.tsx)):
-  a menu destination is already named by the bar, so the trail starts at the
-  current menu page, with the list's return link.
-  The app menu never scrolls: [`useOverflowCount`](../../packages/ui/src/lib/use-overflow-count.ts)
-  measures the ordered menus followed by developer removed markers, and excess
-  entries go into More. The current trail's menu keeps the last visible slot;
-  when no entries fit, More holds them all and is marked current when it holds
-  the current page. A route-less menu with one child is the same link in the row
-  and in More. Icon-only rail links show supplementary name tooltips; developer
-  descriptions follow the name. Both rail modes compose
-  [`RailSortable`](../../packages/ui/src/chrome/RailSortable.tsx) for the app
-  roots: dragging a root's link or Alt+Arrow reorders the one persisted rail
-  order, a long press makes it the default app, and the root's tooltip gives
-  that hint. The Settings, single-app and drawer trees stay plain.
-  [`ChromeMenuNode`](../../packages/ui/src/chrome/menu-tree.ts) owns `isApp`,
-  `appChildren()` and `menuItems()`. A node with `group:"platform"` at any depth
-  contributes to the shared **Settings place** in every console: the rail and
-  chooser expose one synthetic Settings entry, and the expanded rail swaps to
-  the platform tree with a back header. Settings and the expansion toggle sit
-  below the scrolling list, and the rail is viewport-sticky so both remain
-  reachable. The expanded desktop
-  header also composes the same expansion toggle, and opening the rail's app
-  chooser expands a collapsed desktop rail. At desktop widths, a
-  plain second activation of a nav link that already points at the current
-  page toggles expansion. When the viewport fits only the icon rail, activating
-  a root with visible included apps opens those sub-apps temporarily in the
-  shell's shared navigation drawer; leaf apps and sub-apps navigate directly.
-  Settings opens its platform roots in that drawer. Mobile uses it through the
-  top-bar navigation button. Temporary navigation never changes the desktop expansion
-  preference (`railLinkToggleProps` in `chrome/app-rail-model.ts` owns link
-  activation; modified clicks keep the browser default). Workbench primary
-  panes are reserved for page-published explorers; `TopMenuTabs` is reserved
-  for explicit collection-view state, not derived menu children.
-  `ChromeMenuNode.isApp` identifies non-platform roots and included apps.
-  [`MenuTree.railMenuItems()`](../../packages/ui/src/chrome/menu-tree.ts) lists
-  every root, or with an app selected the rail `MenuTree.confineTo(rootIds)`
-  projects; the rail filters platform roots, anchors and hidden nodes. An
-  included app receives compiler-emitted `app: true`; authors do not declare
-  that field. A branded single-root rail shows the brand and included apps
-  instead of the app chooser. Addons rearrange
-  other addons' menus only through the `menus` dict's declared verbs (include,
-  flatten, remove, hide, only, position), along their dependencies; see
-  [`compileMenus`](../../packages/app/src/menus.ts). Never re-declare or copy
-  another addon's items or routes.
-  `route.menu` identifies a route's owning item when references are ambiguous.
-  Multiple references do not throw; without an anchor they provide no
-  menu-derived trail or metadata, and references from different roots leave the
-  route with no owning root; anchor it with `route.menu`, which a root's `home`
-  on such a route requires. To give another app its own copy of a page, mount
-  it. `useChromePlace()` shares one memoized
-  `MenuTree.match(pathname, searchStr, includeHidden, activeMenuId)` across the rail and top bar.
-  Chrome currently selects the nearest visible app on that match's
-  trail, and every place reader (rail, top bar, Settings-only notices) asks
-  `useChromePlace().railPlace`, never a bare path.
-- **A page renders in the place of the menu node it declares.** A route's
-  `route.menu` anchor (inherited by record children) wins over another item's
-  path prefix, even when the anchor's own target lies elsewhere. Only the
-  page's own destinations beat its anchor: an item targeting its exact path, as
-  a more specific preset or parameterized target. Then rank by path length,
-  search params, sitting at or under the anchor, depth and pre-order; an anchor
-  on an app root keeps the page on its own item there. The route projection
-  publishes the winning `activeMenuId`; the Refine router binding uses that same
-  destination for native breadcrumbs. Breadcrumbs occupy the sheet strip below
-  the top bar; pane toggles stay in the top bar. Explorers whose selected records
-  live in route search publish their ancestry with `useBreadcrumbTrail`; they
-  use the shell's existing breadcrumbs rather than adding Back/Open navigation
-  to the record toolbar. A route whose anchor and path
-  fall in different places (an app and Settings, as when composition lifts the
-  page its path nests under into Settings) fails composition
-  ([`AppRouteProjection`](../../packages/app/src/resource-projection.ts)),
-  naming the route, its anchor and the item its path nests under: give the
-  route a path under its anchor's. Operational pages keep their app's chrome;
-  configuration stays in Settings, reached from the gear or an explicit link on
-  the operational page that composes the resource's record href (the work
-  queues' "Queue settings", which the PM suite calls "Team settings").
-- **An addon composes other addons under its own app by absorbing or
-  borrowing.** Absorb with `include`: the included app moves under the
-  composing node and leaves its place on the rail (the PM suite). Borrow with
-  `mount`: the composing addon declares its own node,
-  `"x.people": { parent: "x", mount: "iam.users", path: "people" }`, and
-  [`mountRoutes`](../../packages/app/src/mounts.ts) emits an alias route named
-  after it (`x.people`, plus `x.people.record` for the mounted route's record
-  child) at its app's `path` joined with the node's. The app is the node's
-  nearest ancestor declared at the top of the rail, so a mount keeps its path
-  when another addon includes that app; an app's `path` defaults to `/<app id>`,
-  since its own target may itself be a mount. The alias reuses the mounted route's
-  lazy page, detail page, layout and model (as `recordModel`, so the canonical
-  claim stays with its owner); the source app keeps its own page. A node targets
-  one of `route` (a link), `mount` (a borrowed page) and `to` (an external URL),
-  and an addon mounts only routes of addons it depends on. The alias is a real
-  route anchored to its node, so `useActiveRoute`, `when: { route }`, route
-  vocabulary and the menu trail are the borrowing app's. Inside the alias
-  family `useRouteHref()` composes [`aliasRouteHref`](../../packages/ui/src/runtime/route-href.ts):
-  the mounted route's names build the alias's (`iam.users` → `x.people`), so the
-  borrowed page's own links stay in the borrowing app. The node's
-  `defaultResourceView` and `recordMatch` go onto the alias.
-- **Record ownership has one order.** A record link opens at the `recordMatch`
-  claim its row matches, from every app; otherwise at the active app's own
-  claim (with an app selected, each rail root claims its own routes);
-  otherwise at the canonical route
-  ([`AppRouteProjection.resourceRoutes`](../../packages/app/src/resource-projection.ts)).
-  Two claims on one resource with the same field and value fail at boot; a row
-  two different claims match fails where it renders. Lists read every claimed
-  field (`useResourceRecordMatchFields`) so the row can choose.
-- **Words and `when: { app }` follow the whole app trail.** A page's trail
-  holds its root and every included app on the way, flattened ones too.
-  Vocabulary composes the scopes of every app on it, outermost first, then route
-  scopes, and a vocabulary `app` may name any of those apps; a container
-  condition's `app` matches any of them.
-- **Keep the navigation accordion and selectable ARIA tree distinct.**
-  `AppRailTree` owns app-chrome parent activation, expansion, routing, and
-  temporary-drawer behavior. `ui/tree.tsx` owns selectable-tree keyboard
-  semantics and selection state. Keep both; never replace either with a private
-  approximation of the other.
-- **A group names the resource's canonical query axis.** `ResourceQuery` owns
-  the translation from that axis to relation identity, label selections, server
-  inputs and bucket keys. Never derive those transport names from casing or
-  display labels. Use the resource query's advertised axes; the
-  [query owner](../../packages/metadata/src/query.ts) and its
-  [identity/label tests](../../packages/metadata/src/query.test.ts) define the
-  contract.
-- **Live cross-actor refresh requires a `changes()` subscription.** A list/picker
-  auto-invalidates from `<model>Changed` on the subscription schema, gated on the
-  schema actually declaring it — so a model without
-  `changes(Model, field="<model>Changed")` in its `schema.py` refreshes on local
-  writes only (no live push, no error). Add the subscription to opt a model into
-  live updates; omit it and you simply get local-write invalidation.
-- **A `createDefaults` seed submits on create even when `readOnly`.** `ResourceList`'s
-  `createDefaults` seeds the create form, and `form-view-model.ts`'s `mutationData` submits a create
-  seed even for a `readOnly`/`createOnly` field — whether the seed is the field's own
-  `defaultValue` or a page-level `createDefaults` entry — so a seeded read-only field is
-  no longer silently dropped from the create payload. Prefer `createOnly` (editable on
-  create carrying the seed, locked on edit) when the value should stay visible-but-fixed;
-  `readOnly` + `createDefaults` also works for a value the form never renders editable.
-  (`editOnly` fields stay excluded on create.)
-- **A storybook `meta.args`/`argTypes` is dead only if no story consumes it.** A
-  bare `export const X: Story = {}` (or a `render: (args) => …`) AUTO-RENDERS from
-  `meta.args` — those args are live; only a file whose every story is a zero-param
-  `render: () => …` has dead meta args. Removing them when `meta.component` has a
-  required prop breaks `StoryObj<typeof meta>` (it still demands the arg) — type the
-  self-rendering stories as bare `StoryObj` (keep `component:` for autodocs). A
-  data-bound view story declares `parameters.angeeFixture` with its schemas,
-  resources, runtime and operation documents; the preview mounts the shared
-  [`RuntimeFixture`](../../packages/storybook/src/stories/runtime-fixtures.tsx).
-  Use `storySchema(fetch)` and `jsonResponse` for transport fixtures. Routed
-  fixtures reused by tests set `angeeOwnRuntime: true` and pass
-  `appearance={storyAppearance(context.globals)}` into the same owner. Each
-  story has one provider stack, including appearance, data, toasts and modals.
-- **`Workbench` (`layouts/Workbench.tsx`) is the collapsible inner-shell owner;
-  `Explorer` is removed.** Every multi-pane content region (console body, storage,
-  knowledge, iam schema, agents sessions) composes `Workbench` over `page/SplitPanes`
-  (v4) — `primary` is the navigator pane, `children` the content, `secondary` the
-  aside, with size/collapse persistence via `autoSave`. Do not
-  hand-roll a fixed `grid`/`w-60` multi-pane shell or a pointer/arrow resize handle;
-  the library owns sizing/collapse/persistence and Workbench owns the composition.
-- **`barVariants` (`layouts/bar.ts`) owns bar chrome.** Bar height/edge/pad/tone/
-  justify/text live once; `TopBar`/`BreadcrumbBar`/`ControlBand`/`PageToolbar`/
-  `PageHeader`/`PageFooter`/`Statusline`/`ChatBar` compose it. Never hand-spell a
-  bar's `h-*`/`px-*`/`py-*`/`border-b|t`/`bg-sheet*` again — route it through the
-  recipe so the bars stay in lockstep.
-- **Console side-pane controls stay local.** Primary and secondary panes isolate
-  their ControlBand providers from the main host. An embedded collection opts
-  into native toolbar wrapping; its band and toolbar must both grow with their
-  contents. Opening a main record must not move a finder toolbar across panes.
-- **Form controls `extend` `widget-control`; never re-hand-roll
-  invalid/readOnly/disabled.** `widgetControlSurfaceVariants` (over the
-  `interactiveSurfaceVariants` base) owns the control surface — focus ring,
-  invalid, readOnly, disabled. Inputs/textarea/number-field/select/checkbox `extend`
-  it (tv `extend`); a control that re-spells those states drifts from the owner.
-- **`toneText(tone)` (`lib/tones.ts`) owns per-tone text color.** It is wired into
-  `toneFill` so each tone's `text-*-text` literal lives once; never re-spell a
-  `text-<tone>-text` map or a phantom `text-brand-text` (use `text-brand` /
-  `text-brand-soft-text`). A `*-text` token is a foreground color, never a
-  background — use `toneSolidBg`/`bg-<tone>` for fills.
-- **One type scale, one name per size:** `text-2xs` (11), `text-12`, `text-13`,
-  `text-sm` (14), `text-15`, `text-base` (16), `text-lg` (18), `text-22`, `text-28`,
-  `text-34` — every step reads a public `--fs-*`/`--lh-*` theme token. Tailwind's
-  `text-xs` is not bridged; 12px is `text-12`. No arbitrary `text-[Npx]`.
-- **Control heights are tokens:** `h-control-xs` (28px) is the pane control — tabs,
-  toggles, pane toolbar buttons, tree rows, select triggers; `h-btn-sm/md/lg` are
-  26/30/36. Never a raw `h-7`/`size-7` on a control.
-- **Brand-adjacent tokens derive from `--brand`:** link, focus border, brand line,
-  brand tint and `--chart-1` follow a theme's brand without separate overrides; the
-  rail hover and kbd-on-rail overlays and the whole `--fs/--lh` scale are public
-  theme tokens (`THEME_TOKEN_NAMES`).
-- **One radius scale: `rounded-N`** (the pixel-token scale `2/4/6/8/10/12`). Do not
-  introduce the legacy `rounded`/`rounded-sm|md|lg|xl` aliases in new or rewritten
-  markup.
-- **Pane / Aside / primary-secondary / Panel — one name per concept.** A *Pane* is a
-  `SplitPanes` split region; an *Aside* is the Chatter in the shell's secondary pane,
-  whose tabs are `record#aside` children or page tabs published with
-  `useChatterContent`; *primary*/*secondary* are the Workbench sidebars; a *Panel* is
-  a content `Card`. Don't reuse one term for another's concept across components,
-  props, or slots.
+## Explorer navigation continuity
 
-- **Message projections have one owner.** A peer addon that lists messages spreads
-  the fragments messaging exports (sender, parts + file + mime, reaction groups,
-  feed window) instead of re-authoring the selection; three copies of the same
-  sub-selection already existed across messaging, nexus and posts.
-- **One keyset feed hook.** Compose `useAuthoredKeysetFeed` from `@angee/refine`;
-  domain adapters supply documents, scopes, live interests and presentation order.
-  Native Query pages own loaded history; do not introduce a second row cache.
-  Live feeds supply retained-ID revalidation; explicit remote snapshots can omit
-  it and configure native freshness/refetch options on the same owner. Use its
-  restart operation for a fresh snapshot, rather than remount keys or manual page
-  accumulation. See the [IMAP sample preview](../../addons/angee/messaging_integrate_imap/README.md).
-- **Enum casing is decided once.** `useEnumOptions` owns read/write casing; a
-  caller that re-uppercases option values is working around the owner. Select its
-  casing option for authored enum actions and retain lowercase CRUD inputs.
-- **No `useParams(...) as {...}` casts.** Read generated typed routes directly or
-  use `useRouteParam` at UI’s existing router integration for a named string param.
-- **No `navigate({ search: ... as never })`.** Compose `updateRouteSearch` with
-  relative router navigation; preserve unrelated flat search keys. Addons retain
-  their own scope vocabulary and validation.
-- **Master-detail is `ResourceList`.** A list beside its detail composes routed or
-  controlled `ResourceList`, never `ListView` plus a `useState` selection and a
-  snapshot lift.
-- **Graph + inspector pages use the shell panes.** Navigator to the primary pane,
-  inspector to the secondary pane, as `iam` schema page does; an in-content
-  `SplitPanes` or `Workbench` with its own inspector is the copy. A Chatter tab's
-  children render straight into the panel, which owns scroll and padding while the
-  pane owns width, border and background; `RailPanel` owns the inspector card. Lay
-  out a bounded graph — the selection or a capped neighbourhood — never a whole
-  schema. Bound relationships as well as nodes: layout and canvas initialization
-  both occupy the main thread. The [platform graph](../../addons/angee/platform/web/src/lib/explorer.ts)
-  pages incident relationships while keeping every model and relationship reachable.
-- **A connect action is one ceremony.** Pass the button as `MutationDialog.trigger`
-  so the dialog owns open state, reset and native focus pairing. Addons retain
-  vendor pairing and source selection.
-- **`ActionResult` selections are a fragment**, or derived via `useActionMutation`;
-  never hand-write `…Result`/`…Variables` interfaces and cast to
-  `TypedDocumentNode`.
+A record navigation changes the selected record without replacing its collection.
+Pending, missing or failed detail data does not itself select an empty root. Keep
+the current root, search, expansion and scroll position while another record in
+that root loads. A deliberate root change, or a resolved record belonging to a
+different root, may reset collection state for that new scope.
+
+Explorer pages compose
+[`useScopedTreeExplorer`](../../packages/ui/src/views/tree/useScopedTreeExplorer.ts)
+for retained root and tree selection, then pass its controller and hydrated query
+rows to [`ScopedExplorerPane`](../../packages/ui/src/views/tree/ScopedExplorerPane.tsx).
+The pane owns picker display. Routes own record identity; queries own loaded
+records; collection owners retain search and expansion. Resolved record roots
+update the shared selection owner; unresolved detail leaves its retained scope
+intact. A controlled `rootId` remains authoritative, including an explicit empty
+value. Do not mirror retained selection in addon state or add a parallel selection
+helper, row cache or navigator implementation.
+
+Keys that reset collection state must follow actual collection identity, never
+a temporary gap in detail data. Preserve navigator state separately from record
+data: showing the previous editable record under the next record's URL is not a
+valid way to keep the navigator mounted.
+
+Verify the transition as well as its settled result:
+
+- Use the native router, query and shell test providers. Hold the next record's
+  response pending; check that the navigator controls remain the same DOM nodes
+  and that search and expanded branches survive both pending and resolved reads.
+- Cover entry from the collection and from a directly opened record, navigation
+  within and across roots, explicit picker changes, and browser Back/Forward.
+  Check that a resolved record's root wins over an earlier picker choice.
+- Exercise empty, pending and failed picker searches independently of detail
+  reads. Check that delayed responses cannot restore an obsolete selection, and
+  that unavailable detail data does not expose the previous record's write actions.
+- In the live browser, navigate to an uncached record and observe the pending
+  interval. A screenshot taken only after loading cannot establish continuity.
 
 ## Checks
 
-Use [Checks](../checks.md) for package, composed-addon, distribution, architecture
-and browser commands, including their working directories and prerequisites.
-Run focused checks while editing and the relevant broad checks before handoff.
+[Frontend packages and addon fragments](../checks.md#frontend-packages-and-addon-fragments)
+owns the package, composed-addon, distribution and architecture commands, their
+working directories and prerequisites, and the primitive-drift scan;
+[Browser verification](../checks.md#browser-verification) and
+[End-to-End Testing](e2e.md) own browser acceptance. The vitest and story false
+greens moved to the `angee-tests` skill's [web pitfalls](../../.agents/skills/angee-tests/references/web-pitfalls.md).
 
-Run the package vitest suite — not just `tsc` and a story render, which miss
-stale assertion drift. When verifying data-bound views, wait for the async query
-to load before asserting. Meaningful UI changes require browser verification;
-[End-to-End Testing](e2e.md) owns browser authoring and isolation expectations.
-
-For page/addon changes, run a primitive-drift scan and explain every hit outside
-`@angee/ui`. From the framework repository root:
-
-```sh
-rg -n '<table\b|<thead\b|<tbody\b|<tr\b|<td\b|<th\b|role="grid"|useReactTable|manualPagination' packages addons examples -g '*.tsx'
-rg -n 'useAuthored(Query|Mutation)<|interface .*Data|interface .*Variables|fetch\([^)]*graphql|gql`' packages addons examples -g '*.ts' -g '*.tsx'
-```
-
-Include `../angee-messaging-bridges/addons` in the scan when that optional slot is
-present and affected. Run the architecture guardrail when changing package
-layering, public shared owners, or addon manifests.
-
-A hit is not automatically wrong, but it must either compose the shared primitive
-or identify the owning framework gap to fix first.
+Composed toolbar workflows save through `context.form.submitForm()`. It runs
+native form validation and returns the acknowledged record, or `null` when no
+save was accepted. Await that result before starting a dependent record action;
+never infer success from dirty state or replace the form save pipeline.

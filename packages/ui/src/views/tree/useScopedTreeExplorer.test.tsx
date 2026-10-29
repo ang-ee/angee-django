@@ -32,30 +32,23 @@ const ROWS: Record<string, readonly TreeRow[]> = {
 };
 
 describe("useScopedTreeExplorer", () => {
-  test("defaults to the first root and projects root options", () => {
+  test("defaults to the first root", () => {
     const { result } = renderHook(() =>
       useScopedTreeExplorer<Root, TreeRow>({
         roots: ROOTS,
         getRootId,
-        getRootLabel,
         getTreeRows,
       }));
 
     expect(result.current.rootId).toBe("root-a");
-    expect(result.current.root).toEqual(ROOTS[0]);
-    expect(result.current.rootOptions).toEqual([
-      { value: "root-a", label: "Root A" },
-      { value: "root-b", label: "Root B" },
-    ]);
     expect(result.current.treeRows).toEqual(ROWS["root-a"]);
   });
 
-  test("uses the selected root hint until a root is pinned", () => {
+  test("uses a resolved selected root until a root is picked", () => {
     const { result } = renderHook(() =>
       useScopedTreeExplorer<Root, TreeRow>({
         roots: ROOTS,
         getRootId,
-        getRootLabel,
         getTreeRows,
         selectedId: "b-folder",
         selectedRootId: "root-b",
@@ -76,7 +69,6 @@ describe("useScopedTreeExplorer", () => {
       useScopedTreeExplorer<Root, TreeRow>({
         roots: ROOTS,
         getRootId,
-        getRootLabel,
         getTreeRows,
         defaultSelectedId: "all",
         isSelectedIdValid: hasPseudoSelection,
@@ -100,8 +92,7 @@ describe("useScopedTreeExplorer", () => {
         useScopedTreeExplorer<Root, TreeRow>({
           roots: ROOTS,
           getRootId,
-          getRootLabel,
-          getTreeRows,
+            getTreeRows,
           selectedId,
           onSelectedIdChange,
           defaultSelectedId: "all",
@@ -129,7 +120,6 @@ describe("useScopedTreeExplorer", () => {
       useScopedTreeExplorer<Root, TreeRow>({
         roots: ROOTS,
         getRootId,
-        getRootLabel,
         getTreeRows,
         selectedId: "a-folder",
         onSelectedIdChange,
@@ -152,7 +142,6 @@ describe("useScopedTreeExplorer", () => {
       useScopedTreeExplorer<Root, TreeRow>({
         roots: ROOTS,
         getRootId,
-        getRootLabel,
         getTreeRows,
         defaultSelectedId: "all",
         isSelectedIdValid: hasPseudoSelection,
@@ -164,18 +153,17 @@ describe("useScopedTreeExplorer", () => {
     expect(result.current.selectedRow).toBeUndefined();
   });
 
-  test("keeps an unavailable pinned root until options include it", () => {
+  test("keeps a picked root independently of its option catalogue", () => {
     let roots: readonly Root[] = [ROOTS[0] as Root];
     const { result, rerender } = renderHook(() =>
       useScopedTreeExplorer<Root, TreeRow>({
         roots,
         getRootId,
-        getRootLabel,
         getTreeRows,
       }));
 
     act(() => result.current.setRootId("root-b"));
-    expect(result.current.rootId).toBe("root-a");
+    expect(result.current.rootId).toBe("root-b");
 
     roots = ROOTS;
     rerender();
@@ -187,10 +175,6 @@ describe("useScopedTreeExplorer", () => {
 
 function getRootId(root: Root): string {
   return root.id;
-}
-
-function getRootLabel(root: Root): string {
-  return root.name;
 }
 
 function getTreeRows(rootId: string): readonly TreeRow[] {
@@ -207,7 +191,7 @@ function hasPseudoSelection(
 test("a controlled root survives server search results and reports new selections to its owner", () => {
   const changed = vi.fn();
   const { result, rerender } = renderHook(({ roots, rootId }: { roots: readonly Root[]; rootId: string }) =>
-    useScopedTreeExplorer({ roots, rootId, getRootId, getRootLabel, getTreeRows, onRootIdChange: changed }),
+    useScopedTreeExplorer({ roots, rootId, getRootId, getTreeRows, onRootIdChange: changed }),
     { initialProps: { roots: ROOTS, rootId: "root-b" } });
   rerender({ roots: ROOTS.slice(0, 1), rootId: "root-b" });
   expect(result.current.rootId).toBe("root-b");
@@ -216,4 +200,45 @@ test("a controlled root survives server search results and reports new selection
   expect(result.current.rootId).toBe("root-b");
   rerender({ roots: ROOTS, rootId: "root-a" });
   expect(result.current.rootId).toBe("root-a");
+});
+
+
+test("pending detail retains the selected scope and resolved detail overrides an earlier picker", () => {
+  const { result, rerender } = renderHook(({ selectedRootId, roots }: { selectedRootId: string | null | undefined; roots: readonly Root[] }) =>
+    useScopedTreeExplorer({ roots, selectedRootId, getRootId, getTreeRows }),
+  { initialProps: { selectedRootId: undefined as string | null | undefined, roots: ROOTS } });
+  act(() => result.current.setRootId("root-b"));
+  act(() => result.current.setSelectedId("b-folder"));
+  rerender({ selectedRootId: null, roots: [] });
+  expect(result.current.rootId).toBe("root-b");
+  expect(result.current.selectedId).toBe("b-folder");
+  rerender({ selectedRootId: "root-b", roots: [] });
+  expect(result.current.selectedId).toBe("b-folder");
+  rerender({ selectedRootId: null, roots: ROOTS });
+  rerender({ selectedRootId: "root-a", roots: ROOTS });
+  expect(result.current.rootId).toBe("root-a");
+  expect(result.current.selectedId).toBeUndefined();
+});
+
+test("a pending direct link defers its initial root while a list seeds only once", () => {
+  const { result, rerender } = renderHook(({ selectedRootId, roots }: { selectedRootId: string | null | undefined; roots: readonly Root[] }) =>
+    useScopedTreeExplorer({ roots, selectedRootId, getRootId, getTreeRows }),
+  { initialProps: { selectedRootId: null as string | null | undefined, roots: ROOTS } });
+  expect(result.current.rootId).toBe("");
+  rerender({ selectedRootId: "root-b", roots: [] });
+  expect(result.current.rootId).toBe("root-b");
+  rerender({ selectedRootId: undefined, roots: ROOTS.slice(0, 1) });
+  expect(result.current.rootId).toBe("root-b");
+});
+
+test("controlled empty root remains explicit and picking the same root does not reset selection", () => {
+  const changed = vi.fn();
+  const { result, rerender } = renderHook(({ rootId }: { rootId: string }) =>
+    useScopedTreeExplorer({ roots: ROOTS, rootId, getRootId, getTreeRows, selectedId: "a-folder", onSelectedIdChange: changed }),
+  { initialProps: { rootId: "root-a" } });
+  act(() => result.current.setRootId("root-a"));
+  expect(changed).not.toHaveBeenCalled();
+  rerender({ rootId: "" });
+  expect(result.current.rootId).toBe("");
+  expect(result.current.treeRows).toEqual([]);
 });

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Angee Models"
+  short_description: "Build or change a Django model in an Angee addon."
+  default_prompt: "Use $angee-models to build or change this Django model in its Angee addon."
+policy:
+  allow_implicit_invocation: false

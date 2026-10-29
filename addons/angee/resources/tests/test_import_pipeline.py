@@ -12,9 +12,10 @@ from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import models, transaction
 from django.db.models.fields import NOT_PROVIDED
+from rebac import system_context
 from rebac.models import active_relationship_model
 
-from angee.base.models import AngeeModel
+from angee.base.models.base import AngeeModel
 from angee.resources.entries import ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.models import Resource
@@ -152,7 +153,8 @@ def test_native_import_pipeline_rolls_back_all_groups_grants_and_hooks(
             assert PipelineTag._base_manager.count() == 0
             assert PipelineItem._base_manager.count() == 0
             assert PipelineItem.tags.through.objects.count() == 0
-            assert PipelineLedger.objects.count() == 0
+            with system_context(reason="test.resources.ledger_observation"):
+                assert PipelineLedger.objects.count() == 0
             assert not user_model._base_manager.filter(username="pipeline-user").exists()
             assert relationships.count() == relationship_count
             assert "committed" not in events
@@ -203,7 +205,8 @@ def test_native_import_pipeline_rolls_back_all_groups_grants_and_hooks(
 
         loaded = PipelineLedger.objects.load_addons((owner,), tiers=["master"])
         assert loaded.created == 4
-        assert PipelineLedger.objects.count() == 3
+        with system_context(reason="test.resources.ledger_observation"):
+            assert PipelineLedger.objects.count() == 3
         assert PipelineItem.tags.through.objects.count() == 1
         assert relationships.count() == relationship_count + 1
         assert events == ["hook", "committed"]

@@ -16,8 +16,9 @@ from typing import Any
 
 from hatch_angee import discover
 
+from angee.build import ProjectBuildContract
 from angee.compose.composer import Composer
-from angee.conf import ProjectContract, prepend_import_paths
+from angee.conf import prepend_import_paths
 from angee.project import PROJECT_DIR_ENV
 
 # Types of composer/autoconfig-owned settings published below. Their values
@@ -31,7 +32,7 @@ CELERY_TASK_TIME_LIMIT: int
 _SOURCE_ROOT = Path(__file__).resolve().parents[1]
 if os.environ.get(PROJECT_DIR_ENV):
     _project: dict[str, Any] = {}
-    ProjectContract(_project).load()
+    ProjectBuildContract(_project).load()
     _ADDON_DIRS = _project["ANGEE_ADDON_DIRS"]
     _ROOT_APPS = _project["INSTALLED_APPS"]
     _CACHE_ROOT = Path(_project["BASE_DIR"]) / ".mypy_cache"
@@ -54,6 +55,6 @@ _NAMESPACE = runpy.run_module(
 )
 _NAMESPACE = {name: value for name, value in _NAMESPACE.items() if name.isupper() and not name.startswith("_")}
 prepend_import_paths(_ADDON_DIRS)
-Composer(_NAMESPACE).compose_settings()
 _NAMESPACE["INSTALLED_APPS"].append("tests.typing_host.TypingHostConfig")
+Composer(_NAMESPACE).compose_settings(compose_config="angee.build.ProjectBuildConfig")
 globals().update(_NAMESPACE)

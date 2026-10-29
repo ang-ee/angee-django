@@ -1,0 +1,6 @@
+interface:
+  display_name: "Jobs Tasks"
+  short_description: "Author an addon's Celery tasks, dispatch and beat schedule."
+  default_prompt: "Use $jobs-tasks to add or change a Celery task, its enqueue call or its beat entry in an Angee addon."
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,30 @@
+import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
+import { lazyRouteComponent } from "@tanstack/react-router";
+
+import {
+  en{{ addon_title | replace(" ", "") }}Messages,
+} from "./i18n";
+
+const addon = defineBaseAddon({
+  id: "{{ addon_id }}",
+  // The route claims the canonical `<label>.<Model>` resource label: durable
+  // manifests never store a bare model name.
+  routes: resourcePageRoutes(
+    "{{ addon_id }}.{{ model_name | lower }}",
+    "{{ route_path }}",
+    lazyRouteComponent(() => import("./views/{{ model_name }}Page"), "{{ model_name }}Page"),
+    "{{ addon_id }}.{{ model_name }}",
+  ),
+  menus: {
+    "{{ addon_id }}": {
+      label: "{{ addon_title }}",
+      icon: "file",
+      route: "{{ addon_id }}.{{ model_name | lower }}",
+    },
+  },
+  i18n: {
+    "{{ addon_id }}": en{{ addon_title | replace(" ", "") }}Messages,
+  },
+});
+
+export default addon;

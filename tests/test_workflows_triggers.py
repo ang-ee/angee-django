@@ -14,8 +14,8 @@ from rebac.actors import is_sudo
 from rebac.models import active_relationship_model
 from rebac.relationships import delete_relationship
 
-from angee.base.implementations import impl_choices_enum
-from angee.base.models import row_lock_paths
+from angee.base.fields.implementation import impl_choices_enum
+from angee.base.querysets import row_lock_paths
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.node import AngeeNode
@@ -536,7 +536,7 @@ def test_recursive_and_non_opted_models_are_refused(trigger_setup, model_label):
 def test_resource_condition_rejects_field_gated_reads(execution):
     """The compiler uses the resource catalogue, which excludes read__error fields."""
     owner = GraphQLSchemas([make_addon(schemas=workflow_schema.schemas)])
-    with pytest.raises(ValidationError, match="error.*not defined"):
+    with pytest.raises(ValidationError, match="unknown field 'error'"):
         owner.resource_filter(StepAttempt, {"error": {"_eq": "hidden"}})
 
 

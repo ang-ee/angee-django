@@ -29,7 +29,7 @@ from rebac.schema import parse_zed
 from rebac.testing import install_schema
 from strawberry import auto
 
-from angee.base.models import AngeeDataModel
+from angee.base.models.base import AngeeDataModel
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import (
     _declared_aliases,

@@ -42,7 +42,7 @@ from mypy_django_plugin.lib import fullnames, helpers
 from mypy_django_plugin.main import NewSemanalDjangoPlugin
 from mypy_django_plugin.transformers.managers import create_new_manager_class_from_from_queryset_method
 
-from angee.compose.yamlconf import setting_name, setting_sources
+from angee.utils.yamlconf import setting_name, setting_sources
 
 if TYPE_CHECKING:
     from mypy.checker import TypeChecker
@@ -116,6 +116,11 @@ class CompositionContext(DjangoContext):
     def get_model_class_by_fullname(self, fullname: str) -> type[models.Model] | None:
         return self.composed.get(fullname) or super().get_model_class_by_fullname(fullname)
 
+    def is_fallback_manager(self, manager: models.Manager[models.Model]) -> bool:
+        """Identify Django's implicit manager; host adapters extend native markers."""
+
+        return manager.auto_created
+
     def get_model_manager(
         self, api: TypeChecker | SemanticAnalyzer, model_cls: type[models.Model],
         name: Literal["_default_manager", "_base_manager"],
@@ -123,7 +128,7 @@ class CompositionContext(DjangoContext):
         """Inherit checked parent managers only where Django marks a fallback."""
         manager = super().get_model_manager(api, model_cls, name)
         parent = self.required_parents.get(model_cls)
-        if parent is None or manager is None or not manager.auto_created:
+        if parent is None or manager is None or not self.is_fallback_manager(manager):
             return manager
         info = self.lookup_model_typeinfo(api, model_cls)
         if info is None:
@@ -139,18 +144,19 @@ class CompositionContext(DjangoContext):
         if selected is None:
             return manager
         override = model_cls._meta.managers_map.get(selected.name)
-        return override if override is not None and not override.auto_created else selected
+        return override if override is not None and not self.is_fallback_manager(override) else selected
 
 
 class CompositionPlugin(NewSemanalDjangoPlugin):
     """Extend the native Django plugin with build-time composition declarations."""
 
     django_context: CompositionContext
+    context_class: type[CompositionContext] = CompositionContext
     default_settings_module: str | None = None
 
     def __init__(self, options: Options) -> None:
         super().__init__(options)
-        self.django_context = CompositionContext(self.plugin_config.django_settings_module)
+        self.django_context = self.context_class(self.plugin_config.django_settings_module)
 
     def get_additional_deps(self, file: MypyFile) -> list[tuple[int, str, int]]:
         dependencies = super().get_additional_deps(file)

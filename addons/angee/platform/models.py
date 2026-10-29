@@ -31,7 +31,8 @@ from rebac import system_context
 
 from angee.addons import addon_manifest, resolve_manifest_roots
 from angee.base.fields.state import StateField
-from angee.base.models import AngeeManager, AngeeModel
+from angee.base.managers import AngeeManager
+from angee.base.models.base import AngeeModel
 from angee.platform import composed
 from angee.platform.discovery import available_addons, resolve_app_config
 from angee.platform.installer import (

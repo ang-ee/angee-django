@@ -19,7 +19,7 @@ from import_export.results import RowResult
 from rebac import system_context
 
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceModel, InferenceProvider
-from angee.base.models import StateTransitions
+from angee.base.models.transitions import StateTransitions
 from angee.resources.entries import ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.loader import AngeeResource, build_resource

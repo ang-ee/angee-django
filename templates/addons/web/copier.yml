@@ -7,32 +7,62 @@ _angee:
   kind: addon
   name: web
   description: >-
-    Frontend package scaffold for an Angee addon. It emits the post-refactor
-    shape: `defineBaseAddon`, `resourcePageRoutes`, namespace-relative i18n via
-    `createNamespaceT`, `expectValidBaseAddon` tests, and the shared
-    package/tsconfig/vitest wiring.
+    Complete source-addon scaffold, rendered into `addons/<namespace>/<label>/`:
+    `addon.toml`, one abstract source model on `AngeeDataModel` with its
+    field-backed ownership gate in `permissions.zed`, the console resource in
+    `schema.py`, a demo resource row and one per-actor visibility test. The test
+    runs on the host `test_host` selects: `composed` (the default, a consumer
+    addon reading its runtime model through `apps.get_model` from its own
+    `tests/` package) or `bare` (a framework addon: the concrete
+    `testing/models.py` the bare test host registers, plus `test_<label>.py` at
+    the addon root to move into the framework repository's `tests/`, the only
+    path its pytest collects). With `include_web` it adds the frontend package:
+    `defineBaseAddon`, `resourcePageRoutes` on the canonical `<label>.<Model>`
+    resource label, namespace-relative i18n via `createNamespaceT`,
+    `expectValidBaseAddon` tests, and the shared package/tsconfig/vitest wiring.
+    The operator does not render addon templates; render with Copier and then
+    wire the host with `angee-project`.
 
 addon_id:
   type: str
   default: notes
-  help: Stable addon id and i18n namespace, e.g. notes or contacts.
+  help: Addon folder name, Django app label, REBAC package and i18n namespace, e.g. notes or contacts.
+
+addon_name:
+  type: str
+  default: "example.{{ addon_id }}"
+  help: Dotted Python package name (== AppConfig.name), e.g. acme.notes for addons/acme/notes.
 
 addon_title:
   type: str
   default: Notes
   help: Human menu label for the addon.
 
+model_name:
+  type: str
+  default: Note
+  help: Class name of the addon's first source model, e.g. Note; the route claims the `<label>.<Model>` resource.
+
 route_path:
   type: str
   default: "/notes"
   help: Console route path for the addon's main collection page.
 
-resource_name:
+test_host:
   type: str
-  default: Note
-  help: Refine/resource model name claimed by the collection route.
+  default: composed
+  choices:
+    - composed
+    - bare
+  help: Host the rendered test runs on — composed (consumer addon, apps.get_model on the composed host, test under the addon's tests/) or bare (framework addon, concrete testing/models.py registered in the bare test host, test_<label>.py to move into the repository's tests/).
+
+include_web:
+  type: bool
+  default: true
+  help: Render the web fragment (web/) and depend on angee.web.
 
 package_name:
   type: str
   default: "@angee/{{ addon_id }}"
+  when: "{{ include_web }}"
   help: npm package name for this addon's web package.

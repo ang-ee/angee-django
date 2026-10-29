@@ -25,8 +25,8 @@ from rebac import (
 )
 from rebac.models import active_relationship_model
 
-from angee.base.build import apply_schema_paths, extension_source_map
-from angee.base.testing.permissions import installed_field_owners
+from angee.base.build import extension_source_map
+from angee.base.testing.permissions import emit_permissions, installed_field_owners
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.node import AngeeNode
@@ -34,7 +34,6 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.messaging.testing.models import Channel, Message, Person, Thread, ThreadAttachment
 from angee.projects.testing.models import Project, ProjectBinding, Task
 from angee.spaces.testing.models import Group, Membership
-from angee.utils.files import write_atomic
 from tests.conftest import (
     Backend,
     Drive,
@@ -174,9 +173,7 @@ def project_access_schema(tmp_path: Path, transactional_db: None) -> Any:
     originals = {config: getattr(config, "rebac_schema", None) for config in configs}
     sources = extension_source_map(configs, field_owners=installed_field_owners(configs))
     runtime = tmp_path / "project-access-runtime"
-    for relative, source in sources.items():
-        write_atomic(runtime / relative, source)
-    apply_schema_paths(configs, runtime, sources=sources)
+    emit_permissions(configs, runtime, sources=sources)
     call_command("rebac", "sync", verbosity=0)
     try:
         yield

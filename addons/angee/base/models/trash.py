@@ -17,9 +17,10 @@ from rebac import (
     current_actor,
 )
 
-from angee.base.models.identity import auto_now_stamps, update_fields_with_auto_now
+from angee.base.models.persistence import PersistenceMixin
+from angee.base.models.timestamps import auto_now_stamps, update_fields_with_auto_now
 from angee.base.permissions import actor_user_id, instance_actor
-from angee.base.querysets import CanonicalQuerySet, SystemQuerysetMixin, by_key
+from angee.base.querysets import CanonicalQuerySet, by_key
 from angee.base.signals import bulk_updated
 from angee.serialization import strip_null_bytes
 
@@ -86,7 +87,7 @@ def clean_trash_reason(reason: Any) -> str:
     return text
 
 
-class TrashMixin(SystemQuerysetMixin, models.Model):
+class TrashMixin(PersistenceMixin, models.Model):
     """Soft-remove ("trash") a row while keeping it, with who, when and why.
 
     Trash is removal, distinct from archival (:class:`ArchiveMixin`): nothing is

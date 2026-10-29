@@ -43,11 +43,9 @@ from rebac.actors import current_sudo_reason, is_sudo
 import angee.spaces.testing.models  # noqa: F401 -- register related models before native database setup
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
 from angee.agents.testing.models import Agent
-from angee.base.models import (
-    AngeeModel,
-    AuditMixin,
-    SqidMixin,
-)
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeModel
+from angee.base.models.identity import SqidMixin
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
@@ -758,7 +756,10 @@ def test_threaded_model_toggles_message_reaction(composed_tables: None) -> None:
     assert reaction.handle.value == "reactor@example.com"
     assert reaction.handle.controller_id == user.pk
     person = Person._base_manager.get(user=user)
-    link = Party.statements.get(handle=reaction.handle, subject=person)
+    link = (
+        Party.statements.sudo(reason="test.messaging.statement_observation")
+        .get(handle=reaction.handle, subject=person)
+    )
     assert link.confidence == 1.0
     assert link.source_kind == "person"
     assert not link.is_confirmed
@@ -766,7 +767,11 @@ def test_threaded_model_toggles_message_reaction(composed_tables: None) -> None:
     with system_context(reason="test threaded model reaction remove"):
         ticket.message_reaction(message, reaction="👍", user=user)
     assert not Reaction._base_manager.filter(message=message).exists()
-    assert Party.statements.filter(handle=reaction.handle, subject=person).count() == 1
+    assert (
+        Party.statements.sudo(reason="test.messaging.statement_observation")
+        .filter(handle=reaction.handle, subject=person)
+        .count()
+    ) == 1
 
     with system_context(reason="test threaded model reaction guard"):
         with pytest.raises(ValueError, match="Message does not belong to this record thread."):
@@ -1853,7 +1858,10 @@ def test_ingest_autolinks_sender_from_resolved_normalized_twin(channel: Any) -> 
         external_id="normalized-sender-1",
         value="alice+inbound@gmail.com",
     )
-    link = Party.statements.filter(handle=sender, subject=alice).first()
+    link = (
+        Party.statements.sudo(reason="test.messaging.statement_observation")
+        .filter(handle=sender, subject=alice).first()
+    )
 
     assert link is not None
     sender.refresh_from_db()
@@ -1874,7 +1882,7 @@ def test_ingest_leaves_unknown_first_contact_sender_unresolved(channel: Any) -> 
     )
 
     assert sender.party_id is None
-    assert not Party.statements.filter(handle=sender).exists()
+    assert not Party.statements.sudo(reason="test.messaging.statement_observation").filter(handle=sender).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1936,7 +1944,7 @@ def test_ingest_retries_unknown_sender_after_late_twin_without_duplicate_links(c
         value="alice+late@gmail.com",
     )
     assert sender.party_id is None
-    assert not Party.statements.filter(handle=sender).exists()
+    assert not Party.statements.sudo(reason="test.messaging.statement_observation").filter(handle=sender).exists()
 
     with system_context(reason="test ingest late sender evidence"):
         owner = channel.owner
@@ -1957,7 +1965,11 @@ def test_ingest_retries_unknown_sender_after_late_twin_without_duplicate_links(c
     retried.refresh_from_db()
     assert retried.pk == sender.pk
     assert retried.party_id == alice.pk
-    assert Party.statements.filter(handle=retried, subject=alice).count() == 1
+    assert (
+        Party.statements.sudo(reason="test.messaging.statement_observation")
+        .filter(handle=retried, subject=alice)
+        .count()
+    ) == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1979,7 +1991,10 @@ def test_ingest_keeps_dismissed_sender_suggestion_dismissed(channel: Any) -> Non
         external_id="dismissed-sender-1",
         value="alice+dismissed@gmail.com",
     )
-    dismissed = Party.statements.filter(handle=sender, subject=alice).first()
+    dismissed = (
+        Party.statements.sudo(reason="test.messaging.statement_observation")
+        .filter(handle=sender, subject=alice).first()
+    )
     assert dismissed is not None
     with actor_context(owner):
         dismissed = dismissed.dismiss()
@@ -1997,7 +2012,11 @@ def test_ingest_keeps_dismissed_sender_suggestion_dismissed(channel: Any) -> Non
     assert dismissed.is_dismissed
     assert not dismissed.is_confirmed
     assert sender.party_id is None
-    assert Party.statements.filter(handle=sender, subject=alice).count() == 2
+    assert (
+        Party.statements.sudo(reason="test.messaging.statement_observation")
+        .filter(handle=sender, subject=alice)
+        .count()
+    ) == 2
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2017,7 +2036,10 @@ def test_ingest_suggests_sender_from_organization_domain(channel: Any) -> None:
         external_id="organization-sender-1",
         value="bob@acme.example",
     )
-    link = Party.statements.filter(handle=sender, subject=acme).first()
+    link = (
+        Party.statements.sudo(reason="test.messaging.statement_observation")
+        .filter(handle=sender, subject=acme).first()
+    )
 
     assert link is not None
     sender.refresh_from_db()

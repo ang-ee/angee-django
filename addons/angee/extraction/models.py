@@ -12,7 +12,10 @@ from django.db import models
 
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
-from angee.base.models import AngeeDataModel, AngeeModel, AppendOnlyModel, AuditMixin, DerivedFrom
+from angee.base.models.append_only import AppendOnlyModel
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel, AngeeModel
+from angee.base.models.derived import DerivedFrom
 from angee.base.refs import RecordRef
 from angee.extraction.contracts import (
     CorrectionRef,

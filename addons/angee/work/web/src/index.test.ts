@@ -1,8 +1,11 @@
+import { composeAddons } from "@angee/app";
 import { expectValidBaseAddon } from "@angee/app/testing";
 import { createRouteHref } from "@angee/ui";
 import { describe, expect, test } from "vitest";
 
 import work, { QUEUE_MODEL } from "./index";
+
+const declaredMenus = composeAddons([{ id: work.id, menus: work.menus, routes: work.routes }], { canonicalModelLabel: (model) => model }).menuComposition.logical;
 
 describe("work addon manifest", () => {
   test("satisfies rendered-addon invariants", () => {
@@ -82,7 +85,7 @@ describe("work addon manifest", () => {
   });
 
   test("registers one place, task extensions, and every work glyph", () => {
-    expect(work.menus?.[0]?.children?.map((item) => item.route)).toEqual([
+    expect(declaredMenus?.[0]?.children?.map((item) => item.route)).toEqual([
       "work.queues",
       "work.triage-hub",
       "work.boards-hub",

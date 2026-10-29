@@ -94,6 +94,10 @@ Before source edits for a structural change, refactor, new view, addon,
 integration, model, or shared primitive, make these checks explicit in a working
 note, plan, or user update:
 
+The gate's procedure is the `angee-design` skill
+(`.agents/skills/angee-design/SKILL.md`) and its owner index; the enforcement
+map is `.agents/CONSTITUTION.md`.
+
 - **Owner map:** name the owner of every fact being encoded. Reuse it or extend
   its missing behavior. Create an owner only when none exists at the right level.
 - **Reuse evidence:** search at least two nearby addons/packages for the same
@@ -137,6 +141,7 @@ rules for editing the template source.
 | [Checks](docs/checks.md) | Command context, prerequisites, verification, and actual CI coverage | Before running checks or handing off |
 | [Composer](docs/composer.md) | Composition flow and links to implementing owners | Changing composition or generated artifacts |
 | [Agent methodology](.agents/README.md) | Reusable workflows and their tool adapters | Using or changing an agent workflow |
+| [Constitution map](.agents/CONSTITUTION.md) | Which skill, check or reviewer enforces each constitution rule | Before structural work; when adding a skill or check |
 
 These links route reading; they do not imply every guide or tool definition has
 already been loaded. Read the relevant owner before acting.
@@ -260,10 +265,12 @@ watchers by hand. The angee operator is the stack's monitoring and management
 service: it is not part of the frontend or backend and keeps running while it
 restarts them, so use it for every restart.
 `angee --root "$angee_root" job run deps --chained-restart` restarts the whole
-application (the restart job is `provision` on instance stacks), and
+application (current instance templates start that chain at `runtime-build`), and
 `angee --root "$angee_root" restart <service>...` restarts single services. Apply
 dependency changes with the whole-application restart; never `uv sync` the stack's
-venv while the stack runs.
+venv while the stack runs. Existing stacks retain their rendered job names until
+their templates are updated; inspect the controlling `angee.yaml` before choosing
+the dependency-chain entrypoint.
 [Restart the running stack](docs/howto/getstarted.md#restart-the-running-stack)
 has the details and the operator API. One-shot management commands use the stack
 host's `manage.py`.
@@ -275,8 +282,10 @@ Never `git checkout` or `git switch` inside a pinned workspace slot.
 
 Durable project knowledge is checked in, not held only in private agent memory.
 
-- **Principles and pitfalls:** extend the owning `docs/` guide with a terse rule
-  and an owner link. Exact API details belong beside the implementing code.
+- **Principles, pitfalls and procedures:** an invariant or contract extends the
+  owning `docs/` guide with a terse rule and an owner link; a pitfall or
+  procedure goes to the owning skill's `references/` file; a command goes to
+  `docs/checks.md`. Exact API details belong beside the implementing code.
 - **Shared methodology:** reviewer prompts, skills, commands, and workflows live
   in public `.agents/`; private task history does not.
 - **Private work-state:** resolve the current workspace through the workspace

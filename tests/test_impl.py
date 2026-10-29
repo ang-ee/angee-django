@@ -14,13 +14,12 @@ from django.test import override_settings
 from django.test.utils import isolate_apps
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer, field_validator
 
-from angee.base.fields.implementation import ImplClassField
+from angee.base.fields.implementation import ImplClassField, impl_choices_enum
 from angee.base.implementations import (
     ImplBase,
     ImplChoice,
     check_impl_registry,
     impl_choices,
-    impl_choices_enum,
     resolve_all_impl_classes,
     resolve_impl_class,
 )
@@ -30,7 +29,7 @@ from angee.hooks import resolve_hook, resolve_hooks
 from angee.integrate_github.backend import GitHubBackend
 from angee.integrate_vcs.backend import LocalVCSBackend
 from angee.storage.backends import LocalBackend, StorageBackend
-from tests.conftest import Integration, OAuthClient, VcsBridge
+from tests.conftest import OAuthClient, VcsBridge
 from tests.tables import model_tables
 
 
@@ -136,7 +135,6 @@ def test_hooks_resolve_optional_single_and_declared_list_order() -> None:
         assert resolve_hook("ANGEE_TEST_HOOK") is len
     with override_settings(ANGEE_TEST_HOOKS=["builtins.sorted", "builtins.len", "builtins.sorted"]):
         assert resolve_hooks("ANGEE_TEST_HOOKS") == (sorted, len, sorted)
-        assert resolve_hooks("ANGEE_TEST_HOOKS", sorted_unique=True) == (len, sorted)
 
 
 @pytest.mark.parametrize("path", ["builtins.MissingHook", "builtins.Ellipsis"])
@@ -197,8 +195,7 @@ def test_impl_registry_and_field_collect_every_registry_fault() -> None:
     assert isinstance(faults[2], ImproperlyConfigured)
 
     field = ImplClassField(_BaseImpl)
-    assert [error.id for error in field.check()] == ["angee.E032"]
-    errors = check_impl_registry(_BaseImpl, obj=field)
+    errors = field.check()
     assert [error.id for error in errors] == ["angee.E003", "angee.E004", "angee.E004"]
     assert all(error.obj is field for error in errors)
     assert "MissingImpl" in errors[0].msg
@@ -215,7 +212,7 @@ def test_rowless_registry_checks_config_form_declarations() -> None:
     assert [error.id for error in errors] == ["angee.E005"]
     assert "config.headers" in errors[0].msg
     field = ImplClassField(_BaseImpl)
-    assert [error.id for error in field.check()] == ["angee.E032"]
+    assert [error.id for error in field.check()] == ["angee.E005"]
 
 
 @override_settings(ANGEE_TEST_IMPLS=["not a registry"])
@@ -250,7 +247,8 @@ def test_rowless_choices_share_field_metadata_and_order() -> None:
     field = ImplClassField(_BaseImpl)
     choices = impl_choices(_BaseImpl)
 
-    assert choices == field.impl_choices() == [_BaseImpl.choice(), _TypedConfigImpl.choice()]
+    assert tuple(choice.key for choice in choices) == field.registered_keys()
+    assert choices == [_BaseImpl.choice(), _TypedConfigImpl.choice()]
 
 
 @override_settings(ANGEE_ENUM_TEST_CLASSES={"base": "tests.test_impl._EnumImpl"})
@@ -286,7 +284,6 @@ def test_native_impl_field_uses_its_registry_key() -> None:
     assert field.check() == []
     assert (
         impl_choices(StorageBackend)
-        == field.impl_choices()
         == [ImplChoice(key="local", label="local", icon="", category="", defaults={}, config_schema=None)]
     )
 
@@ -319,13 +316,6 @@ def test_historical_impl_field_loads_when_its_registry_was_renamed() -> None:
     assert "choices" not in reconstructed.deconstruct()[3]
     assert reconstructed.deconstruct()[3]["registry_setting"] == "ANGEE_RENAMED_IMPLS"
 
-
-def test_impl_field_resolves_its_declared_model_field() -> None:
-    """The field owner resolves declarations through Django model metadata."""
-
-    with pytest.raises(FieldDoesNotExist, match="Integration.lifecycle is not an ImplClassField"):
-        ImplClassField.for_model(Integration, "lifecycle")
-    assert not hasattr(Integration, "_impl_field")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -551,7 +541,7 @@ def test_no_model_config_parser_rejects_values_without_changing_untyped_rows() -
 
     raw = {"arbitrary": ["retained"]}
     bridge = VcsBridge(backend_class="stub", config=raw)
-    impl = ImplClassField.for_model(VcsBridge, "backend_class").resolve_class("stub")
+    impl = VcsBridge._meta.get_field("backend_class").resolve_class("stub")
     assert impl.config_model is None
     bridge.validate_impl_configs()
     assert bridge.config is raw

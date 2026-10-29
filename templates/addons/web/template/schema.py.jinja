@@ -1,0 +1,48 @@
+"""GraphQL schema contributions for {{ addon_title | lower }}."""
+
+from __future__ import annotations
+
+import strawberry_django
+from django.apps import apps
+from strawberry import auto
+
+from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
+from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
+
+{{ model_name }} = apps.get_model("{{ addon_id }}", "{{ model_name }}")
+
+
+@strawberry_django.type({{ model_name }})
+class {{ model_name }}Type(AngeeNode):
+    """GraphQL projection of one {{ model_name | lower }}."""
+
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name, only=["title"], description=NODE_DISPLAY_NAME_DESCRIPTION
+    )
+    title: auto
+    body: auto
+    created_at: auto
+    updated_at: auto
+
+
+_{{ model_name | upper }}_RESOURCE = hasura_model_resource(
+    {{ model_name }}Type,
+    model={{ model_name }},
+    name="{{ addon_id }}",
+    filterable=["id", "title", "updated_at"],
+    sortable=["title", "updated_at", "created_at"],
+    aggregatable=["id"],
+    groupable=["updated_at"],
+    writable=["title", "body"],
+    write_backend=AngeeHasuraWriteBackend({{ model_name }}),
+    id_column="sqid",
+)
+
+
+schemas = {
+    "console": {
+        "query": [_{{ model_name | upper }}_RESOURCE.query],
+        "mutation": [_{{ model_name | upper }}_RESOURCE.mutation],
+        "types": [{{ model_name }}Type, *_{{ model_name | upper }}_RESOURCE.types],
+    },
+}

@@ -5,6 +5,9 @@ from __future__ import annotations
 import importlib
 import runpy
 import sys
+from collections.abc import Iterator
+from importlib.machinery import PathFinder
+from importlib.util import module_from_spec
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -14,13 +17,15 @@ import pytest
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 
-from angee.compose.autoconfig import AutoConfig
+from angee.build import ProjectBuildContract
 from angee.compose.composer import Composer
-from angee.conf import ProjectContract, prepend_import_paths
+from angee.conf import prepend_import_paths
 from angee.project import PROJECT_DIR_ENV, find_project_dir, project_dir
+from angee.utils.autoconfig import AutoConfig
 
 BASE_APP = "angee.base.apps.BaseConfig"
 GRAPHQL_APP = "angee.graphql.apps.GraphQLConfig"
+RESOURCES_APP = "angee.resources.apps.ResourcesConfig"
 
 
 def _installed_paths(installed_apps: list[object]) -> list[str]:
@@ -45,9 +50,49 @@ def _compose(tmp_path: Path) -> dict[str, Any]:
         "INSTALLED_APPS": _default_installed_apps(tmp_path, ("example.notes",)),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
     Composer(settings).compose_settings()
     return settings
+
+
+@pytest.fixture(autouse=True)
+def _generated_project_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Use the real settings artifact producer for settings-only contract cases."""
+
+    package = tmp_path / "generated" / "_settings_contract_fixture"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "settings.py").write_text("", encoding="utf-8")
+    (package / "settings.yaml").write_text("{}\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(package.parent))
+    for name in ("_settings_contract_fixture.settings", "_settings_contract_fixture"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    importlib.import_module("_settings_contract_fixture")
+    yield
+    for name in ("_settings_contract_fixture.settings", "_settings_contract_fixture"):
+        sys.modules.pop(name, None)
+
+
+def _load_project_settings_artifact() -> ModuleType:
+    """Build the real wiring for this case's authored source, then import it."""
+
+    from angee.build import ProjectSettings
+
+    root = project_dir()
+    package = importlib.import_module("_settings_contract_fixture")
+    output = Path(package.__file__).parent
+    settings_file = output / "settings.py"
+    namespace = {}
+    ProjectBuildContract(namespace).compose(root=root, runtime_dir=output, error_reporting=False)
+    for relative, source in ProjectSettings.project_sources(
+        tuple(namespace["INSTALLED_APPS"]), runtime_dir=output, namespace=namespace,
+    ).items():
+        (output / relative).write_text(source, encoding="utf-8")
+    Path(importlib.util.cache_from_source(str(settings_file))).unlink(missing_ok=True)
+    importlib.invalidate_caches()
+    module_name = "_settings_contract_fixture.settings"
+    existing = sys.modules.get(module_name)
+    return importlib.reload(existing) if existing is not None else importlib.import_module(module_name)
 
 
 def _default_installed_apps(tmp_path: Path, roots: tuple[str, ...]) -> tuple[str, ...]:
@@ -110,15 +155,15 @@ def test_resources_root_expands_framework_dependencies(tmp_path: Path) -> None:
         "INSTALLED_APPS": _default_installed_apps(tmp_path, ("angee.resources",)),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
     Composer(settings).compose_settings()
     installed = _installed_paths(settings["INSTALLED_APPS"])
 
-    compose_at = installed.index("angee.compose.apps.ComposeConfig")
+    compose_at = installed.index("angee.apps.AngeeConfig")
     base_at = installed.index(BASE_APP)
-    resources_at = installed.index("angee.resources")
+    resources_at = installed.index(RESOURCES_APP)
 
-    assert compose_at < base_at < resources_at
+    assert base_at < resources_at < compose_at
     assert GRAPHQL_APP not in installed
     assert "angee.iam.apps.IAMConfig" not in installed
     assert "REBAC_UNIVERSAL_ADMIN_ROLE" not in settings
@@ -135,10 +180,10 @@ def test_iam_user_is_the_default_auth_model(tmp_path: Path) -> None:
     settings = _compose(tmp_path)
     installed = _installed_paths(settings["INSTALLED_APPS"])
 
-    assert "angee.compose.apps.ComposeConfig" in installed
+    assert "angee.apps.AngeeConfig" in installed
     assert BASE_APP in installed
     assert GRAPHQL_APP in installed
-    assert "angee.resources" in installed
+    assert RESOURCES_APP in installed
     assert settings["AUTH_USER_MODEL"] == "iam.User"
     assert "angee.iam.apps.IAMConfig" in installed
 
@@ -166,7 +211,7 @@ def test_iam_admin_role_default_preserves_project_policy(
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
         **overrides,
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
     Composer(settings).compose_settings()
 
     assert settings["REBAC_UNIVERSAL_ADMIN_ROLE"] == expected
@@ -231,14 +276,14 @@ def test_addons_are_sorted_by_declared_dependencies(tmp_path: Path) -> None:
     settings = _compose(tmp_path)
     installed = _installed_paths(settings["INSTALLED_APPS"])
 
-    compose_at = installed.index("angee.compose.apps.ComposeConfig")
+    compose_at = installed.index("angee.apps.AngeeConfig")
     base_at = installed.index(BASE_APP)
     graphql_at = installed.index(GRAPHQL_APP)
     iam_at = installed.index("angee.iam.apps.IAMConfig")
-    resources_at = installed.index("angee.resources")
+    resources_at = installed.index(RESOURCES_APP)
     notes_at = installed.index("example.notes")
 
-    assert compose_at < base_at < resources_at
+    assert base_at < resources_at < compose_at
     assert base_at < graphql_at < iam_at
     assert resources_at < iam_at
     assert iam_at < notes_at
@@ -251,14 +296,13 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
 
     assert _installed_paths(settings["INSTALLED_APPS"]) == [
         'django_yamlconf',
-        'angee.compose.apps.ComposeConfig',
         'angee.apps.AngeeConfig',
         'django.contrib.contenttypes.apps.ContentTypesConfig',
         'rebac.apps.RebacConfig',
         BASE_APP,
         'channels.apps.ChannelsConfig',
         GRAPHQL_APP,
-        'angee.resources',
+        RESOURCES_APP,
         'angee.web',
         'axes.apps.AppConfig',
         'django.contrib.auth.apps.AuthConfig',
@@ -287,29 +331,26 @@ def test_notes_app_order_is_stable(tmp_path: Path) -> None:
         'angee.projects.apps.ProjectsConfig',
         'angee.workflows.apps.WorkflowsConfig',
         'example.notes',
+        'angee.apps.AngeeConfig',
     ]
 
 
-def test_one_app_set_orders_compose_before_adopters(
+def test_one_app_set_orders_compose_after_source_adopters(
     tmp_path: Path,
 ) -> None:
-    """One app set: the composer emits before base and source addon imports.
-
-    The composer's ``import_models`` renders ``runtime/<label>`` in phase 2; it
-    must run before normal app model imports continue, so it is ordered first.
-    """
+    """The final phase-2 hook imports concrete models after source model hooks."""
 
     settings = _compose(tmp_path)
     installed = _installed_paths(settings["INSTALLED_APPS"])
 
-    assert installed.count("angee.compose.apps.ComposeConfig") == 1
+    assert installed.count("angee.apps.AngeeConfig") == 1
     assert installed.count(BASE_APP) == 1
     assert installed.count(GRAPHQL_APP) == 1
-    assert installed.count("angee.resources") == 1
-    compose_at = installed.index("angee.compose.apps.ComposeConfig")
+    assert installed.count(RESOURCES_APP) == 1
+    compose_at = installed.index("angee.apps.AngeeConfig")
     base_at = installed.index(BASE_APP)
     notes_at = installed.index("example.notes")
-    assert compose_at < base_at < notes_at
+    assert base_at < notes_at < compose_at
     assert "ANGEE_BUILD" not in settings
 
 
@@ -345,7 +386,7 @@ def test_rebac_bare_prefetch_lint_can_be_enabled_by_project(tmp_path: Path) -> N
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
         "REBAC_LINT_BARE_PREFETCH": True,
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
     Composer(settings).compose_settings()
 
     assert settings["REBAC_LINT_BARE_PREFETCH"] is True
@@ -383,7 +424,7 @@ def test_graphql_ide_default_is_debug_only(tmp_path: Path) -> None:
         "COMPOSE_RUNTIME_DIR": tmp_path / "debug-runtime",
         "DEBUG": True,
     }
-    debug_settings["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+    debug_settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
     Composer(debug_settings).compose_settings()
 
     assert debug_settings["ANGEE_GRAPHQL_IDE"] == "graphiql"
@@ -466,7 +507,7 @@ def test_web_statement_timeout_is_declared_with_project_and_environment_override
         monkeypatch.delenv("ANGEE_WEB_STATEMENT_TIMEOUT", raising=False)
     else:
         monkeypatch.setenv("ANGEE_WEB_STATEMENT_TIMEOUT", environment)
-    namespace: dict[str, Any] = {"INSTALLED_APPS": ["angee"]}
+    namespace: dict[str, Any] = {"INSTALLED_APPS": ["angee"], "COMPOSE_ENV_PREFIXES": ("ANGEE_",)}
     if project is not None:
         namespace["ANGEE_WEB_STATEMENT_TIMEOUT"] = project
 
@@ -496,7 +537,7 @@ def test_runtime_settings_makes_runtime_package_importable(
         "INSTALLED_APPS": ("angee.resources",),
         "COMPOSE_RUNTIME_DIR": runtime_dir,
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
     Composer(settings).compose_settings()
 
     assert sys.path[0] == str(runtime_dir.parent)
@@ -510,7 +551,7 @@ def test_runtime_dir_string_matches_normalized_composer_path(tmp_path: Path) -> 
         "INSTALLED_APPS": ("angee.resources",),
         "COMPOSE_RUNTIME_DIR": str(runtime_dir),
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
     Composer(settings).compose_settings()
 
     assert settings["COMPOSE_RUNTIME_DIR"] == runtime_dir
@@ -537,19 +578,17 @@ def test_compose_settings_module_reads_project_runtime(
     monkeypatch.setitem(sys.modules, project.__name__, project)
     monkeypatch.setenv("ANGEE_PROJECT_DIR", str(tmp_path))
 
-    import angee.settings as compose_settings
-
-    compose_settings = importlib.reload(compose_settings)
+    compose_settings = _load_project_settings_artifact()
 
     assert compose_settings.SECRET_KEY == "bridge-secret"
     assert compose_settings.DEBUG is True
     assert compose_settings.ANGEE_DATA_DIR == tmp_path / "data"
-    assert compose_settings.COMPOSE_RUNTIME_DIR == tmp_path / "runtime"
+    assert compose_settings.COMPOSE_RUNTIME_DIR == Path(compose_settings.__file__).resolve().parent
     assert compose_settings.ROOT_URLCONF == "angee.urls"
     assert compose_settings.ASGI_APPLICATION == "angee.asgi.application"
     installed = _installed_paths(compose_settings.INSTALLED_APPS)
-    assert "angee.compose.apps.ComposeConfig" in installed
-    assert "angee.resources" in installed
+    assert "angee.apps.AngeeConfig" in installed
+    assert RESOURCES_APP in installed
     assert not hasattr(compose_settings, "ANGEE_RUNTIME")
 
 
@@ -579,14 +618,12 @@ def test_compose_settings_module_reads_named_project_settings_module(
     monkeypatch.setenv("ANGEE_PROJECT_DIR", str(tmp_path))
     monkeypatch.setenv("ANGEE_PROJECT_SETTINGS", "project.settings")
 
-    import angee.settings as compose_settings
-
-    compose_settings = importlib.reload(compose_settings)
+    compose_settings = _load_project_settings_artifact()
 
     assert compose_settings.SECRET_KEY == "package-secret"
-    assert compose_settings.COMPOSE_RUNTIME_DIR == tmp_path / "runtime"
+    assert compose_settings.COMPOSE_RUNTIME_DIR == Path(compose_settings.__file__).resolve().parent
     installed = _installed_paths(compose_settings.INSTALLED_APPS)
-    assert "angee.resources" in installed
+    assert RESOURCES_APP in installed
 
 
 def test_compose_settings_module_does_not_import_external_settings_module(
@@ -611,9 +648,7 @@ def test_compose_settings_module_does_not_import_external_settings_module(
     monkeypatch.setenv("ANGEE_PROJECT_SETTINGS", "outside_settings")
 
     with pytest.raises(ImproperlyConfigured, match="settings.py or settings.yaml"):
-        import angee.settings as compose_settings
-
-        importlib.reload(compose_settings)
+        _load_project_settings_artifact()
 
     assert not marker.exists()
 
@@ -651,9 +686,7 @@ def test_compose_settings_module_layers_yaml_over_python_settings(
     monkeypatch.delitem(sys.modules, "settings", raising=False)
     monkeypatch.setattr(sys, "argv", [str(manage_py)])
 
-    import angee.settings as compose_settings
-
-    compose_settings = importlib.reload(compose_settings)
+    compose_settings = _load_project_settings_artifact()
 
     assert compose_settings.SECRET_KEY == "yaml-secret"
     assert compose_settings.DEBUG is True
@@ -694,14 +727,12 @@ def test_compose_settings_module_reads_settings_yaml(
     )
     monkeypatch.setattr(sys, "argv", [str(manage_py)])
 
-    import angee.settings as compose_settings
-
-    compose_settings = importlib.reload(compose_settings)
+    compose_settings = _load_project_settings_artifact()
 
     assert compose_settings.SECRET_KEY == "yaml-secret"
     assert compose_settings.BASE_DIR == tmp_path
     assert compose_settings.ANGEE_ADDON_DIRS == (tmp_path / "addons",)
-    assert compose_settings.COMPOSE_RUNTIME_DIR == tmp_path / "generated" / "runtime"
+    assert compose_settings.COMPOSE_RUNTIME_DIR == Path(compose_settings.__file__).resolve().parent
     assert compose_settings.ANGEE_DATA_DIR == tmp_path / "state"
     assert compose_settings.DATABASES["default"]["NAME"] == tmp_path / "state" / "db.sqlite3"
     assert compose_settings.STATIC_URL == "/assets/"
@@ -713,8 +744,8 @@ def test_compose_settings_module_reads_settings_yaml(
     assert sys.path.index(str(tmp_path / "addons")) < sys.path.index(str(tmp_path))
     installed = _installed_paths(compose_settings.INSTALLED_APPS)
     assert "django_yamlconf" in installed
-    assert "angee.resources" in installed
-    assert installed.index("angee.compose.apps.ComposeConfig") < installed.index("angee.resources")
+    assert RESOURCES_APP in installed
+    assert installed.index(RESOURCES_APP) < installed.index("angee.apps.AngeeConfig")
 
 
 def test_prepend_import_paths_refreshes_the_loaded_foundation_package(
@@ -736,6 +767,44 @@ def test_prepend_import_paths_refreshes_the_loaded_foundation_package(
 
     assert angee.__path__[0] == str(addon_portion)
     assert all(path in angee.__path__ for path in foundation_paths)
+
+
+def test_prepend_import_paths_deduplicates_symlinked_namespace_locations(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """One physical addon remains one native Django app location through a symlink."""
+
+    import angee
+
+    installed = tmp_path / "site-packages"
+    addon = installed / "angee" / "cold_namespace"
+    addon.mkdir(parents=True)
+    external_addon = installed / "cold_consumer" / "accounting"
+    external_addon.mkdir(parents=True)
+    linked = tmp_path / "linked-site-packages"
+    linked.symlink_to(installed, target_is_directory=True)
+    distinct = tmp_path / "other-addons" / "angee"
+    distinct.mkdir(parents=True)
+    monkeypatch.setattr(angee, "__path__", [str(linked / "angee"), str(distinct)])
+    monkeypatch.setattr(sys, "path", [str(linked), *sys.path])
+
+    prepend_import_paths((installed, linked))
+    prepend_import_paths((installed,))
+
+    assert angee.__path__ == [str((installed / "angee").resolve()), str(distinct.resolve())]
+    spec = PathFinder.find_spec("angee.cold_namespace", angee.__path__)
+    assert spec is not None
+    config = AppConfig("angee.cold_namespace", module_from_spec(spec))
+    assert Path(config.path) == addon.resolve()
+    assert sum(Path(entry).resolve() == installed.resolve() for entry in sys.path) == 1
+    consumer = PathFinder.find_spec("cold_consumer", sys.path)
+    assert consumer is not None
+    monkeypatch.setitem(sys.modules, "cold_consumer", module_from_spec(consumer))
+    accounting = PathFinder.find_spec("cold_consumer.accounting", consumer.submodule_search_locations)
+    assert accounting is not None
+    consumer_config = AppConfig("cold_consumer.accounting", module_from_spec(accounting))
+    assert Path(consumer_config.path) == external_addon.resolve()
 
 
 def test_compose_settings_module_uses_configured_addon_dirs(
@@ -765,9 +834,7 @@ def test_compose_settings_module_uses_configured_addon_dirs(
     monkeypatch.delitem(sys.modules, "settings", raising=False)
     monkeypatch.setattr(sys, "argv", [str(manage_py)])
 
-    import angee.settings as compose_settings
-
-    compose_settings = importlib.reload(compose_settings)
+    compose_settings = _load_project_settings_artifact()
 
     assert str(addon_dir) in sys.path
     assert "alpha.apps.TestConfig" in _installed_paths(compose_settings.INSTALLED_APPS)
@@ -799,9 +866,7 @@ def test_compose_settings_module_honors_yamlconf_final_file(
     monkeypatch.setattr(sys, "argv", [str(manage_py)])
     monkeypatch.setenv("YAMLCONF_CONFFILE", str(final_settings))
 
-    import angee.settings as compose_settings
-
-    compose_settings = importlib.reload(compose_settings)
+    compose_settings = _load_project_settings_artifact()
 
     assert compose_settings.SECRET_KEY == "final-secret"
     assert "SECRET_KEY" not in compose_settings.ANGEE_PROJECT_YAML_SETTINGS
@@ -836,9 +901,7 @@ def test_compose_settings_module_honors_yamlconf_env(
     monkeypatch.setattr(sys, "argv", [str(manage_py)])
     monkeypatch.setenv("YAMLCONF_SECRET_KEY", "env-secret")
 
-    import angee.settings as compose_settings
-
-    compose_settings = importlib.reload(compose_settings)
+    compose_settings = _load_project_settings_artifact()
 
     assert compose_settings.SECRET_KEY == "env-secret"
 
@@ -870,9 +933,7 @@ def test_compose_settings_module_honors_yamlconf_jsonenv(
     monkeypatch.setenv("YAMLCONF_DEBUG", "false")
     monkeypatch.setenv("YAMLCONF_ALLOWED_HOSTS", '["example.test"]')
 
-    import angee.settings as compose_settings
-
-    compose_settings = importlib.reload(compose_settings)
+    compose_settings = _load_project_settings_artifact()
 
     assert compose_settings.DEBUG is False
     assert compose_settings.ALLOWED_HOSTS == ["example.test"]
@@ -902,9 +963,7 @@ def test_compose_settings_module_rejects_bad_yaml_reference(
     monkeypatch.setattr(sys, "argv", [str(manage_py)])
 
     with pytest.raises(ImproperlyConfigured, match="Undefined attribute"):
-        import angee.settings as compose_settings
-
-        importlib.reload(compose_settings)
+        _load_project_settings_artifact()
 
 
 def test_compose_settings_module_rejects_malformed_yaml(
@@ -920,9 +979,7 @@ def test_compose_settings_module_rejects_malformed_yaml(
     monkeypatch.setattr(sys, "argv", [str(manage_py)])
 
     with pytest.raises(ImproperlyConfigured, match="Failed to load"):
-        import angee.settings as compose_settings
-
-        importlib.reload(compose_settings)
+        _load_project_settings_artifact()
 
 
 def test_compose_settings_module_ignores_ancestor_settings_yaml(
@@ -957,13 +1014,10 @@ def test_compose_settings_module_ignores_ancestor_settings_yaml(
     monkeypatch.delitem(sys.modules, "settings", raising=False)
     monkeypatch.setattr(sys, "argv", [str(manage_py)])
 
-    import angee.settings as compose_settings
-
-    compose_settings = importlib.reload(compose_settings)
+    compose_settings = _load_project_settings_artifact()
 
     assert compose_settings.SECRET_KEY == "project-secret"
     assert compose_settings.BASE_DIR == project
-
 
 
 def test_host_keeps_native_bootstrap_variables_out_of_django_settings(
@@ -989,7 +1043,7 @@ def test_host_keeps_native_bootstrap_variables_out_of_django_settings(
     (tmp_path / "settings.yaml").write_text('SECRET_KEY: "{LIBRARY_BOOTSTRAP_ONLY}"\n', encoding="utf-8")
 
     namespace: dict[str, Any] = {}
-    ProjectContract(namespace).load()
+    ProjectBuildContract(namespace).load()
 
     assert namespace["SECRET_KEY"] == "native-value"
     assert namespace["BASE_DIR"] == tmp_path
@@ -1014,7 +1068,9 @@ def test_reject_unexpected_yamlconf_source_fails_fast(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ImproperlyConfigured, match="Unexpected django-yamlconf source"):
-        ProjectContract({})._reject_unexpected_sources(project_settings, tmp_path, "settings")
+        ProjectBuildContract({})._reject_unexpected_sources(
+            project_settings, tmp_path, source_yaml=tmp_path / "settings.yaml",
+        )
 
 
 def test_compose_settings_module_uses_project_dir_for_non_manage_entrypoints(
@@ -1046,13 +1102,11 @@ def test_compose_settings_module_uses_project_dir_for_non_manage_entrypoints(
     monkeypatch.setattr(sys, "argv", ["uvicorn", "angee.asgi:application"])
     monkeypatch.setenv("ANGEE_PROJECT_DIR", str(tmp_path))
 
-    import angee.settings as compose_settings
-
-    compose_settings = importlib.reload(compose_settings)
+    compose_settings = _load_project_settings_artifact()
 
     assert compose_settings.SECRET_KEY == "asgi-secret"
     assert compose_settings.BASE_DIR == tmp_path
-    assert compose_settings.COMPOSE_RUNTIME_DIR == tmp_path / "runtime"
+    assert compose_settings.COMPOSE_RUNTIME_DIR == Path(compose_settings.__file__).resolve().parent
     assert compose_settings.ROOT_URLCONF == "angee.urls"
     assert compose_settings.ASGI_APPLICATION == "angee.asgi.application"
     assert str(tmp_path / "addons") in sys.path
@@ -1084,13 +1138,11 @@ def test_compose_settings_module_discovers_project_ancestor_for_non_manage_entry
     monkeypatch.delenv("ANGEE_PROJECT_DIR", raising=False)
     monkeypatch.setattr(sys, "argv", ["uvicorn", "angee.asgi:application"])
 
-    import angee.settings as compose_settings
-
-    compose_settings = importlib.reload(compose_settings)
+    compose_settings = _load_project_settings_artifact()
 
     assert compose_settings.SECRET_KEY == "nested-asgi-secret"
     assert compose_settings.BASE_DIR == project
-    assert compose_settings.COMPOSE_RUNTIME_DIR == project / "runtime"
+    assert compose_settings.COMPOSE_RUNTIME_DIR == Path(compose_settings.__file__).resolve().parent
 
 
 def test_compose_settings_rejects_cwd_without_project_contract(
@@ -1104,12 +1156,8 @@ def test_compose_settings_rejects_cwd_without_project_contract(
     monkeypatch.delitem(sys.modules, "settings", raising=False)
     monkeypatch.setattr(sys, "argv", ["uvicorn", "angee.asgi:application"])
 
-    compose_settings = sys.modules.get("angee.settings")
     with pytest.raises(ImproperlyConfigured, match="ANGEE_PROJECT_DIR"):
-        if compose_settings is None:
-            importlib.import_module("angee.settings")
-        else:
-            importlib.reload(compose_settings)
+        _load_project_settings_artifact()
 
     assert not (tmp_path / "db.sqlite3").exists()
     assert not (tmp_path / ".angee").exists()
@@ -1123,7 +1171,7 @@ def test_defaults_module_requires_compose_seed(
 
     monkeypatch.chdir(tmp_path)
 
-    with pytest.raises(ImproperlyConfigured, match="angee.settings"):
+    with pytest.raises(ImproperlyConfigured, match="project settings loader"):
         runpy.run_module("angee.defaults", run_name="__test_defaults__")
 
     assert not (tmp_path / "db.sqlite3").exists()
@@ -1241,7 +1289,7 @@ def test_addon_autoconfig_applies_setting_fragments(
         "INSTALLED_APPS": ("alpha",),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
     Composer(settings).compose_settings()
 
     assert settings["ALPHA_SETTING"] == "ok"
@@ -1271,7 +1319,7 @@ def test_addon_autoconfig_merges_resource_source_classes(
             "path": "angee.resources.sources.PathSource",
         },
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
     Composer(settings).compose_settings()
 
     assert settings["ANGEE_RESOURCE_SOURCE_CLASSES"] == {
@@ -1313,7 +1361,7 @@ def test_addon_autoconfig_merges_sequences_in_dependency_order(
         "INSTALLED_APPS": ("beta",),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
     Composer(settings).compose_settings()
 
     assert settings["MIDDLEWARE"] == [
@@ -1339,7 +1387,7 @@ def test_depends_on_treats_bare_string_as_one_app(
         "INSTALLED_APPS": ("alpha",),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
     Composer(settings).compose_settings()
 
     assert "alpha.apps.TestConfig" in _installed_paths(settings["INSTALLED_APPS"])
@@ -1359,7 +1407,7 @@ def test_depends_on_rejects_non_string_items(
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
     with pytest.raises(ImproperlyConfigured, match="depends_on"):
-        settings["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+        settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
         Composer(settings).compose_settings()
 
 
@@ -1377,7 +1425,7 @@ def test_root_installed_apps_keep_project_order(
         "INSTALLED_APPS": ("beta", "alpha"),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
     Composer(settings).compose_settings()
     installed = _installed_paths(settings["INSTALLED_APPS"])
 
@@ -1398,7 +1446,7 @@ def test_later_root_app_labels_are_available_to_dependencies(
         "INSTALLED_APPS": ("alpha", "project_beta"),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
     Composer(settings).compose_settings()
     installed = _installed_paths(settings["INSTALLED_APPS"])
 
@@ -1420,7 +1468,7 @@ def test_composer_rejects_dependency_cycles(
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
     with pytest.raises(ImproperlyConfigured, match="Cycle"):
-        settings["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+        settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
         Composer(settings).compose_settings()
 
 
@@ -1589,7 +1637,7 @@ def test_plain_addon_autoconfig_keys_are_defaults(
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
         "ALPHA_SETTING": "project",
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
     Composer(settings).compose_settings()
 
     assert settings["ALPHA_SETTING"] == "project"
@@ -1625,9 +1673,7 @@ def test_yamlconf_project_values_beat_plain_addon_defaults(
     monkeypatch.setattr(sys, "argv", [str(manage_py)])
     monkeypatch.setenv("YAMLCONF_ALPHA_SETTING", "env")
 
-    import angee.settings as compose_settings
-
-    compose_settings = importlib.reload(compose_settings)
+    compose_settings = _load_project_settings_artifact()
 
     assert compose_settings.ALPHA_SETTING == "env"
 
@@ -1662,9 +1708,7 @@ def test_angee_env_values_overlay_declared_addon_settings(
     monkeypatch.setattr(sys, "argv", [str(manage_py)])
     monkeypatch.setenv("ANGEE_ALPHA_SECRET", "env-secret")
 
-    import angee.settings as compose_settings
-
-    compose_settings = importlib.reload(compose_settings)
+    compose_settings = _load_project_settings_artifact()
 
     assert compose_settings.ANGEE_ALPHA_SECRET == "env-secret"
 
@@ -1687,7 +1731,7 @@ def test_addon_autoconfig_rejects_composer_owned_settings(
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
     with pytest.raises(ImproperlyConfigured, match="must not define INSTALLED_APPS"):
-        settings["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+        settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
         Composer(settings).compose_settings()
 
 
@@ -1708,7 +1752,7 @@ def test_addon_autoconfig_can_set_graphql_ide(
         "INSTALLED_APPS": ("alpha",),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
     }
-    settings["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+    settings["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
     Composer(settings).compose_settings()
 
     assert settings["ANGEE_GRAPHQL_IDE"] == "custom"
@@ -1894,7 +1938,7 @@ def test_mail_provider_environment_belongs_to_messaging(tmp_path, monkeypatch, i
         "EMAIL_BACKEND": "anymail.backends.mailgun.EmailBackend",
         "ANYMAIL": {"MAILGUN_API_KEY": "project"},
     }
-    namespace["COMPOSE_APP_DECLARATIONS"] = "angee.conf.ManifestDeclarations"
+    namespace["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
     Composer(namespace).compose_settings()
     assert namespace["ANYMAIL"] == {"MAILGUN_API_KEY": "environment" if include_messaging else "project"}
     if include_messaging:
@@ -1906,13 +1950,13 @@ def test_mail_provider_environment_belongs_to_messaging(tmp_path, monkeypatch, i
 
 def test_plain_composer_preserves_host_choices_and_adds_no_capability_defaults(tmp_path):
     namespace = {
-        "INSTALLED_APPS": ("tests.settings.BareComposeConfig",),
+        "INSTALLED_APPS": ("tests.settings.BareAngeeConfig",),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
         "ROOT_URLCONF": "project.urls",
         "ASGI_APPLICATION": "project.asgi.application",
     }
     Composer(namespace).compose_settings()
-    assert [config.name for config in namespace["INSTALLED_APPS"]] == ["angee.compose"]
+    assert [config.name for config in namespace["INSTALLED_APPS"]] == ["angee"]
     assert namespace["ROOT_URLCONF"] == "project.urls"
     assert namespace["ASGI_APPLICATION"] == "project.asgi.application"
     assert "MIDDLEWARE" not in namespace
@@ -1929,3 +1973,116 @@ def test_host_only_autoconfig_does_not_install_foundation_or_job_policy() -> Non
     for name in ("ANGEE_IMPL_REGISTRIES", "ANGEE_MERGE_GUARDS", "REBAC_STRICT_MODE",
                  "ANGEE_CHANGESET_MODEL", "CELERY_TASK_SOFT_TIME_LIMIT"):
         assert name not in namespace
+
+
+def test_packaged_authored_settings_and_deployment_overrides_share_native_yamlconf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deployment secrets need no repeated roots; SOURCE_DIR differs from BASE_DIR."""
+
+    artifact = tmp_path / "artifact"
+    deployment = tmp_path / "deployment"
+    artifact.mkdir()
+    deployment.mkdir()
+    raw_yaml = artifact / "runtime" / "settings.yaml"
+    raw_yaml.parent.mkdir()
+    raw_yaml.write_text(
+        "INSTALLED_APPS: [angee.resources]\n"
+        "ANGEE_ADDON_DIRS: ['{SOURCE_DIR}']\n"
+        "CUSTOM_CONFIG: {path: '{SOURCE_DIR}/assets', value: authored}\n"
+        "SECRET_KEY: authored-placeholder\n",
+    )
+    (deployment / "settings.yaml").write_text(
+        "SECRET_KEY: deployment-secret\n'CUSTOM_CONFIG:append': {value: deployed}\n"
+    )
+    namespace: dict[str, Any] = {}
+    ProjectBuildContract(namespace).load(root=deployment, authored_root=artifact, authored_yaml=raw_yaml)
+
+    assert namespace["SECRET_KEY"] == "deployment-secret"
+    assert namespace["BASE_DIR"] == deployment
+    assert namespace["ANGEE_ADDON_DIRS"] == (artifact,)
+    assert namespace["CUSTOM_CONFIG"] == {"path": str(artifact / "assets"), "value": "deployed"}
+    assert "angee.resources" in namespace["INSTALLED_APPS"]
+    assert "SOURCE_DIR" not in namespace
+
+
+def test_packaged_python_declarations_resolve_helpers_from_the_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deployment cwd cannot replace an explicitly packaged declaration module."""
+
+    artifact = tmp_path / "artifact"
+    deployment = tmp_path / "deployment"
+    artifact.mkdir()
+    deployment.mkdir()
+    (artifact / "settings.yaml").write_text("{}\n")
+    (artifact / "artifact_helper.py").write_text("CUSTOM_SETTING = 'packaged-helper'\n")
+    (artifact / "artifact_settings.py").write_text(
+        "from artifact_helper import CUSTOM_SETTING\nINSTALLED_APPS = ['angee.resources']\n",
+    )
+    (deployment / "artifact_settings.py").write_text("raise AssertionError('deployment shadow imported')\n")
+    monkeypatch.syspath_prepend(str(deployment))
+    for module in ("artifact_settings", "artifact_helper"):
+        monkeypatch.delitem(sys.modules, module, raising=False)
+    namespace: dict[str, Any] = {}
+    try:
+        ProjectBuildContract(namespace).load(
+            root=deployment, authored_root=artifact, authored_module="artifact_settings",
+            authored_yaml=artifact / "settings.yaml",
+        )
+        assert namespace["CUSTOM_SETTING"] == "packaged-helper"
+        assert namespace["BASE_DIR"] == deployment
+        assert "angee.resources" in namespace["INSTALLED_APPS"]
+    finally:
+        for module in ("artifact_settings", "artifact_helper"):
+            sys.modules.pop(module, None)
+
+
+def test_editable_settings_apply_the_live_yaml_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The editable snapshot cannot duplicate or replace the live YAML declaration."""
+
+    (tmp_path / "editable_settings.py").write_text("CUSTOM_LIST = ['base']\n")
+    (tmp_path / "settings.yaml").write_text("'CUSTOM_LIST:append': [live]\n")
+    resource = tmp_path / "runtime" / "settings.yaml"
+    resource.parent.mkdir()
+    resource.write_text("'CUSTOM_LIST:append': [stale-snapshot]\n")
+    monkeypatch.delitem(sys.modules, "editable_settings", raising=False)
+    namespace: dict[str, Any] = {}
+    try:
+        ProjectBuildContract(namespace).load(
+            root=tmp_path, authored_root=tmp_path, authored_module="editable_settings", authored_yaml=resource,
+        )
+        assert namespace["CUSTOM_LIST"] == ["base", "live"]
+    finally:
+        sys.modules.pop("editable_settings", None)
+
+
+def test_yaml_only_editable_settings_accept_native_initial_source_without_importing_a_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native provenance names the empty declaration namespace before YAML wins."""
+
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.delitem(sys.modules, "settings", raising=False)
+    (tmp_path / "settings.yaml").write_text(
+        "SECRET_KEY: yaml-only\nINSTALLED_APPS: []\n'CUSTOM_LIST:append': [live]\n",
+    )
+    resource = tmp_path / "runtime" / "settings.yaml"
+    resource.parent.mkdir()
+    resource.write_text("'CUSTOM_LIST:append': [stale-snapshot]\n")
+    namespace: dict[str, Any] = {}
+    ProjectBuildContract(namespace).load(
+        root=tmp_path, authored_root=tmp_path, authored_module=None, authored_yaml=resource,
+    )
+
+    assert namespace["SECRET_KEY"] == "yaml-only"
+    assert namespace["CUSTOM_LIST"] == ["live"]
+    effective = ModuleType("effective_settings")
+    vars(effective).update(namespace)
+    info = django_yamlconf.get_attr_info("SECRET_KEY", effective)
+    assert info is not None
+    assert info["source"] == str(tmp_path / "settings.yaml")
+    assert (None, "settings") in info["history"]
+    assert "settings" not in sys.modules

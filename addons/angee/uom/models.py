@@ -35,14 +35,11 @@ from django.db import models
 from django.db.models.functions import Abs, Cast, Coalesce, Floor, Log, Power, Round, Sign
 from django.db.models.lookups import Exact
 
-from angee.base.models import (
-    AngeeDataModel,
-    AngeeManager,
-    AngeeQuerySet,
-    ArchiveMixin,
-    ArchiveQuerySet,
-    role_anchor,
-)
+from angee.base.managers import AngeeManager
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.roles import role_anchor
+from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
+from angee.base.querysets import AngeeQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 
 
@@ -272,5 +269,5 @@ class Uom(ResourceLoadMixin, ArchiveMixin, AngeeDataModel):
 
 UomRole = role_anchor("uom/role")
 """The ``uom/role`` anchor: its const ``admin`` arm resolves a platform admin as
-an effective uom manager. See :func:`angee.base.models.role_anchor`.
+an effective uom manager. See :func:`angee.base.models.roles.role_anchor`.
 """

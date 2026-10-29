@@ -10,7 +10,8 @@ from django.core.exceptions import ValidationError
 from django.test.utils import isolate_apps
 from rebac import system_context
 
-from angee.base.models import AngeeManager, ArchiveMixin, ArchiveQuerySet
+from angee.base.managers import AngeeManager
+from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
 from angee.messaging.testing.models import Handle, Organization, Party
 from angee.parties.managers import PartyQuerySet
 from tests.tables import model_tables

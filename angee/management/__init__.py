@@ -8,20 +8,10 @@ from contextlib import nullcontext
 
 from django.conf import settings
 from django.core.management import execute_from_command_line
+from django.core.management.base import CommandError, CommandParser, handle_default_options
 from django.utils.module_loading import import_string
 
 from angee import project
-
-SERVER_COMMANDS = frozenset({"celery", "runserver", "serve", "test"})
-"""Commands whose units of work own their boundaries instead of the process.
-
-``serve`` and ``runserver`` run the composed ASGI application: the request
-middleware, the WebSocket scope middleware and Celery tasks attribute each unit of
-work, and a process-wide changeset would merge every request of a one-worker
-server into one row. ``celery`` lets each task own its boundary; ``test`` lets each
-test own its boundary. Everything else, interactive shells included, is one
-logical write and keeps the command boundary.
-"""
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -31,15 +21,24 @@ def main(argv: Sequence[str] | None = None) -> None:
     rendered file; ``ANGEE_PROJECT_DIR`` and ``DJANGO_SETTINGS_MODULE`` keep any
     explicit value so child processes and tests inherit the caller's settings.
     ``ANGEE_MANAGEMENT_CONTEXT`` may name a dotted context-manager factory
-    accepting the command name; server commands keep their own work boundaries.
+    accepting the command name; that capability owns its attribution policy.
     """
 
     arguments = list(sys.argv if argv is None else argv)
+    # Django exposes the default-option handler but not ManagementUtility's
+    # preliminary parser. Apply only these native options before our context
+    # accesses settings; leave argv and all unknown options for Django itself.
+    parser = CommandParser(add_help=False, allow_abbrev=False)
+    parser.add_argument("--settings")
+    parser.add_argument("--pythonpath")
+    parser.add_argument("args", nargs="*")
+    try:
+        options, _unknown = parser.parse_known_args(arguments[2:])
+        handle_default_options(options)
+    except CommandError:
+        pass  # The native command parser reports malformed options later.
     project.bootstrap(argv=arguments)
     command = arguments[1] if len(arguments) > 1 else "help"
-    if command in SERVER_COMMANDS:
-        execute_from_command_line(arguments)
-        return
     context_path = getattr(settings, "ANGEE_MANAGEMENT_CONTEXT", "")
     context = import_string(context_path)(command) if context_path else nullcontext()
     with context:

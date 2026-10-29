@@ -115,10 +115,11 @@ def test_platform_owns_ledger_listing_and_its_read_gate(
     """The console retains the ledger wire contract and uses one platform gate."""
 
     resource = apps.get_model("resources", "Resource")
-    row = resource.objects.create(
-        source_addon="test.ledger", source_path="rows.yaml", tier="install", xref="example",
-        content_hash="hash", target_model="iam.User", target_id="user",
-    )
+    with system_context(reason="test.platform.ledger.seed"):
+        row = resource.objects.create(
+            source_addon="test.ledger", source_path="rows.yaml", tier="install", xref="example",
+            content_hash="hash", target_model="iam.User", target_id="user",
+        )
     monkeypatch.setattr(platform_schema, "platform_can_read", lambda: allowed)
     schema = _schema()
     data = _data(execute_schema(

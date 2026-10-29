@@ -67,9 +67,10 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
   }));
   const previews = new Map<string, ReturnType<typeof deferred<{ data: Row }>>>();
   const forms = new Map<string, ReturnType<typeof deferred<{ data: Row | null }>>>();
-  const records = [file("file-a", "Alpha"), file("file-b", "Beta")];
+  const otherDrive = { id: "drive-b", slug: "archive", name: "Archive" };
+  const records = [file("file-a", "Alpha"), file("file-b", "Beta"), { ...file("file-c", "Gamma"), drive: otherDrive.id }];
   const getOne = vi.fn(({ id, resource }: { id?: string | number; resource: string }) => {
-    if (resource === "drives") return Promise.resolve({ data: drive });
+    if (resource === "drives") return Promise.resolve({ data: id === otherDrive.id ? otherDrive : drive });
     const request = deferred<{ data: Row | null }>();
     forms.set(String(id), request);
     return request.promise;
@@ -145,6 +146,30 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
   expect(update).not.toHaveBeenCalled();
   // The metadata form lives in the page body, so each record owns one form read.
   expect(getOne.mock.calls.filter(([request]) => request.resource !== "drives").map(([request]) => String(request.id))).toEqual(["file-a", "file-b"]);
+
+  const folderSearch = screen.getByRole("combobox", { name: "Filter records" });
+  const selectedDrive = screen.getByRole("combobox", { name: "Drive: Assets" });
+  await act(async () => router.navigate({ to: "/storage/file-c", search: (current: Record<string, unknown>) => current }));
+  await waitFor(() => expect(forms.has("file-c") && previews.has("file-c")).toBe(true));
+  expect(screen.getByRole("combobox", { name: "Drive: Assets" })).toBe(selectedDrive);
+  expect(screen.getByRole("combobox", { name: "Filter records" })).toBe(folderSearch);
+  expect(screen.queryByDisplayValue("Beta")).toBeNull();
+  await act(async () => {
+    forms.get("file-c")!.resolve({ data: records[2]! });
+    previews.get("file-c")!.resolve({ data: { files_by_pk: records[2] } });
+  });
+  await screen.findByDisplayValue("Gamma");
+  await screen.findByRole("combobox", { name: "Drive: Archive" });
+  expect(screen.getByRole("combobox", { name: "Filter records" })).not.toBe(folderSearch);
+  expect(screen.getAllByRole("tree")[0]).toBe(tree);
+  await act(async () => router.navigate({ to: "/storage/file-b", search: (current: Record<string, unknown>) => current }));
+  await waitFor(() => expect(screen.getByRole("heading", { level: 1, name: "Loading file" })).toBe(header));
+  await act(async () => {
+    forms.get("file-b")!.resolve({ data: records[1]! });
+    previews.get("file-b")!.resolve({ data: { files_by_pk: records[1] } });
+  });
+  await screen.findByDisplayValue("Beta");
+  await screen.findByRole("combobox", { name: "Drive: Assets" });
 
   for (const missing of [false, true]) {
     const id = missing ? "file-missing" : "file-denied";

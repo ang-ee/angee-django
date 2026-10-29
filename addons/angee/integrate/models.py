@@ -56,19 +56,13 @@ from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
-from angee.base.models import (
-    AngeeDataModel,
-    AuditMixin,
-    MergePolicy,
-    OwnerMixin,
-    OwnerQuerySet,
-    RecordRefMixin,
-    StateTransitions,
-    references,
-    save_state,
-    transition,
-)
+from angee.base.models.audit import AuditMixin
+from angee.base.models.base import AngeeDataModel
 from angee.base.models.implementations import ImplDefaultsMixin
+from angee.base.models.merge_references import MergePolicy, references
+from angee.base.models.ownership import OwnerMixin, OwnerQuerySet
+from angee.base.models.refs import RecordRefMixin
+from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.refs import generic_pointer_target
 from angee.graphql.capabilities import held_permissions
@@ -2804,7 +2798,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
 
     config = models.JSONField(default=dict, blank=True)
     """Bridge-scoped settings interpreted by the selected backend."""
-    cursor = models.JSONField(default=dict, blank=True)
     poll_interval = models.PositiveIntegerField(default=300)
     subscription_state = models.JSONField(default=dict, blank=True)
     next_subscription_refresh_at = models.DateTimeField(null=True, blank=True)
@@ -2812,7 +2805,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
     last_sync_completed_at = models.DateTimeField(null=True, blank=True)
     last_sync_items = models.PositiveIntegerField(default=0)
     sync_stage = StateField(choices_enum=SyncStage, max_length=32, default=SyncStage.IDLE, db_index=True)
-    """Messaging channels keep their existing varchar(32) column on upgrade."""
     sync_error = DiagnosticTextField(blank=True, default="")
     sync_run_id = models.PositiveBigIntegerField(null=True, blank=True, editable=False)
     """Opaque execution-owner run identity, retained after terminal settlement."""
@@ -3331,7 +3323,6 @@ class Bridge(models.Model, metaclass=RebacModelBase):
                 self.report_status(status=IntegrationRuntimeStatus.OK)
             self.save(
                 update_fields=[
-                    "cursor",
                     "last_sync_summary",
                     "last_sync_completed_at",
                     "last_sync_items",

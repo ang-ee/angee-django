@@ -15,6 +15,7 @@ DOCUMENTS = sorted(
         *(ROOT / name for name in ("AGENTS.md", "README.md", "CONTRIBUTING.md")),
         *(ROOT / "docs").rglob("*.md"),
         *(ROOT / ".agents").rglob("*.md"),
+        *(ROOT / "addons/angee").glob("*/skills/**/*.md"),
         *(ROOT / "packages").glob("*/README.md"),
         ROOT / "examples/e2e/README.md",
     }

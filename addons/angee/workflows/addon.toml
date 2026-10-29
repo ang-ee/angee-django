@@ -16,8 +16,3 @@ depends_on = [
   "angee.timeline",
   "angee.web",
 ]
-
-[[migrations]]
-name = "owner_column"
-app_label = "workflows"
-module = "runtime_migrations.owner_column"

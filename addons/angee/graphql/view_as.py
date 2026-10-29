@@ -17,8 +17,8 @@ from rebac.actors import is_sudo
 from strawberry.extensions import SchemaExtension
 from strawberry.types.graphql import OperationType
 
-from angee.base.identity import public_id_of
-from angee.errors import DomainError
+from angee.base.exceptions import DomainError
+from angee.base.models.identity import public_id_of
 
 if TYPE_CHECKING:
     from django.contrib.auth.models import _User

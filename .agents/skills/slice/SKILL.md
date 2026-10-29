@@ -26,15 +26,18 @@ commits, publication, new features, or a change to the user's chosen scope.
    review pass and report that independence could not be established.
 4. **Verify the changed behavior.** Use `docs/checks.md` to select commands and
    their execution roots. Meaningful UI changes require browser verification;
-   backend or tooling changes need evidence at their affected boundary. A
-   documentation-only slice needs link/contract checks, not a live app. Report
+   backend or tooling changes need evidence at their affected boundary. For
+   explorer navigation, use the pending-transition checks in
+   [Explorer navigation continuity](../../../docs/frontend/guidelines.md#explorer-navigation-continuity).
+   A documentation-only slice needs link/contract checks, not a live app. Report
    checks that could not run and their concrete limitation.
 5. **Hand off.** Describe the behavior, evidence, unresolved findings, and
    changed files. Commit or publish only when requested or already authorized;
    honor an explicit instruction not to commit. If a different branch is needed,
    follow `.agents/skills/angee-workspace/SKILL.md`; never switch a workspace slot.
-6. **Record at the owner.** Put durable conventions and pitfalls in the owning
-   checked-in `docs/` guideline. Resolve optional private work-state through
+6. **Record at the owner.** Put durable invariants and contracts in the owning
+   checked-in `docs/` guideline, pitfalls and procedures in the owning skill's
+   `references/` file, and commands in `docs/checks.md`. Resolve optional private work-state through
    `.agents/skills/angee-workspace/SKILL.md` before writing task notes; if absent,
    keep them in the conversation. `.agents/` holds reusable methodology.
 

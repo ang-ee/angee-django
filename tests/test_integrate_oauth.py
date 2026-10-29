@@ -18,6 +18,7 @@ from rebac import actor_context, system_context
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 
 from angee.base.fields.implementation import ImplClassField
+from angee.base.implementations import impl_choices
 from angee.integrate import connect
 from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.oauth import state
@@ -298,7 +299,7 @@ def test_provider_choices_are_contributed_through_the_native_impl_registry():
     }):
         field = ImplClassField(OAuthProviderType)
         assert field.registered_keys() == ("contributed", "generic_oauth2")
-        assert {choice.key for choice in field.impl_choices()} == {"contributed", "generic_oauth2"}
+        assert {choice.key for choice in impl_choices(OAuthProviderType)} == {"contributed", "generic_oauth2"}
         assert field.resolve_class("contributed").key == "contributed"
 
 

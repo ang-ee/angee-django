@@ -12,7 +12,6 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from graphql import GraphQLError
-from graphql.execution.values import get_argument_values
 from rebac import current_actor
 from rebac.graphql.strawberry_django import optimize
 from rebac.resources import model_for_resource_type
@@ -20,6 +19,7 @@ from strawberry import auto
 from strawberry.experimental.pydantic import input as pydantic_input
 from strawberry.scalars import JSON
 from strawberry.types import get_object_definition
+from strawberry_django.utils.gql_compat import get_field_arguments
 
 from angee.graphql import capabilities
 from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
@@ -221,9 +221,10 @@ def overdue_milestone_count_field(model: Any) -> Any:
 
     return strawberry_django.field(resolver=resolve, annotate={
         "_overdue_milestone_count": lambda info: model.overdue_milestone_count_expression(
-            current_actor(), **get_argument_values(
+            current_actor(), **get_field_arguments(
+                info._raw_info,
                 info._raw_info.parent_type.fields[info.field_name],
-                info._raw_info.field_nodes[0], info.variable_values,
+                info._raw_info.field_nodes[0],
             ),
         ),
     })

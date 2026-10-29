@@ -19,7 +19,7 @@ from strawberry.scalars import JSON
 from strawberry_django_aggregates import BigInt
 from strawberry_django.utils.requests import get_request
 
-from angee.base.identity import instance_from_public_id
+from angee.base.models.identity import instance_from_public_id
 from angee.graphql.actions import ActionResult, action_guard, resolve_action_target
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder

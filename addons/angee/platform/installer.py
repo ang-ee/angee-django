@@ -23,7 +23,7 @@ The backend is chosen by ``settings.ANGEE_ADDON_INSTALLER_BACKEND`` against the
 addon's ``autoconfig`` supplies the default (``local``) and the ``local`` entry;
 the ``platform_integrate_operator`` bridge contributes the ``operator`` entry, and a
 deployment flips the key to ``operator``. A platform check validates the selected
-key; the base app checks the registry declarations.
+key and every registry declaration.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from django.core.files import locks
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-from angee.base.implementations import ImplBase, impl_registry, resolve_impl_class
+from angee.base.implementations import ImplBase, check_impl_registry, impl_registry, resolve_impl_class
 from angee.utils.files import write_atomic
 
 _INSTALLED_APPS_KEY = "INSTALLED_APPS"
@@ -316,12 +316,14 @@ def check_installer_backend_selection(app_configs: Any, **kwargs: Any) -> list[C
     """Require a non-empty catalogue containing the selected installer backend."""
 
     del app_configs, kwargs
+    errors = check_impl_registry(AddonInstallerBackend)
     try:
         registry = impl_registry(AddonInstallerBackend.registry_setting)
     except ImproperlyConfigured:
-        return []  # The base registry check reports malformed mappings.
+        return errors
     if not registry:
         return [
+            *errors,
             Error(
                 f"settings.{_REGISTRY_SETTING} must be a non-empty mapping of key to dotted path.",
                 id="angee.platform.E001",
@@ -330,9 +332,10 @@ def check_installer_backend_selection(app_configs: Any, **kwargs: Any) -> list[C
     selected = getattr(settings, _BACKEND_SETTING, "local")
     if selected not in registry:
         return [
+            *errors,
             Error(
                 f"settings.{_BACKEND_SETTING} = {selected!r} is not a key in settings.{_REGISTRY_SETTING}.",
                 id="angee.platform.E004",
             )
         ]
-    return []
+    return errors

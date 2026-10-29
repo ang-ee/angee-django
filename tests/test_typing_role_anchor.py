@@ -16,13 +16,13 @@ def test_generated_role_anchor_alias_survives_cold_and_warm_analysis(tmp_path: P
     declaration = app / "models.py"
     declaration.write_text(
         "from django.conf import settings\n"
-        "from angee.base.models import role_anchor\n"
+        'from angee.base.models.roles import role_anchor\n'
         "ProbeRole = role_anchor('probe/role')\n"
     )
     (tmp_path / "role_settings.py").write_text(
         "from pathlib import Path\nSECRET_KEY = 'role-types'\n"
         "INSTALLED_APPS = ['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', "
-        "'angee', 'angee.base', 'role_probe', 'angee.compose']\n"
+        "'angee.base', 'role_probe', 'angee.build.ProjectBuildConfig']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
         f"COMPOSE_RUNTIME_DIR = Path({str(tmp_path / 'role_runtime')!r})\n"

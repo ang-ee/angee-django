@@ -106,15 +106,13 @@ jobs:
 
   # The suite runs as six contiguous shards of equal stored time
   # (.test_durations, pytest-split); a test missing from it still runs in one.
-  # loadfile keeps a file on one worker, so the heaviest files set a floor near
-  # 25 minutes on CI: three campaign files of about 700 stored seconds each, whose
-  # cost is per-test fixture setup (a rebac sync per test). Lowering that setup is
-  # how this limit comes down; 40 minutes keeps that shard from being flaky.
+  # loadfile keeps a file on one worker. Allow for long file-scoped campaigns
+  # and runner cleanup; retain per-test timings for balancing the shards.
   uv-shard:
     name: uv ${{ matrix.group }}/6
     if: ${{ inputs.uv-enabled }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -244,7 +242,7 @@ jobs:
 
   # The composed-stack lane dogfoods the two-command install path: install the
   # released angee CLI, render the in-repo framework-dev stack template,
-  # compose it (angee build + schema + web codegen — no database needed), then
+  # compose it (native editable build + schema + web codegen — no database needed), then
   # typecheck/test addon fragments (the stack root's runtime/ is the @angee/gql
   # fixture), and run the optional bridge source tests.
   # The consolidated checkout supplies core, packages, addons, examples, and
@@ -338,7 +336,7 @@ jobs:
           CONSUMER_SOURCES: ${{ inputs.consumer-sources }}
           CONSUMER_ROOTS: ${{ inputs.consumer-roots }}
         run: |
-          uv run python - <<'PY'
+          uv run --no-project --with pyyaml python - <<'PY'
           import json
           import os
           from pathlib import Path
@@ -365,7 +363,7 @@ jobs:
         if: ${{ inputs.addons-profile == 'full' }}
         working-directory: stack
         run: |
-          uv run python - <<'PY'
+          uv run --no-project --with pyyaml python - <<'PY'
           from pathlib import Path
           import yaml
 
@@ -378,14 +376,15 @@ jobs:
         working-directory: stack
         run: |
           uv sync
-          uv run python -m angee.management.bootstrap
-          uv sync
-          uv run manage.py angee build
-          uv run manage.py schema
+          # This disposable host authors its initial native history before the
+          # ordinary wheel's sealed-history validation. No database is needed.
+          uv run --no-sync python manage.py makemigrations --noinput
+          uv build --wheel
+          uv run --no-sync python manage.py schema
       - name: Provision the composed stack
         working-directory: stack
         run: |
-          uv run manage.py angee provision
+          uv run --no-sync python manage.py angee provision
       - name: Export the framework's locked check tools
         if: ${{ inputs.consumer-path != '' || inputs.addons-profile == 'full' }}
         working-directory: stack/workspaces/src/angee
@@ -442,7 +441,7 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
           ANGEE_PROJECT_DIR: ${{ github.workspace }}/stack
-          DJANGO_SETTINGS_MODULE: angee.settings
+          DJANGO_SETTINGS_MODULE: runtime.settings
           CONSUMER_PATH: ${{ inputs.consumer-path }}
           CONSUMER_TESTS: ${{ inputs.consumer-tests }}
           CONSUMER_PYTEST_PLUGINS: ${{ inputs.consumer-pytest-plugins }}

@@ -74,7 +74,7 @@ and target step records. No compatible candidate takes `unsupported`; the
 installed resource needs no target configuration patch or answer input form.
 
 `ArchiveExtractor` owns the `ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES` registry;
-its addon declares that base through `ANGEE_IMPL_REGISTRIES`.
+its addon registers a native Django check for every contributed extractor.
 Implementations import `ArchiveExtractor` and `ArchiveExecutionReporter` from
 `angee.workflows_integrate.archive_steps`. Safe ZIP helpers live in
 `angee.storage.archives`. The framework's workflow and decision owners handle

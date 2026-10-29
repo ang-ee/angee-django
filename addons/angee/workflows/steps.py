@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
-from functools import cache
+from functools import cache, partial
 from types import get_original_bases
 from typing import Any, ClassVar, Literal, TypeVar, cast, get_args, get_origin
 
@@ -15,7 +15,7 @@ from django.db.models.functions import Now
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, PydanticInvalidForJsonSchema
 
-from angee.base.implementations import ImplBase, resolve_impl_class
+from angee.base.implementations import ImplBase, check_impl_registry, resolve_impl_class
 from angee.base.validators import check_schema, get_type_adapter, validate, validate_value, validator
 from angee.decisions.contracts import DecisionRequest
 from angee.jobs.timeouts import TASK_SETTLEMENT_RESERVE_SECONDS, task_time_budget
@@ -373,3 +373,6 @@ def resolve_step(key: str) -> type[Step[Any, Any, Any]]:
             "below the worker's soft and hard time limits."
         )
     return step
+
+
+check_step_registry = partial(check_impl_registry, Step)

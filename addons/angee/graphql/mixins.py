@@ -18,7 +18,13 @@ class ChangeBroadcastMixin:
 
 
 class ImplementationChoicesMixin:
-    """Let a model authorize implementation metadata beyond the admin default."""
+    """Own a model's offered implementations and additional metadata visibility."""
+
+    @classmethod
+    def include_impl_choice(cls, field_name: str, implementation: type[object]) -> bool:
+        """Offer a registered implementation; this never authorizes record writes."""
+
+        return True
 
     @classmethod
     def can_read_impl_choices(cls, field_name: str, actor: Any) -> bool:

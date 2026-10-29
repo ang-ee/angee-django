@@ -35,7 +35,7 @@ from rebac import (
 from rebac.models import active_relationship_model
 from rebac.roles import grant as grant_role
 
-from angee.base.identity import public_id_for
+from angee.base.models.identity import public_id_for
 from angee.messaging.testing.models import Handle, Message, Party, Person, Thread
 from angee.projects.testing.models import Project, Task
 from angee.tags import schema as tags_schema

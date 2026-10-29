@@ -9,11 +9,17 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 import strawberry
 from django.db import models
 from django.db.backends.postgresql.base import DatabaseWrapper
-from graphql import GraphQLError, build_schema, coerce_input_value, get_named_type
+from graphql import (
+    GraphQLError,
+    Undefined,
+    build_schema,
+    coerce_input_value,
+    get_named_type,
+    validate_input_value,
+)
 from strawberry.scalars import JSON
 from strawberry_django_hasura import hasura_config
 from strawberry_django_hasura.inputs import build_bool_exp, comparison_for_python_type, host_module
@@ -428,29 +434,29 @@ def test_native_operator_samples_use_real_scalar_parsers() -> None:
     for field, value in _SCALAR_OPERANDS.items():
         operand = get_named_type(where.fields[field].type).fields["_eq"].type
         coerced = coerce_input_value(value, operand)
-        assert coerced is not None
+        assert coerced is not None and coerced is not Undefined
     assert coerce_input_value(_SCALAR_OPERANDS["amount"], schema.get_type("Decimal")) == decimal.Decimal(
         "9007199254740993.000000000000000001"
     )
     assert coerce_input_value(_SCALAR_OPERANDS["timestamp"], schema.get_type("DateTime")).microsecond == 123456
     for value in _TIME_OPERANDS["valid"]:
         assert isinstance(coerce_input_value(value, schema.get_type("Time")), datetime.time)
-    for value in _TIME_OPERANDS["invalid"]:
-        with pytest.raises(GraphQLError):
-            coerce_input_value(value, schema.get_type("Time"))
+    invalid_samples = [(schema.get_type("Time"), value) for value in _TIME_OPERANDS["invalid"]]
     for field, values in _INVALID_DATE_OPERANDS.items():
         operand = get_named_type(where.fields[field].type).fields["_eq"].type
-        for value in values:
-            with pytest.raises(GraphQLError):
-                coerce_input_value(value, operand)
-    for scalar, invalid in (
+        invalid_samples.extend((operand, value) for value in values)
+    invalid_samples.extend((schema.get_type(scalar), value) for scalar, value in (
         ("Int", 1.5), ("Int", 2**31), ("Boolean", "false"),
         ("Date", "2026-02-30"), ("DateTime", "not-a-date"),
         ("Time", "25:00:00"), ("Decimal", "not-a-number"),
         ("QueryState", "open"),
-    ):
-        with pytest.raises(GraphQLError):
-            coerce_input_value(invalid, schema.get_type(scalar))
+    ))
+    for operand, value in invalid_samples:
+        assert coerce_input_value(value, operand) is Undefined
+        errors: list[GraphQLError] = []
+        validate_input_value(value, operand, lambda error, _path: errors.append(error))
+        assert len(errors) == 1
+        assert get_named_type(operand).name in errors[0].message
 
 
 def test_postgres_similar_uses_native_lookup_with_bound_sql_pattern(monkeypatch) -> None:

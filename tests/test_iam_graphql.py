@@ -40,12 +40,8 @@ from rebac.roles import grant as grant_role
 from strawberry.django.views import GraphQLView
 
 from angee.agents.testing.models import Agent
-from angee.base.identity import (
-    instance_from_public_id,
-    public_data_id_field,
-    public_id_for,
-    public_id_of,
-)
+from angee.base.identity import public_data_id_field
+from angee.base.models.identity import instance_from_public_id, public_id_for, public_id_of
 from angee.graphql import subscriptions
 from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.data.resource_fields import resource_field_kind, resource_field_widget
@@ -903,7 +899,10 @@ def test_user_crud_create_update_delete_are_admin_only(
             user=admin,
         )
         assert rejected.errors is not None
-        assert f"Field '{field}' is not defined by type 'users_insert_input'" in rejected.errors[0].message
+        assert (
+            f"Expected value of type 'users_insert_input' not to include unknown field '{field}'"
+            in rejected.errors[0].message
+        )
 
     created = _data(_execute(console_schema, create_user, user=admin))["insert_users_one"]
     assert created == {

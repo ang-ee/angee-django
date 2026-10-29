@@ -6,7 +6,7 @@ import importlib
 import os
 import runpy
 import sys
-from collections.abc import Iterable, Mapping, MutableMapping
+from collections.abc import Iterable, MutableMapping
 from copy import deepcopy
 from pathlib import Path
 from types import ModuleType
@@ -14,19 +14,20 @@ from typing import Any
 
 import django_yamlconf
 import environ
-import sentry_sdk
 from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
+from hatch_angee import AddonManifest
 
-from angee.addons import addon_manifest
-from angee.compose import yamlconf
-from angee.compose.declarations import AppDeclarationSource
+from angee.addons import bind_addon_manifest
 from angee.project import (
     PROJECT_SETTINGS_ENV,
     PROJECT_YAML_NAME,
     PROJECT_YAML_SETTINGS,
+    find_project_dir,
     project_dir,
 )
+from angee.utils import yamlconf
+from angee.utils.autoconfig import AutoConfig
 from angee.utils.paths import resolve_path
 
 DEFAULTS_SETTINGS_MODULE = "angee.defaults"
@@ -35,53 +36,79 @@ DEFAULTS_SETTINGS_MODULE = "angee.defaults"
 def prepend_import_paths(paths: Iterable[Path]) -> None:
     """Put import paths first and refresh the already-loaded framework package.
 
-    ``angee.settings`` imports the host package before project addon roots are
+    ``generated runtime settings`` imports the host package before project addon roots are
     known. Its namespace path must gain the configured ``angee`` portions after
-    those roots enter ``sys.path``.
+    those roots enter ``sys.path``. Canonical directory identity prevents symlinked
+    environments from exposing one namespace portion twice to Django.
     """
 
     import_paths = tuple(path.resolve() for path in paths if path.exists())
-    for import_path in reversed(import_paths):
-        sys_path_entry = str(import_path)
-        if sys_path_entry in sys.path:
-            sys.path.remove(sys_path_entry)
-        sys.path.insert(0, sys_path_entry)
+    ordered_paths: dict[Path, str] = {}
+    for entry in (*(str(path) for path in import_paths), *sys.path):
+        ordered_paths.setdefault(Path(entry).resolve(), entry)
+    sys.path[:] = ordered_paths.values()
     package = sys.modules.get("angee")
     package_path = getattr(package, "__path__", None)
     portions = tuple(str(path / "angee") for path in import_paths if (path / "angee").is_dir())
     if package is not None and package_path is not None and portions:
-        package.__path__ = list(dict.fromkeys((*portions, *(str(path) for path in package_path))))
+        package.__path__ = list(
+            dict.fromkeys(str(Path(path).resolve()) for path in (*portions, *package_path))
+        )
 
 
 class ProjectContract:
-    """Load a project's settings contract and ask Angee to compose Django settings."""
+    """Load project declarations and late deployment inputs for a prebuilt host."""
 
     def __init__(self, namespace: MutableMapping[str, Any]) -> None:
         """Store the settings module namespace being populated."""
 
         self.namespace = namespace
         self.env = environ.Env()
-        self._project_apps: object = ()
+        self.project_apps: object = ()
 
-    def compose(self) -> None:
-        """Publish project defaults and addon settings only after composition succeeds.
+    def load_prebuilt(
+        self, *, runtime_dir: Path, authored_root: Path, authored_module: str | None,
+        authored_yaml: Path, project_apps: tuple[str, ...],
+        app_configs: tuple[tuple[str, bool, str | None, bool], ...],
+        autoconfig_modules: tuple[str, ...], manifests: dict[str, dict[str, Any]],
+    ) -> None:
+        """Load deployment values onto a build-resolved native application graph.
 
-        Django may inspect the importing settings module during app discovery.
-        Keeping work private prevents it from capturing a partial app graph, and
-        a failed reload leaves the previously published settings intact. Error
-        reporting starts with the composed addon policy, including when a
-        composition failure is about to propagate.
+        Only the explicit build selects apps, optional autoconfig modules and
+        manifest declarations. Deployment YAML and derived settings still run
+        through their native owners on every process startup.
         """
-
-        from angee.compose.composer import Composer
 
         published = self.namespace
         self.namespace = {}
         try:
-            root = self.load()
-            prepend_import_paths((*self.namespace.get("ANGEE_ADDON_DIRS", ()), root))
+            root = self.load(authored_root=authored_root, authored_module=authored_module, authored_yaml=authored_yaml)
+            if isinstance(self.project_apps, str):
+                declared = (self.project_apps,)
+            elif isinstance(self.project_apps, Iterable):
+                declared = tuple(self.project_apps)
+            else:
+                raise ImproperlyConfigured("Project INSTALLED_APPS must be a string or iterable of app paths.")
+            if declared != project_apps:
+                raise ImproperlyConfigured("Project INSTALLED_APPS changed; rebuild the prebuilt runtime explicitly.")
+            self.namespace["COMPOSE_RUNTIME_DIR"] = runtime_dir.resolve()
+            import_paths = (*self.namespace.get("ANGEE_ADDON_DIRS", ()), root, runtime_dir.parent)
+            if authored_root != root:
+                import_paths = (authored_root, *import_paths)
+            prepend_import_paths(import_paths)
+            configs = []
+            for path, is_root, declaration, required in app_configs:
+                config = AppConfig.create(path)
+                setattr(config, "compose_root", is_root)
+                setattr(config, "compose_root_declaration", declaration)
+                setattr(config, "compose_required", required)
+                bind_addon_manifest(
+                    config, AddonManifest(**manifests[config.name]) if config.name in manifests else None,
+                )
+                configs.append(config)
+            self.namespace["INSTALLED_APPS"] = configs
             try:
-                Composer(self.namespace).compose_settings(project_apps=self._project_apps)
+                AutoConfig.apply_modules(self.namespace, autoconfig_modules)
             finally:
                 self._start_error_reporting()
             composed = self.namespace
@@ -93,8 +120,8 @@ class ProjectContract:
     def _start_error_reporting(self) -> None:
         """Start Sentry once per process when the deployment supplies ``SENTRY_DSN``.
 
-        Every Django, ASGI, Celery and management-command process composes
-        settings here, before ``django.setup()``, which is where Sentry's Django
+        Every Django, ASGI, Celery and management-command process loads
+        deployment settings here, before ``django.setup()``, which is where Sentry's Django
         and Celery integrations must start. The SDK reads ``SENTRY_DSN``,
         ``SENTRY_ENVIRONMENT`` and ``SENTRY_RELEASE`` itself.
 
@@ -103,6 +130,10 @@ class ProjectContract:
         when their own error policy replaces an integration's capture. Request
         bodies and frame locals stay in the process.
         """
+
+        # Metadata preparation uses load() without importing a telemetry SDK.
+        # Only a fully composed application process starts native integrations.
+        import sentry_sdk
 
         if not self.env.str("SENTRY_DSN", default="") or sentry_sdk.is_initialized():
             return
@@ -113,7 +144,10 @@ class ProjectContract:
             max_request_body_size="never",
         )
 
-    def load(self) -> Path:
+    def load(
+        self, *, root: Path | None = None, authored_root: Path | None = None,
+        authored_module: str | None = None, authored_yaml: Path | None = None,
+    ) -> Path:
         """Load project settings and defaults without composing the Django app graph.
 
         This is the standalone settings seam for pre-Django bootstraps that need
@@ -122,12 +156,32 @@ class ProjectContract:
         """
 
         self._reset_settings()
-        root = project_dir()
+        if root is None:
+            root = (find_project_dir() or Path.cwd().resolve()) if authored_root is not None else project_dir()
+        else:
+            root = resolve_path(root)
+        source_root = root if authored_root is None else resolve_path(authored_root)
+        source_yaml = source_root / "settings.yaml" if authored_yaml is None else resolve_path(authored_yaml)
+        if authored_yaml is not None and (not source_yaml.is_file() or not os.access(source_yaml, os.R_OK)):
+            raise ImproperlyConfigured(
+                f"Packaged authored settings are missing or unreadable: {source_yaml}; rebuild the artifact."
+            )
+        if source_root == root:
+            # Editable startup reads the live authored file once. Loading its
+            # compiled snapshot as well would duplicate native append/prepend.
+            source_yaml = root / "settings.yaml"
         self._read_project_env(root)
-        settings_module = self.env.str(PROJECT_SETTINGS_ENV, default=PROJECT_YAML_NAME)
+        settings_module = (
+            self.env.str(PROJECT_SETTINGS_ENV, default=PROJECT_YAML_NAME)
+            if authored_root is None else authored_module
+        )
+        prepend_import_paths((source_root,))
+        if settings_module is None:
+            declarations = ModuleType(PROJECT_YAML_NAME)
+            declarations.__file__ = str(source_yaml)
+        else:
+            declarations = self._load_project_settings(source_root, settings_module)
 
-        prepend_import_paths((root,))
-        declarations = self._load_project_settings(root, settings_module)
         project_settings = ModuleType(declarations.__name__)
         # Native yamlconf overlays traverse dictionaries in place. Keep the
         # cached Python declarations intact for subsequent configuration loads.
@@ -137,12 +191,15 @@ class ProjectContract:
                 for name, value in vars(declarations).items()
             }
         )
-        predefined_settings = self._load_project_overlays(project_settings, root)
-        self._reject_unexpected_sources(project_settings, root, settings_module)
+        predefined_settings = self._load_project_overlays(
+            project_settings, root, source_root=source_root, source_yaml=source_yaml,
+        )
+        self._reject_unexpected_sources(project_settings, root, source_yaml=source_yaml)
         project_yaml_settings = self._project_yaml_settings(project_settings, root)
-        self._project_apps = getattr(project_settings, "INSTALLED_APPS", ())
+        self.project_apps = getattr(project_settings, "INSTALLED_APPS", ())
         self._apply_defaults(project_settings, root, predefined_settings=predefined_settings)
         self.namespace[PROJECT_YAML_SETTINGS] = project_yaml_settings
+        self.namespace["_ANGEE_PROJECT_APPS"] = self.project_apps
         return root
 
     def _read_project_env(self, root: Path) -> None:
@@ -161,7 +218,9 @@ class ProjectContract:
         if env_file.is_file():
             self.env.read_env(env_file)
 
-    def _load_project_overlays(self, project_settings: ModuleType, root: Path) -> frozenset[str]:
+    def _load_project_overlays(
+        self, project_settings: ModuleType, root: Path, *, source_root: Path, source_yaml: Path,
+    ) -> frozenset[str]:
         """Apply project YAML, explicit configuration and environment in native order.
 
         The native loader searches ancestor settings files. This host bounds its
@@ -173,12 +232,15 @@ class ProjectContract:
 
         with yamlconf.fail_on_yamlconf_errors():
             attributes = django_yamlconf.bootstrap_attributes(str(root))
+            django_yamlconf.add_attr_info(attributes, "SOURCE_DIR", str(source_root))
             predefined_settings: frozenset[str] = frozenset(attributes) - {"BASE_DIR"}
             loader, loader_kwargs = django_yamlconf.get_loader("yaml")
             if loader is None:
                 return predefined_settings
+            if os.access(source_yaml, os.R_OK):
+                django_yamlconf.load_conffile(attributes, project_settings, loader, loader_kwargs, str(source_yaml))
             project_yaml = root / "settings.yaml"
-            if os.access(project_yaml, os.R_OK):
+            if project_yaml.resolve() != source_yaml and os.access(project_yaml, os.R_OK):
                 django_yamlconf.load_conffile(attributes, project_settings, loader, loader_kwargs, str(project_yaml))
             if final_conf := os.environ.get("YAMLCONF_CONFFILE"):
                 django_yamlconf.load_conffile(attributes, project_settings, loader, loader_kwargs, final_conf)
@@ -205,13 +267,18 @@ class ProjectContract:
                 names.add(name)
         return frozenset(names)
 
-    def _reject_unexpected_sources(self, project_settings: ModuleType, root: Path, settings_module: str) -> None:
+    def _reject_unexpected_sources(
+        self, project_settings: ModuleType, root: Path, *, source_yaml: Path,
+    ) -> None:
         """Reject any implicit ancestor or foreign project-settings source."""
 
         allowed_sources = {
             yamlconf.YAMLCONF_INTERNAL_SOURCE,
             yamlconf.YAMLCONF_ENVIRONMENT_SOURCE,
-            settings_module,
+            # Native yamlconf records the namespace name as the initial
+            # source, even for the empty namespace of a YAML-only artifact.
+            project_settings.__name__,
+            str(source_yaml),
         }
         project_yaml = (root / "settings.yaml").resolve()
         if project_yaml.exists():
@@ -263,11 +330,12 @@ class ProjectContract:
             project_settings = importlib.import_module(settings_module)
         elif project_settings is None and (root / "settings.yaml").exists():
             project_settings = ModuleType(settings_module)
-            project_settings.__file__ = str(root / f"{PROJECT_YAML_NAME}.py")
-            sys.modules[settings_module] = project_settings
+            # Native yamlconf needs a target namespace, not an importable
+            # synthetic settings.py module in the process module registry.
+            project_settings.__file__ = str(root / "settings.yaml")
 
         if project_settings is None:
-            raise ImproperlyConfigured("angee.settings needs settings.py or settings.yaml beside manage.py")
+            raise ImproperlyConfigured("generated runtime settings needs settings.py or settings.yaml beside manage.py")
 
         settings_file = getattr(project_settings, "__file__", None)
         if not settings_file:
@@ -294,25 +362,6 @@ class ProjectContract:
             if yamlconf.is_setting_name(name) and name not in predefined_settings
         }
         seed.setdefault("BASE_DIR", root)
-        # The host accepts earlier project declarations; the compiler sees only
-        # its canonical names. Keep yamlconf's raw input provenance intact so
-        # existing references to those declarations still expand natively.
-        for suffix in ("DIR", "MODULE"):
-            previous = f"ANGEE_RUNTIME_{suffix}"
-            canonical = f"COMPOSE_RUNTIME_{suffix}"
-            if previous not in seed:
-                continue
-            value = seed.pop(previous)
-            if canonical in seed:
-                same = (
-                    resolve_path(value) == resolve_path(seed[canonical])
-                    if suffix == "DIR"
-                    else value == seed[canonical]
-                )
-                if not same:
-                    raise ImproperlyConfigured(f"{previous} and {canonical} must agree when both are declared.")
-            seed.setdefault(canonical, value)
-
         if "DATABASE_URL" in os.environ:
             database = self.env.db()
             if "postgresql" in database.get("ENGINE", ""):
@@ -367,15 +416,3 @@ class ProjectContract:
                 project_settings,
                 yamlconf.YAMLCONF_ATTRIBUTES,
             )
-
-
-class ManifestDeclarations(AppDeclarationSource):
-    """Project the host's canonical addon manifests into the compiler contract."""
-
-    def dependencies(self, app: AppConfig, *, refresh: bool = False) -> tuple[str, ...]:
-        manifest = addon_manifest(app, refresh=refresh)
-        return manifest.depends_on if manifest is not None else ()
-
-    def migrations(self, app: AppConfig) -> tuple[Mapping[str, Any], ...]:
-        manifest = addon_manifest(app)
-        return manifest.migrations if manifest is not None else ()

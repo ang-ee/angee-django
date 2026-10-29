@@ -50,21 +50,13 @@ from strawberry_django_hasura.filtering import filter_queryset, where_to_q
 from strawberry_django_hasura.inputs import comparison_for_python_type
 
 from angee.base.fields.ordering import FractionalRankField
-from angee.base.identity import (
-    instance_from_public_id,
-    instances_from_public_ids,
-    public_data_id_field,
-    public_id_for,
-    public_id_of,
-)
-from angee.base.models import (
-    AngeeModel,
-    OptimisticLockMixin,
-    RecordRefMixin,
-    RowLockMixin,
-    row_lock_paths,
-)
+from angee.base.identity import public_data_id_field
+from angee.base.models.base import AngeeModel
+from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for, public_id_of
+from angee.base.models.locks import OptimisticLockMixin, RowLockMixin
+from angee.base.models.refs import RecordRefMixin
 from angee.base.permissions import require_rebac_queryset
+from angee.base.querysets import row_lock_paths
 from angee.graphql.access import assert_no_gated_read_fields
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.contracts import (
@@ -137,7 +129,7 @@ class HasuraLines:
     Lines are owned parts: rows that exist only as part of their parent and are
     saved with it. Their writes are the user's writes, elevated only because the
     parent write authorizes them, so they never bypass the child's own guards. A
-    child composing :class:`~angee.base.models.RowLockMixin` has each row checked
+    child composing :class:`~angee.base.models.locks.RowLockMixin` has each row checked
     against its persisted lock before the elevated write: a line may not change a
     locked field, delete a system row, or create or turn into one. Its node must
     project the same fact as ``locked_fields``, which the metadata advertises as

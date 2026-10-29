@@ -22,6 +22,7 @@ from rebac.models import SchemaRelation
 
 from angee.graphql.checks import check_graphql_schemas
 from angee.graphql.schema import GraphQLSchemas, SchemaParts
+from angee.management import provision
 from angee.management.commands.angee import Command
 from tests.composed_host import COMPOSED_TEST_TIMEOUT
 
@@ -58,7 +59,7 @@ INSTALLED_APPS = [
     "django.contrib.auth",
     "rebac",
     "probe.apps.ProbeConfig",
-    "angee",
+    "probe.apps.BareAngeeConfig",
 ]
 DATABASES = {{"default": {{"ENGINE": "django.db.backends.sqlite3", "NAME": {str(root / "probe.sqlite3")!r}}}}}
 """,
@@ -66,19 +67,21 @@ DATABASES = {{"default": {{"ENGINE": "django.db.backends.sqlite3", "NAME": {str(
     )
     (package / "apps.py").write_text(
         """from django.apps import AppConfig
+class BareAngeeConfig(AppConfig):
+    name = "angee"
 class ProbeConfig(AppConfig):
     name = "probe"
     def ready(self):
         import json
         import os
         from pathlib import Path
-        import angee.management.commands.angee as provision
+        import angee.management.provision as provision
         events = Path(__file__).resolve().parent.parent / "events.jsonl"
         def record_step(command, step):
             del command
             with events.open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps({"step": step, "pid": os.getpid()}) + "\\n")
-        provision.Command._run_step = record_step
+        provision.run_step = record_step
 """,
         encoding="utf-8",
     )
@@ -96,8 +99,8 @@ class ProbeConfig(AppConfig):
     return root / "manage.py"
 
 
-def test_provision_builds_then_runs_one_fresh_post_build_process(tmp_path: Path) -> None:
-    """The parent runs build and one fresh child owns the remaining ordered commands."""
+def test_provision_runs_prebuilt_commands_in_one_process(tmp_path: Path) -> None:
+    """One configured native process owns the prebuilt provision commands."""
 
     manage_py = _write_topology_host(tmp_path)
     result = subprocess.run(
@@ -114,8 +117,7 @@ def test_provision_builds_then_runs_one_fresh_post_build_process(tmp_path: Path)
     assert result.returncode == 0, f"provision failed:\n{result.stdout}\n{result.stderr}"
     events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
     assert [event["step"] for event in events] == [
-        ["angee", "build"],
-        ["makemigrations", "--noinput", "--skip-checks"],
+        ["makemigrations", "--check", "--dry-run", "--noinput", "--skip-checks"],
         ["migrate", "--noinput", "--skip-checks"],
         ["rebac", "--skip-checks", "sync", "--prune-stale", "--yes", "--force-overwrite"],
         ["check", "--database", "default"],
@@ -123,8 +125,7 @@ def test_provision_builds_then_runs_one_fresh_post_build_process(tmp_path: Path)
         ["schema"],
         ["bootstrap_admin"],
     ]
-    assert events[0]["pid"] not in {event["pid"] for event in events[1:]}
-    assert len({event["pid"] for event in events[1:]}) == 1
+    assert len({event["pid"] for event in events}) == 1
 
 
 def test_native_composed_test_runner_does_not_require_provenance(tmp_path: Path) -> None:
@@ -210,12 +211,12 @@ def test_makemigrations_writes_a_column_drop_only_after_its_data_is_gone(tmp_pat
     (app / "models.py").write_text(model + legacy, encoding="utf-8")
     database = tmp_path / "native.sqlite3"
     (tmp_path / "drop_guard_settings.py").write_text(
-        f"""from django.apps import AppConfig
-class BareComposeConfig(AppConfig):
-    name = "angee.compose"
-    label = "compose"
+        f"""import os
 SECRET_KEY = "drop-guard-probe"
-INSTALLED_APPS = ["django.contrib.contenttypes", "drop_guard_settings.BareComposeConfig", "native_app"]
+INSTALLED_APPS = ["django.contrib.contenttypes", "native_app",
+    "angee.build.ProjectBuildConfig" if os.environ.get("COMPOSE_BUILD") else "angee.apps.AngeeConfig"]
+COMPOSE_RUNTIME_DIR = {str(tmp_path / "runtime")!r}
+COMPOSE_RUNTIME_MODULE = "runtime"
 DATABASES = {{"default": {{"ENGINE": "django.db.backends.sqlite3", "NAME": {str(database)!r}}}}}
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 """,
@@ -223,18 +224,28 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
     )
     environment = {**_environment(tmp_path), "DJANGO_SETTINGS_MODULE": "drop_guard_settings"}
 
+    def build() -> None:
+        result = subprocess.run(
+            [sys.executable, "-c", "import django; django.setup()"],
+            cwd=tmp_path, env={**environment, "COMPOSE_BUILD": "1"},
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
     def django_admin(*arguments: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, "-m", "django", *arguments, "--noinput"],
             cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=60, check=False,
         )
 
+    build()
     for arguments in (("makemigrations", "native_app"), ("migrate",)):
         result = django_admin(*arguments)
         assert result.returncode == 0, f"{arguments} failed:\n{result.stdout}\n{result.stderr}"
     with sqlite3.connect(database) as connection:
         connection.execute("insert into native_app_entry (value, legacy) values ('a', ''), ('b', 'kept')")
     (app / "models.py").write_text(model, encoding="utf-8")
+    build()
 
     refused = django_admin("makemigrations")
     assert refused.returncode == 1, refused.stdout
@@ -287,9 +298,9 @@ def test_provision_sync_replaces_invalid_historical_subject_sets_before_checks()
         with pytest.raises(SchemaError, match="names a permission"):
             call_command("check", verbosity=0)
         command = Command()
-        plan = command._provision_plan({"force_rebac": True})
-        command._run_step(next(step for step in plan if step[0] == "rebac"))
-        command._run_step(["check"])
+        plan = provision.plan({"force_rebac": True})
+        provision.run_step(command, next(step for step in plan if step[0] == "rebac"))
+        provision.run_step(command, ["check"])
 
 
 @pytest.mark.django_db

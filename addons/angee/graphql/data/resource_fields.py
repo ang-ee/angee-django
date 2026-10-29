@@ -21,6 +21,7 @@ from angee.base.fields import ImplClassField
 from angee.base.fields.state import StatusDisplay
 from angee.base.models.trash import ARCHIVE_FLAG_FIELD, TRASH_FLAG_FIELD, ArchiveMixin, TrashMixin
 from angee.graphql.data import contracts as data_contract
+from angee.graphql.impl import model_impl_choices
 from angee.graphql.introspection import is_to_many_relation, surface_field_names, surface_name
 from graphql import (
     GraphQLEnumType,
@@ -658,11 +659,13 @@ def _field_enum_values(
 ) -> tuple[data_contract.DataResourceEnumValueMetadata, ...]:
     """Project selector options from the final enum or a string field's Django choices."""
 
+    labels = _field_choice_labels(field)
     if isinstance(value, GraphQLEnumType):
-        labels = _field_choice_labels(field)
         result: list[data_contract.DataResourceEnumValueMetadata] = []
         for name, enum_value in value.values.items():
             raw = getattr(enum_value.value, "value", enum_value.value)
+            if isinstance(field, ImplClassField) and str(raw) not in labels:
+                continue
             description = labels.get(str(raw)) or enum_value.description
             result.append(
                 data_contract.DataResourceEnumValueMetadata(
@@ -682,6 +685,7 @@ def _field_enum_values(
             description=str(label) if str(label).strip() else None,
         )
         for raw, label in choices
+        if not isinstance(field, ImplClassField) or str(raw) in labels
     )
 
 
@@ -815,14 +819,14 @@ def _selection_surface(value: object) -> tuple[object, bool]:
 def _field_choice_labels(field: models.Field[Any, Any] | ForeignObjectRel | None) -> dict[str, str]:
     """Return a stored-value -> human-label map for an enum-backed field, or empty.
 
-    An ``ImplClassField`` owns registry labels keyed by impl key; any other
+    An implementation selector uses its model's offered registry choices; any other
     ``TextChoicesField`` (a ``StateField`` or a plain choices enum) carries its
     labels on the ``choices_enum`` members. A field with no enum choices yields an
     empty map, so a non-enum field folds nothing.
     """
 
     if isinstance(field, ImplClassField):
-        return {str(choice.key): str(choice.label) for choice in field.impl_choices()}
+        return {str(choice.key): str(choice.label) for choice in model_impl_choices(field.model, field.name)}
     choices_enum = getattr(field, "choices_enum", None)
     if choices_enum is None:
         return {}

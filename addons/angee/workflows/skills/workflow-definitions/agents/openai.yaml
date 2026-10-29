@@ -1,0 +1,6 @@
+interface:
+  display_name: "Workflow Definitions"
+  short_description: "Author workflow steps, definitions, decisions and triggers in an addon."
+  default_prompt: "Use $workflow-definitions to add or change a workflow step, definition resource, decision step or trigger in this addon."
+policy:
+  allow_implicit_invocation: false

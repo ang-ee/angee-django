@@ -35,8 +35,8 @@ class SqidField(SqidsField):
     encodes unconditionally there.
 
     The field is also usable unbound as a pure public-id codec through
-    ``public_id_from_value`` and ``public_id_to_value``; third-party-model
-    adapters such as ``SqidPublicIdentity`` build on that declared API.
+    ``public_id_from_value`` and ``public_id_to_value``, including when only a
+    stored public id remains after its original model is retired.
     """
 
     sqids_instance: Sqids | None

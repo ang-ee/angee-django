@@ -10,8 +10,8 @@ from django.apps import AppConfig
 from django.core.exceptions import ImproperlyConfigured
 
 from angee.compose.appgraph import AppGraph
-from angee.compose.autoconfig import AutoConfig
 from angee.compose.declarations import AppDeclarationSource
+from angee.utils.autoconfig import AutoConfig
 from angee.utils.paths import resolve_path
 
 
@@ -23,13 +23,25 @@ class Composer:
 
         self.namespace = namespace
 
-    def compose_settings(self, *, project_apps: object | None = None) -> None:
+    def compose_settings(
+        self, *, project_apps: object | None = None, compose_config: str | None = None,
+    ) -> None:
         """Apply composed settings into ``namespace``."""
 
         installed_apps = self.namespace.get("INSTALLED_APPS")
         if installed_apps is None:
             raise ImproperlyConfigured("settings must define INSTALLED_APPS")
         root_apps = self._app_entries(installed_apps)
+        selected = AppConfig.create(compose_config) if compose_config is not None else None
+        if selected is not None:
+            root_apps = tuple(
+                selected
+                if (entry if isinstance(entry, AppConfig) else AppConfig.create(entry)).name == selected.name
+                else entry
+                for entry in root_apps
+            )
+            if selected not in root_apps:
+                root_apps = (*root_apps, selected)
         declared_apps = None if project_apps is None else self._app_entries(project_apps)
 
         runtime_setting = self.namespace.get("COMPOSE_RUNTIME_DIR")
@@ -40,8 +52,13 @@ class Composer:
         app_configs = AppGraph(AppDeclarationSource.configured(self.namespace)).resolve(
             root_apps, declared_roots=declared_apps,
         )
-        self.namespace["INSTALLED_APPS"] = list(app_configs)
-        self._set_composer_setting("COMPOSE_RUNTIME_DIR", runtime_dir)
+        # The compiler/importer is the final native phase-2 hook. Preserve
+        # native identities and all dependency ordering among source apps.
+        last = selected.name if selected is not None else "angee.compose"
+        installed = [config for config in app_configs if config.name != last]
+        installed.extend(config for config in app_configs if config.name == last)
+        self.namespace["INSTALLED_APPS"] = installed
+        self.namespace["COMPOSE_RUNTIME_DIR"] = runtime_dir
         runtime_parent = str(runtime_dir.parent.resolve())
         if runtime_parent in sys.path:
             sys.path.remove(runtime_parent)
@@ -61,12 +78,3 @@ class Composer:
         if not all(isinstance(entry, str | AppConfig) for entry in entries):
             raise ImproperlyConfigured("INSTALLED_APPS must contain app paths or AppConfig instances")
         return entries
-
-    def _set_composer_setting(self, key: str, value: object) -> None:
-        """Assign a Composer-owned setting, rejecting conflicting project values."""
-
-        if key in self.namespace:
-            current = resolve_path(self.namespace[key]) if key == "COMPOSE_RUNTIME_DIR" else self.namespace[key]
-            if current != value:
-                raise ImproperlyConfigured(f"Project settings define Composer-owned setting {key}")
-        self.namespace[key] = value

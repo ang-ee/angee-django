@@ -9,8 +9,8 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from rebac import PermissionDenied, system_context
 
+from angee.base.exceptions import DomainError
 from angee.decisions.signals import decision_answered
-from angee.errors import DomainError
 from angee.messaging.events import message_ingested
 
 logger = logging.getLogger(__name__)

@@ -14,11 +14,11 @@ export function explainComposition(
   containers?: ComposedContainers,
   requires?: CompositionExplanation["requires"],
 ): CompositionExplanation {
-  const { provenance, removed, hidden, diagnostics } = menus;
+  const { provenance, removed, hidden } = menus;
   return {
     selection,
     home,
-    menus: { provenance, removed, hidden, unavailable: Object.fromEntries(unavailable), diagnostics },
+    menus: { provenance, removed, hidden, unavailable: Object.fromEntries(unavailable) },
     ...(requires ? { requires } : {}),
     ...(containers ? {
       containers: {

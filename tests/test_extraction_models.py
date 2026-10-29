@@ -19,7 +19,7 @@ from django.test import override_settings
 from rebac import actor_context, generic_target, system_context
 
 from angee.base.fields.state import StateField
-from angee.base.models import DerivedFrom
+from angee.base.models.derived import DerivedFrom
 from angee.extraction.acquisition import PageCarrier
 from angee.extraction.contracts import (
     DocumentPart,
