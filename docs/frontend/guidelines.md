@@ -408,7 +408,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   because there the canvas is the subject and the inspector its editor). The
   drawers are tools: session-scoped and record-independent (agents, logs). A
   candidate that fails its region's test belongs elsewhere. Related records
-  navigate the middle and the explorer keeps the place; the aside drills in for
+  navigate the middle and the explorer keeps the place (see
+  [Explorer navigation continuity](#explorer-navigation-continuity)); the aside drills in for
   a bounded question about one object in the record's context (this run, this
   changeset, this decision, this conversation) and links to the object's page
   for the open-ended work. Aside publishers compose by owner for their mounted lifetime:
@@ -2014,6 +2015,43 @@ Hard-won traps — the wise learn from others' mistakes
 - **`ActionResult` selections are a fragment**, or derived via `useActionMutation`;
   never hand-write `…Result`/`…Variables` interfaces and cast to
   `TypedDocumentNode`.
+
+## Explorer navigation continuity
+
+A record navigation changes the selected record without replacing its collection.
+Pending, missing or failed detail data does not itself select an empty root. Keep
+the current root, search, expansion and scroll position while another record in
+that root loads. A deliberate root change, or a resolved record belonging to a
+different root, may reset collection state for that new scope.
+
+[`ScopedExplorerPane`](../../packages/ui/src/views/tree/ScopedExplorerPane.tsx)
+composes the existing
+[`useScopedTreeExplorer`](../../packages/ui/src/views/tree/useScopedTreeExplorer.ts)
+selection owner. Routes own record identity; queries own loaded records;
+collection owners retain search and expansion. A controlled `rootId` remains
+the caller's responsibility: an unavailable detail response is not an instruction
+to pass an empty root. Consolidate shared retention behavior at the existing
+selection owner when migrating callers; do not add a parallel selection helper,
+row cache or navigator implementation.
+
+Keys that reset collection state must follow actual collection identity, never
+a temporary gap in detail data. Preserve navigator state separately from record
+data: showing the previous editable record under the next record's URL is not a
+valid way to keep the navigator mounted.
+
+Verify the transition as well as its settled result:
+
+- Use the native router, query and shell test providers. Hold the next record's
+  response pending; check that the navigator controls remain the same DOM nodes
+  and that search and expanded branches survive both pending and resolved reads.
+- Cover entry from the collection and from a directly opened record, navigation
+  within and across roots, explicit picker changes, and browser Back/Forward.
+  Check that a resolved record's root wins over an earlier picker choice.
+- Exercise empty, pending and failed picker searches independently of detail
+  reads. Check that delayed responses cannot restore an obsolete selection, and
+  that unavailable detail data does not expose the previous record's write actions.
+- In the live browser, navigate to an uncached record and observe the pending
+  interval. A screenshot taken only after loading cannot establish continuity.
 
 ## Checks
 
