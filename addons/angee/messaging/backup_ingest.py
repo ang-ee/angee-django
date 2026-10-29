@@ -18,10 +18,6 @@ a plain ``datetime``; the store converts those to its native date filter. That
 ``chat:<channel-pk>:`` key comes from ``ThreadManager.chat_key_prefix``, the
 same owner ingest uses when it lands a chat thread.
 
-The WhatsApp addon still carries its own resume-watermark query in
-:class:`angee.messaging_integrate_whatsapp.backup.BackupImporter`; its
-``_resume_watermarks`` normalizes the recovered key with ``bare_jid`` and
-pre-converts to CoreData seconds — both moves this owner leaves to the store.
 """
 
 from __future__ import annotations

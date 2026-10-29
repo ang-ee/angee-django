@@ -396,6 +396,8 @@ export const RecordThreadDocument = graphql(`
       thread {
         ...RecordThreadSummaryFields
       }
+      has_older_messages
+      has_newer_messages
       message_result_count
       removed_message_count
       audience_label

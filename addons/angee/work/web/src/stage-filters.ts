@@ -1,19 +1,15 @@
-/** The system-owned stage categories: no planning lane, and no user may give a stage one. */
-export const SYSTEM_STAGE_CATEGORIES = ["triage", "duplicate"] as const;
-
-/** Same-queue stages rendered as ordinary board lanes. */
+/** Same-queue stages rendered as ordinary board lanes, including rule-owned lanes. */
 export function queueStageFilters(queueId: string) {
   return [
     { field: "queue", operator: "eq" as const, value: queueId },
-    { field: "category", operator: "ne" as const, value: SYSTEM_STAGE_CATEGORIES[0] },
-    { field: "category", operator: "ne" as const, value: SYSTEM_STAGE_CATEGORIES[1] },
+    { field: "is_system", operator: "eq" as const, value: false },
   ];
 }
 
-/** Same-queue stages that accept may enter by hand. */
+/** Acceptance also requires the owning rule to admit manual entry. */
 export function acceptStageFilters(queueId: string) {
   return [
-    ...queueStageFilters(queueId),
-    { field: "rule_owned", operator: "eq" as const, value: false },
+    { field: "queue", operator: "eq" as const, value: queueId },
+    { field: "accepts_manual_entry", operator: "eq" as const, value: true },
   ];
 }

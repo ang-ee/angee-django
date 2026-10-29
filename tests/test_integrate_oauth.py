@@ -379,3 +379,21 @@ def test_signing_secret_refuses_public_clients_without_reading_storage():
 def test_signing_secret_refuses_a_confidential_client_without_a_secret():
     with pytest.raises(IntegrationError, match="has no client secret"):
         OAuthClientProtocol(OAuthClient(manual_redirect_uri="", client_secret="")).confidential_client_secret()
+
+
+@pytest.mark.parametrize("request_format", ["form", "json"])
+@pytest.mark.parametrize("provider_type, expected", [("generic_oauth2", True), ("anthropic", False)])
+def test_refresh_grant_parameters_are_selected_by_provider(monkeypatch, request_format, provider_type, expected):
+    client = OAuthClient(slug="grant-policy", client_id="client", token_endpoint="https://provider.example/token",
+                         token_request_format=request_format, provider_type=provider_type,
+                         token_params={"expires_in": 3600, "audience": "inference"})
+    protocol = OAuthClientProtocol(client)
+    seen = {}
+    def exchange(endpoint, grant_type, grant, extra):
+        seen.update(extra)
+        return {"access_token": "accepted"}
+    monkeypatch.setattr(protocol, "_json_token_request", exchange)
+    monkeypatch.setattr(protocol, "_authlib_token_request", exchange)
+    assert protocol.exchange_grant("refresh_token", refresh_token="refresh") == {"access_token": "accepted"}
+    assert ("expires_in" in seen) is expected
+    assert seen["audience"] == "inference"

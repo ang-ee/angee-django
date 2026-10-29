@@ -12,6 +12,9 @@ const CATEGORY_OPTIONS = ["triage", "backlog", "unstarted", "started", "complete
   .map((value) => ({ value, label: value }));
 
 vi.mock("@angee/ui", () => ({
+  useUiT: () => (key: string) => key,
+  ErrorBanner: () => null,
+  Button: () => null,
   Chip: ({ children }: { children?: React.ReactNode }) => <span data-badge>{children}</span>,
   Field: () => null,
   Form: (props: Record<string, unknown>) => {
@@ -21,6 +24,10 @@ vi.mock("@angee/ui", () => ({
   Group: () => null,
   useEnumOptions: (_resource: string, field: string) => (field === "category" ? CATEGORY_OPTIONS : []),
 }));
+
+vi.mock("@angee/refine", () => ({ useAuthoredQuery: () => ({ data: {
+  work_stage_editable_categories: ["BACKLOG", "UNSTARTED", "STARTED", "COMPLETED", "CANCELED"],
+} }) }));
 
 vi.mock("./i18n", () => ({
   useWorkT: () => (key: string) => key,

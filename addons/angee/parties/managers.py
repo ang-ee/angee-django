@@ -36,7 +36,7 @@ from rebac import (
     current_actor,
     system_context,
 )
-from rebac.actors import to_subject_ref
+from rebac.actors import is_sudo, to_subject_ref
 
 from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.models.identity import instances_from_public_ids
@@ -390,6 +390,56 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
             refresh = {name: val for name, val in fields.items() if name != "external_id"}
             self._refresh(handle, {"normalized_value": normalized_value, **refresh})
         return handle
+
+    def reidentify(
+        self, handle: Any, *, expected_value: str, value: str, display_name: str = "",
+    ) -> tuple[bool, bool] | None:
+        """Rewrite a canonical handle or fold it into the existing value owner.
+
+        This is admitted system work, like the native fold it composes.
+        Return ``(folded, name_filled)``; a gone/redirected/changed source is a
+        stale request and returns None. Source and target Handles are locked in
+        canonical identity order before Parties and their statements. A value
+        created during a rewrite is retried after releasing the failed attempt's
+        locks, so the same order holds for its subsequent fold.
+        """
+
+        if not is_sudo():
+            raise PermissionDenied("Handle identity rewrites require an admitted system boundary.")
+        using = self.db
+        while True:
+            try:
+                with transaction.atomic(using=using):
+                    source = self.model.system_queryset().using(using).filter(pk=handle.pk).first()
+                    if source is None or source.merged_into_id is not None or source.value != expected_value:
+                        return None
+                    target = self.find_identity(platform=source.platform, value=value)
+                    ids = (source.pk, target.pk) if target is not None else (source.pk,)
+                    handles, _parties = apps.get_model("parties", "Party").objects.db_manager(using).lock_identity_rows(
+                        party_ids=(), handle_ids=ids,
+                    )
+                    source = handles.get(source.pk)
+                    if source is None or source.merged_into_id is not None or source.value != expected_value:
+                        return None
+                    if target is not None and target.pk != source.pk:
+                        target = handles[target.pk]
+                        if target.merged_into_id is not None:
+                            continue
+                        kept = target.fold([source])
+                        folded = True
+                    else:
+                        source.value = value
+                        source.save(using=using, update_fields=("value", "updated_at"))
+                        kept, folded = source, False
+                    named = bool(display_name and not kept.display_name)
+                    if named:
+                        kept.display_name = display_name
+                        kept.save(using=using, update_fields=("display_name", "updated_at"))
+                    return folded, named
+            except IntegrityError:
+                target = self.find_identity(platform=handle.platform, value=value)
+                if target is None or target.pk == handle.pk:
+                    raise
 
     def find_identity(self, *, platform: str, value: str, external_id: str = "") -> Any | None:
         """Return the existing handle :meth:`upsert` lands an identity on, or ``None`` when it would create one.

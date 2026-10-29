@@ -307,3 +307,21 @@ def test_connect_iphone_backup_graphql_denies_non_admin(
 
     assert result.errors is not None
     assert queued_mounts == []
+
+
+def test_backup_root_uses_the_storage_file_local_path_owner(monkeypatch, tmp_path, db):
+    from angee.storage_integrate_iphone.mounts import backup_root
+    manifest = tmp_path / "Manifest.db"
+    manifest.write_bytes(b"manifest")
+    class Rows:
+        def filter(self, **kwargs):
+            assert kwargs["filename"] == "Manifest.db" and kwargs["is_trashed"] is False
+            return self
+        def order_by(self, *args):
+            assert args == ("storage_path",)
+            return self
+        def first(self):
+            return SimpleNamespace(local_path=lambda: manifest)
+    monkeypatch.setattr("angee.storage_integrate_iphone.mounts.apps.get_model",
+                        lambda *args: SimpleNamespace(_base_manager=Rows()))
+    assert backup_root(object()) == tmp_path

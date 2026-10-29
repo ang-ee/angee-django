@@ -33,6 +33,7 @@ from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_display_labels, user_label, user_public_id
 from angee.projects.schema import DroppedReason, TaskType
 from angee.spaces.schema import SpaceGroupType
+from angee.work.models import Stage as StageModel
 
 Queue = apps.get_model("work", "Queue")
 Stage = apps.get_model("work", "Stage")
@@ -43,6 +44,20 @@ User = apps.get_model("iam", "User")
 Membership = apps.get_model("spaces", "Membership")
 Person = apps.get_model("parties", "Person")
 Milestone = apps.get_model("projects", "Milestone")
+
+
+strawberry.enum(cast(Any, Stage.StageCategory), name="WorkStageCategory")
+
+
+@strawberry.type
+class WorkStagePolicyQuery:
+    """Stage owner policy for authored settings controls."""
+
+    @strawberry.field
+    def work_stage_editable_categories(self) -> list[StageModel.StageCategory]:
+        """Project ordinary authors' category choices from the composed Stage owner."""
+
+        return list(Stage.editable_categories())
 
 
 @strawberry_django.type(Queue)
@@ -652,6 +667,7 @@ _RESOURCE_TYPES = [*_QUEUE_RESOURCE.types, *_STAGE_RESOURCE.types, *_CYCLE_RESOU
 _WORK_SCHEMA_BUCKET: dict[str, list[Any]] = {
     "query": [
         WorkPeopleQuery,
+        WorkStagePolicyQuery,
         WorkRemovedTaskQuery,
         _QUEUE_RESOURCE.query,
         _STAGE_RESOURCE.query,

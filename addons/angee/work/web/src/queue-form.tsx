@@ -1,9 +1,10 @@
-import { Chip, Field, Form, Group, useEnumOptions, type ContainerEntry, type EditableLineField, type EditableLineSupplementalColumn, type FormProps } from "@angee/ui";
+import { Button, ErrorBanner, useUiT, Chip, Field, Form, Group, useEnumOptions, type ContainerEntry, type EditableLineField, type EditableLineSupplementalColumn, type FormProps } from "@angee/ui";
 import * as React from "react";
 
 import { useWorkT } from "./i18n";
 import { QUEUE_MODEL, STAGE_MODEL } from "./resources";
-import { SYSTEM_STAGE_CATEGORIES } from "./stage-filters";
+import { useAuthoredQuery } from "@angee/refine";
+import { WorkStageEditableCategoriesDocument } from "./documents";
 
 /** The `work.Queue#sections` child holding the queue's Stages lines; products narrow to it by this id. */
 export const QUEUE_STAGES_SECTION = "work.queue-stages";
@@ -82,7 +83,10 @@ const STAGE_PRIMARY_FIELDS = ["name", "category", "tone"] as const;
  */
 export function useQueueFormDeclaration(props: Omit<FormProps, "resource" | "children"> = {}): React.ReactElement {
   const t = useWorkT();
+  const uiT = useUiT();
   const categories = useEnumOptions(STAGE_MODEL, "category");
+  const policy = useAuthoredQuery(WorkStageEditableCategoriesDocument, {}, { models: [STAGE_MODEL] });
+  const editableCategories = policy.data?.work_stage_editable_categories;
   const lineFields = React.useMemo<readonly EditableLineField[]>(() => [
     { name: "name", label: t("common.name") },
     {
@@ -92,12 +96,12 @@ export function useQueueFormDeclaration(props: Omit<FormProps, "resource" | "chi
       label: t("common.category"),
       options: categories.map((option) => ({
         ...option,
-        disabled: (SYSTEM_STAGE_CATEGORIES as readonly string[]).includes(String(option.value)),
+        disabled: !editableCategories?.some((value) => value.toLowerCase() === String(option.value).toLowerCase()),
       })),
     },
     { name: "tone", label: t("common.tone") },
     { name: "rule_owned", label: t("stage.ruleOwned"), description: t("stage.ruleOwned.help") },
-  ], [categories, t]);
+  ], [categories, editableCategories, t]);
   // Each stage's rule behaviour as badges, read from the live row.
   const stageBadges = React.useMemo<readonly EditableLineSupplementalColumn[]>(() => [{
     key: "behaviour",
@@ -113,6 +117,9 @@ export function useQueueFormDeclaration(props: Omit<FormProps, "resource" | "chi
   return (
     <Form
       {...props}
+      contextLine={policy.error ? <>{props.contextLine}<ErrorBanner description={policy.error.message}
+        actions={<Button size="sm" onClick={() => { void policy.refetch(); }}>{uiT("app.retry")}</Button>} /></>
+        : props.contextLine}
       resource={QUEUE_MODEL}
       linePrimaryFields={STAGE_PRIMARY_FIELDS}
       lineFields={lineFields}

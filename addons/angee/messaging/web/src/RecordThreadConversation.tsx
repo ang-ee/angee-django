@@ -147,16 +147,22 @@ export function RecordThreadConversation({
   const [search, setSearch] = React.useState("");
   const [debouncedSearch] = useDebounce(search.trim(), SEARCH_DEBOUNCE_MS);
   const activeSearch = stream && !stream.search ? "" : debouncedSearch;
+  const scope = JSON.stringify([modelLabel, recordId, activeSearch, messageLimit, around,
+    stream ? stream.messageTypes ?? [] : messageTypes ?? []]);
+  const [window, setWindow] = React.useState<{ scope: string; before?: string; after?: string; latest?: boolean }>({ scope });
+  const cursor = window.scope === scope ? window : undefined;
   const variables = React.useMemo(
     () => ({
       modelLabel,
       recordId,
       search: activeSearch,
       messageLimit,
-      around,
+      around: cursor?.latest || cursor?.before || cursor?.after ? undefined : around,
+      before: cursor?.before,
+      after: cursor?.after,
       messageTypes: stream ? [...(stream.messageTypes ?? [])] : [...(messageTypes ?? [])],
     }),
-    [modelLabel, recordId, activeSearch, messageLimit, around, stream?.messageTypes, messageTypes, Boolean(stream)],
+    [modelLabel, recordId, activeSearch, messageLimit, around, cursor?.before, cursor?.after, cursor?.latest, stream?.messageTypes, messageTypes, Boolean(stream)],
   );
   const threadQuery = useRecordThreadQuery(variables);
   const threadPayload = threadQuery.data?.record_thread;
@@ -249,13 +255,14 @@ export function RecordThreadConversation({
   // delete elsewhere, a filtered search) so we never edit or reply to a ghost row.
   // An older page is a window, not the feed: browsing it for context keeps the intent.
   React.useEffect(() => {
+    if (cursor?.before || cursor?.after || (around && !cursor?.latest)) return;
     if (editingMessageId && !messages.some((message) => message.id === editingMessageId)) {
       setEditingMessageId(null);
     }
     setReplyToMessage((current) =>
       current && !messages.some((message) => message.id === current.id) ? null : current,
     );
-  }, [messages, editingMessageId]);
+  }, [messages, editingMessageId, cursor?.before, cursor?.after, cursor?.latest, around]);
 
   const handleStartEdit = React.useCallback((messageId: string) => {
     setError(null);
@@ -396,6 +403,7 @@ export function RecordThreadConversation({
         await postMessage({ ...input, idempotencyKey: attempt.idempotencyKey });
         if (postAttempt.current === attempt) postAttempt.current = null;
         setReplyToMessage(null);
+        setWindow({ scope, latest: true });
         return true;
       } catch (cause) {
         setError(
@@ -407,7 +415,7 @@ export function RecordThreadConversation({
         return false;
       }
     },
-    [canPost, readOnly, modelLabel, recordId, selectedPostKind, replyToMessage, postMessage, t],
+    [canPost, readOnly, modelLabel, recordId, selectedPostKind, replyToMessage, postMessage, scope, t],
   );
 
   const handleMarkRead = React.useCallback(async (): Promise<void> => {
@@ -468,6 +476,8 @@ export function RecordThreadConversation({
           placeholder={t("chatter.search")}
           aria-label={t("chatter.search")}
         /> : null}
+        {messages.length === 0 && (cursor?.before || cursor?.after || (around && !cursor?.latest)) ? <Button size="sm" variant="ghost"
+          onClick={() => setWindow({ scope, latest: true })}>{t("transcript.latest")}</Button> : null}
         {messages.length > 0 ? (
           <div className="space-y-3">
             {activeSearch ? (
@@ -475,6 +485,14 @@ export function RecordThreadConversation({
                 {t("chatter.results", { count: messageResultCount })}
               </div>
             ) : null}
+            <div className="flex justify-between gap-2">
+              {threadPayload?.has_older_messages ? <Button size="sm" variant="ghost" disabled={threadQuery.isFetching}
+                onClick={() => setWindow({ scope, before: messages[0]!.id })}>{t("transcript.loadOlder")}</Button> : <span />}
+              {threadPayload?.has_newer_messages ? <Button size="sm" variant="ghost" disabled={threadQuery.isFetching}
+                onClick={() => setWindow({ scope, after: messages.at(-1)!.id })}>{t("transcript.loadNewer")}</Button> : null}
+              {cursor?.before || cursor?.after || (around && !cursor?.latest) ? <Button size="sm" variant="ghost" disabled={threadQuery.isFetching}
+                onClick={() => setWindow({ scope, latest: true })}>{t("transcript.latest")}</Button> : null}
+            </div>
             <MessageFeed label={t("chatter.feedLabel")}>
               {messages.map((message) => <MessageFeedRow
                   key={`message:${message.id}`}

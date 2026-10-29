@@ -164,6 +164,7 @@ export const enMessagingMessages: Record<string, string> = {
   "transcript.emptyHint": "This thread has no messages.",
   "transcript.loadOlder": "Load older messages",
   "transcript.loadNewer": "Load newer messages",
+  "transcript.latest": "Latest messages",
   "transcript.jumpDate": "Jump to date",
   "transcript.latest": "Latest messages",
   "transcript.noteLabel": "Internal note",

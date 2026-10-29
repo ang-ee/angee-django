@@ -1898,6 +1898,8 @@ def test_record_chatter_fetches_message_windows(composed_tables: None) -> None:
                     }
                   ) {
                     error_code
+                    has_older_messages
+                    has_newer_messages
                     message_result_count
                     messages {
                       id
@@ -1920,6 +1922,7 @@ def test_record_chatter_fetches_message_windows(composed_tables: None) -> None:
 
     first_page = fetch(limit=2)
     assert first_page["error_code"] is None
+    assert first_page["has_older_messages"] and not first_page["has_newer_messages"]
     # The five posts; the record's creation is a history line, not a message.
     assert first_page["message_result_count"] == 5
     # The newest window is still selected, but returned chronological ascending.
@@ -1933,6 +1936,10 @@ def test_record_chatter_fetches_message_windows(composed_tables: None) -> None:
         "Window message 2",
         "Window message 3",
     ]
+
+    assert older_page["has_older_messages"] and older_page["has_newer_messages"]
+    earliest = fetch(before=messages[1].sqid)
+    assert not earliest["has_older_messages"] and earliest["has_newer_messages"]
 
     newer_page = fetch(limit=2, after=messages[1].sqid)
     assert [message["preview"] for message in newer_page["messages"]] == [

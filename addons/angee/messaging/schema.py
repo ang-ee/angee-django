@@ -1062,6 +1062,25 @@ class RecordThreadPayload(RecordThreadStatePayload, RecordErrorPayload):
     permissions: list[str] = strawberry.field(default_factory=list)
     messages: list[RecordMessageType] = strawberry.field(default_factory=list)
     message_result_count: int = strawberry.field(name="message_result_count", default=0)
+    _page_record: strawberry.Private[Any] = None
+    _page_role: strawberry.Private[str] = "chatter"
+
+    @strawberry.field(name="has_older_messages")
+    def has_older_messages(self) -> bool:
+        return self._window_continues(newer=False)
+
+    @strawberry.field(name="has_newer_messages")
+    def has_newer_messages(self) -> bool:
+        return self._window_continues(newer=True)
+
+    def _window_continues(self, *, newer: bool) -> bool:
+        if self._page_record is None:
+            return False
+        return bool(Message.objects.record_window_continues(
+            self._page_record, self.messages, newer=newer, role=self._page_role,
+            search=self._reply_search, message_types=self._reply_message_types,
+        ))
+
     _reply_search: strawberry.Private[str] = ""
     _reply_message_types: strawberry.Private[tuple[str, ...]] = ()
     audience_label: str | None = strawberry.field(name="audience_label", default=None)
@@ -2353,6 +2372,8 @@ def _record_thread_payload(
         thread=thread,
         messages=messages,
         message_result_count=message_result_count,
+        _page_record=record,
+        _page_role=role,
         _reply_search=search,
         _reply_message_types=message_types,
         post_kinds=[RecordPostKind.COMMENT, RecordPostKind.NOTE] if record_access[0] else [],
