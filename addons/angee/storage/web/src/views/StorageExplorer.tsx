@@ -2,10 +2,10 @@ import { useModelMetadata } from "@angee/metadata";
 import { useAuthoredQuery, useInvalidateAuthoredModels } from "@angee/refine";
 import { useCallback, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
-  CollectionTreeView, EmptyState, ErrorBanner, InlineTextAction, LoadingPanel, PaneToolbar, PaneToolbarMenu,
+  CollectionTreeView, EmptyState, ErrorBanner, InlineTextAction, LoadingPanel, PaneToolbarMenu,
   ResourceViewProvider, ScopedExplorerPane, TreeView, useConfirm, useFilePicker, useLatestRef,
   relationFieldInfoForResource, useRelationOptions, useScopedTreeExplorer,
-  type FieldDescriptor, type ScopedExplorerController,
+  type FieldDescriptor, type ListViewProps, type ScopedExplorerController,
 } from "@angee/ui";
 import { StorageFolderById, type StorageDrive, type StorageFile } from "../data/documents";
 import { ALL_SCOPE, STORAGE_FILE_DND, TRASH_SCOPE, fileDragData, folderTreeRows,
@@ -134,13 +134,29 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
     },
   });
   const renderTree = useCallback(
-    (controller: StorageExplorerController) => {
+    (selection: ScopedStorageController, selector: ReactNode) => {
+      const controller = storageController(selection);
       const effectiveScope = controller.selectedId ?? ALL_SCOPE;
       const selectedFolder =
         effectiveScope !== ALL_SCOPE && effectiveScope !== TRASH_SCOPE
           ? controller.selectedRow
           : undefined;
       uploadTargetRef.current = controller.uploadTarget;
+      const deleteFolder = async (): Promise<void> => {
+        if (!selectedFolder) return;
+        const ok = await confirm({
+          title: t("folder.deleteTitle", { name: selectedFolder.name }),
+          body: t("folder.deleteBody"),
+          confirm: t("folder.deleteConfirm"),
+          danger: true,
+        });
+        if (!ok) return;
+        void folderActionsRef.current
+          .remove(effectiveScope)
+          .then(() => controller.setSelectedId(ALL_SCOPE));
+      };
+      const busy = folderActions.busy || !controller.rootId
+        || (effectiveScope !== ALL_SCOPE && effectiveScope !== TRASH_SCOPE && !selectedFolder);
       const submit = async (name: string): Promise<void> => {
         if (folderEdit === "rename") {
           await folderActionsRef.current.rename(effectiveScope, name);
@@ -182,6 +198,14 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
           <ResourceViewProvider key={controller.rootId} scope="local" resource={FOLDER_MODEL}
             initialState={{ pageSize: 50, sort: { field: "name", dir: "asc" } }}>
             <StorageFolders drive={controller.rootId} selectedId={openFileId ?? controller.selectedId}
+              pane={{ selector, overflowItems: selectedFolder ? [
+                { icon: "pencil", label: t("folder.rename"), disabled: folderActions.busy, onClick: () => setFolderEdit("rename") },
+                { icon: "trash", label: t("folder.delete"), tone: "danger", disabled: folderActions.busy, onClick: () => void deleteFolder() },
+              ] : [] }}
+              toolbarActions={<PaneToolbarMenu icon="plus" label={t("new.menu")} text disabled={busy} items={[
+                { icon: "folder", label: t("new.folder"), onClick: () => setFolderEdit("create") },
+                ...(canUpload ? [{ icon: "upload", label: t("new.upload"), onClick: picker.open, disabled: !controller.uploadTarget }] : []),
+              ]} />}
               revealRows={controller.treeRows.filter((row) => row.kind === "folder" || row.kind === "file" && row.parent !== ALL_SCOPE)}
               onSelect={(row) => row.kind === "file" ? openFileRoute(row.id) : controller.setSelectedId(row.id)}
               onFileDrop={handleFileDrop}
@@ -193,55 +217,8 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
         </>
       );
     },
-    [canUpload, folderRead.error, folderActions.busy, folderActionsRef, folderEdit, handleFileDrop, openFileId, openFileRoute, picker.input, t],
+    [canUpload, confirm, folderRead.error, folderActions.busy, folderActionsRef, folderEdit, handleFileDrop, openFileId, openFileRoute, picker.input, picker.open, t],
   );
-  const explorerToolbar = useCallback(
-    (controller: StorageExplorerController) => {
-      const effectiveScope = controller.selectedId ?? ALL_SCOPE;
-      const selectedFolder =
-        effectiveScope !== ALL_SCOPE && effectiveScope !== TRASH_SCOPE
-          ? controller.selectedRow
-          : undefined;
-      const deleteFolder = async (): Promise<void> => {
-        if (!selectedFolder) return;
-        const ok = await confirm({
-          title: t("folder.deleteTitle", { name: selectedFolder.name }),
-          body: t("folder.deleteBody"),
-          confirm: t("folder.deleteConfirm"),
-          danger: true,
-        });
-        if (!ok) return;
-        void folderActionsRef.current
-          .remove(effectiveScope)
-          .then(() => controller.setSelectedId(ALL_SCOPE));
-      };
-      const busy = folderActions.busy || !controller.rootId
-        || (effectiveScope !== ALL_SCOPE && effectiveScope !== TRASH_SCOPE && !selectedFolder);
-      return {
-        actions: [{
-          icon: "plus", label: t("new.menu"), text: true, disabled: busy,
-          items: [
-            { icon: "folder", label: t("new.folder"), onClick: () => setFolderEdit("create") },
-            ...(canUpload ? [{ icon: "upload", label: t("new.upload"), onClick: picker.open, disabled: !controller.uploadTarget }] : []),
-          ],
-        }],
-        overflow: selectedFolder ? (
-          <PaneToolbarMenu items={[
-            { icon: "pencil", label: t("folder.rename"), disabled: folderActions.busy, onClick: () => setFolderEdit("rename") },
-            { icon: "trash", label: t("folder.delete"), tone: "danger", disabled: folderActions.busy, onClick: () => void deleteFolder() },
-          ]} />
-        ) : undefined,
-      };
-    },
-    [canUpload, confirm, folderActions.busy, folderActionsRef, picker.open, t],
-  );
-  const renderNavigator = useCallback((controller: ScopedStorageController, selector: ReactNode) => {
-    const storage = storageController(controller);
-    return <>
-      <PaneToolbar {...explorerToolbar(storage)} selector={selector} />
-      {renderTree(storage)}
-    </>;
-  }, [explorerToolbar, renderTree]);
   return (
     <ScopedExplorerPane<StorageDrive, StorageTreeRow>
       roots={drives}
@@ -250,7 +227,7 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
       controller={controller}
       navigatorLabel={t("nav.label")}
       rootPicker={driveRootPicker}
-      renderTree={renderNavigator}
+      renderTree={renderTree}
       renderContentWithoutRoots={openFileId !== null || Boolean(requestedFolder)}
       loading={initialDrives.list.fetching && drives.length === 0}
       loadingContent={<LoadingPanel message={t("loading")} />}
@@ -274,8 +251,9 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
   );
 }
 
-function StorageFolders({ drive, selectedId, revealRows, onSelect, onFileDrop, renderRow, insertion }: {
+function StorageFolders({ drive, selectedId, revealRows, onSelect, onFileDrop, renderRow, insertion, pane, toolbarActions }: {
   drive: string; selectedId: string | undefined; revealRows: readonly StorageTreeRow[];
+  pane: ListViewProps["pane"]; toolbarActions: ReactNode;
   onSelect: (row: StorageTreeRow) => void; onFileDrop: (id: string, file: FileDragData) => void;
   renderRow: (row: StorageTreeRow) => ReactNode;
   insertion: { parentId: string | null; node: ReactNode } | null;
@@ -284,7 +262,7 @@ function StorageFolders({ drive, selectedId, revealRows, onSelect, onFileDrop, r
   const metadata = useModelMetadata(FOLDER_MODEL);
   const source = useMemo(() => metadata ? folderSource(metadata, drive) : null, [drive, metadata]);
   if (!source) return null;
-  return <CollectionTreeView<StorageTreeRow> source={source} resource={FOLDER_MODEL} presentation="workspace" pane={{}}
+  return <CollectionTreeView<StorageTreeRow> source={source} resource={FOLDER_MODEL} presentation="workspace" pane={pane} toolbarActions={toolbarActions}
     columns={[{ field: "name", header: t("folder.nameLabel") }]} textFilterField="name" search={{ box: true }}
     rowKey="id" parent="parent" label="name" icon="icon" hasChildren="hasChildren"
     selectedId={selectedId} revealRows={revealRows} onRowClick={onSelect} renderRow={renderRow} insertion={insertion}

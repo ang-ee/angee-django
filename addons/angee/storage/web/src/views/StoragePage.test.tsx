@@ -495,6 +495,19 @@ describe("StoragePage explorer wiring", () => {
     });
   });
 
+  test("the folder collection shares its native header and overflow with drive and folder verbs", async () => {
+    routerState.setSearch({ folder: "folder-a" });
+    render(pageTree());
+    const navigator = screen.getByRole("navigation", { name: "Files" });
+    const toolbar = within(navigator).getByRole("toolbar");
+    expect(toolbar.contains(screen.getByTestId("root-picker"))).toBe(true);
+    expect(within(toolbar).getByRole("button", { name: "New" })).toBeTruthy();
+    fireEvent.click(within(toolbar).getByRole("button", { name: "More" }));
+    expect(await screen.findByRole("menuitem", { name: "Rename folder" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Delete folder" })).toBeTruthy();
+    expect(screen.getByRole("menuitemradio", { name: "Folder name, ascending" })).toBeTruthy();
+  });
+
   test("selects the folder scope from the `?folder=` URL param on load", () => {
     routerState.setSearch({ folder: "folder-a" });
 
