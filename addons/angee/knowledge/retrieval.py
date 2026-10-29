@@ -17,12 +17,16 @@ ORM filtering over the existing ``title``/``body`` columns, not parsing.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from itertools import islice
 from typing import Any
 
 from django.apps import apps
 from django.db.models import Q
 
 from angee.base.implementations import ImplBase
+
+
+MAX_SEARCH_PAGE_SIZE = 100
 
 
 class RetrievalBackend(ImplBase):
@@ -45,8 +49,12 @@ class RetrievalBackend(ImplBase):
         self.vault = vault
 
     def search(self, query: str, *, first: int = 20) -> Iterable[Any]:
-        """Compose the group search for this one bound vault."""
-        return type(self).search_many((self.vault,), query, first=first)
+        """Search this vault within the shared page budget, even for plugin callers."""
+
+        limit = max(0, min(first, MAX_SEARCH_PAGE_SIZE))
+        if not limit:
+            return ()
+        return islice(type(self).search_many((self.vault,), query, first=limit), limit)
 
     @classmethod
     def search_many(cls, vaults: Iterable[Any], query: str, *, first: int = 20) -> Iterable[Any]:

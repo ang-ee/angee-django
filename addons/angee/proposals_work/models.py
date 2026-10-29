@@ -47,8 +47,8 @@ class RoundQuestionsQueue(models.Model):
         if self.clarification_queue_id is not None:
             queue_model = apps.get_model("work", "Queue")
             with system_context(reason="proposals_work.round.queue_validation"):
-                slug = queue_model._base_manager.values_list("slug", flat=True).get(pk=self.clarification_queue_id)
-            if slug.startswith(queue_model.objects.PERSONAL_SLUG_PREFIX):
+                queue = queue_model._base_manager.select_related("owner").get(pk=self.clarification_queue_id)
+            if queue.is_personal:
                 raise ValidationError({"clarification_queue": "Choose a non-personal queue for round questions."})
 
     def route_clarification(self, task: Any, step: str) -> None:
@@ -96,7 +96,7 @@ class TaskTrackQueue(models.Model):
                 queue_model = apps.get_model("work", "Queue")
                 queue = queue_model._base_manager.select_related("owner").get(pk=placement["queue_id"])
                 owner = queue.owner
-                if owner is not None and queue.slug == queue_model.objects.personal_slug(owner):
+                if queue.is_personal:
                     if queue.owner_id == proposal.responder_id or backend().check_access(
                         subject=to_subject_ref(owner), action="manage", resource=to_object_ref(proposal.round)
                     ).allowed:

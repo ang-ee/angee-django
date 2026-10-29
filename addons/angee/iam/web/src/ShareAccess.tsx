@@ -25,14 +25,17 @@ import {
 
 import { RecordAccessDocument, RecordReadersDocument } from "./documents";
 
-type AccessPerson = NonNullable<ManageAccessDialogProps["people"]>[number];
+export type AccessPerson = NonNullable<ManageAccessDialogProps["people"]>[number];
 type AccessRole = NonNullable<ManageAccessDialogProps["roles"]>[number];
 type AccessVisibility = NonNullable<ManageAccessDialogProps["visibility"]>[number];
 
 /** An owner's role adapter contributes its list and verbs to one open panel. */
-export interface AccessRoleState {
-  role: AccessRole;
+export interface AccessPeopleState {
   people: readonly AccessPerson[];
+}
+
+export interface AccessRoleState extends AccessPeopleState {
+  role: AccessRole;
   add: (subject: string) => Promise<boolean>;
   remove: (person: AccessPerson) => Promise<void>;
 }
@@ -49,17 +52,27 @@ declare module "@angee/ui/runtime" {
 export interface AccessRoleOwnerProps {
   targetId: string;
   record: Row | null | undefined;
+  resource: DataResourceMetadata;
 }
 
-const AccessRoleRegistration = React.createContext<((id: string, value: AccessRoleState | null) => void) | null>(null);
+const AccessRoleRegistration = React.createContext<((id: string, value: AccessPeopleState | null) => void) | null>(null);
 
 /** Register one model-owned role while the IAM panel is open. */
-export function useAccessRole(id: string, state: AccessRoleState): void {
+export function useAccessPeople(id: string, state: AccessPeopleState): void {
   const register = React.useContext(AccessRoleRegistration);
   React.useEffect(() => {
     register?.(id, state);
     return () => register?.(id, null);
   }, [id, register, state]);
+}
+
+/** Register a role and its people through the same access contribution. */
+export function useAccessRole(id: string, state: AccessRoleState): void {
+  useAccessPeople(id, state);
+}
+
+function accessRole(state: AccessPeopleState | undefined): AccessRoleState | undefined {
+  return state && "role" in state ? state as AccessRoleState : undefined;
 }
 
 const AccessVisibilityRegistration = React.createContext<((id: string, value: AccessVisibility | null) => void) | null>(null);
@@ -175,8 +188,8 @@ function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel, o
   visibilityEntries: ReturnType<typeof useContainer>;
 }): React.ReactElement {
   const t = useUiT();
-  const [roleStates, setRoleStates] = React.useState<Record<string, AccessRoleState>>({});
-  const registerRole = React.useCallback((id: string, value: AccessRoleState | null) => {
+  const [roleStates, setRoleStates] = React.useState<Record<string, AccessPeopleState>>({});
+  const registerRole = React.useCallback((id: string, value: AccessPeopleState | null) => {
     setRoleStates((current) => {
       if (value === null) {
         if (!(id in current)) return current;
@@ -199,13 +212,13 @@ function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel, o
       return current[id] === value ? current : { ...current, [id]: value };
     });
   }, []);
-  const roles = roleEntries.flatMap((entry) => roleStates[entry.id]?.role ?? []);
+  const roles = roleEntries.flatMap((entry) => accessRole(roleStates[entry.id])?.role ?? []);
   const visibility = visibilityEntries.flatMap((entry) => visibilityStates[entry.id] ?? []);
   const rolePeople = roleEntries.flatMap((entry) => roleStates[entry.id]?.people ?? []);
   const onAddRole = React.useCallback((id: string, subject: string) =>
-    roleStates[id]?.add(subject) ?? Promise.resolve(false), [roleStates]);
+    accessRole(roleStates[id])?.add(subject) ?? Promise.resolve(false), [roleStates]);
   const onRemovePerson = React.useCallback((person: AccessPerson) =>
-    person.roleId ? roleStates[person.roleId]?.remove(person) ?? Promise.resolve() : Promise.resolve(), [roleStates]);
+    person.roleId ? accessRole(roleStates[person.roleId])?.remove(person) ?? Promise.resolve() : Promise.resolve(), [roleStates]);
   const stableTargetIds = useStableArray(targetIds);
   const invalidates = useResourceInvalidates([resource.modelLabel]);
   const query = useAuthoredQuery(RecordAccessDocument, {
@@ -264,7 +277,10 @@ function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel, o
   );
   const people = React.useMemo<readonly AccessPerson[] | undefined>(() => {
     if (stableTargetIds.length !== 1) return undefined;
-    const roleBySubject = new Map(rolePeople.map((person) => [person.subject, person]));
+    const roleBySubject = new Map<string, AccessPerson>();
+    for (const person of rolePeople) roleBySubject.set(person.subject, {
+      ...roleBySubject.get(person.subject), ...person,
+    });
     const directBySubject = new Map(entries.map((entry) => [entry.subject, entry]));
     return (readers.data?.record_readers ?? []).map((reader) => {
       const role = roleBySubject.get(reader.subject);
@@ -273,7 +289,7 @@ function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel, o
         subject: reader.subject, label: reader.label,
         relation: direct?.relation,
         roleLabel: role?.roleLabel ?? (direct ? t("access.direct") : undefined),
-        you: reader.you, following: reader.following,
+        you: reader.you, following: role?.following,
         removable: role?.removable ?? false,
         roleId: role?.roleId, seatId: role?.seatId,
       };
@@ -297,11 +313,11 @@ function BoundShareAccess({ resource, targetIds, record, label: suppliedLabel, o
   return <AccessRoleRegistration.Provider value={registerRole}><AccessVisibilityRegistration.Provider value={registerVisibility}>
     {open && stableTargetIds.length === 1 ? roleEntries.map((entry) =>
       <React.Fragment key={entry.id}>{React.createElement(entry.content as React.ComponentType<AccessRoleOwnerProps>, {
-        targetId: stableTargetIds[0]!, record,
+        targetId: stableTargetIds[0]!, record, resource,
       })}</React.Fragment>) : null}
     {open && stableTargetIds.length === 1 ? visibilityEntries.map((entry) =>
       <React.Fragment key={entry.id}>{React.createElement(entry.content as React.ComponentType<AccessRoleOwnerProps>, {
-        targetId: stableTargetIds[0]!, record,
+        targetId: stableTargetIds[0]!, record, resource,
       })}</React.Fragment>) : null}
     <ManageAccessDialog
     open={open}

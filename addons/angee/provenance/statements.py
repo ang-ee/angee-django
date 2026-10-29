@@ -39,6 +39,7 @@ from simple_history.utils import get_history_manager_for_model
 from angee.base.fields.state import StateField
 from angee.base.lineage import most_derived_concrete
 from angee.base.managers import AngeeManager
+from angee.base.models.base import record_display_label
 from angee.base.models.identity import SqidMixin
 from angee.base.models.locks import OptimisticLockMixin
 from angee.base.models.merge_references import MergeContractMixin
@@ -717,6 +718,14 @@ class StatementLinkMixin(models.Model):
     """
 
     authority_related: ClassVar[tuple[str, ...]] = ()
+    presentation_related: ClassVar[tuple[str, ...]] = ()
+    """Relations the link owner needs to project its source label in a batched read."""
+
+    @property
+    def statement_source_label(self) -> str:
+        """Present this source through its native record label by default."""
+
+        return record_display_label(self)
 
     class Meta:
         abstract = True

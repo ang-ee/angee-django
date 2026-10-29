@@ -360,7 +360,6 @@ class RecordReaderType:
     subject: str
     label: str
     you: bool
-    following: bool
 
 
 @strawberry.type
@@ -880,16 +879,11 @@ class IAMConsoleQuery:
         )
         resolved = resolve_subjects(refs)
         viewer = to_subject_ref(session_user(info))
-        following = set()
-        if apps.is_installed("angee.messaging"):
-            follower_model = apps.get_model("messaging", "ThreadFollower")
-            following = set(follower_model.objects.subjects_for_record(target))
         return [
             RecordReaderType(
                 subject=str(public_subject_ref(ref)),
                 label=user_label(resolved[ref]),
                 you=ref == viewer,
-                following=ref in following,
             )
             for ref in refs
             if ref in resolved and getattr(resolved[ref], "kind", None) == "person"

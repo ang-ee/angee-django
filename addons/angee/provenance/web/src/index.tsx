@@ -18,6 +18,7 @@ const provenance = defineBaseAddon({
   // status vocabulary decides the tone, never a map of this addon's own.
   statusTones: { manual: "success", pull: "success", push: "success", import: "success", merge: "info", revert: "warning", seed: "neutral", system: "neutral", failure: "danger" },
   containers: {
+    "provenance#statement-references": { models: true },
     "form#chrome": {
       "provenance.field-provenance": {
         sequence: 10,
@@ -46,6 +47,6 @@ const provenance = defineBaseAddon({
   },
 });
 
-export { RecordHistoryTimeline, useRecordHistory } from "./RecordHistory";
+export { type StatementReferenceProps, RecordHistoryTimeline, useRecordHistory } from "./RecordHistory";
 
 export default provenance;

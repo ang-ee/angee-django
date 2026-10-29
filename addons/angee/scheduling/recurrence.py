@@ -29,7 +29,9 @@ class Recurrence:
 
     Construct from the stored rule string; an empty string means "no recurrence"
     (a single event). The object is immutable-by-convention — it only reads the
-    rule it was given.
+    rule it was given. End-bounded rules use UTC ``UNTIL`` values, as RFC-5545
+    requires for an aware ``DTSTART``; floating and date-only ``UNTIL`` values
+    are refused by dateutil.
 
     **Deviation kept for v1 — DTSTART must synchronize with the rule.** ``dateutil``
     follows the interpretation in which a ``BY*`` part that excludes the ``dtstart``

@@ -6,14 +6,17 @@
   "type": "module",
   "sideEffects": false,
   "exports": { ".": "./src/index.tsx" },
-  "scripts": { "typecheck": "tsc --noEmit", "test": "vitest run" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
   "dependencies": {
     "@angee/app": "workspace:*",
-    "@angee/ui": "workspace:*"
+    "@angee/ui": "workspace:*",
+    "@angee/metadata": "workspace:*"
   },
   "peerDependencies": { "react": "^19", "react-dom": "^19" },
   "devDependencies": {
-    "@angee/metadata": "workspace:*",
     "@angee/refine": "workspace:*",
     "@tanstack/react-router": "^1.170.41",
     "@testing-library/react": "^16.1.0",

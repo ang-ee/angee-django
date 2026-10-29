@@ -8,6 +8,7 @@ import { useProjectsT } from "../i18n";
 import { TaskBoardSurface } from "../task-board-surface";
 import { TASK_MODEL } from "../resources";
 import {
+  TASK_ACTION_FIELDS,
   useTaskRowActions,
   type TaskActionRow,
 } from "../task-actions";
@@ -26,6 +27,7 @@ export function TaskBoardPage(): React.ReactElement {
         order={{ sort_order: "ASC" }}
         laneSource={{ field: "assignee", rankField: "sort_order", rankInputField: "task_order" }}
         rowActions={rowActions}
+      queryFields={TASK_ACTION_FIELDS}
         emptyContent={{
           icon: "task-board",
           title: t("board.empty.title"),
