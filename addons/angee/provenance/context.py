@@ -93,7 +93,8 @@ class _ChangesetBoundary:
     actors, such as a per-event trigger loop. Every row closes with the boundary.
     """
 
-    def __init__(self, facts: dict[str, object], *, defaults: bool) -> None:
+    def __init__(self, facts: dict[str, object], *, defaults: bool, using: str | None = None) -> None:
+        self.using = using
         self.facts = facts
         self.explicit = set() if defaults else set(facts)
         self.rows: dict[tuple[threading.Thread, str], _ChangesetRow] = {}
@@ -136,6 +137,8 @@ class _ChangesetBoundary:
                 origin = facts.pop("origin", None)
                 facts.setdefault("occurred_at", timezone.now())
                 instance = cast(ChangesetLike, model(actor_ref=key[1], **facts))
+                if self.using is not None:
+                    instance._state.db = self.using
                 if origin is not None:
                     setattr(instance, "origin", origin)
                 row = self.rows[key] = _ChangesetRow(instance)
@@ -148,7 +151,7 @@ class _ChangesetBoundary:
             instance.change_reason = cast(str, self.facts.get("change_reason", instance.ambient_attribution()[1]))
             row.attributed = True
         if record and not row.persisted:
-            using = router.db_for_write(changeset_model(), instance=instance)
+            using = self.using or router.db_for_write(changeset_model(), instance=instance)
             connection = connections[using]
             # Django removes callbacks on savepoint/transaction rollback and
             # retains them on savepoint release. The queue owns that distinction.
@@ -277,7 +280,9 @@ class _ChangesetScope:
     so an async entrypoint never hops threads for the request itself.
     """
 
-    def __init__(self, facts: dict[str, object], *, fresh: bool, process: bool = False) -> None:
+    def __init__(self, facts: dict[str, object], *, fresh: bool, process: bool = False,
+                 using: str | None = None) -> None:
+        self.using = using
         self.facts = facts
         self.fresh = fresh
         self.process = process
@@ -290,10 +295,13 @@ class _ChangesetScope:
         global _process_boundary
         existing = _open_boundary()
         if existing is not None and not self.fresh:
+            if self.using is not None:
+                if existing.using != self.using:
+                    raise ValueError('Joined changeset must use its existing database; open a fresh boundary')
             existing.refine(self.facts)
             self.joined = existing
             return existing.mark_failed
-        self.boundary = _ChangesetBoundary(self.facts, defaults=self.fresh)
+        self.boundary = _ChangesetBoundary(self.facts, defaults=self.fresh, using=self.using)
         self.token = _current_changeset.set(self.boundary)
         if self.process:
             self.previous_process, _process_boundary = _process_boundary, self.boundary
@@ -341,6 +349,7 @@ def changeset(
     occurred_at: datetime | None = None,
     fresh: bool = False,
     process: bool = False,
+    using: str | None = None,
 ) -> _ChangesetScope:
     """Open logical attribution, yielding a callback to mark a handled failure.
 
@@ -352,7 +361,9 @@ def changeset(
     each writing thread and actor records its own row under the shared facts.
     Asynchronous entrypoints use ``async with``. ``process=True`` is for an
     entrypoint that owns the whole process (a management command, a test): threads
-    it starts without copying the context write under this boundary too.
+    it starts without copying the context write under this boundary too. An explicit
+    ``using`` binds fresh attribution rows to the selected database; omitted values
+    retain Django router behavior. Nested scopes restore the previous boundary.
     """
 
     facts: dict[str, object] = {
@@ -367,7 +378,7 @@ def changeset(
         )
         if value is not None
     }
-    return _ChangesetScope(facts, fresh=fresh, process=process)
+    return _ChangesetScope(facts, fresh=fresh, process=process, using=using)
 
 
 @dataclass
