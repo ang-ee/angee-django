@@ -63,7 +63,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
            rebac_resource_type = "tags/role"
    ```
 
-   Then `"angee.tags"` in `tests/settings.py` `INSTALLED_APPS` (`:29-110`) and `from angee.tags.testing import models as tags_models  # noqa: F401` in `tests/conftest.py` after its FK targets (`:645`). If the addon is a consumer → no test models: its tests run on the composed host (step 3). **Owner rule:** Django owns static test-table lifecycle; one concrete model per resource type ([environment and checks](../../../docs/backend/guidelines.md#environment-and-checks)).
+   Then `"angee.tags"` in `tests/settings.py` `INSTALLED_APPS` (`:29-110`) and `from angee.tags.testing import models as tags_models  # noqa: F401` in `tests/conftest.py` after its FK targets (`:645`). If the addon is a consumer → no test models: its tests run on the composed host (step 3). **Owner rule:** Django owns static test-table lifecycle; one concrete model per resource type ([environment and checks](references/environment.md)).
 
 3. **Pick the database contract per module.** Framework modules take a fixture: `composed_tables` for transactional isolation plus REBAC sync, `composed_permissions` when the module needs other addons' `permissions.extends.zed` fragments merged (tags, MTI, placeable fields), native `db` for pure model tests.
 
@@ -91,7 +91,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
            assert not TagAssignment.objects.for_record(party_edge.party).exists()
    ```
 
-   Include a non-admin reader and a platform admin (`create_platform_admin`, or `Note.objects.as_user(admin)` reaching every row through the const-backed role, `test_rebac.py:112-140`). **Owner rule:** `permissions.zed` owns the rule; the test proves outcomes per actor, never the zed text ([GraphQL and authorization](../../../docs/backend/guidelines.md#graphql-and-authorization)).
+   Include a non-admin reader and a platform admin (`create_platform_admin`, or `Note.objects.as_user(admin)` reaching every row through the const-backed role, `test_rebac.py:112-140`). **Owner rule:** `permissions.zed` owns the rule; the test proves outcomes per actor, never the zed text ([GraphQL pitfalls](../angee-graphql/references/pitfalls.md), [authorization pitfalls](../angee-permissions/references/pitfalls.md)).
 
 5. **Test verbs and querysets on their owner.** Call the manager verb, not a raw `create`, and assert idempotence, fail-fast denial and the constraint.
 
@@ -110,7 +110,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
                TagAssignment.objects.create(**edge)
    ```
 
-   Aggregates: assert `scoped_for_aggregate()` is actor-scoped, unscoped only under `sudo()`/`system_context`, and empty with no actor (`test_rebac.py:64-82`). **Owner rule:** the queryset or manager owns the verb, the test exercises it through that contract ([Models, queries, and resources](../../../docs/backend/guidelines.md#models-queries-and-resources)).
+   Aggregates: assert `scoped_for_aggregate()` is actor-scoped, unscoped only under `sudo()`/`system_context`, and empty with no actor (`test_rebac.py:64-82`). **Owner rule:** the queryset or manager owns the verb, the test exercises it through that contract ([Persistence primitives](../../../docs/backend/guidelines.md#persistence-primitives)).
 
 6. **Load declared resources.** Framework: write a throwaway addon and load one tier; consumer: load the demo tier and prove idempotence.
 
@@ -125,7 +125,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
        assert Note.objects.count() == notes_before                    # test_rebac.py:142-149
    ```
 
-   The repository-wide value sweep (`tests/test_resource_fixtures.py`) already validates every declared value against its field; do not repeat it. **Owner rule:** the loader owns xref and tier semantics; a test asserts rows and grants, not file parsing ([Models, queries, and resources](../../../docs/backend/guidelines.md#models-queries-and-resources)).
+   The repository-wide value sweep (`tests/test_resource_fixtures.py`) already validates every declared value against its field; do not repeat it. **Owner rule:** the loader owns xref and tier semantics; a test asserts rows and grants, not file parsing ([Resource loading](../../../docs/backend/guidelines.md#resource-loading)).
 
 7. **Drive GraphQL through the schema.** Bare host: build the addon's own schema and execute as an actor; composed host: POST as a logged-in `Client`.
 
@@ -140,7 +140,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
    self.assertEqual(payload["errors"][0]["extensions"]["code"], "PERMISSION_DENIED")
    ```
 
-   Cover: a non-admin reader, the denied anonymous write with its code, `_by_pk` scoped out for the wrong actor, aggregates and groups equal to the actor-scoped ORM count, and an identical query count at 1 and 25 rows. Snapshot resource metadata through `GraphQLSdl.from_discovery().render_metadata()` (`test_schema_metadata.py`). **Owner rule:** resolvers are thin callers; test the schema contract, never a resolver function ([GraphQL and authorization](../../../docs/backend/guidelines.md#graphql-and-authorization)).
+   Cover: a non-admin reader, the denied anonymous write with its code, `_by_pk` scoped out for the wrong actor, aggregates and groups equal to the actor-scoped ORM count, and an identical query count at 1 and 25 rows. Snapshot resource metadata through `GraphQLSdl.from_discovery().render_metadata()` (`test_schema_metadata.py`). **Owner rule:** resolvers are thin callers; test the schema contract, never a resolver function ([GraphQL pitfalls](../angee-graphql/references/pitfalls.md), [authorization pitfalls](../angee-permissions/references/pitfalls.md)).
 
 8. **Test the web fragment.** `web/vitest.config.ts` composes the published builder with the addon-tree alias; consumers pass `gqlAlias: []` until they import `@angee/gql`.
 
@@ -155,7 +155,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
    expect(Object.keys(tags.containers ?? {})).toEqual(["tags.tags#facets", "tags.tags#columns", "tags.tags#fields"]);
    ```
 
-   Page declarations: call the page as a function and parse `pageChildren`/`parsePageColumns`, mocking `useContainer` per address (`TagsPage.test.tsx:22-30`). Providers: `.native.test.tsx` under `// @vitest-environment happy-dom` with `createUiTestProviders({ resources: [testDataResource(...)] })` and a `dataProvider` of `vi.fn`s (`RecordTagsWidget.native.test.tsx:15-31`). Widgets: render `widget.read`/`widget.edit` and assert currency-driven facts (`addons/angee/money/web/src/widgets/money.test.tsx`). Stories: export the fixture component from `*.stories.tsx` (`excludeStories`), feed it `storySchema(fetch)` + `jsonResponse`, and reuse it from the native test (`TriggersPage.native.test.tsx:4-11`); Storybook discovers `*/*/web/src/**/*.stories.tsx` from the stack root. **Owner rule:** `@angee/app` owns the Vitest defaults and the manifest contract; a fragment adds only its alias and its own assertions ([Checks](../../../docs/frontend/guidelines.md#checks), [story fixtures](../../../docs/frontend/guidelines.md#pitfalls)).
+   Page declarations: call the page as a function and parse `pageChildren`/`parsePageColumns`, mocking `useContainer` per address (`TagsPage.test.tsx:22-30`). Providers: `.native.test.tsx` under `// @vitest-environment happy-dom` with `createUiTestProviders({ resources: [testDataResource(...)] })` and a `dataProvider` of `vi.fn`s (`RecordTagsWidget.native.test.tsx:15-31`). Widgets: render `widget.read`/`widget.edit` and assert currency-driven facts (`addons/angee/money/web/src/widgets/money.test.tsx`). Stories: export the fixture component from `*.stories.tsx` (`excludeStories`), feed it `storySchema(fetch)` + `jsonResponse`, and reuse it from the native test (`TriggersPage.native.test.tsx:4-11`); Storybook discovers `*/*/web/src/**/*.stories.tsx` from the stack root. **Owner rule:** `@angee/app` owns the Vitest defaults and the manifest contract; a fragment adds only its alias and its own assertions ([frontend packages and addon fragments](../../../docs/checks.md#frontend-packages-and-addon-fragments), [story fixtures](references/web-pitfalls.md)).
 
 9. **Add browser specs.** A consumer e2e package is `package.json` (`@angee/e2e` as `workspace:*`, `test:e2e: playwright test`), a one-line config, `tests/auth.setup.ts`, `pages/<route>-page.ts`, `tests/<concern>.spec.ts`.
 
@@ -181,8 +181,8 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 ## Do not
 
 - Write a private REBAC-sync or table fixture beside `composed_tables`/`composed_permissions` ([source-addon test models](../../../docs/checks.md#source-addon-test-models)).
-- Register a second concrete model for a resource type, or create tables by hand instead of `tests/tables.py` `model_tables` ([environment and checks](../../../docs/backend/guidelines.md#environment-and-checks)).
-- Ship admin-only GraphQL tests, or `force_login` without `backend="angee.iam.auth.ModelBackend"` ([GraphQL and authorization](../../../docs/backend/guidelines.md#graphql-and-authorization)).
+- Register a second concrete model for a resource type, or create tables by hand instead of `tests/tables.py` `model_tables` ([environment and checks](references/environment.md)).
+- Ship admin-only GraphQL tests, or `force_login` without `backend="angee.iam.auth.ModelBackend"` ([GraphQL pitfalls](../angee-graphql/references/pitfalls.md), [authorization pitfalls](../angee-permissions/references/pitfalls.md)).
 - Add a caveated subject to make a conditional grant testable; use a field-backed relation (`angee.E024`, `addons/angee/base/checks.py:37`).
 - Put `--nomigrations` or PostgreSQL settings into a module; mark PostgreSQL-only modules and let them skip on SQLite ([Python contracts](../../../docs/checks.md#python-and-composition-contracts)).
 - Pass a per-test timeout for a slow render, or copy provider setup instead of `createUiTestProviders`/`createRefineTestProviders` ([Frontend packages](../../../docs/checks.md#frontend-packages-and-addon-fragments)).
@@ -202,30 +202,30 @@ Validators: the new modules run standalone, the owning guards (`tests/test_layer
 
 ## Pitfalls
 
-- A full run's file order can register a concrete model another module forgot; the standalone module run is the proof ([environment and checks](../../../docs/backend/guidelines.md#environment-and-checks)).
+- A full run's file order can register a concrete model another module forgot; the standalone module run is the proof ([environment and checks](references/environment.md)).
 - An abstract model imported while its app is absent keeps `app_label=None` for the whole process; the roster comment at `tests/settings.py:85-92` exists for that reason.
-- Patch an inherited manager method on `type(manager)`, not the instance; `db_manager()` copies lose an instance patch ([environment and checks](../../../docs/backend/guidelines.md#environment-and-checks)).
-- A page rendered through the router must `findBy*` past the lazy boundary; importing the page component directly needs no wait ([frontend pitfalls](../../../docs/frontend/guidelines.md#pitfalls)).
+- Patch an inherited manager method on `type(manager)`, not the instance; `db_manager()` copies lose an instance patch ([environment and checks](references/environment.md)).
+- A page rendered through the router must `findBy*` past the lazy boundary; importing the page component directly needs no wait ([page pitfalls](../angee-pages/references/pitfalls.md)).
 - A shared pytest plugin must defer model imports until the registry is populated (`addons/angee/base/testing/permissions.py:19`, [what CI runs](../../../docs/checks.md#what-ci-actually-runs)).
 - `composed_permissions` rewrites the synced schema with a forced overwrite into `tmp_path`; a module that edits a `.zed` on disk must do so under that fixture and never against the stack ([REBAC](../../../docs/backend/guidelines.md#rebac)).
 
 ## Read next
 
+- [Environment and checks](references/environment.md)
 - [Source-addon test models](../../../docs/checks.md#source-addon-test-models), [Frontend packages and addon fragments](../../../docs/checks.md#frontend-packages-and-addon-fragments), [Browser verification](../../../docs/checks.md#browser-verification)
-- [Environment and checks](../../../docs/backend/guidelines.md#environment-and-checks), [GraphQL and authorization](../../../docs/backend/guidelines.md#graphql-and-authorization), [Backend checks](../../../docs/backend/guidelines.md#checks)
-- [Rendering and testing](../../../docs/frontend/guidelines.md#rendering-and-testing), [Frontend checks](../../../docs/frontend/guidelines.md#checks), [End-to-End Testing](../../../docs/frontend/e2e.md)
+- [GraphQL pitfalls](../angee-graphql/references/pitfalls.md), [authorization pitfalls](../angee-permissions/references/pitfalls.md), [Backend checks](../../../docs/backend/guidelines.md#checks)
+- [Rendering and testing](../../../docs/frontend/guidelines.md#rendering-and-testing), [End-to-End Testing](../../../docs/frontend/e2e.md)
+- [Web pitfalls](references/web-pitfalls.md): story and vitest traps moved from the frontend guide
 - Skills: `angee-permissions`, `angee-graphql`, `angee-pages`, `angee-addon`, `slice`, `angee-workspace`
 
 ## Sources
 
 <!--
-Docs: AGENTS.md (Checks, Definition of Done); docs/guidelines.md (whole); docs/checks.md:1-376 (whole);
-docs/backend/guidelines.md:139-485 (test greps), 839-916,
-1355-1375, 1392-1402, 1440-1460, 2218-2240; docs/frontend/guidelines.md:1155-1162, 1460-1488, 1568-1576, 1696-1706,
-1760-1772, 1920-1932, 2018-2042; docs/frontend/e2e.md (whole).
+Docs: AGENTS.md (Checks, Definition of Done); docs/guidelines.md (whole); docs/checks.md (whole);
+docs/backend/guidelines.md #rules (test greps), #rebac, #pitfalls, #resource-loading, #development-server, #graphql-actor-and-write-contracts, #checks; docs/frontend/guidelines.md #rules, #authoring, #variants-and-impl, #context-aside, #rendering-and-testing, #form-save-contracts, #checks; docs/frontend/e2e.md (whole).
 Code: addons/angee/base/testing/{__init__,fixtures,permissions}.py; addons/angee/provenance/testing/fixtures.py:1-40;
-addons/angee/workflows/testing/__init__.py; addons/angee/tags/testing/{__init__,models}.py; tests/settings.py:1-150;
-tests/conftest.py:1-30,86-112,630-665,785-800,880-990; pyproject.toml:202-208; tests/test_tags.py:1-120,292-320,
+addons/angee/workflows/testing/__init__.py; addons/angee/tags/testing/{__init__,models}.py; tests/settings.py (whole);
+tests/conftest.py:1-30,86-112,630-665,785-800,880-982; pyproject.toml:202-208; tests/test_tags.py:1-120,292-320,
 412-480,598-657; tests/test_tags_field.py:1-160; tests/test_tags_mti.py; tests/test_messaging_resources.py:1-60;
 tests/test_money.py:80-110; tests/test_resource_fixtures.py; tests/test_composed_note_workflow.py;
 tests/test_notes_owner_adoption.py; tests/composed_host.py (grep); examples/addons/example/notes/tests/* (test_rebac,

@@ -383,7 +383,7 @@ that preserves or retires the data and removes the field or model. Native
 `makemigrations` materializes it first, so the reviewed removal is never
 autodetected.
 
-Follow the [migration policy](backend/guidelines.md#migrations-and-runtime) when
+Follow the [migration policy](backend/guidelines.md#migration-history) when
 authoring a data transition or resetting composed history.
 
 [`angee provision`](../angee/management/commands/angee.py) prepares the database

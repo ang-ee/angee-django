@@ -134,12 +134,12 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
    ```python
    target = authorized_permission_target(info, model, target_id, "delete",
                                          narrow=lambda rows: rows.trash_targets())
-   target.trash(reason=reason)                     # addons/angee/graphql/trash.py:57-75
+   target.trash(reason=reason)                     # addons/angee/graphql/trash.py:57-74
    ```
    - Instance verbs: `self.require_access("write")`; unsaved rows: native `create` on `insert()`, or `candidate_relationships(instance, action).allows(subject, action)` (`permissions.py:180`) for a preflight on a row that is not the stored one.
    - Framework-internal writes: `with system_context(reason="<owner>.<verb>")` only for named system work (`audit.py:28` delete retention, `ownership.py:305` transfer validation). `system_grant_record_access` requires that scope (`base.py:178`).
    - Two-phase destructive verbs check the public permission, then run the destructive work elevated, and test the deny branch.
-   **Owner rule:** the resolver's budget is input, context, dispatch, result; the access decision lives in the zed and the model (`docs/guidelines.md#keep-policy-above-detail`, `docs/backend/guidelines.md#graphql-and-authorization`). Cross-owner orchestration inside the verb is legitimate under `docs/guidelines.md#put-behavior-on-the-owning-object`; a second decision is not.
+   **Owner rule:** the resolver's budget is input, context, dispatch, result; the access decision lives in the zed and the model (`docs/guidelines.md#keep-policy-above-detail`, `docs/backend/guidelines.md#graphql-actor-and-write-contracts`). Cross-owner orchestration inside the verb is legitimate under `docs/guidelines.md#put-behavior-on-the-owning-object`; a second decision is not.
 
 7. **Sync the stored schema.** `rebac sync` parses every effective `permissions.zed` (the merged file for extended packages) and persists it into the `Schema*` tables; the system checks compare models with *that stored* schema, so they gate every `rebac` subcommand (`docs/backend/guidelines.md#rebac`, line 813). Three distinct operations:
    - Ordinary sync after a zed edit on a running stack: `rebac sync` (`docs/checks.md#composition-and-schema`), then restart Django through the operator (`docs/howto/getstarted.md#restart-the-running-stack`). `rebac sync --check` is the drift gate; `rebac check` validates without writing.
@@ -192,11 +192,12 @@ Validator: the addon's focused test module plus the system checks; the loop is `
 - A const-backed role target without its own `definition` + anchor makes a non-member check raise instead of deny (`docs/backend/guidelines.md#rebac`, "Const-backing", line 751).
 - SQLite's `REBAC_DEPTH_LIMIT` of 8 silently drops rows inherited through deeper hierarchies (`docs/backend/guidelines.md#rebac`, line 820; `addons/angee/base/autoconfig.py:55`).
 - `select_related` of a REBAC-guarded relation inside an actor-scoped queryset passes unit tests and fails live (`docs/backend/guidelines.md#rebac`, line 796).
-- Force-login in tests needs the IAM backend (`docs/backend/guidelines.md#graphql-and-authorization`, line 1449).
+- Force-login in tests needs the IAM backend ([authorization pitfalls](references/pitfalls.md)).
 
 ## Read next
 
-- `docs/backend/guidelines.md#rebac`, `#graphql-and-authorization`, `#direct-record-access`, `#rules`
+- [Authorization pitfalls](references/pitfalls.md)
+- `docs/backend/guidelines.md#rebac`, `#graphql-actor-and-write-contracts`, `#direct-record-access`, `#rules`
 - `docs/stack.md#backend` (django-zed-rebac row), `docs/glossary.md` (REBAC, Actor, Role, Relation, Binding, Kind)
 - `docs/checks.md#composition-and-schema`, `docs/composer.md#flow`, `docs/howto/getstarted.md#restart-the-running-stack`
 - Skills: `slice`, `angee-workspace`
@@ -204,7 +205,7 @@ Validator: the addon's focused test module plus the system checks; the loop is `
 ## Sources
 
 <!--
-Docs: AGENTS.md (whole); docs/guidelines.md (whole); docs/backend/guidelines.md 139-485, 488-828, 1359-1540, 2062-2191; docs/stack.md 40-76; docs/glossary.md 120-134, 236-251, 296-300; docs/checks.md 30-60, 113-148, 168-205, 249-290; docs/howto/getstarted.md 363-400.
+Docs: AGENTS.md (whole); docs/guidelines.md (whole); docs/backend/guidelines.md #composition-owners, #rules, #rebac, #graphql-and-authorization, #graphql-actor-and-write-contracts, #naming; docs/stack.md #backend (django-zed-rebac row); docs/glossary.md #backend (Permissions, Principal, Role anchor, System context entries); docs/checks.md #python-and-composition-contracts, #source-addon-test-models, #composition-and-schema, #frontend-packages-and-addon-fragments; docs/howto/getstarted.md #restart-the-running-stack.
 Code: addons/angee/base/permissions.py; addons/angee/base/checks.py; addons/angee/base/build.py 1-100, 202-320, 456-520; addons/angee/base/models/base.py 80-320, 355-411; addons/angee/base/models/ownership.py 60-175, 260-310; addons/angee/base/models/roles.py; addons/angee/base/autoconfig.py 25-60; addons/angee/base/testing/fixtures.py, permissions.py; addons/angee/graphql/trash.py 1-80; addons/angee/graphql/actions.py 240-318; addons/angee/iam/permissions.zed; addons/angee/tags/permissions.zed; addons/angee/tags/models.py 275-300, 341; addons/angee/money/permissions.zed; angee/management/provision.py 1-62; angee/management/commands/angee.py 40-60; examples/addons/example/notes/{permissions.zed,permissions.extends.zed,models.py,addon.toml,tests/test_rebac.py}; tests/extcontrib/{permissions.zed,permissions.extends.zed,models.py,apps.py}; tests/scopedemo/permissions.zed 1-25; tests/test_scopedemo.py 1-45; .venv rebac/managers.py 719-858, rebac/mixins.py 1079, rebac/preflight.py 147, rebac/checks.py 295-332; .venv hatch_angee/manifest.py 54, 246.
-Outstanding discrepancies and gaps: docs/glossary.md:123 says permissions.zed is "discovered by convention", while hatch_angee/manifest.py:54 accepts an addon.toml `permissions` path that addons/angee/base/build.py:119 (`declared_schema_path`) honours; no doc names that key. No doc owns the field read modes: `REBAC_FIELD_READ_MODE="redact"` (addons/angee/base/autoconfig.py:31), `for_write()` and `readable(field)` (rebac/managers.py:756,768) are derived from code; docs/backend/guidelines.md:657 mentions only `readable(field)`.
+Outstanding discrepancies and gaps: docs/glossary.md#backend (Permissions entry) says permissions.zed is "discovered by convention", while hatch_angee/manifest.py:54 accepts an addon.toml `permissions` path that addons/angee/base/build.py:119 (`declared_schema_path`) honours; no doc names that key. No doc owns the field read modes: `REBAC_FIELD_READ_MODE="redact"` (addons/angee/base/autoconfig.py:31), `for_write()` and `readable(field)` (rebac/managers.py:756,768) are derived from code; docs/backend/guidelines.md#rebac mentions only `readable(field)`.
 -->

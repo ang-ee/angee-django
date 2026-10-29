@@ -77,7 +77,7 @@ const scopeColumnEntries = useContainer("tags.tags#columns");
 </List>
 ```
 
-A new kind name is added by declaration merging into `ContainerKinds` (`addons/angee/iam/web/src/ShareAccess.tsx`). Memoize `models` and `impls` passed to `useContainer`; an undeclared address only warns in development (`packages/ui/src/runtime/containers.ts:440-443`).
+A new kind name is added by declaration merging into `ContainerKinds` (`addons/angee/iam/web/src/ShareAccess.tsx`). Memoize `models` and `impls` passed to `useContainer`; an undeclared address only warns in development (`packages/ui/src/runtime/containers.ts:438-441`).
 
 ## 7. Test the contribution
 
@@ -93,7 +93,7 @@ render(<AppRuntimeProvider runtime={{ containers }}><ResourceViewUtilities value
 Pass a `containerScope` when a `when` rule matters; stories mount the same runtime through `RoutedRuntimeFixture`. In the live app, developer mode's composition dialog and `createApp(...).explain.containers` show each layer's narrowing and every removed child ([developer mode](../../../../docs/frontend/guidelines.md#developer-mode)).
 
 <!--
-Sources: docs/frontend/guidelines.md:1071-1497; packages/app/README.md:162-200; packages/ui/src/runtime/containers.ts:16-260,425-452;
+Sources: docs/frontend/guidelines.md:1423-1857; packages/app/README.md:162-200; packages/ui/src/runtime/containers.ts:16-260,425-452;
 packages/ui/src/runtime/contracts.ts:195-240; packages/ui/src/lib/container-outlet.tsx:17-26; packages/app/src/containers.ts:33-50;
 packages/app/src/testing.tsx:160-170; addons/angee/{work,projects,timeline,tags}/web/src/index.tsx; addons/angee/tags/web/src/views/TagsPage.tsx;
 examples/addons/example/notes/web/src/index.tsx:32-41.

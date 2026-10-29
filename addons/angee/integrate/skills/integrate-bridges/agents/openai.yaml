@@ -1,0 +1,6 @@
+interface:
+  display_name: "Integrate Bridges"
+  short_description: "Add a bridge or sync source on the integrate record-sync substrate."
+  default_prompt: "Use $integrate-bridges to add or change a bridge, stream adapter or live session in an Angee integration addon."
+policy:
+  allow_implicit_invocation: false

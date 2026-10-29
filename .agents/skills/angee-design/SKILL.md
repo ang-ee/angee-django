@@ -24,7 +24,7 @@ reviewers run where the gate or the chosen workflow (`slice`) requires them.
 |---|---|---|
 | `AGENTS.md` | the gate's checks and the level definitions | [Architecture Gate](../../../AGENTS.md#architecture-gate), [Repository Role](../../../AGENTS.md#repository-role) |
 | `references/owners.md` | search aliases to the owning symbol, rule and applicability | [owner index](references/owners.md) |
-| `docs/stack.md` | which dependency or deliberate in-repo owner holds a concern | [Backend](../../../docs/stack.md#backend) `docs/stack.md:116-152` |
+| `docs/stack.md` | which dependency or deliberate in-repo owner holds a concern | [Backend](../../../docs/stack.md#backend), the "library choice" paragraphs |
 | `docs/glossary.md` | the one name per concept | [Glossary](../../../docs/glossary.md) |
 | the current note | the owner map and deletion list | lane report under the work-state slot, else the conversation ([Where Knowledge Lives](../../../AGENTS.md#where-knowledge-lives)) |
 | sibling slots | consumers of a changed contract | `../angee-arp`, `../angee-messaging-bridges` beside this checkout when the workspace materializes them |
@@ -58,14 +58,14 @@ concern and for consumers of any contract the feature changes.
    **Owner rule:** [Repository Role](../../../AGENTS.md#repository-role) decides by the fact's reach: "every fact lives at its owning level", bounded on both sides — a fact the framework should own does not stop at the consumer, and product vocabulary never moves below the consumer addon.
 
 5. **Check the dependency.** For a concern a library owns per [docs/stack.md](../../../docs/stack.md#backend), wire that library's native type and extension point. A new dependency needs its stack row and manifest entry together ([Change Policy](../../../docs/stack.md#change-policy)).
-   **Owner rule:** the [Django-Native Rule](../../../docs/backend/guidelines.md#django-native-rule) `docs/backend/guidelines.md:45-50` keeps a wrapper only when it proves a real new concept; one that only forwards, normalizes or renames the library object is deleted. The stack row decides which library owns the concern; [Change Policy](../../../docs/stack.md#change-policy) decides when a new one is admitted.
+   **Owner rule:** the [Django-Native Rule](../../../docs/backend/guidelines.md#django-native-rule) ("A wrapper must prove it adds a real new concept") keeps a wrapper only when it proves a real new concept; one that only forwards, normalizes or renames the library object is deleted. The stack row decides which library owns the concern; [Change Policy](../../../docs/stack.md#change-policy) decides when a new one is admitted.
 
 6. **Write the owner map and deletion list** into the current note: the lane report when the workspace has a work-state slot ([Resolve Work-State](../angee-workspace/SKILL.md#resolve-work-state)), the conversation otherwise.
 
    ```markdown
    ## Owner map — <feature>
    | fact | owner (symbol, module) | composes / extends | applicability quoted from |
-   | hidden after pay | ArchiveMixin, base.models.trash | composes | trash.py:45-48 |
+   | hidden after pay | ArchiveMixin, base.models.trash | composes | `ArchiveMixin` docstring, addons/angee/base/models/trash.py |
    | line items | HasuraLines + RowLockMixin | composes | frontend:1527-1540 |
    Level: consumer addon `<name>` · Dependency: none new · Names: swept `<words>`
    Thin caller: <each dispatching entrypoint (resolver, command, route, page) → the owner holding the rule it calls>
@@ -92,14 +92,14 @@ for host facts; `tests/test_owner_index.py` failing on the stale paths is the si
 
 ## Do not
 
-- A second boolean (`is_deleted`, `hidden`, `active`) for removal or archival → `TrashMixin` / `ArchiveMixin`; [Persistence primitives](../../../docs/backend/guidelines.md#persistence-primitives) `docs/backend/guidelines.md:2040-2043`.
-- A status string with `if` chains or a transition library → `StateField` + `StateTransitions`; [Stack: backend](../../../docs/stack.md#backend) `docs/stack.md:124-127`.
-- An integer `position` with renumbering or epsilon guessing → `FractionalRankField`; [Rules](../../../docs/backend/guidelines.md#rules) `docs/backend/guidelines.md:305-319`.
-- Walking `parent` in Python or a recursive CTE → `HierarchyMixin`; [Stack: backend](../../../docs/stack.md#backend) `docs/stack.md:129-133`.
-- A dotted-path column, `import_string` from writable data, an entry point or a private registry dict → `ImplClassField` + its base's named settings mapping; [Stack: backend](../../../docs/stack.md#backend) `docs/stack.md:135-142`.
+- A second boolean (`is_deleted`, `hidden`, `active`) for removal or archival → `TrashMixin` / `ArchiveMixin`; [Persistence primitives](../../../docs/backend/guidelines.md#persistence-primitives) **Archive and trash are different facts**.
+- A status string with `if` chains or a transition library → `StateField` + `StateTransitions`; [Stack: backend](../../../docs/stack.md#backend) "State-transition library choice".
+- An integer `position` with renumbering or epsilon guessing → `FractionalRankField`; [Rules](../../../docs/backend/guidelines.md#rules) "Manually ordered rows use `FractionalRankField`".
+- Walking `parent` in Python or a recursive CTE → `HierarchyMixin`; [Stack: backend](../../../docs/stack.md#backend) "Tree library choice".
+- A dotted-path column, `import_string` from writable data, an entry point or a private registry dict → `ImplClassField` + its base's named settings mapping; [Stack: backend](../../../docs/stack.md#backend) "Implementation-registry choice".
 - Reading `os.environ` or a private settings parser → `autoconfig.py` `SETTINGS`; [Autoconfig](../../../docs/composer.md#autoconfig).
 - A permission decision in a resolver, in React or in a Zed caveat → the model's Zed plus `authorized_permission_target`; [Boundary leaks](../../../docs/guidelines.md#boundary-leaks-and-detail-driven-policy), `angee.E024` (`addons/angee/base/checks.py:31-37`).
-- A hand-rolled page, table or form → `ListView`/`RowsListView`/`FormView` and `registerForm`; [Frontend rules](../../../docs/frontend/guidelines.md#rules) `docs/frontend/guidelines.md:630-647`.
+- A hand-rolled page, table or form → `ListView`/`RowsListView`/`FormView` and `registerForm`; [Frontend rules](../../../docs/frontend/guidelines.md#rules) **Routes and pages stay thin**.
 
 ## Verify
 
@@ -117,28 +117,28 @@ that names a copy, a wrapper or an unowned fact.
 
 ## Pitfalls
 
-- Name a module by the Django-native owner it extends (`models.py`, `managers.py`, `schema.py`), never by a domain noun: a noun module beside `models.py` takes verbs, generators and survivorship away from their owners; [Django-Native Rule](../../../docs/backend/guidelines.md#django-native-rule) `docs/backend/guidelines.md:52-57`.
-- Before adding a mechanism (a reconciler, a marker inference, a parallel table), find the one explicit line in an existing owner file that carries the fact and extend it; [Keep Policy Above Detail](../../../docs/guidelines.md#keep-policy-above-detail) `docs/guidelines.md:107-110`.
-- Grep the guides for a mechanism before choosing it: a database trigger or function never maintains a row, a revision or a rule; [Models, queries, and resources](../../../docs/backend/guidelines.md#models-queries-and-resources) `docs/backend/guidelines.md:1154`.
+- Name a module by the Django-native owner it extends (`models.py`, `managers.py`, `schema.py`), never by a domain noun: a noun module beside `models.py` takes verbs, generators and survivorship away from their owners; [Django-Native Rule](../../../docs/backend/guidelines.md#django-native-rule) "Django-native also means app-native".
+- Before adding a mechanism (a reconciler, a marker inference, a parallel table), find the one explicit line in an existing owner file that carries the fact and extend it; [Keep Policy Above Detail](../../../docs/guidelines.md#keep-policy-above-detail) "When policy needs an implementation detail, use the appropriate explicit contract".
+- Grep the guides for a mechanism before choosing it: a database trigger or function never maintains a row, a revision or a rule; [Rules](../../../docs/backend/guidelines.md#rules) **Never a database trigger or function**.
 - A removed or renamed export is a consumer contract change, however unused it looks here: search the sibling slots and land companions in dependency order; [Consumer CI Publication](../../../docs/checks.md#consumer-ci-publication).
 - Sweep a candidate name's word family across addons, docs and packages before debating its merit: a collision or a product word in a framework name is disqualifying; [Name So Code Can Be Found, Not Guessed](../../../docs/guidelines.md#name-so-code-can-be-found-not-guessed).
-- Measure total maintained code against the base on every redesign: growth is admitted only for the missing behavior or owner it introduces and the simplification it buys, and the map names what grew; unexplained growth beside an existing owner is a parallel implementation; [DRY](../../../docs/guidelines.md#dont-repeat-yourself-dry) `docs/guidelines.md:88-95`, [Architecture Gate](../../../AGENTS.md#architecture-gate) deletion check.
+- Measure total maintained code against the base on every redesign: growth is admitted only for the missing behavior or owner it introduces and the simplification it buys, and the map names what grew; unexplained growth beside an existing owner is a parallel implementation; [DRY](../../../docs/guidelines.md#dont-repeat-yourself-dry) "Do not create a parallel implementation beside an existing owner", [Architecture Gate](../../../AGENTS.md#architecture-gate) deletion check.
 
 ## Read next
 
 - [AGENTS.md — Architecture Gate](../../../AGENTS.md#architecture-gate), [Repository Role](../../../AGENTS.md#repository-role)
 - [docs/guidelines.md — Put Behavior on the Owning Object](../../../docs/guidelines.md#put-behavior-on-the-owning-object), [Keep Policy Above Detail](../../../docs/guidelines.md#keep-policy-above-detail)
 - [docs/backend/guidelines.md — Rules](../../../docs/backend/guidelines.md#rules), [docs/frontend/guidelines.md — Component ontology](../../../docs/frontend/guidelines.md#component-ontology)
-- capability READMEs under `addons/angee/<addon>/README.md` for the engine a feature extends
+- capability guides beside the engine a feature extends, loaded by path from a source checkout: [mcp-tools](../../../addons/angee/mcp/skills/mcp-tools/SKILL.md), [jobs-tasks](../../../addons/angee/jobs/skills/jobs-tasks/SKILL.md), [integrate-bridges](../../../addons/angee/integrate/skills/integrate-bridges/SKILL.md), [workflow-definitions](../../../addons/angee/workflows/skills/workflow-definitions/SKILL.md), [provenance-attribution](../../../addons/angee/provenance/skills/provenance-attribution/SKILL.md), [agent-composition](../../../addons/angee/agents/skills/agent-composition/SKILL.md); other engines keep only `addons/angee/<addon>/README.md`
 - skills: `slice`, `angee-workspace`; command: `lift` (reconstructing from another repo)
 
 ## Sources
 
 <!--
-AGENTS.md, docs/guidelines.md, docs/glossary.md (whole); docs/stack.md:67-82,116-152; docs/backend/guidelines.md:27-200,220-226,300-351,395-556,705-730,760-790,1095-1110,1152,1178-1195,1228-1235,1244-1282,1306-1318,1416-1428,1856-1862,1878-2182;
-docs/frontend/guidelines.md:128-187,283-290,630-660,950-958,1436-1460,1498-1553; docs/composer.md:159-197; docs/checks.md:9-60,149-168,358-375;
+AGENTS.md, docs/guidelines.md, docs/glossary.md (whole); docs/stack.md #backend; docs/backend/guidelines.md #django-native-rule, #package-layering, #composition-owners, #rules, #rebac, #persistence-primitives, #migration-history, #addon-websocket-endpoints, #graphql-actor-and-write-contracts, #integration-and-worker-contracts, #workflow-contracts, #naming, #checks;
+docs/frontend/guidelines.md #native-state-owners, #reserved-translation-namespace, #component-ontology, #rules, #addresses-kinds-and-inheritance, #authoring, #narrowing-and-when; docs/composer.md #addon-discovery, #autoconfig; docs/checks.md #choose-the-working-directory, #python-and-composition-contracts, #agent-methodology-and-documentation, #what-ci-actually-runs;
 addons/angee/base/{models,fields}/*.py docstrings and the class docstrings cited in references/owners.md; base/implementations.py:1-60, expressions.py, checks.py:26-38; graphql/trash.py:50-70; angee/hooks.py;
 money (README, autoconfig, fields); tags (models, zed, addon.toml, TagForm, index.tsx); READMEs of messaging, workflows, provenance, integrate, decisions, knowledge, storage; examples/addons/example/notes (README, models, mcp_tools);
 tests/test_agent_methodology.py, tests/test_documentation_contracts.py; skills slice, angee-workspace; commands/lift.md;
-Mismatches: the repository ships no addon-level skills/<name>/SKILL.md; the glossary has section anchors only; backend guidelines:1430 cites Stage in work/models.py while the abstract owner is base/models/stages.py:37.
+Mismatches: addon-level skills ship only for mcp, jobs, integrate, workflows, provenance and agents (addons/angee/<addon>/skills/<name>/SKILL.md); other engines keep only their README; the glossary has section anchors only; docs/backend/guidelines.md#graphql-actor-and-write-contracts (**Lines are owned parts, written as the user**) links `Stage` to addons/angee/work/models.py while the abstract owner is addons/angee/base/models/stages.py:37.
 -->

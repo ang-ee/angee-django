@@ -146,6 +146,38 @@ through their native app lifecycle. Decisions-only suites use
 test modules `test_<concern>.py` and tests
 `test_<behavior>` so native discovery and focused file selection agree.
 
+### Owner Search
+
+Before adding a backend abstraction, search for the native owner first. Run the
+scans from the **framework source root**; narrow with paths or `-g` globs when
+the hit list is long:
+
+- `rg "AppConfig|schemas|permissions|resources|autoconfig"` finds the addon
+  declaration and composition owners: app configs, schema buckets, permission
+  and resource manifests, autoconfig.
+- `rg "QuerySet|Manager.from_queryset"` finds the manager or queryset that
+  already owns a row rule or read policy.
+- `rg "apps.get_model|get_app_configs"` finds existing registry lookups, so a
+  new one composes the same app-registry seam instead of a private registry.
+
+The [design skill](../.agents/skills/angee-design/SKILL.md) owns the owner-map
+procedure these scans feed.
+
+### Outbound TLS Trust
+
+Checks that make real outbound HTTPS calls (real-socket transport tests, OAuth
+round trips, bridge probes) need a CA store in the environment that runs them;
+the [TLS contract](backend/guidelines.md#integration-and-worker-contracts) keeps
+trust there, never in call sites. A dev mac trusts through Homebrew
+`ca-certificates`. Repair a minimal container or a bare CI/agent sandbox once,
+at bootstrap of the shell that runs the checks, by installing the OS
+`ca-certificates` package or pointing OpenSSL at the selected environment's
+bundled store:
+
+```sh
+export SSL_CERT_FILE="$(python -m certifi)"
+```
+
 ## Agent Methodology And Documentation
 
 For changes limited to instructions, tool adapters, or their tests, run from the
@@ -191,7 +223,7 @@ Management checks use `--no-sync` so invoking one cannot install or rebuild firs
 | Check composition drift | `uv run --no-sync python manage.py angee check` | Explicit read-only check of composer artifacts and addon upgrade declarations; startup never repairs output |
 | Author schema migrations | `uv run --no-sync python manage.py makemigrations <app-labels>` | After editable build; review and commit `runtime/<label>/migrations/` before packaging |
 | Apply migrations | `uv run --no-sync python manage.py migrate` | Operates on the selected stack database |
-| Sync permissions | `uv run --no-sync python manage.py rebac sync` | After migrations when permissions change |
+| Sync permissions | `uv run --no-sync python manage.py rebac sync` | After migrations when permissions change; `rebac sync --prune-stale` also retires removed definitions, the shape provision runs ([REBAC](backend/guidelines.md#rebac)) |
 | Load declared resource data | `uv run --no-sync python manage.py resources load` | After migrations when resource data changes |
 | Validate runtime contracts | `uv run --no-sync python manage.py check` | Includes construction of every named GraphQL schema; run against deployment code and settings before starting writer tiers |
 | Emit GraphQL SDL | `uv run --no-sync python manage.py schema` | Uses the emitted concrete models; provision reuses its prebuilt registry and checked schemas |
@@ -253,6 +285,20 @@ from the stack root.
 The UI catalog test exercises the generator's drift-check CLI; Storybook's
 `catalog:check` also verifies specimen reachability, guideline story links and
 the token deletion findings.
+
+For page or addon changes, run a primitive-drift scan and explain every hit
+outside `@angee/ui`. A hit is not automatically wrong, but it must either compose
+the shared primitive or identify the owning framework gap to fix first. From the
+framework source root; include `../angee-messaging-bridges/addons` in the scan
+when that optional slot is present and affected:
+
+```sh
+rg -n '<table\b|<thead\b|<tbody\b|<tr\b|<td\b|<th\b|role="grid"|useReactTable|manualPagination' packages addons examples -g '*.tsx'
+rg -n 'useAuthored(Query|Mutation)<|interface .*Data|interface .*Variables|fetch\([^)]*graphql|gql`' packages addons examples -g '*.ts' -g '*.tsx'
+```
+
+Run the architecture guardrail above when changing package layering, public
+shared owners, or addon manifests.
 
 The framework root has no generic `build` script. Package-filtered builds and the
 distribution checks above are the handoff path for published surfaces. A package

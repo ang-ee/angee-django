@@ -71,7 +71,7 @@ wires declarations only; the reference example throughout is `examples/addons/ex
    (`<label>:…` names a cross-addon file; `angee-resources` owns the rows). The full key set and its
    validation belong to the installed `hatch_angee/manifest.py` (`AddonManifest`:33, `parse_manifest`:189).
    Declare an optional seam only to override its conventional file; each owner reads its own: `schemas`
-   (`addons/angee/graphql/schema.py:656`), `permissions` (`addons/angee/base/build.py:133`),
+   (`addons/angee/graphql/schema.py:668`), `permissions` (`addons/angee/base/build.py:133`),
    `[web]` (`addons/angee/web/build.py:242`), `mcp.tools` (`addons/angee/mcp/server.py:92`),
    `resources.retired_models` (`addons/angee/resources/entries.py:111`), `[[migrations]]`
    (`angee/conf.py:421`); see [Addon declarations](../../../docs/composer.md#addon-declarations).
@@ -197,15 +197,16 @@ fragment's `index.test.ts` passes; `runtime/web/manifest.json` (`addons/angee/we
 - [Addon declarations](../../../docs/composer.md#addon-declarations), [Addon discovery](../../../docs/composer.md#addon-discovery), [Glossary: Composition](../../../docs/glossary.md#composition)
 - [Django-native rule](../../../docs/backend/guidelines.md#django-native-rule), [Package layering](../../../docs/backend/guidelines.md#package-layering), [Stack](../../../docs/stack.md)
 - [Frontend package layering](../../../docs/frontend/guidelines.md#package-layering), [Ownership boundaries](../../../docs/frontend/guidelines.md#ownership-boundaries)
+- Extending an engine instead of declaring a new addon: the capability guide beside that engine, loaded by path — [mcp-tools](../../../addons/angee/mcp/skills/mcp-tools/SKILL.md), [jobs-tasks](../../../addons/angee/jobs/skills/jobs-tasks/SKILL.md), [integrate-bridges](../../../addons/angee/integrate/skills/integrate-bridges/SKILL.md), [workflow-definitions](../../../addons/angee/workflows/skills/workflow-definitions/SKILL.md), [provenance-attribution](../../../addons/angee/provenance/skills/provenance-attribution/SKILL.md), [agent-composition](../../../addons/angee/agents/skills/agent-composition/SKILL.md).
 - Route: `angee-design` → `angee-addon` → `angee-models` + `angee-permissions` → `angee-graphql` + `angee-resources` → `angee-forms` + `angee-pages`, with `angee-tests` beside each artifact, then `angee-project`, `angee-runtime` and acceptance through `slice`.
 
 ## Sources
 
 <!--
-Docs: AGENTS.md; docs/guidelines.md; docs/backend/guidelines.md:27-138,2192-2244; docs/composer.md:137-196,494-540; docs/frontend/guidelines.md:15-127,187,1553,1762-1775; docs/checks.md:9-60,113-148,168-248,271; docs/glossary.md:8.
+Docs: AGENTS.md; docs/guidelines.md; docs/backend/guidelines.md #django-native-rule, #package-layering, #composition-owners, #naming, #checks; docs/composer.md #addon-discovery, #autoconfig, #addon-declarations, #serving; docs/frontend/guidelines.md #stack, #package-layering, #reserved-translation-namespace, #rules; docs/checks.md #choose-the-working-directory, #python-and-composition-contracts, #source-addon-test-models, #agent-methodology-and-documentation, #composition-and-schema, #frontend-packages-and-addon-fragments; docs/glossary.md #composition.
 Code (grep -n on the working tree): installed hatch_angee manifest.py:33,189; angee/addons.py:19,73,79,91; angee/compose/autoconfig.py:29;
 angee/compose/declarations.py:126; angee/conf.py:421; addons/angee/base/{autoconfig.py:23-24,42,apps.py:15-22,build.py:133,checks.py:16-37};
-addons/angee/graphql/schema.py:656-665; addons/angee/mcp/server.py:92-101; addons/angee/resources/entries.py:111; addons/angee/web/build.py:77,101,115,149,242;
+addons/angee/graphql/schema.py:650-680; addons/angee/mcp/server.py:92-101; addons/angee/resources/entries.py:111; addons/angee/web/build.py:77,101,115,149,242;
 addons/angee/money/apps.py:17-30; addons/angee/tags/{addon.toml,testing/models.py,web/src/*}; examples/addons/example/notes/{addon.toml,autoconfig.py,README.md,web/*};
 packages/app/src/{define-base-addon.ts:20,66,124,162,testing.tsx:101,architecture-guardrails.test.ts:231,774}; packages/app/config/vitest.ts:90;
 packages/ui/src/i18n/index.ts:45; packages/app/bin/angee-web-codegen.mjs:60-110; tests/settings.py:29,71,144; tests/conftest.py:645; tests/test_addons.py:95;

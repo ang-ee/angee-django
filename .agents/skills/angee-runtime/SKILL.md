@@ -158,7 +158,7 @@ Every command runs from the stack root through its host.
      history is missing (`provision.py:62`); author with step 3 from the root
      against the rebuilt runtime, review, commit, then run the job again:
      provision migrates and the services restart.
-   - If the stack installs `--no-editable` (production serve mode, `:233,258`)
+   - If the stack installs `--no-editable` (production serve mode, `templates/stacks/_shared/stack-body.yaml.jinja:231,256`)
      → `runtime-build` itself refuses missing or drifted history
      (`angee/hatch.py:340`, `:272-299`) and provision never starts. Author
      nothing there: deploy a revision whose committed history passed an editable
@@ -177,7 +177,7 @@ Every command runs from the stack root through its host.
    Publish upstream-first ([Consumer CI Publication](../../../docs/checks.md#consumer-ci-publication)).
    **Owner rule:** [the upgrade cutoff](../../../docs/composer.md#foundation-and-provenance-upgrade-cutoff)
    owns the backup and the order; reset is an explicit cutoff, not a deployment
-   step (composer.md:339-346).
+   step ([Addon-owned runtime migrations](../../../docs/composer.md#addon-owned-runtime-migrations), "`reset_migration_history` is an exceptional, explicit upgrade cutoff").
 
 9. **Clean.** `uv run --no-sync python manage.py angee clean` deletes only the
    configured runtime after verifying the sentinel and keeps `migrations/`; rebuild with `uv sync`.
@@ -198,7 +198,7 @@ Steps 2–4 change command owners; steps 7 and 8 do not.
 
 ## Do not
 
-- Hand-edit or commit generated `runtime/` modules outside `runtime/<label>/migrations/` → the composer re-emits them on `uv sync` ([Invariants](../../../docs/composer.md#invariants); `.gitignore.jinja:11` keeps only history).
+- Hand-edit or commit generated `runtime/` modules outside `runtime/<label>/migrations/` → the composer re-emits them on `uv sync` ([Invariants](../../../docs/composer.md#invariants); `templates/stacks/dev/template/.gitignore.jinja:11` keeps only history).
 - `uv sync`/`uv lock` on the stack venv while it runs → the whole-application restart owns the install while workers are alive ([restart](../../../docs/howto/getstarted.md#restart-the-running-stack)).
 - Start Django, Vite, workers or `uvicorn --reload` by hand, or kill a process → `angee dev` and the operator own processes it must later restart ([Run From The Root](../../../AGENTS.md#run-from-the-root)).
 - Route migration authoring through the restart job or a deployment → provision refuses drift and authors nothing (`provision.py:62`) and a `--no-editable` build refuses missing history (`angee/hatch.py:340`); author from the root of an editable stack, step 3 ([Addon-owned runtime migrations](../../../docs/composer.md#addon-owned-runtime-migrations)).
@@ -207,7 +207,7 @@ Steps 2–4 change command owners; steps 7 and 8 do not.
 - Delete `*/migrations/`, a generated migration or an original chain while a database may still need it → `reset_migration_history` under a cutoff ([Mechanical Overrides](../../../AGENTS.md#mechanical-overrides)).
 - Choose a `rebac sync` shape here, `--force-overwrite` included → `angee-permissions` step 7 owns the decision; provision schedules it (`provision.py:58-60`, [REBAC](../../../docs/backend/guidelines.md#rebac) lines 825-830).
 - Silence `check` to serve past `rebac.E009` → the model or zed backing owns the fix (`rebac/checks.py:298`; `angee-permissions` step 7 recovery).
-- Hand-write `runtime/schemas/*.graphql`, or run `makemigrations` inside the build process → `schema` and the codegen job; a fresh `uv run --no-sync` process (`angee/hatch.py:245`, [Migrations and runtime](../../../docs/backend/guidelines.md#migrations-and-runtime)).
+- Hand-write `runtime/schemas/*.graphql`, or run `makemigrations` inside the build process → `schema` and the codegen job; a fresh `uv run --no-sync` process (`angee/hatch.py:245`, [Migrations and runtime](references/migrations.md)).
 
 ## Verify
 
@@ -228,24 +228,25 @@ Steps 2–4 change command owners; steps 7 and 8 do not.
 
 ## Pitfalls
 
-- Celery workers do not autoreload; restart them through the operator after task, model or settings edits ([Environment and checks](../../../docs/backend/guidelines.md#environment-and-checks)).
-- A missing `runtime/schemas/*.graphql` makes the SPA fail silently while `:5173` still answers 200 ([Migrations and runtime](../../../docs/backend/guidelines.md#migrations-and-runtime)).
-- Data migrations read REBAC-scoped models through `model._base_manager.using(db)`; `objects` raises `MissingActorError` ([Migrations and runtime](../../../docs/backend/guidelines.md#migrations-and-runtime)).
-- PostgreSQL: a manual `migrate` needs `ANALYZE` of changed tables; row updates followed by DDL need `SET CONSTRAINTS ALL IMMEDIATE` ([Migrations and runtime](../../../docs/backend/guidelines.md#migrations-and-runtime)).
-- A restricted `makemigrations` must cover every changed concrete app ([Migrations and runtime](../../../docs/backend/guidelines.md#migrations-and-runtime)).
+- Celery workers do not autoreload; restart them through the operator after task, model or settings edits ([Environment and checks](../angee-tests/references/environment.md)).
+- A missing `runtime/schemas/*.graphql` makes the SPA fail silently while `:5173` still answers 200 ([Migrations and runtime](references/migrations.md)).
+- Data migrations read REBAC-scoped models through `model._base_manager.using(db)`; `objects` raises `MissingActorError` ([Migrations and runtime](references/migrations.md)).
+- PostgreSQL: a manual `migrate` needs `ANALYZE` of changed tables; row updates followed by DDL need `SET CONSTRAINTS ALL IMMEDIATE` ([Migrations and runtime](references/migrations.md)).
+- A restricted `makemigrations` must cover every changed concrete app ([Migrations and runtime](references/migrations.md)).
 
 ## Read next
 
+- [Migrations and runtime](references/migrations.md)
 - [Flow](../../../docs/composer.md#flow), [Runtime Build And Import](../../../docs/composer.md#runtime-build-and-import), [Runtime cleanup](../../../docs/composer.md#runtime-cleanup)
-- [Composition And Schema](../../../docs/checks.md#composition-and-schema), [Migrations and runtime](../../../docs/backend/guidelines.md#migrations-and-runtime), [REBAC](../../../docs/backend/guidelines.md#rebac)
+- [Composition And Schema](../../../docs/checks.md#composition-and-schema), [Migration history](../../../docs/backend/guidelines.md#migration-history), [REBAC](../../../docs/backend/guidelines.md#rebac)
 - [Restart the running stack](../../../docs/howto/getstarted.md#restart-the-running-stack)
 - Skills: `angee-project`, `angee-addon`, `angee-permissions` (step 7), `angee-workspace`, `slice`
 
 <!-- Sources
-Docs: AGENTS.md:234-272; docs/guidelines.md; docs/composer.md:20-43,200-492,581-614; docs/backend/guidelines.md:96-112,800-830,842-1012;
-docs/checks.md:9-60,168-216,271-376; docs/howto/getstarted.md:363-440; docs/stack.md:339-345; templates/stacks/_shared/{AGENTS.md,stack-body.yaml}.jinja;
+Docs: AGENTS.md #common-errors, #mechanical-overrides, #run-from-the-root; docs/guidelines.md; docs/composer.md #flow, #runtime-build-and-import, #addon-owned-runtime-migrations, #foundation-and-provenance-upgrade-cutoff, #composed-addon-dependencies, #runtime-cleanup, #addon-declarations, #invariants; docs/backend/guidelines.md #package-layering, #rebac, #pitfalls, #environment-and-checks, #migrations-and-runtime, #persistence-primitives;
+docs/checks.md #choose-the-working-directory, #python-and-composition-contracts, #composition-and-schema, #frontend-packages-and-addon-fragments, #browser-verification, #what-ci-actually-runs; docs/howto/getstarted.md #restart-the-running-stack, #whats-needed-for-agents-to-self-build; docs/stack.md #tooling; templates/stacks/_shared/{AGENTS.md,stack-body.yaml}.jinja;
 templates/projects/web/template/pyproject.toml.jinja; templates/{projects/web,stacks/dev,stacks/local}/template/.gitignore.jinja. Code: angee/management/
-{commands/angee.py,provision.py,__init__.py}; angee/hatch.py:24-90,242-340; angee/apps.py; angee/compose/{apps.py,runtime.py:1-260,migrations.py:624-645,
+{commands/angee.py,provision.py,__init__.py}; angee/hatch.py:24-90,242-340; angee/apps.py; angee/compose/{apps.py,runtime.py,migrations.py:624-645,
 management/commands/*.py}; angee/utils/artifacts.py:13-122; angee/project.py; installed rebac/checks.py:285-335; tests/test_provision.py:95-130,201.
 Doc gaps: no doc names `pg_dump` (docs/composer.md#foundation-and-provenance-upgrade-cutoff step 1 owns the backup) or `migrate --check`; step 8's
 backup command is derived from the PostgreSQL stack, not a doc.

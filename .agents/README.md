@@ -13,8 +13,9 @@ Private task state follows `AGENTS.md` and the **Resolve Work-State** section of
 `skills/angee-workspace/SKILL.md`: use the optional workspace `work-state` slot,
 which lives beside this checkout in the src template. It may be a clone, a
 local-source symlink, or a Jujutsu workspace of a shared store. If absent, keep task state in the conversation. Durable
-conventions and pitfalls go in owning `docs/` guidelines; screenshots and logs
-go in the configured gitignored scratch directories.
+invariants and contracts go in the owning `docs/` guideline, pitfalls and
+procedures in the owning skill's `references/` file, commands in `docs/checks.md`;
+screenshots and logs go in the configured gitignored scratch directories.
 
 ## Layout
 
@@ -69,6 +70,11 @@ whose `allow_implicit_invocation` is `true` only for `angee-design`.
 
 Each harness enforces a different surface. Claude Code agent definitions in
 `.claude/agents/*.md` support a `tools:` frontmatter allowlist;
+Six capability guides live beside the engine they extend rather than here: `mcp-tools` (`addons/angee/mcp/skills/mcp-tools/SKILL.md`), `jobs-tasks` (`addons/angee/jobs/skills/jobs-tasks/SKILL.md`), `integrate-bridges` (`addons/angee/integrate/skills/integrate-bridges/SKILL.md`), `workflow-definitions` (`addons/angee/workflows/skills/workflow-definitions/SKILL.md`), `provenance-attribution` (`addons/angee/provenance/skills/provenance-attribution/SKILL.md`) and `agent-composition` (`addons/angee/agents/skills/agent-composition/SKILL.md`). Each carries the same frontmatter and `agents/openai.yaml` (implicit invocation `false`) and is reached by its explicit path from the
+`angee-design` and `angee-addon` *Read next* lists; no harness discovers an
+addon-local guide on its own, so a source checkout of this repository is the
+prerequisite for loading one. Delivering the guides with the installed wheel is a
+later phase.
 [`sync-adapters.py`](tools/sync-adapters.py) currently projects name,
 description and body only and does not emit it. Codex `agents/openai.yaml`
 carries invocation policy but no tool restriction. Hooks exist only on the

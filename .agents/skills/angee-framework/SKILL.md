@@ -99,7 +99,7 @@ restating them. Run `angee-design` first for the owner map; `angee-addon`, `ange
            return errors
    ```
 
-   A registry-wide check is a function in `checks.py` registered in `BaseConfig.ready()` (`apps.py:49-52`)
+   A registry-wide check is a function in `checks.py` registered in `BaseConfig.ready()` (`addons/angee/base/apps.py:49-52`)
    with the next unused `angee.E0nn` id. A field joins `fields/__init__.py`; a queryset extends
    `CanonicalQuerySet`, and its manager binds `Manager.from_queryset` at module level ([stack](../../../docs/backend/guidelines.md#stack)).
    Base imports nothing from `angee.compose` or another addon (`tests/test_base_layering.py:124`); only
@@ -110,8 +110,8 @@ restating them. Run `angee-design` first for the owner map; `angee-addon`, `ange
 4. **Packages seam.** Put the owner in the lowest package `FRAMEWORK_IMPORT_RULES` (`architecture-guardrails.test.ts:29`)
    permits: `refine` and `metadata` import no sibling, `ui` reads `AppRuntime` from its own context, `app`
    composes. Export through the package's `package.json` `exports` map, extend `../tsconfig.base.json`, take
-   Vitest config from `packages/vitest.shared.ts`. A new shared owner needs a production consumer (`:476`)
-   and is never a deleted shell (`:17`). A UX rule becomes a `ux-ontology-guard.ts` rule, not an allowance.
+   Vitest config from `packages/vitest.shared.ts`. A new shared owner needs a production consumer (`architecture-guardrails.test.ts:476`)
+   and is never a deleted shell (`DELETED_SHELLS`, `:17`). A UX rule becomes a `ux-ontology-guard.ts` rule, not an allowance.
    **Owner rule:** [one-way rules](../../../docs/frontend/guidelines.md#one-way-rules), [ownership boundaries](../../../docs/frontend/guidelines.md#ownership-boundaries);
    packages never import `@angee/gql/*` ([Area Rules](../../../AGENTS.md#area-rules)).
 
@@ -139,7 +139,7 @@ restating them. Run `angee-design` first for the owner map; `angee-addon`, `ange
 8. **Guard the seam.** A new or changed boundary gets a focused test beside its peers: direction in
    `tests/test_base_layering.py`, closure in `tests/test_layering.py`, settings/app graph in `tests/test_settings.py`,
    emission in `tests/test_compose.py`, manifest binding in `tests/test_addons.py`, package layering in the
-   guardrails test. **Owner rule:** [backend checks](../../../docs/backend/guidelines.md#checks): test boundaries, not prescribed words.
+   guardrails test. **Owner rule:** [seam guards](../angee-tests/references/environment.md#seam-guards): test boundaries, not prescribed words.
 
 9. **Reconcile docs.** Update the owning guide's rule and link to the code; move exact shapes into docstrings;
    delete superseded guidance in the same change. Prose and code disagree → [reconcile](../../../docs/guidelines.md#reconcile-code-docs-and-tests)
@@ -188,13 +188,14 @@ suite passes for any `angee/` change; a template change pins its rendered value;
 - [Composer flow](../../../docs/composer.md#flow), [owner map](../../../docs/composer.md#owner-map), [invariants](../../../docs/composer.md#invariants)
 - [Package layering](../../../docs/backend/guidelines.md#package-layering), [framework contracts](../../../docs/backend/guidelines.md#framework-contracts), [naming](../../../docs/backend/guidelines.md#naming)
 - [Frontend package layering](../../../docs/frontend/guidelines.md#package-layering), [native state owners](../../../docs/frontend/guidelines.md#native-state-owners), [stack tooling](../../../docs/stack.md#tooling), [templates](../../../templates/README.md#kinds), [agent methodology](../../README.md)
+- [Web pitfalls](references/web-pitfalls.md): build, codegen, install and package-layering traps moved from the frontend guide
 - Skills: `angee-design` (first), `angee-addon`, `angee-models`, `angee-permissions`, `angee-workspace`, `slice`
 
 ## Sources
 
 <!--
-Docs: AGENTS.md; docs/guidelines.md; docs/backend/guidelines.md:15-138,805-830,1890-2176,2194-2250; docs/frontend/guidelines.md:15-127; docs/composer.md:20-77,83-112,449-558,587-614; docs/stack.md:1-50,113-158,335-373; docs/checks.md (whole); templates/README.md; .agents/README.md.
-Code: angee/*.py docstrings; angee/{defaults,hooks,apps,autoconfig}.py; angee/{addons,hatch,asgi,urls}.py (defs); angee/conf.py:360-395; angee/compose/apps.py; angee/compose/declarations.py (defs); angee/management/{__init__,provision}.py; angee/management/commands/{angee,createsuperuser}.py; addons/angee/base/{addon.toml,apps.py,checks.py,fields/__init__.py,models/__init__.py}; addons/angee/base/{build,autoconfig,querysets,managers,models/trash,models/ownership}.py (defs); tests/test_layering.py:1-100,165-260; tests/test_base_layering.py:1-230; tests/test_documentation_contracts.py:1-60; def lists of tests/test_{base_checks,compose_imports,hatch,defaults,management,provision,base_addon_dependencies,addons}.py and the five template tests; packages/app/src/architecture-guardrails.test.ts:1-80 and test names; packages/{tsconfig.base.json,vitest.shared.ts,app/package.json}; pnpm-workspace.yaml; pyproject.toml:1-60,156-190; templates/{projects/web,addons/web,stacks/dev,stacks/local}/copier.yml heads.
-Outstanding discrepancies: tests/test_base_layering.py:22-30 (`CORE_ADDON_BINDINGS`) allowlists angee/fields.py, angee/impl.py, angee/indexes.py and angee/models/*, while angee/ contains only the two IAM command shims (angee/management/commands/{createsuperuser,changepassword}.py). templates/README.md:13 says the `addon` kind renders a source addon package; templates/addons/ holds only web/.
+Docs: AGENTS.md; docs/guidelines.md; docs/backend/guidelines.md #stack, #django-native-rule, #package-layering, #composition-owners, #rebac, #workflow-contracts, #naming, #checks; docs/frontend/guidelines.md #stack, #package-layering; docs/composer.md #flow, #owner-map, #settings-bootstrap, #composed-addon-dependencies, #runtime-cleanup, #addon-declarations, #serving, #invariants; docs/stack.md #how-the-stack-is-locked, #backend, #rendered-binding, #tooling, #proposed-not-locked, #change-policy; docs/checks.md (whole); templates/README.md; .agents/README.md.
+Code: angee/*.py docstrings; angee/{defaults,hooks,apps,autoconfig}.py; angee/{addons,hatch,asgi,urls}.py (defs); angee/conf.py:360-395; angee/compose/apps.py; angee/compose/declarations.py (defs); angee/management/{__init__,provision}.py; angee/management/commands/{angee,createsuperuser}.py; addons/angee/base/{addon.toml,apps.py,checks.py,fields/__init__.py,models/__init__.py}; addons/angee/base/{build,autoconfig,querysets,managers,models/trash,models/ownership}.py (defs); tests/test_layering.py:1-100,165-260; tests/test_base_layering.py (whole); tests/test_documentation_contracts.py:1-60; def lists of tests/test_{base_checks,compose_imports,hatch,defaults,management,provision,base_addon_dependencies,addons}.py and the five template tests; packages/app/src/architecture-guardrails.test.ts:1-80 and test names; packages/{tsconfig.base.json,vitest.shared.ts,app/package.json}; pnpm-workspace.yaml; pyproject.toml:1-60,156-190; templates/{projects/web,addons/web,stacks/dev,stacks/local}/copier.yml heads.
+Outstanding discrepancies: tests/test_base_layering.py:22-30 (`CORE_ADDON_BINDINGS`) allowlists angee/fields.py, angee/impl.py, angee/indexes.py and angee/models/*, while angee/ contains only the two IAM command shims (angee/management/commands/{createsuperuser,changepassword}.py).
 Doc gap: no doc lists the per-seam validators or the compatibility-alias registration (derived from tests/test_base_layering.py).
 -->

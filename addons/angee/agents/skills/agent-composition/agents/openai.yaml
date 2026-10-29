@@ -1,0 +1,6 @@
+interface:
+  display_name: "Agent Composition"
+  short_description: "Compose an agent: row, service user, runtime, inference, tools, skills, tests."
+  default_prompt: "Use $agent-composition to add or change an agent, its runtime, inference backend, tool grants or skills in this addon."
+policy:
+  allow_implicit_invocation: false

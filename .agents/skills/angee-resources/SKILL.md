@@ -141,7 +141,7 @@ description: "Declares and loads an addon's master, install and demo data: addon
 
 6. **Retire a seeded model.** If the table holds only rows this addon's files seeded →
    `retired_models = ["messaging.ActivityType"]` under `[resources]` (`addons/angee/messaging/addon.toml:39`);
-   otherwise → a data migration ([migrations and runtime](../../../docs/backend/guidelines.md#migrations-and-runtime)).
+   otherwise → a data migration ([migration history](../../../docs/backend/guidelines.md#migration-history)).
    **Owner rule:** the drop guard exempts only this addon's ledgered keys (`build.py:38`, `managers.py:106`);
    removing a manifest entry retires nothing ([addon declarations](../../../docs/composer.md#addon-declarations)).
 
@@ -150,15 +150,15 @@ description: "Declares and loads an addon's master, install and demo data: addon
    must skip one entry sets `ANGEE_RESOURCE_EXCLUDED_ENTRIES` (`managers.py:536`).
    **Owner rule:** idempotency is the ledger's `(source_addon, xref)` plus the row content
    hash (`models.py:66-67`, `loader.py:398`); an unchanged replay touches no row
-   ([resource rules](../../../docs/backend/guidelines.md#models-queries-and-resources)).
+   ([resource loading](../../../docs/backend/guidelines.md#resource-loading)).
 
 ## Do not
 
 - A row that carries `id`, a pk or a public sqid: the ledger's xref owns identity, so the header check refuses them (`loader.py:753`).
 - A `loaddata` fixture, seeding command or `post_migrate` hook for rows the loader can import: the native import lifecycle already owns them ([stack](../../../docs/stack.md#backend), `django-import-export` row).
-- A resource file without a `[resources]` entry: the manifest selects files, so an unlisted file loads nothing ([resource rules](../../../docs/backend/guidelines.md#models-queries-and-resources)).
-- Promoting a demo row to `install`, or editing another addon's seed, to remove a permissive row: tiers are additive per addon, so the deployment excludes the entry instead ([demo tiers are additive](../../../docs/backend/guidelines.md#models-queries-and-resources)).
-- Selecting a seeded row by display name when it has an xref or stable key: the ledger owns the lookup ([seeded rows carry a stable key](../../../docs/backend/guidelines.md#models-queries-and-resources)).
+- A resource file without a `[resources]` entry: the manifest selects files, so an unlisted file loads nothing ([resource pitfalls](references/pitfalls.md)).
+- Promoting a demo row to `install`, or editing another addon's seed, to remove a permissive row: tiers are additive per addon, so the deployment excludes the entry instead ([demo tiers are additive](../../../docs/backend/guidelines.md#resource-loading)).
+- Selecting a seeded row by display name when it has an xref or stable key: the ledger owns the lookup ([seeded rows carry a stable key](references/pitfalls.md)).
 - Seeding fields that `StateTransitions` writes (`workspace`, `runtime_status`, `last_error`): the transition owns them and the loader does not protect them ([seeded transition state](../../../docs/backend/guidelines.md#seeded-transition-state)).
 - A catalogue tier on `AppConfig` or a second registry, or `runtime/` model imports to resolve a seed: the source model owns the tier and the ledger owns resolution ([composition owners](../../../docs/backend/guidelines.md#composition-owners)).
 - Caveated REBAC subjects behind a grant: actor-scoped querysets have no caveat context, so `angee.E024` rejects them (`addons/angee/base/checks.py:37`) and grants are caveat-free (`grants.py:8`).
@@ -194,15 +194,16 @@ manifest, file shapes and ledger contract above do not change.
 
 ## Read next
 
-- [Models, queries, and resources](../../../docs/backend/guidelines.md#models-queries-and-resources), [Composition owners](../../../docs/backend/guidelines.md#composition-owners), [Migrations and runtime](../../../docs/backend/guidelines.md#migrations-and-runtime)
+- [Resource pitfalls](references/pitfalls.md)
+- [Resource loading](../../../docs/backend/guidelines.md#resource-loading), [Composition owners](../../../docs/backend/guidelines.md#composition-owners), [Migration history](../../../docs/backend/guidelines.md#migration-history)
 - [Addon declarations](../../../docs/composer.md#addon-declarations), [Addon-owned runtime migrations](../../../docs/composer.md#addon-owned-runtime-migrations)
 - [Composition and schema](../../../docs/checks.md#composition-and-schema), [Glossary: Resource file](../../../docs/glossary.md#backend); skills `angee-addon`, `angee-models`, `angee-permissions`, `angee-tests`, `slice`
 
 ## Sources
 
 <!--
-Docs: AGENTS.md; docs/guidelines.md; docs/backend/guidelines.md:100-140,183-200,990-1060,1215-1275; docs/glossary.md:250-260; docs/composer.md:352-370,494-539; docs/checks.md:30-60,168-205; docs/stack.md:83; docs/features.md:64.
-Code (grep -n on the working tree): addons/angee/resources/{addon.toml,entries.py,tiers.py,kinds.py,mixins.py,models.py,managers.py:55-130,191-440,500-580,grants.py,widgets.py:206-302,build.py,loader.py:1-260,520-900,management/commands/resources.py,testing/*}; tests/test_catalogue_trait.py:36-230; angee/compose/migrations.py:624; angee/compose/model_composition.py:178-181; angee/management/provision.py:49-68; addons/angee/base/checks.py:16-37; addons/angee/tags/{addon.toml,resources/**}; addons/angee/money/{addon.toml,models.py:80-106,388-400,resources/**}; examples/addons/example/notes/{addon.toml,resources/**,models.py:22-53}; addons/angee/iam/{addon.toml:15-26,resources/demo/030_iam.admin_grant.yaml}; addons/angee/parties/addon.toml:28 + resources/install/020_statement_source_grants.yaml; addons/angee/messaging/addon.toml:39; addons/angee/integrate/models.py:1134-1225,1464-1500; addons/angee/workflows/{models.py:145-155,881,resources.py:1-135}; addons/angee/dashboards/models.py:786-812.
+Docs: AGENTS.md; docs/guidelines.md; docs/backend/guidelines.md #package-layering, #composition-owners, #rules, #persistence-primitives, #resource-loading; docs/glossary.md #backend (Resource entries); docs/composer.md #addon-owned-runtime-migrations, #addon-declarations, #serving; docs/checks.md #python-and-composition-contracts, #agent-methodology-and-documentation, #composition-and-schema; docs/stack.md #backend (cryptography row); docs/features.md #what-you-get--framework-primitives.
+Code (grep -n on the working tree): addons/angee/resources/{addon.toml,entries.py,tiers.py,kinds.py,mixins.py,models.py,managers.py:55-130,191-440,500-579,grants.py,widgets.py:206-302,build.py,loader.py:1-260,520-875,management/commands/resources.py,testing/*}; tests/test_catalogue_trait.py:36-224; angee/compose/migrations.py:624; angee/compose/model_composition.py:178-181; angee/management/provision.py:49-68; addons/angee/base/checks.py:16-37; addons/angee/tags/{addon.toml,resources/**}; addons/angee/money/{addon.toml,models.py:80-106,388-400,resources/**}; examples/addons/example/notes/{addon.toml,resources/**,models.py:22-53}; addons/angee/iam/{addon.toml:15-25,resources/demo/030_iam.admin_grant.yaml}; addons/angee/parties/addon.toml:28 + resources/install/020_statement_source_grants.yaml; addons/angee/messaging/addon.toml:39; addons/angee/integrate/models.py:1134-1225,1464-1500; addons/angee/workflows/{models.py:145-155,881,resources.py:1-135}; addons/angee/dashboards/models.py:786-812.
 Doc gaps: no [resources] key reference and no row-shape reference in docs/. Filename pattern is `[NNN_]<label>.<model>.<ext>` (entries.py:406).
-Mismatches: angee/management/provision.py:49-68 does not run `resources`; checks.md:195 lists it as a separate lifecycle step.
+Mismatches: angee/management/provision.py:49-68 does not run `resources`; docs/checks.md#composition-and-schema lists it as a separate lifecycle step.
 -->

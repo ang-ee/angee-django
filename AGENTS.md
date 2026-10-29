@@ -282,8 +282,10 @@ Never `git checkout` or `git switch` inside a pinned workspace slot.
 
 Durable project knowledge is checked in, not held only in private agent memory.
 
-- **Principles and pitfalls:** extend the owning `docs/` guide with a terse rule
-  and an owner link. Exact API details belong beside the implementing code.
+- **Principles, pitfalls and procedures:** an invariant or contract extends the
+  owning `docs/` guide with a terse rule and an owner link; a pitfall or
+  procedure goes to the owning skill's `references/` file; a command goes to
+  `docs/checks.md`. Exact API details belong beside the implementing code.
 - **Shared methodology:** reviewer prompts, skills, commands, and workflows live
   in public `.agents/`; private task history does not.
 - **Private work-state:** resolve the current workspace through the workspace
