@@ -272,37 +272,36 @@ def test_addons_own_their_periodic_celery_schedules() -> None:
 def test_celery_command_loads_declared_roots_before_importing_jobs(
     tmp_path: Path, installed: bool, arguments: list[str], code: int, message: str,
 ) -> None:
-    """A prebuilt host loads declared addon paths without process attribution."""
+    """Native installed roots expose Celery without activating provenance."""
 
     source = Path(__file__).resolve().parents[1]
     (tmp_path / "settings.yaml").write_text(
         "SECRET_KEY: celery-entrypoint-test\n"
-        f"COMPOSE_RUNTIME_DIR: {str(tmp_path / 'runtime')!r}\n"
-        "COMPOSE_RUNTIME_MODULE: runtime\n"
-        f"ANGEE_ADDON_DIRS: [{str(source / 'addons')!r}]\n"
+        f"COMPOSE_OUTPUT_DIR: {str(tmp_path / 'runtime')!r}\n"
+        "COMPOSE_OUTPUT_MODULE: runtime\n"
         f"INSTALLED_APPS: {['angee.jobs'] if installed else []!r}\n"
         "DATABASES:\n  default:\n    ENGINE: django.db.backends.sqlite3\n    NAME: ':memory:'\n",
     )
-    (tmp_path / "manage.py").write_text(
-        "from importlib.util import find_spec\n"
-        "import sys\n"
-        "assert find_spec('angee.jobs') is None, 'Addon path leaked into initial imports'\n"
-        "from angee.management import main\n"
-        "try:\n    main()\n"
-        "finally:\n"
-        "    assert not any(n == 'angee.provenance' or n.startswith('angee.provenance.') for n in sys.modules)\n",
+    template = source / "templates/projects/web/template"
+    (tmp_path / "settings.py").write_text((template / "settings.py").read_text())
+    launcher = (template / "manage.py.jinja").read_text().replace("{{ project_name }}", "celery-probe")
+    # Keep the native launcher call; this assertion observes both successful and
+    # failing CLI exits without adding a command/context dispatcher.
+    launcher = launcher.replace(
+        "    execute()",
+        "    try:\n        execute()\n"
+        "    finally:\n"
+        "        import sys\n"
+        "        assert not any(n == 'angee.provenance' or n.startswith('angee.provenance.') for n in sys.modules)",
     )
+    (tmp_path / "manage.py").write_text(launcher)
     environment = {
         key: value for key, value in os.environ.items()
         if not key.startswith(("ANGEE_", "COMPOSE_", "YAMLCONF_", "SENTRY_"))
-        and key not in {"DJANGO_SETTINGS_MODULE", "DATABASE_URL"}
+        and key not in {"DJANGO_SETTINGS_MODULE", "DJANGO_COMPOSE_MODE", "DATABASE_URL", "PYTHONPATH"}
     }
-    # This is the installed core's path, deliberately excluding its addon roots.
-    environment["PYTHONPATH"] = str(source)
     built = subprocess.run(
-        [sys.executable, "-c",
-         "from pathlib import Path; from angee.hatch import build_runtime; "
-         "build_runtime(Path.cwd(), Path('runtime'), check_history=False)"],
+        [sys.executable, str(tmp_path / "manage.py"), "compose"],
         cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=60, check=False,
     )
     assert built.returncode == 0, built.stdout + built.stderr

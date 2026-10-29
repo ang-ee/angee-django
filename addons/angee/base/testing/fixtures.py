@@ -25,7 +25,7 @@ def django_db_setup(
     own their per-test schemas through ``composed_permissions`` instead.
     """
 
-    if not getattr(settings, "COMPOSE_RUNTIME_DIR", None):
+    if not getattr(settings, "COMPOSE_OUTPUT_DIR", None):
         yield
         return
 
