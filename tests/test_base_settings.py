@@ -88,17 +88,9 @@ assert namespace['CACHES'] == caches
 ''', tmp_path)
 
 
-def test_environment_compiler_input_refuses_and_failed_yaml_keeps_watch_candidates(tmp_path: Path) -> None:
+def test_failed_yaml_keeps_watch_candidates(tmp_path: Path) -> None:
     _probe(_SEAM + r'''
 from django.core.exceptions import ImproperlyConfigured
-os.environ['YAMLCONF_INSTALLED_APPS'] = 'acme.invoice'
-try:
-    configure({'__name__':'settings','__file__':str(root/'settings.py')})
-except ImproperlyConfigured as error:
-    assert 'INSTALLED_APPS' in str(error)
-else:
-    raise AssertionError('environment selected structural roots')
-os.environ.pop('YAMLCONF_INSTALLED_APPS')
 (root/'settings.yaml').write_text('INSTALLED_APPS: [unterminated\n')
 namespace = {'__name__':'settings','__file__':str(root/'settings.py')}
 try:
@@ -127,4 +119,22 @@ with patch('sentry_sdk.is_initialized', return_value=False), patch('sentry_sdk.i
     else:
         raise AssertionError('compose failure swallowed')
     start.assert_called_once_with(disabled_integrations=['policy'],send_default_pii=False,include_local_variables=False,max_request_body_size='never')
+''', tmp_path)
+
+
+def test_native_provenance_reaches_compiler_validation(tmp_path: Path) -> None:
+    _probe(_SEAM + r'''
+os.environ['YAMLCONF_INSTALLED_APPS'] = 'acme.invoice'
+seen=[]
+def compose(namespace):
+    seen.append(namespace['_YAMLCONF_ATTRIBUTES'])
+    raise RuntimeError('native validation verdict')
+native.configure=compose
+try:
+    configure({'__name__':'settings','__file__':str(root/'settings.py')})
+except RuntimeError as error:
+    assert str(error)=='native validation verdict'
+else:
+    raise AssertionError('native validation was not called')
+assert seen[0]['INSTALLED_APPS']['source']=='**ENVIRONMENT**'
 ''', tmp_path)
