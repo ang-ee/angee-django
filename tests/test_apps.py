@@ -12,7 +12,7 @@ from django.core.exceptions import ImproperlyConfigured
 
 from angee.addons import addon_manifest
 from angee.graphql.schema import schema_parts_for
-from angee.resources.entries import ResourceEntry, resource_manifest_for
+from angee.resources.entries import EntryGraph, ResourceEntry, resource_manifest_for
 from angee.web.build import WebRuntime
 from tests.conftest import make_addon
 
@@ -86,6 +86,30 @@ def test_resource_manifest_normalizes_tiers_and_entries(monkeypatch) -> None:
         },
     )
     assert manifest["demo"] == ({"url": "https://example.test/demo.csv"},)
+
+
+@pytest.mark.parametrize("with_work", [False, True])
+def test_projects_demo_graph_keeps_work_optional(with_work: bool) -> None:
+    """Projects seeds stand alone; Work's own task seed follows its stages."""
+
+    labels = ("iam", "projects", "work") if with_work else ("iam", "projects")
+    entries = tuple(
+        ResourceEntry.from_declaration(config, tier, declaration)
+        for label in labels
+        for config in (apps.get_app_config(label),)
+        for tier, declarations in resource_manifest_for(config).items()
+        for declaration in declarations
+    )
+    ordered = EntryGraph.from_entries(entries).ordered()
+    positions = {entry.key: index for index, entry in enumerate(ordered)}
+    project_tasks = ("angee.projects", "resources/demo/030_projects.task.yaml")
+    project_children = ("angee.projects", "resources/demo/031_projects.task.yaml")
+    assert positions[("angee.iam", "resources/demo/010_iam.user.yaml")] < positions[project_tasks]
+    assert positions[project_tasks] < positions[project_children]
+    if with_work:
+        work_tasks = ("angee.work", "resources/demo/020_projects.task.yaml")
+        assert positions[project_children] < positions[work_tasks]
+        assert positions[("angee.work", "resources/demo/012_work.stage.yaml")] < positions[work_tasks]
 
 
 def test_integrate_config_installs_public_oauth_provider_resources() -> None:
