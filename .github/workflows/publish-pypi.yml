@@ -1,10 +1,9 @@
-name: publish PyPI package
+name: Publish Python distributions
 
 on:
   release:
     types: [published]
 
-# Restrictive default; the publish job alone elevates to id-token: write.
 permissions:
   contents: read
 
@@ -19,21 +18,18 @@ jobs:
   publish:
     needs: checks
     runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/p/django-angee
-    permissions:
-      contents: read
-      id-token: write
+    environment: python-index
+    env:
+      UV_PUBLISH_URL: ${{ vars.ANGEE_PYTHON_PUBLISH_URL }}
+      UV_PUBLISH_TOKEN: ${{ secrets.ANGEE_PYTHON_PUBLISH_TOKEN }}
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.14"
-      - name: Build source and wheel distributions
-        run: uv build --sdist --wheel
-      - name: Validate distribution metadata
-        # uv accepts the Core Metadata 2.5 emitted for PEP 639; Twine 6.2 does not.
+      - name: Build each native workspace wheel directly
+        run: uv run --only-group dev python scripts/release.py --build
+      - name: Validate target channel metadata
         run: uv publish --dry-run --trusted-publishing never dist/*
-      - name: Publish through PyPI trusted publishing
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Publish to the configured Angee Python index
+        run: uv publish --trusted-publishing never dist/*

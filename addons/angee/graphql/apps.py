@@ -18,6 +18,7 @@ class GraphQLConfig(AppConfig):
 
     default = True
     name = "angee.graphql"
+    requires_apps = ('channels',)
 
     def ready(self) -> None:
         """Register schema checks and connect model-change hooks."""

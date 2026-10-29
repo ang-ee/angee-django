@@ -1,0 +1,14 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-theme-ledger"
+version = "3.0.0"
+description = "Ink-on-paper ledger theme with a solar accent"
+keywords = ["theme", "appearance", "ledger", "ink"]
+dependencies = ["angee-web>=3,<4"]
+
+[project.entry-points]
+"angee.addons" = {"angee.theme_ledger" = "angee.theme_ledger"}
+
+[tool.angee]
+category = "User interface"

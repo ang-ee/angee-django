@@ -17,6 +17,7 @@ class StorageConfig(AppConfig):
 
     default = True
     name = "angee.storage"
+    requires_apps = ('django.contrib.contenttypes',)
 
     def ready(self) -> None:
         """Wire storage-owned signal receivers after app population."""

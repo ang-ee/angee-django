@@ -44,5 +44,13 @@
     "typescript": "^6.0.3",
     "vitest": "^4.1.9",
     "@tanstack/react-query": "^5.101.1"
+  },
+  "angee": {
+    "codegen": {
+      "schema": "operator",
+      "sdl": "schema/operator.graphql",
+      "documents": "documents.daemon.ts",
+      "types": true
+    }
   }
 }

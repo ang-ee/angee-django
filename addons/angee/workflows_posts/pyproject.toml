@@ -1,0 +1,14 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-workflows-posts"
+version = "3.0.0"
+description = "Comment reply eligibility and scheduling through workflow steps"
+keywords = ["posts", "agents", "workflows"]
+dependencies = ["angee-base>=3,<4", "angee-posts>=3,<4", "angee-agents>=3,<4", "angee-workflows-agents>=3,<4"]
+
+[project.entry-points]
+"angee.addons" = {"angee.workflows_posts" = "angee.workflows_posts"}
+
+[tool.angee]
+category = "Workflows"

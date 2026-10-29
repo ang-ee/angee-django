@@ -1,0 +1,14 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-appearance"
+version = "3.0.0"
+description = "Personal theme and color-scheme settings"
+keywords = ["appearance", "theme", "settings"]
+dependencies = ["angee-iam>=3,<4", "angee-web>=3,<4"]
+
+[project.entry-points]
+"angee.addons" = {"angee.appearance" = "angee.appearance"}
+
+[tool.angee]
+category = "User interface"

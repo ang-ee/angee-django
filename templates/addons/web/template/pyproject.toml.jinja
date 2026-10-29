@@ -1,0 +1,22 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "{{ addon_name | replace(".", "-") | replace("_", "-") }}"
+version = "1.0.0"
+description = "{{ addon_title }}: {{ model_name | lower }} records owned by their creator."
+keywords = ["{{ addon_id }}"]
+dependencies = [
+  "angee-base>=3,<4",
+  "angee-iam>=3,<4",
+  "angee-graphql>=3,<4",
+  "angee-resources>=3,<4",
+{% if include_web %}
+  "angee-web>=3,<4",
+{% endif %}
+]
+entry-points."angee.addons"."{{ addon_name }}" = "{{ addon_name }}"
+
+[tool.angee.resources]
+demo = [
+  { path = "demo/010_{{ addon_id }}.{{ model_name | lower }}.yaml", depends_on = "iam:demo/010_iam.user.yaml" },
+]

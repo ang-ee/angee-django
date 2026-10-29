@@ -17,6 +17,7 @@ class MessagingConfig(AppConfig):
 
     default = True
     name = "angee.messaging"
+    requires_apps = ('django.contrib.contenttypes', 'django.contrib.postgres')
 
     def ready(self) -> None:
         from angee.base.signals import connect_for_models, record_access_revoked

@@ -1,8 +1,0 @@
-# Angee addon manifest. The declarative contract hatch-angee compiles into
-# the package's [project] + entry points; see hatch-angee's native AddonManifest.
-[addon]
-name = "angee.platform_integrate_vcs"
-description = "The marketplace catalog tier — addons discovered from VCS sources, known by repo@sha"
-keywords = ["marketplace", "addons", "vcs"]
-category = "Integration"
-depends_on = ["angee.base", "angee.platform", "angee.integrate_vcs", "angee.web"]

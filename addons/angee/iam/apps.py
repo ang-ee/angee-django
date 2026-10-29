@@ -10,6 +10,7 @@ class IAMConfig(AppConfig):
 
     default = True
     name = "angee.iam"
+    requires_apps = ('axes', 'django.contrib.auth', 'django.contrib.sessions')
 
     def ready(self) -> None:
         """Connect IAM's receivers once Django's auth app has connected its own."""

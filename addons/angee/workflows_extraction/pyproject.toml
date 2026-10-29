@@ -1,0 +1,17 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-workflows-extraction"
+version = "3.0.0"
+description = "Workflow steps for document extraction"
+keywords = ["workflows", "extraction", "documents", "evidence"]
+dependencies = ["angee-base>=3,<4", "angee-workflows>=3,<4", "angee-extraction>=3,<4"]
+
+[project.entry-points]
+"angee.addons" = {"angee.workflows_extraction" = "angee.workflows_extraction"}
+
+[tool.angee]
+category = "Workflows"
+
+[tool.angee.resources]
+install = ["install/100_workflows.workflow.yaml"]

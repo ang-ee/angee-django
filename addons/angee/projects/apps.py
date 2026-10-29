@@ -8,6 +8,7 @@ class ProjectsConfig(AppConfig):
 
     default = True
     name = "angee.projects"
+    requires_apps = ('django.contrib.contenttypes',)
 
     def ready(self) -> None:
         """Register model-specific deletion receivers without querying data."""

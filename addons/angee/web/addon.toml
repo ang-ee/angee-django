@@ -1,5 +1,0 @@
-[addon]
-name = "angee.web"
-description = "Composed frontend package and code-generation manifest"
-keywords = ["web", "frontend", "codegen"]
-category = "Foundation"

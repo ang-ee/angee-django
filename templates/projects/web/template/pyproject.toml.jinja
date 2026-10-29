@@ -1,64 +1,38 @@
-# Native uv/Hatch packaging owns the project runtime. `uv sync` creates an
-# editable runtime for native migration authoring; `uv build` validates and
-# packages the reviewed project-specific runtime and version-controlled history.
-[build-system]
-requires = ["hatchling>=1.27", "django-angee>=0.3"]
-build-backend = "hatchling.build"
-
 [project]
 name = "{{ project_name }}"
 version = "0.0.0"
 requires-python = ">=3.14"
-dynamic = ["dependencies", "entry-points"]
-
-[tool.hatch.metadata]
-allow-direct-references = true
-
-[tool.hatch.metadata.hooks.angee-runtime]
-# Host-authored runtime requirements live once here. The native metadata hook
-# adds each selected addon's own requirements from addon.toml.
-dependencies = ["django-angee[postgres]>=0.3"]
-
-[tool.hatch.build.hooks.angee-runtime]
-require-runtime-dependencies = true
-
-[tool.hatch.build.targets.wheel]
-bypass-selection = true
-
-{% if framework_source_path and framework != "baked" %}
-[tool.uv.sources]
-# Development resolves the same framework source as the stack.
-django-angee = { path = "{{ framework_source_path }}", editable = true }
-{% endif %}
-
-[tool.uv]
-cache-dir = "caches/uv"
-# Native uv does not infer transitive dynamic-metadata inputs. Add corresponding
-# native keys when declaring additional external addon source roots.
-cache-keys = [
-  { file = "pyproject.toml" },
-  { file = "settings.yaml" },
-  { file = "settings.py" },
-  { file = "runtime/*/migrations/**/*.py" },
-  { file = "addons/**/addon.toml" },
-  { file = "addons/**/*.py" },
-  { file = "addons/**/*.zed" },
-{% if framework_source_path and framework != "baked" %}
-  { file = "{{ framework_source_path }}/angee/**/*.py" },
-  { file = "{{ framework_source_path }}/addons/**/addon.toml" },
-  { file = "{{ framework_source_path }}/addons/**/*.py" },
-  { file = "{{ framework_source_path }}/addons/**/*.zed" },
-{% endif %}
-{% if framework_workspace %}
+dependencies = [
+  "angee[postgres]>=3,<4",
 {% if addons_profile == "full" %}
-  { file = "workspaces/src/angee-messaging-bridges/addons/**/addon.toml" },
-  { file = "workspaces/src/angee-messaging-bridges/addons/**/*.py" },
-  { file = "workspaces/src/angee-messaging-bridges/addons/**/*.zed" },
+  "angee-messaging-bridges>=1,<2",
+  "example-notes>=3,<4",
+  "example-theme>=3,<4",
 {% endif %}
 {% if include_arp %}
-  { file = "workspaces/src/angee-arp/addons/**/addon.toml" },
-  { file = "workspaces/src/angee-arp/addons/**/*.py" },
-  { file = "workspaces/src/angee-arp/addons/**/*.zed" },
-{% endif %}
+  "arp>=1,<2",
 {% endif %}
 ]
+
+[tool.uv]
+package = false
+cache-dir = "caches/uv"
+
+[tool.uv.workspace]
+members = ["addons/*/*"]
+{% if framework_source_path and framework != "baked" %}
+
+[tool.uv.sources]
+# Native uv follows the source repository's workspace members and declarations.
+angee = { path = "{{ framework_source_path }}", editable = true }
+{% if framework_workspace %}
+{% if addons_profile == "full" %}
+angee-messaging-bridges = { path = "workspaces/src/angee-messaging-bridges", editable = true }
+example-notes = { path = "{{ framework_source_path }}/examples/addons/example/notes", editable = true }
+example-theme = { path = "{{ framework_source_path }}/examples/addons/example/theme", editable = true }
+{% endif %}
+{% if include_arp %}
+arp = { path = "workspaces/src/angee-arp", editable = true }
+{% endif %}
+{% endif %}
+{% endif %}
