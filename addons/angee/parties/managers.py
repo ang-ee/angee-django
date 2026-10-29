@@ -34,6 +34,7 @@ from rebac import (
     PermissionDenied,
     actor_context,
     current_actor,
+    database_context,
     system_context,
 )
 from rebac.actors import is_sudo, to_subject_ref
@@ -370,7 +371,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         if handle is None:
             try:
                 # A savepoint isolates the insert, so the caller's transaction stays usable.
-                with transaction.atomic():
+                with transaction.atomic(using=self.db):
                     return self.create(
                         platform=platform,
                         value=value,
@@ -509,9 +510,15 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
 
         evidence = tuple(evidence)
         person_model = apps.get_model("parties", "Person")
-        link_owner = apps.get_model("parties", "Party").objects
-        with system_context(reason="parties.handle.claim_control"), transaction.atomic():
-            handle = self.upsert(
+        handles_owner = self.db_manager(self._db or user._state.db, hints={"instance": user})
+        using = handles_owner.db
+        link_owner = apps.get_model("parties", "Party").objects.db_manager(using)
+        with (
+            database_context(using),
+            system_context(reason="parties.handle.claim_control"),
+            transaction.atomic(using=using),
+        ):
+            handle = handles_owner.upsert(
                 platform=platform,
                 value=value,
                 created_by_id=user.pk,
@@ -523,7 +530,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 handle_ids=(handle.pk,),
             )
             handle = handles[handle.pk]
-            person = person_model.objects.for_user(user)
+            person = person_model.objects.db_manager(using).for_user(user)
             if handle.controller_id is not None and handle.controller_id != user.pk:
                 link_owner.assert_handle(
                     person,
@@ -535,7 +542,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 return handle
             if handle.controller_id is None:
                 handle.controller = user
-                handle.save(update_fields=["controller", "updated_at"])
+                handle.save(using=using, update_fields=["controller", "updated_at"])
             link_owner.assert_handle(
                 person,
                 handle,
@@ -992,7 +999,6 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         with system_context(reason="parties.rule"):
             return apps.get_model("provenance", "Rule").objects.get(key=f"parties.{key}")
 
-    @transaction.atomic
     def assert_handle(
         self,
         party: Any,
@@ -1004,23 +1010,28 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         link: Any = None,
     ) -> Any:
         """Assert normal handle facts from native supporting records, preserving person decisions."""
-        source = to_subject_ref(asserted_by)
-        subject = apps.get_model("parties", "Party")._base_manager.get(pk=party.pk)
-        refs = [EvidenceReference.of(row) for row in evidence]
-        existing = subject.statements.current().filter(aspect="handle", handle=handle, asserted_by=str(source)).first()
-        if existing is not None and existing.rank == existing.StatementRank.PREFERRED:
-            subject.statements.asserting_source(asserted_by)
-            subject.require_statement_write(source)
-            return existing
-        return subject.statements.set(
-            aspect="handle",
-            handle=handle,
-            values={},
-            asserted_by=asserted_by,
-            confidence=confidence,
-            evidence=refs,
-            link=link,
-        )
+        owner = self.db_manager(self._db or party._state.db, hints={"instance": party})
+        using = owner.db
+        with database_context(using), transaction.atomic(using=using):
+            source = to_subject_ref(asserted_by)
+            subject = apps.get_model("parties", "Party")._base_manager.using(using).get(pk=party.pk)
+            refs = [EvidenceReference.of(row) for row in evidence]
+            existing = (
+                subject.statements.current().filter(aspect="handle", handle=handle, asserted_by=str(source)).first()
+            )
+            if existing is not None and existing.rank == existing.StatementRank.PREFERRED:
+                subject.statements.asserting_source(asserted_by)
+                subject.require_statement_write(source)
+                return existing
+            return subject.statements.set(
+                aspect="handle",
+                handle=handle,
+                values={},
+                asserted_by=asserted_by,
+                confidence=confidence,
+                evidence=refs,
+                link=link,
+            )
 
     def lock_identity_rows(
         self,

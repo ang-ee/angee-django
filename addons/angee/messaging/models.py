@@ -22,13 +22,12 @@ The write path lives on the managers.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from contextlib import AbstractContextManager, nullcontext
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar, cast
 
-from angee.base.serialization import strip_null_bytes
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -54,6 +53,7 @@ from rebac import (
     SubjectRef,
     actor_context,
     current_actor,
+    database_context,
     system_context,
     to_object_ref,
     to_subject_ref,
@@ -366,23 +366,20 @@ class ThreadedModelMixin(models.Model):
             with self._own_write_scope():
                 self._message_after_create()
 
-    def _own_write_scope(self) -> AbstractContextManager[None]:
-        """Make this row's write scope ambient for the chatter its save writes.
+    @contextmanager
+    def _own_write_scope(self) -> Iterator[None]:
+        """Carry this saved row's database and actor into its chatter bookkeeping."""
 
-        A queryset's pinned actor or system scope reaches the row but not the
-        threads, followers and notes written on its behalf, which follow the
-        ambient scope. A pinned actor then owns a new thread as an ambient one
-        would; an elevated insert writes them as system bookkeeping.
-        """
-
-        if not isinstance(self, RebacMixin):
-            return nullcontext()
-        actor, unscoped = self.effective_actor()
-        if unscoped and not is_sudo():
-            return system_context(reason="messaging.record_write")
-        if actor is not None and actor != current_actor():
-            return actor_context(actor)
-        return nullcontext()
+        scope: AbstractContextManager[None] = nullcontext()
+        if isinstance(self, RebacMixin):
+            actor, unscoped = self.effective_actor()
+            if unscoped and not is_sudo():
+                scope = system_context(reason="messaging.record_write")
+            elif actor is not None and actor != current_actor():
+                scope = actor_context(actor)
+        using = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
+        with database_context(using), scope:
+            yield
 
     def delete(self, using: str | None = None, keep_parents: bool = False) -> tuple[int, dict[str, int]]:
         """Delete this row after authorizing the record, then elevate its cascade.
@@ -667,7 +664,6 @@ class ThreadedModelMixin(models.Model):
             idempotency_actor=idempotency_actor,
         )
 
-    @transaction.atomic
     def message_system_post(
         self,
         *,
@@ -693,32 +689,34 @@ class ThreadedModelMixin(models.Model):
         through :meth:`_message_post`, which adds the post gate and autofollow policy.
         """
 
-        bound_actor = self.actor() if isinstance(self, RebacMixin) else None
-        scope_actor = idempotency_actor or bound_actor or current_actor()
-        attachment = self.message_thread_attachment(create=True)
-        if attachment is None:
-            raise ValueError("Cannot post a message without a thread.")
-        message_model = apps.get_model("messaging", "Message")
-        # The framework writes on the record's behalf, so the whole pipeline
-        # (message, parts, fanout, receipt advance) runs under
-        # system_context: a user actor passed the record gate already, and a
-        # non-user actor species (an agent authoring through its service user)
-        # must not be denied on messaging-private bookkeeping rows.
-        with system_context(reason="messaging.system_post"):
-            return self._system_post_pipeline(
-                message_model,
-                attachment,
-                body=body,
-                attachments=attachments,
-                message_type=message_type,
-                subtype_key=subtype_key,
-                parent=parent,
-                recipient_user_ids=recipient_user_ids,
-                autofollow_author=autofollow_author,
-                autofollow_recipients=autofollow_recipients,
-                idempotency_key=idempotency_key,
-                idempotency_actor=scope_actor,
-            )
+        using = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
+        with database_context(using), transaction.atomic(using=using):
+            bound_actor = self.actor() if isinstance(self, RebacMixin) else None
+            scope_actor = idempotency_actor or bound_actor or current_actor()
+            attachment = self.message_thread_attachment(create=True)
+            if attachment is None:
+                raise ValueError("Cannot post a message without a thread.")
+            message_model = apps.get_model("messaging", "Message")
+            # The framework writes on the record's behalf, so the whole pipeline
+            # (message, parts, fanout, receipt advance) runs under
+            # system_context: a user actor passed the record gate already, and a
+            # non-user actor species (an agent authoring through its service user)
+            # must not be denied on messaging-private bookkeeping rows.
+            with system_context(reason="messaging.system_post"):
+                return self._system_post_pipeline(
+                    message_model,
+                    attachment,
+                    body=body,
+                    attachments=attachments,
+                    message_type=message_type,
+                    subtype_key=subtype_key,
+                    parent=parent,
+                    recipient_user_ids=recipient_user_ids,
+                    autofollow_author=autofollow_author,
+                    autofollow_recipients=autofollow_recipients,
+                    idempotency_key=idempotency_key,
+                    idempotency_actor=scope_actor,
+                )
 
     def _system_post_pipeline(
         self,
@@ -739,7 +737,7 @@ class ThreadedModelMixin(models.Model):
         """Run the elevated system-post write; split out for readability only."""
 
         record = attachment.require_threaded_target()
-        return message_model.objects.post_to_thread(
+        return message_model.objects.db_manager(self._state.db).post_to_thread(
             attachment.thread,
             body=body,
             created_by_id=_actor_user_id(self),
@@ -772,7 +770,7 @@ class ThreadedModelMixin(models.Model):
         grants access before adding a new follower.
         """
 
-        return apps.get_model("messaging", "ThreadFollower").objects.subscribe(
+        return apps.get_model("messaging", "ThreadFollower").objects.db_manager(self._state.db).subscribe(
             self,
             party=party,
             user=user,
@@ -785,7 +783,7 @@ class ThreadedModelMixin(models.Model):
         """Remove a party's explicit follow without changing any shares."""
 
         return bool(
-            apps.get_model("messaging", "ThreadFollower").objects.unsubscribe(
+            apps.get_model("messaging", "ThreadFollower").objects.db_manager(self._state.db).unsubscribe(
                 self,
                 party=party,
                 user=user,
@@ -797,7 +795,7 @@ class ThreadedModelMixin(models.Model):
         """Return whether a party, or the acting user's person, follows this record."""
 
         return bool(
-            apps.get_model("messaging", "ThreadFollower").objects.is_following(
+            apps.get_model("messaging", "ThreadFollower").objects.db_manager(self._state.db).is_following(
                 self,
                 party=party,
                 user=user,
@@ -919,9 +917,9 @@ class ThreadedModelMixin(models.Model):
             # System bookkeeping on an already-authorized create; see the
             # autofollow elevation note in MessageManager.post_to_thread.
             with system_context(reason="messaging.autofollow"):
-                account = get_user_model()._base_manager.get(pk=created_by_id)
+                account = get_user_model()._base_manager.using(self._state.db).get(pk=created_by_id)
                 if account.kind != "person" or self.thread_reader_allowed(account):
-                    follower_model.objects.subscribe(
+                    follower_model.objects.db_manager(self._state.db).subscribe(
                         self,
                         user=account,
                         role=self.thread_attachment_role,
