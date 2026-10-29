@@ -12,7 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 def _probe(source: str, *args: str) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         [sys.executable, "-c", source, *args],
-        env={**os.environ, "PYTHONPATH": str(ROOT / "addons")},
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (
+            str(ROOT / "addons"), os.environ.get("PYTHONPATH"),
+        )))},
         text=True, capture_output=True, timeout=30, check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -201,15 +203,11 @@ print('failure retry lifecycle verified')
 
 def test_readiness_reports_missing_in_progress_and_receipt_mismatch(tmp_path: Path) -> None:
     result = _probe(_SETUP + '''
-from contextlib import contextmanager
 from types import ModuleType, SimpleNamespace
 from django.core.management.base import CommandError
 from angee.base.provision import require_provisioned
-@contextmanager
-def lease():
-    yield SimpleNamespace(DIGEST='verified',COMPILER='compiler:1')
 native=ModuleType('django_compose.serving')
-native.receipt_lease=lease
+native.verified_receipt=lambda:SimpleNamespace(DIGEST='verified',COMPILER='compiler:1')
 sys.modules['django_compose.serving']=native
 recorder=ProvisionRecorder(connections['other'])
 def refuses(expected):
@@ -234,3 +232,56 @@ assert not ProvisionRecorder(connections['default']).has_table()
 print('readiness state verified')
 ''', str(tmp_path / 'default.sqlite3'), str(tmp_path / 'other.sqlite3'))
     assert result.stdout.strip() == 'readiness state verified'
+
+
+def test_base_provision_consumes_native_startup_receipt_and_lease(tmp_path: Path) -> None:
+    """Actual native startup/commands feed base's selected-alias durable gate."""
+    (tmp_path / "native_owner_settings.py").write_text(
+        "from pathlib import Path\n"
+        "from django_compose.conf import configure\n"
+        "SECRET_KEY='base-owner-probe'\n"
+        "INSTALLED_APPS=[]\n"
+        "DEFAULT_AUTO_FIELD='django.db.models.BigAutoField'\n"
+        f"COMPOSE_OUTPUT_DIR=Path({str(tmp_path / 'native_output')!r})\n"
+        "COMPOSE_OUTPUT_MODULE='native_output'\n"
+        f"DATABASES={{'default':{{'ENGINE':'django.db.backends.sqlite3','NAME':{str(tmp_path/'default.sqlite3')!r}}},"
+        f"'other':{{'ENGINE':'django.db.backends.sqlite3','NAME':{str(tmp_path/'other.sqlite3')!r}}}}}\n"
+        "configure(globals())\n"
+    )
+    bootstrap = '''
+import os,sys
+sys.path.insert(0,sys.argv[1])
+os.environ['DJANGO_SETTINGS_MODULE']='native_owner_settings'
+os.environ.pop('DJANGO_COMPOSE_MODE',None)
+'''
+    _probe(bootstrap + '''
+from django_compose.management import execute
+execute(['manage.py','compose'])
+''', str(tmp_path))
+    result = _probe(bootstrap + '''
+from io import StringIO
+from unittest.mock import patch
+import django
+django.setup()
+from django.core.management.base import BaseCommand,CommandError
+from django.db import connections
+import django_compose.serving as serving
+from angee.base.provision import ProvisionRecorder,require_provisioned,run
+receipt=serving.verified_receipt()
+try:
+    require_provisioned(using='other')
+except CommandError as error:
+    assert 'missing provision record' in str(error)
+else:
+    raise AssertionError('unprovisioned native host was accepted')
+command=BaseCommand(stdout=StringIO(),stderr=StringIO())
+run(command,{'database':'other','check':False,'wait_db':0,'verbosity':0})
+record=ProvisionRecorder(connections['other']).read()
+assert record.state=='complete'
+assert record.digest==receipt.DIGEST and record.compiler==receipt.COMPILER
+assert not ProvisionRecorder(connections['default']).has_table()
+with patch.object(serving,'receipt_lease',side_effect=AssertionError('readiness acquired a mutation lease')):
+    require_provisioned(using='other')
+print('native receipt selected-alias provision verified')
+''', str(tmp_path))
+    assert result.stdout.strip() == 'native receipt selected-alias provision verified'

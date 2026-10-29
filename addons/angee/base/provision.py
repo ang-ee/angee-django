@@ -162,33 +162,33 @@ def require_provisioned(using: str = "default", timeout: float = 0) -> None:
     Missing/in-progress records and stale digests refuse readiness. Timeout only
     waits for another provisioner; this function never repairs database state.
     """
-    from django_compose.serving import receipt_lease
+    from django_compose.serving import verified_receipt
 
     deadline = time.monotonic() + timeout
-    with receipt_lease() as receipt:
-        while True:
-            connection = connections[using]
-            try:
-                record = ProvisionRecorder(connection).read()
-                reason = (
-                    "missing provision record" if record is None
-                    else f"provision state is {record.state}" if record.state != "complete"
-                    else "provision receipt digest differs from this process" if record.digest != receipt.DIGEST
-                    else "provision compiler version differs from this process" if record.compiler != receipt.COMPILER
-                    else ""
-                )
-                if not reason:
-                    executor = MigrationExecutor(connection)
-                    executor.loader.check_consistent_history(connection)
-                    if executor.migration_plan(executor.loader.graph.leaf_nodes()):
-                        reason = "unapplied migrations"
-            except (DatabaseError, InconsistentMigrationHistory, NodeNotFoundError) as error:
-                reason = str(error)
+    receipt = verified_receipt()
+    while True:
+        connection = connections[using]
+        try:
+            record = ProvisionRecorder(connection).read()
+            reason = (
+                "missing provision record" if record is None
+                else f"provision state is {record.state}" if record.state != "complete"
+                else "provision receipt digest differs from this process" if record.digest != receipt.DIGEST
+                else "provision compiler version differs from this process" if record.compiler != receipt.COMPILER
+                else ""
+            )
             if not reason:
-                return
-            if time.monotonic() >= deadline:
-                raise CommandError(f"Database {using!r} is not provisioned: {reason}")
-            time.sleep(min(0.2, max(0, deadline - time.monotonic())))
+                executor = MigrationExecutor(connection)
+                executor.loader.check_consistent_history(connection)
+                if executor.migration_plan(executor.loader.graph.leaf_nodes()):
+                    reason = "unapplied migrations"
+        except (DatabaseError, InconsistentMigrationHistory, NodeNotFoundError) as error:
+            reason = str(error)
+        if not reason:
+            return
+        if time.monotonic() >= deadline:
+            raise CommandError(f"Database {using!r} is not provisioned: {reason}")
+        time.sleep(min(0.2, max(0, deadline - time.monotonic())))
 
 
 def run(command: BaseCommand, options: dict[str, Any]) -> None:

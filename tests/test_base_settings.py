@@ -33,6 +33,7 @@ root = Path(sys.argv[1])
 # Only the boundary is substituted: native yamlconf/environ/Sentry owners run.
 # Compiler closure, snapshot and receipt behavior are tested in its own repo.
 from django_compose.conf import expand_attribute_refs
+from django_compose.autoreload import inputs
 native = ModuleType('django_compose.conf')
 native.expand_attribute_refs = expand_attribute_refs
 native.configure = lambda namespace: None
@@ -53,13 +54,15 @@ final = root / 'final.yaml'
 final.write_text('VALUES:append: [final]\n')
 os.environ.update(ANGEE_PROJECT_DIR=str(project), YAMLCONF_CONFFILE=str(final))
 authored = {'nested': {'value': 'original'}}
-namespace = {'__name__':'settings', '__file__':str(source / 'settings.py'), 'VALUES':['python'], 'AUTHORED':authored}
+namespace = {'__name__':'settings', '__file__':str(source / 'settings.py'), 'VALUES':['python'], 'AUTHORED':authored,
+             'COMPOSE_WATCH_PATHS':(root/'authored-watch',)}
 configure(namespace)
 assert namespace['VALUES'] == ['python', 'source', 'project', 'final'], namespace['VALUES']
 assert authored == {'nested': {'value': 'original'}}
 assert namespace['COMPOSE_ADDON_GROUP'] == 'angee.addons'
 assert namespace['COMPOSE_ENV_PREFIXES'] == ('ANGEE_',)
-assert set(namespace['COMPOSE_WATCH_PATHS']) == {source/'settings.yaml', project/'settings.yaml', final, project/'.env'}
+assert inputs.files == {source/'settings.yaml', project/'settings.yaml', final, project/'.env'}
+assert namespace['COMPOSE_WATCH_PATHS']==(root/'authored-watch',)
 ''', tmp_path)
 
 
@@ -92,18 +95,42 @@ assert namespace['CACHES'] == caches
 ''', tmp_path)
 
 
-def test_failed_yaml_keeps_watch_candidates(tmp_path: Path) -> None:
+def test_failed_yaml_reports_all_candidates_before_reading_including_dotenv_override(tmp_path: Path) -> None:
     _probe(_SEAM + r'''
 from django.core.exceptions import ImproperlyConfigured
-(root/'settings.yaml').write_text('INSTALLED_APPS: [unterminated\n')
-namespace = {'__name__':'settings','__file__':str(root/'settings.py')}
-try:
-    configure(namespace)
-except ImproperlyConfigured:
-    pass
-else:
-    raise AssertionError('malformed YAML accepted')
-assert set(namespace['COMPOSE_WATCH_PATHS']) == {root/'settings.yaml',root/'.env'}
+from unittest.mock import patch
+import django_yamlconf
+import environ
+source=root/'source'
+project=root/'project'
+source.mkdir()
+project.mkdir()
+os.environ['ANGEE_PROJECT_DIR']=str(project)
+final=root/'absent-final.yaml'
+(project/'.env').write_text(f'YAMLCONF_CONFFILE={final}\n')
+(source/'settings.yaml').write_text('INSTALLED_APPS: [unterminated\n')
+namespace={'__name__':'settings','__file__':str(source/'settings.py')}
+original_read=django_yamlconf.load_conffile
+original_env_read=environ.Env.read_env
+def read_env(*args,**kwargs):
+    assert inputs.files=={source/'settings.yaml',project/'settings.yaml',project/'.env'}
+    return original_env_read(*args,**kwargs)
+def read(*args,**kwargs):
+    assert inputs.files=={source/'settings.yaml',project/'settings.yaml',project/'.env',final}
+    return original_read(*args,**kwargs)
+with (
+    patch.object(environ.Env,'read_env',side_effect=read_env),
+    patch.object(django_yamlconf,'load_conffile',read),
+):
+    try:
+        configure(namespace)
+    except ImproperlyConfigured:
+        pass
+    else:
+        raise AssertionError('malformed YAML accepted')
+assert inputs.files=={source/'settings.yaml',project/'settings.yaml',project/'.env',final}
+assert not (project/'settings.yaml').exists() and not final.exists()
+assert 'COMPOSE_WATCH_PATHS' not in namespace
 ''', tmp_path)
 
 

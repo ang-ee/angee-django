@@ -10,6 +10,7 @@ from typing import Any
 import django_yamlconf
 import environ
 from django.core.exceptions import ImproperlyConfigured
+from django_compose.autoreload import report_inputs
 from django_compose.conf import expand_attribute_refs
 
 from angee.base.conf import yamlconf
@@ -21,16 +22,16 @@ def configure(namespace: MutableMapping[str, Any]) -> None:
 
     The calling settings module owns the source directory. ANGEE_PROJECT_DIR
     may select a deployment directory; no ancestor configuration is searched.
-    Python declarations, source YAML, deployment YAML, explicit final YAML and
-    YAMLCONF environment definitions keep django-yamlconf's native precedence.
+    Candidates are reported before reads, including absent files. Python
+    declarations, source YAML, deployment YAML, explicit final YAML and YAMLCONF
+    environment definitions keep django-yamlconf's native precedence.
     """
     source = resolve_path(namespace["__file__"]).parent
     project = resolve_path(os.environ.get("ANGEE_PROJECT_DIR", source))
     env_file = project / ".env"
     env = environ.Env()
-    namespace["COMPOSE_WATCH_PATHS"] = tuple(dict.fromkeys((
-        *namespace.get("COMPOSE_WATCH_PATHS", ()), source / "settings.yaml", project / "settings.yaml", env_file,
-    )))
+    candidates = list(dict.fromkeys((source / "settings.yaml", project / "settings.yaml")))
+    report_inputs(files=(*candidates, env_file))
     if env_file.is_file():
         env.read_env(env_file)
     target = ModuleType(str(namespace.get("__name__", "settings")))
@@ -38,13 +39,10 @@ def configure(namespace: MutableMapping[str, Any]) -> None:
         name: deepcopy(value) if yamlconf.is_setting_name(name) and isinstance(value, dict) else value
         for name, value in namespace.items()
     })
-    candidates = [source / "settings.yaml", project / "settings.yaml"]
     if final := os.environ.get("YAMLCONF_CONFFILE"):
         candidates.append(resolve_path(final))
     candidates = list(dict.fromkeys(path.resolve() for path in candidates))
-    namespace["COMPOSE_WATCH_PATHS"] = tuple(dict.fromkeys((
-        *namespace["COMPOSE_WATCH_PATHS"], *candidates,
-    )))
+    report_inputs(files=candidates)
     with yamlconf.fail_on_yamlconf_errors():
         attributes = django_yamlconf.bootstrap_attributes(str(project))
         django_yamlconf.add_attr_info(attributes, "SOURCE_DIR", str(source))
@@ -76,9 +74,6 @@ def configure(namespace: MutableMapping[str, Any]) -> None:
             namespace["CSRF_TRUSTED_ORIGINS"].append(origin)
     namespace["COMPOSE_ADDON_GROUP"] = "angee.addons"
     namespace["COMPOSE_ENV_PREFIXES"] = ("ANGEE_",)
-    namespace["COMPOSE_WATCH_PATHS"] = tuple(dict.fromkeys((
-        *namespace.get("COMPOSE_WATCH_PATHS", ()), *candidates, env_file,
-    )))
     from django_compose.conf import configure as compose_configure
 
     try:
