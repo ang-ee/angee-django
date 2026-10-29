@@ -33,7 +33,13 @@ def addon_facts(app_name: str, capability: str) -> dict[str, Any]:
     provider = installed.providers.get(app_name)
     if provider is None:
         return {}
-    facts: Any = package_document(installed.distributions[provider], app_name).get("tool", {})
+    return capability_facts(package_document(installed.distributions[provider], app_name), capability)
+
+
+def capability_facts(document: Mapping[str, Any], capability: str) -> dict[str, Any]:
+    """Project ``[tool.<capability>]`` from installed or source package TOML."""
+
+    facts: Any = document.get("tool", {})
     for name in capability.split("."):
         if not isinstance(facts, Mapping):
             raise ImproperlyConfigured(f"tool.{capability} must be a TOML table")
