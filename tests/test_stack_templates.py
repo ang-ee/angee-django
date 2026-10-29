@@ -705,7 +705,7 @@ def test_project_template_renders_root_agent_instructions() -> None:
         "`INSTALLED_APPS` in `settings.yaml` is the roster and the only place it is declared",
         "`{{ addon_namespace }}.<name>` under `addons/{{ addon_namespace }}/<name>/`",
         "the arpee slot's `arp.*` addons",
-        "`addon.toml` (identity, `depends_on`, resource tiers)",
+        "`pyproject.toml` (native identity, requirements and capability tables)",
         "`web/` fragment declared with `defineBaseAddon`",
         "The stack owning this root provisions and restarts it",
         "stop and ask the user how the stack should be set up",
@@ -760,7 +760,9 @@ def test_local_django_source_mode_installs_the_prebuilt_host_without_rebuilding_
     assert django["image"] == "ghcr.io/ang-ee/django-angee-base:latest"
     command = django["command"][-1]
     assert "uv sync --frozen --inexact --no-build" in command
-    assert stack["jobs"]["runtime-build"]["command"] == ["uv", "sync"]
+    assert stack["jobs"]["runtime-build"]["command"] == [
+        "sh", "-c", "uv sync && exec uv run --no-sync python -m angee.build --root . --output runtime",
+    ]
     assert "exec python manage.py serve --host 0.0.0.0 --port 8000" in command
     provision_command = provision["command"][-1]
     assert "--no-build" in provision_command
@@ -959,57 +961,21 @@ def test_project_web_host_leaves_home_and_confinement_to_the_composed_shell() ->
     assert "confineTo" not in template
 
 
-def test_project_python_dependencies_use_native_dynamic_hatch_metadata() -> None:
-    """Fresh hosts use one metadata hook and native dependency installation."""
+def test_project_python_dependencies_use_native_package_metadata() -> None:
+    """Fresh hosts install static meta requirements; explicit jobs compose runtime."""
 
-    base_text, base = _render_project_pyproject()
-    full_text, full = _render_project_pyproject(
-        addons_profile="full",
-        framework_source_path="workspaces/src/angee",
-    )
-
-    for rendered, manifest in ((base_text, base), (full_text, full)):
-        assert manifest["project"]["dynamic"] == ["dependencies", "entry-points"]
-        assert "dependencies" not in manifest["project"]
-        assert "dependency-groups" not in manifest
-        assert "default-groups" not in manifest["tool"]["uv"]
-        assert manifest["tool"]["hatch"]["metadata"]["allow-direct-references"] is True
-        assert manifest["tool"]["hatch"]["metadata"]["hooks"]["angee-runtime"]["dependencies"] == [
-            "django-angee[postgres]>=0.3",
-        ]
-        assert manifest["tool"]["hatch"]["build"]["hooks"]["angee-runtime"]["require-runtime-dependencies"] is True
-        assert "management.bootstrap" not in rendered
-
-    assert "extra-build-variables" not in base["tool"]["uv"]
-    # No addon needs build variables any more (the Matrix bridge's python-olm
-    # sdist chain is gone), so none renders for the full roster either.
-    assert "extra-build-variables" not in full["tool"]["uv"]
-    assert full["tool"]["uv"]["sources"]["django-angee"] == {
-        "path": "workspaces/src/angee",
-        "editable": True,
+    for overrides in ({}, {"addons_profile": "full", "framework_source_path": "workspaces/src/angee"}):
+        rendered, project = _render_project_pyproject(**overrides)
+        assert project["project"]["dependencies"]
+        assert "dynamic" not in project["project"]
+        assert "dependency-groups" not in project
+        assert "hatch" not in project.get("tool", {})
+        assert "cache-keys" not in project.get("tool", {}).get("uv", {})
+        assert "angee-runtime" not in rendered
+    _rendered, source = _render_project_pyproject(framework_source_path="workspaces/src/angee")
+    assert source["tool"]["uv"]["sources"]["angee"] == {
+        "path": "workspaces/src/angee", "editable": True,
     }
-
-
-def test_project_native_cache_inputs_include_history_and_authored_addons() -> None:
-    """uv's editable cache observes structural source, not deployment secrets."""
-
-    _rendered, manifest = _render_project_pyproject()
-    inputs = manifest["tool"]["uv"]["cache-keys"]
-    assert {"file": "runtime/*/migrations/**/*.py"} in inputs
-    assert {"file": "addons/**/addon.toml"} in inputs
-    assert {"file": "settings.yaml"} in inputs
-    assert {"file": ".env"} not in inputs
-
-    _rendered, framework = _render_project_pyproject(
-        framework_source_path="workspaces/src/angee", framework_workspace=True,
-        addons_profile="full", include_arp=True,
-    )
-    native_inputs = framework["tool"]["uv"]["cache-keys"]
-    for root in ("angee", "angee-arp", "angee-messaging-bridges"):
-        assert {"file": f"workspaces/src/{root}/addons/**/addon.toml"} in native_inputs
-        assert {"file": f"workspaces/src/{root}/addons/**/*.py"} in native_inputs
-        assert {"file": f"workspaces/src/{root}/addons/**/*.zed"} in native_inputs
-    assert {"file": "workspaces/src/angee/angee/**/*.py"} in native_inputs
 
 
 def test_project_template_addon_profiles_and_workspace_dirs() -> None:
@@ -1189,7 +1155,9 @@ def test_dev_stack_has_explicit_lifecycle_job_graph() -> None:
     ]
     assert stack["jobs"]["provision"]["workdir"] == "source://app"
     assert stack["jobs"]["provision"]["env"]["ANGEE_PROJECT_DIR"] == "."
-    assert stack["jobs"]["runtime-build"]["command"] == ["uv", "sync"]
+    assert stack["jobs"]["runtime-build"]["command"] == [
+        "sh", "-c", "uv sync && exec uv run --no-sync python -m angee.build --root . --output runtime",
+    ]
     assert stack["jobs"]["runtime-build"]["depends_on"] == ["deps"]
     assert stack["jobs"]["provision"]["depends_on"] == ["runtime-build", "operator"]
     assert stack["jobs"]["operator-schema"]["depends_on"] == ["operator", "provision"]
@@ -1911,7 +1879,11 @@ def test_serve_modes_cover_both_flavors_and_runtimes() -> None:
         command = " ".join(django["command"])
         assert "ANGEE_SERVE_MODE" not in django["env"]
         build_command = stack["jobs"]["runtime-build"]["command"]
-        assert build_command == ["uv", "sync", *(["--no-editable"] if serve_mode == "production" else [])]
+        assert build_command == ["sh", "-c",
+            "uv sync" + (" --no-editable" if serve_mode == "production" else "")
+            + " && exec uv run --no-sync python -m angee.build --root . --output runtime"
+            + (" --check-history" if serve_mode == "production" else ""),
+        ]
         if serve_mode == "production":
             assert "manage.py serve" in command
             assert "--workers 0" in command

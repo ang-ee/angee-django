@@ -19,7 +19,7 @@ from rebac import system_context
 from rebac.errors import MissingActorError
 from rebac.testing import install_schema
 
-from angee.addons import addon_manifest
+from angee.addons import addon_facts
 from angee.base.models.base import AngeeModel
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
@@ -53,7 +53,7 @@ def addon(
     """Return a resource addon rooted at ``tmp_path``."""
 
     config = make_addon(name=name, label=label, path=tmp_path, resources=dict(manifest or {}))
-    addon_manifest(config)
+    addon_facts(config.name)
     return config
 
 

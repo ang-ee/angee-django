@@ -20,12 +20,12 @@ from rebac import schema_changes
 
 import angee.compose as compose_package
 import angee.compose.runtime as runtime_module
-from angee.addons import addon_manifest
+from angee.addons import addon_dependencies, is_angee_addon
 from angee.apps import AngeeConfig
 from angee.base.build import PermissionIntegration, composed_grants
 from angee.base.models.base import AngeeModel
 from angee.base.models.roles import role_anchor
-from angee.build import ManifestDeclarations
+from angee.build import PackageDeclarations
 from angee.compose.appgraph import AppGraph
 from angee.compose.apps import BuildComposeConfig
 from angee.compose.declarations import AppDeclarationSource, model_declaration
@@ -275,7 +275,7 @@ def test_runtime_honors_explicit_label_when_module_terminal_differs(
     beta.models_module = beta_models
     alpha = temp_config("tests.alpha", "alpha", ModuleType("tests.alpha"), depends_on=("beta",))
 
-    ordered = AppGraph(ManifestDeclarations()).resolve((alpha, beta))
+    ordered = AppGraph(PackageDeclarations()).resolve((alpha, beta))
     assert [config.label for config in ordered[:2]] == ["beta", "alpha"]
 
     runtime = Runtime.discover((beta,), runtime_dir=tmp_path / "runtime")
@@ -345,8 +345,8 @@ def test_web_runtime_projects_package_ancestry_through_backend_only_addons() -> 
 def test_nexus_aggregation_dependencies_reach_web_runtime() -> None:
     """Nexus alone pulls in every app whose menu it includes, already in the test host."""
 
-    configs = AppGraph(ManifestDeclarations()).resolve(("angee.nexus",))
-    assert {config.name for config in configs if addon_manifest(config) is not None} <= {
+    configs = AppGraph(PackageDeclarations()).resolve(("angee.nexus",))
+    assert {config.name for config in configs if is_angee_addon(config)} <= {
         config.name for config in apps.get_app_configs()
     }
     manifest = WebRuntime(configs).manifest
@@ -357,8 +357,8 @@ def test_nexus_aggregation_dependencies_reach_web_runtime() -> None:
 def test_oidc_web_documents_follow_the_enabled_backend_addon() -> None:
     """An IAM-only host never scans operations belonging to the optional OIDC schema."""
 
-    iam_configs = AppGraph(ManifestDeclarations()).resolve(("angee.iam",))
-    oidc_configs = AppGraph(ManifestDeclarations()).resolve(("angee.iam_integrate_oidc",))
+    iam_configs = AppGraph(PackageDeclarations()).resolve(("angee.iam",))
+    oidc_configs = AppGraph(PackageDeclarations()).resolve(("angee.iam_integrate_oidc",))
     iam_manifest = WebRuntime(iam_configs).manifest
     oidc_manifest = WebRuntime(oidc_configs).manifest
 
@@ -443,7 +443,7 @@ def test_web_runtime_rejects_codegen_without_web_package() -> None:
         },
     )
 
-    with pytest.raises(ImproperlyConfigured, match=r"requires \[web\]\.package"):
+    with pytest.raises(ImproperlyConfigured, match=r"name must be a valid npm package name"):
         WebRuntime((daemon,))
 
 
@@ -453,7 +453,7 @@ def test_web_runtime_rejects_duplicate_addon_web_packages() -> None:
     first = make_addon(name="tests.first", web={"package": "@demo/shared"})
     second = make_addon(name="tests.second", web={"package": "@demo/shared"})
 
-    with pytest.raises(ImproperlyConfigured, match=r"Duplicate \[web\]\.package"):
+    with pytest.raises(ImproperlyConfigured, match=r"Duplicate web/package.json name"):
         WebRuntime((first, second))
 
 
@@ -1586,13 +1586,13 @@ def test_appgraph_annotates_roots_and_dependencies() -> None:
     composed graph (``addons/angee/platform/schema.py``).
     """
 
-    graph = AppGraph(ManifestDeclarations())
+    graph = AppGraph(PackageDeclarations())
     configs = {config.name: config for config in graph.resolve(["angee.iam"])}
 
     iam = configs["angee.iam"]
     assert iam.compose_root is True
     assert iam.compose_root_declaration == "angee.iam"
-    assert "angee.resources" in addon_manifest(iam).depends_on
+    assert "angee.resources" in addon_dependencies(iam)
     assert not hasattr(iam, "angee_depends_on")
 
     # `resources` is pulled in through iam's closure, not declared — a dependency.
@@ -1609,7 +1609,7 @@ def test_appgraph_rejects_duplicate_roots() -> None:
     """A repeated explicit root app is a settings error, not hidden dedupe."""
 
     with pytest.raises(ImproperlyConfigured, match="Duplicate Django app 'angee.resources'"):
-        AppGraph(ManifestDeclarations()).resolve(["angee.resources", "angee.resources"])
+        AppGraph(PackageDeclarations()).resolve(["angee.resources", "angee.resources"])
 
 
 def test_appgraph_root_wins_when_also_a_dependency() -> None:
@@ -1617,7 +1617,7 @@ def test_appgraph_root_wins_when_also_a_dependency() -> None:
 
     configs = {
         config.name: config
-        for config in AppGraph(ManifestDeclarations()).resolve(["angee.iam", "angee.resources"])
+        for config in AppGraph(PackageDeclarations()).resolve(["angee.iam", "angee.resources"])
     }
 
     assert configs["angee.iam"].compose_root is True
@@ -1628,7 +1628,7 @@ def test_appgraph_preserves_authored_app_config_root_declaration() -> None:
     """Runtime drift compares the exact root spelling authored in settings YAML."""
 
     declaration = "angee.iam.apps.IAMConfig"
-    configs = {config.name: config for config in AppGraph(ManifestDeclarations()).resolve([declaration])}
+    configs = {config.name: config for config in AppGraph(PackageDeclarations()).resolve([declaration])}
 
     assert configs["angee.iam"].compose_root_declaration == declaration
 
@@ -1639,7 +1639,7 @@ def test_appgraph_distinguishes_project_roots_from_injected_runtime_roots() -> N
     declaration = "angee.iam.apps.IAMConfig"
     configs = {
         config.name: config
-        for config in AppGraph(ManifestDeclarations()).resolve(
+        for config in AppGraph(PackageDeclarations()).resolve(
             ["django.contrib.contenttypes", declaration],
             declared_roots=[declaration],
         )
@@ -1657,7 +1657,7 @@ def test_appgraph_rejects_duplicate_dependencies() -> None:
     config = make_addon(name="tests.duplicate_dependency", depends_on=("angee", "angee"))
 
     with pytest.raises(ImproperlyConfigured, match="duplicate dependency"):
-        AppGraph(ManifestDeclarations()).resolve([config])
+        AppGraph(PackageDeclarations()).resolve([config])
 
 
 def test_project_env_file_loads_without_overriding_process_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

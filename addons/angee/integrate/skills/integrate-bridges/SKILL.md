@@ -54,7 +54,7 @@ source addon contributes one adapter class, its registry key and its tests. Refe
 
 1. **Create the addon and pick the donor.** Folder `addons/angee/<capability>_integrate_<vendor>` (`angee-addon`);
    `depends_on` names the capability, `angee.integrate` and the vendor client as `dependencies`
-   (`addons/angee/messaging_integrate_imap/addon.toml`). If the capability has no concrete bridge yet → add it
+   (`addons/angee/messaging_integrate_imap/pyproject.toml`). If the capability has no concrete bridge yet → add it
    there first as a `Bridge` child with `extends = "integrate.Integration"` and an `ImplClassField` selector
    (`addons/angee/messaging/models.py:1032-1055`), never in the vendor addon. **Owner rule:** the capability owns
    the row, the vendor addon owns one implementation ([Repository Role](../../../../../AGENTS.md#repository-role)).
@@ -192,9 +192,9 @@ session exits within one wake on stop, shutdown and lost lock.
 
 <!--
 Docs: addons/angee/integrate/README.md (whole); docs/backend/guidelines.md sections Record sync, Integrations and workers, Integration and worker contracts (cited by anchor and bullet title); docs/stack.md #backend (messaging-protocol rows and the implementation-registry choice); docs/checks.md #python-and-composition-contracts, #source-addon-test-models, #composition-and-schema, #frontend-packages-and-addon-fragments, #browser-verification, #what-ci-actually-runs; AGENTS.md (Repository Role).
-Code: addons/angee/integrate/{impl.py,states.py:95-160,streams.py (def list),models.py (def list; 2754-2830),session_process.py:1-80,live.py:1-80,session.py:1-60,session_runner.py:1-50,sync_runner.py:1-40,tasks.py:1-120,scheduler.py:1-80,queue.py,constants.py,autoconfig.py,addon.toml,credentials.py (def list),errors.py (def list),discovery.py (def list),locks.py (def list),testing/*};
-addons/angee/messaging/backends.py:1-330; addons/angee/messaging/models.py:1032-1075; addons/angee/messaging_integrate_imap/{addon.toml,autoconfig.py,README.md,backend.py:1-260,405-420,781-800,models.py:1-80};
-addons/angee/platform_integrate_vcs/addon.toml; tests/{integrate_fixtures.py,conftest.py:336-400,settings.py:140-149,stream_adapters.py:1-45,test_integrate_streams.py:1-100,test_messaging_imap.py:1-120,test_integrate_live.py:1-40}.
+Code: addons/angee/integrate/{impl.py,states.py:95-160,streams.py (def list),models.py (def list; 2754-2830),session_process.py:1-80,live.py:1-80,session.py:1-60,session_runner.py:1-50,sync_runner.py:1-40,tasks.py:1-120,scheduler.py:1-80,queue.py,constants.py,autoconfig.py,pyproject.toml,credentials.py (def list),errors.py (def list),discovery.py (def list),locks.py (def list),testing/*};
+addons/angee/messaging/backends.py:1-330; addons/angee/messaging/models.py:1032-1075; addons/angee/messaging_integrate_imap/{pyproject.toml,autoconfig.py,README.md,backend.py:1-260,405-420,781-800,models.py:1-80};
+addons/angee/platform_integrate_vcs/pyproject.toml; tests/{integrate_fixtures.py,conftest.py:336-400,settings.py:140-149,stream_adapters.py:1-45,test_integrate_streams.py:1-100,test_messaging_imap.py:1-120,test_integrate_live.py:1-40}.
 Doc gaps: no docs/ walkthrough for writing an adapter; the contract is in impl.py docstrings and the README; derived from IMAP and the test adapters.
 Mismatches: platform_integrate_vcs is a catalog tier, not a bridge (its bridge is integrate_vcs.VcsBridge); addons/angee/integrate/README.md:8-15 links owner modules by bare filename while docs/ link with paths.
 -->

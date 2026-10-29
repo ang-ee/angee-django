@@ -1,0 +1,14 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-provenance"
+version = "3.0.0"
+description = "Changesets attributing canonical record history to its actor and origin"
+keywords = ["provenance", "history"]
+dependencies = ["angee-base>=3,<4", "angee-graphql>=3,<4", "angee-timeline>=3,<4", "angee-web>=3,<4", "django-simple-history>=3.13", "django-angee>=3,<4"]
+
+[project.entry-points]
+"angee.addons" = {"angee.provenance" = "angee.provenance"}
+
+[tool.angee]
+category = "Data"

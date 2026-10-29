@@ -6,3 +6,4 @@ from django.apps import AppConfig
 class DecisionsConfig(AppConfig):
     default = True
     name = "angee.decisions"
+    requires_apps = ('django.contrib.contenttypes',)

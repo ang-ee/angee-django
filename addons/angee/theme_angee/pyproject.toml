@@ -1,0 +1,14 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-theme-angee"
+version = "3.0.0"
+description = "The angee.ai gold and graphite identity theme"
+keywords = ["theme", "appearance", "angee", "gold"]
+dependencies = ["angee-web>=3,<4"]
+
+[project.entry-points]
+"angee.addons" = {"angee.theme_angee" = "angee.theme_angee"}
+
+[tool.angee]
+category = "User interface"

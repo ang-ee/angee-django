@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tests.package_metadata import write_addon_distribution
+
 _DEFAULTS = """\
 from typing import TypedDict
 from collections.abc import Mapping
@@ -145,9 +147,7 @@ def test_typing_host_uses_declared_project_paths_without_live_database_or_runtim
         "from django.apps import AppConfig\n"
         "class ConsumerConfig(AppConfig):\n    name = 'typing_consumer'\n    default = True\n"
     )
-    (addon / "addon.toml").write_text(
-        '[addon]\nname = "typing_consumer"\ndepends_on = ["angee.money"]\n'
-    )
+    write_addon_distribution(addon , 'typing_consumer', depends_on=('angee.money',))
     (project / "settings.py").write_text(
         "from pathlib import Path\n"
         "BASE_DIR = Path(__file__).parent\n"

@@ -179,7 +179,7 @@ defineThemeContribution({
 
 ## Authoring a theme addon
 
-A model-less theme addon has the same `addon.toml` and web package structure as
+A model-less theme addon has the same `pyproject.toml` and web package structure as
 other addons. Its package exports the browser contribution at `.` and a pure
 Node-loadable definition entry at `./themes`:
 
@@ -275,7 +275,7 @@ configurable variants.
 
 ## Build outputs and migration
 
-The Hatch runtime build discovers `./themes` only for composed addon packages and writes
+The explicit host build discovers `./themes` only for composed addon packages and writes
 `runtime/web/themes.css` plus `runtime/web/themes.catalog.json`. The project CSS
 entry imports the generated stylesheet; Vite resolves theme-relative images and
 fonts through its normal asset pipeline. Browser composition also checks that

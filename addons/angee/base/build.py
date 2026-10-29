@@ -65,7 +65,7 @@ from rebac.resources import model_resource_type
 from rebac.schema import Definition, Permission, Schema, parse_zed, resolve_schema_path, validate_schema
 from rebac.schema import render_zed as render_schema
 
-from angee.addons import addon_manifest
+from angee.addons import addon_facts, is_angee_addon
 from angee.base.permissions import declared_grants
 from angee.compose.declarations import BuildIntegration, DeclarationValue, ModelDeclaration
 from angee.compose.runtime import GENERATED_SENTINEL
@@ -120,9 +120,8 @@ def _schema_path(app_config: AppConfig, filename: str) -> Path | None:
 def declared_schema_path(app_config: AppConfig) -> Path | None:
     """Resolve authored input independently of previously bound effective output."""
 
-    manifest = addon_manifest(app_config)
-    if manifest is None:
-        # Native Django apps have no addon manifest. Capture their upstream
+    if not is_angee_addon(app_config):
+        # Native Django apps have no addon entry point. Capture their upstream
         # declaration before a derived merged path is assigned to the same seam.
         if (
             "_angee_rebac_schema_effective" not in app_config.__dict__
@@ -131,17 +130,23 @@ def declared_schema_path(app_config: AppConfig) -> Path | None:
             setattr(app_config, "_angee_rebac_schema_source", resolve_schema_path(app_config))
         return getattr(app_config, "_angee_rebac_schema_source")
 
-    path = Path(app_config.path) / (manifest.permissions or "permissions.zed")
+    facts = addon_facts(app_config.name).get("base", {})
+    if not isinstance(facts, Mapping):
+        raise ImproperlyConfigured(f"{app_config.name}: tool.angee.base must be a table")
+    permissions = facts.get("permissions", "permissions.zed")
+    if not isinstance(permissions, str) or not permissions:
+        raise ImproperlyConfigured(f"{app_config.name}: tool.angee.base.permissions must be a non-empty path")
+    path = Path(app_config.path) / permissions
     configured = getattr(app_config, "rebac_schema", None)
     bound = app_config.__dict__.get("_angee_rebac_schema_effective")
     if configured is not None and configured != bound:
         configured_path = Path(app_config.path) / configured
         if configured_path.resolve() != path.resolve():
             raise ImproperlyConfigured(
-                f"{app_config.name}: declare permissions in addon.toml; "
-                "AppConfig.rebac_schema conflicts with the manifest"
+                f"{app_config.name}: declare permissions in pyproject.toml [tool.angee.base]; "
+                "AppConfig.rebac_schema conflicts with the package declaration"
             )
-    if manifest.permissions is not None and not path.is_file():
+    if facts.get("permissions") is not None and not path.is_file():
         raise ImproperlyConfigured(f"{app_config.name}: declared permissions file does not exist: {path}")
     return path if path.is_file() else None
 
@@ -412,11 +417,10 @@ def schema_path_wiring(
     for app_config in app_configs:
         source = declared_schema_path(app_config)
         merged = merged_schema_relpath(app_config.name)
-        manifest = addon_manifest(app_config)
         if (
             merged not in sources
             and "_angee_rebac_schema_effective" not in app_config.__dict__
-            and (manifest is None or source is None)
+            and (not is_angee_addon(app_config) or source is None)
         ):
             continue
         lines.append(f"app = apps.get_app_config({app_config.label!r})")
@@ -425,10 +429,10 @@ def schema_path_wiring(
         elif source.is_relative_to(Path(app_config.path)):
             relative = source.relative_to(Path(app_config.path))
             source_expression = f"Path(app.path) / {str(relative)!r}"
-        elif manifest is not None:
-            # An explicit manifest path remains the source of truth even when
-            # absolute; native AppConfig resolution does not read addon.toml.
-            source_expression = f"Path({manifest.permissions!r})"
+        elif is_angee_addon(app_config):
+            # An explicit package path remains the source of truth even when
+            # absolute; native AppConfig resolution does not read package metadata.
+            source_expression = f"Path({str(source)!r})"
         else:
             # Native external declarations remain late-bound to their AppConfig;
             # an already-bound config retains its original source on reimport.
@@ -439,7 +443,7 @@ def schema_path_wiring(
                 "else resolve_schema_path(app)"
             )
         lines.append(f"app._angee_rebac_schema_source = {source_expression}")
-        if source is not None and (manifest is not None or source.is_relative_to(Path(app_config.path))):
+        if source is not None and (is_angee_addon(app_config) or source.is_relative_to(Path(app_config.path))):
             lines.extend((
                 "if not app._angee_rebac_schema_source.is_file():",
                 "    raise ImproperlyConfigured("

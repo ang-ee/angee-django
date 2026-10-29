@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "django-angee"
+version = "3.0.0"
+description = "Thin Django composition primitives for Angee applications."
+keywords = ["addons", "agentic-applications", "asgi", "composition", "django"]
+classifiers = ["Development Status :: 2 - Pre-Alpha", "Environment :: Web Environment", "Framework :: Django", "Framework :: Django :: 6.1", "Intended Audience :: Developers", "Operating System :: OS Independent", "Programming Language :: Python :: 3", "Programming Language :: Python :: 3.14", "Topic :: Software Development :: Libraries :: Application Frameworks", "Typing :: Typed"]
+license = "LGPL-3.0-or-later"
+license-files = ["LICENSE", "LICENSE.GPL"]
+requires-python = ">=3.14"
+dependencies = ["channels>=4.0", "django>=6.1.2,<6.2", "django-yamlconf>=1.5.0", "django-environ>=0.12", "uvicorn[standard]>=0.30", "sentry-sdk>=2.71.0", "hatch-angee>=1,<2", "packaging>=24"]
+
+[[project.authors]]
+name = "Alexis Yushin"
+email = "alexis@apexive.com"
+
+[project.urls]
+Homepage = "https://github.com/ang-ee/angee-django"
+Documentation = "https://docs.angee.ai"
+Changelog = "https://github.com/ang-ee/angee-django/blob/main/CHANGELOG.md"
+Issues = "https://github.com/ang-ee/angee-django/issues"
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary,pool]>=3.2"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["angee"]
+
+[tool.hatch.build.targets.sdist]
+only-include = ["angee", "pyproject.toml", "LICENSE", "LICENSE.GPL"]

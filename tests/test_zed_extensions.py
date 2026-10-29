@@ -33,6 +33,7 @@ from angee.base.build import (
 )
 from angee.base.testing.permissions import installed_field_owners
 from angee.utils.files import write_atomic
+from tests.conftest import make_addon, write_addon_package
 
 User = get_user_model()
 
@@ -423,10 +424,10 @@ def test_effective_source_rewrites_do_not_leave_stale_field_gates(tmp_path, monk
 def test_manifest_permission_path_wins_over_convention(tmp_path):
     """The parsed manifest stays authoritative after repeated effective binding."""
 
-    base = _base_addon(tmp_path)
+    base = make_addon(name="base", label="base", path=Path(_base_addon(tmp_path).path))
     custom = Path(base.path) / "authored.zed"
     custom.write_text(_BASE.replace("demo/thing", "demo/custom"))
-    (Path(base.path) / "addon.toml").write_text('[addon]\nname = "base"\npermissions = "authored.zed"\n')
+    write_addon_package(base, base={"permissions": "authored.zed"})
     contrib = _contrib_addon(
         tmp_path,
         "definition demo/custom { relation viewer: auth/user permission read = viewer }",
@@ -444,20 +445,18 @@ def test_manifest_permission_file_is_checked_before_any_fragment(tmp_path):
 
     from django.core.exceptions import ImproperlyConfigured
 
-    base = _base_addon(tmp_path)
-    (Path(base.path) / "addon.toml").write_text('[addon]\nname = "base"\npermissions = "missing.zed"\n')
+    base = make_addon(name="base", label="base", path=Path(_base_addon(tmp_path).path))
+    write_addon_package(base, base={"permissions": "missing.zed"})
     with pytest.raises(ImproperlyConfigured, match="declared permissions file does not exist"):
         extension_source_map([base])
 
 
 
 def test_emitted_wiring_preserves_an_explicit_external_manifest_source(tmp_path):
-    base = _base_addon(tmp_path)
+    base = make_addon(name="base", label="base", path=Path(_base_addon(tmp_path).path))
     external = tmp_path / "outside.zed"
     external.write_text(_BASE.replace("demo/thing", "demo/external"))
-    (Path(base.path) / "addon.toml").write_text(
-        f'[addon]\nname = "base"\npermissions = {str(external)!r}\n',
-    )
+    write_addon_package(base, base={"permissions": str(external)})
 
     _apply_emitted_schema_paths([base], tmp_path / "runtime", sources={})
 
@@ -469,8 +468,8 @@ def test_emitted_wiring_preserves_an_explicit_external_manifest_source(tmp_path)
 def test_emitted_wiring_refuses_a_missing_packaged_permission_source(tmp_path, monkeypatch):
     import angee.base.build as permissions
 
-    base = _base_addon(tmp_path)
-    (Path(base.path) / "addon.toml").write_text('[addon]\nname = "base"\npermissions = "permissions.zed"\n')
+    base = make_addon(name="base", label="base", path=Path(_base_addon(tmp_path).path))
+    write_addon_package(base, base={"permissions": "permissions.zed"})
     original = permissions.schema_path_wiring
 
     def remove_after_render(configs, *, sources):

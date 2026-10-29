@@ -14,8 +14,7 @@ import runpy
 from pathlib import Path
 from typing import Any
 
-from hatch_angee import discover
-
+from angee.addons import addon_entry_points
 from angee.build import ProjectBuildContract
 from angee.compose.composer import Composer
 from angee.conf import prepend_import_paths
@@ -38,7 +37,7 @@ if os.environ.get(PROJECT_DIR_ENV):
     _CACHE_ROOT = Path(_project["BASE_DIR"]) / ".mypy_cache"
 else:
     _ADDON_DIRS = (_SOURCE_ROOT / "addons",)
-    _ROOT_APPS = sorted(manifest.name for _, manifest in discover(_ADDON_DIRS))
+    _ROOT_APPS = sorted(name for name in addon_entry_points() if name.startswith("angee."))
     _CACHE_ROOT = _SOURCE_ROOT / ".mypy_cache"
 _NAMESPACE = runpy.run_module(
     "angee.defaults",

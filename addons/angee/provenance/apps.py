@@ -6,6 +6,7 @@ from django.core import checks
 
 class ProvenanceConfig(AppConfig):
     name = "angee.provenance"
+    requires_apps = ('simple_history',)
     label = "provenance"
 
     def ready(self) -> None:

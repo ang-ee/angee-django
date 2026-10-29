@@ -39,6 +39,7 @@ from angee.graphql.schema import DEFAULT_SCHEMA_NAME, GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from angee.serialization import json_safe
 from tests.conftest import SchemaAddon
+from tests.package_metadata import write_addon_distribution
 from tests.tables import model_tables
 
 
@@ -665,7 +666,7 @@ def test_alias_imported_changes_declaration_connects_publisher(
     module = importlib.import_module(module_name)
     addon = AppConfig(module_name, module)
     addon.path = str(package_dir)
-    (package_dir / "addon.toml").write_text(f'[addon]\nname = "{module_name}"\n')
+    write_addon_distribution(package_dir , module_name, depends_on=())
     schemas = GraphQLSchemas((addon,))
     publishing.disconnect_publishers(AliasPublished)
     try:
@@ -727,7 +728,7 @@ def test_graphql_ready_discovers_declarations_before_later_ready_and_finalizes_o
         ),
         encoding="utf-8",
     )
-    (package_dir / "addon.toml").write_text(f'[addon]\nname = "{module_name}"\n')
+    write_addon_distribution(package_dir , module_name, depends_on=())
     monkeypatch.syspath_prepend(str(tmp_path))
     module = importlib.import_module(module_name)
 

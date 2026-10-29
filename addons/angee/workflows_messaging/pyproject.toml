@@ -1,0 +1,14 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-workflows-messaging"
+version = "3.0.0"
+description = "Message admission sources and channel-scoped workflow triggers"
+keywords = ["workflows", "messaging", "triggers"]
+dependencies = ["angee-workflows>=3,<4", "angee-messaging>=3,<4", "angee-web>=3,<4"]
+
+[project.entry-points]
+"angee.addons" = {"angee.workflows_messaging" = "angee.workflows_messaging"}
+
+[tool.angee]
+category = "Workflows"

@@ -1,0 +1,17 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-base"
+version = "3.0.0"
+description = "Django model, identity and permission foundation"
+keywords = ["models", "identity", "permissions"]
+dependencies = ["cryptography>=44", "django-sqids>=0.1", "django-zed-rebac>=0.30.0", "sqids>=0.4.1", "django-choices-field @ git+https://github.com/ang-ee/django-choices-field.git@b02c1488660d0bf1f4483d2e73bc842b41b70632", "jsonschema[format-nongpl]>=4.26", "pydantic>=2.13", "referencing>=0.37", "django-angee>=3,<4"]
+
+[project.entry-points]
+"angee.addons" = {"angee.base" = "angee.base"}
+
+[tool.angee]
+category = "Foundation"
+
+[tool.hatch.metadata]
+allow-direct-references = true

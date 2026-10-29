@@ -86,7 +86,7 @@ public vault id. See the [knowledge addon](../../addons/angee/knowledge/README.m
   persisted marker; the in-repo example links `@angee/*` source (HMR) and is
   excluded.
 - Operator daemon types are generated, never authored: the
-  [operator manifest](../../addons/angee/operator/addon.toml) contributes the
+  [operator manifest](../../addons/angee/operator/pyproject.toml) contributes the
   committed daemon SDL and document glob to the shared codegen pass, and daemon
   actions return `MutationResult{status}`.
 - Layering and unconsumed-owner guardrails are Vitest checks over the locked

@@ -17,6 +17,7 @@ class BaseConfig(AppConfig):
 
     default = True
     name = "angee.base"
+    requires_apps = ('django.contrib.contenttypes', 'rebac')
     # Moving the Python package must not rename Django's persisted app label:
     # migrations, content types, and the test-model schema all retain ``base``.
     label = "base"

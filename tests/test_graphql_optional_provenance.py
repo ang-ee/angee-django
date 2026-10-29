@@ -5,15 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from tests.composed_host import run_composed_tests
+from tests.package_metadata import write_addon_distribution
 
 
 def test_graphql_native_crud_does_not_load_optional_provenance(tmp_path: Path) -> None:
     addon = tmp_path / "addons" / "native_graphql"
     addon.mkdir(parents=True)
     (addon / "__init__.py").write_text("")
-    (addon / "addon.toml").write_text(
-        '[addon]\nname="native_graphql"\ndepends_on=["angee.graphql", "django.contrib.auth"]\n'
-    )
+    write_addon_distribution(addon , 'native_graphql', depends_on=('angee.graphql', 'django.contrib.auth'))
     (addon / "models.py").write_text('''from django.db import models
 from angee.base.models.base import AngeeDataModel
 

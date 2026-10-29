@@ -21,7 +21,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 | File or module | Owns | Reference |
 |---|---|---|
 | `<addon>/models.py` | `HistoryMixin` composition, captured manager, `history_revert_permission`, `history_relations`, `statements` declaration | `addons/angee/tags/models.py:58-77`, `tests/statement_models.py:16` |
-| `<addon>/addon.toml` | `depends_on = [..., "angee.provenance"]` | `addons/angee/tags/addon.toml` |
+| `<addon>/pyproject.toml` | `depends_on = [..., "angee.provenance"]` | `addons/angee/tags/pyproject.toml` |
 | `addons/angee/provenance/contrib/angee/history.py` | `HistoryMixin` (:346), `ModelHistory` (:97), `HistoryDocumentMixin` (:50), `record_history` (:86) | docstrings |
 | `addons/angee/provenance/contrib/angee/managers.py`, `querysets.py` | `AngeeHistoryManager` (:20), `AngeeHistoryUnscopedManager` (:24), `AngeeHistoryMergeableUnscopedManager` (:33); `AngeeHistoryQuerySet` (:16) | docstrings |
 | `addons/angee/provenance/history.py`, `querysets.py`, `context.py` | native capture without Angee policy: `ModelHistory` (:132), `HistoryMixin` (:438); `changeset()` (:334), `current_changeset` (:224), `ChangesetRequired` (:28) | [README](../../README.md) |
@@ -47,7 +47,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 
 ## Steps
 
-1. **Declare the dependency.** `addon.toml` `depends_on` adds `angee.provenance` (it brings `simple_history`).
+1. **Declare the dependency.** `pyproject.toml` `depends_on` adds `angee.provenance` (it brings `simple_history`).
    **Owner rule:** only addons that opt in depend on provenance; `angee.base` and core never do, so a foundation or IAM fact
    that provenance needs arrives as a provenance-owned donor (`contrib/iam/models.py:12`;
    [README](../../README.md), [Package layering](../../../../../docs/backend/guidelines.md#package-layering)).
@@ -196,6 +196,6 @@ statement tables.
 
 <!--
 Docs: docs/backend/guidelines.md #package-layering, #composition-owners, #pitfalls, #environment-and-checks, #persistence-primitives, #integration-and-worker-contracts, #workflow-contracts; docs/stack.md #backend; docs/glossary.md #backend (Backend class entries), #decisions (Derived-from evidence); docs/checks.md #source-addon-test-models; docs/composer.md #addon-owned-runtime-migrations, #foundation-and-provenance-upgrade-cutoff.
-Code: addons/angee/provenance/{README.md, addon.toml, autoconfig.py, tasks.py, checks.py, context.py:1-50,224-372, evidence.py, models.py:61-230, managers.py:30,57,134, statements.py:1-60,664-840,1424-1500, contrib/angee/history.py:40-120,346-400, contrib/angee/managers.py, contrib/angee/querysets.py, contrib/angee/context.py, contrib/iam/models.py, testing/fixtures.py, testing/models.py}; addons/angee/base/models/derived.py; addons/angee/tags/models.py:58-77; addons/angee/parties/models.py:100-135; addons/angee/agents/{tasks.py,sessions.py:57-80}; tests/{statement_models.py, test_history.py:1-60, test_statement_records.py:1-40, test_provenance_context.py:1-40, test_provenance_native.py:1-30, settings.py:35-99, conftest.py:643}.
+Code: addons/angee/provenance/{README.md, pyproject.toml, autoconfig.py, tasks.py, checks.py, context.py:1-50,224-372, evidence.py, models.py:61-230, managers.py:30,57,134, statements.py:1-60,664-840,1424-1500, contrib/angee/history.py:40-120,346-400, contrib/angee/managers.py, contrib/angee/querysets.py, contrib/angee/context.py, contrib/iam/models.py, testing/fixtures.py, testing/models.py}; addons/angee/base/models/derived.py; addons/angee/tags/models.py:58-77; addons/angee/parties/models.py:100-135; addons/angee/agents/{tasks.py,sessions.py:57-80}; tests/{statement_models.py, test_history.py:1-60, test_statement_records.py:1-40, test_provenance_context.py:1-40, test_provenance_native.py:1-30, settings.py:35-99, conftest.py:643}.
 Mismatches: README says Angee models "compose a captured manager when they declare a custom queryset" while HistoryMixin already binds objects/_angee_base defaults (addons/angee/provenance/contrib/angee/history.py:349-350) — consistent, but the README omits the Mergeable variant; no doc names `MACHINE_REASON` (addons/angee/provenance/models.py:61).
 -->

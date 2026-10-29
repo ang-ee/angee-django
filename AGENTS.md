@@ -65,8 +65,8 @@ highest standard.
 - **Dependencies point toward stable owners.** Framework and base addons never
   depend on consumers or examples; serving code never imports the build-time
   composer. Commands, resolvers, routes, and adapters dispatch to policy owners.
-- **Compose through declared contracts.** Addon declaration facts belong to
-  `addon.toml`; Django `AppConfig` owns app identity and lifecycle. Use schema
+- **Compose through declared contracts.** Addon identity and requirements belong to native package metadata in
+  `pyproject.toml`; capability facts belong to its `[tool.angee]` tables; Django `AppConfig` owns app identity and lifecycle. Use schema
   buckets, model `extends`, input/type extensions, settings/autoconfig,
   `ImplClassField`, containers, registered forms/glyphs, generated SDL, and native
   dependency extension points. Never probe foreign object shapes or monkey-patch
@@ -165,7 +165,7 @@ product specifics down into the framework. Every fact lives at its owning level.
 
 ```text
 .                    # consolidated framework source slot
-├── angee/           # django-angee host, generic compose/, serving seams and shared primitives
+├── core/angee/      # django-angee host, generic compose/, serving seams and shared primitives
 ├── addons/          # angee.base foundation and capability addons; co-located web fragments
 ├── packages/        # schema-independent @angee/* packages and workshop/test tooling
 ├── examples/        # consumer addons and reference browser suite
@@ -177,9 +177,8 @@ product specifics down into the framework. Every fact lives at its owning level.
 ```
 
 The `angee.*` namespace spans the core and folder addons. The core wheel is
-`django-angee`; each addon is a source folder with `addon.toml`, not a separately
-distributed Python package. Core dependencies belong to `pyproject.toml`, addon
-dependencies to their manifests, and resolved versions to lockfiles. In a
+`django-angee`; each addon is a separate Python distribution with `pyproject.toml`. Core dependencies belong to `core/pyproject.toml`, addon
+dependencies to their `[project].dependencies`, and resolved versions to lockfiles. In a
 materialized workspace the stack root owns the JS install; the repository's own
 pnpm manifest also supports standalone package CI. See [the stack](docs/stack.md).
 
@@ -293,7 +292,7 @@ Durable project knowledge is checked in, not held only in private agent memory.
   local-source symlink, or a Jujutsu workspace of a shared store. When
   `.work/.jj` exists, write through `jj` only and follow `.work/AGENTS.md`.
   Use its `plans/specs/`, `plans/`, `notes/`, and `handovers/` directories; do
-  not create `angee/.work` inside this source slot. Follow the workspace's
+  not create `core/angee/.work` inside this source slot. Follow the workspace's
   synchronization rules and the user's instructions.
 - **No work-state source:** keep task-specific plans and handoff notes in the
   conversation. Do not invent a private repository/path or put private history

@@ -1,0 +1,14 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-web"
+version = "3.0.0"
+description = "Composed frontend package and code-generation manifest"
+keywords = ["web", "frontend", "codegen"]
+dependencies = ["django-angee>=3,<4"]
+
+[project.entry-points]
+"angee.addons" = {"angee.web" = "angee.web"}
+
+[tool.angee]
+category = "Foundation"

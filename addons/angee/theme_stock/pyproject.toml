@@ -1,0 +1,14 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-theme-stock"
+version = "3.0.0"
+description = "The selectable default Angee application theme"
+keywords = ["theme", "appearance", "default"]
+dependencies = ["angee-web>=3,<4"]
+
+[project.entry-points]
+"angee.addons" = {"angee.theme_stock" = "angee.theme_stock"}
+
+[tool.angee]
+category = "User interface"

@@ -42,8 +42,8 @@ The reference example is `examples/addons/example/notes` (steps, rows, trigger, 
 
 ## Steps
 
-1. **Declare the dependencies.** `addon.toml` `depends_on` lists `angee.workflows`, `angee.decisions` when a step asks, and
-   `angee.provenance` (`examples/addons/example/notes/addon.toml:8-24`). **Owner rule:** the manifest owns dependency facts
+1. **Declare the dependencies.** `pyproject.toml` `depends_on` lists `angee.workflows`, `angee.decisions` when a step asks, and
+   `angee.provenance` (`examples/addons/example/notes/pyproject.toml:8-24`). **Owner rule:** the manifest owns dependency facts
    ([composition owners](../../../../../docs/backend/guidelines.md#composition-owners)).
 
 2. **Write the step in `<addon>/steps.py`.** Type parameters are the input, output and config models (`None` accepts JSON);
@@ -100,7 +100,7 @@ The reference example is `examples/addons/example/notes` (steps, rows, trigger, 
    ([Workflow contracts](../../../../../docs/backend/guidelines.md#workflow-contracts), "Reviews retain one current decision per step").
 
 6. **Author the definition as a resource.** `resources/<tier>/NNN_workflows.workflow.yaml` rows carry `key`, `name`,
-   `description`, `subject_model`, `publish` and the `draft` graph; list the file under `[resources]` with `adopt = "key"`.
+   `description`, `subject_model`, `publish` and the `draft` graph; list the file under `[tool.angee.resources]` with `adopt = "key"`.
 
    ```yaml
    _meta: {model: workflows.Workflow}
@@ -133,7 +133,7 @@ The reference example is `examples/addons/example/notes` (steps, rows, trigger, 
        @classmethod
        def record_changed_grant_targets(cls, trigger: Any) -> tuple[TriggerGrantTarget, ...]:
            return (TriggerGrantTarget(ObjectRef("notes/role", "trigger_editor"), "member", "effective_member",
-                                      ObjectRef("angee/role", "admin")),)
+                                      ObjectRef("core/angee/role", "admin")),)
    ```
 
    The trigger row (`110_workflows.trigger.yaml`) names `workflow: example.notes.note_publish`, `source: record_changed`,
@@ -196,6 +196,6 @@ and a decision test answers through `decide` and resumes the step.
 
 <!--
 Docs: docs/backend/guidelines.md #workflow-execution, #workflow-contracts, #rebac; docs/glossary.md #backend, #workflows, #decisions; docs/checks.md #choose-the-working-directory, #python-and-composition-contracts, #source-addon-test-models, #browser-verification, #what-ci-actually-runs; docs/composer.md #autoconfig.
-Code: addons/angee/workflows/{README.md, steps.py:1-376, models.py:145-260,872-895, managers.py:363-405, resources.py, autoconfig.py, addon.toml, apps.py, context.py:20-110, decision_steps.py:1-100, subjects.py, triggers.py:175-200,429-436, definition.py:147,181,274, maps.py:13-52, awaits.py:15-61, testing/__init__.py, testing/drivers.py, testing/fixtures.py, testing/models.py:1-30}; addons/angee/decisions/README.md; examples/addons/example/notes/{addon.toml, autoconfig.py, steps.py, models.py:22-45, resources/demo/100_workflows.workflow.yaml, 110_workflows.trigger.yaml, tests/test_workflow_steps.py:1-70}; tests/workflow_steps.py:1-80; tests/test_workflows_testing.py:1-60; tests/test_composed_note_workflow.py; tests/settings.py:56-101.
+Code: addons/angee/workflows/{README.md, steps.py:1-376, models.py:145-260,872-895, managers.py:363-405, resources.py, autoconfig.py, pyproject.toml, apps.py, context.py:20-110, decision_steps.py:1-100, subjects.py, triggers.py:175-200,429-436, definition.py:147,181,274, maps.py:13-52, awaits.py:15-61, testing/__init__.py, testing/drivers.py, testing/fixtures.py, testing/models.py:1-30}; addons/angee/decisions/README.md; examples/addons/example/notes/{pyproject.toml, autoconfig.py, steps.py, models.py:22-45, resources/demo/100_workflows.workflow.yaml, 110_workflows.trigger.yaml, tests/test_workflow_steps.py:1-70}; tests/workflow_steps.py:1-80; tests/test_workflows_testing.py:1-60; tests/test_composed_note_workflow.py; tests/settings.py:56-101.
 Mismatches: none found for the cited surfaces; no doc lists the YAML node keys (step/next/input/config/body/results/when) — derived from the notes rows and Definition.
 -->

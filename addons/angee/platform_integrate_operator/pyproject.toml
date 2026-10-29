@@ -1,0 +1,14 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-platform-integrate-operator"
+version = "3.0.0"
+description = "Install and disable addons through the operator, with application restart status and actions"
+keywords = ["marketplace", "addons", "operator"]
+dependencies = ["angee-platform>=3,<4", "angee-operator>=3,<4", "angee-web>=3,<4"]
+
+[project.entry-points]
+"angee.addons" = {"angee.platform_integrate_operator" = "angee.platform_integrate_operator"}
+
+[tool.angee]
+category = "Integration"

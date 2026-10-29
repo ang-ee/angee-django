@@ -1,216 +1,216 @@
 [build-system]
-requires = [
-  # PEP 639 license-files metadata requires hatchling 1.27 or newer.
-  "hatchling>=1.27",
-]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "django-angee"
-version = "0.3.0"
-description = "Thin Django composition primitives for Angee applications."
-readme = "README.md"
-authors = [{ name = "Alexis Yushin", email = "alexis@apexive.com" }]
-keywords = ["addons", "agentic-applications", "asgi", "composition", "django"]
-# PEP 639 deprecates License classifiers when `license` is an SPDX expression;
-# the expression below is the single machine-readable owner of license identity.
-classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
-  "Environment :: Web Environment",
-  "Framework :: Django",
-  "Framework :: Django :: 6.1",
-  "Intended Audience :: Developers",
-  "Operating System :: OS Independent",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.14",
-  "Topic :: Software Development :: Libraries :: Application Frameworks",
-  "Typing :: Typed",
-]
-# LGPLv3 is drafted as additional permissions on top of GPLv3, so both texts ship:
-# LICENSE is the Lesser additional permissions, LICENSE.GPL the GPLv3 they extend.
+name = "angee"
+version = "3.0.0"
+description = "Angee framework addons at one version"
+requires-python = ">=3.14"
 license = "LGPL-3.0-or-later"
 license-files = ["LICENSE", "LICENSE.GPL"]
-requires-python = ">=3.14"
 dependencies = [
-  "channels>=4.0",
-  "django>=6.1.2,<6.2",
-  "hatch-angee>=0.2.6",
-  "django-yamlconf>=1.5.0",
-  "django-environ>=0.12",
-  # ASGI server: serves the composed app and addon-contributed channels WebSocket
-  # and HTTP mounts. uvicorn sends the ASGI lifespan that runs mount lifespans;
-  # [standard] adds WebSocket and --reload support for dev.
-  "uvicorn[standard]>=0.30",
-  # Error reporting; ProjectContract starts it only when the deployment sets SENTRY_DSN.
-  "sentry-sdk>=2.71.0",
+    "angee-agents-integrate-anthropic==3.0.0",
+    "angee-agents-integrate-ollama==3.0.0",
+    "angee-agents-integrate-openai==3.0.0",
+    "angee-agents-runtime-pydantic==3.0.0",
+    "angee-agents==3.0.0",
+    "angee-appearance-integrate==3.0.0",
+    "angee-appearance==3.0.0",
+    "angee-base==3.0.0",
+    "angee-dashboards==3.0.0",
+    "angee-decisions==3.0.0",
+    "angee-extraction==3.0.0",
+    "angee-graphql==3.0.0",
+    "angee-iam-integrate-oidc==3.0.0",
+    "angee-iam==3.0.0",
+    "angee-intake==3.0.0",
+    "angee-integrate-github==3.0.0",
+    "angee-integrate-iphone==3.0.0",
+    "angee-integrate-vcs==3.0.0",
+    "angee-integrate==3.0.0",
+    "angee-jobs==3.0.0",
+    "angee-knowledge-graph-pgvector==3.0.0",
+    "angee-knowledge-integrate-notion==3.0.0",
+    "angee-knowledge==3.0.0",
+    "angee-mcp==3.0.0",
+    "angee-messaging-integrate-imap==3.0.0",
+    "angee-messaging-integrate-slack==3.0.0",
+    "angee-messaging==3.0.0",
+    "angee-money==3.0.0",
+    "angee-nexus==3.0.0",
+    "angee-operator==3.0.0",
+    "angee-parties-integrate-carddav==3.0.0",
+    "angee-parties==3.0.0",
+    "angee-platform-integrate-operator==3.0.0",
+    "angee-platform-integrate-vcs==3.0.0",
+    "angee-platform==3.0.0",
+    "angee-pm==3.0.0",
+    "angee-portfolio==3.0.0",
+    "angee-posts==3.0.0",
+    "angee-projects==3.0.0",
+    "angee-proposals-work==3.0.0",
+    "angee-proposals==3.0.0",
+    "angee-provenance==3.0.0",
+    "angee-resources==3.0.0",
+    "angee-scheduling==3.0.0",
+    "angee-sequence==3.0.0",
+    "angee-spaces==3.0.0",
+    "angee-storage-integrate-iphone==3.0.0",
+    "angee-storage-integrate==3.0.0",
+    "angee-storage==3.0.0",
+    "angee-tags==3.0.0",
+    "angee-theme-angee==3.0.0",
+    "angee-theme-aurora==3.0.0",
+    "angee-theme-carbon==3.0.0",
+    "angee-theme-fyltr==3.0.0",
+    "angee-theme-ledger==3.0.0",
+    "angee-theme-midnight==3.0.0",
+    "angee-theme-stock==3.0.0",
+    "angee-theme-warm-red==3.0.0",
+    "angee-timeline==3.0.0",
+    "angee-uom==3.0.0",
+    "angee-web==3.0.0",
+    "angee-work==3.0.0",
+    "angee-workflows-agents==3.0.0",
+    "angee-workflows-extraction==3.0.0",
+    "angee-workflows-integrate==3.0.0",
+    "angee-workflows-messaging==3.0.0",
+    "angee-workflows-parties==3.0.0",
+    "angee-workflows-posts==3.0.0",
+    "angee-workflows==3.0.0",
+    "django-angee==3.0.0",
 ]
 
-[project.urls]
-Homepage = "https://github.com/ang-ee/angee-django"
-Documentation = "https://docs.angee.ai"
-Changelog = "https://github.com/ang-ee/angee-django/blob/main/CHANGELOG.md"
-Issues = "https://github.com/ang-ee/angee-django/issues"
-
-[project.entry-points.hatch]
-# Hosts opt into these native hooks; building the framework itself does not
-# compose an application or bundle its source-folder addons.
-angee = "angee.hatch"
-
 [project.optional-dependencies]
-# Wheel extras are reserved for core-owned deployment variants. Addon-owned
-# dependencies come from each composed addon's addon.toml. The host's native
-# Hatch metadata hook projects them into its runtime requirements.
-
-# Postgres driver only — installed by the runtime image's `--extra postgres` and by
-# the self-contained local stack. psycopg 3 is the driver Django 6's
-# django.db.backends.postgresql uses when DATABASE_URL points at Postgres (the
-# stack env supplies the URL; angee/conf.py maps it, SQLite floor
-# otherwise).
 postgres = ["psycopg[binary,pool]>=3.2"]
 
 [dependency-groups]
 dev = [
-  # Test-only: channels.testing imports daphne (ChannelsLiveServerTestCase). It is
-  # not a runtime dependency — Angee serves with uvicorn (see [project.dependencies]).
-  "daphne>=4.0",
-  # Test-only: E024 fixtures retain and validate CEL caveat declarations.
-  "django-zed-rebac[caveats]>=0.30.0",
-  "faker>=30.0",
-  # Source-addon tests import django.contrib.postgres field types even when the
-  # test database is SQLite; the former base wrapper selected the core extra.
-  "psycopg[binary,pool]>=3.2",
-  "django-stubs[compatible-mypy] @ git+https://github.com/ang-ee/django-stubs.git@423ed850e5f2d7ea9e67f3e0f9e8bee4be215988",
-  "mypy @ git+https://github.com/ang-ee/mypy.git@ac3de6e4c34b04728e768e07d4842f4309ff6c45",
-  "pytest>=8.0",
-  "pytest-django>=4.8",
-  "pytest-randomly>=3.16",
-  "pytest-xdist>=3.6",
-  "ruff>=0.15.12",
-  "vulture>=2.16",
-  "pytest-split>=0.11",
+    "daphne>=4.0",
+    "django-zed-rebac[caveats]>=0.30.0",
+    "faker>=30.0",
+    "psycopg[binary,pool]>=3.2",
+    "django-stubs[compatible-mypy] @ git+https://github.com/ang-ee/django-stubs.git@423ed850e5f2d7ea9e67f3e0f9e8bee4be215988",
+    "mypy @ git+https://github.com/ang-ee/mypy.git@ac3de6e4c34b04728e768e07d4842f4309ff6c45",
+    "pytest>=8.0",
+    "pytest-django>=4.8",
+    "pytest-randomly>=3.16",
+    "pytest-xdist>=3.6",
+    "ruff>=0.15.12",
+    "vulture>=2.16",
+    "pytest-split>=0.11",
+    "tomlkit>=0.13",
+    "example-notes==3.0.0",
+    "example-theme==3.0.0",
+    "tests-blankchoices==3.0.0",
 ]
 
-# GENERATED by angee build from the enabled addons' manifests — do not edit
-addons = [
-    "agent-client-protocol==1.0.0rc2",
-    "anthropic>=0.109.2",
-    "authlib>=1.8.0",
-    "billiard>=4.2.1,<4.3",
-    "celery[redis]>=5.5",
-    "channels-redis>=4.2",
-    "channels>=4.0",
-    "cryptography>=44",
-    "deepdiff>=9.1.0",
-    "django-anymail>=15.1",
-    "django-axes>=8.0",
-    "django-celery-beat @ git+https://github.com/celery/django-celery-beat.git@b5e3443d647baf910c0168f25b512dd388ba669e",
-    "django-choices-field @ git+https://github.com/ang-ee/django-choices-field.git@b02c1488660d0bf1f4483d2e73bc842b41b70632",
-    "django-countries>=9,<10",
-    "django-import-export>=4.4",
-    "django-simple-history>=3.13",
-    "django-sqids>=0.1",
-    "django-zed-rebac>=0.30.0",
-    "django-zed-rebac[strawberry-django]>=0.30.0",
-    "fastmcp>=3.4.7,<4",
-    "graphql-core>=3.3.1,<3.4",
-    "httpcore2>=2.10,<3",
-    "httpx2>=2.10,<3",
-    "httpx>=0.28.1,<0.29",
-    "imapclient>=3.1.0",
-    "jsonpointer>=3.1",
-    "jsonschema[format-nongpl]>=4.26",
-    "mail-parser-reply>=1.36",
-    "markdown-it-py>=4.2",
-    "mcp>=1.2",
-    "openai>=2.43.0",
-    "phonenumbers>=9.0",
-    "pillow>=11.0",
-    "pycountry>=26,<27",
-    "pydantic-ai-slim>=2.13",
-    "pydantic-ai-slim[anthropic]>=2.13",
-    "pydantic-ai-slim[mcp]>=2.13",
-    "pydantic-ai-slim[openai]>=2.13",
-    "pydantic>=2.13",
-    "pyjwt[crypto]>=2.12",
-    "pypdfium2>=4.30",
-    "python-dateutil>=2.9",
-    "python-magic>=0.4.27",
-    "pyyaml>=6",
-    "qrcode[pil]>=8.2",
-    "referencing>=0.37",
-    "requests>=2.32",
-    "ruamel.yaml>=0.18",
-    "sentry-sdk>=2.71.0",
-    "slack-sdk>=3.43.0",
-    "sqids>=0.4.1",
-    "strawberry-django-aggregates @ git+https://github.com/ang-ee/strawberry-django-aggregates.git@0f374854d19b2709b6d77ae872090ab2a751f1dc",
-    "strawberry-django-hasura @ git+https://github.com/ang-ee/strawberry-django-hasura.git@4e1c2da2bcbbc90cc586fef3db8d70f5cd6ccfc0",
-    "strawberry-graphql @ git+https://github.com/ang-ee/strawberry.git@273bf0456d914d4df535222c4cbae73dff46a376",
-    "strawberry-graphql-django @ git+https://github.com/ang-ee/strawberry-django.git@091238ecd4ae07798ef12e9eb24281540da41ced",
-    "tablib>=3",
-    "urllib3>=2.2",
-    "vobject>=0.9.9",
-]
 
 [tool.uv]
-default-groups = ["dev", "addons"]
+default-groups = ["dev"]
 
 # No [tool.uv] cache-dir here: a CWD-relative cache-dir mints a stray
 # `.angee/caches/uv` wherever uv runs (slots, worktrees, the stack root under
 # --project). The rendered stack host pins its own stack-owned cache; every
 # other invocation uses uv's default per-user cache.
 
-[tool.hatch.metadata]
-allow-direct-references = true
+[tool.uv.workspace]
+members = ["core", "addons/angee/*", "examples/addons/example/*", "tests/blankchoices"]
 
+[tool.uv.sources]
+angee-agents = {workspace = true}
+angee-agents-integrate-anthropic = {workspace = true}
+angee-agents-integrate-ollama = {workspace = true}
+angee-agents-integrate-openai = {workspace = true}
+angee-agents-runtime-pydantic = {workspace = true}
+angee-appearance = {workspace = true}
+angee-appearance-integrate = {workspace = true}
+angee-base = {workspace = true}
+angee-dashboards = {workspace = true}
+angee-decisions = {workspace = true}
+angee-extraction = {workspace = true}
+angee-graphql = {workspace = true}
+angee-iam = {workspace = true}
+angee-iam-integrate-oidc = {workspace = true}
+angee-intake = {workspace = true}
+angee-integrate = {workspace = true}
+angee-integrate-github = {workspace = true}
+angee-integrate-iphone = {workspace = true}
+angee-integrate-vcs = {workspace = true}
+angee-jobs = {workspace = true}
+angee-knowledge = {workspace = true}
+angee-knowledge-graph-pgvector = {workspace = true}
+angee-knowledge-integrate-notion = {workspace = true}
+angee-mcp = {workspace = true}
+angee-messaging = {workspace = true}
+angee-messaging-integrate-imap = {workspace = true}
+angee-messaging-integrate-slack = {workspace = true}
+angee-money = {workspace = true}
+angee-nexus = {workspace = true}
+angee-operator = {workspace = true}
+angee-parties = {workspace = true}
+angee-parties-integrate-carddav = {workspace = true}
+angee-platform = {workspace = true}
+angee-platform-integrate-operator = {workspace = true}
+angee-platform-integrate-vcs = {workspace = true}
+angee-pm = {workspace = true}
+angee-portfolio = {workspace = true}
+angee-posts = {workspace = true}
+angee-projects = {workspace = true}
+angee-proposals = {workspace = true}
+angee-proposals-work = {workspace = true}
+angee-provenance = {workspace = true}
+angee-resources = {workspace = true}
+angee-scheduling = {workspace = true}
+angee-sequence = {workspace = true}
+angee-spaces = {workspace = true}
+angee-storage = {workspace = true}
+angee-storage-integrate = {workspace = true}
+angee-storage-integrate-iphone = {workspace = true}
+angee-tags = {workspace = true}
+angee-theme-angee = {workspace = true}
+angee-theme-aurora = {workspace = true}
+angee-theme-carbon = {workspace = true}
+angee-theme-fyltr = {workspace = true}
+angee-theme-ledger = {workspace = true}
+angee-theme-midnight = {workspace = true}
+angee-theme-stock = {workspace = true}
+angee-theme-warm-red = {workspace = true}
+angee-timeline = {workspace = true}
+angee-uom = {workspace = true}
+angee-web = {workspace = true}
+angee-work = {workspace = true}
+angee-workflows = {workspace = true}
+angee-workflows-agents = {workspace = true}
+angee-workflows-extraction = {workspace = true}
+angee-workflows-integrate = {workspace = true}
+angee-workflows-messaging = {workspace = true}
+angee-workflows-parties = {workspace = true}
+angee-workflows-posts = {workspace = true}
+example-notes = {workspace = true}
+example-theme = {workspace = true}
+tests-blankchoices = {workspace = true}
+django-angee = {workspace = true}
 [tool.hatch.build.targets.wheel]
-# The distribution contains the framework core only. Folder addons are provided
-# as source folders under addons/ and discovered from explicit addon directories.
-packages = ["angee"]
-dev-mode-dirs = ["."]
-artifacts = [
-  "angee/**/*.csv",
-  "angee/**/*.pyi",
-  "angee/**/*.typed",
-  "angee/**/*.yaml",
-  "angee/**/*.zed",
-]
-# Exclude dependency trees from the core wheel. Addon web fragments and shared
-# React packages remain source content outside this distribution.
-exclude = [
-  "**/node_modules",
-]
-
-# Shared React packages live under packages/ and are consumed through the
-# stack's pnpm workspace, not this core wheel.
+bypass-selection = true
 
 [tool.hatch.build.targets.sdist]
-only-include = [
-  "AGENTS.md",
-  "CHANGELOG.md",
-  "LICENSE",
-  "LICENSE.GPL",
-  "README.md",
-  "angee",
-  "docs",
-  "pyproject.toml",
-  "tests",
-  "uv.lock",
-]
+only-include = ["pyproject.toml", "LICENSE", "LICENSE.GPL"]
 
 [tool.pytest.ini_options]
 cache_dir = ".pytest_cache"
 DJANGO_SETTINGS_MODULE = "tests.settings"
 python_files = ["test_*.py"]
 testpaths = ["tests", "addons/angee/resources/tests"]
-pythonpath = [".", "addons", "examples/addons"]
+pythonpath = ["core", "addons", "examples/addons", "."]
 addopts = "-ra --strict-markers --import-mode=importlib -p no:randomly"
 
 [tool.ruff]
 line-length = 120
 target-version = "py314"
 cache-dir = ".ruff_cache"
-src = [".", "addons", "examples/addons"]
+src = ["core", "addons", "examples/addons"]
 exclude = [
   ".angee",
   ".git",
@@ -226,6 +226,7 @@ exclude = [
   "**/runtime",
   # Materialized addon migration sources are pinned by digest and immutable.
   "**/runtime_migrations",
+  "**/compose_migrations",
 ]
 
 [tool.ruff.lint]
@@ -236,22 +237,22 @@ plugins = ["angee.base.typing", "angee.provenance.typing"]
 python_version = "3.14"
 cache_dir = ".mypy_cache"
 explicit_package_bases = true
-files = ["angee", "addons/angee"]
+files = ["core/angee", "addons/angee"]
 ignore_missing_imports = true
-mypy_path = [".", "addons", ".mypy_cache"]
+mypy_path = ["core", "addons", ".mypy_cache"]
 warn_unused_ignores = true
 # Historical addon migrations are digest-pinned executable artifacts, like the
 # Ruff boundary above; integrity and execution tests validate their bodies.
-exclude = ["(^|/)runtime_migrations/"]
+exclude = ["(^|/)(runtime_migrations|compose_migrations)/"]
 
 [[tool.mypy.overrides]]
-module = ["*.runtime_migrations.*"]
+module = ["*.runtime_migrations.*", "*.compose_migrations.*"]
 # Integrity tests still import typed Migration contracts. Preserve those types
 # and caller diagnostics without re-checking immutable historical source bodies.
 follow_imports = "silent"
 
 [tool.vulture]
-paths = ["angee", "addons/angee", "examples/addons", "tests"]
+paths = ["core/angee", "addons/angee", "examples/addons", "tests"]
 exclude = [
   "*/runtime/*",
 ]

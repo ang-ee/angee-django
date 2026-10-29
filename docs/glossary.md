@@ -63,8 +63,8 @@ stays the project's. The two stack layouts live in the operator's
 default Host; a project *is* the Host's source. The operator is Host-agnostic — to
 it, a project is just a git Source.
 
-**Addon contract** — the addon facts declared in `addon.toml`, parsed by
-hatch-angee and consumed by composition and capability owners. Fields, executable
+**Addon contract** — the addon facts declared in `pyproject.toml`, parsed by
+native metadata readers and consumed by their capability owners. Fields, executable
 behavior and native library objects remain in their Python or web modules;
 manifest references and conventional defaults connect those implementations.
 
@@ -254,7 +254,7 @@ does not change the principal's `auth/user` identity.
 
 **Resource file** — tabular data owned by an addon and imported idempotently by
 tier (`master`, `install`, `demo`). Addons list resource files in their
-`addon.toml` `[resources]` manifest.
+`pyproject.toml` `[tool.angee.resources]` manifest.
 
 **GraphQL data resource** — a list/detail/mutation metadata contract emitted from
 a GraphQL schema contribution for the frontend data-view layer. It is a UI/API

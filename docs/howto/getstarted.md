@@ -387,7 +387,7 @@ angee --root "$ANGEE_ROOT" restart django celery-worker
   `angee.yaml`. The job runs, then its downstream jobs, then every service that
   waits on them restarts. On a dev stack that sequence is:
   - `deps` runs `pnpm install`;
-  - `runtime-build` uses native `uv sync` and the Hatch runtime hook (editable in
+  - `runtime-build` installs with native `uv sync`, then explicitly runs the host build worker (editable in
     development, `--no-editable` in production);
   - `provision` consumes the built runtime in one process: read-only history drift
     validation, migrations, permission sync, checks and declared addon commands;
@@ -431,7 +431,7 @@ cooperate:
   This loop is described in full under
   [What "Self-Building" Looks Like](https://docs.angee.ai/guide/concepts#what-self-building-looks-like).
 - **The framework gives agents a native package build.** Inside the host, an agent
-  changes source models and addons, runs `uv sync` for the editable runtime, and
+  changes source models and addons, runs the explicit `runtime-build` job for the editable runtime, and
   authors native migrations with `uv run --no-sync python manage.py makemigrations`.
   Native `runtime/<label>/migrations/` packages are reviewed and committed. `uv build` validates
   and packages that project-specific runtime and history. The operator's declared
