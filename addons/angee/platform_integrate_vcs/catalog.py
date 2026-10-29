@@ -6,8 +6,7 @@ import tomllib
 from collections.abc import Mapping
 from typing import Any
 
-from angee.addons import facts_from_toml
-from angee.platform.discovery import catalogue_category
+from angee.platform.discovery import facts_from_toml
 
 
 def parse_addon_meta(blob: bytes, *, dependencies: Mapping[str, str] | None = None) -> dict[str, Any]:
@@ -18,7 +17,6 @@ def parse_addon_meta(blob: bytes, *, dependencies: Mapping[str, str] | None = No
         return {}
     return {
         **facts,
-        "category": catalogue_category(facts["category"]),
         "namespace": facts["name"].split(".", 1)[0],
         "keywords": list(facts["keywords"]),
         "depends_on": list(facts["depends_on"]),

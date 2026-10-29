@@ -4,7 +4,7 @@ import { Alert, Chip, Button, DialogForm, ErrorBanner, Glyph, InlineEmpty, Loadi
 import { usePlatformT } from "../i18n";
 import type { AddonChangePreviewData } from "../documents";
 
-export type AddonChangeAction = "INSTALL" | "DISABLE";
+export type AddonChangeAction = "ENABLE" | "DISABLE";
 type AddonChangeImpact = AddonChangePreviewData["addons_to_enable"][number];
 
 export interface AddonChangeDialogProps {
@@ -32,7 +32,7 @@ export function AddonChangeDialog({
   onCancel,
 }: AddonChangeDialogProps): ReactElement {
   const t = usePlatformT();
-  const installing = action === "INSTALL";
+  const enabling = action === "ENABLE";
   const inventoryModels = preview?.data_inventory.flatMap((inventory) =>
     inventory.models.map((model) => ({ ...model, addon: inventory.addon })),
   ) ?? [];
@@ -45,19 +45,19 @@ export function AddonChangeDialog({
       onOpenChange={(open) => { if (!open && !applying) onCancel(); }}
       size="lg"
       placement="center"
-      title={t(installing ? "apps.preview.installTitle" : "apps.preview.disableTitle", { addon: addonLabel })}
+      title={t(enabling ? "apps.preview.enableTitle" : "apps.preview.disableTitle", { addon: addonLabel })}
       description={t("apps.preview.description")}
       onSubmit={(event) => { event.preventDefault(); onConfirm(); }}
       footer={<>
         <Button type="button" variant="secondary" disabled={applying} onClick={onCancel}>{t("apps.preview.cancel")}</Button>
         <Button
           type="submit"
-          variant={installing ? "primary" : "danger"}
+          variant={enabling ? "primary" : "danger"}
           pending={applying}
           disabled={!preview?.can_apply || loading || applying || Boolean(error)}
         >
-          <Glyph decorative name={installing ? "plus" : "minus"} />
-          {t(installing ? "apps.install" : "apps.disable")}
+          <Glyph decorative name={enabling ? "plus" : "minus"} />
+          {t(enabling ? "apps.enable" : "apps.disable")}
         </Button>
       </>}
     >
@@ -67,12 +67,12 @@ export function AddonChangeDialog({
       {preview?.migration_warning ? <Alert tone="warning">{preview.migration_warning}</Alert> : null}
       {preview ? (
         <>
-          {installing || preview.addons_to_enable.length ? (
+          {enabling || preview.addons_to_enable.length ? (
             <PreviewSection title={t("apps.preview.enabled")} count={preview.addons_to_enable.length} empty={t("apps.preview.noDependencyChanges")}>
               {preview.addons_to_enable.map((addon) => <AddonImpactRow key={addon.name} addon={addon} />)}
             </PreviewSection>
           ) : null}
-          {!installing || preview.addons_to_disable.length ? (
+          {!enabling || preview.addons_to_disable.length ? (
             <PreviewSection title={t("apps.preview.disabled")} count={preview.addons_to_disable.length} empty={t("apps.preview.noDependencyChanges")}>
               {preview.addons_to_disable.map((addon) => <AddonImpactRow key={addon.name} addon={addon} />)}
             </PreviewSection>

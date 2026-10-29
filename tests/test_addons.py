@@ -7,19 +7,18 @@ import sys
 from importlib import metadata
 from importlib.metadata import EntryPoint
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from django.apps import apps
+from django.apps import AppConfig, apps
 from django.db import DatabaseError, connection, connections
 from django.test.utils import CaptureQueriesContext, isolate_apps
+from django_compose.addons import enabled_apps
 from rebac import system_context
 
 import tests.test_platform_install  # noqa: F401 -- register fixture models before database setup
-from angee.addons import addon_dependencies, resolve_package_roots
-from angee.build import PackageDeclarations
-from angee.compose.appgraph import AppGraph
 from angee.platform import models as platform_models
-from angee.platform.discovery import available_addons
+from angee.platform.discovery import available_addons, resolve_catalogue_roots
 from angee.resources.models import Resource as AbstractResource
 from tests.conftest import catalogue_package, make_addon
 
@@ -37,7 +36,7 @@ def test_catalogue_reads_package_data_without_importing_disabled_apps(tmp_path, 
         '[project]\nname="catalogue-probe-disabled"\nversion="1.0"\n'
         'description="Installed disabled addon"\n'
         '[project.entry-points."angee.addons"]\n"catalogue_probe.disabled"="catalogue_probe.disabled"\n'
-        '[tool.angee]\ncategory="Foundation"\n'
+        '[tool.angee.platform]\ncategory="Foundation"\n'
     )
     dist_info = tmp_path / "catalogue_probe_disabled-1.0.dist-info"
     dist_info.mkdir()
@@ -53,7 +52,8 @@ def test_catalogue_reads_package_data_without_importing_disabled_apps(tmp_path, 
     else:
         (dist_info / "RECORD").write_text("catalogue_probe/disabled/pyproject.toml,,\n")
     dist = metadata.PathDistribution(dist_info)
-    monkeypatch.setattr(metadata, "entry_points", lambda **params: dist.entry_points.select(**params))
+    installed = tuple(metadata.distributions())
+    monkeypatch.setattr(metadata, "distributions", lambda **params: (*installed, dist))
     monkeypatch.syspath_prepend(str(tmp_path))
 
     available = available_addons()
@@ -79,7 +79,7 @@ def test_available_addons_uses_installed_entry_points() -> None:
 def test_package_root_resolution_uses_exact_app_config_aliases() -> None:
     dependency = catalogue_package("example.dependency")
     root = catalogue_package("example.root", depends_on=("example.dependency",))
-    resolved = resolve_package_roots(
+    resolved = resolve_catalogue_roots(
         ("example.root.apps.RootConfig", "django.contrib.auth"), (root, dependency),
         aliases={"example.root.apps.RootConfig": "example.root"},
     )
@@ -98,8 +98,6 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
         loaded = make_addon(name="fakeaddon.loaded", path=tmp_path / "loaded", depends_on=("django.contrib.auth",))
         loaded.apps = apps
         loaded.models = {"documentline": line}
-        loaded.compose_root = True
-        loaded.compose_required = False
         installed_manifest = catalogue_package("fakeaddon.base", depends_on=(loaded.name,))
         local_manifest = catalogue_package(name="example.unavailable", depends_on=("fakeaddon.base",))
         available = {
@@ -115,7 +113,7 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
 
         patch.setattr(platform_models, "available_addons", lambda: available)
         patch.setattr(platform_models.composed, "addons", lambda: [loaded])
-        patch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
+        patch.setattr(platform_models.composed, "root_app_aliases", lambda: {loaded.name: loaded.name})
         patch.setattr(platform_models.composed, "resource_counts", resource_counts)
         with system_context(reason="test.platform.reconcile-native-facts"):
             addon.objects.create(
@@ -197,7 +195,7 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
         assert str(materialised) == local_manifest["name"]
 
 
-def test_install_preview_uses_canonical_name_when_django_label_is_unknown(tmp_path, settings, monkeypatch) -> None:
+def test_enable_preview_uses_canonical_name_when_django_label_is_unknown(tmp_path, settings, monkeypatch) -> None:
     """An unresolved addon's display label falls back to its canonical name."""
 
     manifest = catalogue_package(name="unavailable_package.addon", depends_on=("unavailable_package.dependency",))
@@ -208,7 +206,7 @@ def test_install_preview_uses_canonical_name_when_django_label_is_unknown(tmp_pa
     settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
     (tmp_path / "settings.yaml").write_text("INSTALLED_APPS: []\n")
 
-    preview = apps.get_model("platform", "Addon").objects.change_preview(manifest["name"], "install")
+    preview = apps.get_model("platform", "Addon").objects.change_preview(manifest["name"], "enable")
 
     assert preview.can_apply is True
     assert preview.roots_after == (manifest["name"],)
@@ -344,16 +342,17 @@ def test_loaded_root_pending_and_forced_admission_follow_the_composed_graph(
         addon = apps.get_model("platform", "Addon")
         root = make_addon(name="example.root", path=tmp_path / "root", depends_on=("example.dep",))
         dependency = make_addon(name="example.dep", path=tmp_path / "dep")
-        configs = AppGraph(PackageDeclarations()).resolve((root, dependency), declared_roots=(root,))
+        closure = enabled_apps((root.name,), group="angee.addons")
+        configs = tuple(AppConfig.create(entry) for entry in closure.entries)
         for config in configs:
             config.apps = apps
             config.models = {}
         patch.setattr(platform_models, "available_addons", lambda: {
-            config.name: (catalogue_package(config.name, depends_on=tuple(addon_dependencies(config))), None)
+            config.name: (catalogue_package(config.name, depends_on=closure.dependencies[config.name]), None)
             for config in configs
         })
         patch.setattr(platform_models.composed, "addons", lambda: list(configs))
-        patch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
+        patch.setattr(platform_models.composed, "root_app_aliases", lambda: {root.name: root.name})
         patch.setattr(platform_models.composed, "resource_counts", lambda **kwargs: {})
         settings.BASE_DIR = tmp_path
         settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
@@ -376,3 +375,16 @@ def test_loaded_root_pending_and_forced_admission_follow_the_composed_graph(
             addon.objects.reconcile_from_registry(desired=frozenset({root.name}))
             root_row.refresh_from_db()
             assert root_row.pending is False
+
+
+def test_composed_membership_reuses_native_selected_closure(settings, monkeypatch) -> None:
+    """A retained closure supplies membership without rediscovering installed packages."""
+
+    from angee.platform import composed
+
+    settings.COMPOSE_CLOSURE = SimpleNamespace(addons=frozenset({"angee.base"}))
+    monkeypatch.setattr(
+        composed, "installed_addons",
+        lambda *args: (_ for _ in ()).throw(AssertionError("installed metadata rediscovered")),
+    )
+    assert [config.name for config in composed.addons()] == ["angee.base"]

@@ -6,7 +6,9 @@ import type { AddonKind } from "@angee/gql/console/graphql";
 import {
   AddonChangePreview,
   DisableAddon,
+  EnableAddon,
   InstallAddon,
+  UninstallAddon,
   PLATFORM_ADDON_MUTATION_INVALIDATES,
 } from "../documents";
 import { addonEnumLabel, usePlatformT } from "../i18n";
@@ -72,14 +74,7 @@ export function AddonCard({ row }: { row: AddonResourceRow }): ReactElement {
   );
 }
 
-/**
- * The card footer lifecycle controls. An enabled addon offers Disable; required
- * addons still open the server-owned refusal preview. An available addon offers
- * Install; a removed addon offers Reinstall through the same server-owned preview.
- * Pending rows show the restart state once queued. Both writes go
- * through the platform AddonInstaller mutations, settle through the shared
- * action-result run, and refetch the reflected board.
- */
+/** Root changes use a revision-bound preview; packages use native held dependency jobs. */
 export function AddonCardActions({
   row,
   context,
@@ -94,20 +89,40 @@ export function AddonCardActions({
   const applyingRef = useRef(false);
   const preview = useAuthoredQuery(
     AddonChangePreview,
-    { addon: row.id, action: action ?? "INSTALL" },
+    { addon: row.id, action: action ?? "ENABLE" },
     { enabled: action !== null },
   );
   // Invalidate the board only on an *effective* write — a server refusal (`ok: false`)
   // changed nothing, so it should not trigger a refetch.
-  const [install, installState] = useAuthoredResourceMutation(InstallAddon, {
+  const [enable, enableState] = useAuthoredResourceMutation(EnableAddon, {
     invalidateModels: PLATFORM_ADDON_MUTATION_INVALIDATES,
-    shouldInvalidate: (data) => Boolean(data?.install?.ok),
+    shouldInvalidate: (data) => Boolean(data?.enable?.ok),
   });
   const [disable, disableState] = useAuthoredResourceMutation(DisableAddon, {
     invalidateModels: PLATFORM_ADDON_MUTATION_INVALIDATES,
     shouldInvalidate: (data) => Boolean(data?.disable?.ok),
   });
-  const applying = installState.fetching || disableState.fetching;
+  const [install, installState] = useAuthoredResourceMutation(InstallAddon, {
+    invalidateModels: PLATFORM_ADDON_MUTATION_INVALIDATES,
+  });
+  const [uninstall, uninstallState] = useAuthoredResourceMutation(UninstallAddon, {
+    invalidateModels: PLATFORM_ADDON_MUTATION_INVALIDATES,
+  });
+  const queueDependency = async (remove: boolean) => {
+    if (applyingRef.current) return;
+    applyingRef.current = true;
+    try {
+      await settle(async () => {
+        const operation = remove
+          ? (await uninstall({ addon: row.id }))?.uninstall
+          : (await install({ addon: row.id }))?.install;
+        return operation ? { ok: true, message: t("apps.dependencyQueued") } : null;
+      });
+    } finally {
+      applyingRef.current = false;
+    }
+  };
+  const applying = enableState.fetching || disableState.fetching || installState.fetching || uninstallState.fetching;
   const busy = applying || preview.isFetching;
 
   const run = useCallback(
@@ -116,8 +131,8 @@ export function AddonCardActions({
       if (!action || !change?.can_apply || applyingRef.current) return;
       applyingRef.current = true;
       try {
-        const outcome = await settle(async () => action === "INSTALL"
-          ? (await install({ addon: row.id, revision: change.revision }))?.install
+        const outcome = await settle(async () => action === "ENABLE"
+          ? (await enable({ addon: row.id, revision: change.revision }))?.enable
           : (await disable({ addon: row.id, revision: change.revision }))?.disable);
         if (outcome?.ok) {
           setAction(null);
@@ -130,7 +145,7 @@ export function AddonCardActions({
         applyingRef.current = false;
       }
     },
-    [action, context, disable, install, preview.data, preview.refetch, row.id, settle, t],
+    [action, context, disable, enable, preview.data, preview.refetch, row.id, settle, t],
   );
 
   const dialog = action ? (
@@ -147,7 +162,7 @@ export function AddonCardActions({
     />
   ) : null;
 
-  // Pending first: a queued install or disable shows the restart state and
+  // Pending first: a queued enable or disable shows the restart state and
   // hides the live action, so a composed-but-disabled root cannot be queued twice.
   if (row.pending) return null;
   if (row.state === "ENABLED") {
@@ -165,21 +180,22 @@ export function AddonCardActions({
       {dialog}
     </>);
   }
-  if (row.source === "REMOTE") {
-    // Known from a marketplace source but not materialised — the local installer
-    // cannot clone it, so installing would write an unbootable settings.yaml.
-    // Materialising is an operator-tier step; until then the action is locked.
+  if (row.source === "REMOTE" || row.state === "REMOVED") {
     return (
-      <Button size="sm" variant="ghost" disabled title={t("apps.remoteHint")}>
+      <Button size="sm" variant="primary" disabled={busy} onClick={() => { void queueDependency(false); }}>
         <Glyph decorative name="plus" />
         {t("apps.install")}
       </Button>
     );
   }
   return (<>
-    <Button size="sm" variant="primary" disabled={busy} onClick={() => { setApplyError(null); setAction("INSTALL"); }}>
+    <Button size="sm" variant="primary" disabled={busy} onClick={() => { setApplyError(null); setAction("ENABLE"); }}>
       <Glyph decorative name="plus" />
-      {t(row.state === "REMOVED" ? "apps.reinstall" : "apps.install")}
+      {t("apps.enable")}
+    </Button>
+    <Button size="sm" variant="ghost" disabled={busy} onClick={() => { void queueDependency(true); }}>
+      <Glyph decorative name="minus" />
+      {t("apps.uninstall")}
     </Button>
     {dialog}
   </>);
