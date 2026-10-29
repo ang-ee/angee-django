@@ -1496,7 +1496,7 @@ class StatementRecords(HistoricalRecords):
 
         Declarations are read down the MRO until an inherited concrete table's
         descriptor. The composer orders donors before the subject source in the
-        composed bases (``angee.compose.rendering``), so the last declaration at
+        composed bases (``django_compose.rendering``), so the last declaration at
         this level is the source's own: it owns bases, prefix, queryset and link,
         while every donor contributes its aspects through :meth:`aspects_for`.
         """

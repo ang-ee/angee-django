@@ -62,7 +62,7 @@ class ChangesetScopeMiddleware:
     Channels consumers (GraphQL subscriptions, the agent ACP transport) run every
     handler and ``database_sync_to_async`` call inside the connection's context,
     so their captured writes attribute to one changeset per connection, closed as
-    failed when the consumer raises. Composed by :func:`angee.asgi.websocket_application`.
+    failed when the consumer raises. Composed by :func:`angee.graphql.asgi.websocket_application`.
     """
 
     def __init__(self, inner: ASGI3Application) -> None:

@@ -275,7 +275,8 @@ jobs:
 {% endif %}    command: ["uv", "run", "--no-sync", "python", "manage.py", "provision", "--wait-db", "60"]
     depends_on: [compose{% if postgres_mode == "external" %}{% else %}, postgres{% endif %}]
 
-  # Both schema inputs are compose artifacts; codegen needs no provisioned DB.
+  # Compose owns application SDL; this job exports the live operator SDL.
+  # Both are codegen inputs and need no provisioned DB.
   operator-schema:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
     command: ["uv", "run", "--no-sync", "python", "manage.py", "operator_schema"]

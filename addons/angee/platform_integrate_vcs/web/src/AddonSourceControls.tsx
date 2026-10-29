@@ -14,7 +14,7 @@ import { usePlatformIntegrateVcsT } from "./i18n";
 /**
  * The marketplace source controls for the board toolbar: **Add source** inventories a
  * repository on a VCS bridge and points a new addon `Source` at it; **Scan** re-runs an
- * existing source's discovery, materialising its `addon.toml` rows into the board. Both
+ * existing source's discovery, materialising its `pyproject.toml` rows into the board. Both
  * are admin-gated server-side; the buttons render for everyone and the mutation refuses.
  */
 export function AddonSourceControls(): React.ReactElement {

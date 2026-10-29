@@ -1,17 +1,8 @@
-"""Tests for the composed ASGI dispatcher's scope-routing helpers.
-
-:mod:`angee.asgi` wires a :class:`~channels.routing.ProtocolTypeRouter` whose
-``http`` arm is :func:`angee.asgi._http_app` (mounted sub-apps by path prefix,
-else Django) and whose ``lifespan`` arm is :class:`angee.asgi._Lifespan` (runs
-each mount's own ASGI lifespan at server startup). These drive both directly,
-the way the serving ASGI server (uvicorn) does.
-"""
+"""Angee serving timeout and GraphQL WebSocket origin/auth middleware policy."""
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
-from collections.abc import AsyncIterator, Callable
 from types import SimpleNamespace
 from typing import Any
 
@@ -23,100 +14,12 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db.backends.signals import connection_created
 from django.urls import path
 
-from angee import asgi
-from angee.asgi import _http_app, _Lifespan
+from angee.graphql import asgi
 from angee.graphql.consumers import AngeeGraphQLWSConsumer
-from angee.signals import WEB_STATEMENT_TIMEOUT_UID
+from angee.server.signals import WEB_STATEMENT_TIMEOUT_UID, connect_web_statement_timeout
 
 
-def _recording_app(name: str, sink: list[tuple[str, str]]) -> Any:
-    """Return an ASGI app that records ``(name, path)`` for each call."""
-
-    async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
-        sink.append((name, scope["path"]))
-
-    return app
-
-
-async def _call_http(app: Any, path: str) -> None:
-    """Send one minimal HTTP scope through ``app``."""
-
-    async def receive() -> dict[str, Any]:
-        return {"type": "http.request"}
-
-    async def send(message: dict[str, Any]) -> None:
-        return None
-
-    await app({"type": "http", "path": path}, receive, send)
-
-
-def test_http_app_without_mounts_is_the_django_app() -> None:
-    """With no mounts the HTTP arm is the Django app itself, not a wrapper."""
-
-    django = _recording_app("django", [])
-    assert _http_app(django, []) is django
-
-
-def test_http_app_routes_by_prefix_then_falls_through_to_django() -> None:
-    """A path under a mount prefix reaches the mount; anything else reaches Django."""
-
-    seen: list[tuple[str, str]] = []
-    django = _recording_app("django", seen)
-    mcp = _recording_app("mcp", seen)
-    app = _http_app(django, [("/mcp", mcp)])
-
-    asyncio.run(_call_http(app, "/mcp"))
-    asyncio.run(_call_http(app, "/mcp/messages"))
-    asyncio.run(_call_http(app, "/graphql"))
-
-    assert seen == [("mcp", "/mcp"), ("mcp", "/mcp/messages"), ("django", "/graphql")]
-
-
-def test_http_app_matches_longest_prefix_first() -> None:
-    """A nested mount wins over its parent regardless of declaration order."""
-
-    seen: list[tuple[str, str]] = []
-    django = _recording_app("django", seen)
-    parent = _recording_app("parent", seen)
-    nested = _recording_app("nested", seen)
-    app = _http_app(django, [("/a", parent), ("/a/b", nested)])
-
-    asyncio.run(_call_http(app, "/a/b/x"))
-    asyncio.run(_call_http(app, "/a/x"))
-
-    assert seen == [("nested", "/a/b/x"), ("parent", "/a/x")]
-
-
-def test_http_app_normalizes_trailing_slashes_and_keeps_root_mount_last() -> None:
-    """Root and trailing-slash mounts share the longest-prefix path contract."""
-
-    seen: list[tuple[str, str]] = []
-    app = _http_app(_recording_app("django", seen), [
-        ("/", _recording_app("root", seen)),
-        ("/mcp/", _recording_app("mcp", seen)),
-    ])
-
-    for request_path in ("/mcp", "/mcp/child", "/mcpx", "/"):
-        asyncio.run(_call_http(app, request_path))
-
-    assert seen == [("mcp", "/mcp"), ("mcp", "/mcp/child"), ("root", "/mcpx"), ("root", "/")]
-
-
-@pytest.mark.parametrize("prefixes", [("/mcp", "/mcp"), ("/mcp/", "/mcp")])
-def test_http_app_refuses_duplicate_normalized_prefixes(prefixes: tuple[str, str]) -> None:
-    app = _recording_app("mount", [])
-    with pytest.raises(ImproperlyConfigured, match="Duplicate ASGI HTTP mount prefix"):
-        _http_app(app, [(prefix, app) for prefix in prefixes])
-
-
-@pytest.mark.parametrize("prefix", ["", "mcp", 1])
-def test_http_app_requires_absolute_path_prefixes(prefix: Any) -> None:
-    app = _recording_app("mount", [])
-    with pytest.raises(ImproperlyConfigured, match="must be an absolute path"):
-        _http_app(app, [(prefix, app)])
-
-
-def test_only_the_web_entrypoint_bounds_postgresql_statements(monkeypatch: Any, settings: Any) -> None:
+def test_only_the_web_entrypoint_bounds_postgresql_statements(settings: Any) -> None:
     """Web-process PostgreSQL connections carry the timeout; workers and commands keep the server's."""
 
     statements: list[tuple[str, list[str]]] = []
@@ -134,13 +37,12 @@ def test_only_the_web_entrypoint_bounds_postgresql_statements(monkeypatch: Any, 
     def open_connection(vendor: str = "postgresql") -> None:
         connection_created.send(sender=None, connection=SimpleNamespace(vendor=vendor, cursor=Cursor))
 
-    monkeypatch.setattr(asgi, "_websocket_urlpatterns", list)
-    monkeypatch.setattr(asgi, "_http_mounts", list)
+    settings.ANGEE_WEB_STATEMENT_TIMEOUT = 60
     connection_created.disconnect(dispatch_uid=WEB_STATEMENT_TIMEOUT_UID)
     open_connection()  # a worker or command does not register the ASGI receiver
     assert statements == []
     try:
-        asgi._application()
+        connect_web_statement_timeout()
         open_connection()
         open_connection("sqlite")
     finally:
@@ -150,7 +52,7 @@ def test_only_the_web_entrypoint_bounds_postgresql_statements(monkeypatch: Any, 
     statements.clear()
     settings.ANGEE_WEB_STATEMENT_TIMEOUT = "0"  # a deployment disabling the bound
     try:
-        asgi._application()
+        connect_web_statement_timeout()
         open_connection()
     finally:
         connection_created.disconnect(dispatch_uid=WEB_STATEMENT_TIMEOUT_UID)
@@ -158,117 +60,12 @@ def test_only_the_web_entrypoint_bounds_postgresql_statements(monkeypatch: Any, 
 
 
 @pytest.mark.parametrize("value", ["60s", "-5", "nan", None])
-def test_an_invalid_web_statement_timeout_fails_at_boot(monkeypatch: Any, settings: Any, value: object) -> None:
+def test_an_invalid_web_statement_timeout_fails_at_boot(settings: Any, value: object) -> None:
     """A malformed or negative timeout stops the web app from starting, not every request."""
-
-    from django.core.exceptions import ImproperlyConfigured
 
     settings.ANGEE_WEB_STATEMENT_TIMEOUT = value
     with pytest.raises(ImproperlyConfigured, match="ANGEE_WEB_STATEMENT_TIMEOUT"):
-        asgi._application()
-
-
-def _lifespan(
-    events: list[str], *, fail: bool = False,
-) -> Callable[[], contextlib.AbstractAsyncContextManager[None]]:
-    """Declare an addon lifespan that records its entry and exit."""
-
-    @contextlib.asynccontextmanager
-    async def context() -> AsyncIterator[None]:
-        if fail:
-            raise RuntimeError("boom")
-        events.append("startup")
-        try:
-            yield
-        finally:
-            events.append("shutdown")
-
-    return context
-
-
-async def _drive_lifespan(lifespan: Any, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Feed ``messages`` to a lifespan app and return what it sends back."""
-
-    inbox = list(messages)
-    sent: list[dict[str, Any]] = []
-
-    async def receive() -> dict[str, Any]:
-        return inbox.pop(0)
-
-    async def send(message: dict[str, Any]) -> None:
-        sent.append(message)
-
-    await lifespan({"type": "lifespan"}, receive, send)
-    return sent
-
-
-def test_lifespan_enters_and_exits_each_mount() -> None:
-    """Startup enters every mount's lifespan; shutdown closes them in reverse."""
-
-    events: list[str] = []
-    lifespan = _Lifespan([_lifespan(events)])
-
-    sent = asyncio.run(_drive_lifespan(lifespan, [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}]))
-
-    assert sent == [
-        {"type": "lifespan.startup.complete"},
-        {"type": "lifespan.shutdown.complete"},
-    ]
-    assert events == ["startup", "shutdown"]
-
-
-def test_lifespan_reports_a_startup_failure_to_the_server() -> None:
-    """A mount that fails to start surfaces ``lifespan.startup.failed``, not a hang."""
-
-    lifespan = _Lifespan([_lifespan([], fail=True)])
-
-    sent = asyncio.run(_drive_lifespan(lifespan, [{"type": "lifespan.startup"}]))
-
-    assert sent == [{"type": "lifespan.startup.failed", "message": "boom"}]
-
-
-def test_lifespan_unwinds_started_mounts_when_a_later_mount_fails() -> None:
-    """A partial startup closes earlier mounts before reporting the failure."""
-
-    events: list[str] = []
-    lifespan = _Lifespan([_lifespan(events), _lifespan([], fail=True)])
-
-    async def start() -> list[dict[str, Any]]:
-        sent = await _drive_lifespan(lifespan, [{"type": "lifespan.startup"}])
-        # Check before asyncio.run finalizes abandoned asynchronous generators.
-        assert events == ["startup", "shutdown"]
-        return sent
-
-    sent = asyncio.run(start())
-
-    assert sent == [{"type": "lifespan.startup.failed", "message": "boom"}]
-    assert lifespan._exit_stack is None
-
-
-def test_lifespan_cancellation_closes_started_mounts() -> None:
-    """Cancellation unwinds retained lifespans before the server task exits."""
-
-    events: list[str] = []
-    lifespan = _Lifespan([_lifespan(events)])
-
-    async def cancel_after_startup() -> None:
-        inbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        started = asyncio.Event()
-
-        async def send(message: dict[str, Any]) -> None:
-            assert message == {"type": "lifespan.startup.complete"}
-            started.set()
-
-        await inbox.put({"type": "lifespan.startup"})
-        task = asyncio.create_task(lifespan({"type": "lifespan"}, inbox.get, send))
-        await started.wait()
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert events == ["startup", "shutdown"]
-        assert lifespan._exit_stack is None
-
-    asyncio.run(cancel_after_startup())
+        connect_web_statement_timeout()
 
 
 @pytest.mark.parametrize(
@@ -288,6 +85,7 @@ def test_lifespan_cancellation_closes_started_mounts() -> None:
 )
 def test_shared_router_validates_graphql_websocket_origins(
     settings: Any,
+    monkeypatch: pytest.MonkeyPatch,
     host: str,
     origin: str | None,
     debug: bool,
@@ -305,7 +103,11 @@ def test_shared_router_validates_graphql_websocket_origins(
     settings.CSRF_TRUSTED_ORIGINS = ["https://trusted.example"]
     settings.DEBUG = debug
     route = path("graphql/test/", AngeeGraphQLWSConsumer.as_asgi(schema=strawberry.Schema(query=Query)))
-    application = asgi.websocket_application([route])
+    monkeypatch.setattr("django.apps.apps.get_app_configs", lambda: [SimpleNamespace(name="routes")])
+    monkeypatch.setattr(asgi, "addon_contribution", lambda config, module, attr, **options: (
+        [route] if attr == "websocket_urlpatterns" else []
+    ))
+    application = asgi.websocket_application()
 
     async def scenario() -> None:
         headers = [(b"host", host.encode())]
@@ -337,11 +139,16 @@ def test_websocket_addon_wrappers_are_optional_and_run_after_authentication(
     settings.DEBUG = True
     settings.ALLOWED_HOSTS = ["localhost"]
     seen: list[str] = []
-    addons = [SimpleNamespace(name=name) for name in wrapper_names]
+    addons = [SimpleNamespace(name=name) for name in ("routes", *wrapper_names)]
     monkeypatch.setattr("django.apps.apps.get_app_configs", lambda: addons)
 
-    def contribution(config: Any, module: str, attr: str) -> list[Any]:
-        assert (module, attr) == ("asgi", "websocket_middleware")
+    def contribution(config: Any, module: str, attr: str, **options: Any) -> list[Any]:
+        assert module == "asgi"
+        if attr == "websocket_urlpatterns":
+            return [path("ws", endpoint)] if config.name == "routes" else []
+        assert attr == "websocket_middleware"
+        if config.name == "routes":
+            return []
 
         def wrap(inner: Any) -> Any:
             async def middleware(scope: Any, receive: Any, send: Any) -> None:
@@ -360,7 +167,7 @@ def test_websocket_addon_wrappers_are_optional_and_run_after_authentication(
         await send({"type": "websocket.accept"})
         await receive()
 
-    application = asgi.websocket_application([path("ws", endpoint)])
+    application = asgi.websocket_application()
 
     async def exercise() -> None:
         client = WebsocketCommunicator(
@@ -372,3 +179,5 @@ def test_websocket_addon_wrappers_are_optional_and_run_after_authentication(
 
     asyncio.run(exercise())
     assert seen == [*wrapper_names, "endpoint"]
+
+

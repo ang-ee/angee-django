@@ -18,8 +18,9 @@ from import_export.results import Result, RowResult
 from rebac import system_context
 from rebac.errors import MissingActorError
 from rebac.testing import install_schema
+from tests.conftest import addon_fixture_resources, make_addon  # noqa: F401 -- share fake-addon lifetime
+from tests.tables import model_tables
 
-from angee.addons import addon_facts
 from angee.base.models.base import AngeeModel
 from angee.resources.entries import EntryGraph, GrantGroup, GrantRow, LoadResult, ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
@@ -39,8 +40,6 @@ from angee.resources.widgets import (
     resolve_ledger_xref,
     resolve_xref,
 )
-from tests.conftest import addon_fixture_resources, make_addon  # noqa: F401 -- share fake-addon lifetime
-from tests.tables import model_tables
 
 
 def addon(
@@ -53,7 +52,6 @@ def addon(
     """Return a resource addon rooted at ``tmp_path``."""
 
     config = make_addon(name=name, label=label, path=tmp_path, resources=dict(manifest or {}))
-    addon_facts(config.name)
     return config
 
 
@@ -2179,7 +2177,6 @@ def test_grant_on_mti_child_lands_on_every_identity(tmp_path: Path) -> None:
     from rebac.backends import backend
     from rebac.models import active_relationship_model
     from rebac.resources import model_resource_type
-
     from tests.mtidemo.models import MtiChild, MtiParent
 
     class MtiGrantLedger(Resource):
