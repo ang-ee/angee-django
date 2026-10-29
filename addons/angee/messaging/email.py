@@ -19,7 +19,8 @@ from anymail.exceptions import (
 from anymail.message import AnymailMessage
 from django.apps import apps
 from django.conf import settings
-from django.core.mail import get_connection
+from django.core.mail import mailers
+from django.core.mail.backends.base import BaseEmailBackend
 from django.utils.html import strip_tags
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout
@@ -37,7 +38,7 @@ _HEADER_NAME_RE = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+\Z")
 class AnymailEmailChannelBackend(ChannelBackend):
     """Send an email channel's outbound messages through Django's Anymail backend.
 
-    The deployment selects the concrete ESP with ``EMAIL_BACKEND`` and supplies
+    The deployment selects the concrete ESP with Django's ``MAILERS["default"]`` and supplies
     its vendor settings through ``ANYMAIL``/``ANYMAIL_*``. This adapter remains
     provider-neutral and also works with Anymail's deterministic test backend.
     """
@@ -66,7 +67,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
                 getattr(message, "pk", None),
             )
             raise IntegrationError("The email envelope is incomplete.")
-        connection = get_connection()
+        connection = mailers.default
         try:
             try:
                 connection.open()
@@ -78,8 +79,7 @@ class AnymailEmailChannelBackend(ChannelBackend):
                 # RequestNotSentError names HTTP; email uses the same transient
                 # non-acceptance contract with an email-specific safe message.
                 raise IntegrationError("The email connection failed before sending.", transient=True) from error
-            email.connection = connection
-            return self._send(email)
+            return self._send(email, connection)
         finally:
             try:
                 connection.close()
@@ -87,11 +87,11 @@ class AnymailEmailChannelBackend(ChannelBackend):
                 logger.warning("Closing the email connection failed (%s).", type(error).__name__)
 
     @staticmethod
-    def _send(email: Any) -> DeliveryOutcome:
+    def _send(email: Any, connection: BaseEmailBackend) -> DeliveryOutcome:
         """Once sending starts, only explicit provider replies prove refusal."""
 
         try:
-            accepted = email.send()
+            accepted = connection.send_messages([email])
         except (AnymailInvalidAddress, AnymailRecipientsRefused, AnymailUnsupportedFeature) as error:
             raise IntegrationError("The email provider refused the message.") from error
         except SMTPRecipientsRefused as error:
