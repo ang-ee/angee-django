@@ -1935,7 +1935,7 @@ def test_mail_provider_environment_belongs_to_messaging(tmp_path, monkeypatch, i
     namespace = {
         "INSTALLED_APPS": ("angee.messaging",) if include_messaging else (),
         "COMPOSE_RUNTIME_DIR": tmp_path / "runtime",
-        "EMAIL_BACKEND": "anymail.backends.mailgun.EmailBackend",
+        "MAILERS": {"default": {"BACKEND": "anymail.backends.mailgun.EmailBackend"}},
         "ANYMAIL": {"MAILGUN_API_KEY": "project"},
     }
     namespace["COMPOSE_APP_DECLARATIONS"] = "angee.build.ManifestDeclarations"
