@@ -79,6 +79,33 @@ class IAMGraphQLTests(TransactionTestCase):
         anonymous_again = self.graphql("query { current_user { username } }")
         self.assertEqual(anonymous_again["data"], {"current_user": None})
 
+    def test_note_permissions_project_owner_verbs_and_keep_readers_read_only(self) -> None:
+        """Record chrome receives native capabilities without exposing personal flags."""
+
+        self.welcome.with_actor(self.alice).grant_record_access("reader", self.bob)
+        query = """query NoteChrome($id: String!) {
+            notes_by_pk(id: $id) { title is_starred permissions }
+        }"""
+        for user, permissions, starred in (
+            (self.alice, {"write", "share", "delete"}, True),
+            (self.bob, set(), None),
+        ):
+            with self.subTest(actor=user.username):
+                self.client.force_login(user)
+                for schema in ("public", "console"):
+                    response = self.client.post(
+                        f"/graphql/{schema}/",
+                        data=json.dumps({"query": query, "variables": {"id": str(self.welcome.sqid)}}),
+                        content_type="application/json",
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    payload = response.json()
+                    self.assertNotIn("errors", payload)
+                    row = payload["data"]["notes_by_pk"]
+                    self.assertEqual(row["title"], self.welcome.title)
+                    self.assertEqual(set(row["permissions"]), permissions)
+                    self.assertIs(row["is_starred"], starred)
+
     def test_notes_page_and_update_by_public_id(self) -> None:
         self.graphql(
             """
