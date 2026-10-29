@@ -12,6 +12,7 @@ def test_resource_import_uses_selected_database(tmp_path):
     script = r'''
 import sys
 from pathlib import Path
+from io import StringIO
 import yaml
 from angee.base.testing.packages import write_addon_distribution
 root = Path(sys.argv[1])
@@ -75,6 +76,9 @@ ContentTypeRow.objects.using('default').create(name='default untouched')
 with database_context('default'), system_context(reason='tests.resources.selected'):
     ledger = Resource.objects.db_manager('selected')
     owner = apps.get_app_config('fixture_resources')
+    call_command('resources', 'validate', 'master', database='selected', stdout=StringIO())
+    assert not Resource._base_manager.using('selected').exists()
+    assert not ContentTypeRow.objects.using('selected').exists()
     first = ledger.load_addons((owner,), tiers=['master'])
     assert first.created == 2
     assert ledger.resolve('fixture_resources.seed')._state.db == 'selected'

@@ -442,7 +442,6 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                     tuple(instances_by_pk.values()),
                     tier=group.entry.tier,
                     source=group.entry.source,
-                    using=self.db,
                 )
 
     def _addon_aliases(self, addons: Iterable[Any]) -> dict[str, str]:

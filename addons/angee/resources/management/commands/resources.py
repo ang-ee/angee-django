@@ -64,7 +64,7 @@ class Command(BaseCommand):
         """Validate selected resource files and print their counts."""
 
         tiers = self._selected_tiers(options)
-        result = self._resource_model().objects.validate_addons(
+        result = self._resource_model().objects.db_manager(options["database"]).validate_addons(
             self._addons(),
             tiers=tiers,
         )
@@ -98,7 +98,7 @@ class Command(BaseCommand):
         """Print resource row counts for selected files."""
 
         tiers = self._selected_tiers(options)
-        counts = self._resource_model().objects.diff_addons(
+        counts = self._resource_model().objects.db_manager(options["database"]).diff_addons(
             self._addons(),
             tiers=tiers,
         )
