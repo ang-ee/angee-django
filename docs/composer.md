@@ -301,14 +301,25 @@ declared `name`, so a migration can depend on a pending transition through ordin
 Django `dependencies`, for example `("resources", "copy_legacy")`. Manifest order
 is not an execution dependency. Declare cross-app dependencies and `run_before`
 explicitly; the composer does not infer data ordering from changes to schema.
+Independent addon transitions targeting the same existing app history may instead
+be joined with `makemigrations <app-label> --merge --name <unique-merge-name>`.
+This explicit command validates each pending branch against its own prerequisite
+state, stages the immutable source copies, and delegates the merge to Django.
+Use an unused `--name` to preserve existing files and deterministic native naming;
+reusing a name from native history is refused before staging.
+Normal authoring still refuses split leaves; `--dry-run` and `--check` never stage
+pending sources. Existing split host history must be merged before pending
+transitions can attach to its leaf. The combined state and drop guard are checked
+after native merge authoring; review and commit the branch and merge files together.
 
 The target app's existing leaf is a prerequisite. The copied footer freezes the
 resolved `dependencies` and `run_before`, including symbolic `__first__` and
 `__latest__` references, and records the `<addon>:<name>` origin and source digest.
 Existing names, including older numeric names, and copied source bodies remain
 immutable. Repeated authoring does not create another node. Duplicate names/origins,
-changed source or body digests, missing prerequisites, split leaves, invalid
-states and cycles fail before source emission or database execution. Source
+changed source or body digests, missing prerequisites, ambiguous existing leaves,
+invalid states and cycles fail before source emission or database execution.
+Pending split leaves require the explicit native merge authoring path above. Source
 callbacks are copied with the migration so later addon changes do not replace
 historical Python bodies.
 

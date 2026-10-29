@@ -16,4 +16,7 @@ class Command(BaseCommand):
     def handle(self, *args: Any, **options: Any) -> None:
         from angee.compose.management.commands.reset_migration_history import Command as BuildCommand
 
-        BuildCommand(stdout=self.stdout, stderr=self.stderr).handle(*args, **options)
+        command = BuildCommand(no_color=options["no_color"], force_color=options["force_color"])
+        command.stdout = self.stdout
+        command.stderr = self.stderr
+        command.handle(*args, **options)
