@@ -2295,3 +2295,32 @@ def test_project_template_delegates_native_bootstrap() -> None:
     assert 'os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")' in launcher
     assert 'angee.management' not in launcher
     assert (directory / "settings.py").read_text() == "from angee.base.conf import configure\n\nconfigure(globals())\n"
+
+
+def test_python_jobs_and_services_share_the_selected_platform_environment() -> None:
+    """Docker reuses one writable Linux env; process mode retains its host env."""
+    for render in (_render_dev_stack, _render_dev_docker_stack, _render_local_stack):
+        stack = render(celery_queues="reports")
+        jobs = stack["jobs"]
+        nodes = [jobs[name] for name in ("py-sync", "compose", "provision", "operator-schema")]
+        nodes += [stack["services"][name] for name in ("django", "celery-worker", "celery-queues")]
+        docker = nodes[0]["runtime"] == "container"
+        project = Path(nodes[0]["workdir"])
+        expected = str(project / "data" / ".venv-linux") if docker else ".venv"
+        for node in nodes:
+            assert node["env"]["UV_PROJECT_ENVIRONMENT"] == expected
+            if docker:
+                assert f"bind://./data:{project}/data" in node["mounts"]
+                assert Path(expected).relative_to(project / "data") == Path(".venv-linux")
+                assert Path(expected) != project / ".venv"
+            else:
+                assert node["workdir"] == "source://app"
+                assert "mounts" not in node
+        command = jobs["py-sync"]["command"][-1]
+        dollar = "$$" if docker else "$"
+        assert (
+            f'exec "{dollar}UV_PROJECT_ENVIRONMENT/bin/python" -m angee.platform_integrate_operator.preflight'
+            in command
+        )
+        assert "exec .venv/bin/python" not in command
+        assert "exec uv sync --locked" in command

@@ -70,7 +70,7 @@ def _plan(project: Path, environment: Path, options: Sequence[str]) -> dict[str,
     if Path(plan["project"]["workspace"]["path"]).resolve() != project.resolve():
         raise ValueError("Dependency changes must run at the native uv workspace root")
     if Path(plan["sync"]["environment"]["path"]).resolve() != environment.resolve():
-        raise ValueError("uv planned a different environment from the stack .venv")
+        raise ValueError("uv planned a different environment from the selected stack environment")
     return plan
 
 
@@ -118,15 +118,18 @@ def change_dependencies(
 ) -> tuple[str, ...]:
     """Resolve with uv, audit complete removals, publish its exact lock, then sync.
 
-    The process must be the operator's held install job. The native compiler
+    The process must be the operator's held dependency job. The native compiler
     audit runs in the unchanged stack interpreter before any metadata publication
     or environment mutation. A failed sync retains the checked desired metadata
     for an explicit retry while the operator keeps application services stopped.
     """
     project = project.resolve()
-    environment = project / ".venv"
+    environment = Path(os.environ.get("UV_PROJECT_ENVIRONMENT", project / ".venv"))
+    if not environment.is_absolute():
+        environment = project / environment
+    environment = environment.resolve()
     if not (environment / "bin" / "python").is_file():
-        raise ValueError("Dependency preflight requires the existing stack .venv")
+        raise ValueError("Dependency preflight requires the existing stack UV_PROJECT_ENVIRONMENT")
     if action not in {"add", "remove"} or not requirement or requirement.startswith("-"):
         raise ValueError("Supply an add/remove action and a distribution requirement")
     options = ("--no-editable",) if no_editable else ()

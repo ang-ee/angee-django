@@ -109,12 +109,15 @@ def test_failed_second_publication_restores_original_pair(tmp_path: Path, monkey
     assert not (tmp_path / "uv.lock").exists()
 
 
+@pytest.mark.parametrize("environment_name", (".venv", "data/.venv-linux"))
 @pytest.mark.parametrize("audit_refuses", (False, True))
 def test_import_verdict_precedes_exact_lock_publication_and_real_sync(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, audit_refuses: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, audit_refuses: bool, environment_name: str,
 ) -> None:
     """This is the orchestration boundary, not a substitute compiler audit proof."""
-    interpreter = tmp_path / ".venv" / "bin" / "python"
+    selected_environment = tmp_path / environment_name
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(selected_environment))
+    interpreter = selected_environment / "bin" / "python"
     interpreter.parent.mkdir(parents=True)
     interpreter.touch()
     before = {"pyproject.toml": b"original metadata", "uv.lock": b"original lock"}
@@ -123,7 +126,7 @@ def test_import_verdict_precedes_exact_lock_publication_and_real_sync(
     events: list[str] = []
 
     def uv(project: Path, environment: Path, *arguments: str) -> str:
-        assert environment == tmp_path / ".venv"
+        assert environment == selected_environment
         if arguments[0] == "remove":
             assert "--no-sync" in arguments
             assert project != tmp_path
