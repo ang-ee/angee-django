@@ -38,17 +38,21 @@ function detail(overrides: Partial<KnowledgePageDetail> = {}): KnowledgePageDeta
 async function fixture(initial = detail()) {
   let record = initial;
   let failure: Error | null = null;
+  let readFailure: Error | null = null;
   let release: (() => void) | undefined;
   let pending: Promise<void> | undefined;
   let readPending: Promise<void> | undefined;
   let releaseRead: (() => void) | undefined;
   const client = createClient({ defaultOptions: { queries: { retry: false } } });
   const writes = vi.fn<(variables: Record<string, unknown>) => void>();
+  const reads = vi.fn();
   const custom: NonNullable<RefineTestDataProvider["custom"]> = async ({ meta }) => {
     if (meta?.gqlQuery === KnowledgePages) return { data: { pages: [], pages_aggregate: { aggregate: { count: 0 } } } };
     if (meta?.gqlMutation !== KnowledgeUpdatePageBody) {
+      reads();
       const snapshot = record;
       if (readPending) await readPending;
+      if (readFailure) throw readFailure;
       return { data: { pages_by_pk: snapshot } };
     }
     const variables: Record<string, unknown> = meta.gqlVariables ?? {};
@@ -77,7 +81,7 @@ async function fixture(initial = detail()) {
   const view = render(renderPage());
   await screen.findByDisplayValue(initial.title);
   return {
-    writes, update, client,
+    writes, reads, update, client,
     get record() { return record; },
     remote: async (next: KnowledgePageDetail) => {
       record = next;
@@ -86,6 +90,7 @@ async function fixture(initial = detail()) {
     deferReads: () => { readPending = new Promise<void>((resolve) => { releaseRead = resolve; }); },
     resolveReads: async () => { await act(async () => { releaseRead?.(); await readPending; }); readPending = undefined; },
     fail: (error: Error | null) => { failure = error; },
+    failReads: (error: Error | null) => { readFailure = error; },
     defer: () => { pending = new Promise<void>((resolve) => { release = resolve; }); },
     resolve: async () => { await act(async () => { release?.(); await pending; }); pending = undefined; },
     navigate: (next: KnowledgePageDetail) => { record = next; view.rerender(renderPage(next.id)); },
@@ -241,4 +246,31 @@ test("a read started before acceptance cannot replay the old body after Save", a
   await f.resolveReads();
   await waitFor(() => expect(f.client.isFetching()).toBe(0));
   expect(screen.getByDisplayValue("Accepted after old read")).toBeTruthy();
+});
+
+
+test("a failed background refresh retains the accepted page and editor draft through retry", async () => {
+  const f = await fixture();
+  edit("Page title", "Accepted title");
+  edit("Page body", "Accepted body");
+  f.failReads(new Error("Page refresh is offline"));
+  await save();
+  await screen.findByRole("alert");
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).toBeNull());
+  expect(screen.getByDisplayValue("Accepted title")).toBeTruthy();
+  expect(screen.getByDisplayValue("Accepted body")).toBeTruthy();
+  expect(screen.getByText("Page refresh is offline")).toBeTruthy();
+  const editor = screen.getByRole("textbox", { name: "Page body" });
+  edit("Page body", "Draft after accepted save");
+  const reads = f.reads.mock.calls.length;
+  f.failReads(null);
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(f.reads.mock.calls.length).toBeGreaterThan(reads));
+  await waitFor(() => expect(f.client.isFetching()).toBe(0));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByRole("textbox", { name: "Page body" })).toBe(editor);
+  expect(screen.getByDisplayValue("Draft after accepted save")).toBeTruthy();
+  expect(screen.getByDisplayValue("Accepted title")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  expect(f.writes).toHaveBeenCalledOnce();
 });

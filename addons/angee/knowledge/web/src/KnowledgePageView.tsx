@@ -1,8 +1,8 @@
 import { useModelMetadata } from "@angee/metadata";
 import { useAuthoredQuery } from "@angee/refine";
 import {
-  Action, EmptyState, ErrorBanner, Field, Form, RecordPager, Skeleton, SkeletonStatus, SkeletonText,
-  WikilinkProvider, errorMessage, useRouteHref, useTrashActions, type RecordNavigation,
+  Action, Button, EmptyState, ErrorBanner, Field, Form, RecordPager, Skeleton, SkeletonStatus, SkeletonText,
+  WikilinkProvider, errorMessage, useRouteHref, useTrashActions, useUiT, type RecordNavigation,
 } from "@angee/ui";
 import { KnowledgePage, PAGE_MODEL, PAGE_READ_MODELS } from "./data/documents";
 import { usePageSubmit } from "./data/use-page-submit";
@@ -17,23 +17,30 @@ export interface KnowledgePageViewProps {
 /** A Knowledge page declares fields; Form owns its toolbar and edit lifecycle. */
 export function KnowledgePageView({ pageId, navigation }: KnowledgePageViewProps) {
   const t = useKnowledgeT();
+  const uiT = useUiT();
   const href = useRouteHref();
   const query = useAuthoredQuery(KnowledgePage, { id: pageId }, { models: PAGE_READ_MODELS });
   const resource = useModelMetadata(PAGE_MODEL)?.resource;
   const actions = useTrashActions(resource);
   const submit = usePageSubmit();
+  const readError = query.error ? <ErrorBanner
+    description={errorMessage(query.error, t("page.loadError"))}
+    actions={<Button variant="secondary" size="sm" disabled={query.isFetching}
+      onClick={() => { void query.refetch(); }}>{uiT("app.retry")}</Button>}
+  /> : null;
   const detail = query.data?.pages_by_pk;
   if (!detail) {
     if (query.isPending) return <SkeletonStatus label={t("page.loading")} className="space-y-3 p-4">
       <Skeleton size="lg" className="w-2/3" /><SkeletonText lines={2} />
     </SkeletonStatus>;
-    if (query.error) return <ErrorBanner description={errorMessage(query.error, t("page.loadError"))} />;
+    if (readError) return readError;
     return <EmptyState fill icon="note" title={t("page.notFoundTitle")} description={t("page.notFoundDescription")} />;
   }
   return <WikilinkProvider resolve={(title) => {
     const target = detail.wikilinks.find((link) => link.title === title)?.page;
     return target ? { broken: false, href: href("knowledge.page", { id: target }) } : { broken: true };
   }}>
+    {readError}
     <Form key={pageId} resource={PAGE_MODEL} id={pageId} headerDensity="compact"
       acknowledgedSource={{ record: detail,
         values: { title: detail.title, body: detail.markdown?.body ?? "", is_trashed: detail.is_trashed },
