@@ -67,6 +67,7 @@ export {
   MessageSummary,
   MessagePaneRow,
   useMessageChannelLabel,
+  isStatusUpdate,
   type MessageSummaryData,
 } from "./MessageSummary";
 export { MessageReader, type MessageReaderProps } from "./MessageReader";

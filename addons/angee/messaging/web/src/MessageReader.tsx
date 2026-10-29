@@ -17,6 +17,7 @@ import {
 
 import { SetMessageStarredDocument, type MessageReaderData, type MessageReplyData } from "./documents";
 import { useMessagingT } from "./i18n";
+import { isStatusUpdate, useMessageChannelLabel } from "./MessageSummary";
 import { MessageSourceCopies } from "./MessageSourceCopies";
 import { StarButton } from "./StarButton";
 import { MessageReplyQuote } from "./MessageReplyQuote";
@@ -59,6 +60,7 @@ export function MessageReader({
   children,
 }: MessageReaderProps): React.ReactElement {
   const t = useMessagingT();
+  const channelLabel = useMessageChannelLabel();
   const recordHref = useResourceRecordHrefLookup();
   const [setStarred, starState] = useAuthoredMutation(SetMessageStarredDocument, { invalidateModels: STAR_MODELS });
   const [starError, setStarError] = React.useState<string>();
@@ -79,6 +81,7 @@ export function MessageReader({
                 <span className="truncate text-12 text-fg-muted">{address}</span>
               ) : null}
             </div>
+            {isStatusUpdate(message) ? <p className="text-12 text-fg-muted">{channelLabel(message)}</p> : null}
             {RECIPIENT_ROLES.map((role) => {
               const names = message.participants
                 .filter((participant) => participant.role === role)

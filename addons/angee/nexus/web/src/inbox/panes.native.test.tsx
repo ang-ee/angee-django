@@ -23,7 +23,9 @@ const message = {
   sender: { display_name: "Ada", value: "ada@example.com", party: null }, thread: { id: "thread-one", title: { text: "A conversation" } },
 };
 
-function fixture(pane: "navigator" | "results" | "related", initialSearch = "") {
+function fixture(pane: "navigator" | "results" | "related", initialSearch = "", status = false) {
+  const rowMessage = status ? { ...message, platform: "WHATSAPP", channel: { display_name: "Alexis" },
+    thread: { ...message.thread, modality: "STATUS" } } : message;
   let view: ResourceViewContextValue;
   const dataProvider = { custom: vi.fn(async ({ meta }) => {
     const variables = meta?.gqlVariables ?? {};
@@ -32,21 +34,21 @@ function fixture(pane: "navigator" | "results" | "related", initialSearch = "") 
     if (document === InboxSelection) return { data: { inbox_selection: { id: "party:ada", label: "Ada" } } };
     if (document === InboxNavigator) return { data: { inbox_navigator: { count: 60, message_count: 60, rows: [{
       id: variables.parent ? "circle:child" : "party:ada", label: variables.parent ? "Child circle" : "Ada", count: 60,
-      latest: message.sent_at, first: message.sent_at, preview: "A preview", handle: null, party: null,
-      thread: variables.options?.lens === "groups" ? message.thread : null,
+      latest: rowMessage.sent_at, first: rowMessage.sent_at, preview: "A preview", handle: null, party: null,
+      thread: variables.options?.lens === "groups" ? rowMessage.thread : null,
       circle: variables.options?.lens === "circles" ? { id: variables.parent ? "child" : "root", name: "Circle" } : null,
       parent_id: variables.parent ? "party:ada" : null, has_children: !variables.parent,
     }] } } };
     if (document === InboxNavigatorGroups || document === InboxResultGroups) {
       return { data: { [document === InboxNavigatorGroups ? "inbox_navigator_groups" : "inbox_result_groups"]: {
         count: 30, record_count: 60, message_count: 60,
-        rows: [{ value: "thread:thread-one", label: `Conversation ${variables.page}`, count: 60, message_count: 60 }],
+        rows: [{ value: "thread:thread-one", label: status ? "Status updates" : `Conversation ${variables.page}`, modality: status ? "status" : "direct", count: 60, message_count: 60 }],
       } } };
     }
     const content = variables.options?.lens === "attachments" || variables.options?.lens === "text";
     if (document === InboxResults) return { data: { inbox_results: { count: 60, message_count: 60, rows: [{
-      id: content ? "file:attachment" : "result-one", latest: message.sent_at, count: 2, part_count: content ? 2 : 0,
-      message: { ...message, title: `Message page ${variables.page}` },
+      id: content ? "file:attachment" : "result-one", latest: rowMessage.sent_at, count: 2, part_count: content ? 2 : 0,
+      message: { ...rowMessage, title: `Message page ${variables.page}` },
       part: content ? { id: "part-one", name: "Report.pdf", role: "BODY" } : null,
       file: content ? { id: "attachment", filename: "Report.pdf", url: "/report.pdf", mime_type: { mime_type: "application/pdf" }, size_bytes: "20" } : null,
       fragment: null,
@@ -55,7 +57,7 @@ function fixture(pane: "navigator" | "results" | "related", initialSearch = "") 
       id: "file:one", label: "Pinned file", count: 60, unit: "messages", source: null, part: null, file: null, fragment: null,
     } } };
     if (document === InboxConnections) return { data: { inbox_connections: {
-      count: 60, message_count: 60, rows: [{ id: "connection-one", message, part: null, handle: null, src: null, dst: null }],
+      count: 60, message_count: 60, rows: [{ id: "connection-one", message: rowMessage, part: null, handle: null, src: null, dst: null }],
     } } };
     throw new Error("Unexpected inbox operation");
   }) } satisfies RefineTestDataProvider;
@@ -196,4 +198,20 @@ test("closing Related clears only its target and native collection state", async
   expect(f.router.state.location.search).not.toHaveProperty("relatedFrom");
   expect(f.router.state.location.search).not.toHaveProperty("r.page");
   expect(f.router.state.location.search).toMatchObject({ sender: "party:ada", message: "msg-one", "c.page": "4", "s.page": "2" });
+});
+
+
+test("status rows name their author and account and open an update instead of the shared feed", async () => {
+  const filter = encodeURIComponent(JSON.stringify({ kind: { exact: "updates" }, account: { exact: "acc_one" } }));
+  const f = fixture("results", `?sender=party:ada&c.filter=${filter}`, true);
+  await screen.findByRole("button", { name: "Collapse Status updates" });
+  const row = await screen.findByRole("button", { name: /Ada.*status update.*Alexis/ });
+  expect(screen.getByRole("combobox", { name: "Show results as" }).textContent).toContain("By source");
+  fireEvent.click(row);
+  await waitFor(() => expect(f.router.state.location.search).toHaveProperty("message", "msg-one"));
+  expect(f.router.state.location.search).not.toHaveProperty("thread");
+  fireEvent.click(screen.getByTitle("View status updates"));
+  await waitFor(() => expect(f.router.state.location.search).toMatchObject({ lens: "timeline", sender: "party:ada" }));
+  expect(f.view.state.filter).toMatchObject({ account: { exact: "acc_one" }, kind: { exact: "updates" } });
+  expect(f.router.state.location.search).not.toHaveProperty("message");
 });

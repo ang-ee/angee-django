@@ -1305,6 +1305,12 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   corrections with forward migrations and keep original chains while partially
   upgraded databases remain supported. Native squashing needs its usual
   coordinated replacement period.
+- **Addon transitions precede host autodetection.** A data step that writes a
+  newly allowed state must declare its native `AlterField` before `RunPython`:
+  historical models still reconstruct the retained choices. Rehearse the whole
+  migration against the old `ProjectState`, not only its function against current
+  test models. [`RuntimeMigrations`](../../angee/compose/migrations.py) owns this
+  ordering; current source enums do not prove historical compatibility.
 - **History reset requires an explicit upgrade cutoff.**
   [`reset_migration_history`](../../angee/compose/management/commands/reset_migration_history.py)
   verifies a fully applied, model-clean graph before replacing selected histories

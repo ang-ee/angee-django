@@ -1406,6 +1406,7 @@ class Thread(ChangeBroadcastMixin, SourceCopyMixin, HistoryMixin, TaggedModel, O
         EMAIL_THREAD = "email_thread", "Email thread"
         DIRECT = "direct", "Direct"
         GROUP = "group", "Group"
+        STATUS = "status", "Status updates"
         PUBLIC_THREAD = "public_thread", "Public thread"
 
     class Visibility(models.TextChoices):
@@ -1479,9 +1480,15 @@ class Thread(ChangeBroadcastMixin, SourceCopyMixin, HistoryMixin, TaggedModel, O
     def __str__(self) -> str:
         """Return the thread title for Django displays."""
 
-        fragment = self.title
-        title = fragment.text if fragment is not None else ""
-        return title or f"thread:{self.public_id}"
+        return self.display_title or f"thread:{self.public_id}"
+
+    @property
+    def display_title(self) -> str:
+        """Name a status feed by its category, never by unrelated participants."""
+
+        if self.modality == self.Modality.STATUS:
+            return str(self.Modality.STATUS.label)
+        return self.title.text.strip() if self.title_id else ""
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Channel threads inherit access and cannot carry personal ownership."""
