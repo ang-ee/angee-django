@@ -9,6 +9,7 @@ import { MenuTree } from "@angee/ui/chrome/menu-tree";
 import { describe, expect, test } from "vitest";
 
 import nexus from "./index";
+import iam from "../../../iam/web/src";
 
 // Minimal upstream menu contracts exercise aggregation without importing peer pages.
 const upstream = [
@@ -89,7 +90,10 @@ describe("Nexus menu aggregation", () => {
   test.each([undefined, "nexus"])("composes the live rail, selected app's top bar and Settings (?app=%s)", async (app) => {
     // Compose the real Timeline, Messaging and Parties declarations; the leaf contracts
     // above stand in for Spaces and Posts without importing undeclared web deps.
-    const owners = [timeline, parties, { ...messaging, dependsOn: ["parties", "timeline"] }, ...upstream.slice(2)];
+    const owners = [
+      { id: iam.id, routes: iam.routes, containers: iam.containers },
+      timeline, parties, { ...messaging, dependsOn: [iam.id, "parties", "timeline"] }, ...upstream.slice(2),
+    ];
     const liveAddons = [...owners, { ...nexus, dependsOn: owners.map(({ id }) => id) }];
     const models = [...new Set(["storage.File", ...liveAddons.flatMap((addon) => (addon.routes ?? []).flatMap((route) =>
       route.resource ? [route.resource] : []))])];

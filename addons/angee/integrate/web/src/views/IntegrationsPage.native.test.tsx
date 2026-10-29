@@ -45,6 +45,8 @@ vi.mock("./IntegrationsPage", async (importOriginal) => ({
 }));
 
 import integrate from "../index";
+import provenance from "@angee/provenance";
+import timeline from "../../../../timeline/web/src";
 import { concreteIntegrationHref } from "./IntegrationsPage";
 
 const mounts: { root: Root; host: HTMLElement }[] = [];
@@ -75,7 +77,7 @@ function mountApp(childRouted = true) {
   ].map((model) => testDataResource(model));
   history.replaceState(null, "", "/start");
   const app = createApp({
-    addons: [integrate, {
+    addons: [timeline, provenance, integrate, {
       id: "example",
       routes: [
         { name: "example.start", path: "/start", component: Links },

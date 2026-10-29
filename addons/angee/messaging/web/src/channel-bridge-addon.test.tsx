@@ -45,6 +45,8 @@ import {
 } from "./channel-bridge-addon";
 import { CHANNEL_MODEL } from "./documents";
 import { expectValidChannelBridgeAddon } from "./testing";
+import provenance from "../../../provenance/web/src";
+import timeline from "../../../timeline/web/src";
 
 const VENDOR = "messaging-integrate-example";
 
@@ -55,6 +57,8 @@ const VENDOR = "messaging-integrate-example";
  */
 function composed(manifest: AddonManifest) {
   return composeAddons([
+    timeline,
+    provenance,
     { id: integrate.id, containers: integrate.containers },
     // Messaging declares the Channels toolbar the vendors' connect verbs join.
     { id: "messaging", dependsOn: [integrate.id], containers: { "messaging.channels#toolbar": {} } },

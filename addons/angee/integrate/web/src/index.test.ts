@@ -4,11 +4,13 @@ import { MenuTree, resolveContainer, type RelatedGroupContent, type ContainerChi
 import { describe, expect, test } from "vitest";
 
 import integrate from "./index";
+import provenance from "@angee/provenance";
+import timeline from "../../../timeline/web/src";
 import { INTEGRATION_MODEL, INTEGRATION_RESUME_ACTION_ID } from "./IntegrationLifecycleActions";
 import { INTEGRATION_STREAMS_TAB_ID } from "./IntegrationStreams";
 import { RECORD_LINK_MODEL, RECORD_SOURCES_GROUP_ID } from "./RecordSourcesPane";
 
-const composed = composeAddons([integrate], { canonicalModelLabel: (model) => model }).containers;
+const composed = composeAddons([timeline, provenance, integrate], { canonicalModelLabel: (model) => model }).containers;
 /** The child ids one form container resolves for a subtype record. */
 const childIds = (address: string, models: readonly string[]) =>
   resolveContainer(composed, address, { models }).map((child) => child.id);
