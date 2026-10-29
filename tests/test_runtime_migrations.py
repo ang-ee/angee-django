@@ -1938,7 +1938,9 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 
 @pytest.mark.parametrize("selected_apps", [False, True])
-def test_fresh_host_authors_native_initials_before_guarded_transitions(fresh_authoring_host, selected_apps: bool) -> None:
+def test_fresh_host_authors_native_initials_before_guarded_transitions(
+    fresh_authoring_host, selected_apps: bool,
+) -> None:
     """Public authoring handles all apps together or independent selected apps in succession."""
     tmp_path, environment = fresh_authoring_host
     result = subprocess.run(
@@ -1998,7 +2000,6 @@ if sys.argv[1] == "selected":
         capture_output=True, text=True, timeout=60, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-
 
 
 def test_fresh_app_initial_refuses_native_dependency_expansion_into_existing_history(fresh_authoring_host) -> None:
