@@ -24,12 +24,13 @@ Every command runs from the stack root through its host.
 | File or module | Owns | Reference |
 |---|---|---|
 | `angee/hatch.py` (`RuntimeBuildHook`, `build_runtime`, `_compile`) | The build: editable `uv sync` compiles the runtime in a fresh interpreter without a history check (`:330`); `uv sync --no-editable` and `uv build` compile with `check_history` (`:340`), which refuses missing, foreign or drifted tracked history; the worker authors nothing | `angee/hatch.py:318,242,305`; history validation `:272-299` |
-| `angee/apps.py` `ProjectBuildConfig`, `angee/compose/apps.py` | Build-time compile (`BuildComposeConfig`) vs serving import of the prebuilt runtime with app-identity validation (`ComposeConfig`); default `MIGRATION_MODULES[label]` = `<runtime_module>.<label>.migrations`, i.e. `runtime/<label>/migrations/` | `angee/apps.py:20,33`, `angee/compose/apps.py:24,75` |
+| `angee/build.py` `ProjectBuildConfig`, `angee/compose/apps.py` `BuildComposeConfig` | Explicit build-time compilation; default `MIGRATION_MODULES[label]` = `<runtime_module>.<label>.migrations`, i.e. `runtime/<label>/migrations/` | `angee/build.py:76,82`, `angee/compose/apps.py:14,32` |
+| `angee/apps.py` `AngeeConfig` | Serving import of the prebuilt runtime with app-identity and migration-mapping validation | `angee/apps.py:12,19` |
 | `angee/compose/runtime.py` `Runtime` | Render, emit, drift check and guarded clean of `runtime/`; `GENERATED_SENTINEL`; `labels` | `angee/compose/runtime.py:22,130,151,225,245` |
 | `angee/utils/artifacts.py` `GeneratedTree` | Root and marker guard before any write or clean | `angee/utils/artifacts.py:13,111` |
 | `angee/management/commands/angee.py` | `angee check`, `angee clean`, `angee provision` and its flags | `angee/management/commands/angee.py:29,32,35` |
 | `angee/management/provision.py` | The provision plan and order, database wait, `ANALYZE` after migrate, `--after-if-installed`; it checks migration authoring and refuses drift | `angee/management/provision.py:49,62,95,140` |
-| `angee/compose/management/commands/{makemigrations,migrate}.py`, `angee/compose/migrations.py` | Addon transition binding, `DropGuardAutodetector`, `reset_migration_history` | `angee/compose/migrations.py:239,624,79` |
+| `angee/management/commands/{makemigrations,reset_migration_history}.py`, `angee/compose/migrations.py` | Explicit authoring dispatch, addon transition binding, `DropGuardAutodetector`, `reset_migration_history`; native Django owns `migrate` | Host dispatch `angee/management/commands/makemigrations.py:8`, `angee/management/commands/reset_migration_history.py:8`; build authoring `angee/compose/management/commands/makemigrations.py:29`; policy `angee/compose/migrations.py:239,638,79` |
 | Stack `angee.yaml` jobs (rendered from the template) | `deps` (framework stacks) → `runtime-build` (`uv sync`; `--no-editable` under the production serve mode) → `provision` → `operator-schema` → `codegen` (framework stacks; instance stacks run codegen inside `frontend-build`); the restart job; the operator stops the chain on a failed job | `templates/stacks/_shared/stack-body.yaml.jinja:232,237,255,258,262,285,325` |
 | The operator (`angee --root …`, its GraphQL API) | Whole-application and single-service restarts | `templates/stacks/_shared/AGENTS.md.jinja:38`, [restart](../../../docs/howto/getstarted.md#restart-the-running-stack) |
 | Installed `rebac/checks.py` `check_field_backed_relations` | `rebac.E009`: a zed relation's field/attribute/const backing must resolve to a model and canonical identity | `rebac/checks.py:298` |
@@ -69,7 +70,7 @@ Every command runs from the stack root through its host.
    uv sync --no-editable  # deployment: validates tracked history, installs the sealed wheel
    ```
 
-   Both run `ProjectBuildConfig` in a fresh interpreter and open no database. The
+   Both run `angee.build.ProjectBuildConfig` in a fresh interpreter and open no database. The
    editable build (`angee/hatch.py:330`) emits `runtime/` with the sentinel in
    `__init__.py`. The `--no-editable` install and `uv build` (`:340`) first refuse
    a missing, foreign or drifted `runtime/<label>/migrations/` (`:272-299`): a
@@ -91,7 +92,7 @@ Every command runs from the stack root through its host.
    Declared addon `[[migrations]]` bind to the host graph first, then Django
    autodetects the rest. Output lands in `MIGRATION_MODULES[label]`, which the
    host build defaults to `<runtime_module>.<label>.migrations` — the directory
-   `runtime/<label>/migrations/` beside the generated models (`angee/apps.py:33`);
+   `runtime/<label>/migrations/` beside the generated models (`angee/build.py:82`);
    an explicit mapping in `settings.yaml` wins and `None` disables the app. The
    rendered `.gitignore` keeps exactly that path (`templates/stacks/dev/template/.gitignore.jinja:11`):
    review and commit it, because `uv sync --no-editable` and `uv build` refuse a
@@ -246,8 +247,8 @@ Steps 2–4 change command owners; steps 7 and 8 do not.
 Docs: AGENTS.md #common-errors, #mechanical-overrides, #run-from-the-root; docs/guidelines.md; docs/composer.md #flow, #runtime-build-and-import, #addon-owned-runtime-migrations, #foundation-and-provenance-upgrade-cutoff, #composed-addon-dependencies, #runtime-cleanup, #addon-declarations, #invariants; docs/backend/guidelines.md #package-layering, #rebac, #pitfalls, #environment-and-checks, #migrations-and-runtime, #persistence-primitives;
 docs/checks.md #choose-the-working-directory, #python-and-composition-contracts, #composition-and-schema, #frontend-packages-and-addon-fragments, #browser-verification, #what-ci-actually-runs; docs/howto/getstarted.md #restart-the-running-stack, #whats-needed-for-agents-to-self-build; docs/stack.md #tooling; templates/stacks/_shared/{AGENTS.md,stack-body.yaml}.jinja;
 templates/projects/web/template/pyproject.toml.jinja; templates/{projects/web,stacks/dev,stacks/local}/template/.gitignore.jinja. Code: angee/management/
-{commands/angee.py,provision.py,__init__.py}; angee/hatch.py:24-90,242-340; angee/apps.py; angee/compose/{apps.py,runtime.py,migrations.py:624-645,
-management/commands/*.py}; angee/utils/artifacts.py:13-122; angee/project.py; installed rebac/checks.py:285-335; tests/test_provision.py:95-130,201.
+{commands/{angee,makemigrations,reset_migration_history}.py,provision.py,__init__.py}; angee/hatch.py:24-90,242-340; angee/apps.py; angee/build.py; angee/compose/{apps.py,runtime.py,migrations.py:638-645,
+management/commands/{makemigrations,reset_migration_history}.py}; angee/utils/artifacts.py:13-122; angee/project.py; installed rebac/checks.py:285-335; tests/test_provision.py:95-130,201.
 Doc gaps: no doc names `pg_dump` (docs/composer.md#foundation-and-provenance-upgrade-cutoff step 1 owns the backup) or `migrate --check`; step 8's
 backup command is derived from the PostgreSQL stack, not a doc.
 -->
