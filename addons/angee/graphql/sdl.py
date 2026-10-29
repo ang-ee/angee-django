@@ -20,10 +20,10 @@ _METADATA_SUFFIX = ".metadata.json"
 
 
 class GraphQLSdl:
-    """Render, write, and check generated GraphQL artifacts for each schema."""
+    """Render deterministic GraphQL artifacts and check the compiler snapshot."""
 
     def __init__(self, schemas: GraphQLSchemas, *, schema_dir: Path) -> None:
-        """Create a schema artifact owner over ``schemas`` writing under ``schema_dir``."""
+        """Create a projection over ``schemas`` whose compiler snapshot is in ``schema_dir``."""
 
         self.schemas = schemas
         self.schema_dir = schema_dir

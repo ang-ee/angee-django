@@ -45,7 +45,7 @@ when it advertises a granted tool.
 """
 
 MOUNT_PATH = "/mcp"
-"""The external StreamableHTTP path the server mounts at (see :mod:`angee.mcp.asgi`)."""
+"""The external StreamableHTTP path contributed by MCPConfig.compose_asgi."""
 
 
 @cache
