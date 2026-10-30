@@ -29,7 +29,7 @@ dependencies = ["hatchling>=1.27"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
-    "mypy>=1.10",
+    "angee-mypy==2.1.0",
     "editables>=0.3",
 ]
 

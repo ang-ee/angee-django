@@ -5,7 +5,7 @@ name = "angee-platform-integrate-vcs"
 version = "3.0.0"
 description = "The marketplace catalog tier — addons discovered from VCS sources, known by repo@sha"
 keywords = ["marketplace", "addons", "vcs"]
-dependencies = ["angee-base>=3,<4", "angee-platform>=3,<4", "angee-integrate-vcs>=3,<4", "angee-web>=3,<4", "django-compose @ git+https://github.com/ang-ee/django-compose.git@c7e61d587a91adeba8d26e9551e6c1ffc2dd6ddb"]
+dependencies = ["angee-base>=3,<4", "angee-platform>=3,<4", "angee-integrate-vcs>=3,<4", "angee-web>=3,<4", "django-compose==0.1.0.dev1"]
 
 [project.entry-points]
 "angee.addons" = {"angee.platform_integrate_vcs" = "angee.platform_integrate_vcs"}

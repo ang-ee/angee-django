@@ -423,12 +423,11 @@ Publish in dependency order:
 Local source checks do not establish that this publication chain or a remote CI
 run has completed.
 
-Framework requirements pin the native compiler to its immutable public Git
-source, and `uv.lock` records that commit. Clean checkouts and Docker builds
-resolve the same source without a sibling compiler checkout or named context.
-This is a source pin, not a PyPI release.
+Framework requirements pin the native compiler to its public PyPI release,
+and `uv.lock` records the distribution artifacts. Clean checkouts and Docker
+builds resolve that release without a sibling compiler checkout or named context.
 
 Compiler co-development may use an explicit editable sibling checkout in a
 separate disposable check environment. Keep that local override out of committed
 requirements/locks and never apply it to a live stack environment. Normal native
-installation continues to consume the committed public source pin.
+installation continues to consume the committed public release pin.

@@ -425,7 +425,7 @@ jobs:
           authored["COMPOSE_OUTPUT_MODULE"] = "ci_typing_runtime"
           authored["DATABASES"] = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
           (typing_root / "settings.yaml").write_text(yaml.safe_dump(authored, sort_keys=False))
-          # Locked django-stubs gives its configured module priority over the env.
+          # Locked angee-django-stubs gives its configured module priority over the env.
           # Reuse the full policy; change only that native project selection.
           policy = tomlkit.parse((framework / "pyproject.toml").read_text())
           policy["tool"]["django-stubs"]["django_settings_module"] = "ci_consumer_typing"

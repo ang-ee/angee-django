@@ -5,7 +5,7 @@ name = "angee-server"
 version = "3.0.0"
 description = "Angee HTTP serving, readiness and process commands"
 keywords = ["server", "asgi", "http"]
-dependencies = ["angee-base>=3,<4", "django-compose @ git+https://github.com/ang-ee/django-compose.git@c7e61d587a91adeba8d26e9551e6c1ffc2dd6ddb", "uvicorn[standard]>=0.30"]
+dependencies = ["angee-base>=3,<4", "django-compose==0.1.0.dev1", "uvicorn[standard]>=0.30"]
 entry-points."angee.addons"."angee.server" = "angee.server"
 
 [tool.angee.platform]

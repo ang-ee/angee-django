@@ -5,7 +5,7 @@ name = "angee-posts"
 version = "3.0.0"
 description = "Public posts, feeds, engagement metrics, following/timeline, and reactions built on messaging"
 keywords = ["posts", "feeds", "engagement", "timeline"]
-dependencies = ["angee-base>=3,<4", "angee-messaging>=3,<4", "angee-integrate>=3,<4", "angee-parties>=3,<4", "angee-graphql>=3,<4", "angee-provenance>=3,<4", "angee-web>=3,<4", "django-compose @ git+https://github.com/ang-ee/django-compose.git@c7e61d587a91adeba8d26e9551e6c1ffc2dd6ddb"]
+dependencies = ["angee-base>=3,<4", "angee-messaging>=3,<4", "angee-integrate>=3,<4", "angee-parties>=3,<4", "angee-graphql>=3,<4", "angee-provenance>=3,<4", "angee-web>=3,<4", "django-compose==0.1.0.dev1"]
 
 [project.entry-points]
 "angee.addons" = {"angee.posts" = "angee.posts"}
