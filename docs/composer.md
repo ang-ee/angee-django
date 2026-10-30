@@ -108,16 +108,19 @@ distribution metadata. Ordinary addons author `dynamic = ["entry-points"]`;
 [hatch-angee](https://github.com/ang-ee/hatch-angee#readme) owns the naming rule.
 Explicit entry points remain available for custom mappings and additional groups.
 
-Source ingestion builds a wheel through PyPA build in an isolated environment
-and reads its native distribution metadata through the same catalogue owner as
-installed packages. The wheel is temporary; the addon is not installed or loaded
-into the serving process.
-Remote sources use an operator-managed complete checkout pinned to one commit;
-local sources retain their configured working-tree semantics. The operator and
-build process must share the stack filesystem, and the operator's native Git
-credentials must permit access to the remote. Preparation runs before catalogue
-writes; a failed build or changed source leaves the catalogue unchanged.
-`pyproject.toml` supplies capability facts, not a parallel identity parser.
+The catalogue reads installed distribution metadata and explicitly built wheel
+artifacts. Authors and CI own builds and publication; catalogue refresh never
+installs packages, executes build hooks, or materializes source. Native METADATA
+and entry points own identity, including dynamically generated Hatch entry
+points. Packaged `pyproject.toml` contributes capability facts only.
+
+Optional addon Sources read local wheel directories or committed/CI-produced
+wheel blobs through native VCS transport at one immutable revision. Preparation
+finishes before the existing source CAS/reconcile transaction. Failed or changed
+inputs preserve previous rows and sync time. Standard public/private index
+installation remains with uv/operator, after which Platform reads the installed
+metadata; direct uninstalled index browsing is not currently a source type. See
+[built-distribution catalogue sources](../src/angee/platform_integrate_vcs/README.md).
 
 Addon requirements belong in `[project].dependencies`. Foreign Django app edges
 belong in django-compose's `AppConfig.requires_apps` extension; do not repeat

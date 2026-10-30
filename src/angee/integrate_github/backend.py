@@ -107,14 +107,32 @@ class GitHubBackend(VCSBackend):
         return entries
 
     def cat_file(self, repository: Any, *, ref: str, path: str) -> bytes:
-        """Return the bytes of one blob via the contents API; raise if absent or a tree."""
+        """Read bounded binary contents; large blobs use GitHub's native raw media type."""
 
-        payload = self._get(f"/repos/{repository.name}/contents/{quote(path, safe='/')}?ref={quote(ref, safe='')}")
+        endpoint = f"/repos/{repository.name}/contents/{quote(path, safe='/')}?ref={quote(ref, safe='')}"
+        payload = self._get(endpoint, max_bytes=2 * 1024 * 1024)
         if isinstance(payload, list):
             raise IsADirectoryError(path)
-        encoding = str(payload.get("encoding", "base64"))
-        content = str(payload.get("content", ""))
-        return base64.b64decode(content) if encoding == "base64" else content.encode("utf-8")
+        if payload.get("size", 0) > self.max_file_bytes:
+            raise GitHubApiError("GitHub file exceeds its byte limit", status=0)
+        if payload.get("encoding", "base64") == "base64":
+            content = base64.b64decode(str(payload.get("content", "")))
+            if len(content) > self.max_file_bytes:
+                raise GitHubApiError("GitHub file exceeds its byte limit", status=0)
+            return content
+        if payload.get("encoding") != "none":
+            raise GitHubApiError("GitHub returned an unsupported file encoding", status=0)
+        headers = {**self._headers(), "Accept": "application/vnd.github.raw+json"}
+        response = self.http.request(
+            "GET", f"{self.api_base}{endpoint}", headers=headers,
+            allow_private=self.api_base != DEFAULT_API_BASE.rstrip("/"),
+            same_origin_redirects=3, max_bytes=self.max_file_bytes, timeout=HTTP_TIMEOUT_SECONDS,
+        )
+        if response.status_code == 404:
+            raise FileNotFoundError(path)
+        if not response.is_success:
+            raise GitHubApiError(f"GitHub raw file returned HTTP {response.status_code}", status=response.status_code)
+        return response.content
 
     def rev_parse(self, repository: Any, ref: str) -> str:
         """Resolve ``ref`` to a commit oid via the commits API."""
@@ -168,7 +186,7 @@ class GitHubBackend(VCSBackend):
         headers.update(credential.auth_headers())
         return headers
 
-    def _get(self, path: str) -> Any:
+    def _get(self, path: str, *, max_bytes: int | None = None) -> Any:
         """GET one REST path and return parsed JSON; raise ``FileNotFoundError`` on 404.
 
         A configured (non-default) ``github_api_base`` is a self-hosted GitHub
@@ -177,12 +195,16 @@ class GitHubBackend(VCSBackend):
         """
 
         allow_private = self.api_base != DEFAULT_API_BASE.rstrip("/")
-        response = self.http.get(
-            f"{self.api_base}{path}",
-            headers=self._headers(),
-            allow_private=allow_private,
-            timeout=HTTP_TIMEOUT_SECONDS,
-        )
+        if max_bytes is None:
+            response = self.http.get(
+                f"{self.api_base}{path}", headers=self._headers(),
+                allow_private=allow_private, timeout=HTTP_TIMEOUT_SECONDS,
+            )
+        else:
+            response = self.http.request(
+                "GET", f"{self.api_base}{path}", headers=self._headers(),
+                allow_private=allow_private, max_bytes=max_bytes, timeout=HTTP_TIMEOUT_SECONDS,
+            )
         if response.status_code == 404:
             raise FileNotFoundError(path)
         if not response.is_success:
