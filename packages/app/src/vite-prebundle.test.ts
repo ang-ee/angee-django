@@ -48,6 +48,8 @@ const uiSource = fileURLToPath(new URL("../../ui/src/", import.meta.url));
 /** A web root whose only `@angee/*` dependency is the linked UI source, as on a dev stack. */
 function linkedUiWebRoot(prefix: string): string {
   const webRoot = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(webRoot, "runtime", "web"), { recursive: true });
+  writeFileSync(join(webRoot, "runtime", "web", "manifest.json"), JSON.stringify({ schema: 1 }));
   writeFileSync(join(webRoot, "package.json"), '{"dependencies":{"@angee/ui":"workspace:*"}}\n');
   symlinkSync(fileURLToPath(new URL("../node_modules", import.meta.url)), join(webRoot, "node_modules"));
   writeFileSync(join(webRoot, "index.html"), '<script type="module" src="/main.ts"></script>\n');
@@ -163,7 +165,8 @@ test.each([false, true])("discovers linked UI dependencies across lazy boundarie
     // Run Vite's native scanner/optimizer without a server. Scanning the UI
     // entry directly supplies the reference graph, including its import()
     // edges, so new lazy dependencies need no hand-maintained test inventory.
-    const scanConfig = { ...config, configFile: false as const, plugins: [], logLevel: "silent" as const };
+    const resolved = await resolveConfig({ ...config, configFile: false, logLevel: "silent" }, "serve");
+    const scanConfig = { ...config, optimizeDeps: resolved.optimizeDeps, configFile: false as const, plugins: [], logLevel: "silent" as const };
     const reference = await optimizeDeps(await resolveConfig({
       ...scanConfig,
       cacheDir: join(webRoot, "reference-cache"),
@@ -289,7 +292,7 @@ describe("angeePrebundleForce", () => {
     expect(angeePrebundleForce(webRoot, ["@angee/ui"])).toBe(true);
     // A fresh coverage/test-results tree inside the package must be skipped, so
     // the unchanged source tree still reads as cached.
-    for (const dir of ["coverage", "storybook-static", "test-results", "playwright-report"]) {
+    for (const dir of [".jj", "coverage", "storybook-static", "test-results", "playwright-report"]) {
       const churn = join(webRoot, "node_modules", "@angee", "ui", dir);
       mkdirSync(churn, { recursive: true });
       writeFileSync(join(churn, "report.txt"), `${Math.random()}\n`);
