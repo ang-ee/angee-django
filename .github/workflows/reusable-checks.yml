@@ -49,10 +49,10 @@ on:
         type: string
         default: main
       angee-version:
-        description: Release tag of the angee CLI the stack lane installs.
+        description: Release version of the angee CLI the stack lane installs (without the v prefix).
         required: false
         type: string
-        default: latest
+        default: "0.27.0"
       consumer-sources:
         description: JSON array of additional addon sources with repository, path (sibling slot), and ref.
         required: false

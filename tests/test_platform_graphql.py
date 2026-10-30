@@ -280,7 +280,7 @@ def test_addon_detail_and_record_services_share_canonical_public_identity(compos
     assert row.public_id != row.name
     data = _data(execute_schema(
         _schema(),
-        """query($id: ID!) {
+        """query($id: String!) {
           platform_addons_by_pk(id: $id) { id name label }
           platform_addons(where: {name: {_eq: "catalogue_probe.identity"}}) { id name }
         }""",
