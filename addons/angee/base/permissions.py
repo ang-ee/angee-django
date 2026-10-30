@@ -215,8 +215,6 @@ def candidate_relationships(instance: models.Model, action: str) -> CandidateRel
     resource_type = model_resource_type(type(instance))
     if resource_type is None:
         return None
-    # This runtime candidate check needs the model-bound native backend.
-    from rebac.backends import backend
 
     schema = backend().schema()
     definition = schema.get_definition(resource_type)
