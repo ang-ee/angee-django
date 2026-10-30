@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from importlib import metadata
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
+from django.core.exceptions import ImproperlyConfigured
+from django_compose.components import Closure
+from django_compose.snapshot import discover_transitions
+
+from angee.base.addons import capability_facts, package_document
 from angee.base.paths import resolve_path
 
 _Settings = TypedDict(
@@ -61,13 +67,14 @@ class _DerivedSettings(TypedDict):
     STATIC_ROOT: Path
     MEDIA_ROOT: Path
     DATABASES: dict[str, Any]
+    COMPOSE_TRANSITION_SOURCE: NotRequired[tuple[Mapping[str, str], ...]]
 
 
 def settings(namespace: Mapping[str, Any]) -> _DerivedSettings:
-    """Default permission depth to 8 on SQLite and 16 elsewhere.
+    """Derive storage/permission defaults and addon-owned transition facts.
 
-    Autoconfig supplies environment values before project settings; either
-    explicit value takes precedence over the backend default.
+    Explicit settings remain authoritative. Baseline declarations annotate native
+    discovery from the already resolved closure; the compiler owns their meaning.
     """
 
     data = resolve_path(namespace.get("ANGEE_DATA_DIR", resolve_path(namespace["BASE_DIR"]) / ".angee" / "data"))
@@ -83,7 +90,7 @@ def settings(namespace: Mapping[str, Any]) -> _DerivedSettings:
         },
     })
     engine = databases.get("default", {}).get("ENGINE")
-    return {
+    derived: _DerivedSettings = {
         "ALLOWED_HOSTS": namespace.get("ALLOWED_HOSTS", ["*"] if namespace.get("DEBUG", False) else []),
         "ANGEE_DATA_DIR": data,
         "STATIC_ROOT": resolve_path(namespace.get("STATIC_ROOT", data / "static")),
@@ -93,3 +100,22 @@ def settings(namespace: Mapping[str, Any]) -> _DerivedSettings:
             "REBAC_DEPTH_LIMIT", 8 if engine == "django.db.backends.sqlite3" else 16,
         )),
     }
+    if "COMPOSE_TRANSITION_SOURCE" not in namespace:
+        closure: Closure = namespace["COMPOSE_CLOSURE"]
+        records = tuple(dict(record) for record in discover_transitions(closure.app_entries))
+        by_origin = {(record["declaring_app"], record["name"]): record for record in records}
+        for distribution_name, app_name in sorted(closure.components.items()):
+            declarations = capability_facts(
+                package_document(metadata.distribution(distribution_name), app_name),
+                "angee.migrations.initial_baseline",
+            )
+            for name, value in declarations.items():
+                record = by_origin.get((app_name, name))
+                if record is None:
+                    raise ImproperlyConfigured(
+                        f"{app_name}: initial_baseline names unknown transition {name!r}"
+                    )
+                # The compiler validates the declaration and owns baseline semantics.
+                record["initial_baseline"] = value
+        derived["COMPOSE_TRANSITION_SOURCE"] = records
+    return derived
