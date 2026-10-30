@@ -782,32 +782,6 @@ def test_mint_refuses_absent_invalid_naive_or_expired_issue_metadata(settings, m
     assert OperatorDaemon.from_settings().mint_token("auth/user:invalid-expiry") is None
 
 
-def test_source_build_uses_the_native_job_endpoint_and_existing_receipt(monkeypatch):
-    calls = []
-    def respond(request):
-        calls.append((request.method, request.url.path))
-        if request.method == "POST":
-            assert request.url.path == "/jobs/catalogue-metadata/source-build"
-            payload = json.loads(request.content)
-            assert payload == {
-                "repository_url": "https://example.com/repository.git", "revision": "a" * 40,
-                "artifact": "print('metadata')", "package_path": "src", "credential": {
-                    "username": "x-access-token", "password": "one-run-token",
-                },
-            }
-            return httpx2.Response(202, json={"id": "operation", "status": "pending"})
-        assert request.url.path == "/job-runs/operation"
-        return httpx2.Response(200, json={"id": "operation", "status": "succeeded", "output": "{}"})
-    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(respond)))
-    daemon = OperatorDaemon(
-        endpoint="http://op/graphql", server_base="http://op", admin_bearer="admin", scope=(), ttl="1h",
-    )
-    receipt = daemon.run_source_build(
-        "catalogue-metadata", repository_url="https://example.com/repository.git", revision="a" * 40,
-        artifact="print('metadata')", package_path="src",
-        credential={"username": "x-access-token", "password": "one-run-token"},
-    )
-    assert receipt == {"id": "operation", "status": "pending"}
-    assert daemon.job_run(receipt["id"])["output"] == "{}"
-    assert not hasattr(daemon, "source_checkout")
-    assert calls == [("POST", "/jobs/catalogue-metadata/source-build"), ("GET", "/job-runs/operation")]
+def test_operator_has_no_catalogue_execution_or_checkout_api():
+    assert not hasattr(OperatorDaemon, "source_checkout")
+    assert not hasattr(OperatorDaemon, "run_source_build")

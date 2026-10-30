@@ -1,13 +1,9 @@
-"""Native package metadata catalogue from isolated remote builds or built local wheels.
+"""Read-only built-wheel inputs for Platform's native distribution catalogue.
 
-Remote sources resolve through their selected VCS connection and submit an
-immutable revision to the operator's declared source-build job. Fetch credentials
-exist only in its separate fetch phase; the prepared build image runs offline.
-Only bounded native metadata and packaged capability TOML return to Django.
-Local sources index explicitly built wheels under Source.path; they never build
-working trees. Both paths use django-compose's native identity index.
-
-Preparation finishes before source CAS and catalogue reconciliation. Failed,
-unavailable or invalid metadata operations preserve prior rows and sync time.
-Installed rows retain their native precedence; this addon adds their provenance.
+Installed metadata remains with Platform. This addon adds Source provenance and
+indexes explicit local or immutable remote wheel artifacts through native VCS
+binary transport. Authors/CI own building; package indexes and installation stay
+with the existing dependency workflow. The catalogue runs no backend or operator
+job. Data preparation precedes the existing source CAS and reconciliation, so
+failed or changed inputs preserve catalogue rows and their sync timestamp.
 """

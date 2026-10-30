@@ -108,16 +108,19 @@ distribution metadata. Ordinary addons author `dynamic = ["entry-points"]`;
 [hatch-angee](https://github.com/ang-ee/hatch-angee#readme) owns the naming rule.
 Explicit entry points remain available for custom mappings and additional groups.
 
-Remote source ingestion submits a selected connection's immutable revision to
-an operator-owned `source-build` job. Its credentialed fetch phase is separate
-from its offline build phase, whose dependencies come from a trusted prepared
-image. Django interprets only bounded wheel metadata and packaged capability
-TOML through the native catalogue owners. It never receives a checkout or runs
-package build hooks. Local catalogue sources instead index explicitly built
-wheels under `Source.path`, preserving other local VCS consumers' working-tree
-semantics. Preparation finishes before catalogue writes; failure or changed
-source coordinates preserve prior rows and sync time. See the
-[VCS catalogue setup](../src/angee/platform_integrate_vcs/README.md).
+The catalogue reads installed distribution metadata and explicitly built wheel
+artifacts. Authors and CI own builds and publication; catalogue refresh never
+installs packages, executes build hooks, or materializes source. Native METADATA
+and entry points own identity, including dynamically generated Hatch entry
+points. Packaged `pyproject.toml` contributes capability facts only.
+
+Optional addon Sources read local wheel directories or committed/CI-produced
+wheel blobs through native VCS transport at one immutable revision. Preparation
+finishes before the existing source CAS/reconcile transaction. Failed or changed
+inputs preserve previous rows and sync time. Standard public/private index
+installation remains with uv/operator, after which Platform reads the installed
+metadata; direct uninstalled index browsing is not currently a source type. See
+[built-distribution catalogue sources](../src/angee/platform_integrate_vcs/README.md).
 
 Addon requirements belong in `[project].dependencies`. Foreign Django app edges
 belong in django-compose's `AppConfig.requires_apps` extension; do not repeat

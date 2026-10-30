@@ -422,31 +422,6 @@ class OperatorDaemon:
     # and trigger a rebuild. The ``etag`` carries optimistic concurrency: read it,
     # echo it on write, and the daemon 409s a stale write rather than clobbering.
 
-    def run_source_build(
-        self, name: str, *, repository_url: str, revision: str, artifact: str,
-        package_path: str = ".", credential: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
-        """Submit an immutable source to a declared isolated build job, never a checkout API."""
-
-        payload: dict[str, Any] = {
-            "repository_url": repository_url, "revision": revision,
-            "artifact": artifact, "package_path": package_path,
-        }
-        if credential is not None:
-            payload["credential"] = credential
-        result = self._request("POST", f"{self._base()}/jobs/{quote(name, safe='')}/source-build", payload)
-        if not isinstance(result, dict):
-            raise OperatorDaemonError("operator returned no source-build operation record")
-        return result
-
-    def job_run(self, identifier: str) -> dict[str, Any]:
-        """Read the native durable job operation, including its bounded output."""
-
-        result = self._request("GET", f"{self._base()}/job-runs/{quote(identifier, safe='')}")
-        if not isinstance(result, dict):
-            raise OperatorDaemonError("operator returned no job operation record")
-        return result
-
     def read_file(self, source: str, path: str) -> RemoteFile:
         """Read ``path`` under a stack ``source`` (``GET /files?source=&path=``)."""
 

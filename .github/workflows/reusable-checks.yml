@@ -122,10 +122,6 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ inputs.python-version }}
-      - name: Prepare the trusted offline catalogue metadata image
-        run: |
-          docker build -t catalogue-metadata:prepared src/angee/platform_integrate_vcs/metadata-image
-          echo "CATALOGUE_METADATA_TEST_IMAGE=$(docker image inspect catalogue-metadata:prepared --format '{{.Id}}')" >> "$GITHUB_ENV"
       - run: >-
           uv run pytest -q -n auto --dist loadfile --durations=25
           --splits 6 --group ${{ matrix.group }} ${{ inputs.pytest-extra-args }}

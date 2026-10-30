@@ -1210,7 +1210,6 @@ source = { editable = "src/angee/platform_integrate_vcs" }
 dependencies = [
     { name = "angee-base" },
     { name = "angee-integrate-vcs" },
-    { name = "angee-operator" },
     { name = "angee-platform" },
     { name = "angee-web" },
     { name = "django-compose" },
@@ -1220,7 +1219,6 @@ dependencies = [
 requires-dist = [
     { name = "angee-base", editable = "src/angee/base" },
     { name = "angee-integrate-vcs", editable = "src/angee/integrate_vcs" },
-    { name = "angee-operator", editable = "src/angee/operator" },
     { name = "angee-platform", editable = "src/angee/platform" },
     { name = "angee-web", editable = "src/angee/web" },
     { name = "django-compose", specifier = ">=0.1.0.dev3,<0.2" },

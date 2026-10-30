@@ -1,111 +1,94 @@
-"""Data-only catalogue boundaries and explicit local wheel admission."""
+"""Bounded data-only wheel readers and explicit local artifact admission."""
 
 from __future__ import annotations
 
-import csv
 import io
-import json
 import zipfile
-from types import SimpleNamespace
+import zlib
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 from rebac import system_context
 
-from angee.integrate.credentials import CredentialKind
-from angee.integrate.models import Credential
-from angee.operator.daemon import OperatorDaemonError
-from angee.platform_integrate_vcs import catalog
-from angee.platform_integrate_vcs.metadata_worker import MAX_OUTPUT_BYTES
+from angee.platform_integrate_vcs import wheels
 from tests.conftest import Addon, Repository, Source, VcsBridge, make_integration
+from tests.wheel_fixtures import wheel_files, write_wheel
 
 
-def wheel_files():
-    record = io.StringIO()
-    files = {
-        "local_addon-1.0.dist-info/METADATA": (
-            "Metadata-Version: 2.4\nName: local-addon\nVersion: 1.0\nSummary: Built locally\n"
-        ),
-        "local_addon-1.0.dist-info/entry_points.txt": "[angee.addons]\nlocal.addon = local.addon\n",
-        "local/addon/pyproject.toml": '[tool.angee.platform]\ncategory="Integration"\n',
-    }
-    csv.writer(record).writerows((name, "", "") for name in files)
-    files["local_addon-1.0.dist-info/RECORD"] = record.getvalue()
-    return files
+def archive_bytes(files, *, compression=zipfile.ZIP_DEFLATED):
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=compression) as archive:
+        for name, content in files.items():
+            archive.writestr(name, content)
+    output.seek(0)
+    return output
 
 
-def snapshot(files=None, path="addons/local"):
-    return json.dumps({"schema": 1, "packages": [{"path": path, "files": wheel_files() if files is None else files}]})
+@pytest.mark.parametrize("name", ["../escape/pyproject.toml", "/escape/pyproject.toml", "addon\\pyproject.toml"])
+def test_wheel_metadata_rejects_escaping_or_aliased_paths(name):
+    with pytest.raises(ValueError, match="normalized relative"):
+        wheels.wheel_metadata(archive_bytes({**wheel_files(), name: "untrusted"}))
 
 
-@pytest.mark.parametrize("name", ["../escape.py", "/escape.py", "addon/execute.py", "addon\\pyproject.toml"])
-def test_job_metadata_cannot_write_executable_or_escaping_files(name):
-    files = {**wheel_files(), name: "raise AssertionError('must never execute')"}
-    with pytest.raises(ImproperlyConfigured, match="Catalogue metadata was invalid"):
-        catalog.descriptors_from_metadata(snapshot(files))
-
-
-def test_native_record_cannot_escape_the_metadata_snapshot():
+def test_record_cannot_escape_its_metadata_snapshot():
     files = wheel_files()
-    files["local_addon-1.0.dist-info/RECORD"] += "../../outside/pyproject.toml,,\n"
-    with pytest.raises(ImproperlyConfigured, match="normalized relative"):
-        catalog.descriptors_from_metadata(snapshot(files))
+    record = next(name for name in files if name.endswith("/RECORD"))
+    files[record] += "../../outside/pyproject.toml,,\n"
+    with pytest.raises(ValueError, match="normalized relative"):
+        wheels.wheel_metadata(archive_bytes(files))
 
 
-def test_job_metadata_must_stay_inside_selected_source_scope():
-    with pytest.raises(ImproperlyConfigured, match="selected source scope"):
-        catalog.descriptors_from_metadata(snapshot(path="elsewhere"), scope="addons")
+def test_code_files_are_never_returned_as_metadata():
+    result = wheels.wheel_metadata(archive_bytes(wheel_files(code=True)))
+    assert not any(name.endswith(".py") for name in result)
+    assert "__init__.py" not in next(value for name, value in result.items() if name.endswith("/RECORD"))
 
 
-def test_job_metadata_is_bounded_before_json_parsing():
-    with pytest.raises(ImproperlyConfigured, match="byte limit"):
-        catalog.descriptors_from_metadata(" " * (MAX_OUTPUT_BYTES + 1))
+def test_wheel_archive_and_metadata_sizes_are_bounded(monkeypatch):
+    stream = archive_bytes(wheel_files())
+    monkeypatch.setattr(wheels, "MAX_WHEEL_BYTES", 1)
+    with pytest.raises(ValueError, match="archive byte limit"):
+        wheels.wheel_metadata(stream)
+    monkeypatch.setattr(wheels, "MAX_WHEEL_BYTES", 64 * 1024 * 1024)
+    files = wheel_files()
+    name = next(name for name in files if name.endswith("/METADATA"))
+    files[name] = "x" * (wheels.MAX_METADATA_BYTES + 1)
+    with pytest.raises(ValueError, match="file exceeds"):
+        wheels.wheel_metadata(archive_bytes(files))
 
 
-@pytest.mark.parametrize("status", ["failed", "blocked", "unknown"])
-def test_failed_or_invalid_operations_never_become_empty_catalogues(status):
-    with pytest.raises(OperatorDaemonError, match="preparation failed"):
-        catalog.metadata_output(SimpleNamespace(), {"id": "operation", "status": status, "error": "build unavailable"})
+def test_metadata_rejects_non_wheel_compression_methods():
+    with pytest.raises(ValueError, match="compression method"):
+        wheels.wheel_metadata(archive_bytes(wheel_files(), compression=zipfile.ZIP_BZIP2))
 
 
-def test_native_operation_receipt_is_polled_before_reading_metadata(monkeypatch):
-    monkeypatch.setattr(catalog.time, "sleep", lambda _: None)
-    identifiers = []
-    def job_run(identifier):
-        identifiers.append(identifier)
-        return {"id": identifier, "status": "succeeded", "output": snapshot()}
-    assert catalog.metadata_output(SimpleNamespace(job_run=job_run), {
-        "id": "operation", "status": "pending",
-    }) == snapshot()
-    assert identifiers == ["operation"]
-
-
-@pytest.mark.parametrize("kind,material,expected", [
-    (CredentialKind.OAUTH, {"access_token": "oauth-token"}, {"username": "provider", "password": "oauth-token"}),
-    (CredentialKind.STATIC_TOKEN, {"api_key": "static-token"}, {"username": "provider", "password": "static-token"}),
-    (CredentialKind.BASIC_AUTH, {"username": "alice", "password": "secret"},
-     {"username": "alice", "password": "secret"}),
-])
-def test_git_auth_material_belongs_to_credential_kind(kind, material, expected):
-    credential = SimpleNamespace(material=json.dumps(material))
-    assert kind.handler.git_credentials(credential, token_username="provider") == expected
-
-
-def test_credential_refresh_precedes_handler_material_lookup():
-    calls = []
-    owner = SimpleNamespace(ensure_fresh=lambda: calls.append("refresh"))
-    def material(credential, *, token_username):
-        assert credential is owner and calls == ["refresh"]
-        calls.append("material")
-        return {"username": token_username, "password": "fresh-token"}
-    owner.handler = SimpleNamespace(git_credentials=material)
-    assert Credential.git_credentials(owner, token_username="provider")["password"] == "fresh-token"
-    assert calls == ["refresh", "material"]
-
-
-def test_unsupported_git_credential_does_not_reveal_secret():
-    with pytest.raises(ValueError, match="HTTPS Git"):
-        CredentialKind.SSH_KEY.handler.git_credentials(SimpleNamespace(), token_username="provider")
+def test_forged_zip_size_cannot_trigger_unbounded_decompression(monkeypatch):
+    files = wheel_files()
+    metadata_name = next(name for name in files if name.endswith("/METADATA"))
+    payload = "x" * 262144
+    files[metadata_name] = payload
+    original_inventory = zipfile.ZipFile.infolist
+    original_decompressor = zipfile._get_decompressor
+    lengths = []
+    def inventory(archive):
+        members = original_inventory(archive)
+        for member in members:
+            if member.filename == metadata_name:
+                member.file_size = 64
+                member.CRC = zlib.crc32(payload[:64].encode())
+        return members
+    class Observe:
+        def __init__(self, native):
+            self.native = native
+        def decompress(self, data, max_length=0):
+            lengths.append(max_length)
+            return self.native.decompress(data, max_length)
+        def __getattr__(self, name):
+            return getattr(self.native, name)
+    monkeypatch.setattr(zipfile.ZipFile, "infolist", inventory)
+    monkeypatch.setattr(zipfile, "_get_decompressor", lambda *args: Observe(original_decompressor(*args)))
+    assert wheels.wheel_metadata(archive_bytes(files))[metadata_name] == payload[:64]
+    assert lengths and 0 < max(lengths) <= 1024 * 1024 + 1
 
 
 def local_source(root):
@@ -114,45 +97,25 @@ def local_source(root):
         config={"local_root": str(root), "local_name": "local-wheels"},
     )
     bridge.discover_repositories()
-    with system_context(reason="tests.catalogue.local_wheel_source"):
+    with system_context(reason="tests.catalogue.local_source"):
         return Source.objects.create(repository=Repository.objects.get(name="local-wheels"), kind="addon", path="dist")
 
 
-def test_local_catalogue_indexes_only_explicit_built_wheels(composed_tables, tmp_path, monkeypatch):
-    directory = tmp_path / "dist"
-    directory.mkdir()
-    with zipfile.ZipFile(directory / "local_addon-1.0-py3-none-any.whl", "w") as wheel:
-        for name, content in wheel_files().items():
-            wheel.writestr(name, content)
+def test_local_catalogue_reads_built_wheels_without_importing_source(composed_tables, tmp_path, monkeypatch):
+    write_wheel(tmp_path / "dist/local.whl", "local.addon", "local-addon", description="Built locally", code=True)
     (tmp_path / "pyproject.toml").write_text('[build-system]\nrequires=[]\nbuild-backend="must_not_import"\n')
     source = local_source(tmp_path)
-    monkeypatch.setattr(catalog.OperatorDaemon, "from_settings", lambda: pytest.fail("local wheels require no daemon"))
     assert source.refresh() == 1
-    with system_context(reason="tests.catalogue.local_wheel_read"):
+    with system_context(reason="tests.catalogue.local_read"):
         row = Addon.objects.get(name="local.addon")
-        assert row.description == "Built locally" and row.category == "Integration"
-        assert row.vcs_path == "dist/local_addon-1.0-py3-none-any.whl"
+        assert row.description == "Built locally" and row.vcs_path == "dist/local.whl"
 
 
-def test_local_source_does_not_implicitly_build_working_tree(composed_tables, tmp_path):
+def test_local_source_without_wheels_requires_an_explicit_author_build(composed_tables, tmp_path):
     (tmp_path / "dist").mkdir()
     source = local_source(tmp_path)
-    with pytest.raises(ImproperlyConfigured, match="explicitly built wheels"):
+    with pytest.raises(ImproperlyConfigured, match="already built wheels"):
         source.refresh()
-    with system_context(reason="tests.catalogue.no_implicit_local_build"):
+    with system_context(reason="tests.catalogue.no_implicit_build"):
         source.refresh_from_db()
         assert source.last_synced_at is None
-
-
-def test_selected_github_connection_owns_the_git_username_and_credential():
-    from angee.integrate_github.backend import GitHubBackend
-
-    calls = []
-    def selected(*, token_username):
-        calls.append(token_username)
-        return {"username": token_username, "password": "selected-connection-token"}
-    backend = GitHubBackend(SimpleNamespace(credential=SimpleNamespace(git_credentials=selected)))
-    assert backend.git_credentials() == {
-        "username": "x-access-token", "password": "selected-connection-token",
-    }
-    assert calls == ["x-access-token"]
