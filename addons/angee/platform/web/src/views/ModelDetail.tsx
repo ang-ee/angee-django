@@ -1,6 +1,6 @@
 import { type ReactElement } from "react";
 
-import { NavLink, Chip, Code, DetailSection, DetailSurface, OverflowChipList, useRouteHref, useRouteRecordId } from "@angee/ui";
+import { Chip, Code, DetailSection, DetailSurface, OverflowChipList, useRouteHref, useRouteRecordId } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
 import { AddonLink } from "./AddonLink";
