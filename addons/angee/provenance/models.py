@@ -48,7 +48,7 @@ from angee.base.serialization import canonical_json, canonical_json_sha256, json
 from angee.base.signals import bulk_updated
 from angee.provenance.context import changeset, current_changeset
 from angee.provenance.contrib.angee.exceptions import ChangesetRequired
-from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.managers import ChangesetManager
 from angee.provenance.querysets import model_history
 from angee.provenance.statements import (
@@ -391,8 +391,8 @@ class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True
             subjects: dict[tuple[type[models.Model], Any], Any] = {}
             for model, _ in self.history_rows():
                 history = model_history(model)
-                if history is None:
-                    raise ValidationError(f"{model._meta.label}: no history owner.")
+                if not isinstance(history, ModelHistory):
+                    raise ValidationError(f"{model._meta.label}: no record history policy owner.")
                 histories.append((model, history))
                 for version in (
                     model.history.using(using)

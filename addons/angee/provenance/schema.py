@@ -41,7 +41,7 @@ from angee.graphql.data.metadata import (
 )
 from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
 from angee.provenance.context import changeset_model
-from angee.provenance.contrib.angee.history import HistoryMixin, record_history
+from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory, record_history
 from angee.provenance.evidence import FactAuthority
 from angee.provenance.models import Changeset as ChangesetContract
 from angee.provenance.querysets import model_history
@@ -514,7 +514,7 @@ class RecordHistory:
                 if fields is None:
                     fields = (
                         history.redacted(snapshot, self.actor, current=None, retained=pk in retained)
-                        if history is not None and snapshot
+                        if isinstance(history, ModelHistory) and snapshot
                         else hidden
                     )
                 result[model, pk, changeset_id] = fields
