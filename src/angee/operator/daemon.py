@@ -4,15 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
-import httpx2
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
@@ -23,7 +19,7 @@ from graphql import build_client_schema, get_introspection_query, print_schema
 
 from angee.base.serialization import canonical_json_sha256
 from angee.integrate.errors import RequestNotSentError
-from angee.integrate.http import HTTP_TIMEOUT_SECONDS, HttpClient
+from angee.integrate.http import HttpClient
 
 logger = logging.getLogger(__name__)
 
@@ -425,47 +421,6 @@ class OperatorDaemon:
     # one file under a stack source (e.g. ``app/settings.yaml``) over its file API
     # and trigger a rebuild. The ``etag`` carries optimistic concurrency: read it,
     # echo it on write, and the daemon 409s a stale write rather than clobbering.
-
-    @contextmanager
-    def source_checkout(self, repository: str, revision: str) -> Iterator[tuple[Path, str]]:
-        """Hold the operator's complete checkout until the response is closed.
-
-        The daemon and Django must share the stack filesystem. ``BASE_DIR`` is
-        the host root resolved by native settings bootstrap from ANGEE_PROJECT_DIR;
-        the daemon returns only a path relative to that root. Git transport,
-        pinned submodules and temporary-tree cleanup remain with the daemon.
-        """
-
-        url = f"{self._base()}/source-checkouts"
-        try:
-            with HttpClient().stream(
-                "POST", url,
-                headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.admin_bearer}"},
-                body=json.dumps({"repository": repository, "revision": revision}).encode(),
-                allow_private=True, timeout=httpx2.Timeout(HTTP_TIMEOUT_SECONDS, read=None),
-            ) as response:
-                if not response.is_success:
-                    raise OperatorDaemonError.from_response("POST", url, response.status_code, response.read())
-                try:
-                    lines = response.iter_lines()
-                    data = json.loads(next(lines, ""))
-                    if not isinstance(data, dict):
-                        raise ValueError("Expected checkout coordinates")
-                    relative = Path(data["path"])
-                    resolved_revision = data["revision"]
-                    if not isinstance(resolved_revision, str) or not resolved_revision:
-                        raise ValueError("Missing checkout revision")
-                    project = Path(settings.BASE_DIR).resolve()
-                    checkout = (project / relative).resolve()
-                    if relative.is_absolute() or checkout == project or not checkout.is_relative_to(project):
-                        raise ValueError("Checkout path must stay inside the shared stack root")
-                    if not checkout.is_dir():
-                        raise ValueError("Checkout is unavailable in Django's shared stack filesystem")
-                except (KeyError, TypeError, ValueError) as error:
-                    raise OperatorDaemonError(f"Invalid operator checkout response: {error}") from error
-                yield checkout, resolved_revision
-        except RequestNotSentError as error:
-            raise OperatorDaemonError(error.public_message) from error
 
     def read_file(self, source: str, path: str) -> RemoteFile:
         """Read ``path`` under a stack ``source`` (``GET /files?source=&path=``)."""

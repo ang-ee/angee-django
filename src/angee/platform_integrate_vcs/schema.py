@@ -47,7 +47,8 @@ class AddonSourceInput:
 
     ``vcs_bridge_id`` names an existing bridge (a local checkout in dev, or a host
     bridge); ``name`` is the repository's host path (``owner/repo``). ``ref``/``path``
-    scope the source within the repo (blank ``ref`` resolves to the default branch).
+    scope already built wheel artifacts within the repo (blank ``ref`` resolves
+    to the default branch). Authors/CI build the artifacts before refreshing.
     """
 
     vcs_bridge_id: PublicID

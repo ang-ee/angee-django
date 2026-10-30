@@ -119,6 +119,9 @@ class VCSBackend(BridgeImpl, HttpClientMixin):
     category = "vcs"
     label = "VCS"
     icon = "git-branch"
+    max_file_bytes = 64 * 1024 * 1024
+    """Maximum decoded binary file returned by a native VCS transport."""
+
     repository_search_scope_config_key = ""
     """Optional ``VcsBridge.config`` key whose value scopes repository search/listing."""
 
@@ -226,7 +229,11 @@ class LocalVCSBackend(VCSBackend):
         if target.is_dir():
             raise IsADirectoryError(path)
         try:
-            return target.read_bytes()
+            with target.open("rb") as stream:
+                content = stream.read(self.max_file_bytes + 1)
+            if len(content) > self.max_file_bytes:
+                raise ValueError("VCS file exceeds its byte limit")
+            return content
         except FileNotFoundError:
             raise FileNotFoundError(path) from None
 
