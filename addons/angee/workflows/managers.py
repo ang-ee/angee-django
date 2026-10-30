@@ -65,7 +65,15 @@ from angee.workflows.subjects import RunSubject
 from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 
 if TYPE_CHECKING:
-    from angee.workflows.models import StepAttempt, StepRecord, StepRun, StepWatch, Workflow, WorkflowRun
+    from angee.workflows.models import (
+        StepAttempt,
+        StepRecord,
+        StepRun,
+        StepWatch,
+        Workflow,
+        WorkflowRun,
+        WorkflowVersion,
+    )
 
 logger = logging.getLogger(__name__)
 RETRYABLE_SQLSTATES = frozenset({"57014", "40P01", "55P03"})
@@ -346,6 +354,7 @@ class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
             assert definition is not None
             document = definition.published_document()
             digest = canonical_json_sha256(document)
+            version: WorkflowVersion
             if published is not None and published.content_hash == digest:
                 version = published
             else:

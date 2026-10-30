@@ -111,7 +111,7 @@ class ModelHistoryManager[T: HistoricalChanges](HistoryManager[T]):
         custom_historical_attrs: dict[str, Any] | None = None,
         *,
         history_type: str | None = None,
-    ) -> list[models.Model]:
+    ) -> list[T]:
         """Fill upstream 3.13's constructor-loop gap for explicit deletion history types."""
 
         if not getattr(settings, "SIMPLE_HISTORY_ENABLED", True):

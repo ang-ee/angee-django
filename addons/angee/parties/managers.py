@@ -24,7 +24,7 @@ from itertools import chain, combinations, groupby, islice
 from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict
 
 from django.apps import apps
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
 from django.db.models.functions import Coalesce, NullIf
@@ -61,8 +61,9 @@ from angee.storage.exceptions import UploadTooLarge, UploadTypeRefused
 if TYPE_CHECKING:
     from django_stubs_ext import WithAnnotations
 
+    from angee.integrate.models import RecordLink
     from angee.parties.mixins import PartyStatementMixin
-    from angee.parties.models import Circle, Handle, Party
+    from angee.parties.models import Circle, Handle, Party, Person
 
 logger = logging.getLogger(__name__)
 
@@ -877,6 +878,9 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         statements = (
             statements.sudo(reason="parties.same_as_pairs") if unscoped else statements.with_actor(actor)
         )
+        endpoints = self.canonical()
+        if not unscoped:
+            endpoints = endpoints.with_display_avatars(actor)
         pairs = (
             self.model.same_as.model._base_manager.filter(
                 left_id__in=Subquery(visible),
@@ -886,12 +890,7 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
             .filter(Exists(statements.filter(subject_id=OuterRef("pk"))))
             .prefetch_related(
                 Prefetch("partysameaspairstatement_set", queryset=statements, to_attr="_resolved_statements"),
-                *(
-                    Prefetch(side, queryset=self.canonical().with_display_avatars(actor))
-                    for side in ("left", "right")
-                    if not unscoped
-                ),
-                *(Prefetch(side, queryset=self.canonical()) for side in ("left", "right") if unscoped),
+                *(Prefetch(side, queryset=endpoints) for side in ("left", "right")),
             )
             .order_by("left_id", "right_id")
         )[: max(0, min(int(limit), 101))]
@@ -1884,6 +1883,23 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         return self.sudo(reason="parties.party.user_for").account_for_party(party.pk)
 
+    def contact_person(self, link: RecordLink) -> Person | None:
+        """Resolve a contact through its native generic target and Person relation."""
+
+        target = link.target
+        if target is None:
+            if link.target_content_type_id is not None or link.target_object_id:
+                raise ValidationError("The contact's linked target no longer exists.")
+            return None
+        if not isinstance(target, apps.get_model("parties", "Party")):
+            raise ValidationError("A contact target must be a Party with a Person child.")
+        if isinstance(target, apps.get_model("parties", "Person")):
+            return target
+        try:
+            return target.person
+        except ObjectDoesNotExist as error:
+            raise ValidationError("A contact target must have a Person child.") from error
+
     def lock_contact(
         self,
         person: Any | None,
@@ -2089,7 +2105,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         folder: Any,
         created_by_id: Any,
         link: Any,
-        target: Any = None,
+        target: Person | None = None,
     ) -> Any:
         """Assert one link's contact facts; preserve other sources and person preferences.
 
@@ -2112,7 +2128,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         relationships = apps.get_model("parties", "Relationship")
         source = folder.directory.integration_ptr
         with transaction.atomic():
-            target = target or link.target
+            linked_person = self.contact_person(link)
+            target = target or linked_person
             if target is not None:
                 self.lock_contact(target, parsed=parsed)
             person = target or people.create(

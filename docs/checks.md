@@ -322,7 +322,7 @@ database, and these commands do not create one.
 [reusable checks](../.github/workflows/reusable-checks.yml) on pull requests and
 pushes to `main`. The current tiers are:
 
-- **Python quality:** Ruff over the source tree and mypy over core and addons,
+- **Python quality:** Ruff over the source tree and mypy over addons,
   using the locked framework environment.
 - **SQLite:** the full framework Python suite once, as six shards that
   pytest-split cuts into contiguous chunks of equal stored time from the

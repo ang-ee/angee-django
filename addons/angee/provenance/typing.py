@@ -19,7 +19,7 @@ from mypy.build import PRI_MYPY
 from mypy.nodes import MypyFile, TypeInfo
 from mypy.plugin import AttributeContext, FunctionContext, Plugin, ReportConfigContext
 from mypy.typeops import erase_to_bound, make_simplified_union
-from mypy.types import CallableType, Instance, NoneType, TypeType, TypeVarType, get_proper_type
+from mypy.types import CallableType, Instance, NoneType, TypeType, TypeVarType, UnionType, get_proper_type
 from mypy.types import Type as MypyType
 from mypy_django_plugin.lib import helpers
 from mypy_django_plugin.transformers.managers import create_manager_info_from_queryset
@@ -54,6 +54,10 @@ class ProvenancePlugin(Plugin):
             receiver = get_proper_type(receiver.ret_type)
         if isinstance(receiver, TypeVarType):
             receiver = get_proper_type(erase_to_bound(receiver))
+        if isinstance(receiver, UnionType):
+            return make_simplified_union([
+                self.history_manager(ctx._replace(type=get_proper_type(item)), name=name) for item in receiver.items
+            ])
         if not isinstance(receiver, Instance):
             return ctx.default_attr_type
         module = sys.modules.get(receiver.type.module_name)

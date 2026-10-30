@@ -1391,8 +1391,8 @@ class StatementPair(
 
     objects = _StatementPairManager()
     _angee_base = _StatementPairUnscopedManager()
-    left: Any
-    right: Any
+    left: models.ForeignKey[Any, Any]
+    right: models.ForeignKey[Any, Any]
     pair_name: str
     statements: StatementManager[Statement]
 

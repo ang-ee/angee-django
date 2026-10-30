@@ -4310,16 +4310,16 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
                 post_create_historical_record.disconnect(pin_application, sender=sender)
             if application is None:
                 raise RuntimeError("Application save did not create its historical evidence.")
+            self._set_target(link, locked.target if target is UNSET else target)
             for field in [*fields, "applied_base"]:
                 setattr(link, field, getattr(locked, field))
             return application
 
     def _set_target(self, link: Any, target: models.Model | None) -> None:
-        if target is None:
-            link.target_content_type_id = link.target_object_id = None
-        else:
-            if target.pk is None:
-                raise ValidationError("A record target must be saved.")
+        if target is not None and target.pk is None:
+            raise ValidationError("A record target must be saved.")
+        link.target = target
+        if target is not None:
             # Provenance names any applied row, a plain domain sink included.
             link.target_content_type, object_id = generic_pointer_target(target)
             link.target_object_id = str(object_id)
@@ -4354,6 +4354,7 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
             locked.save(
                 update_fields=["target_content_type", "target_object_id", "status", "tombstoned_at", "updated_at"]
             )
+        self._set_target(link, locked.target if target is UNSET else target)
         for name in fields:
             setattr(link, name, getattr(locked, name))
         return locked

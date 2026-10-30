@@ -75,9 +75,53 @@ def test_record_link_keys_mti_target_on_canonical_parent(replica: Any) -> None:
     """The link target shares the canonical parent identity used by other edges."""
 
     child = MtiChild.objects.create(title="Target")
-    link = RecordLink.objects.observe(replica, "mti-target", target=child)
+    link = RecordLink.objects.observe(replica, "mti-target")
+    assert link.target is None
+    with transaction.atomic():
+        RecordLink.objects.bind_target(link, child)
     assert link.target_content_type.model_class() is MtiParent
     assert link.target_object_id == str(child.pk)
+    assert type(link.target) is MtiParent
+    assert link.target.pk == child.pk
+    replacement = MtiChild.objects.create(title="Replacement")
+    with transaction.atomic():
+        RecordLink.objects.bind_target(link, replacement)
+    assert link.target_content_type.model_class() is MtiParent
+    assert link.target.pk == replacement.pk
+    link.refresh_from_db()
+    assert type(link.target) is MtiParent
+    assert link.target.pk == replacement.pk
+
+
+@pytest.mark.parametrize("operation", ("promote", "revalidate"))
+@pytest.mark.parametrize("selection", ("explicit", "omitted", "clear"))
+def test_public_target_updates_replace_callers_cached_none(replica: Any, operation: str, selection: str) -> None:
+    """Both public updates retain native target identity on the supplied instance."""
+
+    child = MtiChild.objects.create(title="Target")
+    link = RecordLink.objects.observe(replica, "cached-target")
+    assert link.target is None
+    if selection != "explicit":
+        stored = RecordLink.objects.get(pk=link.pk)
+        with transaction.atomic():
+            RecordLink.objects.bind_target(stored, child)
+    target = {} if selection == "omitted" else {"target": None if selection == "clear" else child}
+    with transaction.atomic():
+        if operation == "promote":
+            RecordLink.objects.promote(link, source_payload={}, source_hash="remote", mapped_payload={}, **target)
+        else:
+            RecordLink.objects.revalidate(link, **target)
+    stored = RecordLink.objects.get(pk=link.pk)
+    assert (link.target_content_type_id, link.target_object_id) == (
+        stored.target_content_type_id, stored.target_object_id,
+    )
+    if selection == "clear":
+        assert link.target is None
+        assert (link.target_content_type_id, link.target_object_id) == (None, None)
+    else:
+        assert type(link.target) is MtiParent
+        assert link.target.pk == child.pk
+        assert link.target_content_type.model_class() is MtiParent
 
 
 def test_epoch_retains_links_history_and_quarantine(replica: Any) -> None:

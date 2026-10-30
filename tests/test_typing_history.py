@@ -97,6 +97,14 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         "    assert_type(model.history.filter().latest_of_each(), FixtureHistoricalQuerySet[HistoricalChanges])\n"
         "    assert_type(record.statements.get(), Statement)\n"
         "    assert_type(model.same_as.filter().get(), StatementPair)\n"
+        "from django.db.models import Prefetch\n"
+        "assert_type(AbstractSubject.same_as.model._base_manager.filter(left_id=1, right_id=2).get(), StatementPair)\n"
+        "AbstractSubject.same_as.model._base_manager.prefetch_related("
+        "Prefetch('left', queryset=AbstractSubject.objects.all()))\n"
+        "def union_history(record: AbstractSubject | SubjectStatement) -> None:\n"
+        "    assert_type(record.history.filter().get(), HistoricalChanges)\n"
+        "def union_statements(record: AbstractSubject | Subject) -> None:\n"
+        "    assert_type(record.statements.get(), Statement)\n"
     )
     invalid = tmp_path / "invalid.py"
     invalid.write_text(
@@ -115,6 +123,11 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         "def invalid_generic[T: AbstractSubject](record: T) -> None:\n"
         "    record.history.missing_method()\n"
         "    record.statements.missing_method()\n"
+        "def invalid_union(record: AbstractSubject | SubjectStatement) -> None:\n"
+        "    wrong_union_row: int = record.history.get()\n"
+        "AbstractSubject.same_as.model._base_manager.filter(left_id__in=1)\n"
+        "AbstractSubject.same_as.model._base_manager.filter(right_id__isnull='bad')\n"
+        "AbstractSubject.same_as.model._base_manager.filter(missing_pair_field=1)\n"
     )
     # The native plugin owns TypeInfos only. Compare actual Django model/state
     # identities after semantic analysis to the fixture's pre-analysis snapshot.
@@ -125,6 +138,8 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
             "result=api.run(sys.argv[1:])",
             "from django.apps import apps",
             "from django.db.migrations.state import ProjectState",
+            "from angee.provenance.statements import StatementPair",
+            "assert not {'left', 'right'}.intersection(field.name for field in StatementPair._meta.get_fields())",
             "config=apps.get_app_config('typing_history')",
             "assert config.before_typing_state==ProjectState.from_apps(apps)",
             "assert config.before_typing_models==dict((model.__name__,model) for model in config.get_models())",
@@ -143,8 +158,8 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
     assert positive.returncode == 0, positive.stdout + positive.stderr
     negative = subprocess.run([*command, str(invalid)], cwd=root, env=env, capture_output=True, text=True, check=False)
     assert negative.returncode == 1, negative.stdout + negative.stderr
-    assert negative.stdout.count(": error:") == 12, negative.stdout
-    for line in (2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 14, 15):
+    assert negative.stdout.count(": error:") == 16, negative.stdout
+    for line in (2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 14, 15, 17, 18, 19, 20):
         assert f"invalid.py:{line}: error:" in negative.stdout, negative.stdout
     assert {path.relative_to(runtime): path.read_bytes() for path in runtime.rglob("*.py")} == before
     assert not tuple(runtime.rglob("*.pyi"))
