@@ -5,7 +5,7 @@ name = "angee-messaging-integrate-imap"
 version = "3.0.0"
 description = "IMAP email sync — pulls mailbox accounts into messaging threads and messages"
 keywords = ["imap", "email", "sync"]
-dependencies = ["angee-messaging>=3,<4", "angee-integrate>=3,<4", "angee-parties>=3,<4", "angee-web>=3,<4", "imapclient>=3.1.0", "mail-parser-reply>=1.36", "django-compose==0.1.0.dev1"]
+dependencies = ["angee-messaging>=3,<4", "angee-integrate>=3,<4", "angee-parties>=3,<4", "angee-web>=3,<4", "imapclient>=3.1.0", "mail-parser-reply>=1.36", "django-compose>=0.1.0.dev1,<0.2"]
 
 [project.entry-points]
 "angee.addons" = {"angee.messaging_integrate_imap" = "angee.messaging_integrate_imap"}

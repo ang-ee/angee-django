@@ -5,7 +5,7 @@ name = "angee-work"
 version = "3.0.0"
 description = "Operational queues, named stages, cycles, and triage folded into project tasks."
 keywords = ["work", "queues", "stages", "cycles", "triage", "planning"]
-dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-jobs>=3,<4", "angee-messaging>=3,<4", "angee-projects>=3,<4", "angee-sequence>=3,<4", "angee-spaces>=3,<4", "angee-web>=3,<4", "django-compose==0.1.0.dev1"]
+dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-jobs>=3,<4", "angee-messaging>=3,<4", "angee-projects>=3,<4", "angee-sequence>=3,<4", "angee-spaces>=3,<4", "angee-web>=3,<4", "django-compose>=0.1.0.dev1,<0.2"]
 
 [project.entry-points]
 "angee.addons" = {"angee.work" = "angee.work"}

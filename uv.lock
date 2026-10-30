@@ -360,7 +360,7 @@ requires-dist = [
     { name = "angee-provenance", editable = "addons/angee/provenance" },
     { name = "angee-resources", editable = "addons/angee/resources" },
     { name = "angee-web", editable = "addons/angee/web" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
     { name = "httpx", specifier = ">=0.28.1,<0.29" },
     { name = "pydantic-ai-slim", specifier = ">=2.13" },
 ]
@@ -712,7 +712,7 @@ requires-dist = [
     { name = "angee-integrate", editable = "addons/angee/integrate" },
     { name = "angee-parties", editable = "addons/angee/parties" },
     { name = "angee-web", editable = "addons/angee/web" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12" },
 ]
 
@@ -746,7 +746,7 @@ requires-dist = [
     { name = "angee-resources", editable = "addons/angee/resources" },
     { name = "angee-web", editable = "addons/angee/web" },
     { name = "angee-work", editable = "addons/angee/work" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
 ]
 
 [[package]]
@@ -780,7 +780,7 @@ requires-dist = [
     { name = "angee-web", editable = "addons/angee/web" },
     { name = "authlib", specifier = ">=1.8.0" },
     { name = "deepdiff", specifier = ">=9.1.0" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
     { name = "httpcore2", specifier = ">=2.10,<3" },
     { name = "httpx2", specifier = ">=2.10,<3" },
     { name = "qrcode", extras = ["pil"], specifier = ">=8.2" },
@@ -863,7 +863,7 @@ requires-dist = [
     { name = "angee-resources", editable = "addons/angee/resources" },
     { name = "angee-tags", editable = "addons/angee/tags" },
     { name = "angee-web", editable = "addons/angee/web" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
     { name = "markdown-it-py", specifier = ">=4.2" },
 ]
 
@@ -962,7 +962,7 @@ requires-dist = [
     { name = "angee-timeline", editable = "addons/angee/timeline" },
     { name = "angee-web", editable = "addons/angee/web" },
     { name = "django-anymail", specifier = ">=15.1" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
     { name = "requests", specifier = ">=2.32" },
     { name = "urllib3", specifier = ">=2.2" },
 ]
@@ -987,7 +987,7 @@ requires-dist = [
     { name = "angee-messaging", editable = "addons/angee/messaging" },
     { name = "angee-parties", editable = "addons/angee/parties" },
     { name = "angee-web", editable = "addons/angee/web" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
     { name = "imapclient", specifier = ">=3.1.0" },
     { name = "mail-parser-reply", specifier = ">=1.36" },
 ]
@@ -1129,7 +1129,7 @@ requires-dist = [
     { name = "angee-storage", editable = "addons/angee/storage" },
     { name = "angee-tags", editable = "addons/angee/tags" },
     { name = "angee-web", editable = "addons/angee/web" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
     { name = "django-countries", specifier = ">=9,<10" },
     { name = "phonenumbers", specifier = ">=9.0" },
     { name = "pycountry", specifier = ">=26,<27" },
@@ -1212,7 +1212,7 @@ requires-dist = [
     { name = "angee-integrate-vcs", editable = "addons/angee/integrate_vcs" },
     { name = "angee-platform", editable = "addons/angee/platform" },
     { name = "angee-web", editable = "addons/angee/web" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
 ]
 
 [[package]]
@@ -1258,7 +1258,7 @@ requires-dist = [
     { name = "angee-projects", editable = "addons/angee/projects" },
     { name = "angee-provenance", editable = "addons/angee/provenance" },
     { name = "angee-web", editable = "addons/angee/web" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
 ]
 
 [[package]]
@@ -1285,7 +1285,7 @@ requires-dist = [
     { name = "angee-parties", editable = "addons/angee/parties" },
     { name = "angee-provenance", editable = "addons/angee/provenance" },
     { name = "angee-web", editable = "addons/angee/web" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
 ]
 
 [[package]]
@@ -1322,7 +1322,7 @@ requires-dist = [
     { name = "angee-tags", editable = "addons/angee/tags" },
     { name = "angee-timeline", editable = "addons/angee/timeline" },
     { name = "angee-web", editable = "addons/angee/web" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
 ]
 
 [[package]]
@@ -1357,7 +1357,7 @@ requires-dist = [
     { name = "angee-spaces", editable = "addons/angee/spaces" },
     { name = "angee-storage", editable = "addons/angee/storage" },
     { name = "angee-web", editable = "addons/angee/web" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
 ]
 
 [[package]]
@@ -1376,7 +1376,7 @@ requires-dist = [
     { name = "angee-proposals", editable = "addons/angee/proposals" },
     { name = "angee-web", editable = "addons/angee/web" },
     { name = "angee-work", editable = "addons/angee/work" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
 ]
 
 [[package]]
@@ -1398,7 +1398,7 @@ requires-dist = [
     { name = "angee-graphql", editable = "addons/angee/graphql" },
     { name = "angee-timeline", editable = "addons/angee/timeline" },
     { name = "angee-web", editable = "addons/angee/web" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
     { name = "django-simple-history", git = "https://github.com/ang-ee/django-simple-history.git?rev=014c0a56b6e80080b56483120172d417d5c7920b" },
 ]
 
@@ -1466,7 +1466,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "angee-base", editable = "addons/angee/base" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 
@@ -1492,7 +1492,7 @@ requires-dist = [
     { name = "angee-messaging", editable = "addons/angee/messaging" },
     { name = "angee-parties", editable = "addons/angee/parties" },
     { name = "angee-web", editable = "addons/angee/web" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
 ]
 
 [[package]]
@@ -1750,7 +1750,7 @@ requires-dist = [
     { name = "angee-sequence", editable = "addons/angee/sequence" },
     { name = "angee-spaces", editable = "addons/angee/spaces" },
     { name = "angee-web", editable = "addons/angee/web" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
 ]
 
 [[package]]
@@ -1781,7 +1781,7 @@ requires-dist = [
     { name = "angee-resources", editable = "addons/angee/resources" },
     { name = "angee-timeline", editable = "addons/angee/timeline" },
     { name = "angee-web", editable = "addons/angee/web" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
 ]
 
 [[package]]
@@ -1861,7 +1861,7 @@ requires-dist = [
     { name = "angee-messaging", editable = "addons/angee/messaging" },
     { name = "angee-web", editable = "addons/angee/web" },
     { name = "angee-workflows", editable = "addons/angee/workflows" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
 ]
 
 [[package]]
