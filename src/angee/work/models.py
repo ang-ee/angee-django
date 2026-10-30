@@ -411,16 +411,16 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=T
         constraints = (
             models.UniqueConstraint(
                 fields=("queue", "position"),
-                name="uq_work_stage_queue_position",
+                name="uq_%(app_label)s_%(class)s_queue_position",
             ),
             models.UniqueConstraint(
                 fields=("queue", "name"),
-                name="uq_work_stage_queue_name",
+                name="uq_%(app_label)s_%(class)s_queue_name",
             ),
             models.UniqueConstraint(
                 fields=("queue", "category"),
                 condition=models.Q(category__in=("triage", "duplicate")),
-                name="uq_work_stage_queue_system_category",
+                name="uq_%(app_label)s_%(class)s_queue_system_category",
             ),
         )
 

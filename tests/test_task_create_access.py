@@ -59,11 +59,6 @@ class ProjectAccessTask(AbstractTask):
         abstract = False
         app_label = "scopedemo"
         rebac_resource_type = "scopedemo/project_access_task"
-        constraints = [
-            constraint
-            for constraint in AbstractTask.Meta.constraints
-            if constraint.name != "uq_projects_task_converted_activity"
-        ]
 
 
 @strawberry_django.type(ProjectAccessTask)
