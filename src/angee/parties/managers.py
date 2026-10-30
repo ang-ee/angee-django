@@ -394,7 +394,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         return handle
 
     def reidentify(
-        self, handle: Any, *, expected_value: str, value: str, display_name: str = "",
+        self, handle: Any, *, expected_value: str, value: str, display_name: str = "", dry_run: bool = False,
     ) -> tuple[bool, bool] | None:
         """Rewrite a canonical handle or fold it into the existing value owner.
 
@@ -403,7 +403,10 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         stale request and returns None. Source and target Handles are locked in
         canonical identity order before Parties and their statements. A value
         created during a rewrite is retried after releasing the failed attempt's
-        locks, so the same order holds for its subsequent fold.
+        locks, so the same order holds for its subsequent fold. ``dry_run``
+        validates the same locked source and projected survivor without business
+        or provenance mutations or merge signals. Native elevated-read audit
+        records remain expected. Its result describes current facts, not a reservation.
         """
 
         if not is_sudo():
@@ -427,9 +430,15 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                         target = handles[target.pk]
                         if target.merged_into_id is not None:
                             continue
+                        if dry_run:
+                            target.validate_merge([source])
+                            carried = target.merge_values([source])
+                            return True, bool(display_name and not carried.get("display_name", target.display_name))
                         kept = target.fold([source])
                         folded = True
                     else:
+                        if dry_run:
+                            return False, bool(display_name and not source.display_name)
                         source.value = value
                         source.save(using=using, update_fields=("value", "updated_at"))
                         kept, folded = source, False

@@ -11,6 +11,9 @@ from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
+RECOGNITION_READ_LIMIT = 128 * 1024 * 1024
+"""Aggregate compressed bytes available to one independent archive recognition probe."""
+
 EXTRACT_DECLARED_LIMIT = 128 * 1024 * 1024 * 1024
 """Aggregate declared uncompressed bytes accepted for one staged subtree."""
 

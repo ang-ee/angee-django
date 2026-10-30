@@ -369,6 +369,19 @@ class Drive(OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeDataModel, concre
         with system_context(reason="storage.drive.storage"):
             return self.backend.storage
 
+    def local_file_path(self, filename: str) -> Path | None:
+        """Resolve the first readable live file of this name to its local path.
+
+        Deterministic storage-path order chooses among repeated leaf names.
+        Object-store files and missing local bytes have no on-disk location.
+        """
+        actor = self.require_access("read")
+        rows = (self.files.with_actor(actor) if actor is not None else
+                self.files.system_context(reason="storage.drive.local_file_path"))
+        file = rows.filter(filename=filename, is_trashed=False).order_by("storage_path", "pk").first()
+        path = file.local_path() if file is not None else None
+        return path if path is not None and path.is_file() else None
+
     def object_key(self, content_hash: str, filename: str) -> str:
         """Return the deterministic backend key for one digest and filename.
 
