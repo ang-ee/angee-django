@@ -33,7 +33,7 @@ wires declarations only; the reference example throughout is `examples/src/examp
 - Copy shapes from `examples/src/example/notes` (consumer, e2e target); `src/angee/tags` is the
   smallest framework addon, `src/angee/money` the one with checks in `ready()`.
 - The [Base adapter](../../../src/angee/base/addons.py) reads packaged Angee tool tables and discovers optional
-  addon modules. Capability owners interpret them: [Resources](../../../src/angee/resources/) owns resources,
+  addon modules. Capability owners interpret them: [Resources](../../../src/angee/resources/loader.py) owns resources,
   [GraphQL schema discovery](../../../src/angee/graphql/schema.py) owns schema references and
   [GraphQL ASGI](../../../src/angee/graphql/asgi.py) owns WebSocket contributions.
 - Native django-compose owns component graphs, generic lifecycle and optional hook dispatch:
