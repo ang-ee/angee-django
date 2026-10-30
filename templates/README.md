@@ -176,16 +176,31 @@ For a new stack, pass the inputs at render:
 angee stack init <template> <root> --input slot_mode=jj --input vcs=jj
 ```
 
-For an existing stack, `angee stack update --template --input slot_mode=jj`
-refreshes `workspace_defaults`. New workspaces take the mode; existing ones
-keep the slots they were cut with. The update does not apply `vcs`, which stays
-as the manifest has it, so set `vcs: jj` in `angee.yaml` by hand. As of angee
-0.25.0, do that only while no workspace has a `.work` slot: the operator reads
-every slot that names no mode by the current `vcs`, existing ones included, so
-it would read an existing `.work` clone as a jj workspace. To change it anyway,
-destroy those workspaces first and cut them again after the change. That
-includes the declared `src` workspace, whose slots the running stack runs from,
-so stop the stack first.
+For an existing stack, answer the template's inputs on update:
+
+```sh
+angee stack update --template --input slot_mode=jj --input vcs=jj
+```
+
+That refreshes `workspace_defaults` and, with angee 0.26.0 or later, the
+stack's `vcs` too. New workspaces take the mode; existing ones keep the slots
+they were cut with. angee 0.26.0 records, on each slot that names no mode, the
+`vcs` it was cut with, and the update pins that record on existing slots before
+it changes `vcs`, so an existing `.work` clone stays a clone. Prefer the update
+to editing `vcs` in `angee.yaml` by hand: a hand edit pins nothing, so a slot
+cut before 0.26.0 would follow the new `vcs`. Once a 0.26.0 CLI has written
+those records, an operator of 0.25.0 or older cannot load the manifest, so
+upgrade the operator with the CLI. To move an existing slot between a git
+worktree and a jj workspace, use `angee workspace source migrate <ws> <slot>
+--to jj` (or `--to worktree`).
+
+With angee 0.25.0 the update does not apply `vcs`, which stays as the manifest
+has it. Set `vcs: jj` in `angee.yaml` by hand only while no workspace has a
+`.work` slot: 0.25.0 reads every slot that names no mode by the current `vcs`,
+existing ones included, so it would read an existing `.work` clone as a jj
+workspace. To change it anyway, destroy those workspaces first and cut them
+again after the change. That includes the declared `src` workspace, whose slots
+the running stack runs from, so stop the stack first.
 
 ### The `local` root is a git-controlled project
 
