@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from os import PathLike
 from pathlib import Path
 from typing import Any
@@ -54,6 +54,8 @@ class _RebacSchemaBinding:
     source: Path | None
     declaration: str | PathLike[str] | None
     effective: str | PathLike[str] | None
+    signature: tuple[Path, int, int, int, int, int] | None = None
+    schema: Schema | None = None
 
 
 _SCHEMA_BINDING = "_angee_rebac_schema_binding"
@@ -63,11 +65,9 @@ def declared_schema_path(app_config: AppConfig) -> Path | None:
     """Retain the native authored declaration before binding generated output."""
 
     binding = app_config.__dict__.get(_SCHEMA_BINDING)
-    effective = binding.effective if isinstance(binding, _RebacSchemaBinding) else None
-    if not isinstance(binding, _RebacSchemaBinding) or getattr(app_config, "rebac_schema", None) != effective:
-        binding = _RebacSchemaBinding(
-            resolve_schema_path(app_config), getattr(app_config, "rebac_schema", None), effective,
-        )
+    declaration = getattr(app_config, "rebac_schema", None)
+    if not isinstance(binding, _RebacSchemaBinding) or declaration != binding.effective:
+        binding = _RebacSchemaBinding(resolve_schema_path(app_config), declaration, declaration)
         app_config.__dict__[_SCHEMA_BINDING] = binding
     return binding.source
 
@@ -97,10 +97,32 @@ def effective_rebac_definition(model: type[models.Model]) -> Definition | None:
 
 
 def effective_rebac_schema(app_config: AppConfig) -> Schema | None:
-    """Read the bound compose snapshot for startup and declaration checks only."""
+    """Reuse one parsed bound declaration while its source identity is unchanged.
 
+    State lives only on this AppConfig's binding. Native path discovery still
+    observes missing files and declaration changes; nanosecond modification/change
+    times and inode identity invalidate same-path rewrites and atomic replacement.
+    Request policy never reads this startup snapshot.
+    """
+
+    declared_schema_path(app_config)
+    binding = app_config.__dict__[_SCHEMA_BINDING]
+    assert isinstance(binding, _RebacSchemaBinding)
     schema_path = resolve_schema_path(app_config)
-    return parse_zed(schema_path.read_text(encoding='utf-8')) if schema_path is not None else None
+    if schema_path is None:
+        if binding.signature is not None:
+            app_config.__dict__[_SCHEMA_BINDING] = replace(binding, signature=None, schema=None)
+        return None
+    status = schema_path.stat()
+    signature = (
+        schema_path, status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns,
+    )
+    if signature != binding.signature:
+        binding = replace(
+            binding, signature=signature, schema=parse_zed(schema_path.read_text(encoding="utf-8")),
+        )
+        app_config.__dict__[_SCHEMA_BINDING] = binding
+    return binding.schema
 
 
 def declared_rebac_definition(model: type[models.Model]) -> Definition | None:
