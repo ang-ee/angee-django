@@ -42,7 +42,7 @@ from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.parties.schema import PartyType
 from angee.projects.inputs import MilestoneTemplate, TaskOrder
-from angee.projects.models import ProjectSetupState
+from angee.projects.models import ProjectSetupState, TaskOrderingQuerySet
 from angee.projects.models import Task as TaskModel
 from angee.storage.schema import FolderType
 from angee.tags.schema import TaggedNode, tags_input_extensions
@@ -157,9 +157,22 @@ class TaskHasuraWriteBackend(AngeeHasuraWriteBackend):
         if data.get("task_order") is not None and "sort_order" in data:
             raise ValidationError({"task_order": "Choose ordering neighbors or an explicit rank, not both."})
         model = cast(type[TaskModel], self.model)
-        rows = model._default_manager.all()
+        fields = model.ORDERING_FIELDS if data.get("task_order") is not None else data.keys()
+        if not model.ORDERING_FIELDS.intersection(fields):
+            return super().update(info, pk, data, expected_revision=expected_revision)
+        rows = cast(TaskOrderingQuerySet[TaskModel], self.write_target_queryset())
         rows._for_write = True
-        with model.ordering_write(using=rows.db):
+        instance = instance_for_id(model, pk, queryset=rows)
+        if instance is None:
+            return super().update(info, pk, data, expected_revision=expected_revision)
+        destinations = self._decode_public_id_fields({
+            key: value for key, value in data.items() if key in {"project", "parent"}
+        })
+        with model.ordering_write(
+            using=rows.db, rows=rows.filter(pk=instance.pk),
+            project_ids=(() if "project_id" not in destinations else (destinations["project_id"],)),
+            parent_ids=(() if "parent_id" not in destinations else (destinations["parent_id"],)),
+        ):
             return super().update(info, pk, data, expected_revision=expected_revision)
 
 

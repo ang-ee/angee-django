@@ -508,7 +508,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=44" },
     { name = "django", specifier = ">=6.1.2,<6.2" },
     { name = "django-choices-field", git = "https://github.com/ang-ee/django-choices-field.git?rev=b02c1488660d0bf1f4483d2e73bc842b41b70632" },
-    { name = "django-compose", specifier = "==0.1.0.dev3" },
+    { name = "django-compose", specifier = "==0.1.0.dev5" },
     { name = "django-environ", specifier = ">=0.12" },
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
@@ -913,7 +913,6 @@ source = { editable = "src/angee/mcp" }
 dependencies = [
     { name = "angee-base" },
     { name = "angee-iam" },
-    { name = "angee-provenance" },
     { name = "angee-server" },
     { name = "django-compose" },
     { name = "fastmcp" },
@@ -924,7 +923,6 @@ dependencies = [
 requires-dist = [
     { name = "angee-base", editable = "src/angee/base" },
     { name = "angee-iam", editable = "src/angee/iam" },
-    { name = "angee-provenance", editable = "src/angee/provenance" },
     { name = "angee-server", editable = "src/angee/server" },
     { name = "django-compose", specifier = ">=0.1.0.dev2,<0.2" },
     { name = "fastmcp", specifier = ">=3.4.7,<4" },
@@ -2693,16 +2691,16 @@ dependencies = [
 
 [[package]]
 name = "django-compose"
-version = "0.1.0.dev3"
+version = "0.1.0.dev5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
     { name = "django-yamlconf" },
     { name = "packaging" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/41/5e/2a58ba2575dacc0a03cc159f32490e00ca2f8e6274e2f6bc358376205b68/django_compose-0.1.0.dev3.tar.gz", hash = "sha256:50c28432ca3cb9ddc32b831fcf225ef41f3cdc8275d0905ab3edf8ff177455e7", size = 276789, upload-time = "2026-10-30T17:05:33.974Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c3/df/18af2fa7e104c81ac8b971245f8e26fc8b46f2aa67faca9391b4d5df0d02/django_compose-0.1.0.dev5.tar.gz", hash = "sha256:014e69991d34002f0392d942f5781200faccfd0ba7ba35a2913116b0b1650cc9", size = 279545, upload-time = "2026-10-30T18:22:10.126Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ef/4a/0e5bfbf52a53ccbfbc30fa4ac11a4bf69bfeb0e52318ad494aac07731533/django_compose-0.1.0.dev3-py3-none-any.whl", hash = "sha256:68864e8c4057362376e2817503163341b541876be80c3afdfb812ff2ec2121eb", size = 104128, upload-time = "2026-10-30T17:05:32.476Z" },
+    { url = "https://files.pythonhosted.org/packages/64/59/a64eea4dad91987badba27ddfe5f5e53d22454d1835ceb7ea7c910a61a65/django_compose-0.1.0.dev5-py3-none-any.whl", hash = "sha256:96f84e7392815ab5b83e9a41e5bb5a32d68888768ed677dea2cb1e450904b209", size = 104350, upload-time = "2026-10-30T18:22:08.883Z" },
 ]
 
 [[package]]

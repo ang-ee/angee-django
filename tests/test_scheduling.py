@@ -202,6 +202,21 @@ def test_utc_until_validates_and_bounds_aware_wall_clock_recurrence() -> None:
 
 
 @pytest.mark.parametrize("until", ["20261029", "20261029T000000"])
-def test_floating_until_is_refused_for_the_aware_recurrence_contract(until: str) -> None:
-    with pytest.raises(ValidationError):
-        Recurrence(f"FREQ=DAILY;UNTIL={until}").validate()
+def test_legacy_floating_until_validates(until: str) -> None:
+    Recurrence(f"FREQ=DAILY;UNTIL={until}").validate()
+
+
+@pytest.mark.parametrize("until,last_day,hour", [
+    ("20260309", 9, 0), ("20260309T090000", 9, 9),
+    ("20260309T130000Z", 9, 9),
+])
+@override_settings(TIME_ZONE="America/New_York")
+def test_legacy_until_retains_local_clock_across_dst(until, last_day, hour):
+    recurrence = Recurrence(f"FREQ=DAILY;UNTIL={until}")
+    recurrence.validate()
+    result = recurrence.occurrences(
+        _local("America/New_York", 2026, 3, 6, hour),
+        _local("America/New_York", 2026, 3, 7),
+        _local("America/New_York", 2026, 3, 11),
+    )
+    assert result == [_local("America/New_York", 2026, 3, day, hour) for day in range(7, last_day + 1)]

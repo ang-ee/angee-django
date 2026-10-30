@@ -48,14 +48,14 @@ from angee.base.expressions import JSONArraySubquery
 from angee.base.fields.ordering import FractionalRankField
 from angee.base.fields.state import StateField
 from angee.base.managers import AngeeManager
-from angee.base.models.audit import AuditMixin
+from angee.base.models.audit import AuditMixin, retained_set_null
 from angee.base.models.base import AngeeDataModel, AngeeModel
 from angee.base.models.locks import ImmutableFieldsMixin, OptimisticLockMixin
 from angee.base.models.ownership import OwnerQuerySet
 from angee.base.models.roles import role_anchor
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.permissions import actor_user_id, instance_actor, subject_reaches_user
-from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet
+from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet, ClosedUpdateQuerySet
 from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256
 from angee.base.validators import validate_value
 from angee.iam.identity import user_label_expression, user_label_queryset
@@ -208,13 +208,18 @@ class RosterEntry:
     track_status: str | None = None
 
 
-class _RoundRequesterWrites(models.QuerySet):
+class _RoundRequesterWrites(ClosedUpdateQuerySet):
     """Reserve requester identity changes for the round's locked instance owner."""
 
     def update(self, **kwargs: Any) -> int:
         if {"requester_party", "requester_party_id"}.intersection(kwargs):
             raise ValidationError({"requester_party": "Change requester identity through the round instance."})
-        return super().update(**kwargs)
+        return self.owner_update(**kwargs)
+
+    def bulk_update(self, objs: Any, fields: Any, *args: Any, **kwargs: Any) -> int:
+        """Keep native batch edits subject to the requester update guard."""
+
+        return super(ClosedUpdateQuerySet, self).bulk_update(objs, fields, *args, **kwargs)
 
     def bulk_create(
         self,
@@ -446,7 +451,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         "parties.Party",
         null=True,
         blank=True,
-        on_delete=models.SET_NULL,
+        on_delete=retained_set_null,
         related_name="requested_proposal_rounds",
     )
     team = models.ForeignKey(
@@ -1082,6 +1087,17 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             ),
         )
         self.route_clarification(task, "passed")
+
+    @classmethod
+    def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> Any:
+        """Reassign requester identity through the same locked exclusion owner."""
+
+        if reference.name != "requester_party":
+            return NotImplemented
+        for round in rows.order_by("pk").lock_if_supported():
+            round.requester_party = survivor
+            round.save(using=rows.db, update_fields=("requester_party", "updated_at"))
+        return None
 
     def clean(self) -> None:
         """Validate target, deadline, outcome, and receipt coherence."""

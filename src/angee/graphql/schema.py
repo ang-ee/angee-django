@@ -13,6 +13,7 @@ from typing import Any, ClassVar, cast
 
 import strawberry
 from django.apps import AppConfig, apps
+from django.conf import settings
 from django.core.exceptions import NON_FIELD_ERRORS, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.utils.functional import cached_property
@@ -22,6 +23,7 @@ from rebac import MissingActorError, PermissionDenied
 from rebac.graphql.strawberry import RebacExtension
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 from rebac.resources import model_resource_type
+from strawberry.extensions import SchemaExtension
 from strawberry.schema.schema_converter import GraphQLCoreConverter
 from strawberry.tools import merge_types
 from strawberry.types.arguments import convert_argument
@@ -94,6 +96,21 @@ class AngeeSchema(strawberry.Schema):
 
     angee_resources: tuple[DataResourceMetadata, ...] = ()
     """Model resource metadata carried by this built schema."""
+
+    def get_extensions(self, sync: bool = False) -> list[SchemaExtension]:
+        """Add configured native extension factories to every named schema.
+
+        ``ANGEE_GRAPHQL_EXTENSION_FACTORIES`` contains dotted callables accepting
+        Strawberry's ``sync`` flag and returning a native SchemaExtension class.
+        Native construction keeps one extension instance per execution, including
+        schemas whose addon bucket contributes its own extensions.
+        """
+
+        return [
+            *super().get_extensions(sync=sync),
+            *(import_string(path)(sync=sync)() for path in
+              getattr(settings, "ANGEE_GRAPHQL_EXTENSION_FACTORIES", ())),
+        ]
 
     @lru_cache
     def get_type_by_name(

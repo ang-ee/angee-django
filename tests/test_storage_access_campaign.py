@@ -156,12 +156,15 @@ def test_folder_and_drive_projections_hide_unreadable_parents(drive: Any) -> Non
         parent = Folder.objects.create(drive=drive, name="Private parent")
         child = Folder.objects.create(drive=drive, parent=parent, owner=reader, name="Visible child")
     schema = addon_schema(storage_schema.schemas, "public")
-    query = "query Folder($id: String!) { folders_by_pk(id: $id) { id drive parent } }"
-    expected = {"id": str(child.sqid), "drive": None, "parent": None}
+    query = "query Folder($id: String!) { folders_by_pk(id: $id) { id drive parent ancestors { id name } } }"
+    expected = {"id": str(child.sqid), "drive": None, "parent": None, "ancestors": []}
     assert result_data(execute_schema(schema, query, {"id": str(child.sqid)}, user=reader))["folders_by_pk"] == expected
     with actor_context(drive.alice):
         drive.with_actor(drive.alice).grant_record_access("viewer", reader)
-    expected.update(drive=str(drive.sqid), parent=str(parent.sqid))
+    expected.update(
+        drive=str(drive.sqid), parent=str(parent.sqid),
+        ancestors=[{"id": str(parent.sqid), "name": parent.name}],
+    )
     assert result_data(execute_schema(schema, query, {"id": str(child.sqid)}, user=reader))["folders_by_pk"] == expected
     backend_query = "query Drive($id: String!) { drives_by_pk(id: $id) { backend } }"
     assert result_data(execute_schema(

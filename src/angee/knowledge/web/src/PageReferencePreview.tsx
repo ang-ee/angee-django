@@ -4,14 +4,15 @@ import { useOne, type BaseRecord, type HttpError } from "@refinedev/core";
 import { RecordReference, useRecordReference, useResolvedWidget } from "@angee/ui";
 import type { ReactElement } from "react";
 
-const KNOWLEDGE_PAGE_MODEL = "knowledge.Page";
+import { PAGE_MODEL } from "./data/documents";
+
 const KNOWLEDGE_PAGE_FIELDS = refineFieldsFromPaths(["id", "title", "markdown.body"]);
 type RowRecord = BaseRecord & Row;
 
 /** Resolve the optional knowledge resource and show its current title and opening paragraph. */
 export function PageReferencePreview(): ReactElement {
   const reference = useRecordReference();
-  const metadata = useModelMetadata(KNOWLEDGE_PAGE_MODEL);
+  const metadata = useModelMetadata(PAGE_MODEL);
   const resource = metadata?.resource ?? null;
   const read = useOne<RowRecord, HttpError>({
     resource: refineResourceName(resource),

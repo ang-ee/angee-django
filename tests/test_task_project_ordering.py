@@ -1,14 +1,16 @@
 """Task board intent respects persisted project ranks and native write admission."""
 
+import math
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event
 from types import SimpleNamespace
 from unittest import skipUnless
 
-from django.db import connection, connections, transaction
+from django.core.exceptions import ValidationError
+from django.db import connection, connections, models, transaction
 from django.test import RequestFactory
 from rebac import actor_context, system_context
 from rebac.backends import backend
@@ -66,6 +68,16 @@ class TaskProjectOrderingTests(WorkCase):
         self.assertEqual(list(self.Task._base_manager.filter(project=self.project).order_by(
             "sort_order",
         ).values_list("pk", flat=True)), [before.pk, hidden.pk, moving.pk, after.pk])
+
+    def test_board_drop_repairs_exhausted_context_then_preserves_intent(self):
+        before = self.ordered_task("Before", 1.0)
+        after = self.ordered_task("After", math.nextafter(1.0, math.inf))
+        moving = self.ordered_task("Moving", 4096)
+        result = self.execute_move(moving, [before.sqid], [after.sqid])
+        self.assertIsNone(result.errors, result.errors)
+        self.assertEqual(list(self.Task._base_manager.filter(project=self.project).order_by(
+            "sort_order",
+        ).values_list("pk", flat=True)), [before.pk, moving.pk, after.pk])
 
     def test_mixed_project_visible_neighbors_do_not_define_task_scope(self):
         before = self.ordered_task("Before", 0)
@@ -162,11 +174,11 @@ class TaskProjectOrderingTests(WorkCase):
             ]
             self.Task._base_manager.bulk_create(rows)
             self.assertEqual([row.sort_order for row in rows], [9216, 10240, 8192])
-            self.assertEqual(len({row.sub_sort_order for row in rows}), 3)
+            self.assertEqual({row.sub_sort_order for row in rows}, {1024})
             forest = [self.Task(title=f"Forest {index}", project=self.project, owner=self.owner) for index in range(2)]
             self.Task.objects.create_forest(forest)
         self.assertEqual([row.sort_order for row in forest], [11264, 12288])
-        self.assertEqual(len({row.sub_sort_order for row in [*rows, *forest]}), 5)
+        self.assertEqual({row.sub_sort_order for row in [*rows, *forest]}, {1024})
         self.assertTrue(all(row.path for row in forest))
 
     def test_forest_stages_null_parent_ranks_then_captures_final_parent_context_once(self):
@@ -196,6 +208,125 @@ class TaskProjectOrderingTests(WorkCase):
                 "history_type", "parent_id", "sub_sort_order",
             ))
             self.assertEqual(versions, [("+", row.parent_id, row.sub_sort_order)])
+
+    def test_native_queryset_and_upsert_moves_lock_their_source_and_destination(self):
+        with system_context(reason="tests.task_order.native_moves"):
+            other = self.Project.objects.create(title="Destination", owner=self.owner)
+            row = self.ordered_task("Moving", 0)
+            self.Task._base_manager.filter(pk=row.pk).update(project_id=models.Value(other.pk))
+            row.refresh_from_db()
+            self.assertEqual(row.project_id, other.pk)
+            row.project = self.project
+            self.Task._base_manager.bulk_create(
+                [row], update_conflicts=True, update_fields=("project",), unique_fields=("pk",),
+            )
+            row.refresh_from_db()
+            self.assertEqual(row.project_id, self.project.pk)
+
+    @skipUnless(connection.vendor == "postgresql", "Requires native PostgreSQL transactional ordering locks.")
+    def test_independent_projects_do_not_wait_for_an_ingest_transaction(self):
+        with system_context(reason="tests.task_order.independent_setup"):
+            other = self.Project.objects.create(title="Independent project", owner=self.owner)
+            row = self.Task.objects.create(title="Independent task", project=other, owner=self.owner)
+        for operation in ("insert", "save", "queryset", "bulk_create", "create_forest", "bulk_update", "graphql"):
+            with self.subTest(operation=operation):
+                acquired, release = Event(), Event()
+                def ingest():
+                    try:
+                        with system_context(reason="tests.task_order.ingest"), transaction.atomic():
+                            self.Task.objects.create(title="Ingested", project_id=self.project.pk, owner=self.owner)
+                            acquired.set()
+                            self.assertTrue(release.wait(10))
+                    finally:
+                        connections.close_all()
+                def independent():
+                    try:
+                        with system_context(reason="tests.task_order.independent"):
+                            selected = self.Task.system_queryset().filter(pk=row.pk)
+                            target = selected.get()
+                            if operation == "insert":
+                                self.Task.objects.create(title="Append independent", project=other, owner=self.owner)
+                            elif operation == "save":
+                                target.sort_order = -1024
+                                target.save(update_fields=("sort_order",))
+                            elif operation == "queryset":
+                                selected.update(sort_order=-2048)
+                            elif operation == "bulk_create":
+                                self.Task._base_manager.bulk_create([
+                                    self.Task(title="Bulk independent", project=other, owner=self.owner),
+                                ])
+                            elif operation == "create_forest":
+                                self.Task.objects.create_forest([
+                                    self.Task(title="Forest independent", project=other, owner=self.owner),
+                                ])
+                            elif operation == "bulk_update":
+                                target.sort_order = -3072
+                                self.Task.objects.bulk_update([target], ("sort_order",))
+                            else:
+                                result = self.execute_move(target)
+                                self.assertIsNone(result.errors, result.errors)
+                    finally:
+                        connections.close_all()
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    held = pool.submit(ingest)
+                    try:
+                        self.assertTrue(acquired.wait(5))
+                        pool.submit(independent).result(timeout=5)
+                    finally:
+                        release.set()
+                    held.result(timeout=10)
+
+    @skipUnless(connection.vendor == "postgresql", "Requires native PostgreSQL transactional ordering locks.")
+    def test_concurrent_project_move_refuses_a_stale_ordering_context(self):
+        row = self.ordered_task("Moves while waiting", 0)
+        with system_context(reason="tests.task_order.stale_setup"):
+            other = self.Project.objects.create(title="Destination", owner=self.owner)
+        waiting = Event()
+        def reorder():
+            try:
+                def observe(execute, sql, params, many, context):
+                    if "pg_advisory_xact_lock" in sql:
+                        waiting.set()
+                    return execute(sql, params, many, context)
+                with connection.execute_wrapper(observe), system_context(reason="tests.task_order.stale_write"):
+                    try:
+                        self.Task._base_manager.filter(pk=row.pk).update(sort_order=4096)
+                    except ValidationError:
+                        return "stale"
+                return "changed"
+            finally:
+                connections.close_all()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with system_context(reason="tests.task_order.move"), self.Task.ordering_write(
+                using=connection.alias, project_ids=(self.project.pk,),
+            ):
+                future = pool.submit(reorder)
+                self.assertTrue(waiting.wait(5))
+                self.Task._base_manager.filter(pk=row.pk).update(project_id=other.pk)
+            self.assertEqual(future.result(timeout=10), "stale")
+        row.refresh_from_db()
+        self.assertEqual((row.project_id, row.sort_order), (other.pk, 0))
+
+    @skipUnless(connection.vendor == "postgresql", "Requires native PostgreSQL transactional ordering locks.")
+    def test_cross_project_children_still_share_their_parent_order(self):
+        parent = self.ordered_task("Shared parent", 0)
+        with system_context(reason="tests.task_order.cross_project_parent"):
+            other = self.Project.objects.create(title="Other project", owner=self.owner)
+        ready = Barrier(2, timeout=5)
+        def append(project_id):
+            try:
+                ready.wait()
+                with system_context(reason="tests.task_order.cross_project_append"):
+                    return self.Task.objects.create(
+                        title="Child", project_id=project_id, parent_id=parent.pk, owner=self.owner,
+                    ).pk
+            finally:
+                connections.close_all()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            keys = list(pool.map(append, (self.project.pk, other.pk)))
+        self.assertEqual(list(self.Task._base_manager.filter(pk__in=keys).order_by(
+            "sub_sort_order",
+        ).values_list("sub_sort_order", flat=True)), [1024, 2048])
 
     @skipUnless(connection.vendor == "postgresql", "Requires native PostgreSQL transactional ordering locks.")
     def test_concurrent_native_appends_share_the_ordering_transaction(self):

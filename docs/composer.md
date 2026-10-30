@@ -183,8 +183,25 @@ comes from Django dependencies and `run_before`, not filename order.
 After compose, native `makemigrations` binds applicable transitions and authors
 remaining changes. Review and commit the resulting native history. Copied bodies,
 origin fingerprints and released names remain immutable. A false guard cannot
-prove a data-only backfill ran. Fresh installs need a valid native chain or a
-reviewed squash; partially upgraded deployments retain the original chain.
+prove a data-only backfill ran. Partially upgraded deployments retain the original
+chain. For a newly authored final-schema baseline, an addon owner may explicitly
+declare that a particular transition is already satisfied:
+
+```toml
+[tool.angee.migrations.initial_baseline]
+stage_fractional_position = "satisfied"
+```
+
+This is a promise about the baseline, including databases adopted later with
+Django's `--fake-initial`; table existence alone does not prove it. Base's eager
+settings callback annotates `django_compose.snapshot.discover_transitions` records
+from the resolved closure. The compiler seals an inapplicable opted-in transition
+as a native no-op history node, preserving its origin and source hash. Applicable
+bootstrap/backfill work still runs; undeclared or ambiguous skips still fail.
+Unknown transition names fail configuration. An explicit project
+`COMPOSE_TRANSITION_SOURCE` remains authoritative. Do not edit a released source
+migration to express this promise; retire its declaration when the transition is
+retired under the native history policy.
 
 `MIGRATION_MODULES` is Django's routing contract. The compiler preserves tracked
 histories, including history-only apps whose source addon has been removed.

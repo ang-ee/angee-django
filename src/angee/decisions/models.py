@@ -57,7 +57,8 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
         constraints = [models.CheckConstraint(
             condition=models.Q(verdict__isnull=True, verdict_values__isnull=True,
                                answered_by__isnull=True, answered_at__isnull=True)
-            | (models.Q(verdict__isnull=False, answered_by__isnull=False, answered_at__isnull=False)
+            | (models.Q(verdict__isnull=False, answered_at__isnull=False)
+               & (models.Q(verdict=[]) | models.Q(answered_by__isnull=False))
                & (~models.Q(verdict=[]) | models.Q(verdict_values__isnull=True))),
             name="decisions_verdict_consistent",
         )]

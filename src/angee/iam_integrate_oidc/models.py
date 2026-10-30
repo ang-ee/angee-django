@@ -62,7 +62,7 @@ class CredentialOidc(Composable, extends="integrate.Credential"):
         if user.has_usable_password():
             return
         with system_context(reason="iam_integrate_oidc.unlink.guard"):
-            account_count = (
+            has_alternative = (
                 type(credential)
                 .objects.using(using).filter(
                     user_id=credential.user_id,
@@ -71,12 +71,10 @@ class CredentialOidc(Composable, extends="integrate.Credential"):
                         type(credential).external_account.field.related_model._base_manager.using(using).all(),
                     ).values("pk"),
                 )
-                .order_by()
-                .values("external_account_id")
-                .distinct()
-                .count()
+                .exclude(pk=credential.pk)
+                .exists()
             )
-        if account_count <= 1:
+        if not has_alternative:
             raise ValidationError("This is your only sign-in method.", code=ONLY_SIGN_IN_METHOD)
 
 

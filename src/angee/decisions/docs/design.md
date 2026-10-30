@@ -94,6 +94,8 @@ How the ontology maps to this addon.
 - **Gate:** `Decision.objects.open_for(record)` is the one call other owners use.
 - **Withdrawing:** the asker closes its own open decision with an empty verdict, recorded with who stopped it.
   `verdict_values` is null while open and when withdrawn, enforced by the verdict consistency constraint.
+  A named system owner may withdraw without a user; it still records `answered_at`.
+  Every substantive answer requires `answered_by`.
   "Open" stays one rule: no verdict yet.
   The card's choice and accepted-answer lock belong to its observed revision. A new revision
   clears both; closing the card keeps focus on its outcome. Answers invalidate concerned records.

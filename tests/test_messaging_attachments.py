@@ -189,8 +189,8 @@ def test_attached_files_never_follow_foreign_parents_or_repeat_cycles(channel: A
 
 
 @pytest.mark.django_db(transaction=True)
-def test_attached_files_queryset_is_limited_to_classified_ids(channel: Any, tmp_path: Path) -> None:
-    """New file uses wait for classification instead of entering a saved selector."""
+def test_attached_files_queryset_classifies_lazily(channel: Any, tmp_path: Path) -> None:
+    """Saved selectors classify current file uses when SQL runs without eager reads."""
 
     with system_context(reason="test messaging attachment snapshot storage"):
         _storage_drive(tmp_path, owner=channel.owner)
@@ -202,10 +202,15 @@ def test_attached_files_queryset_is_limited_to_classified_ids(channel: Any, tmp_
         message = Message._base_manager.get(external_id="attachment-snapshot")
         original = Part._base_manager.get(message=message, file__isnull=False)
     scope = message.parts.with_actor(channel.owner)
-    selected = scope.attached_files()
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    with CaptureQueriesContext(connection) as queries:
+        selected = scope.attached_files()
+    assert not any(Part._meta.db_table in entry["sql"] for entry in queries)
     with system_context(reason="test messaging attachment snapshot new uses"):
         added = Part.objects.create(message=message, file_id=original.file_id, disposition="attachment")
         Part.objects.create(message=message, file_id=original.file_id, disposition="attachment", role="signature")
-    assert list(selected.values_list("pk", flat=True)) == [original.pk]
+    assert set(selected.values_list("pk", flat=True)) == {original.pk, added.pk}
     assert set(scope.attached_files().values_list("pk", flat=True)) == {original.pk, added.pk}
     assert scope.attached_file_skip_counts() == {"signature": 1}

@@ -17,7 +17,7 @@ const emptyExplorer = {
   getRootId: (root: { id: string }) => root.id,
   getRootLabel: (root: { id: string }) => root.id,
   controller: {
-    rootId: "", setRootId: vi.fn(), treeRows: [] as Array<{ id: string }>,
+    rootId: "", setRootId: vi.fn(), invalidateRoot: vi.fn(), treeRows: [] as Array<{ id: string }>,
     selectedId: undefined, selectedRow: undefined, setSelectedId: vi.fn(),
   },
   navigatorLabel: "Folders",

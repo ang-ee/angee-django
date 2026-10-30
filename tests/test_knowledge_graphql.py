@@ -395,6 +395,36 @@ def test_update_page_body_round_trip_and_stale_guard(composed_tables: None) -> N
     assert detail["title"] == "Saved together"
 
 
+
+@pytest.mark.parametrize("failure", ["stale_title", "invalid_title"])
+def test_update_page_body_keeps_title_conflicts_and_validation_in_band(composed_tables: None, failure: str) -> None:
+    alice = create_user("knowledge-title-guard")
+    vault = vault_for(alice)
+    with actor_context(alice):
+        page = Page.objects.create_in(vault, title="Original", body="Original body")
+        expected = page.revision
+        if failure == "stale_title":
+            page.title = "Concurrent title"
+            page.save(update_fields={"title"})
+    result = result_data(execute_schema(
+        _schema("public"),
+        """mutation Save($page: ID!, $title: String!, $revision: Int!) {
+          update_page_body(page: $page, body: "Rejected body", title: $title, expected_revision: $revision) {
+            ok error_code markdown { revision }
+          }
+        }""",
+        {"page": _public_id(page), "title": "Stale title" if failure == "stale_title" else "x" * 513,
+         "revision": expected},
+        user=alice,
+    ))["update_page_body"]
+    assert result == {"ok": False, "error_code": "STALE_REVISION" if failure == "stale_title" else "VALIDATION_ERROR",
+                      "markdown": None}
+    with actor_context(alice):
+        stored = MarkdownPage.objects.get(pk=page.pk)
+        assert stored.body == "Original body"
+        assert stored.title == ("Concurrent title" if failure == "stale_title" else "Original")
+
+
 def test_update_page_body_reports_unsupported_kind(composed_tables: None) -> None:
     """Bodyless kinds surface a typed error code, not a server fault."""
 

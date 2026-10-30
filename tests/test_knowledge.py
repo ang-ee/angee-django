@@ -9,6 +9,7 @@ import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
+from django.test import override_settings
 from rebac import (
     MissingActorError,
     PermissionDenied,
@@ -21,6 +22,7 @@ from rebac import (
 )
 from rebac.roles import grant
 
+from angee.base.models.locks import StaleRevisionError
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.knowledge import schema as knowledge_schema
 from angee.knowledge.models import (
@@ -545,3 +547,38 @@ def _rename(vault: Any, name: str) -> None:
 
     vault.name = name
     vault.save(update_fields=("name",))
+
+
+def test_markdown_save_rejects_a_concurrent_title_edit_with_native_page_revision(composed_tables) -> None:
+    owner = create_user("knowledge-title-concurrency")
+    vault = vault_for(owner)
+    with actor_context(owner):
+        page = Page.objects.create_in(vault, title="Draft")
+        body = MarkdownPage.objects.write_body(page, "Original body")
+        baseline_revision, baseline_hash = body.revision, body.body_hash
+        changed = Page.objects.get(pk=page.pk)
+        changed.title = "Concurrent title"
+        changed.save(update_fields={"title"})
+        with pytest.raises(StaleRevisionError):
+            MarkdownPage.objects.write_body(
+                page, "Must not replace body", title="Stale title", expected_hash=baseline_hash,
+                expected_revision=baseline_revision,
+            )
+        stored = MarkdownPage.objects.get(pk=page.pk)
+        assert (stored.title, stored.body) == ("Concurrent title", "Original body")
+        class WriteRouter:
+            def db_for_read(self, model, **hints):
+                if model is MarkdownPage:
+                    raise AssertionError("A body write must select its write database before opening a transaction.")
+                return None
+
+            def db_for_write(self, model, **hints):
+                return "default"
+
+        with override_settings(DATABASE_ROUTERS=[WriteRouter()]):
+            saved = MarkdownPage.objects.write_body(
+                stored, "Accepted body", title="Accepted title", expected_hash=stored.body_hash,
+                expected_revision=stored.revision,
+            )
+        assert saved.revision == stored.revision + 1
+        assert (saved.title, saved.body) == ("Accepted title", "Accepted body")

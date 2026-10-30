@@ -151,3 +151,28 @@ def test_reader_rejects_encrypted_backup(tmp_path: Path) -> None:
     root = build_iphone_backup(tmp_path / "encrypted", encrypted=True)
     with pytest.raises(BackupError, match="encrypted"):
         IosBackup(root)
+
+
+def test_archive_manifest_resets_caller_budget_for_each_sorted_candidate(tmp_path):
+    import zipfile
+
+    from angee.integrate_iphone.archives import backup_manifest
+    from angee.integrate_iphone.backup import SQLITE_HEADER
+
+    manifest = tmp_path / "Manifest.db"
+    connection = sqlite3.connect(manifest)
+    connection.execute("CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT)")
+    connection.execute("INSERT INTO Files VALUES (?, ?, ?)", ("a" * 40, "AppDomain", "store.db"))
+    connection.commit()
+    connection.close()
+    archive_path = tmp_path / "backup.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.write(manifest, "a/Manifest.db")
+        archive.write(manifest, "b/Manifest.db")
+        archive.writestr("b/aa/" + "a" * 40, SQLITE_HEADER)
+    resets = []
+    with zipfile.ZipFile(archive_path) as archive:
+        entries = {member.filename: member for member in archive.infolist()}
+        result = backup_manifest(archive, entries, domain="AppDomain", relative_path="store.db",
+                                 before_candidate=lambda: resets.append(True))
+    assert result == "b/Manifest.db" and len(resets) == 2

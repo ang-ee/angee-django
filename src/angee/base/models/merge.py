@@ -194,8 +194,7 @@ class MergeableMixin(AngeeModel):
             merged_ids = sorted({row.pk for row in found.values()})
             if self.pk in merged_ids:
                 raise ValidationError("A record cannot be merged into itself.")
-            for row in sorted((self, *found.values()), key=lambda item: item.pk):
-                row.lock_for_merge()
+            model.lock_merge_records((self, *found.values()))
             rows = model._base_manager.db_manager(hints={"instance": self}).filter(
                 pk__in=(self.pk, *merged_ids)
             ).order_by("pk")
@@ -238,8 +237,7 @@ class MergeableMixin(AngeeModel):
         ids = sorted(keys)
         using = self._state.db
         with transaction.atomic(using=using):
-            for row in sorted((self, *merged), key=lambda item: item.pk):
-                row.lock_for_merge()
+            model.lock_merge_records((self, *merged))
             rows = model._base_manager.db_manager(hints={"instance": self}).filter(
                 pk__in=[self.pk, *ids]
             ).order_by("pk")
@@ -258,24 +256,9 @@ class MergeableMixin(AngeeModel):
 
         survivor = self
         model = type(survivor)
-        retained = all(self.retains(record) for record in merged)
         using = survivor._state.db
         with ExitStack() as contexts:
             pre_merge.send(sender=model, survivor=survivor, join=join, contexts=contexts)
-            with system_context(reason=MERGE_REASON):
-                rows = model._base_manager.db_manager(hints={"instance": survivor}).filter(
-                    pk__in=[record.pk for record in merged]
-                )
-                for condition, message in type(self).merge_blockers():
-                    if rows.filter(condition).exists():
-                        raise ValidationError(message)
-                guards = resolve_hooks("ANGEE_MERGE_GUARDS")
-                for record in merged:
-                    if not retained and named_in_relationships(record):
-                        raise ValidationError(f"{record} is shared or named in access rules; remove that first.")
-                    for guard in guards:
-                        if refusal := guard(record):
-                            raise ValidationError(refusal)
             self.validate_merge(merged)
             self.merge_fields(merged, **options)
             moving = [
@@ -300,17 +283,40 @@ class MergeableMixin(AngeeModel):
             for record in merged:
                 self.retire_merged(record)
 
+    @classmethod
+    def lock_merge_records(cls, records: Sequence[Self]) -> None:
+        """Acquire domain locks for the complete batch before core record locks."""
+
+        for row in sorted(records, key=lambda item: item.pk):
+            row.lock_for_merge()
+
     def lock_for_merge(self) -> None:
         """Acquire domain locks that must precede the core record locks."""
 
     def validate_merge(self, merged: Sequence[Self]) -> None:
-        """Only live operational roots merge; model hooks add domain refusals."""
+        """Read canonical, reference and addon refusals without mutating records."""
 
         if any(
             row.merged_into_id is not None or (isinstance(row, TrashMixin) and row.is_trashed)
             for row in (self, *merged)
         ):
             raise ValidationError("Only canonical records can be merged.")
+
+        retained = all(self.retains(record) for record in merged)
+        with system_context(reason=MERGE_REASON):
+            rows = type(self)._base_manager.db_manager(hints={"instance": self}).filter(
+                pk__in=[record.pk for record in merged],
+            )
+            for condition, message in type(self).merge_blockers():
+                if rows.filter(condition).exists():
+                    raise ValidationError(message)
+            guards = resolve_hooks("ANGEE_MERGE_GUARDS")
+            for record in merged:
+                if not retained and named_in_relationships(record):
+                    raise ValidationError(f"{record} is shared or named in access rules; remove that first.")
+                for guard in guards:
+                    if refusal := guard(record):
+                        raise ValidationError(refusal)
 
     def merge_fields(self, merged: Sequence[Self], **options: Any) -> None:
         """Carry values over from the merged records; the default keeps this record's own."""

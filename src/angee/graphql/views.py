@@ -9,12 +9,10 @@ from typing import Any
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied
-from django.dispatch import Signal
 from django.http import Http404, HttpRequest, HttpResponse, JsonResponse
 from django.middleware.csrf import get_token
 from django.views.decorators.csrf import ensure_csrf_cookie
 from strawberry.django.views import GraphQLView
-from strawberry.types import ExecutionResult
 
 from angee.base.models.identity import public_id_of
 from angee.graphql.schema import GraphQLSchemas
@@ -23,25 +21,12 @@ from graphql import GraphQLError, get_operation_ast, parse
 
 logger = logging.getLogger("angee.graphql.view_as")
 
-result_processed = Signal()
-"""A view serialized a GraphQL execution result (request, result)."""
-
-
-class AngeeGraphQLView(GraphQLView):
-    """Strawberry's Django view with a native operation-result lifecycle signal."""
-
-    def process_result(self, request: HttpRequest, result: ExecutionResult) -> Any:
-        processed = super().process_result(request, result)
-        result_processed.send(sender=type(self), request=request, result=result)
-        return processed
-
-
 @cache
 def _get_view(schema_name: str) -> Any:
     """Return the Django view for one named GraphQL schema."""
 
     schema = GraphQLSchemas.from_discovery().build(schema_name)
-    return AngeeGraphQLView.as_view(
+    return GraphQLView.as_view(
         schema=schema,
         graphql_ide=getattr(settings, "ANGEE_GRAPHQL_IDE", None),
     )

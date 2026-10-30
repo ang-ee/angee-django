@@ -22,6 +22,7 @@ from angee.base.models.locks import StaleRevisionError
 from angee.base.serialization import ASCII_JSON, canonical_json_sha256
 from angee.dashboards.models import Dashboard as DashboardModel
 from angee.dashboards.models import DashboardConflictError, canonical_dashboard_snapshot, widget_visibility_answers
+from angee.graphql.actions import session_user
 from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID, require_public_id, to_public_id
@@ -29,7 +30,6 @@ from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import TrashedRefMixin
 from angee.iam.identity import user_display_label, user_public_id
-from angee.iam.permissions import session_user
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 
 Dashboard = apps.get_model("dashboards", "Dashboard")

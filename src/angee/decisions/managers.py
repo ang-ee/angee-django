@@ -96,7 +96,8 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
         if not is_sudo():
             raise PermissionDenied("Withdrawal requires the authorized asking owner's system context.")
         # Cleanup must still close a retired principal's retained questions.
-        withdrawing = _user(actor, active=False)
+        actor = actor if actor is not None else current_actor()
+        withdrawing = _user(actor, active=False) if actor is not None else None
         pk = decision.pk if isinstance(decision, models.Model) else decision
         with transaction.atomic(), system_context(reason="decisions.withdraw"):
             row = self.filter(pk=pk).lock_if_supported().get()
@@ -111,7 +112,7 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
                 row.refresh_from_db()
                 publish_change(row, action="update", update_fields=None)
                 decision_answered.send(sender=type(row), decision=row)
-        return row.with_actor(withdrawing)
+        return row.with_actor(withdrawing) if withdrawing is not None else row
 
     def ask(self, request: DecisionRequest, *, actor: Any) -> Any:
         """Admit one question after checking its participants' standing read access."""

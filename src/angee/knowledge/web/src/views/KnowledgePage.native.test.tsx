@@ -16,7 +16,7 @@ const pageQuery = ResourceQuery.forRows({ fields: {
   is_trashed: { scalar: "Boolean" }, navigation_root: { scalar: "Boolean" }, removed_root: { scalar: "Boolean" },
 } });
 const vaultQuery = ResourceQuery.forRows({ fields: { id: { scalar: "ID" }, name: { scalar: "String" }, is_trashed: { scalar: "Boolean" } } });
-const { Provider, clearClients } = createUiTestProviders({ resources: [
+const { Provider, createClient, clearClients } = createUiTestProviders({ resources: [
   testDataResource("knowledge.Page", { query: pageQuery.contract, fields: [
     { name: "title", kind: "scalar", scalar: "String", readable: true, updatable: true,
       creatable: true, requiredOnCreate: true, aggregatable: false },
@@ -28,7 +28,7 @@ const href = createRouteHref([{ name: "knowledge.home", path: "/knowledge" }, { 
 const vaults = [{ id: "vlt_a", name: "Reference", permissions: ["write"], is_trashed: false },
   { id: "vlt_b", name: "Research", permissions: ["write"], is_trashed: false }];
 function page(id: string, title: string, vault = "vlt_a"): KnowledgePageDetail {
-  return { id, title, vault, kind: "note", icon: "", vault_label: vault === "vlt_a" ? "Reference" : "Research",
+  return { id, revision: 1, title, vault, kind: "note", icon: "", vault_label: vault === "vlt_a" ? "Reference" : "Research",
     permissions: ["write"], parent: null, is_trashed: false, has_children: false, ancestors: [], wikilinks: [], backlinks: [],
     markdown: null, updated_at: "2026-10-20", created_by_label: "Author" };
 }
@@ -43,14 +43,16 @@ function deferred() {
 afterEach(() => { cleanup(); clearClients(); });
 
 function fixture(initial = "/knowledge", pending: Record<string, ReturnType<typeof deferred>> = {}) {
+  let availableVaults = vaults;
+  const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   const custom = vi.fn<NonNullable<RefineTestDataProvider["custom"]>>(async ({ meta }) => {
     const variables = meta?.gqlVariables ?? {};
     if (meta?.gqlQuery === PageDocument) {
       await pending[String(variables.id)]?.promise;
       return { data: { pages_by_pk: rows.find((row) => row.id === variables.id) ?? null } };
     }
-    if (meta?.gqlQuery === KnowledgeVault) return { data: { vaults_by_pk: vaults.find((vault) => vault.id === variables.id) ?? null } };
-    if (meta?.gqlQuery === KnowledgeVaults) return { data: { vaults: vaults.filter((vault) => vaultQuery.matches(vault, vaultQuery.fromWhere(variables.where))) } };
+    if (meta?.gqlQuery === KnowledgeVault) return { data: { vaults_by_pk: availableVaults.find((vault) => vault.id === variables.id) ?? null } };
+    if (meta?.gqlQuery === KnowledgeVaults) return { data: { vaults: availableVaults.filter((vault) => vaultQuery.matches(vault, vaultQuery.fromWhere(variables.where))) } };
     if (meta?.gqlQuery === KnowledgePages) {
       const pages = rows.filter((row) => pageQuery.matches(row, pageQuery.fromWhere(variables.where)));
       return { data: { pages, pages_aggregate: { aggregate: { count: pages.length } } } };
@@ -65,10 +67,13 @@ function fixture(initial = "/knowledge", pending: Record<string, ReturnType<type
   const router = createRouter({ routeTree: root.addChildren([home.addChildren([detail])]),
     history: createMemoryHistory({ initialEntries: [initial] }),
   });
-  render(<Provider dataProvider={{ custom, getList: async () => ({ data: [], total: 0 }) }}>
+  render(<Provider queryClient={client} dataProvider={{ custom, getList: async () => ({ data: [], total: 0 }) }}>
     <ToastProvider><ModalsHost><RouterProvider router={router} /></ModalsHost></ToastProvider>
   </Provider>);
-  return { router, custom };
+  return { router, custom, setVaults: async (next: typeof vaults) => {
+    availableVaults = next;
+    await act(async () => { await client.invalidateQueries(); });
+  } };
 }
 
 test("native navigation keeps the same-root tree and search while the next record is pending", async () => {
@@ -157,4 +162,36 @@ test("an expanded native branch survives a same-root deferred record read", asyn
   await screen.findByDisplayValue("Beta");
   expect(screen.getByRole("tree")).toBe(tree);
   expect(screen.getByText("Nested")).toBeTruthy();
+});
+
+
+test("declining the native dirty-form blocker retains the vault and edited record", async () => {
+  const f = fixture("/knowledge/pg_a");
+  const title = await screen.findByDisplayValue("Alpha");
+  fireEvent.change(title, { target: { value: "Unsaved Alpha" } });
+  await screen.findByRole("button", { name: "Save" });
+  const tree = screen.getByRole("tree");
+  const picker = screen.getByRole("combobox", { name: "Vault: Reference" });
+  fireEvent.click(picker);
+  fireEvent.click(await screen.findByRole("option", { name: "Research" }));
+  const dialog = await screen.findByRole("alertdialog");
+  expect(screen.getByRole("combobox", { name: "Vault: Reference" })).toBe(picker);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Stay" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(f.router.state.location.pathname).toBe("/knowledge/pg_a");
+  expect(screen.getByDisplayValue("Unsaved Alpha")).toBe(title);
+  expect(screen.getByRole("tree")).toBe(tree);
+  expect(screen.getByRole("combobox", { name: "Vault: Reference" })).toBe(picker);
+});
+
+
+test.each(["revoked", "trashed"])("a resolved %s vault clears its retained scope", async (state) => {
+  const f = fixture("/knowledge/pg_a");
+  await screen.findByRole("combobox", { name: "Vault: Reference" });
+  await f.setVaults(state === "revoked" ? vaults.slice(1) : [
+    { ...vaults[0]!, is_trashed: true }, vaults[1]!,
+  ]);
+  await waitFor(() => expect(screen.queryByRole("combobox", { name: "Vault: Reference" })).toBeNull());
+  expect(f.router.state.location.pathname).toBe("/knowledge/pg_a");
+  expect(screen.queryByText("Projects")).toBeNull();
 });

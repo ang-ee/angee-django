@@ -35,12 +35,13 @@ export const KnowledgeCreateVaultFrom = graphql(`
 `);
 
 export const KnowledgeUpdatePageBody = graphql(`
-  mutation KnowledgeUpdatePageBody($page: ID!, $body: String!, $expected_hash: String, $title: String) {
-    update_page_body(page: $page, body: $body, expected_hash: $expected_hash, title: $title) {
+  mutation KnowledgeUpdatePageBody($page: ID!, $body: String!, $expected_hash: String, $title: String, $expected_revision: Int) {
+    update_page_body(page: $page, body: $body, expected_hash: $expected_hash, title: $title, expected_revision: $expected_revision) {
       ok
       error
       error_code
       markdown {
+        revision
         title
         body
         body_hash
@@ -65,7 +66,7 @@ export const KnowledgeVaults = graphql(`
 
 export const KnowledgeVault = graphql(`
   query KnowledgeVault($id: String!) {
-    vaults_by_pk(id: $id) { id name permissions }
+    vaults_by_pk(id: $id) { id name permissions is_trashed }
   }
 `);
 
@@ -160,6 +161,7 @@ export const KnowledgePage = graphql(`
   query KnowledgePage($id: String!) {
     pages_by_pk(id: $id) {
       id
+      revision
       permissions
       title
       kind

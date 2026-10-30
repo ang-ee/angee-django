@@ -27,7 +27,6 @@ import hashlib
 import json
 import logging
 import re
-from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import nullcontext
 from contextvars import Context
@@ -91,6 +90,7 @@ from angee.messaging.delivery import (
     RECONCILE_BACKOFF,
 )
 from angee.messaging.events import message_ingested
+from angee.messaging.expressions import AttachedFileSkipReason
 from angee.messaging.inbox import MessageInbox
 from angee.messaging.source_copies import observe_email_identity
 from angee.parties.managers import Signing
@@ -4528,112 +4528,26 @@ class PartQuerySet[PartT: Part](AngeeQuerySet[PartT]):
         parsed ``message/rfc822`` level regardless of multipart depth; skip raw
         message wrappers and deeper forwarded content without parsing file bytes.
 
-        Classification eagerly reads candidates and prefetches their readable
-        trees. The returned queryset preserves actor, filters and ordering,
-        restricted to the selected IDs at call time. Keep each Part use even
-        when several parts reference the same File; call again for new parts.
+        Selection stays lazy, preserving actor, filters, ordering and later writes.
+        Each Part use is retained even when several uses share a File.
         """
 
-        selected, _skipped = self._attached_file_selection()
-        return self.attachments().filter(pk__in=selected)
+        return self.attachments().alias(_attachment_skip=self._attached_file_reason()).filter(_attachment_skip="")
 
     def attached_file_skip_counts(self) -> dict[str, int]:
-        """Count skipped file-bearing Part uses using ``attached_files()`` policy.
+        """Count each skipped file use by the same first matching reason as selection."""
 
-        Count each use once, by the first matching reason: ``signature``,
-        ``delivery_report``, ``inline``, ``forward_depth``, ``forwarded_message``,
-        ``empty_file``. Only nonzero reasons appear; parts without Files do not.
-        Signature roles or PGP/PKCS7 signature MIME types veto a whole branch,
-        as do multipart reports and delivery/disposition status messages.
-        Content-IDs and inline decoration file parts also veto descendants; inline
-        text or multipart containers, and inline documents, do not. Forward depth counts strict RFC822
-        ancestors, allowing one. MIME comparisons ignore case and parameters.
-        """
+        rows = self.attachments().annotate(_attachment_skip=self._attached_file_reason()).exclude(
+            _attachment_skip="",
+        ).order_by().values("_attachment_skip").annotate(count=models.Count("pk"))
+        return {row["_attachment_skip"]: row["count"] for row in rows}
 
-        _selected, skipped = self._attached_file_selection()
-        return dict(skipped)
-
-    INLINE_DOCUMENT_TYPES = frozenset({"application/pdf", "application/xml", "text/xml"})
-    """Document types a mailer may present inline (``Content-Disposition: inline`` with a filename)
-    without making them decoration: a forwarded bill stays an attachment."""
-
-    def _inline_decoration(self, row: Any) -> bool:
-        """Return whether an inline row is body decoration rather than a document.
-
-        A part referenced from the body by Content-ID is decoration, as is an inline
-        file part without a filename or of a non-document type (a signature image).
-        An inline file part with a filename and a document type is a document the
-        sender chose to show inline, and stays an attachment.
-        """
-
-        if row.cid:
-            return True
-        if not row.file_id or row.disposition != self.model.Disposition.INLINE:
-            return False
-        mime = row.type.split(";", 1)[0].strip().lower()
-        return not (row.name and (mime in self.INLINE_DOCUMENT_TYPES or mime.endswith("+xml")))
-
-    def _attached_file_selection(self) -> tuple[list[Any], Counter[str]]:
-        """Share classification between the selector and its skip counts."""
-
+    def _attached_file_reason(self) -> AttachedFileSkipReason:
         actor, bypass = self.effective_actor(strict=True)
         tree = self.model.objects.using(self.db)
-        tree = (
-            tree.system_context(reason="messaging attached-file tree for an elevated queryset")
-            if bypass
-            else tree.with_actor(actor)
-        ).select_related("fragment", "file", "file__mime_type")
-        candidates = (
-            self.attachments()
-            .select_related("file", "message")
-            .prefetch_related(
-                models.Prefetch("message__parts", queryset=tree),
-            )
-        )
-        owner = self.model.objects.db_manager(self.db)
-        selected: list[Any] = []
-        skipped: Counter[str] = Counter()
-        for part in candidates:
-            file = part.file
-            if file is None:
-                continue
-            lineage: tuple[Part, ...] = (part, *owner.ancestors_for_message(part.message, part.pk))
-            types = [row.type.split(";", 1)[0].strip().lower() for row in lineage]
-            if any(row.role == self.model.PartRole.SIGNATURE for row in lineage) or any(
-                mime
-                in {
-                    "application/pgp-signature",
-                    "application/pkcs7-signature",
-                    "application/x-pkcs7-signature",
-                }
-                for mime in types
-            ):
-                reason = "signature"
-            elif any(
-                mime
-                in {
-                    "multipart/report",
-                    "message/delivery-status",
-                    "message/global-delivery-status",
-                    "message/disposition-notification",
-                    "message/global-disposition-notification",
-                }
-                for mime in types
-            ):
-                reason = "delivery_report"
-            elif any(self._inline_decoration(row) for row in lineage):
-                reason = "inline"
-            elif types[1:].count("message/rfc822") > 1:
-                reason = "forward_depth"
-            elif types[0] == "message/rfc822":
-                reason = "forwarded_message"
-            elif not file.size_bytes:
-                reason = "empty_file"
-            else:
-                selected.append(part.pk)
-                continue
-            skipped[reason] += 1
-        return selected, skipped
+        readable = (tree.system_context(reason="messaging attached-file lineage for an elevated queryset")
+                    if bypass else tree.with_actor(actor)).scoped_for_aggregate()
+        return AttachedFileSkipReason(readable)
 
 
 _PartManagerBase = AngeeManager.from_queryset(PartQuerySet)

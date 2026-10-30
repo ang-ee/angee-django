@@ -16,6 +16,9 @@ from angee.mcp import server
     ("api.example.test", "https://untrusted.test", 403),
     ("api.example.test", "https://console.example.test", 204),
     ("example.test", "http://example.test", 204),
+    ("django:8000", None, 204),
+    ("django:8000", "https://untrusted.test", 403),
+    ("host.docker.internal:8000", None, 421),
 ])
 def test_mcp_mount_composes_native_host_and_origin_guard(
     monkeypatch: pytest.MonkeyPatch, host: str, origin: str | None, status: int,
@@ -37,7 +40,10 @@ def test_mcp_mount_composes_native_host_and_origin_guard(
     monkeypatch.setattr(server, "mcp_server", NativeServer)
     server.mcp_app.cache_clear()
     try:
-        with override_settings(ALLOWED_HOSTS=[".example.test"], CSRF_TRUSTED_ORIGINS=["https://console.example.test"]):
+        with override_settings(
+            ALLOWED_HOSTS=[".example.test"], CSRF_TRUSTED_ORIGINS=["https://console.example.test"],
+            ANGEE_BUILTIN_MCP_URL="http://django:8000/mcp",
+        ):
             async def request() -> int:
                 async with httpx.AsyncClient(
                     transport=httpx.ASGITransport(app=server.mcp_app()), base_url="http://127.0.0.1",

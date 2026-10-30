@@ -2,9 +2,8 @@
 
 iam owns "who is a platform admin", so the platform-admin GraphQL gate lives here
 — not buried in ``iam.schema`` — and downstream addons (e.g. ``integrate``) import
-it without pulling in iam's whole schema module. Session authentication checks
-are shared by permission classes and self-service resolvers; Strawberry owns
-request context.
+it without pulling in iam's whole schema module. GraphQL owns the shared
+session-user gate; Strawberry owns request context.
 """
 
 from __future__ import annotations
@@ -24,20 +23,6 @@ def is_authenticated(user: Any) -> bool:
     """Return whether ``user`` is a real authenticated session user."""
 
     return not isinstance(user, AnonymousUser) and bool(getattr(user, "is_authenticated", False))
-
-
-def session_user(info: strawberry.Info) -> Any:
-    """Return the authenticated session user or raise a REBAC denial.
-
-    The shared "this resolver requires a signed-in user" gate; iam's resolvers
-    and downstream self-service mutations (e.g. ``integrate``) use it so the
-    anonymous-deny check lives in exactly one place.
-    """
-
-    user = get_current_user(info)
-    if not is_authenticated(user):
-        raise PermissionDenied("Authentication required.")
-    return user
 
 
 def is_platform_admin(user: Any) -> bool:

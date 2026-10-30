@@ -276,6 +276,13 @@ class ForeignKeyReference(Reference):
 
         return (self.field.name,)
 
+    def blocks_target_delete(self, target: type[models.Model]) -> bool:
+        """Ordinary foreign keys retain live rows regardless of generic-edge policy."""
+
+        # The edge's model-wide deletion policy describes its generic pointer,
+        # never an unrelated real FK (which Django may cascade on deletion).
+        return issubclass(self.model, RecordRefMergeContract) or super().blocks_target_delete(target)
+
     def lookup(self, record: models.Model) -> dict[str, Any]:
         """Return the key value pointing at ``record``; a multi-table relative shares its primary key."""
 

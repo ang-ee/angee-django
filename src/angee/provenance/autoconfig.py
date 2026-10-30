@@ -9,6 +9,7 @@ _Settings = TypedDict(
     {
         "SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD": bool,
         "ANGEE_GRAPHQL_WRITE_BACKEND_ADAPTER": str,
+        "ANGEE_GRAPHQL_EXTENSION_FACTORIES:append": list[str],
         "ANGEE_CHANGESET_MODEL": str,
         "MIDDLEWARE:append": list[str],
         "ANGEE_CELERY_TASK_CLASS": str,
@@ -21,6 +22,7 @@ _Settings = TypedDict(
 SETTINGS: _Settings = {
     "SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD": True,
     "ANGEE_GRAPHQL_WRITE_BACKEND_ADAPTER": "angee.provenance.graphql.write_backend",
+    "ANGEE_GRAPHQL_EXTENSION_FACTORIES:append": ["angee.provenance.graphql.schema_extension"],
     "ANGEE_CHANGESET_MODEL": "provenance.Changeset",
     "COMPOSE_FINGERPRINT_SETTINGS:append": ["ANGEE_CHANGESET_MODEL"],
     "MIDDLEWARE:append": ["angee.provenance.middleware.ChangesetMiddleware"],

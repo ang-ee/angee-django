@@ -68,3 +68,31 @@ def test_reference_contracts_continue_to_accept_plain_django_models() -> None:
         assert reference.lookup(row) == {"target_id": 7}
         assert reference.columns == ("target",)
         assert not issubclass(Link, AngeeDataModel)
+
+
+def test_real_foreign_key_on_generic_edge_always_blocks_creation_undo():
+    from django.contrib.contenttypes.fields import GenericForeignKey
+
+    from angee.base.models.refs import RecordRefMixin
+
+    with isolate_apps():
+        class Target(models.Model):
+            class Meta:
+                app_label = "merge_contract"
+
+        class Edge(RecordRefMixin):
+            target = models.ForeignKey(Target, on_delete=models.CASCADE)
+            content_type = models.ForeignKey("contenttypes.ContentType", on_delete=models.CASCADE)
+            object_id = models.PositiveIntegerField()
+            content_object = GenericForeignKey()
+            on_target_delete = models.CASCADE
+
+            @classmethod
+            def blocks_target_delete(cls, target):
+                return False
+
+            class Meta:
+                app_label = "merge_contract"
+
+        reference = ForeignKeyReference(Edge, MergePolicy.MOVE, Edge._meta.get_field("target"))
+        assert reference.blocks_target_delete(Target)

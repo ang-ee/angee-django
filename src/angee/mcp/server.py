@@ -12,7 +12,9 @@ to :meth:`~fastmcp.FastMCP.http_app`). FastMCP's native host/origin guard protec
 Django request middleware does not run on mounted MCP requests. Django allowed
 host patterns and trusted browser origins supply deployment intent, translated
 to the native guard's glob semantics. The guard also admits its native local
-host defaults. Bearer + REBAC actor resolution remains the authorization boundary.
+host defaults. The deployment-owned built-in MCP URL also supplies its internal
+hostname; browser origins still require explicit trust. Bearer + REBAC actor
+resolution remains the authorization boundary.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import cache
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from django.apps import AppConfig, apps
 from django.conf import settings
@@ -75,6 +78,8 @@ def mcp_app() -> StarletteWithLifespan:
         for host in settings.ALLOWED_HOSTS
         for pattern in ((host[1:], f"*{host}") if host.startswith(".") else (host,))
     ]
+    if internal_host := urlsplit(getattr(settings, "ANGEE_BUILTIN_MCP_URL", "")).hostname:
+        hosts.append(internal_host)
     return mcp_server().http_app(
         path="/", stateless_http=True, json_response=True,
         host_origin_protection=True, allowed_hosts=hosts,

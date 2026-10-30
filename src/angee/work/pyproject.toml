@@ -29,3 +29,6 @@ depends_on = ["demo/015_work.cycle.yaml", "projects:demo/031_projects.task.yaml"
 
 [tool.angee.platform]
 category = "Productivity"
+
+[tool.angee.migrations.initial_baseline]
+stage_fractional_position = "satisfied"

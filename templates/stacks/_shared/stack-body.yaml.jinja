@@ -259,7 +259,7 @@ jobs:
         exec uv sync --locked{% if effective_serve_mode == "production" %} --no-editable{% endif %}; fi;
         exec "{{ job_dollar }}UV_PROJECT_ENVIRONMENT/bin/python" -m angee.platform_integrate_operator.preflight{% if effective_serve_mode == "production" %} --no-editable{% endif %}
         -- "{{ job_dollar }}ANGEE_DEPENDENCY_ACTION" "{{ job_dollar }}ANGEE_DEPENDENCY_REQUIREMENT"
-    holds: &python-consumers [django, celery-worker{% if celery_queues %}, celery-queues{% endif %}]
+    holds: &python-consumers [django{% if enable_celery %}, celery-worker{% if celery_queues %}, celery-queues{% endif %}{% endif %}]
 {% if stack_flavor == "framework" %}    depends_on: [deps]
 {% endif %}
   compose:
@@ -425,6 +425,7 @@ services:
       retries: 180
     after: [provision{% if stack_flavor == "instance" %}, caddy{% else %}{% if effective_serve_mode == "production" %}, frontend{% endif %}{% endif %}]
 
+{% if enable_celery %}
 {# pongo2 has no list literals and takes Django-style filter args; split a string. #}
 {# The shared worker plus one `celery-queues` worker consuming every `celery_queues` entry: #}
 {# it isolates addons' long-lived tasks (threads pool — enforces no time limits, so queue #}
@@ -451,6 +452,7 @@ services:
     after: [provision{% if redis_mode == "external" %}{% else %}, redis{% endif %}]
 {% endif %}
 {% endif %}{% endfor %}
+{% endif %}
 
 {% if runtime_mode == "process" and stack_flavor == "framework" %}
   # Vite dev server for the SPA. It proxies the curated Django HTTP surfaces

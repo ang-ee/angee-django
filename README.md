@@ -90,7 +90,12 @@ source inside a framework-dev stack's `src` workspace.
 brew install ang-ee/tap/angee      # or: curl -fsSL https://raw.githubusercontent.com/ang-ee/angee-operator/main/scripts/install.sh | sh
 angee init myproject               # dev is the default template; add -y for non-interactive use
 cd myproject
-angee dev                          # materialize sources and boot everything
+angee job run deps                 # install JS dependencies
+angee job run py-sync              # install Python dependencies
+angee job run compose              # generate runtime models and artifacts
+uv run --no-sync python manage.py makemigrations
+# Review and commit runtime/*/migrations before first provisioning.
+angee dev                          # provision tracked history and start services
 ```
 
 On macOS, create the stack in a normal working directory, not under `/tmp`:

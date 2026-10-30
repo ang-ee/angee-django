@@ -1853,3 +1853,16 @@ def test_backend_cache_includes_selected_implementation(tmp_path: Path, drive: A
         backend.refresh_from_db()
     assert isinstance(backend.storage, LocalFolderBackend)
     assert backend.storage is not first
+
+
+def test_drive_local_file_path_uses_readable_live_file_and_native_location(drive, tmp_path):
+    with system_context(reason="test local file location fixtures"):
+        file = File.objects.ingest_bytes(b"Manifest placeholder", filename="Manifest.db", owner_id=drive.alice.pk,
+                                        drive_id=drive.sqid)
+    with actor_context(drive.alice):
+        assert drive.with_actor(drive.alice).local_file_path("Manifest.db") == file.local_path()
+        file.trash(reason="local file lookup excludes trash")
+        assert drive.local_file_path("Manifest.db") is None
+    stranger = get_user_model().objects.create_user(username="local-path-stranger")
+    with actor_context(stranger), pytest.raises(PermissionDenied):
+        drive.with_actor(stranger).local_file_path("Manifest.db")

@@ -119,3 +119,9 @@ def test_tables_preserve_rows_cells_and_styled_text():
 def test_unknown_or_malformed_markup_refuses_silent_data_loss(source):
     with pytest.raises(ValueError):
         NotionMarkdownConverter().convert(source)
+
+
+def test_rewritten_link_title_retains_unicode():
+    source = f'[Guide]({PAGE_URL} "日本語 café")'
+    result = NotionMarkdownConverter({PAGE_ID: LOCAL_URL}).convert(source)
+    assert 'title="日本語 café"' in MarkdownIt().render(result)

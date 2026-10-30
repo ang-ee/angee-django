@@ -1,9 +1,9 @@
 import { Filter, ResourceQuery, holdsPermission, useModelMetadata, type QueryFilter } from "@angee/metadata";
 import { useAuthoredQuery, useInvalidateAuthoredModels } from "@angee/refine";
-import { useCallback, useMemo, useState, type ReactNode } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import {
-  CollectionTreeView, EmptyState, ErrorBanner, InlineTextAction, PaneToolbarMenu, RemovedRecords,
+  CollectionTreeView, EmptyState, ErrorBanner, InlineTextAction, PaneToolbar, PaneToolbarMenu, RemovedRecords,
   ResourceViewProvider, ScopedExplorerPane, errorMessage, useAppRuntime, useBreadcrumbCollectionLink,
   useBreadcrumbLeafLabel, useListRecordNavigation, useRouteHref, useRouteRecordId, useRuntimeViewAs,
   useResourceView, useRouteSearch, useLatestRef, useScopedTreeExplorer, parseRecordNavigationScope, recordNavigationSearch,
@@ -30,6 +30,7 @@ const rootLabel = (vault: VaultRow) => vault.name;
 export function KnowledgePage() {
   const t = useKnowledgeT();
   const navigate = useNavigate();
+  const router = useRouter();
   const href = useRouteHref();
   const openId = useRouteRecordId() ?? null;
   const metadata = useModelMetadata(PAGE_MODEL);
@@ -40,10 +41,12 @@ export function KnowledgePage() {
   const scope = defaultResourceFilter?.resource === PAGE_MODEL ? defaultResourceFilter.filter : undefined;
   const home = href("knowledge.home");
   const [vaultSearch, setVaultSearch] = useState("");
-  const handleRootChange = useCallback(() => {
-    setVaultSearch("");
-    void navigate({ to: home });
-  }, [home, navigate]);
+  const handleRootChange = useCallback(async () => {
+    await navigate({ to: home });
+    const accepted = router.state.location.pathname === home;
+    if (accepted) setVaultSearch("");
+    return accepted;
+  }, [home, navigate, router]);
   const detailRead = useAuthoredQuery(KnowledgePageQuery, { id: openId ?? "" }, {
     enabled: Boolean(openId), models: PAGE_READ_MODELS,
   });
@@ -65,8 +68,14 @@ export function KnowledgePage() {
   const vault = useAuthoredQuery(KnowledgeVault, { id: activeVaultId }, {
     enabled: Boolean(activeVaultId), models: ["knowledge.Vault"],
   });
+  useEffect(() => {
+    if (activeVaultId && vault.isSuccess && !vault.isFetching
+      && (!vault.data?.vaults_by_pk || vault.data.vaults_by_pk.is_trashed)) {
+      controller.invalidateRoot(activeVaultId);
+    }
+  }, [activeVaultId, controller.invalidateRoot, vault.data, vault.isFetching, vault.isSuccess]);
   const roots = useMemo(() => [...new Map([
-    ...(vaults.data?.vaults ?? []), ...(vault.data?.vaults_by_pk?.id === activeVaultId ? [vault.data.vaults_by_pk] : []),
+    ...(vaults.data?.vaults ?? []), ...(vault.data?.vaults_by_pk?.id === activeVaultId && !vault.data.vaults_by_pk.is_trashed ? [vault.data.vaults_by_pk] : []),
   ].map((row) => [row.id, row])).values()], [vaults.data, vault.data, activeVaultId]);
   useBreadcrumbLeafLabel(detail?.title ?? null);
   useBreadcrumbCollectionLink(home, openId ? home : null);
@@ -107,14 +116,16 @@ export function KnowledgePage() {
     resource={metadata?.resource} fields={["title"]} label={(row) => String(row.title)}
     filters={[{ field: "vault", operator: "eq", value: controller.rootId }, { field: "removed_root", operator: "eq", value: true }]} /> : null,
   [metadata?.resource]);
+  const rootPicker = useMemo(() => ({ "aria-label": t("vault.label"), placeholder: t("vault.placeholder"),
+    searchPlaceholder: t("vault.searchPlaceholder"), onSearchChange: setVaultSearch,
+    searchState: { pending: vaults.isFetching, error: vaults.error?.message, retry: () => void vaults.refetch() },
+    create: scope ? undefined : { resource: "knowledge.Vault" },
+    onCreated: () => invalidate(["knowledge.Vault"]),
+  }), [invalidate, scope, t, vaults.error?.message, vaults.isFetching, vaults.refetch]);
   return <ScopedExplorerPane<VaultRow, KnowledgeTreeRow>
     controller={controller} roots={roots} getRootId={rootId} getRootLabel={rootLabel}
     renderContentWithoutRoots={Boolean(openId)} navigatorLabel={t("nav.label")}
-    rootPicker={{ "aria-label": t("vault.label"), placeholder: t("vault.placeholder"),
-      searchPlaceholder: t("vault.searchPlaceholder"), onSearchChange: setVaultSearch,
-      searchState: { pending: vaults.isFetching, error: vaults.error?.message, retry: () => void vaults.refetch() },
-      create: scope ? undefined : { resource: "knowledge.Vault" },
-      onCreated: () => invalidate(["knowledge.Vault"]) }}
+    rootPicker={rootPicker}
     renderTree={renderTree} renderNavigatorFooter={removed}
     loading={vaults.isPending} emptyContent={vaults.error
       ? <ErrorBanner description={errorMessage(vaults.error, t("vaults.unavailableTitle"))} />
@@ -151,7 +162,7 @@ function KnowledgeTreeContent({ pane, toolbarActions, vault, detail, scope, crea
     }));
   }, [creating, detail, vault, view.state.filter]);
   const [moveError, setMoveError] = useState<unknown>(null);
-  if (!source) return null;
+  if (!source) return <PaneToolbar selector={pane?.selector} actions={toolbarActions} />;
   return <>
     {moveError ? <ErrorBanner description={errorMessage(moveError, t("page.moveError"))} /> : null}
     <CollectionTreeView<KnowledgeTreeRow> source={source} resource={PAGE_MODEL} presentation="workspace"

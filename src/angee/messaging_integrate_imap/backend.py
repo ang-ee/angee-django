@@ -10,8 +10,8 @@ Incremental state lives on one ``SyncStream.cursor`` per mailbox::
     {"uidvalidity": 123456, "last_uid": 4211}
 
 An operator may establish a future-only boundary while the channel is paused.
-That operator intent belongs to ``bridge.config``; the driver moves legacy
-intent there during the first stream cutover. Epoch resets preserve that policy.
+That operator intent belongs to ``bridge.config``. Epoch resets preserve that
+policy; retained bridge cursors are not a live input.
 
 Correctness rests on three facts. UIDVALIDITY is checked every run: a changed
 value raises ``CursorInvalid`` and starts a new stream generation. A normal
