@@ -175,7 +175,12 @@ test("declining the native dirty-form blocker retains the vault and edited recor
   fireEvent.click(picker);
   fireEvent.click(await screen.findByRole("option", { name: "Research" }));
   const dialog = await screen.findByRole("alertdialog");
-  expect(screen.getByRole("combobox", { name: "Vault: Reference" })).toBe(picker);
+  // The native modal hides the background from accessibility queries. Inspect
+  // the captured control while blocked, then query it accessibly after Stay.
+  expect(picker.isConnected).toBe(true);
+  expect(picker.closest('[aria-hidden="true"]')).not.toBeNull();
+  expect(picker.getAttribute("aria-label")).toBe("Vault: Reference");
+  expect(f.router.state.location.pathname).toBe("/knowledge/pg_a");
   fireEvent.click(within(dialog).getByRole("button", { name: "Stay" }));
   await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   expect(f.router.state.location.pathname).toBe("/knowledge/pg_a");
