@@ -23,7 +23,8 @@ installs its own repository workspace instead. Ordinary JS installation uses
 `pnpm install --lockfile-only --no-frozen-lockfile` at that same owner before
 installing. Fresh stacks author an absent lock once; existing lock drift fails.
 Instance frontend jobs keep their lock on the mounted project through pnpm
-`--lockfile-dir /opt/angee-project`. When intentionally changing instance workspace
+`--lockfile-dir /opt/angee-project`; pnpm owns the resulting modules/store layout
+and package-local links. When intentionally changing instance workspace
 membership, run native lock authoring in its declared image/workspace environment
 with that same flag, then retain the project lock. Verification must not silently
 change manifests or lockfiles.
