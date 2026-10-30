@@ -57,7 +57,7 @@ Custom integrations consume `django_compose.components` and
 | Component providers, requirement closure and Django app identity | `django_compose.components` and Django `AppConfig` |
 | Deployment YAML, `.env`, service URLs and Angee defaults | [`angee.base.conf`](../src/angee/base/conf/__init__.py) and [`base.autoconfig`](../src/angee/base/autoconfig.py) |
 | Settings merge, structural provenance and immutable snapshot | `django_compose.conf` and `django_compose.snapshot` |
-| Capability-owned package facts | [`angee.base.addons`](../src/angee/base/addons.py) reads packaged TOML through the native installed index |
+| Angee package data and optional modules | [`angee.base.addons`](../src/angee/base/addons.py) reads packaged `[tool.angee.*]` tables through the native installed index and discovers optional addon modules; capability owners interpret their declarations |
 | Source declarations, model composition and collision checks | `django_compose.models.Composable`, `model_composition`, and Django |
 | Build/check publication, artifact receipt and serving verification | `django_compose.build`, `artifacts` and `serving` |
 | Migration binding, drop guards and retained history | `django_compose.migrations` and native Django migration commands |
@@ -67,7 +67,7 @@ Custom integrations consume `django_compose.components` and
 | Database readiness and optional app preparation hooks | `django_compose.provision` |
 | Explicit URL and ASGI contributions | `django_compose.urls` and `django_compose.asgi` |
 | HTTP defaults, Uvicorn commands and connection policy | [`angee.server`](../src/angee/server/) |
-| GraphQL schema, SDL and WebSocket policy | [`angee.graphql`](../src/angee/graphql/); ready-phase [`SchemaIntegration`](../src/angee/graphql/sdl.py) emits SDL/metadata during compose |
+| GraphQL schema, SDL and WebSocket policy | [`schema.py`](../src/angee/graphql/schema.py) resolves and validates schema declarations; [`asgi.py`](../src/angee/graphql/asgi.py) validates WebSocket contributions; ready-phase [`SchemaIntegration`](../src/angee/graphql/sdl.py) emits SDL/metadata during compose |
 | MCP tools, HTTP mount and lifespan | [`angee.mcp`](../src/angee/mcp/) |
 | In-place addon layout and metadata defaults | Published [hatch-angee](https://github.com/ang-ee/hatch-angee) backend |
 
@@ -243,8 +243,8 @@ the web manifest to generate TypeScript. Python does not render schema-shaped TS
 web, GraphQL or MCP declares it through native requirements. Model-only projects
 need no HTTP server. Ordinary Django URL settings remain valid.
 
-The native URL composer reads explicit `AppConfig.compose_urls`, with optional
-prefix and namespace. Native ASGI composition reads `compose_asgi()` contributions
+Native `django_compose.urls` reads explicit `AppConfig.compose_urls`, with optional
+prefix and namespace. Native `django_compose.asgi` reads `compose_asgi()` contributions
 after Django setup, rejects collisions and owns async lifespan teardown.
 GraphQL contributes its Channels WebSocket protocol; MCP contributes its HTTP
 mount and fresh native lifespan. `angee.server` supplies HTTP defaults and

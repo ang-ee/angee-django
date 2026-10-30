@@ -28,7 +28,7 @@ through the same ambient actor.
 | `angee.mcp.middleware`, `angee.mcp.verifier` | Actor bracketing per call; bearer→`SubjectRef` through `ANGEE_MCP_ACTOR_VERIFIER` | `src/angee/mcp/middleware.py:20`, `src/angee/mcp/verifier.py:23,27` |
 | `angee.mcp.apps.MCPConfig.compose_asgi` | Native `AsgiContribution` mount and lifespan factories, entered per serving process | `src/angee/mcp/apps.py`, `django_compose.asgi` |
 | `angee.mcp.resource_tools`, `angee.mcp.apps` | Generated console readers, `RESOURCE_READER_TOOL_TAG`, check `angee.mcp.E001` | `src/angee/mcp/resource_tools.py:35,49,136`, `src/angee/mcp/apps.py:16` |
-| `angee.base.addons` | `optional_addon_module` / `resolve_addon_reference` used by every conventional seam | `src/angee/base/addons.py` |
+| `angee.base.addons` | Optional addon-module discovery; MCP owns registrar validation | [Base adapter](../../../base/addons.py), [MCP server](../../server.py) |
 | `tests/test_<addon>_mcp.py`, `<consumer>/tests/test_mcp.py` | Compile-and-register tests; StreamableHTTP round trip | `tests/test_knowledge_mcp.py:56,197`, `examples/src/example/notes/tests/test_mcp.py:67,148` |
 
 ## Reuse first
@@ -126,7 +126,7 @@ through the same ambient actor.
   ([Keep policy above detail](../../../../../docs/guidelines.md#keep-policy-above-detail)).
 - An actor, user id or tenant argument on a tool: `ActorMiddleware` supplies the actor ambiently (`src/angee/mcp/middleware.py:20`; [GraphQL actor and write contracts](../../../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts)).
 - A second FastMCP instance, mount or lifespan in an addon: `angee.mcp.server.mcp_server` is the process-wide owner (`src/angee/mcp/server.py:54`; [Serving](../../../../../docs/composer.md#serving)).
-- A tool registry, decorator or settings list beside `mcp_tools.register`: the conventional seam resolves through `angee.base.addons` (`src/angee/base/addons.py`; [composition owners](../../../../../docs/backend/guidelines.md#composition-owners)).
+- A tool registry, decorator or settings list beside `mcp_tools.register`: [MCP server](../../server.py) discovers and validates registrars through Base's optional-module reader ([composition owners](../../../../../docs/backend/guidelines.md#composition-owners)).
 - Hand-rolled CRUD readers for a console resource: generated readers already exist and the agents catalogue grants them (`src/angee/mcp/resource_tools.py:49`, `src/angee/agents/grants.py:116`; [DRY](../../../../../docs/guidelines.md#dont-repeat-yourself-dry)).
 - A list query without `limit_arg` or a page bound above `MAX_QUERY_LIMIT`: the compiler refuses the first and clamps the second (`src/angee/mcp/graphql.py:73,528`).
 - Projecting owner-gated or nullable-sensitive fields in a tool every actor may call: field gates redact, the projection then fails (`examples/src/example/notes/mcp_tools.py:17-19`; [field-backed conditional access](../../../../../docs/backend/guidelines.md#rebac)).

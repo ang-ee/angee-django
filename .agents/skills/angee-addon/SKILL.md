@@ -20,8 +20,8 @@ wires declarations only; the reference example throughout is `examples/src/examp
 | File or module | Owns | Reference |
 |---|---|---|
 | `pyproject.toml` | Identity, dependencies, declared capability seams | `examples/src/example/notes/pyproject.toml` |
-| Native `EntryPoint`, `Distribution`, `packaging.Requirement` | Addon identity, installed requirement activation, and package metadata | `src/angee/base/addons.py` |
-| `src/angee/base/addons.py` | Package-data projection, optional-module and dotted-reference conventions | `native `django_compose.components` index + base reader` |
+| `django_compose.components`, native `EntryPoint`, `Distribution`, `packaging.Requirement` | Component identity, requirement closure and package metadata | [Composition owners](../../../docs/backend/guidelines.md#composition-owners) |
+| `angee.base.addons` | Packaged `[tool.angee.*]` tables and optional addon-module discovery | [Base adapter](../../../src/angee/base/addons.py) |
 | `apps.py` (optional) | `name`, pinned `label`, `ready()` hooks, check registration | `src/angee/money/apps.py:17`, `src/angee/base/apps.py:22` |
 | `autoconfig.py` | Settings fragments merged by native `django_compose.conf` in dependency order | `examples/src/example/notes/autoconfig.py:5`, `src/angee/base/autoconfig.py:23,42` |
 | `testing/models.py`, `tests/settings.py`, `tests/conftest.py` | Concrete models and roster of the bare test host | `src/angee/tags/testing/models.py`, `tests/settings.py:29,144`, `tests/conftest.py:645` |
@@ -32,9 +32,13 @@ wires declarations only; the reference example throughout is `examples/src/examp
 
 - Copy shapes from `examples/src/example/notes` (consumer, e2e target); `src/angee/tags` is the
   smallest framework addon, `src/angee/money` the one with checks in `ready()`.
-- `angee.base.addons.optional_addon_module` / `resolve_addon_reference` own conventional discovery (`schema.py`,
-  `permissions.zed`, `mcp_tools.py`, `urls.py`, `asgi.py`); native `django_compose.conf` (`django_compose.conf`)
-  owns settings merge. Declare, never load.
+- The [Base adapter](../../../src/angee/base/addons.py) reads packaged Angee tool tables and discovers optional
+  addon modules. Capability owners interpret them: [Resources](../../../src/angee/resources/) owns resources,
+  [GraphQL schema discovery](../../../src/angee/graphql/schema.py) owns schema references and
+  [GraphQL ASGI](../../../src/angee/graphql/asgi.py) owns WebSocket contributions.
+- Native django-compose owns component graphs, generic lifecycle and optional hook dispatch:
+  `django_compose.conf` merges settings, `django_compose.urls` reads explicit `AppConfig.compose_urls`,
+  and `django_compose.asgi` composes `compose_asgi()` contributions. Declare through those owners.
 - `defineBaseAddon`, `resourcePageRoutes` (`packages/app/src/define-base-addon.ts:162,66`), `createNamespaceT`
   (`packages/ui/src/i18n/index.ts:45`), `expectValidBaseAddon` (`packages/app/src/testing.tsx:101`),
   `defineAngeeWebVitestConfig` (`packages/app/config/vitest.ts:90`) own fragment composition.

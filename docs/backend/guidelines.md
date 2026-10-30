@@ -111,9 +111,9 @@ Use these owners instead of maintaining another contract in an addon:
 
 | Concern | Owner and durable rule |
 |---|---|
-| Addon discovery and declarations | The native `django_compose.components` index owns identity/closure; [`angee.base.addons`](../../src/angee/base/addons.py) reads capability-owned package TOML. Addon requirements stay in `[project].dependencies`; foreign app edges use django-compose's `AppConfig.requires_apps` extension. |
+| Addon discovery and declarations | The native `django_compose.components` index owns identity/closure. [`angee.base.addons`](../../src/angee/base/addons.py) reads packaged `[tool.angee.*]` tables and discovers optional addon modules. Addon requirements stay in `[project].dependencies`; foreign app edges use django-compose's `AppConfig.requires_apps` extension. |
 | Settings and app ordering | [Settings bootstrap and app graph](../composer.md#settings-bootstrap) compose one app set. Keep source-model imports out of settings loading; do not create separate build/run registries. |
-| Capability conventions | [Addon declarations](../composer.md#addon-declarations) identifies the readers. Each capability reads its own `[tool.angee]` table and conventional defaults; dependencies, resource tiers, and intent stay explicit. |
+| Capability conventions | [Addon declarations](../composer.md#addon-declarations) identifies the readers. Resources owns resource semantics; GraphQL [schema discovery](../../src/angee/graphql/schema.py) resolves and validates its schema references. Generic lifecycle and optional hook dispatch belong to django-compose; native `django_compose.urls` owns explicit HTTP URL contributions. |
 | Models and runtime import | [Runtime build and import](../composer.md#runtime-build-and-import) describes source selection and Django phase 2. Use narrow abstract contributors; let Django own inheritance, field cloning, managers, and registration. |
 | Migration history and cleanup | [Addon-owned runtime migrations](../composer.md#addon-owned-runtime-migrations) and [migration policy](#migration-history) distinguish replaceable generated models from version-controlled native Django history. |
 | Resource load hooks | [`ResourceLoadMixin`](../../src/angee/resources/mixins.py) is the resources-owned terminal mixin. Contributors delegate exactly once through `super()`, even when skipping local work; an exception aborts the transaction, so never delegate in `finally`. A row whose state only an owner verb may write declares a `resource_class` adapter that persists through that verb as the row's named actor and records the result in the ledger ([workflow definitions](../../src/angee/workflows/resources.py), [chatter](../../src/angee/messaging/resources.py)). |
@@ -1399,8 +1399,9 @@ retains its native routing contract.
 
 Contribute socket protocols through `AppConfig.compose_asgi()` and compose
 `RebacChannelsConsumerMixin` to pin the cookie actor before creating tasks.
-The [GraphQL Channels owner](../../src/angee/graphql/asgi.py) owns Origin trust and Django session
-authentication; never repeat those handshake checks per consumer. Long-lived
+The [GraphQL Channels owner](../../src/angee/graphql/asgi.py) discovers and validates
+addon `asgi.py` WebSocket routes and middleware, and owns Origin trust and Django
+session authentication; never repeat those handshake checks per consumer. Long-lived
 protocols that accept writes must revalidate the session at each request and
 open fresh evaluator scopes for authorization and change-feed reads.
 
