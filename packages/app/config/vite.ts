@@ -449,7 +449,7 @@ function angeeWebCodegenPlugin({
   return {
     name: "angee:web-codegen",
     enforce: "pre",
-    async config(_config, env) {
+    async config(config, env) {
       // Preview serves the completed distribution and must work without runtime
       // manifests, source themes, schemas or even a source package.json.
       if (env.isPreview) return;
@@ -458,7 +458,7 @@ function angeeWebCodegenPlugin({
       const prebundle = prebundleAngeePackages && packages.built.length > 0 && env.command === "serve"
         ? angeePrebundleOptimizerConfig(webRoot, packages.built)
         : {};
-      return { optimizeDeps: {
+      const defaults = { optimizeDeps: {
         // Linked source stays in Vite's native transform/HMR graph; scanning its
         // entries discovers dependencies across lazy import boundaries.
         entries: packages.entries.length > 0 ? ["**/*.html", ...packages.entries] : undefined,
@@ -466,6 +466,9 @@ function angeeWebCodegenPlugin({
         exclude: [...(prebundleAngeePackages ? packages.source : packages.all), ...packages.codemirror],
         ...prebundle,
       } };
+      // Native config hooks may mutate the current config. Merge once in the
+      // same order as the public factory: defaults first, host overrides last.
+      config.optimizeDeps = mergeConfig(defaults, { optimizeDeps: config.optimizeDeps }).optimizeDeps;
     },
     configureServer(value) {
       server = value;

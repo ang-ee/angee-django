@@ -105,9 +105,7 @@ export async function generateWebRuntime({
 }
 
 function importThemeModule(entry) {
-  // Config hooks also run after Vite's config-runner module transport closes.
-  const load = Function("specifier", "return import(specifier)");
-  return load(pathToFileURL(entry).href);
+  return import(pathToFileURL(entry).href);
 }
 
 // Resolve workspace links, including an absent input beneath an existing link.

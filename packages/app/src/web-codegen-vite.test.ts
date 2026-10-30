@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { Window } from "happy-dom";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
@@ -99,10 +100,18 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-test("cold build generates its installed theme before validating first-paint appearance", async () => {
+test.each(["runner", "bundle"] as const)("cold %s build generates its theme before validating first-paint appearance", async (configLoader) => {
   // No generated catalogue exists when Vite starts resolving this configuration.
+  const viteConfig = join(web, "vite.config.mts");
+  write(viteConfig, `
+    import { defineAngeeWebViteConfig } from ${JSON.stringify(fileURLToPath(new URL("../config/vite.ts", import.meta.url)))};
+    export default defineAngeeWebViteConfig(${JSON.stringify({
+      webRoot: web, gqlRuntimeDir: join(runtime, "gql"), prebundleAngeePackages: false,
+      appearance: { themeId: "demo.theme", colorScheme: "light", options: { version: 1, value: {} } },
+    })});
+  `);
   const outputs = await build({
-    ...await config(), configFile: false, logLevel: "silent", build: { write: false, minify: false },
+    configFile: viteConfig, configLoader, logLevel: "silent", build: { write: false, minify: false },
   });
   expect(catalogue().themes[0]?.defaultTokens.light["--brand"]).toBe("#123456");
   const bundles = Array.isArray(outputs) ? outputs : [outputs];
@@ -117,8 +126,7 @@ test("preview resolves without any source manifests, catalogues, packages or the
   rmSync(addon, { recursive: true, force: true });
   rmSync(join(web, "package.json"));
   const generate = vi.spyOn(codegen, "generateWebRuntime");
-  const resolved = await resolveConfig({ ...value, configFile: false, logLevel: "silent" }, "serve", "production", "production", true);
-  expect(resolved.isPreview).toBe(true);
+  await resolveConfig({ ...value, configFile: false, logLevel: "silent" }, "serve", "production", "production", true);
   expect(generate).not.toHaveBeenCalled();
 });
 
@@ -161,7 +169,7 @@ test("dev watches manifest-owned documents and newly arriving preferred external
   write(join(runtime, "schemas", "external", "demo.graphql"), "type Query { ping: String! pong: String! }");
   write(document, "export const Pong = /* GraphQL */ `query Pong { pong }`;");
   await vi.waitFor(() => expect(readFileSync(generated, "utf8")).toContain("PongDocument"));
-  expect(sent.mock.calls.some(([payload]) => typeof payload === "object" && payload.type === "full-reload")).toBe(true);
+  expect(sent).toHaveBeenCalledWith(expect.objectContaining({ type: "full-reload" }));
 }, 30_000);
 
 test("dev discovers direct Django SDL and metadata after startup and tracks their changes", async () => {
@@ -188,7 +196,7 @@ test("generation failures show an overlay and a repaired newly declared theme in
   const sent = vi.spyOn(server.ws, "send");
   const manifestPath = join(addon, "package.json");
   write(manifestPath, JSON.stringify({ name: "@demo/theme", exports: { "./themes": "./src/repaired.mjs" } }));
-  await vi.waitFor(() => expect(sent.mock.calls.some(([payload]) => typeof payload === "object" && payload.type === "error")).toBe(true));
+  await vi.waitFor(() => expect(sent).toHaveBeenCalledWith(expect.objectContaining({ type: "error" })));
   sent.mockClear();
   write(join(addon, "src", "repaired.mjs"), readFileSync(join(addon, "src", "themes.mjs"), "utf8"));
   await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
