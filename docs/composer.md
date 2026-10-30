@@ -206,6 +206,13 @@ Unknown transition names fail configuration. An explicit project
 migration to express this promise; retire its declaration when the transition is
 retired under the native history policy.
 
+For a retained initial migration that already satisfies the owner declaration,
+use native `adopt_transition` explicitly. This attests that the named baseline
+is covered by that declaration; the compiler does not infer historical data
+completion from a false guard. Dry-run first, then review and commit the appended
+empty origin alongside ordinary schema migrations. Existing files remain intact,
+and native `migrate` applies and records the new node.
+
 `MIGRATION_MODULES` is Django's routing contract. The compiler preserves tracked
 histories, including history-only apps whose source addon has been removed.
 Read-only checks never author missing packages. A disabled migration mapping
