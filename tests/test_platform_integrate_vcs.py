@@ -8,6 +8,7 @@ from importlib.metadata import EntryPoint
 from pathlib import Path
 
 import pytest
+from build import BuildBackendException
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, connection, transaction
 from django.test.utils import CaptureQueriesContext
@@ -15,8 +16,16 @@ from rebac import system_context
 
 import tests.test_marketplace_graphql  # noqa: F401 -- register the fixture model graph before database setup
 from angee.platform.discovery import facts_from_distribution, installed_entry_points
-from angee.platform_integrate_vcs.catalog import parse_addon_meta
+from angee.platform_integrate_vcs import catalog
 from tests.conftest import Addon, Repository, Source, VcsBridge, catalogue_package, make_addon, make_integration
+
+_BUILD_SYSTEM = """
+[build-system]
+requires=["hatchling>=1.27"]
+build-backend="hatchling.build"
+[tool.hatch.build.targets.wheel]
+bypass-selection=true
+"""
 
 
 @pytest.fixture()
@@ -38,11 +47,12 @@ def catalog_source(composed_tables: None, tmp_path: Path) -> tuple[Source, Path]
             '"catalog_remote.base" = "catalog_remote.base"\n'
             '[tool.angee.platform]\n'
             'category = "Integration"\n'
+            + _BUILD_SYSTEM
         )
     )
     sibling = marker.parent.parent / "dependency" / "pyproject.toml"
     sibling.parent.mkdir()
-    sibling.write_text('[project]\nname="catalog-remote-dependency"\nversion="1.0"\n'
+    sibling.write_text(_BUILD_SYSTEM + '[project]\nname="catalog-remote-dependency"\nversion="1.0"\n'
                        '[project.entry-points."angee.addons"]\n"catalog_remote.dependency"="catalog_remote.dependency"\n')
     bridge = make_integration(
         "addon-catalog",
@@ -55,59 +65,6 @@ def catalog_source(composed_tables: None, tmp_path: Path) -> tuple[Source, Path]
         repository = Repository.objects.get(name="catalogue")
         source = Source.objects.create(repository=repository, kind="addon", path="addons")
     return source, marker
-
-
-def test_parse_addon_meta_projects_static_package_metadata() -> None:
-    """Static project metadata and Platform facts become the catalogue descriptor."""
-
-    blob = (
-        (
-            b'[project]\n'
-            b'name = "angee-demo"\n'
-            b'version = "1.0.0"\n'
-            b'description = "A demo addon."\n'
-            b'keywords = ["catalog", "demo"]\n'
-            b'dependencies = ["angee-iam", "angee-platform"]\n'
-            b'[project.entry-points."angee.addons"]\n'
-            b'"angee.demo" = "angee.demo"\n'
-            b'[tool.angee.platform]\n'
-            b'category = "Data"\n'
-        )
-    )
-
-    meta = parse_addon_meta(blob)
-
-    assert meta["name"] == "angee.demo"
-    assert "label" not in meta
-    assert meta["namespace"] == "angee"
-    assert meta["description"] == "A demo addon."
-    assert meta["keywords"] == ["catalog", "demo"]
-    assert meta["category"] == "Data"
-    assert meta["depends_on"] == ["angee.iam", "angee.platform"]
-
-
-def test_parse_addon_meta_ignores_non_addon_projects() -> None:
-    assert parse_addon_meta((
-                                b'[project]\n'
-                                b'name="ordinary"\n'
-                                b'version="1.0"\n'
-                            )) == {}
-
-
-def test_parse_addon_meta_does_not_infer_dynamic_entry_points_from_a_source_blob() -> None:
-    assert parse_addon_meta(
-        b'[project]\nname="angee-demo"\nversion="1.0"\ndynamic=["entry-points"]\n'
-    ) == {}
-
-
-def test_parse_addon_meta_projects_uninstalled_dependencies_through_known_identity_index() -> None:
-    blob = (
-        b'[project]\nname="example-remote"\nversion="1.0"\n'
-        b'dependencies=["example-dependency>=1", "angee-iam>=3; extra == \'feature\'"]\n'
-        b'[project.entry-points."angee.addons"]\n"example.remote"="example.remote"\n'
-    )
-    facts = parse_addon_meta(blob, dependencies={"example-dependency": "example.dependency", "angee-iam": "angee.iam"})
-    assert facts["depends_on"] == ["example.dependency"]
 
 
 def test_remote_catalogue_reconciles_metadata_and_retains_removed_declarations(
@@ -220,7 +177,7 @@ def test_remote_catalogue_keeps_unknown_identity_without_importing_the_remote_na
     """Remote declaration names never trigger local package or AppConfig imports."""
 
     source, marker = catalog_source
-    marker.write_text((
+    marker.write_text(_BUILD_SYSTEM + (
                           '[project]\n'
                           'name = "catalog-remote-identity-base"\n'
                           'version = "1.0.0"\n'
@@ -322,11 +279,12 @@ def test_catalogue_rejects_ambiguous_source_documents_before_catalogue_writes(ca
     marker.write_text(_catalogue_document("example.foo_bar", "example-foo-bar"))
     second = marker.parent.parent / "dependency" / "pyproject.toml"
     other = "example.foo.bar" if collision == "canonical_distribution" else "example.foo_bar"
-    second.write_text(_catalogue_document(other, "example-foo-bar"))
+    provider = "example-foo-bar" if collision == "canonical_distribution" else "different-provider"
+    second.write_text(_catalogue_document(other, provider))
     with system_context(reason="test catalogue collision snapshot"):
         before = list(Addon.objects.order_by("pk").values())
     with CaptureQueriesContext(connection) as queries:
-        with pytest.raises(ImproperlyConfigured, match="Conflicting catalogue identity|Duplicate catalogue addon"):
+        with pytest.raises(ImproperlyConfigured, match="Duplicate component distribution|Competing providers"):
             source.refresh()
     assert not [
         query["sql"] for query in queries
@@ -391,3 +349,103 @@ def test_catalogue_distribution_uniqueness_is_enforced_by_the_model(composed_tab
         with pytest.raises(IntegrityError), transaction.atomic():
             Addon.objects.create(name="example.foo.bar", distribution="example-foo-bar")
         assert not Addon.objects.filter(name="example.foo.bar").exists()
+
+
+def test_native_dynamic_metadata_and_ordinary_projects_preserve_catalogue_behavior(catalog_source, monkeypatch):
+    source, marker = catalog_source
+    package = marker.parents[1] / "catalogue" / "integrate_notes"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("raise AssertionError('catalogue imported the addon')\n")
+    (package / "pyproject.toml").write_text(
+        '[build-system]\nrequires=["hatch-angee>=1.1,<2"]\nbuild-backend="hatch_angee"\n'
+        '[project]\nname="catalogue-integrate-notes"\nversion="1.0"\n'
+        'dynamic=["entry-points"]\ndescription="Native dynamic metadata"\nkeywords=["native","notes"]\n'
+        'dependencies=["catalog-remote-dependency>=1"]\n[tool.angee.platform]\ncategory="Data"\n'
+    )
+    ordinary = marker.parents[1] / "library"
+    ordinary.mkdir()
+    (ordinary / "pyproject.toml").write_text(_BUILD_SYSTEM + '[project]\nname="plain-library"\nversion="1.0"\n')
+    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda: {})
+    assert source.refresh() == 3
+    with system_context(reason="test native metadata row"):
+        row = Addon.objects.get(name="catalogue.integrate_notes")
+        assert not Addon.objects.filter(distribution="plain-library").exists()
+    assert row.distribution == "catalogue-integrate-notes"
+    assert row.description == "Native dynamic metadata"
+    assert row.keywords == ["native", "notes"] and row.category == "Data"
+    assert row.depends_on == ["catalog_remote.dependency"]
+    assert row.vcs_path == "addons/catalogue/integrate_notes"
+    assert "catalogue.integrate_notes" not in sys.modules
+
+
+def test_build_failure_preserves_existing_catalogue_and_sync_time(catalog_source, monkeypatch):
+    source, _marker = catalog_source
+    assert source.refresh() == 2
+    with system_context(reason="test catalogue before failure"):
+        before = list(Addon.objects.order_by("pk").values())
+    timestamp = source.last_synced_at
+
+    def fail(*args):
+        assert not connection.in_atomic_block
+        raise RuntimeError("native metadata failed")
+
+    monkeypatch.setattr(catalog, "build_distribution", fail)
+    with pytest.raises(RuntimeError, match="native metadata failed"):
+        source.refresh()
+    with system_context(reason="test catalogue after failure"):
+        assert list(Addon.objects.order_by("pk").values()) == before
+        source.refresh_from_db()
+    assert source.last_synced_at == timestamp
+
+
+@pytest.mark.parametrize("field,value", [("ref", "changed"), ("path", "changed"), ("repository_id", None)])
+def test_source_coordinate_change_during_build_cannot_publish(catalog_source, monkeypatch, field, value):
+    source, _marker = catalog_source
+    assert source.refresh() == 2
+    with system_context(reason="test stale source before"):
+        before = list(Addon.objects.order_by("pk").values())
+    timestamp = source.last_synced_at
+    if field == "repository_id":
+        with system_context(reason="test equal transport, different repository owner"):
+            replacement = Repository.objects.create(
+                vcs_bridge=source.repository.vcs_bridge, org="local", name="alternate",
+                remote=source.repository.remote, ssh_remote=source.repository.ssh_remote,
+                default_branch=source.repository.default_branch,
+            )
+        value = replacement.pk
+    original = catalog.build_distribution
+    changed = False
+
+    def prepare(*args):
+        nonlocal changed
+        assert not connection.in_atomic_block
+        result = original(*args)
+        if not changed:
+            changed = True
+            with system_context(reason="test concurrent source edit"):
+                Source.objects.filter(pk=source.pk).update(**{field: value})
+        return result
+
+    monkeypatch.setattr(catalog, "build_distribution", prepare)
+    with pytest.raises(ImproperlyConfigured, match="Source changed"):
+        source.refresh()
+    with system_context(reason="test stale source after"):
+        assert list(Addon.objects.order_by("pk").values()) == before
+        source.refresh_from_db()
+    assert source.last_synced_at == timestamp
+
+
+def test_malformed_non_addon_build_project_is_not_silently_ignored(catalog_source):
+    source, marker = catalog_source
+    broken = marker.parents[1] / "ordinary"
+    broken.mkdir()
+    (broken / "pyproject.toml").write_text(
+        '[project]\nname="ordinary"\nversion="1.0"\n'
+        '[build-system]\nrequires=[]\nbuild-backend="missing_native_backend"\n'
+    )
+    with pytest.raises(BuildBackendException, match="missing_native_backend"):
+        source.refresh()
+    with system_context(reason="test malformed catalogue remains empty"):
+        assert not Addon.objects.filter(vcs_source=source).exists()
+        source.refresh_from_db()
+    assert source.last_synced_at is None

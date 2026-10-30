@@ -89,60 +89,30 @@ def requirement_addons(requirements: Iterable[str], identities: Mapping[str, str
     return _requirement_apps(active_requirements(requirements), identities)
 
 
-def _project_identity(document: Mapping[str, Any]) -> tuple[str, str] | None:
-    project = document.get("project", {})
-    entries = project.get("entry-points", {}).get("angee.addons")
-    if entries is None:
-        return None
-    if not isinstance(entries, Mapping) or len(entries) != 1:
-        raise ImproperlyConfigured("An addon project must declare one angee.addons entry point")
-    name, value = next(iter(entries.items()))
-    if not isinstance(name, str) or not isinstance(value, str):
-        raise ImproperlyConfigured("Addon entry-point names and values must be strings")
-    return name, value
-
-
 def _category(document: Mapping[str, Any]) -> str:
     return catalogue_category(capability_facts(document, "angee.platform").get("category", ""))
 
 
-def facts_from_toml(
-    document: Mapping[str, Any], *, dependencies: Mapping[str, str] | None = None,
-) -> dict[str, Any]:
-    """Project static source metadata; dynamic entry points require a built distribution."""
-
-    identity = _project_identity(document)
-    if identity is None:
-        return {}
-    project = document["project"]
-    provider = project.get("name")
-    if not isinstance(provider, str) or not provider:
-        raise ImproperlyConfigured("An addon project must declare its distribution name")
-    if dependencies is None:
-        index = installed_components("angee.addons")
-        dependencies = {provider: app for app, provider in index.providers.items()}
-    requirements = tuple(project.get("dependencies", ()))
-    return {
-        "name": identity[0], "distribution": canonicalize_name(provider),
-        "requirements": requirements, "description": project.get("description", ""),
-        "keywords": tuple(project.get("keywords", ())), "category": _category(document),
-        "depends_on": requirement_addons(requirements, dependencies),
-    }
-
-
 def facts_from_distribution(
     distribution: metadata.Distribution, *, index: InstalledComponents | None = None,
+    document: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Use native METADATA and package platform facts without loading a disabled app."""
+    """Project native metadata and capability facts without loading the addon.
+
+    Source ingestion supplies its authored capability document while prepared
+    dist-info owns identity and common metadata. Installed reads locate the
+    packaged document through the distribution.
+    """
 
     index = installed_components("angee.addons") if index is None else index
     provider = canonicalize_name(distribution.metadata["Name"])
     if provider not in index.entry_points:
         return {}
     point = index.entry_points[provider]
-    document = package_document(distribution, point.name)
+    if document is None:
+        document = package_document(distribution, point.name)
     return {
-        "name": point.name, "distribution": provider,
+        "name": point.name, "namespace": point.name.split(".", 1)[0], "distribution": provider,
         "requirements": tuple(distribution.requires or ()),
         "description": distribution.metadata.get("Summary", ""),
         "keywords": tuple(

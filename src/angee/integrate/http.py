@@ -29,7 +29,8 @@ from __future__ import annotations
 
 import ssl
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Any, ClassVar
@@ -350,6 +351,34 @@ class HttpClient:
             follow_redirects=follow_redirects,
             timeout=timeout,
         )
+
+    @contextmanager
+    def stream(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        allow_private: bool = False,
+        timeout: int | httpx2.Timeout = HTTP_TIMEOUT_SECONDS,
+    ) -> Iterator[httpx2.Response]:
+        """Keep one pinned response open for its caller's context lifetime.
+
+        Native httpx2 owns streaming and closure. The shared URL, transport and
+        header policy applies; redirects remain disabled. Native ``httpx2.Timeout``
+        allows a transport owner to select separate connection and read limits.
+        """
+
+        parse_http_url(url)
+        with httpx2.Client(
+            transport=self.transport_factory(allow_private=allow_private), timeout=timeout,
+        ) as client:
+            with client.stream(
+                method, url, headers=_request_headers(headers, capped=False),
+                content=body, follow_redirects=False,
+            ) as response:
+                yield response
 
     def request(
         self,

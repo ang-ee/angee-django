@@ -1,20 +1,20 @@
-"""The VCS/remote tier of the addon marketplace.
+"""The VCS source tier of the addon marketplace.
 
-`platform`'s `Addon` registry reflects the *local* world — addons installed
-(an entry point) or local (an `pyproject.toml` under a configured dir), and which
-lifecycle state each is in. This addon adds the **remote** tier: addons *known
-from a VCS repo* but not materialised in the project. It extends `platform.Addon`
-with VCS provenance (the integrate `Source` a row was discovered from + the bearing
-directory) and contributes the remote rows, discovered through the same
-`VcsBridge -> Source` flow integrate already uses for templates and skills — a
-`Source(kind="addon")`, marker `pyproject.toml`, the manifest reused as the catalog
-record.
+Platform projects installed distributions into its one ``Addon`` registry. This
+addon extends those rows with VCS source/path provenance and owns declarations
+not installed in the project, created ``REMOTE``/``DISABLED`` and marked
+``REMOVED`` when they disappear from their source.
 
-The boundary stays one-way: `platform`/`integrate` know nothing of this addon. The
-sync coordinates with platform's reconcile by tier — platform owns installed/local
-rows (their `source`/`state`); this addon only ever *adds* provenance to an
-already-materialised row, and owns the `REMOTE` rows outright (created `DISABLED`,
-marked `REMOVED` when they vanish). So pointing a local bridge at this very repo
-yields provenance on the rows that are already installed, not a flood of `REMOTE`
-duplicates — the coordination working.
+An addon ``Source`` obtains a complete pinned checkout from the operator, or the
+current working tree from a local backend. Each package is built in native PyPA
+isolation; django-compose indexes its wheel distributions and Platform projects
+the same metadata facts as installed packages. Authored TOML supplies capability
+facts only. Addon code is never imported into the serving process.
+
+Remote checkout lifetime, submodules and Git credentials belong to the operator;
+Django and the operator must share the stack filesystem. Any checkout, build or
+identity failure preserves the previous catalogue and sync timestamp. Network and
+build work finish before the transaction that validates source ownership and
+reconciles rows. Platform retains installed-row precedence; this addon adds only
+provenance to those rows.
 """

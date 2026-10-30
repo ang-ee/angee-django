@@ -56,6 +56,8 @@ _TREE = [
 ]
 _BLOBS = {
     "src/angee/demo/pyproject.toml": (
+                                            '[build-system]\nrequires=["hatchling>=1.27"]\nbuild-backend="hatchling.build"\n'
+                                            '[tool.hatch.build.targets.wheel]\nbypass-selection=true\n'
                                             '[project]\n'
                                             'name = "angee-demo"\n'
                                             'version = "1.0.0"\n'
@@ -111,7 +113,7 @@ def test_add_source_inventories_the_repo_and_points_an_addon_source_at_it(
     assert (source.kind, source.path) == ("addon", "src")
 
 
-def test_scan_discovers_addon_toml_rows_into_the_registry(
+def test_scan_prepares_native_package_metadata_into_the_registry(
     composed_tables: None,
 ) -> None:
     """``scan`` runs the discovery walk and writes a REMOTE ``platform.Addon`` row."""
