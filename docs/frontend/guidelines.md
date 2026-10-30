@@ -85,6 +85,10 @@ public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
   source and sets `optimizeDeps.force` when that signature differs from its
   persisted marker; the in-repo example links `@angee/*` source (HMR) and is
   excluded.
+- Vite dev and build await the shared `@angee/app` generator before serving or
+  bundling; preview consumes built output. Native compose and operator SDL are
+  its inputs. Standalone fragment checks invoke the same generator through its
+  explicit CLI ([Composition and schema](../checks.md#composition-and-schema)).
 - Operator daemon types are generated, never authored: the
   [operator manifest](../../src/angee/operator/pyproject.toml) contributes the
   committed daemon SDL and document glob to the shared codegen pass, and daemon
@@ -232,7 +236,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   its shared [JSON Schema](../../src/angee/base/schemas/form_spec.schema.json).
   Reuse the existing contract and validator instead of maintaining another schema.
 - **Eligible ActionResult mutations are derived, not authored.** Codegen in
-  `packages/app/bin/angee-web-codegen.mjs` derives mutations with at least one
+  the shared `@angee/app` generator derives mutations with at least one
   argument when every argument is required (non-null without a default), or
   when `id: ID!` is the sole required argument and all others are optional or
   defaulted. Other shapes stay authored. Generated documents preserve the

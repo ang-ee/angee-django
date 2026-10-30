@@ -21,8 +21,8 @@
     "skipLibCheck": true,
     "noEmit": true,
     "types": ["vite/client"],
-    // This project owns its `runtime/gql/<schema>/` tree (its web package
-    // generates it via codegen), so it declares its OWN project-relative
+    // This project owns its `runtime/gql/<schema>/` tree (Vite awaits generation
+    // before dev/build), so it declares its OWN project-relative
     // `@angee/gql/*` resolution. The web package lives one level under the
     // project root, so `runtime/gql` is one level up.
     "paths": {
