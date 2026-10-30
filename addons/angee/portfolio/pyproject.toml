@@ -5,7 +5,7 @@ name = "angee-portfolio"
 version = "3.0.0"
 description = "Phasal products, strategic initiatives, health updates, and releases."
 keywords = ["portfolio", "products", "initiatives", "roadmaps", "releases"]
-dependencies = ["angee-base>=3,<4", "angee-projects>=3,<4", "angee-provenance>=3,<4", "angee-web>=3,<4", "django-compose==0.1.0.dev1"]
+dependencies = ["angee-base>=3,<4", "angee-projects>=3,<4", "angee-provenance>=3,<4", "angee-web>=3,<4", "django-compose>=0.1.0.dev1,<0.2"]
 
 [project.entry-points]
 "angee.addons" = {"angee.portfolio" = "angee.portfolio"}

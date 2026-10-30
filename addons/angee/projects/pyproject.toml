@@ -5,7 +5,7 @@ name = "angee-projects"
 version = "3.0.0"
 description = "Bounded projects, milestones, and the platform's one human-action task table."
 keywords = ["projects", "milestones", "tasks", "planning"]
-dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-integrate>=3,<4", "angee-knowledge>=3,<4", "angee-messaging>=3,<4", "angee-parties>=3,<4", "angee-provenance>=3,<4", "angee-scheduling>=3,<4", "angee-storage>=3,<4", "angee-tags>=3,<4", "angee-timeline>=3,<4", "angee-web>=3,<4", "django-compose==0.1.0.dev1"]
+dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-integrate>=3,<4", "angee-knowledge>=3,<4", "angee-messaging>=3,<4", "angee-parties>=3,<4", "angee-provenance>=3,<4", "angee-scheduling>=3,<4", "angee-storage>=3,<4", "angee-tags>=3,<4", "angee-timeline>=3,<4", "angee-web>=3,<4", "django-compose>=0.1.0.dev1,<0.2"]
 
 [project.entry-points]
 "angee.addons" = {"angee.projects" = "angee.projects"}
