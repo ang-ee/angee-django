@@ -33,6 +33,9 @@ export function AddonDetail(): ReactElement {
         addon ? (
           <>
             <Code tone="muted">{addon.name}</Code>
+            <Chip tone="muted">{addon.installed_version
+              ? t("apps.installedVersion", { version: addon.installed_version })
+              : t("apps.notInstalled")}</Chip>
             <Chip tone="neutral">{addon.namespace}</Chip>
             <Chip tone="neutral">{addonEnumLabel(t, "kind", addon.kind)}</Chip>
           </>

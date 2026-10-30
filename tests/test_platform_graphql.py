@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib
 from collections import Counter
+from importlib import metadata
+from pathlib import Path
 from typing import Any, NoReturn
 
 import pytest
@@ -15,7 +17,7 @@ from strawberry.schema.config import StrawberryConfig
 import tests.test_platform_install  # noqa: F401 -- register the fixture model graph before database setup
 from angee.graphql.ids import require_instance_for_id
 from angee.platform import composed
-from tests.conftest import addon_schema, execute_schema
+from tests.conftest import addon_schema, execute_schema, make_addon
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data
 
@@ -378,3 +380,42 @@ def test_model_only_explorer_selection_skips_catalogue_and_edges(monkeypatch: An
     )
 
     assert data == {"platform_explorer": {"models": [{"label": row.label}]}}
+
+
+@pytest.mark.parametrize("state", ["enabled", "disabled"])
+def test_installed_versions_use_native_metadata_for_catalogue_and_explorer(
+    composed_tables: None, state: str,
+) -> None:
+    """Installed metadata wins over source version; unavailable packages have no version."""
+
+    del composed_tables
+    config = make_addon(name="version_probe.installed")
+    distribution = metadata.distribution("version-probe-installed")
+    source = Path(config.path) / "pyproject.toml"
+    source.write_text(source.read_text().replace('version = "0.0.0"', 'version = "99.0.0"'))
+    assert '99.0.0' in source.read_text()
+    admin = _platform_admin("catalogue-version-admin")
+    addon = apps.get_model("platform", "Addon")
+    with system_context(reason="test.platform.catalogue.versions"):
+        addon.objects.create(name=config.name, distribution=distribution.metadata["Name"], state=state)
+        addon.objects.create(name="version_probe.missing", distribution="version-probe-missing", source="remote")
+        addon.objects.create(name="version_probe.unknown", source="remote")
+    data = _data(execute_schema(
+        _schema(),
+        """{
+          platform_addons(where: {name: {_ilike: "version_probe.%"}}, order_by: [{name: asc}]) {
+            name installed_version
+          }
+          platform_explorer { addons { name installed_version } }
+        }""",
+        user=admin,
+    ))
+    expected = [
+        {"name": "version_probe.installed", "installed_version": "0.0.0"},
+        {"name": "version_probe.missing", "installed_version": None},
+        {"name": "version_probe.unknown", "installed_version": None},
+    ]
+    assert data["platform_addons"] == expected
+    assert [
+        row for row in data["platform_explorer"]["addons"] if row["name"].startswith("version_probe.")
+    ] == expected

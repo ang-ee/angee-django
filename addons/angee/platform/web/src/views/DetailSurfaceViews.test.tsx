@@ -96,6 +96,7 @@ describe("platform detail surfaces", () => {
         name: "angee.storage",
         kind: "REQUIRED",
         label: "Storage",
+        installed_version: "3.0.0",
         model_count: 2,
         namespace: "angee",
         resource_count: 1,
@@ -137,6 +138,7 @@ describe("platform detail surfaces", () => {
         name: "example.base",
         kind: "REQUIRED",
         label: "example.base",
+        installed_version: null,
         model_count: 0,
         namespace: "example",
         resource_count: 0,
@@ -150,6 +152,7 @@ describe("platform detail surfaces", () => {
     render(<AddonDetail />);
 
     expect(screen.getByRole("heading", { name: "example.base" })).toBeTruthy();
+    expect(screen.getByText("apps.notInstalled")).toBeTruthy();
   });
 
   test("ModelDetail keeps metric links navigable", () => {

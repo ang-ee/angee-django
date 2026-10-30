@@ -81,6 +81,7 @@ function row(overrides: Partial<AddonResourceRow> = {}): AddonResourceRow {
     id: "addon_notes",
     name: "angee.notes",
     label: "notes",
+    installed_version: "3.0.0",
     namespace: "angee",
     category: "Example",
     description: "Product logic for the example.",
@@ -133,6 +134,7 @@ describe("AddonCard", () => {
     render(<AddonCard row={row()} />);
     expect(screen.getByText("notes")).toBeTruthy();
     expect(screen.getByText("angee.notes")).toBeTruthy();
+    expect(screen.getByText("Installed 3.0.0")).toBeTruthy();
     expect(screen.queryByText("addon_notes")).toBeNull();
     expect(screen.getByText("Product logic for the example.")).toBeTruthy();
     expect(screen.getByText("demo")).toBeTruthy(); // keyword chip

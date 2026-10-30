@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from importlib import metadata
 from typing import Any
 
 from django.apps import AppConfig, apps
@@ -593,6 +594,16 @@ class Addon(AngeeModel, concrete=True):
         """Return the display label for this catalogue entry."""
 
         return get_addon_display_label(self.name, self.label)
+
+    def get_installed_version(self) -> str | None:
+        """Read this distribution's installed version, or None for catalogue-only rows."""
+
+        if not self.distribution:
+            return None
+        try:
+            return metadata.version(self.distribution)
+        except metadata.PackageNotFoundError:
+            return None
 
     @staticmethod
     def reset_runtime_facts() -> dict[str, Any]:

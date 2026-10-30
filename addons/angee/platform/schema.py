@@ -139,6 +139,7 @@ class PlatformAddon:
     id: PublicID = strawberry.field(resolver=AngeeNode.id)
     name: str
     label: str = strawberry.field(resolver=_Addon.get_display_label)
+    installed_version: str | None = strawberry.field(resolver=_Addon.get_installed_version)
     namespace: str
     kind: AddonModel.AddonKind
     model_count: int
@@ -267,6 +268,9 @@ class AddonNode:
 
     name: auto
     label: str = strawberry_django.field(resolver=_Addon.get_display_label, only=["label", "name"])
+    installed_version: str | None = strawberry_django.field(
+        resolver=_Addon.get_installed_version, only=["distribution"],
+    )
     namespace: auto
     description: auto
     category: auto
