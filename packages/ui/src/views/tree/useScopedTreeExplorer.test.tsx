@@ -191,7 +191,7 @@ function hasPseudoSelection(
 test("a controlled root survives server search results and reports new selections to its owner", () => {
   const changed = vi.fn();
   const { result, rerender } = renderHook(({ roots, rootId }: { roots: readonly Root[]; rootId: string }) =>
-    useScopedTreeExplorer({ roots, rootId, getRootId, getTreeRows, onRootIdChange: changed }),
+    useScopedTreeExplorer({ roots, rootId, onRootInvalidated: vi.fn(), getRootId, getTreeRows, onRootIdChange: changed }),
     { initialProps: { roots: ROOTS, rootId: "root-b" } });
   rerender({ roots: ROOTS.slice(0, 1), rootId: "root-b" });
   expect(result.current.rootId).toBe("root-b");
@@ -234,7 +234,7 @@ test("a pending direct link defers its initial root while a list seeds only once
 test("controlled empty root remains explicit and picking the same root does not reset selection", () => {
   const changed = vi.fn();
   const { result, rerender } = renderHook(({ rootId }: { rootId: string }) =>
-    useScopedTreeExplorer({ roots: ROOTS, rootId, getRootId, getTreeRows, selectedId: "a-folder", onSelectedIdChange: changed }),
+    useScopedTreeExplorer({ roots: ROOTS, rootId, onRootInvalidated: vi.fn(), getRootId, getTreeRows, selectedId: "a-folder", onSelectedIdChange: changed }),
   { initialProps: { rootId: "root-a" } });
   act(() => result.current.setRootId("root-a"));
   expect(changed).not.toHaveBeenCalled();
@@ -275,4 +275,23 @@ test("authoritative root removal clears the retained scope without navigating", 
   expect(result.current.rootId).toBe("");
   expect(result.current.treeRows).toEqual([]);
   expect(change).not.toHaveBeenCalled();
+});
+
+
+test("controlled authoritative removal notifies its state owner without navigation", () => {
+  const navigate = vi.fn(() => false);
+  const invalidated = vi.fn();
+  const { result, rerender } = renderHook(({ rootId }: { rootId: string }) => useScopedTreeExplorer({
+    roots: ROOTS, rootId, getRootId, getTreeRows,
+    onRootIdChange: navigate, onRootInvalidated: invalidated,
+  }), { initialProps: { rootId: "root-b" } });
+  act(() => result.current.invalidateRoot("root-a"));
+  expect(invalidated).not.toHaveBeenCalled();
+  act(() => result.current.invalidateRoot("root-b"));
+  expect(invalidated).toHaveBeenCalledExactlyOnceWith("root-b");
+  expect(navigate).not.toHaveBeenCalled();
+  expect(result.current.rootId).toBe("root-b");
+  rerender({ rootId: "" });
+  expect(result.current.rootId).toBe("");
+  expect(result.current.treeRows).toEqual([]);
 });

@@ -5,7 +5,7 @@ export interface ScopedTreeExplorerOption {
   label: string;
 }
 
-export interface UseScopedTreeExplorerOptions<TRoot, TTreeRow extends { id: string }> {
+interface ScopedTreeExplorerOptions<TRoot, TTreeRow extends { id: string }> {
   roots: readonly TRoot[];
   getRootId: (root: TRoot) => string;
   getTreeRows: (rootId: string) => readonly TTreeRow[];
@@ -24,8 +24,6 @@ export interface UseScopedTreeExplorerOptions<TRoot, TTreeRow extends { id: stri
    * and defer initial default selection. Omit on list routes to seed from roots.
    */
   selectedRootId?: string | null;
-  /** Controlled root selection, for a picker whose options are server-searched. */
-  rootId?: string;
   /**
    * Accept explicit root changes through the route owner before changing scope.
    * Return false (or a promise resolving false) when navigation was blocked.
@@ -38,10 +36,26 @@ export interface UseScopedTreeExplorerOptions<TRoot, TTreeRow extends { id: stri
   ) => boolean;
 }
 
+/** Controlled roots remain owned by the caller, including authoritative removal. */
+export type UseScopedTreeExplorerOptions<TRoot, TTreeRow extends { id: string }> =
+  ScopedTreeExplorerOptions<TRoot, TTreeRow> & ({
+    rootId?: undefined;
+    onRootInvalidated?: never;
+  } | {
+    /** Controlled root selection, for a picker whose options are server-searched. */
+    rootId: string;
+    /**
+     * Clear or replace this unavailable root in the controlling state. This is
+     * authoritative removal, not user navigation: do not invoke a dirty guard.
+     * The hook retains the controlled value until its owner supplies the update.
+     */
+    onRootInvalidated: (rootId: string) => void;
+  });
+
 export interface ScopedTreeExplorerController<TTreeRow extends { id: string }> {
   rootId: string;
   setRootId: (rootId: string) => void;
-  /** Clear only an authoritatively unavailable root, without changing the route. */
+  /** Clear an unavailable root locally, or notify its controlled owner; never navigate. */
   invalidateRoot: (rootId: string) => void;
   treeRows: readonly TTreeRow[];
   selectedId: string | undefined;
@@ -68,6 +82,7 @@ export function useScopedTreeExplorer<
   selectedRootId,
   rootId: controlledRootId,
   onRootIdChange,
+  onRootInvalidated,
   isSelectedIdValid,
 }: UseScopedTreeExplorerOptions<TRoot, TTreeRow>): ScopedTreeExplorerController<TTreeRow> {
   const [selection, setSelection] = useState({
@@ -120,9 +135,11 @@ export function useScopedTreeExplorer<
 
   const rootRequest = useRef(0);
   const invalidateRoot = useCallback((unavailableId: string) => {
-    setSelection((current) => current.rootId === unavailableId
+    if (!rootId || rootId !== unavailableId) return;
+    if (controlledRootId !== undefined) onRootInvalidated?.(unavailableId);
+    else setSelection((current) => current.rootId === unavailableId
       ? { ...current, rootId: "" } : current);
-  }, []);
+  }, [controlledRootId, onRootInvalidated, rootId]);
   const handleSetRootId = useCallback(
     (nextRootId: string) => {
       if (nextRootId === rootId) return;
