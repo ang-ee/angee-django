@@ -532,3 +532,22 @@ def test_native_schema_binding_restores_absent_source_when_extensions_are_remove
     _apply_emitted_schema_paths([config], runtime, sources={})
     assert config.rebac_schema is None
     assert resolve_schema_path(config) is None
+
+
+def test_native_schema_binding_restores_explicit_missing_source_without_fallback(tmp_path):
+    """An explicit missing source must not enable the conventional schema on unbind."""
+
+    from rebac.schema import resolve_schema_path
+
+    base = _base_addon(tmp_path)
+    base.rebac_schema = "missing.zed"
+    assert resolve_schema_path(base) is None
+    runtime = tmp_path / "runtime"
+    _apply_emitted_schema_paths(
+        [base], runtime,
+        sources={merged_schema_relpath("base"): _BASE},
+    )
+    assert resolve_schema_path(base) == runtime / merged_schema_relpath("base")
+    _apply_emitted_schema_paths([base], runtime, sources={})
+    assert base.rebac_schema == "missing.zed"
+    assert resolve_schema_path(base) is None

@@ -242,7 +242,7 @@ def test_addon_names_support_text_search_sort_and_labels_with_unknown_identity(c
     admin = _platform_admin("catalogue-search-admin")
     addon = apps.get_model("platform", "Addon")
     with system_context(reason="test.platform.catalogue.search"):
-        for name, label in (("example.zebra", ""), ("example.alpha", "Zulu"), ("other.hidden", "")):
+        for name, label in (("catalogue_probe.zebra", ""), ("catalogue_probe.alpha", "Zulu"), ("other.hidden", "")):
             addon.objects.create(name=name, label=label, source=addon.AddonSource.REMOTE)
 
     data = _data(
@@ -250,7 +250,7 @@ def test_addon_names_support_text_search_sort_and_labels_with_unknown_identity(c
             _schema(),
             """
             query {
-              platform_addons(where: {name: {_ilike: "example.%"}}, order_by: [{name: asc}]) {
+              platform_addons(where: {name: {_ilike: "catalogue_probe.%"}}, order_by: [{name: asc}]) {
                 id name label
               }
             }
@@ -260,8 +260,8 @@ def test_addon_names_support_text_search_sort_and_labels_with_unknown_identity(c
     )
 
     assert data["platform_addons"] == [
-        {"id": "example.alpha", "name": "example.alpha", "label": "Zulu"},
-        {"id": "example.zebra", "name": "example.zebra", "label": "example.zebra"},
+        {"id": "catalogue_probe.alpha", "name": "catalogue_probe.alpha", "label": "Zulu"},
+        {"id": "catalogue_probe.zebra", "name": "catalogue_probe.zebra", "label": "catalogue_probe.zebra"},
     ]
 
 

@@ -1114,7 +1114,9 @@ def test_dev_stack_has_explicit_lifecycle_job_graph() -> None:
         assert jobs["provision"]["command"] == [
             "uv", "run", "--no-sync", "python", "manage.py", "provision", "--wait-db", "60",
         ]
-        assert jobs["provision"]["depends_on"] == ["compose", "postgres"]
+        assert jobs["provision"]["depends_on"] == (
+            ["compose", "postgres"] if jobs["provision"]["runtime"] == "container" else ["compose"]
+        )
         assert jobs["operator-schema"]["depends_on"] == ["operator", "compose"]
         assert jobs["codegen"]["depends_on"] == ["deps", "compose", "operator-schema"]
         assert stack["services"]["django"]["after"] == ["provision"]

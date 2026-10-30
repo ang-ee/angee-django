@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from os import PathLike
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +52,8 @@ def require_rebac_queryset[M: models.Model](model: type[M]) -> RebacQuerySet[M]:
 @dataclass(frozen=True, slots=True)
 class _RebacSchemaBinding:
     source: Path | None
-    effective: Path | None
+    declaration: str | PathLike[str] | None
+    effective: str | PathLike[str] | None
 
 
 _SCHEMA_BINDING = "_angee_rebac_schema_binding"
@@ -63,17 +65,22 @@ def declared_schema_path(app_config: AppConfig) -> Path | None:
     binding = app_config.__dict__.get(_SCHEMA_BINDING)
     effective = binding.effective if isinstance(binding, _RebacSchemaBinding) else None
     if not isinstance(binding, _RebacSchemaBinding) or getattr(app_config, "rebac_schema", None) != effective:
-        binding = _RebacSchemaBinding(resolve_schema_path(app_config), effective)
+        binding = _RebacSchemaBinding(
+            resolve_schema_path(app_config), getattr(app_config, "rebac_schema", None), effective,
+        )
         app_config.__dict__[_SCHEMA_BINDING] = binding
     return binding.source
 
 
-def bind_rebac_schema(app_config: AppConfig, path: Path) -> None:
-    """Bind a native schema path while retaining its authored declaration."""
+def bind_rebac_schema(app_config: AppConfig, path: Path | None) -> None:
+    """Bind generated input; ``None`` restores the original native declaration."""
 
     source = declared_schema_path(app_config)
-    setattr(app_config, "rebac_schema", path)
-    app_config.__dict__[_SCHEMA_BINDING] = _RebacSchemaBinding(source, path)
+    binding = app_config.__dict__[_SCHEMA_BINDING]
+    assert isinstance(binding, _RebacSchemaBinding)
+    effective = path if path is not None else binding.declaration
+    setattr(app_config, "rebac_schema", effective)
+    app_config.__dict__[_SCHEMA_BINDING] = _RebacSchemaBinding(source, binding.declaration, effective)
 
 
 def merged_schema_relpath(package: str) -> Path:

@@ -46,8 +46,10 @@ def django_db_setup(
 @pytest.fixture(autouse=True)
 def restore_composed_permission_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
     """Restore generated permission paths and source annotations after each test."""
+    from angee.base.permissions import _SCHEMA_BINDING
+
     for config in apps.get_app_configs():
-        for key in ("rebac_schema", "_angee_rebac_schema_source", "_angee_rebac_schema_effective"):
+        for key in ("rebac_schema", _SCHEMA_BINDING):
             existed = key in config.__dict__
             monkeypatch.setitem(config.__dict__, key, config.__dict__.get(key))
             if not existed:

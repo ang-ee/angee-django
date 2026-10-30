@@ -25,14 +25,14 @@ def installed_field_owners(app_configs: Iterable[AppConfig]) -> dict[str, dict[s
 def emit_permissions(app_configs: Iterable[AppConfig], runtime: Path, *, sources: Mapping[Path, str]) -> None:
     """Bind temporary merged inputs through the native AppConfig schema seam."""
 
-    from angee.base.permissions import bind_rebac_schema, merged_schema_relpath
+    from angee.base.permissions import bind_rebac_schema, declared_schema_path, merged_schema_relpath
 
     for relative, content in sorted(sources.items()):
         atomic_write(runtime / relative, content.encode("utf-8"))
     for config in app_configs:
         relative = merged_schema_relpath(config.name)
-        if relative in sources:
-            bind_rebac_schema(config, runtime / relative)
+        path = runtime / relative if relative in sources else declared_schema_path(config)
+        bind_rebac_schema(config, path)
 
 
 @pytest.fixture

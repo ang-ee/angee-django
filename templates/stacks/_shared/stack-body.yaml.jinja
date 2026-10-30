@@ -273,7 +273,7 @@ jobs:
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_EMAIL: "admin@example.com"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_PASSWORD: "${secret.admin-password}"
 {% endif %}    command: ["uv", "run", "--no-sync", "python", "manage.py", "provision", "--wait-db", "60"]
-    depends_on: [compose{% if postgres_mode == "external" %}{% else %}, postgres{% endif %}]
+    depends_on: [compose{% if runtime_mode == "docker" %}{% if postgres_mode == "external" %}{% else %}, postgres{% endif %}{% endif %}]
 
   # Compose owns application SDL; this job exports the live operator SDL.
   # Both are codegen inputs and need no provisioned DB.

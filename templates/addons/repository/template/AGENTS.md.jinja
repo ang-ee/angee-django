@@ -1,4 +1,5 @@
 # AGENTS.md
+
 This repository holds the **Angee consumer addons** of {{ repository_title }}:
 `addons/{{ addon_namespace }}/<name>` is the `{{ addon_namespace }}.<name>` addon. It
 is a source slot the owning stack materializes, not a stack or a Django project.
@@ -7,8 +8,7 @@ It owns its root uv workspace and addon distribution metadata in
 `manage.py`, the running Python and JS environments, composition, migrations,
 SDL and codegen. Never run `angee init` or `pnpm install` here, or synchronize the
 live stack's environment from this slot. Never `git checkout` or `git switch`
-inside this slot; the parent stack and workspace `AGENTS.md` own lifecycle and
-branches.
+inside this slot; parent stack and workspace `AGENTS.md` own lifecycle and branches.
 
 ## Consumer Scope
 
