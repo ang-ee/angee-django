@@ -14,7 +14,7 @@ import {
 import { usePlatformT } from "../i18n";
 
 // The `resources.Resource` Hasura resource (`hasura_model_resource` over the
-// import ledger, `addons/angee/platform/schema.py`): a real queryset on a
+// import ledger, `src/angee/platform/schema.py`): a real queryset on a
 // server row model — list/filter/sort/group resolve server-side via the
 // resource's `_groups` aggregate over the source/tier axes.
 interface ResourceLedgerResourceRow extends Record<string, unknown> {

@@ -5,7 +5,7 @@ description: "Authors a workflow in an Angee addon: Step classes registered thro
 
 # Workflow Definitions
 
-The reference example is `examples/addons/example/notes` (steps, rows, trigger, tests); `angee.workflows` owns execution.
+The reference example is `examples/src/example/notes` (steps, rows, trigger, tests); `angee.workflows` owns execution.
 
 ## Use when
 
@@ -18,32 +18,32 @@ The reference example is `examples/addons/example/notes` (steps, rows, trigger, 
 
 | File or module | Owns | Reference |
 |---|---|---|
-| `<addon>/steps.py` | `Step` subclasses: key, typed input/output/config, mode, outcomes, body | `examples/addons/example/notes/steps.py:28,47,65` |
-| `<addon>/autoconfig.py` | `ANGEE_WORKFLOW_STEP_CLASSES.<key>` entries | `examples/addons/example/notes/autoconfig.py:5` |
-| `<addon>/resources/<tier>/NNN_workflows.workflow.yaml`, `…workflows.trigger.yaml` | the graph document and its disabled trigger policy | `examples/addons/example/notes/resources/demo/100_workflows.workflow.yaml`, `110_workflows.trigger.yaml` |
-| `addons/angee/workflows/steps.py` | `Step` (:226), `StepMode` (:40), `RetryPolicy` (:48), settlements `Done`/`Wait`/`NextPage`/`Fail`/`Ask` (:84,:113,:147,:160,:185), `resolve_step` (:358) | module docstring |
-| `addons/angee/workflows/context.py` | `StepContext` (:24): `subject_for_update` :73, `load` :87, `watch` :116, `ask` :129, `record` :162, `start_run` :178 | docstrings |
-| `addons/angee/workflows/decision_steps.py` | `apply_proposals` (:19), `DecisionStep` (:73), built-in `AskDecision` (:110) | docstrings |
-| `addons/angee/workflows/definition.py`, `models.py`, `managers.py` | `Definition` (:274), `WorkflowExtension` (:147); `Workflow` (:145), `WorkflowVersion` (:220), `Trigger` (:872); `WorkflowManager.install_definition` (:363), `save_draft` (:277), `publish` (:309), `WorkflowRunManager.start` (:584) | [README](../../README.md) |
-| `addons/angee/workflows/resources.py` | `WorkflowDefinitionResource` (:68), `TriggerResource` (:121), `WorkflowExtensionResourceKind` (:21) | docstrings |
-| `addons/angee/workflows/triggers.py`, `subjects.py` | `TriggerSource` (:187), `RecordChangedOptIn` (:178), `TriggerGrantTarget` (:72), `RecordChanged` (:389); `RunSubject` (:10) | docstrings |
-| `addons/angee/workflows/testing/` | `register_steps` :53, `load_workflow` :70, `publish_draft` :97, `start_run` :110, `decide` :117, `run_until` :124, `RunFactory` :147 (`drivers.py`); fixtures `register_step`, `execution`, `run_factory` (`fixtures.py:37,27,48`) | `testing/__init__.py` docstring |
+| `<addon>/steps.py` | `Step` subclasses: key, typed input/output/config, mode, outcomes, body | `examples/src/example/notes/steps.py:28,47,65` |
+| `<addon>/autoconfig.py` | `ANGEE_WORKFLOW_STEP_CLASSES.<key>` entries | `examples/src/example/notes/autoconfig.py:5` |
+| `<addon>/resources/<tier>/NNN_workflows.workflow.yaml`, `…workflows.trigger.yaml` | the graph document and its disabled trigger policy | `examples/src/example/notes/resources/demo/100_workflows.workflow.yaml`, `110_workflows.trigger.yaml` |
+| `src/angee/workflows/steps.py` | `Step` (:226), `StepMode` (:40), `RetryPolicy` (:48), settlements `Done`/`Wait`/`NextPage`/`Fail`/`Ask` (:84,:113,:147,:160,:185), `resolve_step` (:358) | module docstring |
+| `src/angee/workflows/context.py` | `StepContext` (:24): `subject_for_update` :73, `load` :87, `watch` :116, `ask` :129, `record` :162, `start_run` :178 | docstrings |
+| `src/angee/workflows/decision_steps.py` | `apply_proposals` (:19), `DecisionStep` (:73), built-in `AskDecision` (:110) | docstrings |
+| `src/angee/workflows/definition.py`, `models.py`, `managers.py` | `Definition` (:274), `WorkflowExtension` (:147); `Workflow` (:145), `WorkflowVersion` (:220), `Trigger` (:872); `WorkflowManager.install_definition` (:363), `save_draft` (:277), `publish` (:309), `WorkflowRunManager.start` (:584) | [README](../../README.md) |
+| `src/angee/workflows/resources.py` | `WorkflowDefinitionResource` (:68), `TriggerResource` (:121), `WorkflowExtensionResourceKind` (:21) | docstrings |
+| `src/angee/workflows/triggers.py`, `subjects.py` | `TriggerSource` (:187), `RecordChangedOptIn` (:178), `TriggerGrantTarget` (:72), `RecordChanged` (:389); `RunSubject` (:10) | docstrings |
+| `src/angee/workflows/testing/` | `register_steps` :53, `load_workflow` :70, `publish_draft` :97, `start_run` :110, `decide` :117, `run_until` :124, `RunFactory` :147 (`drivers.py`); fixtures `register_step`, `execution`, `run_factory` (`fixtures.py:37,27,48`) | `testing/__init__.py` docstring |
 
 ## Reuse first
 
-- The built-in steps before a new one: `ask_decision`, `map` (`addons/angee/workflows/maps.py:52`), `await_run` (`awaits.py:61`).
+- The built-in steps before a new one: `ask_decision`, `map` (`src/angee/workflows/maps.py:52`), `await_run` (`awaits.py:61`).
 - `StepContext` verbs for every record touch: `ctx.subject` / `ctx.subject_for_update()`, `ctx.load(model, id, permission=, lock=)`,
   `ctx.record(record, operation=)`, `ctx.watch(record)`, `ctx.note(message)`; never a raw `Model.objects` read in a body.
 - The subject model's own verbs for domain work (`Note.publish`, `Note.publication_summary`,
-  `examples/addons/example/notes/models.py:93,113`); a step dispatches, it does not decide.
-- `DecisionRequest`, `DecisionProposal`, `DecisionContext`, `DecisionFact` (`addons/angee/decisions/contracts.py`);
+  `examples/src/example/notes/models.py:93,113`); a step dispatches, it does not decide.
+- `DecisionRequest`, `DecisionProposal`, `DecisionContext`, `DecisionFact` (`src/angee/decisions/contracts.py`);
   `ImplBase` registry mechanics (`Step.registry_setting`); `angee.jobs.timeouts.task_time_budget` for IO bounds.
-- Existing addon steps as shapes: `addons/angee/workflows_parties/steps.py`, `workflows_integrate/steps.py`, `workflows_agents/steps.py`.
+- Existing addon steps as shapes: `src/angee/workflows_parties/steps.py`, `workflows_integrate/steps.py`, `workflows_agents/steps.py`.
 
 ## Steps
 
 1. **Declare the dependencies.** `pyproject.toml` `[project].dependencies` lists `angee-workflows`, `angee-decisions` when a step asks, and
-   `angee-provenance` (`examples/addons/example/notes/pyproject.toml:8-24`). **Owner rule:** the manifest owns dependency facts
+   `angee-provenance` (`examples/src/example/notes/pyproject.toml:8-24`). **Owner rule:** the manifest owns dependency facts
    ([composition owners](../../../../../docs/backend/guidelines.md#composition-owners)).
 
 2. **Write the step in `<addon>/steps.py`.** Type parameters are the input, output and config models (`None` accepts JSON);
@@ -88,7 +88,7 @@ The reference example is `examples/addons/example/notes` (steps, rows, trigger, 
    }
    ```
 
-   `check_step_registry` (registered by `addons/angee/workflows/apps.py:20`) validates every entry; `resolve_step` is the only
+   `check_step_registry` (registered by `src/angee/workflows/apps.py:20`) validates every entry; `resolve_step` is the only
    resolver. **Owner rule:** [Autoconfig](../../../../../docs/composer.md#autoconfig) merges contributions; no addon-local step table.
 
 5. **Ask a question with a decision step.** Subclass `DecisionStep[I, O, C]` (DATABASE only, `decision_steps.py:76`), implement
@@ -142,12 +142,12 @@ The reference example is `examples/addons/example/notes` (steps, rows, trigger, 
    writes tuples to the workflow principal ([REBAC](../../../../../docs/backend/guidelines.md#rebac); `workflows.E001`, `triggers.py:436`).
 
 8. **Own the root-run lifecycle on the record (optional).** Compose `RunSubject`; implement `admit_run(run)` and `settle_run(run, status)`
-   with database work only (`addons/angee/workflows/testing/models.py:13`); `workflows.E002` rejects a partial opt-in (`subjects.py:38`).
+   with database work only (`src/angee/workflows/testing/models.py:13`); `workflows.E002` rejects a partial opt-in (`subjects.py:38`).
    **Owner rule:** the record, not a signal receiver, owns admission and settlement ([Workflow contracts](../../../../../docs/backend/guidelines.md#workflow-contracts)).
 
 9. **Test through the drivers.** Framework addons: `tests/test_<name>.py` with `angee.workflows.testing` installed
    (`tests/settings.py:101`) and the `register_step`, `execution`, `run_factory` fixtures. Consumer addons: a `TransactionTestCase`
-   in the addon's `tests/` (`examples/addons/example/notes/tests/test_workflow_steps.py:35`): `load_workflow("example.notes.note_publish",
+   in the addon's `tests/` (`examples/src/example/notes/tests/test_workflow_steps.py:35`): `load_workflow("example.notes.note_publish",
    actor=admin, allow_non_dev=True)`, `start_run(workflow, actor=, subject=)`, `run_until(run)`, `decide(decision, actor=, chosen=[...])`,
    `run_factory(workflow, actor=).at("review")`, inside `capture_tasks()`. **Owner rule:** the drivers compose production admission
    and transition verbs; nothing fabricates step rows ([source-addon test models](../../../../../docs/checks.md#source-addon-test-models)).
@@ -162,7 +162,7 @@ The reference example is `examples/addons/example/notes` (steps, rows, trigger, 
 - Applying a verdict's actions yourself in `continue_with`: `apply_proposals` already ran in the body transaction (`decision_steps.py:81-90`).
 - Reading a record in a body through `Model.objects` or `system_context`: `ctx.load` / `ctx.subject` under the run actor (`context.py:87`).
 - `enabled: true` on a trigger row or a trigger enabled by code: `TriggerResource` clears activation (`resources.py:121`); enablement is operator state ([Glossary: Trigger source grant](../../../../../docs/glossary.md#backend)).
-- A caveated subject in a grant target's zed: `angee.E024` (`addons/angee/base/checks.py:37`); field-backed conditional relations.
+- A caveated subject in a grant target's zed: `angee.E024` (`src/angee/base/checks.py:37`); field-backed conditional relations.
 
 ## Verify
 
@@ -196,6 +196,6 @@ and a decision test answers through `decide` and resumes the step.
 
 <!--
 Docs: docs/backend/guidelines.md #workflow-execution, #workflow-contracts, #rebac; docs/glossary.md #backend, #workflows, #decisions; docs/checks.md #choose-the-working-directory, #python-and-composition-contracts, #source-addon-test-models, #browser-verification, #what-ci-actually-runs; docs/composer.md #autoconfig.
-Code: addons/angee/workflows/{README.md, steps.py:1-376, models.py:145-260,872-895, managers.py:363-405, resources.py, autoconfig.py, pyproject.toml, apps.py, context.py:20-110, decision_steps.py:1-100, subjects.py, triggers.py:175-200,429-436, definition.py:147,181,274, maps.py:13-52, awaits.py:15-61, testing/__init__.py, testing/drivers.py, testing/fixtures.py, testing/models.py:1-30}; addons/angee/decisions/README.md; examples/addons/example/notes/{pyproject.toml, autoconfig.py, steps.py, models.py:22-45, resources/demo/100_workflows.workflow.yaml, 110_workflows.trigger.yaml, tests/test_workflow_steps.py:1-70}; tests/workflow_steps.py:1-80; tests/test_workflows_testing.py:1-60; tests/test_composed_note_workflow.py; tests/settings.py:56-101.
+Code: src/angee/workflows/{README.md, steps.py:1-376, models.py:145-260,872-895, managers.py:363-405, resources.py, autoconfig.py, pyproject.toml, apps.py, context.py:20-110, decision_steps.py:1-100, subjects.py, triggers.py:175-200,429-436, definition.py:147,181,274, maps.py:13-52, awaits.py:15-61, testing/__init__.py, testing/drivers.py, testing/fixtures.py, testing/models.py:1-30}; src/angee/decisions/README.md; examples/src/example/notes/{pyproject.toml, autoconfig.py, steps.py, models.py:22-45, resources/demo/100_workflows.workflow.yaml, 110_workflows.trigger.yaml, tests/test_workflow_steps.py:1-70}; tests/workflow_steps.py:1-80; tests/test_workflows_testing.py:1-60; tests/test_composed_note_workflow.py; tests/settings.py:56-101.
 Mismatches: none found for the cited surfaces; no doc lists the YAML node keys (step/next/input/config/body/results/when) — derived from the notes rows and Definition.
 -->

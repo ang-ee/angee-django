@@ -294,7 +294,7 @@ def test_demo_agent_seed_reload_preserves_provisioned_state(tmp_path: Path, monk
     """Replay an actual demo row with changed metadata over a provisioned agent."""
 
     root = Path(__file__).resolve().parents[4]
-    monkeypatch.syspath_prepend(str(root / "examples/addons"))
+    monkeypatch.syspath_prepend(str(root / "examples/src"))
     owner = AppConfig("example.notes", import_module("example.notes"))
     source = ResourceEntry.from_declaration(owner, "demo", {"path": "resources/demo/095_agents.agent.yaml"})
     (group,) = source.read_groups()

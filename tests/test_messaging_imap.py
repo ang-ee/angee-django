@@ -824,7 +824,7 @@ def _drain(backend: ImapChannelBackend) -> list[Any]:
 def test_web_sample_selection_limit_matches_backend() -> None:
     """The preview's selection cap must stay within the import owner's bound."""
 
-    action = Path(__file__).parents[1] / "addons/angee/messaging_integrate_imap/web/src/ImportImapSampleAction.tsx"
+    action = Path(__file__).parents[1] / "src/angee/messaging_integrate_imap/web/src/ImportImapSampleAction.tsx"
     assert f"const IMAP_SAMPLE_LIMIT = {MAX_SAMPLE_MESSAGES};" in action.read_text()
 
 

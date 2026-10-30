@@ -10,7 +10,7 @@ import { AddonLink } from "./AddonLink";
 import { platformScopeSearch } from "../lib/paths";
 
 // The `platform.Model` Hasura resource row (`hasura_pydantic_resource`,
-// `addons/angee/platform/schema.py`): raw snake fields, fetched + grouped
+// `src/angee/platform/schema.py`): raw snake fields, fetched + grouped
 // client-side by ListView's client row model. The inverse `depended_by` is a
 // detail concern (the resource carries only `depends_on`).
 interface ModelResourceRow extends Record<string, unknown> {

@@ -30,7 +30,7 @@ def test_typed_xref_resolution_preserves_optional_and_wrong_assignment_errors(tm
     )
     env = dict(os.environ)
     env.pop("ANGEE_PROJECT_DIR", None)
-    env["PYTHONPATH"] = os.pathsep.join((str(root), str(root / "addons")))
+    env["PYTHONPATH"] = os.pathsep.join((str(root), str(root / "src")))
     result = subprocess.run([
         sys.executable, "-m", "mypy", "--config-file", str(root / "pyproject.toml"),
         "--cache-dir", str(tmp_path / "cache"), str(caller),

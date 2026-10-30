@@ -74,7 +74,7 @@ else:
                 assert user.source_kind == ("person" if kind == "person" and active else None)
 '''
     root = Path(__file__).resolve().parents[1]
-    environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "addons")))}
+    environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "src")))}
     result = subprocess.run(
         [sys.executable, "-c", script, order], cwd=root, env=environment,
         text=True, capture_output=True, timeout=60, check=False,

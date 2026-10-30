@@ -42,12 +42,12 @@ package_name:
   default: "@{{ project_name }}/web"
   help: npm name for the rendered web package (its own private host package).
 
-# Directory name for the project's own consumer addons, under addons/<namespace>/.
+# Directory name for the project's own consumer addons, under src/<namespace>/.
 # INSTALLED_APPS references it as `<namespace>.<app>`.
 addon_namespace:
   type: str
   default: "{{ project_name }}"
-  help: Directory + import namespace for this project's consumer addons (addons/<namespace>/).
+  help: Directory + import namespace for this project's consumer addons (src/<namespace>/).
 
 # Path to the project's web package, relative to the project root — the directory
 # this template renders the web package into. Mirrors the `web_path` input the dev

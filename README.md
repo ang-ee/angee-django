@@ -16,10 +16,10 @@ on the [Angee platform](https://angee.ai).**
 > teams building Angee applications and addons. If you want a product to use,
 > start with a product-specific distribution built on Angee.
 
-Public [feed streams and held replies](addons/angee/posts/README.md) compose
-[integration discovery](addons/angee/integrate/README.md),
-[delivery settlement](addons/angee/messaging/README.md) and
-[workflow conversations](addons/angee/workflows_posts/README.md).
+Public [feed streams and held replies](src/angee/posts/README.md) compose
+[integration discovery](src/angee/integrate/README.md),
+[delivery settlement](src/angee/messaging/README.md) and
+[workflow conversations](src/angee/workflows_posts/README.md).
 
 > **Public alpha / active refactor.** Angee is being opened while major addon,
 > API, and UI surfaces are still moving. Use it for exploration and feedback,
@@ -105,9 +105,9 @@ hand. For the full onboarding path
 
 This repository holds the framework's source surfaces together:
 
-- **`addons/angee/base/`** — model foundation, deployment settings and shared primitives.
-- **`addons/angee/server/`** — optional HTTP serving policy over native compiler seams.
-- **`addons/`** — the `angee.base` model foundation and capability addons,
+- **`src/angee/base/`** — model foundation, deployment settings and shared primitives.
+- **`src/angee/server/`** — optional HTTP serving policy over native compiler seams.
+- **`src/`** — the `angee.base` model foundation and capability addons,
   including provenance, jobs, web builds and GraphQL, with co-located web fragments.
   Generic composition is owned by the `django-compose` dependency.
 - **`packages/`** — the published `@angee/*` React packages and workshops.

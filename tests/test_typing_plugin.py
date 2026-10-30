@@ -249,10 +249,10 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "    record.save_without_historical_record(unknown=True)\n"
         "    record.save_without_historical_record(force_update='bad')\n"
     )
-    env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "addons")))}
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "src")))}
     command = [sys.executable, "-m", "mypy", "--config-file", str(config)]
     positive = subprocess.run(
-        [*command, str(valid), str(root / "addons/angee/base/managers.py")],
+        [*command, str(valid), str(root / "src/angee/base/managers.py")],
         cwd=root, env=env, capture_output=True, text=True, check=False,
     )
     assert positive.returncode == 0, positive.stdout + positive.stderr
@@ -277,7 +277,7 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
     )
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(
-        filter(None, (str(tmp_path), str(root), str(root / "addons"), env.get("PYTHONPATH")))
+        filter(None, (str(tmp_path), str(root), str(root / "src"), env.get("PYTHONPATH")))
     )
     disabled = subprocess.run(
         [sys.executable, "-m", "mypy", "--config-file", str(disabled_config), str(disabled_source)],

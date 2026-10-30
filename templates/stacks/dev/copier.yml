@@ -50,7 +50,7 @@ _angee:
   description: >-
     The framework-dev stack: the root folder IS the stack AND the project host
     (ANGEE_ROOT=.). It chains the `projects/web` project template to scaffold
-    the host (manage.py, settings.yaml, pyproject, addons, web), then overlays a
+    the host (manage.py, settings.yaml, pyproject, src, web), then overlays a
     process- or Docker-mode manifest against the framework source slot and the
     optional external slots its `src` workspace materializes under
     workspaces/src/. `angee dev` owns the whole bring-up: caches, the src
@@ -153,7 +153,7 @@ project_name:
     namespace of every workspace branch this stack cuts (`<project_name>/<workspace>`).
     Give each stack on a machine or a shared fork its own name.
 
-# Directory + import namespace for this project's own consumer addons (addons/<ns>/,
+# Directory + import namespace for this project's own consumer addons (src/<ns>/,
 # referenced in INSTALLED_APPS as <ns>.<app>). Must be a valid Python identifier.
 # Copier-go does not evaluate Jinja defaults before chain-input substitution, so
 # keep this concrete; override it alongside `project_name` for custom projects.

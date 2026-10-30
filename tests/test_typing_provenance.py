@@ -42,7 +42,7 @@ def test_provenance_plugin_types_concrete_storage_without_angee_host(tmp_path: P
     config = tmp_path / "mypy.ini"
     config.write_text(
         "[mypy]\nplugins = django_compose.typing, angee.provenance.typing\n"
-        f"mypy_path = {tmp_path},{root},{root / 'addons'}\n"
+        f"mypy_path = {tmp_path},{root},{root / 'src'}\n"
         f"cache_dir = {tmp_path / 'cache'}\nignore_missing_imports = True\n"
         "[mypy.plugins.django-stubs]\ndjango_settings_module = storage_settings\n"
     )
@@ -65,7 +65,7 @@ def test_provenance_plugin_types_concrete_storage_without_angee_host(tmp_path: P
     )
     env = dict(os.environ, DJANGO_SETTINGS_MODULE="storage_settings")
     env["PYTHONPATH"] = os.pathsep.join(filter(None, (
-        str(tmp_path), str(root), str(root / "addons"), env.get("PYTHONPATH"),
+        str(tmp_path), str(root), str(root / "src"), env.get("PYTHONPATH"),
     )))
     command = [sys.executable, "-m", "mypy", "--config-file", str(config)]
     positive = subprocess.run(
@@ -100,7 +100,7 @@ def test_provenance_plugin_keeps_protocol_without_an_installed_storage_app(tmp_p
     config = tmp_path / "mypy.ini"
     config.write_text(
         "[mypy]\nplugins = django_compose.typing, angee.provenance.typing\n"
-        f"mypy_path = {tmp_path},{root},{root / 'addons'}\n"
+        f"mypy_path = {tmp_path},{root},{root / 'src'}\n"
         f"cache_dir = {tmp_path / 'cache'}\nignore_missing_imports = True\n"
         "[mypy.plugins.django-stubs]\ndjango_settings_module = absent_storage_settings\n",
     )
@@ -114,7 +114,7 @@ def test_provenance_plugin_keeps_protocol_without_an_installed_storage_app(tmp_p
     )
     env = dict(os.environ, DJANGO_SETTINGS_MODULE="absent_storage_settings")
     env["PYTHONPATH"] = os.pathsep.join(filter(None, (
-        str(tmp_path), str(root), str(root / "addons"), env.get("PYTHONPATH"),
+        str(tmp_path), str(root), str(root / "src"), env.get("PYTHONPATH"),
     )))
     result = subprocess.run(
         [sys.executable, "-m", "mypy", "--config-file", str(config), str(source)],
@@ -143,7 +143,7 @@ def test_installed_provenance_settings_keep_their_declared_types(tmp_path: Path)
     )
     env = dict(
         os.environ, DJANGO_SETTINGS_MODULE="tests.typing_settings",
-        PYTHONPATH=os.pathsep.join((str(root), str(root / "addons"))),
+        PYTHONPATH=os.pathsep.join((str(root), str(root / "src"))),
     )
     env.pop("ANGEE_PROJECT_DIR", None)
     command = [

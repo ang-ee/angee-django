@@ -304,7 +304,7 @@ assert not apps.apps_ready
 assert not apps.models_ready
 """],
         cwd=Path(__file__).resolve().parents[1],
-        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "addons")},
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")},
         capture_output=True,
         text=True,
         timeout=30,

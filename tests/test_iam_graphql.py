@@ -1981,7 +1981,7 @@ assert Credential.objects.using("secondary").count() == 1
 assert Credential.objects.using("default").count() == 3
 """
     root = Path(__file__).resolve().parents[1]
-    environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "addons"), str(tmp_path)))}
+    environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "src"), str(tmp_path)))}
     result = subprocess.run(
         [sys.executable, "-c", script], cwd=root, env=environment,
         text=True, capture_output=True, timeout=60, check=False,

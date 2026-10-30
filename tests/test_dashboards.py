@@ -62,7 +62,7 @@ def dashboard_tables(transactional_db: Any) -> Iterator[None]:
     reset_backend()
     active = backend()
     assert isinstance(active, LocalBackend)
-    policy = Path(__file__).parents[1] / "addons/angee/dashboards/permissions.zed"
+    policy = Path(__file__).parents[1] / "src/angee/dashboards/permissions.zed"
     install_schema(
         parse_zed(
             "definition auth/user {}\n"

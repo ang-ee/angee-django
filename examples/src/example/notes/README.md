@@ -11,8 +11,8 @@ relation and the visibility-filtered `storage/file` arm; attaching an existing
 private or inherited file does not change its access. The shared groups own
 Upload and Bind; the example adds no custom pane or mutation.
 
-See the [storage](../../../../addons/angee/storage/README.md) and
-[knowledge](../../../../addons/angee/knowledge/README.md) contracts.
+See the [storage](../../../../src/angee/storage/README.md) and
+[knowledge](../../../../src/angee/knowledge/README.md) contracts.
 
 
 The local-template demo keeps its bridge, repository, template source, templates,

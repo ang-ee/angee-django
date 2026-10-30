@@ -25,7 +25,7 @@ Traps moved from the frontend guide's Pitfalls section. The layering, manifest a
   so Vite sees the new package. See [Checks](../../../../docs/checks.md) for environment setup
   and safe script invocation.
 - **Install JS dependencies once at the owning stack workspace root.** Never run
-  `pnpm install` inside a source slot, `packages/`, `addons/`, or `examples/`
+  `pnpm install` inside a source slot, `packages/`, `src/`, or `examples/`
   ([Composition and schema](../../../../docs/checks.md#composition-and-schema)): a
   nested install forks linked
   `vite`/`vitest` identities and can produce `Excessive stack depth comparing

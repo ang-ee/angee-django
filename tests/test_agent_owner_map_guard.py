@@ -50,14 +50,14 @@ def reminded(stdout: str) -> bool:
 
 
 def test_first_source_edit_reminds_once_per_session(tmp_path: Path) -> None:
-    context = json.loads(run_guard(tmp_path, event("addons/angee/base/models/base.py")))
+    context = json.loads(run_guard(tmp_path, event("src/angee/base/models/base.py")))
     assert context["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
     assert "angee-design" in context["hookSpecificOutput"]["additionalContext"]
     assert run_guard(tmp_path, event("packages/ui/src/index.ts")) == ""
 
 
 def test_relative_paths_resolve_against_a_nested_cwd_and_classify_from_the_project_root(tmp_path: Path) -> None:
-    assert reminded(run_guard(tmp_path, event("models.py", cwd=ROOT / "addons/angee/tags")))
+    assert reminded(run_guard(tmp_path, event("models.py", cwd=ROOT / "src/angee/tags")))
 
 
 def test_configured_project_root_classifies_edits_started_outside_the_repository(tmp_path: Path) -> None:
@@ -70,17 +70,17 @@ def test_configured_project_root_classifies_edits_started_outside_the_repository
     "file_path",
     [
         "tests/test_base.py",
-        "addons/angee/base/README.md",
+        "src/angee/base/README.md",
         "docs/stack.md",
-        "addons/angee/tags/web/src/views/TagsPage.test.tsx",
-        "addons/angee/tags/web/src/views/TagsPage.native.test.tsx",
+        "src/angee/tags/web/src/views/TagsPage.test.tsx",
+        "src/angee/tags/web/src/views/TagsPage.native.test.tsx",
         "packages/ui/src/views/list.spec.ts",
         "packages/ui/src/views/Button.stories.tsx",
     ],
 )
 def test_non_source_edits_are_silent_and_keep_the_reminder(tmp_path: Path, file_path: str) -> None:
     assert run_guard(tmp_path, event(file_path)) == ""
-    assert reminded(run_guard(tmp_path, event("addons/angee/tags/models.py")))
+    assert reminded(run_guard(tmp_path, event("src/angee/tags/models.py")))
 
 
 def test_malformed_input_is_silent(tmp_path: Path) -> None:

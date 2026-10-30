@@ -77,7 +77,7 @@ def test_native_addon_members_reach_base_and_explicit_library_stays_outside_grou
 
 def test_meta_exact_pins_and_native_sources_match_actual_members():
     data = tomllib.loads((ROOT / "pyproject.toml").read_text())
-    production = {path for path in members() if path.parent == ROOT / "addons/angee"}
+    production = {path for path in members() if path.parent == ROOT / "src/angee"}
     requirements = {parsed.name: parsed for raw in data["project"]["dependencies"] if (parsed := Requirement(raw))}
     assert len(requirements) == len(production)
     for path in production:
@@ -89,17 +89,17 @@ def test_meta_exact_pins_and_native_sources_match_actual_members():
     assert "hatch-angee" not in projects
     assert not (ROOT / "tools/hatch-angee").exists()
     assert "addons" not in data.get("dependency-groups", {})
-    assert not list((ROOT / "addons").rglob(".gitignore"))
-    assert not list((ROOT / "addons").rglob("addon.toml"))
+    assert not list((ROOT / "src").rglob(".gitignore"))
+    assert not list((ROOT / "src").rglob("addon.toml"))
 
 
 @pytest.mark.parametrize(("kind", "expected"), [("patch", "3.0.1"), ("major", "4.0.0")])
 def test_native_release_bumps_only_cohort_and_updates_all_consumers(tmp_path, kind, expected):
     paths = {
         "": ("angee", "3.0.0", ["angee-base==3.0.0", "angee-web==3.0.0"]),
-        "addons/angee/base": ("angee-base", "3.0.0", []),
-        "addons/angee/web": ("angee-web", "3.0.0", ["angee-base>=3,<4"]),
-        "examples/addons/example/notes": ("example-notes", "0.9.0", ["angee-base>=3,<4"]),
+        "src/angee/base": ("angee-base", "3.0.0", []),
+        "src/angee/web": ("angee-web", "3.0.0", ["angee-base>=3,<4"]),
+        "examples/src/example/notes": ("example-notes", "0.9.0", ["angee-base>=3,<4"]),
         "tests/blankchoices": ("tests-blankchoices", "0.7.0", ["angee-web==3.0.0"]),
     }
     for relative, (name, version, requirements) in paths.items():
@@ -113,7 +113,7 @@ def test_native_release_bumps_only_cohort_and_updates_all_consumers(tmp_path, ki
     with target.open("a") as stream:
         stream.write("""
 [tool.uv.workspace]
-members=["addons/angee/*","examples/addons/example/*","tests/blankchoices"]
+members=["src/angee/*","examples/src/example/*","tests/blankchoices"]
 [tool.uv.sources]
 angee-base={workspace=true}
 angee-web={workspace=true}
@@ -132,7 +132,7 @@ dev=["example-notes==0.9.0","tests-blankchoices==0.7.0"]
     assert result.returncode == 0, result.stdout + result.stderr
     for relative, (name, version, _) in paths.items():
         project = tomllib.loads((tmp_path / relative / "pyproject.toml").read_text())["project"]
-        is_cohort = not relative or relative.startswith("addons/angee/")
+        is_cohort = not relative or relative.startswith("src/angee/")
         assert project["version"] == (expected if is_cohort else version)
         for raw in project.get("dependencies", []):
             parsed = Requirement(raw)

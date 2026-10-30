@@ -51,7 +51,7 @@ def test_declared_settings_types_preserve_native_errors_and_warm_dependencies(tm
     config = tmp_path / "mypy.ini"
     config.write_text(
         "[mypy]\nplugins = angee.base.typing\n"
-        f"mypy_path = {tmp_path},{root},{root / 'addons'}\ncache_dir = {tmp_path / 'cache'}\n"
+        f"mypy_path = {tmp_path},{root},{root / 'src'}\ncache_dir = {tmp_path / 'cache'}\n"
         "ignore_missing_imports = True\n"
         "[mypy.plugins.django-stubs]\ndjango_settings_module = fixture_settings\n"
     )
@@ -212,7 +212,7 @@ def test_immutable_migration_imports_retain_typed_caller_errors(tmp_path: Path) 
         "from historical_fixture.runtime_migrations.retained import forward\n"
         "valid: int = forward(1)\ninvalid: str = forward(1)\n"
     )
-    env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(root), str(root / "addons"))), MYPYPATH=str(tmp_path))
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(root), str(root / "src"))), MYPYPATH=str(tmp_path))
     env.pop("ANGEE_PROJECT_DIR", None)
     result = subprocess.run([
         sys.executable, "-m", "mypy", "--config-file", str(root / "pyproject.toml"),

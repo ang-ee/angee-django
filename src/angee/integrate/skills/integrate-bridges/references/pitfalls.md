@@ -7,7 +7,7 @@ to the `jobs-tasks` skill.
 - **Querying every ancestor of a bridge queues the same connection twice.** The
   [final-MTI scheduling rule](../../../../../../docs/backend/guidelines.md#integration-and-worker-contracts)
   selects the one row through
-  [`Integration.concrete_type`](../../../../../../addons/angee/integrate/models.py);
+  [`Integration.concrete_type`](../../../../../../src/angee/integrate/models.py);
   a scheduler that walks the parent kinds (Channel and its public Feed child)
   enqueues both. Keep parent-scoped message access on the declared Channel
   relation instead of re-querying by kind.
@@ -65,7 +65,7 @@ to the `jobs-tasks` skill.
   `OAuth2Client` is from 1.8.0, asserts its own stream type inside the
   transport, so an httpx transport fails on the first real request while
   `MockTransport` tests pass. Integrate's outbound HTTP is httpx2 end to end
-  ([`angee.integrate.http`](../../../../../../addons/angee/integrate/http.py)). Cover a
+  ([`angee.integrate.http`](../../../../../../src/angee/integrate/http.py)). Cover a
   transport or HTTP-library change with a real-socket test such as
   `test_oauth_protocol_round_trips_over_the_real_pinned_transport`.
 - **Anthropic's JSON OAuth token exchange must echo redirect `state`.** Standard
@@ -80,6 +80,6 @@ to the `jobs-tasks` skill.
   `DeleteModel` operations; reverse rebuilds from ordered link history and retained stream state, with legacy IDs and native-only
   distinctions lost as documented in the migration.
 - **Review enrolled local rows before enabling two-way record sync.** The
-  [record-sync driver](../../../../../../addons/angee/integrate/README.md) may publish targeted
+  [record-sync driver](../../../../../../src/angee/integrate/README.md) may publish targeted
   links after the first baseline. Directory membership belongs to RecordLink;
   creating a Party never enrolls it in a remote address book.

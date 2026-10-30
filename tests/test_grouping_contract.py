@@ -69,7 +69,7 @@ GROUP_CONTRACT_CASES = (
         expected_key_fields=frozenset({"status", "updated_at", "updated_at_month", "updated_at_month_range"}),
     ),
     GroupContractCase(
-        sdl_path=ROOT / "addons/angee/operator/web/schema/operator.graphql",
+        sdl_path=ROOT / "src/angee/operator/web/schema/operator.graphql",
         root_field="services_groups",
         group_type="services_group",
         where_type="services_bool_exp",

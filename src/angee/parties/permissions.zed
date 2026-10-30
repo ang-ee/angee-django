@@ -20,7 +20,7 @@
 // read arms. Private fields and private uses of a party require read_private,
 // which retains per-row grants. An explicit `reader` grant on an MTI child also
 // reaches each parent that accepts the relation and subject through the resources
-// grant loader (`addons/angee/resources/grants.py`). Related rows keep their own
+// grant loader (`src/angee/resources/grants.py`). Related rows keep their own
 // read rules. Lossless contact data and handle counts are private. created_by,
 // updated_by and their labels remain readable: attribution belongs to identity.
 

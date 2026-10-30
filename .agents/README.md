@@ -70,7 +70,7 @@ authors an addon's tests; `angee-framework` routes a change to a framework seam;
 `angee-project` configures a customer system's host. Claude Code loads them
 through the `.claude/skills` link; Codex loads each skill's `agents/openai.yaml`,
 whose `allow_implicit_invocation` is `true` only for `angee-design`.
-Six capability guides live beside the engine they extend rather than here: `mcp-tools` (`addons/angee/mcp/skills/mcp-tools/SKILL.md`), `jobs-tasks` (`addons/angee/jobs/skills/jobs-tasks/SKILL.md`), `integrate-bridges` (`addons/angee/integrate/skills/integrate-bridges/SKILL.md`), `workflow-definitions` (`addons/angee/workflows/skills/workflow-definitions/SKILL.md`), `provenance-attribution` (`addons/angee/provenance/skills/provenance-attribution/SKILL.md`) and `agent-composition` (`addons/angee/agents/skills/agent-composition/SKILL.md`). Each carries the same frontmatter and `agents/openai.yaml` (implicit invocation `false`) and is reached by its explicit path from the
+Six capability guides live beside the engine they extend rather than here: `mcp-tools` (`src/angee/mcp/skills/mcp-tools/SKILL.md`), `jobs-tasks` (`src/angee/jobs/skills/jobs-tasks/SKILL.md`), `integrate-bridges` (`src/angee/integrate/skills/integrate-bridges/SKILL.md`), `workflow-definitions` (`src/angee/workflows/skills/workflow-definitions/SKILL.md`), `provenance-attribution` (`src/angee/provenance/skills/provenance-attribution/SKILL.md`) and `agent-composition` (`src/angee/agents/skills/agent-composition/SKILL.md`). Each carries the same frontmatter and `agents/openai.yaml` (implicit invocation `false`) and is reached by its explicit path from the
 `angee-design` and `angee-addon` *Read next* lists; no harness discovers an
 addon-local guide on its own, so a source checkout of this repository is the
 prerequisite for loading one. Delivering the guides with the installed wheel is a
@@ -86,7 +86,7 @@ description and body only and does not emit it. Codex `agents/openai.yaml`
 carries invocation policy but no tool restriction. Hooks exist only on the
 Claude Code side. `tools/owner-map-guard.py` is an advisory Claude Code
 `PreToolUse` hook (wired in `.claude/settings.json`; Codex does not run it)
-that, on the first `Edit`/`Write` under `addons/`, `packages/`, `tools/` or
+that, on the first `Edit`/`Write` under `src/`, `packages/`, `tools/` or
 `examples/` in a session, reminds the agent to run `angee-design` and write the
 owner map before continuing. It fires once per session, never blocks, and stays
 silent on tests, Markdown, migrations and malformed input; an agent that

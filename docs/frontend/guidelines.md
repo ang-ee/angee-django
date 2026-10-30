@@ -46,7 +46,7 @@ depend on addons or a composed project's generated schema.
 Knowledge's role-scoped notes compose messaging's `RecordThreadStream` through
 its child item and inline composer contracts. Knowledge owns page creation, body
 writes, binding, and vault permission reads; record hosts declare the role and
-public vault id. See the [knowledge addon](../../addons/angee/knowledge/README.md).
+public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
 
 ### Ownership boundaries
 
@@ -86,7 +86,7 @@ public vault id. See the [knowledge addon](../../addons/angee/knowledge/README.m
   persisted marker; the in-repo example links `@angee/*` source (HMR) and is
   excluded.
 - Operator daemon types are generated, never authored: the
-  [operator manifest](../../addons/angee/operator/pyproject.toml) contributes the
+  [operator manifest](../../src/angee/operator/pyproject.toml) contributes the
   committed daemon SDL and document glob to the shared codegen pass, and daemon
   actions return `MutationResult{status}`.
 - Layering and unconsumed-owner guardrails are Vitest checks over the locked
@@ -225,11 +225,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `documents.public.ts` (or vice versa) fails codegen loudly against the wrong
   schema. Optional schema contributions keep their documents and UI registrations
   in the contributing addon's web package, so hosts without it never scan those
-  operations; see [OIDC sign-in](../../addons/angee/iam_integrate_oidc/web/src/index.ts).
+  operations; see [OIDC sign-in](../../src/angee/iam_integrate_oidc/web/src/index.ts).
   An opaque `JSON`-scalar value is parsed at its domain owner with its declared
   schema, never asserted into an application shape. Resource metadata uses
   Valibot `safeParse`; FormSpec uses the standalone Ajv validator generated from
-  its shared [JSON Schema](../../addons/angee/base/schemas/form_spec.schema.json).
+  its shared [JSON Schema](../../src/angee/base/schemas/form_spec.schema.json).
   Reuse the existing contract and validator instead of maintaining another schema.
 - **Eligible ActionResult mutations are derived, not authored.** Codegen in
   `packages/app/bin/angee-web-codegen.mjs` derives mutations with at least one
@@ -393,7 +393,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   multiword terminal widget name, matching the web widget registry. Backend field
   metadata and the owning addon's `widgets` contribution use the identical key,
   for example `angee.integrate.integrationSyncCursor`. The validator in
-  [`angee.graphql.data.resource_fields`](../../addons/angee/graphql/data/resource_fields.py)
+  [`angee.graphql.data.resource_fields`](../../src/angee/graphql/data/resource_fields.py)
   also accepts existing underscore names; unknown bare names remain errors.
 - **A resource registry key is the emitted canonical `modelLabel`** (for example
   `"integrate.OAuthClient"`). Addon composition may accept a unique bare or
@@ -470,7 +470,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   re-export the page module. A page may import its form, and form callers import
   the form module directly. A heavy optional surface may use `React.lazy` inside
   the shared `LazyBoundary` when its dependency tree otherwise enters the boot
-  bundle. The [agents chat](../../addons/angee/agents/web/src/views/AgentChatterPane.tsx)
+  bundle. The [agents chat](../../src/angee/agents/web/src/views/AgentChatterPane.tsx)
   defers assistant-ui, streamdown and its code renderer until chat opens; its
   `record#aside` child and context remain eager so addon composition stays
   synchronous. A transport or context shared
@@ -862,7 +862,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `contextLine` remains the deliberate custom-rendering escape hatch. Place
   operational fields in a collapsed Details group when their create-default
   behavior must remain available.
-  Projects exports its [standard declarations](../../addons/angee/projects/README.md)
+  Projects exports its [standard declarations](../../src/angee/projects/README.md)
   so consumer routes compose the same forms, lists and record tabs.
   See the shipped [FormView hero](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--forms`).
 - **Statusbar steps are projections of owner facts.** `StatusbarSteps` renders only
@@ -886,7 +886,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   state. The model's Hasura resource owns filter/order/group/facet capabilities;
   the list owns its heading row, paging and `rowActions`, including
   confirmations for generated action callbacks. See
-  [Integration Streams](../../addons/angee/integrate/web/src/IntegrationStreams.tsx).
+  [Integration Streams](../../src/angee/integrate/web/src/IntegrationStreams.tsx).
   A large browsable set inside a record (child runs, trigger events, a project's
   tasks) keeps the full list: the default presentation with `scope="local"`.
   A product narrows a form's sections and verbs per app or route with `only`
@@ -948,12 +948,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **Inline visibility controls bind a server verb.** Declare a
   `<Field name="visibility" widget="visibility" placement="title" visibilityAction={...} />`.
   The [shared widget](../../packages/ui/src/widgets/visibility.tsx) uses record
-  chrome's server choices, revision and action gate; [Task fields](../../addons/angee/projects/web/src/task-actions.tsx)
-  and [Answer fields](../../addons/angee/proposals/web/src/index.tsx) declare the binding.
+  chrome's server choices, revision and action gate; [Task fields](../../src/angee/projects/web/src/task-actions.tsx)
+  and [Answer fields](../../src/angee/proposals/web/src/index.tsx) declare the binding.
 - **Records have one chronology.** The timeline addon owns the `Timeline`
   tab and the `timeline` read, which pages a SQL `UNION ALL` of native source
   queries behind one cursor. Each addon contributes a Python
-  [timeline kind](../../addons/angee/timeline/kinds.py) and a `timeline#kinds` presentation (label,
+  [timeline kind](../../src/angee/timeline/kinds.py) and a `timeline#kinds` presentation (label,
   glyph, verb, target). A line is a pointer: one sentence, actor, time, one
   verb, never a body, never an action. A run folds its decisions and changes
   into its line; the run drill-in shows one run with its own Stop. The same
@@ -1103,7 +1103,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   where row-specific arms are false, so name a role- or const-decidable
   permission (`iam.User#read__last_login`). A question about one row stays the
   child's per-row `permission`; data stays with querysets and field values with
-  their gates. See [IAM presence](../../addons/angee/iam/README.md#presence).
+  their gates. See [IAM presence](../../src/angee/iam/README.md#presence).
 - No Python view DSL, no frontend metadata hidden in backend decorators.
 - **Server preference writes are live but not transactional across tabs:** each delivered `changes()` event rebases later patches immediately, while whole-document writes already in flight can still be accepted in server order and the last accepted write wins.
 - **Effect cleanup must not permanently kill a memoized resource:** StrictMode's simulated mount → cleanup → remount leaves it dead; own the resource inside the effect or explicitly re-arm it on mount, as the preference patch queue does.
@@ -1118,14 +1118,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **Optional operations travel with their owning addon.** Keep documents and their
   transport UI in the addon contributing the schema fields; a base fragment must
   codegen without optional dependents. Every agent uses the one
-  [ACP runtime](../../addons/angee/agents/web/src/useAcpRuntime.ts), selecting the
+  [ACP runtime](../../src/angee/agents/web/src/useAcpRuntime.ts), selecting the
   SDK version from its endpoint.
 - **Agent sessions are URL selections, created on intent.** The
-  [sessions page](../../addons/angee/agents/web/src/views/AgentSessionsPage.tsx)
+  [sessions page](../../src/angee/agents/web/src/views/AgentSessionsPage.tsx)
   owns `?session=` through route search; the ACP runtime restores known/newest
   sessions and creates on first send or New session. Native Query pages own the list.
 - **ACP view context follows the protocol owner.** The
-  [runtime](../../addons/angee/agents/web/src/useAcpRuntime.ts) derives Current view
+  [runtime](../../src/angee/agents/web/src/useAcpRuntime.ts) derives Current view
   attachment from the session's sent prompts: first/changed views attach automatically,
   sending consumes the badge, and users can remove or reattach it. Replayed history
   without a known normalized envelope starts unsent. V2 sends context on session
@@ -1400,7 +1400,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   Live feeds supply retained-ID revalidation; explicit remote snapshots can omit
   it and configure native freshness/refetch options on the same owner. Use its
   restart operation for a fresh snapshot, rather than remount keys or manual page
-  accumulation. See the [IMAP sample preview](../../addons/angee/messaging_integrate_imap/README.md).
+  accumulation. See the [IMAP sample preview](../../src/angee/messaging_integrate_imap/README.md).
 - **Enum casing is decided once.** `useEnumOptions` owns read/write casing; a
   caller that re-uppercases option values is working around the owner. Select its
   casing option for authored enum actions and retain lowercase CRUD inputs.
@@ -1419,7 +1419,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   pane owns width, border and background; `RailPanel` owns the inspector card. Lay
   out a bounded graph — the selection or a capped neighbourhood — never a whole
   schema. Bound relationships as well as nodes: layout and canvas initialization
-  both occupy the main thread. The [platform graph](../../addons/angee/platform/web/src/lib/explorer.ts)
+  both occupy the main thread. The [platform graph](../../src/angee/platform/web/src/lib/explorer.ts)
   pages incident relationships while keeping every model and relationship reachable.
 - **A connect action is one ceremony.** Pass the button as `MutationDialog.trigger`
   so the dialog owns open state, reset and native focus pairing. Addons retain
@@ -1458,7 +1458,7 @@ and put components in their rendered content slots.
 There are no per-kind constructor functions; an addon helper returns a plain
 child (`recordPagesTab()`, `decisionRecordTab()`). A new
 container name is added by declaration merging, as
-[IAM](../../addons/angee/iam/web/src/ShareAccess.tsx) does:
+[IAM](../../src/angee/iam/web/src/ShareAccess.tsx) does:
 
 ```ts
 declare module "@angee/ui/runtime" {
@@ -1472,7 +1472,7 @@ declare module "@angee/ui/runtime" {
 
 An addon declares one `containers` dict keyed by address. A key in the addon's
 own namespace (`<id>.…`) declares a child; a second declaration of an id at one
-address fails. From [work](../../addons/angee/work/web/src/index.tsx):
+address fails. From [work](../../src/angee/work/web/src/index.tsx):
 
 ```tsx
 containers: {
@@ -1496,7 +1496,7 @@ Any other key alters a child an addon this one depends on declared:
 `remove: true` takes it out at composition, `hide: true` hides it at render and
 `hide: false` shows again what a dependency hid. The framework's own children
 are every addon's to adjust. Two unrelated layers setting one field fail.
-[Messaging](../../addons/angee/messaging/web/src/index.tsx) contributes the
+[Messaging](../../src/angee/messaging/web/src/index.tsx) contributes the
 presentation of the timeline kinds its Python source implements:
 
 ```tsx
@@ -1511,7 +1511,7 @@ with no children or with its own: `"messaging.channels#toolbar": {}`. Two
 entry keys apply only there. `unique: "key"` makes every child carry a `key`
 and fails two children with one key. `models: true`
 makes the container model-scoped: IAM declares `iam#access-roles`, and
-[proposals](../../addons/angee/proposals/web/src/record-rounds.tsx) adds
+[proposals](../../src/angee/proposals/web/src/record-rounds.tsx) adds
 children at `proposals.Round#access-roles`; the owner passes the record's
 models to `useContainer`. A model-scoped name belongs to one kind.
 
@@ -1570,7 +1570,7 @@ rows. A variant inherits its original's admission: an `only` that drops the
 original drops its variants, and a `hide` of the original hides them. Where
 the row lacks the variant's `permission`, the original stays. Two variants of
 one child for one `impl` fail composition. The
-[channel bridges](../../addons/angee/messaging/web/src/channel-bridge-addon.tsx)
+[channel bridges](../../src/angee/messaging/web/src/channel-bridge-addon.tsx)
 are the reference: each vendor's verbs are `impl` children, and its pairing
 verbs are variants of Integration's resume and disconnect:
 
@@ -1678,13 +1678,13 @@ destination from the strip never unregisters its drill-in. The record's own
 state belongs in the header and sheet; a drill-in acts on the record's process
 (answer, stop, revert) and never edits its content.
 
-Messaging's [`messaging.conversation`](../../addons/angee/messaging/web/src/index.tsx)
+Messaging's [`messaging.conversation`](../../src/angee/messaging/web/src/index.tsx)
 drill-in targets a `ThreadAttachment`. Its pane resolves the thread through the
 authorized `record_source_threads` read and composes `ThreadTranscript`.
 Conversation rows in Links continue linking to the thread page.
 Message matches open the full conversation at the selected message; inspecting
 the message record is a separate secondary action. Messaging's
-[`MessageReplyQuote`](../../addons/angee/messaging/web/src/MessageReplyQuote.tsx)
+[`MessageReplyQuote`](../../src/angee/messaging/web/src/MessageReplyQuote.tsx)
 renders the access-checked parent in readers, transcripts and record discussions.
 Readers and transcripts navigate quotes through the host when retaining an
 explorer scope, or through the same-thread anchor or native record link.
@@ -1758,7 +1758,7 @@ navigable title. A pane
 never picks its own font size, card or header row.
 
 Each `timeline#kinds` child presents one kind a Python timeline kind
-implements; [the kind contract](../../addons/angee/timeline/kinds.py) owns its
+implements; [the kind contract](../../src/angee/timeline/kinds.py) owns its
 source models, source query, presentation and live attention predicate. The read
 combines owner querysets with SQL `UNION ALL`, applying the record's and each
 target owner's read policies before pagination. Published owner changes
@@ -1908,7 +1908,7 @@ Undeclared, the lines trail the form. A record with a life of its own (its own v
 pages or references from elsewhere) is an associated record and stays an
 embedded list, however small or ordered it is. Never split one owned collection
 into several lists to protect some of its rows; lock those rows instead. See
-[QueuesPage](../../addons/angee/work/web/src/views/QueuesPage.tsx).
+[QueuesPage](../../src/angee/work/web/src/views/QueuesPage.tsx).
 
 The lines composer owns the line wire shape at the diff boundary
 ([editable-lines](../../packages/ui/src/views/form/editable-lines.ts)):

@@ -5,7 +5,7 @@ import { Code, ListView, type ListColumn, type ResourceToolbarGroupOption } from
 import { useIamT } from "../i18n";
 
 // The `iam.Relationship` Hasura resource (`hasura_model_resource` over the active
-// REBAC relationship store, `addons/angee/iam/schema.py`, marked rowModel
+// REBAC relationship store, `src/angee/iam/schema.py`, marked rowModel
 // "client"): the group axes are denormalized display strings on the node, not
 // RelationshipRegistry columns, so — like the original authored page — it fetches
 // the bounded admin tuple set once and filters/sorts/groups in the browser. The

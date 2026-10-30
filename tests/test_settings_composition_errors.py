@@ -32,7 +32,7 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     environment.update({
         "ANGEE_PROJECT_DIR": str(tmp_path), "DJANGO_SETTINGS_MODULE": "settings",
         "PYTHONPATH": os.pathsep.join(filter(None, (
-            str(tmp_path), str(Path(__file__).resolve().parents[1] / "addons"),
+            str(tmp_path), str(Path(__file__).resolve().parents[1] / "src"),
             *(str(Path(path).resolve()) for path in os.environ.get("PYTHONPATH", "").split(os.pathsep) if path),
         ))),
     })

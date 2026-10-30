@@ -98,7 +98,7 @@ SKILLS = sorted(
     [
         *(ROOT / ".agents/skills").glob("*/SKILL.md"),
         # Capability guides live beside the engine they extend; they are skills in every other respect.
-        *(ROOT / "addons/angee").glob("*/skills/*/SKILL.md"),
+        *(ROOT / "src/angee").glob("*/skills/*/SKILL.md"),
     ]
 )
 SKILL_NAME = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")

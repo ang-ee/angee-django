@@ -17,7 +17,7 @@ its `angee ws` verbs address only the workspaces it created, such as this one.
 - **`angee/`** — the consolidated framework repository. Its root `AGENTS.md`
   carries the constitution for framework work. The main areas are:
 
-  - `addons/` — native `angee.*` distributions, with base primitives, optional
+  - `src/` — native `angee.*` distributions, with base primitives, optional
     server policy and capability-owned web fragments;
   - `packages/` — schema-independent `@angee/*` React packages and workshops;
   - `examples/` — showcase consumer addons and the reference e2e suite;

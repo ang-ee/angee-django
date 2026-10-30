@@ -29,10 +29,9 @@ def test_baked_image_installs_native_distributions_without_path_injection() -> N
     """The baked image installs workspace packages and their locked public dependencies."""
 
     dockerfile = DOCKERFILE.read_text()
-    assert "COPY --chown=angee:angee addons ./addons" in dockerfile
-    assert "COPY --chown=angee:angee examples/addons ./examples/addons" in dockerfile
+    assert "COPY --chown=angee:angee src ./src" in dockerfile
+    assert "COPY --chown=angee:angee examples/src ./examples/src" in dockerfile
     assert "COPY --chown=angee:angee tests/blankchoices ./tests/blankchoices" in dockerfile
-    assert "COPY --chown=angee:angee tools ./tools" in dockerfile
     assert "from=django-compose" not in dockerfile
     assert "uv sync --frozen --no-dev --no-editable --extra postgres" in dockerfile
     assert "addon-settings.yaml" not in dockerfile
@@ -47,7 +46,7 @@ def test_web_image_uses_native_package_sources_and_build_context() -> None:
     ignored = (ROOT / ".dockerignore").read_text().splitlines()
     assert "packages" not in ignored
     assert "COPY packages ./packages" in dockerfile
-    assert "COPY addons ./addons" in dockerfile
+    assert "COPY src ./src" in dockerfile
     assert "COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./" in dockerfile
     assert "pnpm install --frozen-lockfile" in dockerfile
     assert "site-packages" not in dockerfile

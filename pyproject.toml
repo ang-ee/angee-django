@@ -116,7 +116,7 @@ default-groups = ["dev"]
 # other invocation uses uv's default per-user cache.
 
 [tool.uv.workspace]
-members = ["addons/angee/*", "examples/addons/example/*", "tests/blankchoices"]
+members = ["src/angee/*", "examples/src/example/*", "tests/blankchoices"]
 
 [tool.uv.sources]
 angee-agents = {workspace = true}
@@ -202,15 +202,15 @@ only-include = ["pyproject.toml", "LICENSE", "LICENSE.GPL"]
 cache_dir = ".pytest_cache"
 DJANGO_SETTINGS_MODULE = "tests.settings"
 python_files = ["test_*.py"]
-testpaths = ["tests", "addons/angee/resources/tests"]
-pythonpath = ["addons", "examples/addons", "."]
+testpaths = ["tests", "src/angee/resources/tests"]
+pythonpath = ["src", "examples/src", "."]
 addopts = "-ra --strict-markers --import-mode=importlib -p no:randomly"
 
 [tool.ruff]
 line-length = 120
 target-version = "py314"
 cache-dir = ".ruff_cache"
-src = ["addons", "examples/addons"]
+src = ["src", "examples/src"]
 exclude = [
   ".angee",
   ".git",
@@ -237,9 +237,9 @@ plugins = ["angee.base.typing", "angee.provenance.typing"]
 python_version = "3.14"
 cache_dir = ".mypy_cache"
 explicit_package_bases = true
-files = ["addons/angee"]
+files = ["src/angee"]
 ignore_missing_imports = true
-mypy_path = ["addons", ".mypy_cache"]
+mypy_path = ["src", ".mypy_cache"]
 warn_unused_ignores = true
 # Historical addon migrations are digest-pinned executable artifacts, like the
 # Ruff boundary above; integrity and execution tests validate their bodies.
@@ -257,7 +257,7 @@ module = ["*.runtime_migrations.*", "*.compose_migrations.*"]
 follow_imports = "silent"
 
 [tool.vulture]
-paths = ["addons/angee", "examples/addons", "tests"]
+paths = ["src/angee", "examples/src", "tests"]
 exclude = [
   "*/runtime/*",
 ]

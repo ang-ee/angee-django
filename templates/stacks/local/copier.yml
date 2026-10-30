@@ -45,7 +45,7 @@ _angee:
   description: >-
     A self-contained local Angee instance: the root folder IS the stack AND a
     git-controlled project (ANGEE_ROOT=.). It chains the `projects/web` project
-    template to scaffold the host (manage.py, settings.yaml, addons, web), then
+    template to scaffold the host (manage.py, settings.yaml, src, web), then
     overlays a Postgres-backed `angee.yaml` — operator + postgres (pgvector) +
     redis + django (DATABASE_URL → postgres) + Caddy serving the built SPA. In
     default (`framework=source`) the django service runs the deps-only base image
@@ -81,7 +81,7 @@ instance_name:
   default: angee-local
   help: Machine name of the instance; also the chained project's name.
 
-# Directory + import namespace for this project's own consumer addons (addons/<ns>/,
+# Directory + import namespace for this project's own consumer addons (src/<ns>/,
 # referenced in INSTALLED_APPS as <ns>.<app>). Must be a valid Python identifier.
 # Copier-go does not evaluate Jinja defaults before chain-input substitution, so
 # keep this concrete; override it alongside `instance_name` for custom projects.

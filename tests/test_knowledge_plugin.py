@@ -11,7 +11,7 @@ way the composer merges per bucket across addons) and assert each seam holds:
 - ``related_pages`` appears on knowledge's ``PageType``;
 - the plugin's ``semantic_search`` MCP tool compiles against the merged schema.
 
-No file under ``addons/angee/knowledge/`` is touched — the plugin imports only the
+No file under ``src/angee/knowledge/`` is touched — the plugin imports only the
 declared knowledge contracts (the schema types, the model registry, the backend
 base). The merged schema is built standalone (no DB needed), like
 :mod:`tests.test_knowledge_mcp`.

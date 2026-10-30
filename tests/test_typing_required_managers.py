@@ -140,7 +140,7 @@ class Explicit(Capability, inherits='manager_contract.Parent'):
     config = tmp_path / "mypy.ini"
     config.write_text(
         "[mypy]\nplugins = angee.base.typing\n"
-        f"mypy_path = {tmp_path},{root},{root / 'addons'}\n"
+        f"mypy_path = {tmp_path},{root},{root / 'src'}\n"
         f"cache_dir = {tmp_path / 'cache'}\n"
         "ignore_missing_imports = True\n"
         "[mypy.plugins.django-stubs]\ndjango_settings_module = manager_settings\n"
@@ -163,7 +163,7 @@ assert_type(Explicit.system_queryset().lock_if_supported().get(), Explicit)
     source.write_text(valid)
     env = dict(os.environ, DJANGO_SETTINGS_MODULE="manager_settings")
     env["PYTHONPATH"] = os.pathsep.join(
-        filter(None, (str(tmp_path), str(root), str(root / "addons"), env.get("PYTHONPATH")))
+        filter(None, (str(tmp_path), str(root), str(root / "src"), env.get("PYTHONPATH")))
     )
     command = [sys.executable, "-m", "mypy", "--config-file", str(config), str(source)]
     positive = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, check=False)

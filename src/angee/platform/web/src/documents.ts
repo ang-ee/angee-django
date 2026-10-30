@@ -1,5 +1,5 @@
 // Hand-authored console query against the platform introspection surface. The
-// platform backend owns the schema (`addons/angee/platform/schema.py`); this
+// platform backend owns the schema (`src/angee/platform/schema.py`); this
 // document mirrors it and the result types are derived from it, the same
 // generated-document pattern IAM uses. The resource ledger listing is owned by the
 // `resources` addon, not here.

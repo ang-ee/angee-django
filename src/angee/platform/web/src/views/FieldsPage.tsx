@@ -9,7 +9,7 @@ import { usePlatformT } from "../i18n";
 import { AddonLink } from "./AddonLink";
 
 // The `platform.Field` Hasura resource row (`hasura_pydantic_resource`,
-// `addons/angee/platform/schema.py`): every composed model's fields flattened
+// `src/angee/platform/schema.py`): every composed model's fields flattened
 // into one server-paged collection, grouped through the resource's declared
 // group columns. `model`/`addon` carry the owning context.
 interface FieldResourceRow extends Record<string, unknown> {

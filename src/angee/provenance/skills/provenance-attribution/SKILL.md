@@ -5,7 +5,7 @@ description: "Opts a model into history and statements in an Angee addon: Histor
 
 # Provenance Attribution
 
-The reference example is `addons/angee/tags` (smallest captured model) with `tests/statement_models.py`
+The reference example is `src/angee/tags` (smallest captured model) with `tests/statement_models.py`
 for statements. `angee.provenance` owns capture, attribution and serving; an addon declares which rows it keeps.
 
 ## Use when
@@ -20,28 +20,28 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 
 | File or module | Owns | Reference |
 |---|---|---|
-| `<addon>/models.py` | `HistoryMixin` composition, captured manager, `history_revert_permission`, `history_relations`, `statements` declaration | `addons/angee/tags/models.py:58-77`, `tests/statement_models.py:16` |
-| `<addon>/pyproject.toml` | `[project].dependencies = [..., "angee-provenance>=3,<4"]` | `addons/angee/tags/pyproject.toml` |
-| `addons/angee/provenance/contrib/angee/history.py` | `HistoryMixin` (:346), `ModelHistory` (:97), `HistoryDocumentMixin` (:50), `record_history` (:86) | docstrings |
-| `addons/angee/provenance/contrib/angee/managers.py`, `querysets.py` | `AngeeHistoryManager` (:20), `AngeeHistoryUnscopedManager` (:24), `AngeeHistoryMergeableUnscopedManager` (:33); `AngeeHistoryQuerySet` (:16) | docstrings |
-| `addons/angee/provenance/history.py`, `querysets.py`, `context.py` | native capture without Angee policy: `ModelHistory` (:132), `HistoryMixin` (:438); `changeset()` (:334), `current_changeset` (:224), `ChangesetRequired` (:28) | [README](../../README.md) |
-| `addons/angee/provenance/models.py`, `managers.py` | `Changeset` (:102) with `ambient_attribution` (:188), `revert` (:370), `document` (:349); `Rule` (:78), `Seed` (:90); `ChangesetQuerySet.touching` (:30), `ChangesetManager.claim` (:134) | docstrings |
-| `addons/angee/provenance/statements.py` | `StatementRecords` (:1424), `Aspect` (:730), `PairAspect` (:1624), `StatementsMixin` (:798), `StatementSourceMixin` (:678), `StatementLinkMixin` (:710), `SourceKind` (:664) | module docstring |
-| `addons/angee/provenance/tasks.py`, `middleware.py`, `contrib/angee/context.py` | the entrypoint boundaries: `Task` (:12), `ChangesetMiddleware`, `management_context` (:25), `merge_context` (:34) | [README: Boundaries](../../README.md#boundaries) |
-| `addons/angee/provenance/evidence.py`, `addons/angee/base/models/derived.py` | `EvidenceReference` (:38), `EvidenceFact` (:28), `FactAuthority` (:20), `readable_records` (:127); `DerivedFrom` (:13) | docstrings |
-| `addons/angee/provenance/testing/` | `captured_changeset` autouse fixture (`fixtures.py:21`), concrete `Changeset`/`Rule`/`Seed` (`models.py`) | [source-addon test models](../../../../../docs/checks.md#source-addon-test-models) |
+| `<addon>/models.py` | `HistoryMixin` composition, captured manager, `history_revert_permission`, `history_relations`, `statements` declaration | `src/angee/tags/models.py:58-77`, `tests/statement_models.py:16` |
+| `<addon>/pyproject.toml` | `[project].dependencies = [..., "angee-provenance>=3,<4"]` | `src/angee/tags/pyproject.toml` |
+| `src/angee/provenance/contrib/angee/history.py` | `HistoryMixin` (:346), `ModelHistory` (:97), `HistoryDocumentMixin` (:50), `record_history` (:86) | docstrings |
+| `src/angee/provenance/contrib/angee/managers.py`, `querysets.py` | `AngeeHistoryManager` (:20), `AngeeHistoryUnscopedManager` (:24), `AngeeHistoryMergeableUnscopedManager` (:33); `AngeeHistoryQuerySet` (:16) | docstrings |
+| `src/angee/provenance/history.py`, `querysets.py`, `context.py` | native capture without Angee policy: `ModelHistory` (:132), `HistoryMixin` (:438); `changeset()` (:334), `current_changeset` (:224), `ChangesetRequired` (:28) | [README](../../README.md) |
+| `src/angee/provenance/models.py`, `managers.py` | `Changeset` (:102) with `ambient_attribution` (:188), `revert` (:370), `document` (:349); `Rule` (:78), `Seed` (:90); `ChangesetQuerySet.touching` (:30), `ChangesetManager.claim` (:134) | docstrings |
+| `src/angee/provenance/statements.py` | `StatementRecords` (:1424), `Aspect` (:730), `PairAspect` (:1624), `StatementsMixin` (:798), `StatementSourceMixin` (:678), `StatementLinkMixin` (:710), `SourceKind` (:664) | module docstring |
+| `src/angee/provenance/tasks.py`, `middleware.py`, `contrib/angee/context.py` | the entrypoint boundaries: `Task` (:12), `ChangesetMiddleware`, `management_context` (:25), `merge_context` (:34) | [README: Boundaries](../../README.md#boundaries) |
+| `src/angee/provenance/evidence.py`, `src/angee/base/models/derived.py` | `EvidenceReference` (:38), `EvidenceFact` (:28), `FactAuthority` (:20), `readable_records` (:127); `DerivedFrom` (:13) | docstrings |
+| `src/angee/provenance/testing/` | `captured_changeset` autouse fixture (`fixtures.py:21`), concrete `Changeset`/`Rule`/`Seed` (`models.py`) | [source-addon test models](../../../../../docs/checks.md#source-addon-test-models) |
 
 ## Reuse first
 
 - `HistoryMixin` from `angee.provenance.contrib.angee.history` (never the native `angee.provenance.history` one or
   `simple_history.models.HistoricalRecords` directly) and the three captured managers above.
-- `AuditMixin` (`addons/angee/base/models/audit.py`) for `created_by`/`updated_by` stamps; `OwnerMixin` for transferable
+- `AuditMixin` (`src/angee/base/models/audit.py`) for `created_by`/`updated_by` stamps; `OwnerMixin` for transferable
   access; `TrashMixin` so a created-row revert can use retained removal.
 - The entrypoint boundaries in the README table: request, connection, task, command, bridge session, test.
 - `Changeset.objects.claim(scope, key, fingerprint=)` for idempotent creation; `merge_context` for merges.
 - `angee.base.models.derived.DerivedFrom` for evidence edges; `readable_records`/`readable_evidence` for admission and display.
-- Statement declarations with donors and links: `addons/angee/parties/models.py:111`; the `UserSource` donor
-  (`addons/angee/provenance/contrib/iam/models.py:12`) as the pattern for principals in addons that must not depend on provenance.
+- Statement declarations with donors and links: `src/angee/parties/models.py:111`; the `UserSource` donor
+  (`src/angee/provenance/contrib/iam/models.py:12`) as the pattern for principals in addons that must not depend on provenance.
 - Upstream: django-simple-history (`diff_against`, `bulk_history_create`), `rebac` `actor_context`/`system_context`, Celery `DjangoTask`
   — [Stack](../../../../../docs/stack.md#backend) rows 67, 76, 79.
 
@@ -68,7 +68,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 
    Without a custom queryset the mixin's defaults already bind `objects` and `_angee_base` (`history.py:349-350`).
    Vary only `history_revert_permission` (default `write`) and `history_relations` for owned reverse-FK document parts
-   (`addons/angee/projects/models.py:515`). **Owner rule:** the mixin owns capture, redaction-safe snapshots, revert
+   (`src/angee/projects/models.py:515`). **Owner rule:** the mixin owns capture, redaction-safe snapshots, revert
    admission and the table inventory; a model names only what varies ([Persistence primitives](../../../../../docs/backend/guidelines.md#persistence-primitives)).
 
 3. **Let migrations follow the swappable storage.** Django's `makemigrations` on the built runtime owns the history tables;
@@ -101,9 +101,9 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
        run_next_turn(session_id)            # inside: with actor_context(principal): ...
    ```
 
-   (`addons/angee/agents/tasks.py:8`, `sessions.py:57-80`). **Owner rule:** jobs owns transport and retries, provenance the
+   (`src/angee/agents/tasks.py:8`, `sessions.py:57-80`). **Owner rule:** jobs owns transport and retries, provenance the
    attribution ([Stack](../../../../../docs/stack.md#backend), Celery row); a task body nests its own `changeset(fresh=True,
-   activity="pull", ...)` only when the run is a distinct logical pull (`addons/angee/integrate/session_runner.py:27-45`;
+   activity="pull", ...)` only when the run is a distinct logical pull (`src/angee/integrate/session_runner.py:27-45`;
    [README: Boundaries](../../README.md#boundaries) "Separate logical writes"; `jobs-tasks` step 7).
 
 6. **Declare statements when sources disagree about a row.** The canonical model composes `StatementsMixin, HistoryMixin`
@@ -130,7 +130,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
    statements paragraphs; [Glossary: Statement](../../../../../docs/glossary.md#backend).
 
 7. **Retain derivation evidence.** An evidence owner declares a `DerivedFrom` child (`DecisionRecord`,
-   `addons/angee/decisions/models.py:95`; `ExtractionSource`, `addons/angee/extraction/models.py:514`) and admits sources
+   `src/angee/decisions/models.py:95`; `ExtractionSource`, `src/angee/extraction/models.py:514`) and admits sources
    with `readable_records(refs, actors)` (standing read for every participant); frozen values travel as `EvidenceFact`
    with a `FactAuthority`. **Owner rule:** [Glossary: Derived-from evidence](../../../../../docs/glossary.md#workflows);
    edges never grant access to their targets.

@@ -352,7 +352,7 @@ def test_ollama_addon_owns_vendor_install_provider_and_demo_models() -> None:
 def test_notes_demo_only_composes_reusable_agent_seeds(monkeypatch) -> None:
     """The notes example keeps demo rows separate from master-tier catalogue seeds."""
 
-    notes_addons = Path(__file__).parents[1] / "examples" / "addons"
+    notes_addons = Path(__file__).parents[1] / "examples" / "src"
     monkeypatch.syspath_prepend(str(notes_addons))
     module = import_module("example.notes")
     config = AppConfig("example.notes", module)
