@@ -349,9 +349,10 @@ pushes to `main`. The current tiers are:
   and addon fragments, and run the bridges repository's pytest suite with its
   native source-test settings and collection policy. Bridge tests use the
   composed stack's runtime dependencies plus the framework's locked check tools,
-  as the consumer lane does; they do not resolve a second environment from the
-  bridges' standalone generated addon dependency group. Its checked-in group
-  remains subject to the suite's native package metadata guard.
+  as the consumer lane does. Bridge packages declare dependencies in their own
+  `pyproject.toml`; native lockfiles own resolved versions. The suite's package
+  metadata guard checks that the collection requirements match its workspace
+  member distributions.
   Framework composed-host tests create their own temporary hosts in the SQLite
   suite; the stack job does not repeat that framework suite.
 
