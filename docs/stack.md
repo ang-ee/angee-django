@@ -335,7 +335,7 @@ calendar.
 
 | Pick | Owns | Angee adds |
 |---|---|---|
-| Cobra | `angee` CLI implementation | Dev supervisor, init, workspaces, templates |
+| Cobra | `angee` CLI implementation | Dev supervisor, init, workspaces, templates; stack lifecycle requires native operator job holds and isolated dependency jobs. The [reusable workflow](../.github/workflows/reusable-checks.yml) owns the required release in its `angee-version` default |
 | hatchling | Native Python distribution metadata and wheel/editable/sdist build lifecycle | Addon distributions compose in-tree hatch-angee layout defaults. Composition is a separate native job. Packaging does not provision databases |
 | hatch-angee >= 1, < 2 | In-place addon layout defaults over hatchling; native PEP 517 wheel/editable/sdist hooks | One addon entry point determines package layout; explicit Hatch configuration wins. The backend is the native workspace member at `tools/hatch-angee`; it owns no dependency graph or runtime hooks |
 | ruff | Python lint and format | Repo checks |
