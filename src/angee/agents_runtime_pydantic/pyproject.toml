@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "In-process pydantic-ai runtime for persisted agent sessions"
 keywords = ["agents", "pydantic-ai", "runtime"]
 dependencies = ["angee-base>=3,<4", "angee-agents>=3,<4", "angee-integrate>=3,<4", "angee-mcp>=3,<4", "pydantic-ai-slim[mcp]>=2.13"]
-
-[project.entry-points]
-"angee.addons" = {"angee.agents_runtime_pydantic" = "angee.agents_runtime_pydantic"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

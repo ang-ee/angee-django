@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "A notes example — the minimal consumer addon the example project composes"
 keywords = ["notes", "example"]
 dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-integrate>=3,<4", "angee-iam-integrate-oidc>=3,<4", "angee-agents>=3,<4", "angee-agents-integrate-anthropic>=3,<4", "angee-mcp>=3,<4", "angee-messaging>=3,<4", "angee-storage>=3,<4", "angee-knowledge>=3,<4", "angee-projects>=3,<4", "angee-decisions>=3,<4", "angee-workflows>=3,<4", "angee-provenance>=3,<4", "angee-web>=3,<4", "faker>=30.0"]
-
-[project.entry-points]
-"angee.addons" = {"example.notes" = "example.notes"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

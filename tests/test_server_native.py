@@ -124,10 +124,94 @@ schemas = {"public": {"query": Query}}
     receipt = read_receipt(runtime)
     assert receipt is not None and not receipt.IN_PROGRESS
     assert {'web/manifest.json', 'web/tailwind.sources.css', 'schemas/public.graphql',
-            'schemas/public.metadata.json'} <= set(receipt.OWNED_FILES)
+            'schemas/public.metadata.json', 'schemas/publishers.json'} <= set(receipt.OWNED_FILES)
     assert apps.is_installed('django_compose')
     assert 'django_compose' not in settings.COMPOSE_SNAPSHOT.dependencies
     manifest = json.loads(artifact_path('web/manifest.json').read_text())
     assert any(package['app'] == 'ready_probe' for package in manifest['addonPackages'])
     assert 'ready_probe' in artifact_path('schemas/public.graphql').read_text()
+''')
+
+
+def test_verified_publishers_start_and_write_without_schema_imports():
+    """Fresh composed startup and first writes use only receipt-owned publisher fields."""
+
+    _run(r'''
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from angee.base.testing.packages import write_addon_distribution
+from tests.composed_host import boot
+with tempfile.TemporaryDirectory(prefix='native-publisher-artifact-') as temporary:
+    root = Path(temporary).resolve()
+    package = root / 'publisher_probe'
+    package.mkdir()
+    (package / '__init__.py').write_text('')
+    (package / 'schema.py').write_text("""
+import strawberry
+import strawberry_django
+from django.contrib.auth.models import Group
+from strawberry import auto
+from angee.graphql.data.hasura import hasura_model_resource
+from angee.graphql.subscriptions import changes
+@strawberry_django.type(Group)
+class GroupNode:
+    id: auto
+    name: auto = strawberry_django.field(name="display_name")
+resource = hasura_model_resource(GroupNode, model=Group, name="probe_groups",
+    filterable=("id", "name"), sortable=("name",), aggregatable=("id",),
+    public_id_field="id", insert=False, update=False, delete=False)
+schemas = {"public": {"query": resource.query, "types": resource.types,
+    "subscription": changes(Group, field="probeGroupChanged")}}
+""")
+    write_addon_distribution(package, 'publisher_probe', depends_on=('angee.graphql',), metadata_root=root)
+    runtime = root / 'runtime'
+    boot(Path.cwd(), runtime, [root], include_examples=False, root_apps=['publisher_probe'])
+    projection = runtime / 'schemas/publishers.json'
+    assert json.loads(projection.read_text()) == {'auth.group': ['id', 'name']}
+    script = r"""
+import importlib.abc
+import sys
+class NoSchemaImports(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in {'publisher_probe.schema', 'angee.graphql.schema', 'strawberry_django_hasura'}:
+            raise AssertionError('serving imported schema: ' + fullname)
+sys.meta_path.insert(0, NoSchemaImports())
+import django
+django.setup()
+from django.contrib.auth.models import Group
+from django.db import connection, transaction
+from angee.graphql import publishing
+assert 'angee.graphql.schema' not in sys.modules
+assert 'publisher_probe.schema' not in sys.modules
+with connection.schema_editor() as editor:
+    editor.create_model(Group)
+observed = []
+def observe(sender, payload, **kwargs):
+    observed.append(payload)
+publishing.change_published.connect(observe, weak=False)
+with transaction.atomic():
+    row = Group.objects.create(name='before')
+    row.name = 'after'
+    row.save(update_fields=('name',))
+    publishing.broadcast_related_records((row,))
+    assert len(observed) == 2
+    assert observed[-1].changed_values == {'name': 'after'}
+    assert len(connection.run_on_commit) == 3
+    transaction.set_rollback(True)
+assert not Group.objects.exists()
+assert 'angee.graphql.schema' not in sys.modules
+"""
+    result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    projection.write_text('{}\n')
+    result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0
+    assert 'Generated file is missing or altered: schemas/publishers.json; run compose' in result.stderr
+    projection.unlink()
+    result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0
+    assert 'run compose' in result.stderr
 ''')

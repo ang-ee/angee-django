@@ -35,7 +35,7 @@ def test_native_addon_members_reach_base_and_explicit_library_stays_outside_grou
     }
     assert ROOT / "tests/blankchoices" in members()
     assert "django-angee" not in projects
-    assert "angee.web" in projects["angee-web"]["entry-points"]["angee.addons"]
+    assert "angee-web" in projects
     for path in members():
         data = tomllib.loads((path / "pyproject.toml").read_text())
         project = data["project"]
@@ -45,10 +45,10 @@ def test_native_addon_members_reach_base_and_explicit_library_stays_outside_grou
             assert not project.get("entry-points", {}).get("angee.addons")
             assert not data.get("tool", {}).get("angee")
             continue
-        points = project["entry-points"]["angee.addons"]
-        assert len(points) == 1
-        app = next(iter(points))
-        assert name == app.replace(".", "-").replace("_", "-")
+        # Naming and emitted entry points belong to the published backend's
+        # native metadata contracts, not a second decoder in this repository.
+        assert project["dynamic"] == ["entry-points"]
+        assert "entry-points" not in project
         assert data["build-system"] == {
             "requires": ["hatch-angee>=1.1,<2"],
             "build-backend": "hatch_angee",
@@ -70,7 +70,7 @@ def test_native_addon_members_reach_base_and_explicit_library_stays_outside_grou
                 if (parsed := Requirement(raw)).name in projects
                 and (parsed.marker is None or parsed.marker.evaluate({"extra": ""}))
             )
-        assert "angee-base" in visited, app
+        assert "angee-base" in visited, name
         facts = data.get("tool", {}).get("angee", {})
         assert "category" not in facts and not {"base", "mcp", "web"}.intersection(facts)
 

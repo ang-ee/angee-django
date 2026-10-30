@@ -14,7 +14,7 @@ dependencies = [
   "angee-web>=3,<4",
 {% endif %}
 ]
-entry-points."angee.addons"."{{ addon_name }}" = "{{ addon_name }}"
+dynamic = ["entry-points"]
 
 [tool.angee.resources]
 demo = [

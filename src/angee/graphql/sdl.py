@@ -8,15 +8,16 @@ from typing import TYPE_CHECKING, Any
 
 from django.conf import settings
 
-from angee.graphql.schema import GraphQLSchemas
-
 if TYPE_CHECKING:
     from django.apps.registry import Apps
     from django_compose.declarations import ModelsView
     from django_compose.model_composition import ModelComposition
 
+    from angee.graphql.schema import GraphQLSchemas
+
 _SDL_SUFFIX = ".graphql"
 _METADATA_SUFFIX = ".metadata.json"
+PUBLISHERS_ARTIFACT = Path("schemas/publishers.json")
 
 
 class GraphQLSdl:
@@ -31,6 +32,8 @@ class GraphQLSdl:
     @classmethod
     def from_discovery(cls) -> GraphQLSdl:
         """Return a schema artifact owner over discovered schemas and the runtime dir."""
+
+        from angee.graphql.schema import GraphQLSchemas
 
         return cls(
             GraphQLSchemas.from_discovery(),
@@ -66,11 +69,12 @@ class GraphQLSdl:
             Path(f"{name}{_METADATA_SUFFIX}"): _metadata_json(metadata)
             for name, metadata in self.render_metadata().items()
         })
+        artifacts[Path(PUBLISHERS_ARTIFACT.name)] = _metadata_json(self.schemas.render_publishers())
         return artifacts
 
 
 
-def _metadata_json(metadata: dict[str, object]) -> str:
+def _metadata_json(metadata: object) -> str:
     """Return deterministic JSON for one schema metadata artifact."""
 
     return json.dumps(metadata, indent=2, sort_keys=True, default=_json_default) + "\n"
@@ -90,5 +94,11 @@ class SchemaIntegration:
 
     def render(self, composition: ModelComposition, models: ModelsView | Apps) -> dict[Path, bytes]:
         del composition, models
-        return {Path('schemas') / path: text.encode('utf-8')
-                for path, text in GraphQLSdl.from_discovery()._rendered_artifacts().items()}
+        from angee.graphql.publishing import connect_change_publishers
+
+        schemas = GraphQLSdl.from_discovery()
+        artifacts = {Path("schemas") / path: text.encode("utf-8")
+                     for path, text in schemas._rendered_artifacts().items()}
+        # Native compose reaches this hook after every app's ready callback.
+        connect_change_publishers(schemas.schemas.render_publishers())
+        return artifacts

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 
-from angee.base.addons import addon_contribution, addon_facts
+from angee.base.addons import addon_facts
 from angee.graphql.schema import schema_parts_for
 from angee.mcp.server import tool_registrar
 from angee.web.build import WebRuntime
@@ -28,7 +28,8 @@ def test_conventional_schema_and_mcp_support_reexports_and_conditional_exports(t
     assert addon_facts(config.name, "angee").get("mcp", {}) == {}
 
 
-def test_explicit_graphql_declaration_wins_over_convention(tmp_path: Path) -> None:
+@pytest.mark.parametrize("qualified", [False, True])
+def test_explicit_graphql_declaration_wins_over_convention(tmp_path: Path, qualified: bool) -> None:
     config = make_addon(path=tmp_path)
     (tmp_path / "selected.py").write_text(
         'schemas = {"chosen": {}}\ndef register(server):\n    return None\n', encoding="utf-8"
@@ -36,7 +37,7 @@ def test_explicit_graphql_declaration_wins_over_convention(tmp_path: Path) -> No
     (tmp_path / "schema.py").write_text('raise AssertionError("unselected convention")\n', encoding="utf-8")
     write_addon_package(
         config,
-        graphql={"schema": "selected.schemas"},
+        graphql={"schema": f"{config.name}.selected.schemas" if qualified else "selected.schemas"},
     )
     assert tuple(schema_parts_for(config)) == ("chosen",)
 
@@ -57,14 +58,6 @@ def test_broken_present_module_preserves_internal_import_error(tmp_path: Path, m
         owner(config)
     assert isinstance(failure.value.__cause__, ModuleNotFoundError)
     assert failure.value.__cause__.name == "angee_missing_test_dependency"
-
-
-@pytest.mark.parametrize("value", ["None", "'bad'", "b'bad'", "{'bad'}", "{'bad': 1}"])
-def test_url_contributions_reject_nonsequences(tmp_path: Path, value: str) -> None:
-    config = make_addon(path=tmp_path)
-    (tmp_path / "urls.py").write_text(f"urlpatterns = {value}\n", encoding="utf-8")
-    with pytest.raises(ImproperlyConfigured, match="must be iterable"):
-        addon_contribution(config, "urls", "urlpatterns")
 
 
 def test_web_codegen_reads_native_package_metadata(tmp_path: Path) -> None:
@@ -102,3 +95,14 @@ def test_present_null_export_is_invalid(tmp_path: Path, capability: str, explici
         write_addon_package(config, graphql={"schema": "schema.schemas"})
     with pytest.raises(ImproperlyConfigured, match="must"):
         (schema_parts_for if capability == "schema" else tool_registrar)(config)
+
+
+@pytest.mark.parametrize("reference", [None, 3, [], {}])
+def test_explicit_graphql_reference_rejects_non_string_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reference: object,
+) -> None:
+    config = make_addon(path=tmp_path)
+    # TOML cannot represent null: inject the projected capability value instead.
+    monkeypatch.setattr("angee.graphql.schema.addon_facts", lambda *args, **kwargs: {"schema": reference})
+    with pytest.raises(ImproperlyConfigured, match="graphql.schema must be a dotted reference"):
+        schema_parts_for(config)

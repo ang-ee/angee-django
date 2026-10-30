@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "RFC-5545 recurrence (RRULE) parsing and bounded, timezone-aware occurrence expansion."
 keywords = ["scheduling", "recurrence", "rrule", "rfc-5545", "calendar"]
 dependencies = ["angee-graphql>=3,<4", "python-dateutil>=2.9"]
-
-[project.entry-points]
-"angee.addons" = {"angee.scheduling" = "angee.scheduling"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

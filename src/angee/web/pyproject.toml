@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "Composed frontend package and code-generation manifest"
 keywords = ["web", "frontend", "codegen"]
 dependencies = ["django-compose>=0.1.0.dev2,<0.2", "angee-base>=3,<4", "angee-server>=3,<4"]
-
-[project.entry-points]
-"angee.addons" = {"angee.web" = "angee.web"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

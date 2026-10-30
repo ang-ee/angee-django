@@ -53,8 +53,10 @@ normalizes, or renames a Django object, delete it.
 
 Django-native also means app-native. Addons are reusable Django apps with
 conventional files: `pyproject.toml` declares package metadata, and its
-`angee.addons` entry point identifies the package as an addon. A pyproject alone
-may describe an ordinary library. `models.py` owns data and row behavior,
+`angee.addons` entry point in native distribution metadata identifies the package
+as an addon. Ordinary addons author `dynamic = ["entry-points"]` through the
+published Hatch backend; consumers read prepared or installed metadata. A
+pyproject alone may describe an ordinary library. `models.py` owns data and row behavior,
 `managers.py` owns reusable row-set APIs when they outgrow the model module,
 `schema.py` owns Strawberry declarations, `permissions.zed` owns REBAC structure,
 `mcp_tools.py` owns MCP tool registration, `forms.py` owns Django form
@@ -109,9 +111,9 @@ Use these owners instead of maintaining another contract in an addon:
 
 | Concern | Owner and durable rule |
 |---|---|
-| Addon discovery and declarations | The native `django_compose.components` index owns identity/closure; [`angee.base.addons`](../../src/angee/base/addons.py) reads capability-owned package TOML. Addon requirements stay in `[project].dependencies`; foreign app edges use django-compose's `AppConfig.requires_apps` extension. |
+| Addon discovery and declarations | The native `django_compose.components` index owns identity/closure. [`angee.base.addons`](../../src/angee/base/addons.py) reads packaged `[tool.angee.*]` tables and discovers optional addon modules. Addon requirements stay in `[project].dependencies`; foreign app edges use django-compose's `AppConfig.requires_apps` extension. |
 | Settings and app ordering | [Settings bootstrap and app graph](../composer.md#settings-bootstrap) compose one app set. Keep source-model imports out of settings loading; do not create separate build/run registries. |
-| Capability conventions | [Addon declarations](../composer.md#addon-declarations) identifies the readers. Each capability reads its own `[tool.angee]` table and conventional defaults; dependencies, resource tiers, and intent stay explicit. |
+| Capability conventions | [Addon declarations](../composer.md#addon-declarations) identifies the readers. Resources owns resource semantics; GraphQL [schema discovery](../../src/angee/graphql/schema.py) resolves and validates its schema references. Generic lifecycle and optional hook dispatch belong to django-compose; native `django_compose.urls` owns explicit HTTP URL contributions. |
 | Models and runtime import | [Runtime build and import](../composer.md#runtime-build-and-import) describes source selection and Django phase 2. Use narrow abstract contributors; let Django own inheritance, field cloning, managers, and registration. |
 | Migration history and cleanup | [Addon-owned runtime migrations](../composer.md#addon-owned-runtime-migrations) and [migration policy](#migration-history) distinguish replaceable generated models from version-controlled native Django history. |
 | Resource load hooks | [`ResourceLoadMixin`](../../src/angee/resources/mixins.py) is the resources-owned terminal mixin. Contributors delegate exactly once through `super()`, even when skipping local work; an exception aborts the transaction, so never delegate in `finally`. A row whose state only an owner verb may write declares a `resource_class` adapter that persists through that verb as the row's named actor and records the result in the ledger ([workflow definitions](../../src/angee/workflows/resources.py), [chatter](../../src/angee/messaging/resources.py)). |
@@ -1397,8 +1399,9 @@ retains its native routing contract.
 
 Contribute socket protocols through `AppConfig.compose_asgi()` and compose
 `RebacChannelsConsumerMixin` to pin the cookie actor before creating tasks.
-The [GraphQL Channels owner](../../src/angee/graphql/asgi.py) owns Origin trust and Django session
-authentication; never repeat those handshake checks per consumer. Long-lived
+The [GraphQL Channels owner](../../src/angee/graphql/asgi.py) discovers and validates
+addon `asgi.py` WebSocket routes and middleware, and owns Origin trust and Django
+session authentication; never repeat those handshake checks per consumer. Long-lived
 protocols that accept writes must revalidate the session at each request and
 open fresh evaluator scopes for authorization and change-feed reads.
 
@@ -1539,12 +1542,16 @@ open fresh evaluator scopes for authorization and change-feed reads.
   seam. A verb completing a conditional or bulk write publishes after its
   related rows are ready. `change_batch_targets` may coalesce publications;
   local observers still receive original bulk batches where needed.
-- **Publishers wire during `angee.graphql` app `ready()`, not schema build or
-  schema import.** GraphQL schema modules declare subscription surfaces;
-  `GraphQLSchemas` connects publishers from declared `changes` metadata after
-  model population without constructing schemas. Readable-field projection is
-  resolved only when an observable partial update needs changed values, through
-  that schema owner. Building a schema never mutates process-global signal state.
+- **Publisher wiring reads prebuilt server metadata.** The ready-phase
+  [schema integration](../../src/angee/graphql/sdl.py) emits `schemas/publishers.json`
+  from finalized resources: published model labels and readable concrete fields,
+  unioned across named schemas with aliases and FK attnames preserved. Public
+  resource JSON omits these field origins. Ordinary app `ready()` reads the
+  native receipt-verified artifact and connects eager field sets; startup,
+  partial writes and related-record invalidations never discover addon schemas.
+  Missing or stale output requires compose. Compose wires publishers only after
+  all ready callbacks; bare source-model tests wire the same projection explicitly
+  in their [session fixture](../../tests/conftest.py), without a serving fallback.
 - **Validate every named schema before deploying writer processes.** The GraphQL
   addon's [Django system check](../../src/angee/graphql/checks.py) builds every
   named schema through `GraphQLSchemas` and reports construction failures. It runs

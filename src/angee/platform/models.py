@@ -416,7 +416,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
                     defaults={
                         **runtime_facts,
                         "label": config.label if config is not None else "",
-                        "namespace": name.split(".")[0],
+                        "namespace": manifest["namespace"],
                         "distribution": manifest["distribution"],
                         "requirements": list(manifest["requirements"]),
                         "description": manifest["description"],

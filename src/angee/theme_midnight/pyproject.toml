@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "A deep blue visual theme for Angee"
 keywords = ["theme", "appearance", "midnight"]
 dependencies = ["angee-web>=3,<4"]
-
-[project.entry-points]
-"angee.addons" = {"angee.theme_midnight" = "angee.theme_midnight"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

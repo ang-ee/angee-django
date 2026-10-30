@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "Party identity review and mapped same_as pair reviews"
 keywords = ["workflows", "parties", "reviews", "dedupe"]
 dependencies = ["angee-base>=3,<4", "angee-workflows>=3,<4", "angee-decisions>=3,<4", "angee-parties>=3,<4", "angee-provenance>=3,<4"]
-
-[project.entry-points]
-"angee.addons" = {"angee.workflows_parties" = "angee.workflows_parties"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
@@ -24,7 +25,7 @@ from angee.base.refs import RecordRef, record_view_refs
 from angee.base.signals import bulk_updated
 from angee.graphql.events import ChangePayload, ChangeRelatedRecord, ReadableFields
 from angee.graphql.mixins import ChangeBroadcastMixin
-from angee.graphql.schema import GraphQLSchemas
+from angee.graphql.sdl import PUBLISHERS_ARTIFACT
 
 _INMEMORY_CHANNEL_LAYER = "channels.layers.InMemoryChannelLayer"
 change_published = Signal()
@@ -40,6 +41,8 @@ through the same native commit queue.
 """
 
 logger = logging.getLogger(__name__)
+
+_publisher_model_labels: frozenset[str] = frozenset()
 
 _mute_state = threading.local()
 _publication_ingestion_depth: ContextVar[int] = ContextVar("graphql_publication_ingestion_depth", default=0)
@@ -97,6 +100,41 @@ def change_group(model: type[models.Model]) -> str:
     """Return the channel-layer group name for ``model`` changes."""
 
     return f"angee.changes.{model._meta.app_label}.{model._meta.model_name}"
+
+
+def connect_change_publishers(metadata: Mapping[str, list[str]] | None = None) -> tuple[type[models.Model], ...]:
+    """Wire eager publisher fields from verified output or an explicit build projection.
+
+    Only compose and bare source-test hosts pass a projection. Ordinary startup
+    always verifies the native receipt; a missing or altered artifact is fatal.
+    """
+
+    global _publisher_model_labels
+    if metadata is None:
+        from django_compose.serving import artifact_path
+
+        metadata = json.loads(artifact_path(PUBLISHERS_ARTIFACT).read_text(encoding="utf-8"))
+    if not isinstance(metadata, Mapping) or any(not isinstance(label, str) for label in metadata):
+        raise ImproperlyConfigured("GraphQL publisher metadata must be a model-to-fields mapping; run compose")
+    resolved: dict[type[models.Model], frozenset[str]] = {}
+    for label, fields in sorted(metadata.items()):
+        if not isinstance(label, str) or not isinstance(fields, list | tuple) or any(
+            not isinstance(field, str) for field in fields
+        ):
+            raise ImproperlyConfigured(
+                "GraphQL publisher metadata must contain model labels and field lists; run compose"
+            )
+        try:
+            model = apps.get_model(label)
+        except (LookupError, ValueError) as error:
+            raise ImproperlyConfigured(f"Unknown GraphQL publisher model: {label}; run compose") from error
+        if model is None:
+            raise ImproperlyConfigured(f"Unknown GraphQL publisher model: {label}; run compose")
+        resolved[model] = frozenset(fields)
+    for model, fields in resolved.items():
+        connect_publishers(model, readable_fields=fields)
+    _publisher_model_labels = frozenset(model._meta.label_lower for model in resolved)
+    return tuple(resolved)
 
 
 def connect_publishers(
@@ -306,7 +344,7 @@ def broadcast_related_records(records: Iterable[models.Model]) -> None:
     subscriber read policy applies; private source models gain no feed.
     """
 
-    feeds = GraphQLSchemas.from_discovery().change_publisher_model_labels()
+    feeds = _publisher_model_labels
     by_database: dict[str | None, list[models.Model]] = {}
     for record in records:
         by_database.setdefault(record._state.db, []).append(record)

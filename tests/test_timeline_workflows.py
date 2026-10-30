@@ -14,8 +14,8 @@ from angee.base.models.identity import public_id_of
 from angee.base.signals import bulk_updated
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
+from angee.graphql import publishing
 from angee.graphql.publishing import change_published
-from angee.graphql.schema import GraphQLSchemas
 from angee.provenance.context import changeset
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.states import RunStatus, WaitingKind
@@ -223,7 +223,7 @@ def test_each_committed_workflow_wait_refreshes_the_inherited_record_feed(
 
     register_step(Question)
     monkeypatch.setattr(
-        GraphQLSchemas, "change_publisher_model_labels", lambda self: frozenset({MtiChild._meta.label_lower}),
+        publishing, "_publisher_model_labels", frozenset({MtiChild._meta.label_lower}),
     )
     snapshots = []
 

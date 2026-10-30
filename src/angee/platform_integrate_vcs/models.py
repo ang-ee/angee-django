@@ -20,7 +20,7 @@ from angee.platform.discovery import (
     package_identity_index,
     requirement_addons,
 )
-from angee.platform_integrate_vcs.catalog import parse_addon_meta
+from angee.platform_integrate_vcs.catalog import source_descriptors
 
 
 class CatalogProvenance(Composable, extends="platform.Addon"):
@@ -63,7 +63,7 @@ class AddonCatalogManager(AngeeManager, VcsOutputManager):
             )
 
     def sync_from_source(self, source: Any) -> int:
-        """Discover ``pyproject.toml`` under ``source`` and reconcile ``platform.Addon`` rows.
+        """Prepare source distribution metadata and reconcile ``platform.Addon`` rows.
 
         Mirrors ``TemplateManager.sync_from_source`` but writes into ``platform.Addon``
         (the one marketplace registry), tier-scoped so it never fights platform's own
@@ -82,24 +82,23 @@ class AddonCatalogManager(AngeeManager, VcsOutputManager):
                 "vcs_bridge__credential__oauth_client"
             ).get(pk=source.repository_id)
             source.repository = repository
-            vcs_bridge = repository.vcs_bridge
-            documents = vcs_bridge.discover(source, marker="pyproject.toml", parse=lambda blob: {"blob": blob})
-            descriptors = []
-            claims: dict[str, str] = {}
-            for document in documents:
-                facts = parse_addon_meta(document["blob"], dependencies={})
-                if not facts:
-                    continue
-                name = facts["name"]
-                if name in claims:
-                    raise ImproperlyConfigured(
-                        f"Duplicate catalogue addon {name!r}: {claims[name]!r} and {document['path']!r}"
-                    )
-                claims[name] = document["path"]
-                descriptors.append({**facts, "path": document["path"]})
+            coordinates = (source.repository_id, source.kind, source.materialize_spec(), source.last_synced_at)
+            descriptors = source_descriptors(source)
+            claims = {descriptor["name"]: descriptor["path"] for descriptor in descriptors}
             available = available_addons()
             seen: set[str] = set()
             with transaction.atomic(using=using):
+                current_source = (
+                    type(source)._base_manager.db_manager(using).select_related("repository")
+                    .select_for_update().get(pk=source.pk)
+                )
+                if (
+                    current_source.repository_id, current_source.kind,
+                    current_source.materialize_spec(), current_source.last_synced_at
+                ) != coordinates:
+                    raise ImproperlyConfigured(
+                        "Source changed during catalogue preparation; refresh its current coordinates"
+                    )
                 known = list(rows.select_for_update().order_by("name"))
                 identities = package_identity_index((
                     *((entry.dist.metadata["Name"], name) for name, entry in installed_entry_points().items()
@@ -148,8 +147,9 @@ class AddonCatalogManager(AngeeManager, VcsOutputManager):
                     .update(state=addon.AddonState.REMOVED, **addon.reset_runtime_facts())
                 )
                 rows.reconcile_dependencies()
-                source.last_synced_at = timezone.now()
-                source.save(using=using, update_fields=["last_synced_at", "updated_at"])
+                current_source.last_synced_at = timezone.now()
+                current_source.save(using=using, update_fields=["last_synced_at", "updated_at"])
+                source.last_synced_at = current_source.last_synced_at
             return len(descriptors)
 
 

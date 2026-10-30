@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -17,6 +18,7 @@ from django.urls import path
 from angee.graphql import asgi
 from angee.graphql.consumers import AngeeGraphQLWSConsumer
 from angee.server.signals import WEB_STATEMENT_TIMEOUT_UID, connect_web_statement_timeout
+from tests.conftest import make_addon
 
 
 def test_only_the_web_entrypoint_bounds_postgresql_statements(settings: Any) -> None:
@@ -104,8 +106,8 @@ def test_shared_router_validates_graphql_websocket_origins(
     settings.DEBUG = debug
     route = path("graphql/test/", AngeeGraphQLWSConsumer.as_asgi(schema=strawberry.Schema(query=Query)))
     monkeypatch.setattr("django.apps.apps.get_app_configs", lambda: [SimpleNamespace(name="routes")])
-    monkeypatch.setattr(asgi, "addon_contribution", lambda config, module, attr, **options: (
-        [route] if attr == "websocket_urlpatterns" else []
+    monkeypatch.setattr(asgi, "optional_addon_module", lambda config, module, **options: SimpleNamespace(
+        __name__="routes.asgi", websocket_urlpatterns=lambda: [route],
     ))
     application = asgi.websocket_application()
 
@@ -142,13 +144,10 @@ def test_websocket_addon_wrappers_are_optional_and_run_after_authentication(
     addons = [SimpleNamespace(name=name) for name in ("routes", *wrapper_names)]
     monkeypatch.setattr("django.apps.apps.get_app_configs", lambda: addons)
 
-    def contribution(config: Any, module: str, attr: str, **options: Any) -> list[Any]:
+    def contribution_module(config: Any, module: str, **options: Any) -> Any:
         assert module == "asgi"
-        if attr == "websocket_urlpatterns":
-            return [path("ws", endpoint)] if config.name == "routes" else []
-        assert attr == "websocket_middleware"
         if config.name == "routes":
-            return []
+            return SimpleNamespace(__name__="routes.asgi", websocket_urlpatterns=[path("ws", endpoint)])
 
         def wrap(inner: Any) -> Any:
             async def middleware(scope: Any, receive: Any, send: Any) -> None:
@@ -156,9 +155,9 @@ def test_websocket_addon_wrappers_are_optional_and_run_after_authentication(
                 seen.append(config.name)
                 await inner(scope, receive, send)
             return middleware
-        return [wrap]
+        return SimpleNamespace(__name__=f"{config.name}.asgi", websocket_middleware=[wrap])
 
-    monkeypatch.setattr(asgi, "addon_contribution", contribution)
+    monkeypatch.setattr(asgi, "optional_addon_module", contribution_module)
 
     async def endpoint(scope: Any, receive: Any, send: Any) -> None:
         assert scope["user"].is_anonymous
@@ -179,3 +178,60 @@ def test_websocket_addon_wrappers_are_optional_and_run_after_authentication(
 
     asyncio.run(exercise())
     assert seen == [*wrapper_names, "endpoint"]
+
+
+@pytest.fixture
+def websocket_addon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Expose one native addon to the websocket capability owner."""
+
+    config = make_addon(path=tmp_path)
+    monkeypatch.setattr(asgi.apps, "get_app_configs", lambda: [config])
+    return config
+
+
+@pytest.mark.parametrize("declaration", ["websocket_urlpatterns = []", "def websocket_urlpatterns(): return []"])
+def test_websocket_routes_accept_static_and_callable_conventions(tmp_path: Path, websocket_addon, declaration: str):
+    (tmp_path / "asgi.py").write_text(declaration + "\n")
+    assert asgi.websocket_application() is not None
+
+
+def test_websocket_absent_module_and_unbound_exports_contribute_nothing(tmp_path: Path, websocket_addon):
+    assert asgi.websocket_application() is not None
+    (tmp_path / "asgi.py").write_text("websocket_urlpatterns: list[object]\nwebsocket_middleware: list[object]\n")
+    assert asgi.websocket_application() is not None
+
+
+def test_websocket_present_module_preserves_internal_import_failure(tmp_path: Path, websocket_addon):
+    (tmp_path / "asgi.py").write_text("import missing_angee_test_dependency\n")
+    with pytest.raises(ImproperlyConfigured, match="asgi failed to import") as failure:
+        asgi.websocket_application()
+    assert isinstance(failure.value.__cause__, ModuleNotFoundError)
+    assert failure.value.__cause__.name == "missing_angee_test_dependency"
+
+
+@pytest.mark.parametrize("attribute", ["websocket_urlpatterns", "websocket_middleware"])
+@pytest.mark.parametrize("value", ["None", "1", "'bad'", "b'bad'", "{'bad'}", "{'bad': 1}"])
+def test_websocket_contributions_reject_nondeterministic_or_non_iterable_values(
+    tmp_path: Path, websocket_addon, attribute: str, value: str,
+):
+    (tmp_path / "asgi.py").write_text(f"{attribute} = {value}\n")
+    with pytest.raises(ImproperlyConfigured, match=f"{attribute} must be iterable"):
+        asgi.websocket_application()
+
+
+def test_websocket_routes_validate_callable_results(tmp_path: Path, websocket_addon):
+    (tmp_path / "asgi.py").write_text("def websocket_urlpatterns(): return 1\n")
+    with pytest.raises(ImproperlyConfigured, match="websocket_urlpatterns must be iterable or callable"):
+        asgi.websocket_application()
+
+
+@pytest.mark.parametrize("declaration, message", [
+    ("def websocket_middleware(): return []", "asgi.websocket_middleware must be iterable"),
+    ("websocket_middleware = [1]", "asgi.websocket_middleware must contain callables"),
+])
+def test_websocket_middleware_validates_sequence_and_callable_members(
+    tmp_path: Path, websocket_addon, declaration: str, message: str,
+):
+    (tmp_path / "asgi.py").write_text(declaration + "\n")
+    with pytest.raises(ImproperlyConfigured, match=message):
+        asgi.websocket_application()

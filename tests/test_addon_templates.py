@@ -245,7 +245,8 @@ def test_copier_renders_the_addon_template(tmp_path: Path, include_web: bool, te
 
     manifest = tomllib.loads((target / "pyproject.toml").read_text(encoding="utf-8"))
     assert manifest["project"]["name"] == "acme-contacts"
-    assert manifest["project"]["entry-points"]["angee.addons"] == {"acme.contacts": "acme.contacts"}
+    assert manifest["project"]["dynamic"] == ["entry-points"]
+    assert "entry-points" not in manifest["project"]
     assert ("angee-web>=3,<4" in manifest["project"]["dependencies"]) is include_web
     assert manifest["tool"]["angee"]["resources"]["demo"][0]["path"] == "demo/010_contacts.contact.yaml"
     rows = yaml.safe_load((target / "resources/demo/010_contacts.contact.yaml").read_text(encoding="utf-8"))

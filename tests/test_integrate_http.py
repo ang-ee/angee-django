@@ -638,3 +638,44 @@ def test_bounded_download_uses_native_redirect_credentials(monkeypatch, destinat
     assert result is not None and result.content == b"ok"
     assert len(calls) == 2
     assert calls[0].headers["authorization"] == "Bearer test-secret"
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_stream_retains_native_response_until_context_exit(monkeypatch: pytest.MonkeyPatch, fail: bool) -> None:
+    closed = False
+
+    class Body(httpx2.SyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            yield b"first\n"
+            yield b"second\n"
+
+        def close(self) -> None:
+            nonlocal closed
+            closed = True
+
+    def transport(*, allow_private: bool) -> httpx2.MockTransport:
+        assert allow_private
+
+        def respond(request: httpx2.Request) -> httpx2.Response:
+            assert request.headers["host"] == "example.com"
+            assert request.headers["authorization"] == "Bearer test-token"
+            assert request.content == b"request"
+            return httpx2.Response(200, stream=Body())
+
+        return httpx2.MockTransport(respond)
+
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(transport))
+    try:
+        with HttpClient().stream(
+            "POST", "https://example.com/checkout", body=b"request", allow_private=True,
+            headers={"Host": "spoof.invalid", "Authorization": "Bearer test-token"},
+        ) as response:
+            assert not response.is_closed and not closed
+            lines = response.iter_lines()
+            assert next(lines) == "first"
+            assert not response.is_closed and not closed
+            if fail:
+                raise ValueError("consumer failed")
+    except ValueError:
+        assert fail
+    assert response.is_closed and closed

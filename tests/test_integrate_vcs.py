@@ -8,7 +8,9 @@ themselves).
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -16,10 +18,11 @@ import pytest
 from django.utils import timezone
 from rebac import system_context
 
-from angee.integrate_vcs.backend import LocalVCSBackend
+from angee.integrate_vcs.backend import LocalVCSBackend, VCSBackend, source_path, tree_entries
 from tests.conftest import (
     Repository,
     Source,
+    StubVCSBackend,
     Template,
     VcsBridge,
     make_integration,
@@ -218,3 +221,85 @@ def test_local_vcs_backend_walks_the_working_tree(tmp_path: Any) -> None:
     assert backend.cat_file(None, ref="main", path="templates/services/demo/copier.yml").startswith(b"_angee")
     with pytest.raises(FileNotFoundError):
         backend.cat_file(None, ref="main", path="../escape")
+
+
+def test_remote_materialization_pins_the_backend_revision_and_scopes_cleanup(tmp_path):
+    events = []
+
+    class Backend(VCSBackend):
+        def rev_parse(self, repository, ref):
+            assert ref == "main"
+            return "a" * 40
+
+    @contextmanager
+    def checkout(remote, revision):
+        assert remote == "https://example.com/repo.git" and revision == "a" * 40
+        events.append("open")
+        try:
+            yield tmp_path, revision
+        finally:
+            events.append("closed")
+
+    backend = Backend(SimpleNamespace(config={}))
+    repository = SimpleNamespace(remote="https://example.com/repo.git")
+    with backend.materialize(repository, ref="main", checkout=checkout) as source:
+        assert source == (tmp_path, "a" * 40) and events == ["open"]
+    assert events == ["open", "closed"]
+
+
+def test_local_materialization_retains_unsaved_working_tree_files(tmp_path):
+    (tmp_path / "uncommitted").write_text("current")
+    backend = LocalVCSBackend(SimpleNamespace(config={"local_root": str(tmp_path)}))
+
+    def no_remote(*args):
+        raise AssertionError("Local working trees must not ask the operator to clone")
+
+    with backend.materialize(None, ref="main", checkout=no_remote) as (root, revision):
+        assert (root / "uncommitted").read_text() == "current" and revision == ""
+
+
+def test_materialized_marker_policy_preserves_path_boundaries_and_ignores_jj(tmp_path, monkeypatch):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "pyproject.toml").write_text("[project]")
+    (tmp_path / ".jj").mkdir()
+    (tmp_path / ".jj" / "pyproject.toml").write_text("ignored")
+    visited = []
+    original_walk = Path.walk
+
+    def walk(path, **options):
+        for directory, subdirectories, files in original_walk(path, **options):
+            visited.append(directory.relative_to(tmp_path).as_posix())
+            yield directory, subdirectories, files
+
+    monkeypatch.setattr(Path, "walk", walk)
+    entries = tree_entries(tmp_path, path="", recursive=True)
+    assert visited == [".", "src"]
+    assert [entry.path for entry in entries if entry.name == "pyproject.toml"] == ["src/pyproject.toml"]
+    with pytest.raises(FileNotFoundError):
+        source_path(tmp_path, "../outside")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_discovery_uses_one_resolved_revision_for_tree_and_blobs(composed_tables, monkeypatch):
+    del composed_tables
+    observed = []
+    original_tree = StubVCSBackend.ls_tree
+    original_blob = StubVCSBackend.cat_file
+
+    def tree(self, repository, *, ref, path, recursive=False):
+        observed.append(ref)
+        return original_tree(self, repository, ref=ref, path=path, recursive=recursive)
+
+    def blob(self, repository, *, ref, path):
+        observed.append(ref)
+        return original_blob(self, repository, ref=ref, path=path)
+
+    monkeypatch.setattr(StubVCSBackend, "ls_tree", tree)
+    monkeypatch.setattr(StubVCSBackend, "cat_file", blob)
+    vcs = _vcs_bridge("immutable", config={"stub_repos": REPOS, "stub_tree": TREE, "stub_blobs": BLOBS})
+    vcs.discover_repositories()
+    with system_context(reason="test pinned discovery"):
+        repository = Repository.objects.get(name="acme/widgets")
+        source = Source.objects.create(repository=repository, kind="template", path="templates")
+    assert source.refresh() == 1
+    assert observed == ["stubsha", "stubsha"]

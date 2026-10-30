@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "One chronology per record, read directly from owner queries through their target policies"
 keywords = ["timeline", "activity", "history"]
 dependencies = ["angee-base>=3,<4", "angee-graphql>=3,<4", "angee-web>=3,<4"]
-
-[project.entry-points]
-"angee.addons" = {"angee.timeline" = "angee.timeline"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

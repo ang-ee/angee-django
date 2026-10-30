@@ -416,7 +416,7 @@ def readable_model_field_names(
     if metadata.model is None:
         return frozenset()
     names: set[str] = set()
-    by_name = {field.name: field for field in metadata.model._meta.local_fields}
+    by_name = {field.name: field for field in metadata.model._meta.concrete_fields}
     for resource_field in metadata.fields:
         if not resource_field.readable or resource_field.model_field_name is None:
             continue

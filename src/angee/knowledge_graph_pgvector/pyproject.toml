@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "Skeleton knowledge retrieval plugin using lexical search; pgvector embeddings and graph retrieval are not implemented"
 keywords = ["pgvector", "embeddings", "knowledge"]
 dependencies = ["angee-knowledge>=3,<4", "angee-mcp>=3,<4"]
-
-[project.entry-points]
-"angee.addons" = {"angee.knowledge_graph_pgvector" = "angee.knowledge_graph_pgvector"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

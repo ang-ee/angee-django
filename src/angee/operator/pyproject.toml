@@ -5,10 +5,9 @@ name = "angee-operator"
 version = "3.0.0"
 description = "Bridge to the operator daemon — drives the local stack and the admin console"
 keywords = ["operator", "daemon", "stack"]
-dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-integrate>=3,<4", "angee-web>=3,<4"]
+dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-integrate>=3,<4", "angee-web>=3,<4", "httpx2>=2.10,<3"]
 
-[project.entry-points]
-"angee.addons" = {"angee.operator" = "angee.operator"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

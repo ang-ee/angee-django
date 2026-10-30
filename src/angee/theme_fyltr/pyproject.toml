@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "The fyltr.ai green and charcoal identity theme"
 keywords = ["theme", "appearance", "fyltr", "green"]
 dependencies = ["angee-web>=3,<4"]
-
-[project.entry-points]
-"angee.addons" = {"angee.theme_fyltr" = "angee.theme_fyltr"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

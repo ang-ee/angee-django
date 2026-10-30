@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Mapping
 from typing import cast
 
 from asgiref.typing import ASGI3Application
@@ -11,7 +12,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.urls import re_path
 from django_compose.components import installed_components
 
-from angee.base.addons import addon_contribution
+from angee.base.addons import optional_addon_module
 from angee.graphql.consumers import AngeeGraphQLWSConsumer
 from angee.graphql.middleware import WebsocketOriginValidator
 from angee.graphql.schema import GraphQLSchemas
@@ -38,15 +39,25 @@ def websocket_application() -> ASGI3Application:
 
     configs = tuple(apps.get_app_configs())
     index = installed_components("angee.addons")
-    patterns = [
-        pattern for config in configs
-        for pattern in addon_contribution(config, "asgi", "websocket_urlpatterns", allow_callable=True, index=index)
-    ]
+    patterns: list[object] = []
+    wrappers: list[object] = []
+    for config in configs:
+        module = optional_addon_module(config, "asgi", index=index)
+        if module is None:
+            continue
+        for attr, allow_callable, target in (
+            ("websocket_urlpatterns", True, patterns),
+            ("websocket_middleware", False, wrappers),
+        ):
+            if not hasattr(module, attr):
+                continue
+            contribution = getattr(module, attr)
+            value = contribution() if allow_callable and callable(contribution) else contribution
+            if not isinstance(value, Iterable) or isinstance(value, str | bytes | Mapping | set | frozenset):
+                suffix = "iterable or callable" if allow_callable else "iterable"
+                raise ImproperlyConfigured(f"{module.__name__}.{attr} must be {suffix}")
+            target.extend(value)
     application = cast(ASGI3Application, URLRouter(patterns))
-    wrappers = [
-        wrapper for config in configs
-        for wrapper in addon_contribution(config, "asgi", "websocket_middleware", index=index)
-    ]
     for wrapper in reversed(wrappers):
         if not callable(wrapper):
             raise ImproperlyConfigured("asgi.websocket_middleware must contain callables")

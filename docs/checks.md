@@ -38,7 +38,7 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Python/addon/template handoff: full SQLite suite; required for shared foundation/composition changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
-| Python types | `PYTHONPATH=addons uv run --locked python -m mypy addons` |
+| Python types | `PYTHONPATH=src uv run --locked python -m mypy src` |
 | Dead-code review | `uv run --locked python -m vulture` |
 
 Mypy loads native compiler and addon-owned plugins through the declared Python
@@ -182,7 +182,7 @@ adapter parity, and mocked helper behavior without starting the application.
 `tests/test_owner_index.py` validates the owner index citations: every cited
 `path:line` in `.agents/skills/angee-design/references/owners.md` declares the
 named symbol, and every public class a foundation models or fields module
-declares, and every addon manifest, has a row.
+declares, and every source distribution (including libraries), has a row.
 Disabling pytest-django, application configuration, and conftest intentionally
 isolates these tests; use normal pytest for application or template behavior.
 If template source changes too, run its contract tests and the Python suite above. A prose-only

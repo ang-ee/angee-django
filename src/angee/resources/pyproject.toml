@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "Tiered data import/export — load demo and seed data from declarative resource files"
 keywords = ["resources", "import", "data"]
 dependencies = ["django-compose>=0.1.0.dev2,<0.2", "angee-base>=3,<4", "django-import-export>=4.4", "pyyaml>=6", "tablib>=3"]
-
-[project.entry-points]
-"angee.addons" = {"angee.resources" = "angee.resources"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 
