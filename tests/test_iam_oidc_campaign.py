@@ -2,6 +2,7 @@
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.utils.connection import ConnectionDoesNotExist
 from rebac import system_context
 
 from angee.iam_integrate_oidc import identity
@@ -74,3 +75,13 @@ def test_oidc_login_establishes_person_only_for_explicitly_verified_email(compos
     assert people.count() == (1 if verified is True else 0)
     if verified is True:
         assert people.get().created_by_id == user.pk
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("factory", ["create_user", "create_superuser", "create_person_as_system"])
+def test_user_factory_preserves_explicit_manager_database(factory: str) -> None:
+    users = User.objects.db_manager("unconfigured-explicit-database")
+    options = {"reason": "test.iam.database"} if factory == "create_person_as_system" else {}
+    with pytest.raises(ConnectionDoesNotExist):
+        getattr(users, factory)("explicit-database", "explicit-db@example.com", **options)
+    assert not User.system_queryset().filter(username="explicit-database").exists()

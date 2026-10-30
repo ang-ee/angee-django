@@ -35,40 +35,27 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Scope | Command |
 |---|---|
 | Focused Python test | `uv run --locked python -m pytest -q tests/<test_file>.py` |
-| Python/addon/template handoff: full SQLite suite; required for core changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
+| Python/addon/template handoff: full SQLite suite; required for shared foundation/composition changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
-| Python types | `PYTHONPATH=.:addons uv run --locked python -m mypy angee addons` |
+| Python types | `PYTHONPATH=src uv run --locked python -m mypy src` |
 | Dead-code review | `uv run --locked python -m vulture` |
 
-Mypy imports addon-owned plugins before its Django settings host runs. The
-invocation supplies the declared source roots on native `PYTHONPATH` so those
-plugin modules can load; `mypy_path` controls static resolution and does not
-change the interpreter's import paths. Consumer CI passes the framework root
-and the typing host's declared `ANGEE_ADDON_DIRS` to its mypy subprocess.
+Mypy loads native compiler and addon-owned plugins through the declared Python
+installation and its configured source roots. `mypy_path` controls static
+resolution, not runtime imports. Use the owning CI invocation and typing settings;
+do not introduce a source-model append, generated stub directory or parallel
+model registry to make a missing native type visible. The composed typing host
+is isolated from the running stack and pytest's bare source-model settings.
 
-The consumer CI lane uses the same framework mypy policy and
-[`tests.typing_settings`](../tests/typing_settings.py), with its existing
-[`tests.typing_host`](../tests/typing_host.py) projection of native history
-models. An explicit `ANGEE_PROJECT_DIR` reads the project's declared app roots
-and addon directories through `ProjectContract.load`; the typing host retains
-only those composition inputs and uses SQLite in memory, a synthetic secret,
-and `<project>/.mypy_cache/typing_runtime`. Without that explicit project, the
-host checks the full framework composition as before. The CI target is the
-consumer's entire `addons` directory, including optional addons when their
-declared composition is checked; it does not select only recently changed files.
-
-A declared addon transition is a temporary executable input: its materialized
-copy carries a source fingerprint until it is applied and the stack's history is
-consolidated. Native mypy/Ruff discovery excludes those bodies; integrity-test
-imports remain followed silently so their types are available. Do not change an
-applied copy or digest to fix checker diagnostics. The
-[runtime-migration mechanism tests](../tests/test_runtime_migrations.py) cover
-materialization, fingerprints, replay and guarded history replacement through
-neutral fixtures. Completed transition declarations and bodies are retired after
-the [snapshot/reset cutoff](composer.md#foundation-and-provenance-upgrade-cutoff),
-not retained indefinitely as compatibility APIs. Generated `typing_runtime`
-model declarations remain followed because they are required typing inputs.
+Projects author data upgrades as ordinary Django migrations with explicit
+dependencies, historical models and the schema editor's database alias. Compose
+preserves those files. The [native-history tests](../tests/test_native_initial_history.py)
+cover initial authoring, project data operations and preservation across rebuilds;
+the [migration-policy tests](../tests/test_runtime_migrations.py) cover Resources'
+retirement policy and the native drop guard. Previously shipped transition sources
+are historical upgrade assets only; retire them after the supported upgrade cutoff
+and preserve Python imports still required by retained migration history.
 
 [`tests/test_layering.py`](../tests/test_layering.py) guards framework import
 boundaries and optional state-field declarations. See the
@@ -113,14 +100,14 @@ host fixtures must use process-local connections or pytest's worker-local
 ### Source-addon Test Models
 
 Share source-addon compositions through their owning test apps:
-[`angee.resources.testing`](../addons/angee/resources/testing/__init__.py),
-[`angee.workflows.testing`](../addons/angee/workflows/testing/__init__.py), and
-[`angee.integrate.testing`](../addons/angee/integrate/testing/__init__.py). Their
+[`angee.resources.testing`](../src/angee/resources/testing/__init__.py),
+[`angee.workflows.testing`](../src/angee/workflows/testing/__init__.py), and
+[`angee.integrate.testing`](../src/angee/integrate/testing/__init__.py). Their
 package docstrings own the adoption contract. Other reusable concrete
-compositions, including [`decisions`](../addons/angee/decisions/testing/models.py)
-and [`messaging`](../addons/angee/messaging/testing/models.py), register once
+compositions, including [`decisions`](../src/angee/decisions/testing/models.py)
+and [`messaging`](../src/angee/messaging/testing/models.py), register once
 through imports in the root conftest before database setup. The framework-generic
-[`composed_tables`](../addons/angee/base/testing/fixtures.py) fixture uses native transactional
+[`composed_tables`](../src/angee/base/testing/fixtures.py) fixture uses native transactional
 isolation and synchronizes REBAC after each flush; use the native `db` fixture
 when a test needs neither transaction behavior nor permission synchronization.
 Composed hosts also install their schema during native database setup. Register
@@ -128,11 +115,11 @@ Composed hosts also install their schema during native database setup. Register
 that loads it explicitly must pass `-p django -p angee.base.testing.fixtures` in that
 order so pytest-django cannot shadow the shared `django_db_setup` override.
 Hosts installing provenance also register
-[`angee.provenance.testing.fixtures`](../addons/angee/provenance/testing/fixtures.py)
+[`angee.provenance.testing.fixtures`](../src/angee/provenance/testing/fixtures.py)
 for test attribution; the generic framework plugin does not install that boundary.
 A test that reaches a statement source needs the install-tier `provenance.Rule`
 principals parties declares: list
-[`angee.parties.testing.fixtures`](../addons/angee/parties/testing/fixtures.py) in
+[`angee.parties.testing.fixtures`](../src/angee/parties/testing/fixtures.py) in
 `pytest_plugins` and request its `statement_sources` fixture (the framework's own
 hosts load them after every REBAC sync).
 
@@ -194,7 +181,7 @@ adapter parity, and mocked helper behavior without starting the application.
 `tests/test_owner_index.py` validates the owner index citations: every cited
 `path:line` in `.agents/skills/angee-design/references/owners.md` declares the
 named symbol, and every public class a foundation models or fields module
-declares, and every addon manifest, has a row.
+declares, and every source distribution (including libraries), has a row.
 Disabling pytest-django, application configuration, and conftest intentionally
 isolates these tests; use normal pytest for application or template behavior.
 If template source changes too, run its contract tests and the Python suite above. A prose-only
@@ -215,19 +202,19 @@ Management checks use `--no-sync` so invoking one cannot install or rebuild firs
 
 | Purpose | Command | Prerequisite / effect |
 |---|---|---|
-| Install/build for development | `uv sync` | Native Hatch editable build on a stopped/new host; no database operations |
-| Install for production | `uv sync --no-editable` | The same native Hatch hook validates the sealed project/history; no database operations |
-| Package the sealed project | `uv build` | Validates and bundles tracked native history and portable composed runtime |
-| Prepare the installed runtime | `uv run --no-sync python manage.py angee provision` | One prebuilt native process; the [command owner](../angee/management/commands/angee.py) defines ordering and options |
-| Clean generated runtime | `uv run --no-sync python manage.py angee clean` | [Guarded whole-tree cleanup](composer.md#runtime-cleanup); preserves all migration directories |
-| Archive retired history | `uv run --no-sync python manage.py archive_retired_migrations <label> --archive-dir /path/to/new-archive --dry-run` | Verify every configured database and table retirement; omit `--dry-run` for recoverable archival |
-| Check composition drift | `uv run --no-sync python manage.py angee check` | Explicit read-only check of composer artifacts and addon upgrade declarations; startup never repairs output |
-| Author schema migrations | `uv run --no-sync python manage.py makemigrations <app-labels>` | After editable build; review and commit `runtime/<label>/migrations/` before packaging |
+| Install for development | `uv sync --locked` | Installs native editable distributions on a stopped/new host; does not compose |
+| Compose models and artifacts | `uv run --no-sync python manage.py compose` | Fresh build-mode process through the native launcher; no database provisioning |
+| Install for production | `uv sync --locked --no-editable` | New/stopped host; installs distributions, does not compose |
+| Build distribution wheels | `uv build --wheel --all-packages` | Native workspace builds; composition is a separate job |
+| Provision database state | `uv run --no-sync python manage.py provision` | Compiler-owned native history checks, migrations, hooks and readiness record |
+| Read readiness | `uv run --no-sync python manage.py provision --check` | Read-only proof for the selected database |
+| Check composition drift | `uv run --no-sync python manage.py compose --check` | Native read-only artifact/receipt comparison |
+| Check migration drift/imports | `uv run --no-sync python manage.py check_migrations --imports` | Native retained-history integrity and Python import audit |
+| Author schema migrations | `uv run --no-sync python manage.py makemigrations <app-labels>` | After compose; review and commit `runtime/<label>/migrations/` before packaging |
 | Apply migrations | `uv run --no-sync python manage.py migrate` | Operates on the selected stack database |
 | Sync permissions | `uv run --no-sync python manage.py rebac sync` | After migrations when permissions change; `rebac sync --prune-stale` also retires removed definitions, the shape provision runs ([REBAC](backend/guidelines.md#rebac)) |
 | Load declared resource data | `uv run --no-sync python manage.py resources load` | After migrations when resource data changes |
 | Validate runtime contracts | `uv run --no-sync python manage.py check` | Includes construction of every named GraphQL schema; run against deployment code and settings before starting writer tiers |
-| Emit GraphQL SDL | `uv run --no-sync python manage.py schema` | Uses the emitted concrete models; provision reuses its prebuilt registry and checked schemas |
 | Check GraphQL SDL | `uv run --no-sync python manage.py schema --check` | Separate from the composer drift check |
 
 Run only lifecycle steps needed for the change and within the user's authorized
@@ -235,8 +222,9 @@ scope.
 For containerized stacks, use the declared service/job environment; a host shell
 without the runtime dependencies cannot run these commands directly.
 
-After a model change, rebuild through the native runtime-build job and author
-required native history before provision. Emit SDL, then run the host web
+After a model change, run native compose and author
+required native history before provision. Compose emits GraphQL SDL through its
+capability integration; then run the host web
 package's codegen **before** checking addon fragments. From the stack
 root, for the default `web_path=web`:
 
@@ -249,6 +237,12 @@ implicitly perform codegen. After a manifest/dependency change, synchronize at
 the stack's dependency owner before codegen; never install in the source slot.
 
 ## Frontend Packages And Addon Fragments
+
+FormSpec source generation is a repository operation, separate from package builds.
+From the framework source root, run `pnpm generate:form-spec` after editing the
+canonical `src/angee/base/schemas/form_spec.schema.json`, and verify committed
+outputs with `pnpm check:form-spec`. Generator tool versions are exact in
+`packages/ui/package.json`; ordinary UI builds consume the committed outputs.
 
 The stack's JS dependencies must already be installed. Framework packages are
 schema-independent; addon fragments need the composed host's generated documents.
@@ -290,12 +284,12 @@ the token deletion findings.
 For page or addon changes, run a primitive-drift scan and explain every hit
 outside `@angee/ui`. A hit is not automatically wrong, but it must either compose
 the shared primitive or identify the owning framework gap to fix first. From the
-framework source root; include `../angee-messaging-bridges/addons` in the scan
+framework source root; include `../angee-messaging-bridges/src` in the scan
 when that optional slot is present and affected:
 
 ```sh
-rg -n '<table\b|<thead\b|<tbody\b|<tr\b|<td\b|<th\b|role="grid"|useReactTable|manualPagination' packages addons examples -g '*.tsx'
-rg -n 'useAuthored(Query|Mutation)<|interface .*Data|interface .*Variables|fetch\([^)]*graphql|gql`' packages addons examples -g '*.ts' -g '*.tsx'
+rg -n '<table\b|<thead\b|<tbody\b|<tr\b|<td\b|<th\b|role="grid"|useReactTable|manualPagination' packages src examples -g '*.tsx'
+rg -n 'useAuthored(Query|Mutation)<|interface .*Data|interface .*Variables|fetch\([^)]*graphql|gql`' packages src examples -g '*.ts' -g '*.tsx'
 ```
 
 Run the architecture guardrail above when changing package layering, public
@@ -333,7 +327,7 @@ database, and these commands do not create one.
 [reusable checks](../.github/workflows/reusable-checks.yml) on pull requests and
 pushes to `main`. The current tiers are:
 
-- **Python quality:** Ruff over the source tree and mypy over core and addons,
+- **Python quality:** Ruff over the source tree and mypy over addons,
   using the locked framework environment.
 - **SQLite:** the full framework Python suite once, as six shards that
   pytest-split cuts into contiguous chunks of equal stored time from the
@@ -360,9 +354,11 @@ pushes to `main`. The current tiers are:
   and addon fragments, and run the bridges repository's pytest suite with its
   native source-test settings and collection policy. Bridge tests use the
   composed stack's runtime dependencies plus the framework's locked check tools,
-  as the consumer lane does; they do not resolve a second environment from the
-  bridges' standalone generated addon dependency group. Its checked-in group
-  remains subject to the suite's manifest-drift guard.
+  as the consumer lane does. The tools export omits workspace members already
+  supplied by the composed host. Bridge packages declare dependencies in their own
+  `pyproject.toml`; native lockfiles own resolved versions. The suite's package
+  metadata guard checks that the collection requirements match its workspace
+  member distributions.
   Framework composed-host tests create their own temporary hosts in the SQLite
   suite; the stack job does not repeat that framework suite.
 
@@ -387,11 +383,11 @@ The caller revision replaces its source ref; dependency revisions remain explici
 The full declared Python collection runs once across six `stack-shard` jobs,
 using native pytest-split `least_duration` assignment. Without stored consumer
 timings, the plugin balances test counts with equal weights. Each shard renders
-its own host, resolves native manifest dependencies, composes/provisions it, and
+its own host, resolves native distribution requirements, composes/provisions it, and
 collects the declared Python paths with `python_files=test*.py` on PostgreSQL.
 Four native pytest-xdist workers use `--dist worksteal` inside each shard, so long
 consumer intake modules can use every worker. Each worker loads the configured
-host through generated `runtime.settings`; pytest-django owns its separate test
+host through its authored `settings` module; pytest-django owns its separate test
 database. Pytest emits a thread dump after five minutes in one test protocol,
 including setup and teardown, without changing its outcome. Shared test plugins
 must defer model imports until Django's app registry is populated. Check tools
@@ -416,12 +412,20 @@ promising planned coverage as though it already exists.
 
 ### Consumer CI Publication
 
-Consumer callers use `main` for the reusable workflow, framework checkout, and
-source dependencies. The caller's own source always uses its exact `github.sha`;
-its declared source ref is replaced by that revision. Workspace branches do not
+During a coordinated draft cutover, publish the reviewed framework commit first.
+Consumer callers temporarily pin that public immutable SHA in both the reusable
+workflow `uses` reference and `framework-ref`. Pin source dependencies to published,
+reviewed cohort commits as well; an unpublished local hash is not a CI dependency.
+Run full consumer verification through published CI after the draft cohort
+converges; do not recreate its profiles or shards in a private local harness.
+
+After the reviewed framework and source dependencies land, durable consumer
+callers use `main` for the reusable workflow, framework checkout, and source
+dependencies. In either phase, the caller's own source uses its exact
+`github.sha`; its declared source ref is replaced by that revision. Workspace branches do not
 define the durable CI dependency contract.
 
-Publish in dependency order:
+For durable `main` wiring, land in dependency order:
 
 1. Publish required upstream fixes and record their versions or immutable Git
    revisions in the framework dependency declarations and lockfile.
@@ -432,4 +436,14 @@ Publish in dependency order:
    those already-landed dependencies.
 
 Local source checks do not establish that this publication chain or a remote CI
-run has completed.
+run has completed. Billing rejections and private-source checkout failures are
+external blockers, not evidence that the consumer checks executed or passed.
+
+Framework requirements pin the native compiler to its public PyPI release,
+and `uv.lock` records the distribution artifacts. Clean checkouts and Docker
+builds resolve that release without a sibling compiler checkout or named context.
+
+Compiler co-development may use an explicit editable sibling checkout in a
+separate disposable check environment. Keep that local override out of committed
+requirements/locks and never apply it to a live stack environment. Normal native
+installation continues to consume the committed public release pin.

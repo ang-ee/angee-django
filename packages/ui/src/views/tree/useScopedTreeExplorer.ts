@@ -1,11 +1,11 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 export interface ScopedTreeExplorerOption {
   value: string;
   label: string;
 }
 
-export interface UseScopedTreeExplorerOptions<TRoot, TTreeRow extends { id: string }> {
+interface ScopedTreeExplorerOptions<TRoot, TTreeRow extends { id: string }> {
   roots: readonly TRoot[];
   getRootId: (root: TRoot) => string;
   getTreeRows: (rootId: string) => readonly TTreeRow[];
@@ -24,19 +24,39 @@ export interface UseScopedTreeExplorerOptions<TRoot, TTreeRow extends { id: stri
    * and defer initial default selection. Omit on list routes to seed from roots.
    */
   selectedRootId?: string | null;
-  /** Controlled root selection, for a picker whose options are server-searched. */
-  rootId?: string;
-  /** Notifies explicit root changes; resolved record roots do not rewrite routes. */
-  onRootIdChange?: (rootId: string) => void;
+  /**
+   * Accept explicit root changes through the route owner before changing scope.
+   * Return false (or a promise resolving false) when navigation was blocked.
+   * Resolved record roots do not rewrite routes.
+   */
+  onRootIdChange?: (rootId: string) => void | boolean | Promise<boolean>;
   isSelectedIdValid?: (
     selectedId: string,
     rows: readonly TTreeRow[],
   ) => boolean;
 }
 
+/** Controlled roots remain owned by the caller, including authoritative removal. */
+export type UseScopedTreeExplorerOptions<TRoot, TTreeRow extends { id: string }> =
+  ScopedTreeExplorerOptions<TRoot, TTreeRow> & ({
+    rootId?: undefined;
+    onRootInvalidated?: never;
+  } | {
+    /** Controlled root selection, for a picker whose options are server-searched. */
+    rootId: string;
+    /**
+     * Clear or replace this unavailable root in the controlling state. This is
+     * authoritative removal, not user navigation: do not invoke a dirty guard.
+     * The hook retains the controlled value until its owner supplies the update.
+     */
+    onRootInvalidated: (rootId: string) => void;
+  });
+
 export interface ScopedTreeExplorerController<TTreeRow extends { id: string }> {
   rootId: string;
   setRootId: (rootId: string) => void;
+  /** Clear an unavailable root locally, or notify its controlled owner; never navigate. */
+  invalidateRoot: (rootId: string) => void;
   treeRows: readonly TTreeRow[];
   selectedId: string | undefined;
   selectedRow: TTreeRow | undefined;
@@ -62,6 +82,7 @@ export function useScopedTreeExplorer<
   selectedRootId,
   rootId: controlledRootId,
   onRootIdChange,
+  onRootInvalidated,
   isSelectedIdValid,
 }: UseScopedTreeExplorerOptions<TRoot, TTreeRow>): ScopedTreeExplorerController<TTreeRow> {
   const [selection, setSelection] = useState({
@@ -112,16 +133,28 @@ export function useScopedTreeExplorer<
     ? treeRows.find((row) => row.id === effectiveSelectedId)
     : undefined;
 
+  const rootRequest = useRef(0);
+  const invalidateRoot = useCallback((unavailableId: string) => {
+    if (!rootId || rootId !== unavailableId) return;
+    if (controlledRootId !== undefined) onRootInvalidated?.(unavailableId);
+    else setSelection((current) => current.rootId === unavailableId
+      ? { ...current, rootId: "" } : current);
+  }, [controlledRootId, onRootInvalidated, rootId]);
   const handleSetRootId = useCallback(
     (nextRootId: string) => {
       if (nextRootId === rootId) return;
-      if (controlledRootId === undefined) setSelection({ rootId: nextRootId, selectedRootId });
-      onRootIdChange?.(nextRootId);
-      // Reset the selection through the same ownership split as the write seam
-      // below: uncontrolled updates local state; controlled notifies its external
-      // owner (local state is dead there — the store, not this hook, is the truth).
-      if (ownsSelection) setLocalSelectedId(defaultSelectedId);
-      else onSelectedIdChange?.(defaultSelectedId);
+      const request = ++rootRequest.current;
+      const commit = (accepted: void | boolean) => {
+        if (accepted === false || request !== rootRequest.current) return;
+        if (controlledRootId === undefined) setSelection({ rootId: nextRootId, selectedRootId });
+        if (ownsSelection) setLocalSelectedId(defaultSelectedId);
+        else onSelectedIdChange?.(defaultSelectedId);
+      };
+      // Navigation can be refused by the native unsaved-changes blocker. Keep
+      // the current collection until its route owner accepts this transition.
+      const accepted = onRootIdChange?.(nextRootId);
+      if (accepted instanceof Promise) void accepted.then(commit);
+      else commit(accepted);
     },
     [controlledRootId, defaultSelectedId, onRootIdChange, onSelectedIdChange, ownsSelection, rootId, selectedRootId],
   );
@@ -140,6 +173,7 @@ export function useScopedTreeExplorer<
     () => ({
       rootId,
       setRootId: handleSetRootId,
+      invalidateRoot,
       treeRows,
       selectedId: effectiveSelectedId,
       selectedRow,
@@ -148,6 +182,7 @@ export function useScopedTreeExplorer<
     [
       rootId,
       handleSetRootId,
+      invalidateRoot,
       treeRows,
       effectiveSelectedId,
       selectedRow,

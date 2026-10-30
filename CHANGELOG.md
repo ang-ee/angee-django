@@ -1,18 +1,30 @@
 # Changelog
 
-Notable structural and behavioral changes to the Angee framework — the `angee/`
-core + composer and the framework addons under `addons/angee/`. The format loosely
-follows [Keep a Changelog](https://keepachangelog.com). Now that the package
-ships to PyPI, releases get version-keyed headings; earlier pre-release
-entries remain grouped by the dated effort that landed them, newest first. Day-to-day detail lives in git history — this file
+Notable structural and behavioral changes to the Angee framework and its addons.
+The format loosely follows [Keep a Changelog](https://keepachangelog.com).
+Releases get version-keyed headings; earlier pre-release entries remain grouped
+by the dated effort that landed them, newest first. Day-to-day detail lives in git history — this file
 keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
-## Unreleased — AP consolidation 2026-10-18 (breaking; ships in 0.3.0)
+## Unreleased — addon distribution metadata
 
-- **0.3.0 replaces the old `angee.base` compatibility package with a real
-  foundation addon under `addons/angee/base/`.** Models, mixins, fields,
+- Each addon declares native package metadata and requirements in its own
+  `pyproject.toml`, with one `angee.addons` entry point. Capability tables remain
+  package data. The repository root is a uv workspace and metadata-only collection.
+- Dependency installation, explicit operator `compose`, and Python archive
+  builds are separate operations. Native migration history remains reviewed,
+  committed project source.
+- Framework and addon wheel publication targets the configured private Python
+  index because declared dependencies include pinned fork URLs.
+
+The unreleased sections describe the current 3.0 framework cohort. Released
+and dated sections below preserve their historical contracts.
+
+## Unreleased — foundation and composition (breaking; 3.0)
+
+- **The `angee.base` foundation addon lives under `src/angee/base/`.** Models, mixins, fields,
   managers, querysets, indexes, validators, identity and permission integration
   belong to that addon. The frozen historical REBAC helper is removed. Existing databases
   must first pass through compatible code that still supplies these imports and
@@ -21,34 +33,35 @@ live in code docstrings.
   imported `SourceKind` through `angee.base.mixins`; its public owner is now
   `angee.provenance.statements`. Follow the [upgrade cutoff](docs/composer.md#foundation-and-provenance-upgrade-cutoff).
   The persisted Django app label `base`, tables and content types keep their names.
-  Other surviving migration contracts, including `angee.parties.runtime_migrations`,
-  retain their own retirement requirements.
+  Retired migration modules must be absent from tracked project history before
+  this upgrade; the cutoff guide owns the required transition.
 - Mixed root modules are decomposed by responsibility: `ImplClassField` lives in
   `angee.base.fields.implementation`, implementation configuration in
   `angee.base.implementations`, model defaults in
   `angee.base.models.implementations`, and independent hook resolution in
-  `angee.hooks`. JSON Schema validation and shared schema contracts belong to
+  `angee.base.hooks`. JSON Schema validation and shared schema contracts belong to
   foundation; workflow schema algebra belongs to workflows. `angee.data` is
   retired: GraphQL owns resource projections, and foundation owns the shared
   FormSpec schema consumed by Python and generated frontend validation.
-  Top-level model/field modules retain only proven historical migration aliases.
-- Composer stays in `angee.compose` and consumes declared app and build contracts.
-  Angee's host owns project defaults, addon manifests, dependency projection and
-  feature adapters. Rendered hosts now call `angee.management.main`, use
-  `angee.settings`, and provision through `angee.management.bootstrap`; refresh
-  hosts from the project and stack templates before restarting on this version.
-- Jobs/Celery and web builds have their own optional addon owners. Host settings,
-  Django lifecycle, serving entrypoints and neutral shared primitives remain in
-  core; the compiler receives capability integrations through explicit contracts.
+  The superseded top-level modules and compatibility aliases are removed.
+- Generic compilation, component ordering, receipts, migration coordination and
+  provisioning belong to published `django-compose`. The project owns native
+  `settings.py`, `settings.yaml` and `manage.py`; `angee.base.conf` supplies Angee
+  defaults. The in-tree compiler and manifest/dependency compiler are removed.
+- Jobs/Celery and web builds have optional addon owners. `angee.server` owns HTTP
+  policy; base owns reusable Django primitives. Capability adapters contribute
+  through native compiler contracts. Stack templates can omit Celery services
+  with `enable_celery=false`, independently of app activation.
 - Provenance lives entirely in the `angee.provenance` addon. Context, evidence,
   history and statements leave the model foundation; callers import their addon
   owners and explicitly opt into captured managers. The native Django capture
   engine is separate from the `provenance.contrib.angee` permission and replay
   adapters. HTTP, task, command and test boundaries are installed by the addon.
   GraphQL hosts without provenance retain native CRUD and expose no creation
-  idempotency argument. See the [addon contract](addons/angee/provenance/README.md).
+  idempotency argument. See the [addon contract](src/angee/provenance/README.md).
 - Model references follow Django's explicit model-package exports:
-  `RecordRefMixin` and `DerivedFrom` are imported from `angee.base.models`;
+  `RecordRefMixin` and `DerivedFrom` are imported from
+  `angee.base.models.refs` and `angee.base.models.derived`;
   reference discovery and deletion hooks live in `angee.base.models.refs`.
   `angee.base.refs` owns pointer identities and `RetainedGenericRelation`, with
   historical migration imports handled by the upgrade cutoff. Test
@@ -60,7 +73,8 @@ live in code docstrings.
   `HandleType.controller`); `Integration.owner` and `WebhookSubscription.owner` are
   nullable `retained_set_null`; `owner` lands on `Party`, `Folder`, `Circle`,
   `Workflow` and `ExternalAccount` (the external-account `#owner` tuples fold into the
-  column). Each addon declares the cutover as a `[[migrations]]` runtime migration.
+  column). Each addon contributes its cutover through `compose_migrations/<label>/`;
+  Django project history retains the materialized migration.
 - `client_creation_key` is `idempotency_key` on every create argument and on the
   GraphQL wire; the conflict error keeps its code. A changeset claim owns create
   replay, so a kept database retires the stored creation keys through declared
@@ -80,11 +94,10 @@ live in code docstrings.
   aside with the provider `source_url` hook; see the `@angee/ui` changeset.
 - `FileType.permissions` (verbs contributed to `storage.File#actions` gate on it).
 
-## Unreleased — sync provenance and native history (breaking; ships in 0.3.0)
+## Unreleased — sync provenance and native history (breaking; 3.0)
 
 The retired names and their owners are listed below; the upgrade path for a
-stack that keeps its database is the incremental one in "Unreleased — AP
-consolidation" (a stack with re-importable data starts a fresh database).
+stack that keeps its database follows the [upgrade cutoff](docs/composer.md#foundation-and-provenance-upgrade-cutoff) (a stack with re-importable data starts a fresh database).
 
 - A record's facts are statements: who asserted a value, from what evidence,
   through which link. `StatementsMixin` and `Aspect` (`angee.provenance.statements`)
@@ -114,19 +127,12 @@ consolidation" (a stack with re-importable data starts a fresh database).
   `resolve_sync_discrepancy`, `retry_sync_discrepancy`,
   `SyncStream.open_discrepancy_count` and the record link hash bases.
 
-## Unreleased — django-zed-rebac 0.27
+## Unreleased — native permission integration
 
-- The `angee.graphql` manifest declares `django-zed-rebac[strawberry-django]`
-  with a release floor; the core wheel alone pins the exact release. Two exact
-  pins made every bump break a host whose generated `addons` group still held the
-  old one: `uv` refused to resolve before `angee build` could rewrite the group.
-  A host that took 0.27.3 before this change runs `manage.py angee build` once
-  with its existing environment to regenerate the group.
-- Require django-zed-rebac 0.27.3. Point checks on a type backed by a
-  `GenericForeignKey` compile only the arms of the row's content type, so
-  SQLite no longer fails with "Expression tree is too large" on polymorphic
-  edges, and an exclusion nested in another exclusion no longer raises
-  `FieldError` when it is evaluated at an identity that is not a model row.
+- Permission integration uses native `django-zed-rebac` managers, queryset gates,
+  schema checks and GraphQL extensions. Owning addon requirements and the native
+  lockfile identify the reviewed dependency; generated addon dependency groups
+  and the `angee build` repair step are removed.
 - Since 0.27.1, read guards refuse filtering or ordering
   on a gated field under an actor; filters and sorts over a gated field use the
   queryset's `readable(field)`, and Angee's `gated_field_expression` is removed.
@@ -144,9 +150,9 @@ consolidation" (a stack with re-importable data starts a fresh database).
 - `AngeeModel.system_queryset` returns a permission-naive default queryset as it
   is, and GraphQL filter expressions take their output fields from it.
 
-## Unreleased — record tasks (breaking; ships in 0.3.0)
+## Unreleased — record tasks (breaking; 3.0)
 
-Upgrade steps: see "Unreleased — AP consolidation" below.
+Upgrade steps: see the [upgrade cutoff](docs/composer.md#foundation-and-provenance-upgrade-cutoff).
 
 - Record activities are record tasks: a `projects.Task` whose `subject` is a
   record's chatter attachment, typed by `projects.ActivityType` (moved from
@@ -166,7 +172,8 @@ Upgrade steps: see "Unreleased — AP consolidation" below.
   `chatter.history`); the former ids stay as `?chatterTab=` aliases until 0.4.0.
 - The composer's drop guard refuses an autodetected `DeleteModel` whose table
   holds rows, except rows the retiring addon's resource files seeded once it
-  names the model under `retired_models` in its `addon.toml` `[resources]`.
+  names the model under `retired_models` in its `pyproject.toml`
+  `[tool.angee.resources]`.
 
 ## Unreleased — in-process agent sessions
 
@@ -389,8 +396,8 @@ Upgrade steps: see "Unreleased — AP consolidation" below.
 - Generated-runtime rebuilds reset once, preserving migration history and
   warning only for labels outside the current composition. Remove unused
   runtime wrappers; materialization requires
-  the composed app registry. Provision runs `makemigrations --noinput`, so
-  missing required migration defaults fail promptly instead of prompting.
+  the composed app registry. Project authors run `makemigrations` explicitly
+  and review the resulting history; provision only checks and applies it.
   Generated-tree pruning removes reported empty owned directories after their
   contents, so reconciliation converges while preserving migration history.
 - Retained collections use one model-labelled `ValidationError`. Lease updates
@@ -448,8 +455,8 @@ Upgrade steps: see "Unreleased — AP consolidation" below.
   Photo downloads share that origin comparison; URL-gate validation errors retain
   their original type, while origin-changing redirects become `CardDavError`.
 - Messaging adapters import `mapping`, `millis_to_utc`, `sequence` and `text` from
-  the public owner `angee.messaging.identity`. `_wire` remains private compatibility
-  imports while bridge callers migrate; delete `_wire` once that migration lands.
+  the public owner `angee.messaging.identity`. Its retired `_wire` compatibility
+  module is removed after callers have moved.
 
 - Remove write-alias threading and custom `using=` parameters, including the
   `using` payload on `change_published` and `file_finalized`; Django routers own
@@ -754,15 +761,6 @@ index; summarized here because the working lift plans were retired.
 Forward-looking work consciously deferred; kept here so it survives the plans
 that proposed it.
 
-- **Repo split Phase B — two-dist uv workspace.** Before the actual repo split,
-  turn the monorepo into a uv workspace with two dists: root `django-angee`
-  (`packages = ["angee"]`, framework-only deps) and `addons/pyproject.toml`
-  `django-angee-addons` (`dependencies = ["django-angee", …]`). Partition
-  dependencies from real imports — `django-import-export` / `tablib` / `pyyaml` →
-  addons, `pyjwt[crypto]` → iam, whatever `angee` + `angee/compose` import →
-  framework — so the addons→framework dependency direction is enforced, not just
-  implied by directory. The repo split then becomes "move `addons/` to a new repo
-  + point its `django-angee` dependency at the published version."
 - **Generic-list title/status is a backend contract.** `@angee/base` has no owner
   for *which* row field is the "title" vs the "status" of a generic list row; a
   frontend heuristic would violate find-the-owner. The real owner is the GraphQL

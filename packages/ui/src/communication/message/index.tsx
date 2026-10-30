@@ -164,7 +164,7 @@ export interface MessagePartFile {
   filename?: string | null;
   title?: string | null;
   url?: string | null;
-  size_bytes?: number | string | null;
+  size_bytes?: number | null;
   mime_type?: MessagePartMime | null;
 }
 
@@ -439,7 +439,7 @@ function renderMessagePartFile(
     <MessageAttachmentChip
       icon={<Glyph decorative name="attachment" />}
       remove={
-        file.size_bytes != null ? (
+        typeof file.size_bytes === "number" ? (
           <span className="shrink-0 text-2xs opacity-70">{formatSize(file.size_bytes)}</span>
         ) : undefined
       }

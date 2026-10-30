@@ -1,0 +1,47 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-proposals"
+version = "3.0.0"
+description = "Project-backed solicitation rounds with sealed proposals, comparison, and review."
+keywords = ["proposals", "solicitation", "competition", "comparison", "review"]
+dependencies = ["angee-base>=3,<4", "angee-graphql>=3,<4", "angee-iam>=3,<4", "angee-messaging>=3,<4", "angee-money>=3,<4", "angee-parties>=3,<4", "angee-projects>=3,<4", "angee-spaces>=3,<4", "angee-storage>=3,<4", "angee-provenance>=3,<4", "angee-web>=3,<4", "django-compose>=0.1.0.dev1,<0.2"]
+dynamic = ["entry-points"]
+
+[tool.angee]
+
+[[tool.angee.resources.demo]]
+path = "demo/005_iam.user.yaml"
+depends_on = "iam:demo/010_iam.user.yaml"
+
+[[tool.angee.resources.demo]]
+path = "demo/010_projects.project.yaml"
+depends_on = ["demo/005_iam.user.yaml", "projects:demo/010_projects.project.yaml"]
+
+[[tool.angee.resources.demo]]
+path = "demo/015_parties.party.yaml"
+depends_on = "demo/005_iam.user.yaml"
+
+[[tool.angee.resources.demo]]
+path = "demo/020_proposals.round.yaml"
+depends_on = ["demo/010_projects.project.yaml", "demo/015_parties.party.yaml"]
+
+[[tool.angee.resources.demo]]
+path = "demo/030_proposals.topic.yaml"
+depends_on = "demo/020_proposals.round.yaml"
+
+[[tool.angee.resources.demo]]
+path = "demo/040_proposals.proposal.yaml"
+depends_on = ["demo/020_proposals.round.yaml", "money:master/010_money.currency.yaml"]
+
+[[tool.angee.resources.demo]]
+path = "demo/050_proposals.answer.yaml"
+depends_on = ["demo/030_proposals.topic.yaml", "demo/040_proposals.proposal.yaml"]
+
+[[tool.angee.resources.demo]]
+path = "demo/060_proposals.review.yaml"
+depends_on = "demo/040_proposals.proposal.yaml"
+adopt = ["proposal", "reviewer"]
+
+[tool.angee.platform]
+category = "Productivity"

@@ -1,19 +1,22 @@
-"""Integration coverage for provision's process and native-owner boundaries."""
+"""Angee provision hooks compose native commands in one selected process."""
 
 from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 import strawberry
+from django.apps import apps
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import override_settings
 from django.test.utils import override_system_checks
+from django_compose import provision
+from django_compose.management.commands.provision import Command
 from rebac import schema_changes
 from rebac.backends import reset_backend
 from rebac.checks import check_universal_admin_in_roles
@@ -22,8 +25,7 @@ from rebac.models import SchemaRelation
 
 from angee.graphql.checks import check_graphql_schemas
 from angee.graphql.schema import GraphQLSchemas, SchemaParts
-from angee.management import provision
-from angee.management.commands.angee import Command
+from angee.graphql.sdl import SchemaIntegration
 from tests.composed_host import COMPOSED_TEST_TIMEOUT
 
 
@@ -31,105 +33,15 @@ def _environment(tmp_path: Path) -> dict[str, str]:
     source_root = Path(__file__).resolve().parents[1]
     environment = dict(os.environ)
     environment.pop("DJANGO_SETTINGS_MODULE", None)
+    environment.pop("DJANGO_COMPOSE_MODE", None)
     environment["PYTHONPATH"] = os.pathsep.join(
         filter(None, (str(tmp_path), str(source_root), environment.get("PYTHONPATH", "")))
     )
     return environment
 
 
-def _write_topology_host(root: Path) -> Path:
-    """Write a Django host that records only provision orchestration facts."""
-
-    package = root / "probe"
-    package.mkdir()
-    (package / "__init__.py").write_text("", encoding="utf-8")
-    (root / "manage.py").write_text(
-        """import os
-import sys
-from django.core.management import execute_from_command_line
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "probe.settings")
-execute_from_command_line(sys.argv)
-""",
-        encoding="utf-8",
-    )
-    (package / "settings.py").write_text(
-        f"""SECRET_KEY = "provision-process-probe"
-INSTALLED_APPS = [
-    "django.contrib.contenttypes",
-    "django.contrib.auth",
-    "rebac",
-    "probe.apps.ProbeConfig",
-    "probe.apps.BareAngeeConfig",
-]
-DATABASES = {{"default": {{"ENGINE": "django.db.backends.sqlite3", "NAME": {str(root / "probe.sqlite3")!r}}}}}
-""",
-        encoding="utf-8",
-    )
-    (package / "apps.py").write_text(
-        """from django.apps import AppConfig
-class BareAngeeConfig(AppConfig):
-    name = "angee"
-class ProbeConfig(AppConfig):
-    name = "probe"
-    def ready(self):
-        import json
-        import os
-        from pathlib import Path
-        import angee.management.provision as provision
-        events = Path(__file__).resolve().parent.parent / "events.jsonl"
-        def record_step(command, step):
-            del command
-            with events.open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps({"step": step, "pid": os.getpid()}) + "\\n")
-        provision.run_step = record_step
-""",
-        encoding="utf-8",
-    )
-    commands = package / "management" / "commands"
-    commands.mkdir(parents=True)
-    (commands.parent / "__init__.py").write_text("")
-    (commands / "__init__.py").write_text("")
-    for name in ("resources", "schema", "bootstrap_admin"):
-        (commands / f"{name}.py").write_text(
-            "from django.core.management.base import BaseCommand\n"
-            "class Command(BaseCommand):\n"
-            "    def handle(self, *args, **options):\n"
-            "        pass\n"
-        )
-    return root / "manage.py"
-
-
-def test_provision_runs_prebuilt_commands_in_one_process(tmp_path: Path) -> None:
-    """One configured native process owns the prebuilt provision commands."""
-
-    manage_py = _write_topology_host(tmp_path)
-    result = subprocess.run(
-        [sys.executable, str(manage_py), "angee", "provision", "--wait-db", "1", "--force-rebac",
-         "--after-if-installed", "resources load --include-demo", "--after-if-installed", "schema",
-         "--after-if-installed", "bootstrap_admin", "--after-if-installed", "absent_addon_command"],
-        cwd=tmp_path,
-        env=_environment(tmp_path),
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    assert result.returncode == 0, f"provision failed:\n{result.stdout}\n{result.stderr}"
-    events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
-    assert [event["step"] for event in events] == [
-        ["makemigrations", "--check", "--dry-run", "--noinput", "--skip-checks"],
-        ["migrate", "--noinput", "--skip-checks"],
-        ["rebac", "--skip-checks", "sync", "--prune-stale", "--yes", "--force-overwrite"],
-        ["check", "--database", "default"],
-        ["resources", "load", "--include-demo"],
-        ["schema"],
-        ["bootstrap_admin"],
-    ]
-    assert len({event["pid"] for event in events}) == 1
-
-
 def test_native_composed_test_runner_does_not_require_provenance(tmp_path: Path) -> None:
-    """The source test host can run a core-only Django test without addon boundaries."""
+    """The source test host can run a plain Django app test without addon boundaries."""
 
     root = Path(__file__).resolve().parents[1]
     addon = tmp_path / "addons" / "native_probe"
@@ -139,13 +51,14 @@ def test_native_composed_test_runner_does_not_require_provenance(tmp_path: Path)
         'from django.apps import apps\nfrom django.test import SimpleTestCase\n'
         'class CoreTests(SimpleTestCase):\n'
         '    def test_native_host(self):\n'
-        '        self.assertTrue(apps.is_installed("angee"))\n'
+        '        self.assertTrue(apps.is_installed("django_compose"))\n'
         '        self.assertFalse(apps.is_installed("angee.provenance"))\n'
     )
     report = tmp_path / "report.json"
     result = subprocess.run(
         [sys.executable, str(root / "tests/composed_host.py"), "--runtime-dir", str(tmp_path / "runtime"),
-         "--addon-dir", str(addon.parent), "--app", "django.contrib.auth", "--app", "native_probe",
+         "--addon-dir", str(addon.parent), "--app", "django.contrib.contenttypes",
+         "--app", "django.contrib.auth", "--app", "native_probe",
          "--no-examples", "--action", "tests",
          "--test-label", "native_probe.tests", "--output", str(report)],
         cwd=root, env=_environment(tmp_path), capture_output=True, text=True,
@@ -153,118 +66,6 @@ def test_native_composed_test_runner_does_not_require_provenance(tmp_path: Path)
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}
-
-
-def test_native_makemigrations_then_migrate_sees_new_file_in_same_process(tmp_path: Path) -> None:
-    """Django reloads a migration file created earlier in the same process."""
-
-    app = tmp_path / "native_app"
-    app.mkdir()
-    (app / "__init__.py").write_text("", encoding="utf-8")
-    (app / "models.py").write_text(
-        "from django.db import models\n\nclass Entry(models.Model):\n    value = models.CharField(max_length=20)\n",
-        encoding="utf-8",
-    )
-    database = tmp_path / "native.sqlite3"
-    script = tmp_path / "migrate_in_process.py"
-    script.write_text(
-        f"""from django.conf import settings
-settings.configure(
-    SECRET_KEY="probe",
-    INSTALLED_APPS=["django.contrib.contenttypes", "native_app"],
-    DATABASES={{"default": {{"ENGINE": "django.db.backends.sqlite3", "NAME": {str(database)!r}}}}},
-    DEFAULT_AUTO_FIELD="django.db.models.BigAutoField",
-)
-import django
-django.setup()
-from django.core.management import call_command
-call_command("makemigrations", "native_app", verbosity=0, skip_checks=True)
-call_command("migrate", verbosity=0, interactive=False, skip_checks=True)
-""",
-        encoding="utf-8",
-    )
-    result = subprocess.run(
-        [sys.executable, str(script)],
-        cwd=tmp_path,
-        env=_environment(tmp_path),
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    assert result.returncode == 0, f"native migration sequence failed:\n{result.stdout}\n{result.stderr}"
-    assert (app / "migrations" / "0001_initial.py").is_file()
-    with sqlite3.connect(database) as connection:
-        assert connection.execute(
-            "select name from sqlite_master where type = 'table' and name = 'native_app_entry'"
-        ).fetchone() == ("native_app_entry",)
-
-
-def test_makemigrations_writes_a_column_drop_only_after_its_data_is_gone(tmp_path: Path) -> None:
-    """The composer's makemigrations refuses a populated drop before writing any file."""
-
-    app = tmp_path / "native_app"
-    app.mkdir()
-    (app / "__init__.py").write_text("", encoding="utf-8")
-    model = "from django.db import models\n\nclass Entry(models.Model):\n    value = models.CharField(max_length=20)\n"
-    legacy = '    legacy = models.CharField(max_length=20, default="")\n'
-    (app / "models.py").write_text(model + legacy, encoding="utf-8")
-    database = tmp_path / "native.sqlite3"
-    (tmp_path / "drop_guard_settings.py").write_text(
-        f"""import os
-SECRET_KEY = "drop-guard-probe"
-INSTALLED_APPS = ["django.contrib.contenttypes", "native_app",
-    "angee.build.ProjectBuildConfig" if os.environ.get("COMPOSE_BUILD") else "angee.apps.AngeeConfig"]
-COMPOSE_RUNTIME_DIR = {str(tmp_path / "runtime")!r}
-COMPOSE_RUNTIME_MODULE = "runtime"
-DATABASES = {{"default": {{"ENGINE": "django.db.backends.sqlite3", "NAME": {str(database)!r}}}}}
-DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-""",
-        encoding="utf-8",
-    )
-    environment = {**_environment(tmp_path), "DJANGO_SETTINGS_MODULE": "drop_guard_settings"}
-
-    def build() -> None:
-        result = subprocess.run(
-            [sys.executable, "-c", "import django; django.setup()"],
-            cwd=tmp_path, env={**environment, "COMPOSE_BUILD": "1"},
-            capture_output=True, text=True, timeout=60, check=False,
-        )
-        assert result.returncode == 0, result.stdout + result.stderr
-
-    def django_admin(*arguments: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [sys.executable, "-m", "django", *arguments, "--noinput"],
-            cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=60, check=False,
-        )
-
-    build()
-    for arguments in (("makemigrations", "native_app"), ("migrate",)):
-        result = django_admin(*arguments)
-        assert result.returncode == 0, f"{arguments} failed:\n{result.stdout}\n{result.stderr}"
-    with sqlite3.connect(database) as connection:
-        connection.execute("insert into native_app_entry (value, legacy) values ('a', ''), ('b', 'kept')")
-    (app / "models.py").write_text(model, encoding="utf-8")
-    build()
-
-    refused = django_admin("makemigrations")
-    assert refused.returncode == 1, refused.stdout
-    assert (
-        "unsafe autodetected column drop: native_app.entry.legacy: column native_app_entry.legacy "
-        "holds data in 1 row(s) on database 'default'."
-    ) in refused.stderr
-    assert sorted(path.name for path in (app / "migrations").glob("0*.py")) == ["0001_initial.py"]
-    pending = django_admin("migrate")
-    assert pending.returncode == 1 and "unsafe autodetected column drop" in pending.stderr
-
-    with sqlite3.connect(database) as connection:
-        connection.execute("update native_app_entry set legacy = ''")
-    allowed = django_admin("makemigrations")
-    assert allowed.returncode == 0, allowed.stderr
-    assert "Remove field legacy from entry" in allowed.stdout
-    assert sorted(path.name for path in (app / "migrations").glob("0*.py")) == [
-        "0001_initial.py", "0002_remove_entry_legacy.py",
-    ]
 
 
 @pytest.mark.django_db
@@ -292,14 +93,15 @@ def test_provision_sync_replaces_invalid_historical_subject_sets_before_checks()
     # Exercise a native schema-reading check without requiring a fully composed
     # concrete model graph in this bare test host.
     with (
-        override_settings(REBAC_UNIVERSAL_ADMIN_ROLE="angee/role:admin"),
+        override_settings(REBAC_UNIVERSAL_ADMIN_ROLE="angee/role:admin", ANGEE_REBAC_FORCE_OVERWRITE=True),
         override_system_checks([check_universal_admin_in_roles]),
     ):
         with pytest.raises(SchemaError, match="names a permission"):
             call_command("check", verbosity=0)
         command = Command()
-        plan = provision.plan({"force_rebac": True})
-        provision.run_step(command, next(step for step in plan if step[0] == "rebac"))
+        apps.get_app_config("base").compose_provision(
+            provision.ProvisionContext("default", command.stdout, command.stderr),
+        )
         provision.run_step(command, ["check"])
 
 
@@ -308,7 +110,7 @@ def test_graphql_check_then_schema_command_reuses_the_built_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The native check and SDL command share discovery's completed schema build."""
+    """The native check and prebuilt SDL command share discovery's completed schema build."""
 
     @strawberry.type
     class Query:
@@ -327,9 +129,15 @@ def test_graphql_check_then_schema_command_reuses_the_built_schema(
     monkeypatch.setattr(schemas, "_build", counted_build)
     monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
     with override_system_checks([check_graphql_schemas]):
-        with override_settings(COMPOSE_RUNTIME_DIR=tmp_path / "runtime"):
+        with override_settings(COMPOSE_OUTPUT_DIR=tmp_path / "runtime"):
+            for relative, content in SchemaIntegration().render(None, None).items():
+                target = tmp_path / "runtime" / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
             call_command("check", verbosity=0)
-            call_command("schema", verbosity=0)
+            call_command("schema", check=True, verbosity=0)
+            with pytest.raises(CommandError, match="compiler-owned"):
+                call_command("schema", verbosity=0)
 
     assert len(builds) == 1
     assert schemas.build("public") is builds[0]

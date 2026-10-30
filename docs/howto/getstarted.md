@@ -51,9 +51,9 @@ The framework is a thin composition layer. You write **source models**
 (abstract Django models), GraphQL contributions, REBAC permissions, and React
 views inside **addons**; the **composer** assembles those addon contracts into a
 concrete, runnable Django + GraphQL + React application under a generated
-`runtime/` tree. The framework core supplies the language and composition
-machinery, while every product capability — including GraphQL — is an addon. The
-first question for any change is always *which level owns it.*
+`runtime/` tree. The upstream `django-compose` library owns composition; Angee addons
+contribute project defaults, reusable models and product capabilities, including
+GraphQL. The first question for any change is always *which level owns it.*
 
 Concretely, you build in **addons**, and each addon bundles two halves that ship
 together: a **Django app** — models, permissions, and operations — and the
@@ -125,7 +125,7 @@ Concretely, today:
 
 - **Already landed here.** The operator (Stacks, Services, Jobs, Sources,
   Workspaces, secrets, ports, and gitops topology over CLI, REST, and GraphQL),
-  the framework core (including composition from source models to `runtime/`),
+  composition from source models to `runtime/` through `django-compose`,
   and the framework addons: GraphQL via strawberry-django, relationship-based
   authorization (REBAC), aggregates, tiered resources, changeset history in
   Activity with revert, and the React frontend (layouts, list/board/form views).
@@ -188,8 +188,19 @@ materializes its framework sources and boots the complete stack.
    ```sh
    angee init myproject   # dev is the default template; add -y for non-interactive use
    cd myproject
-   angee dev              # materialize sources and boot everything
+   angee job run deps     # materialize sources and install JS dependencies
+   angee job run py-sync  # install Python dependencies
+   angee job run compose  # generate runtime models and artifacts
+   uv run --no-sync python manage.py makemigrations
+   # Review and commit runtime/*/migrations before first provisioning.
+   angee dev              # apply tracked history and boot services
    ```
+
+   Those first three jobs are explicit and ordered: a job checks its
+   prerequisites but does not start them. Do not use `--chained-restart` during
+   initial history authoring: it would advance into provisioning. On later
+   starts, the project already owns its migration history and `angee dev` is
+   sufficient. Provisioning validates and applies history; it never authors it.
 
    There is no `--dev` flag: `dev` is the default value of `-t/--template`.
    `angee dev` is the supported bring-up command for the whole local stack;
@@ -201,7 +212,16 @@ materializes its framework sources and boots the complete stack.
    `src` workspace, and runs the composed host at the stack root against those
    worktrees.
 
+For a host without `angee.jobs`, or one using separately managed workers, set
+the stack template input `enable_celery=false`. This omits worker services and
+their dependency holds; app activation still belongs to `INSTALLED_APPS`.
+
 ### Containerized mode and remote hosts
+
+Author and commit initial project migration history in the development host
+before deploying its container stack. The container lifecycle consumes that
+tracked history; it does not silently create it on the first start. A brand-new
+project therefore uses the authoring steps above before switching to Docker mode.
 
 `runtime_mode` is a template input (a recorded answer, so one stack can switch
 later): the default `process` runs Django, Celery, Vite, and Storybook as local
@@ -341,14 +361,14 @@ Django and Celery processes. If `ollama_port` is changed or leased to a workspac
 set the Ollama inference provider row's `base_url` to
 `http://localhost:<ollama_port>/v1`.
 
-Native `uv sync` builds the editable host before startup; `uv build` packages its
-sealed runtime and reviewed history. One-shot management commands then consume
-that prebuilt host: run `uv run --no-sync python manage.py` from the controlling
-stack root to migrate, sync permissions, load data or check GraphQL SDL. [Checks](../checks.md#composition-and-schema)
-owns the prerequisites and ordering. A rendered `manage.py` only calls
-`angee.management.main()`, which attributes a one-shot command's writes to one
-changeset; a `manage.py` from before that entrypoint fails its first captured write
-with the remedy — re-render it from the project template. To work on a change in
+Native `uv sync --locked` installs the project's distributions on a stopped/new
+host; it does not compose output. `uv run --no-sync python manage.py compose`
+runs the native compiler before ordinary serving/management processes consume
+its receipt. The authored `settings.py` calls `angee.base.conf.configure` and
+`manage.py` delegates to `django_compose.management.execute`. Database changes
+belong to the separate `manage.py provision` operation. `uv build` builds
+archives only. [Checks](../checks.md#composition-and-schema) owns command context
+and ordering. To work on a change in
 isolation, add a Jujutsu (jj) workspace of the framework's source store under
 the stack's `workspaces/` directory. Its bookmark is named `<stack>/<name>`, the
 stack's name being the branch namespace so stacks sharing one source store or
@@ -375,8 +395,11 @@ can no longer see or restart. Run these from the controlling stack root
 # The whole application: deps on framework-dev stacks.
 angee --root "$ANGEE_ROOT" job run deps --chained-restart
 
-# Instance stacks start their dependency chain at the runtime build.
-angee --root "$ANGEE_ROOT" job run runtime-build --chained-restart
+# Instance stacks start their dependency chain at native Python sync.
+angee --root "$ANGEE_ROOT" job run py-sync --chained-restart
+
+# Recompose after source changes when native packages are already synchronized.
+angee --root "$ANGEE_ROOT" job run compose --chained-restart
 
 # One or more services by name; also `start` and `stop`
 angee --root "$ANGEE_ROOT" restart django celery-worker
@@ -387,20 +410,30 @@ angee --root "$ANGEE_ROOT" restart django celery-worker
   `angee.yaml`. The job runs, then its downstream jobs, then every service that
   waits on them restarts. On a dev stack that sequence is:
   - `deps` runs `pnpm install`;
-  - `runtime-build` uses native `uv sync` and the Hatch runtime hook (editable in
-    development, `--no-editable` in production);
-  - `provision` consumes the built runtime in one process: read-only history drift
-    validation, migrations, permission sync, checks and declared addon commands;
-  - `operator-schema` and `codegen` run;
-  - Django, the frontend, Storybook and the Celery workers restart.
+  - `py-sync` stops its declared held Django/workers and installs native packages;
+  - `compose` holds the same Python consumers and emits verified model and capability artifacts;
+  - `provision` performs native history checks, migrations and idempotent hooks;
+  - schema/codegen jobs consume those artifacts;
+  - successful chained recovery reapplies held and dependent services once.
+
+  A direct `compose` run holds Django and the workers so their serving leases
+  cannot block publication. With `--chained-restart` it selects downstream jobs,
+  not its `py-sync` prerequisite; dependency changes still require the
+  whole-application restart.
+
+  The operator keeps held services stopped across the entire selected job graph.
+  Failure or cancellation leaves them stopped. Running `py-sync` or `compose`
+  without `--chained-restart` intentionally leaves holds stopped; it never
+  resumes consumers before required compose and provision steps. Plain service restarts remain
+  separate operations.
 
   Postgres, Redis and the operator keep running, so the operator stays
   reachable throughout and reports the restart's progress.
 - **Dependency changes.** Apply them with the whole-application restart. Never
   run `uv sync` or `uv lock` on the stack's venv while the stack is running:
   long-lived workers that later import a changed module mix old and new code and
-  fail. The declared `runtime-build` job installs before provision and the workers
-  restart. Ordinary `uv run --no-sync` management and serving commands cannot
+  fail. The declared `py-sync` → `compose` → `provision` chain completes before held
+  workers recover. Ordinary `uv run --no-sync` management and serving commands cannot
   trigger an implicit rebuild.
 - **One service.** For a stack running under process-compose, this is
   `process-compose process restart <name>`.
@@ -431,11 +464,11 @@ cooperate:
   This loop is described in full under
   [What "Self-Building" Looks Like](https://docs.angee.ai/guide/concepts#what-self-building-looks-like).
 - **The framework gives agents a native package build.** Inside the host, an agent
-  changes source models and addons, runs `uv sync` for the editable runtime, and
+  changes source models and addons, runs the explicit native `compose` job, and
   authors native migrations with `uv run --no-sync python manage.py makemigrations`.
-  Native `runtime/<label>/migrations/` packages are reviewed and committed. `uv build` validates
-  and packages that project-specific runtime and history. The operator's declared
-  DAG installs the runtime before running `angee provision`, then starts services.
+  Native `runtime/<label>/migrations/` packages are reviewed and committed. Native
+  migration checks validate tracked history; `uv build` builds distribution wheels. The operator's declared DAG installs packages and
+  composes artifacts before running `manage.py provision`, then starts services.
   Provision uses the prebuilt registry for read-only drift validation, migrate,
   policy sync and declared addon commands; it never compiles or rewrites history.
   Each capability and fact has one owner, so an agent changes that owner rather

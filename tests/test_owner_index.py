@@ -4,29 +4,28 @@ Static: run with ``-p no:django --noconftest`` like ``test_agent_methodology.py`
 Every Owner cell cites a ``symbol path:line``, every ``path:line`` in it is such a
 citation, and the cited line (or a decorator line above it) declares the symbol.
 Every public class a foundation ``models``/``fields`` module declares and every
-``angee.*`` addon has a row.
+``angee.*`` source distribution has a row, including explicit libraries.
 """
 
 from __future__ import annotations
 
 import ast
 import re
-import tomllib
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / ".agents/skills/angee-design/references/owners.md"
-ADDONS = ROOT / "addons/angee"
+ADDONS = ROOT / "src/angee"
 FOUNDATION_MODULES = sorted(
     module
     for area in ("models", "fields")
     for module in (ADDONS / "base" / area).glob("*.py")
     if module.name != "__init__.py"
 )
-CITATION = re.compile(r"`(\w+)` ((?:addons|angee|packages|examples)/[\w./-]+):(\d+)")
-LOCATION = re.compile(r"(?<![\w/])((?:addons|angee|packages|examples)/[\w./-]+\.\w+)(?::(\d+))?")
+CITATION = re.compile(r"`(\w+)` ((?:src|packages|examples)/[\w./-]+):(\d+)")
+LOCATION = re.compile(r"(?<![\w/])((?:src|packages|examples)/[\w./-]+\.\w+)(?::(\d+))?")
 
 
 def owner_cells() -> list[str]:
@@ -55,12 +54,9 @@ def foundation_classes() -> list[tuple[str, str]]:
     ]
 
 
-def addons() -> list[tuple[str, str]]:
-    """Return ``(declared name, repository folder)`` for every framework addon manifest."""
-    return sorted(
-        (tomllib.loads(manifest.read_text())["addon"]["name"], manifest.parent.relative_to(ROOT).as_posix())
-        for manifest in ADDONS.glob("*/addon.toml")
-    )
+def package_folders() -> list[str]:
+    """Cover authored packages without re-deriving their generated entry points."""
+    return sorted(package.parent.relative_to(ROOT).as_posix() for package in ADDONS.glob("*/pyproject.toml"))
 
 
 def declares(line: str, symbol: str) -> bool:
@@ -106,8 +102,7 @@ def test_every_public_foundation_class_has_an_owner_row(symbol: str, module: str
     assert (symbol, module) in cited, f"no Owner cell cites `{symbol}` {module}"
 
 
-@pytest.mark.parametrize(("name", "folder"), addons(), ids=lambda value: value if value.startswith("angee.") else "")
-def test_every_addon_has_an_owner_row(name: str, folder: str) -> None:
-    """An addon appears by its declared name or by a path inside its folder in an Owner cell."""
-    named = re.compile(rf"{re.escape(name)}(?!\w)")
-    assert any(named.search(cell) or f"{folder}/" in cell for cell in owner_cells()), f"no Owner cell names {name}"
+@pytest.mark.parametrize("folder", package_folders())
+def test_every_package_has_an_owner_row(folder: str) -> None:
+    """Each distribution has an owner definition within its source folder."""
+    assert any(f"{folder}/" in cell for cell in owner_cells()), f"no Owner cell cites {folder}"

@@ -8,7 +8,7 @@ import pytest
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import connection, models
+from django.db import connection, connections, models
 from django.db.models.deletion import ProtectedError
 from django.db.models.signals import pre_delete
 from django.test.utils import CaptureQueriesContext, isolate_apps
@@ -510,3 +510,27 @@ def test_ancestor_object_refs_fails_fast_at_the_call_on_an_untyped_row(record_re
 
     with pytest.raises(TypeError):
         ancestor_object_refs(plain)
+
+
+def test_concrete_child_keeps_the_loaded_parents_database(record_ref_tables, django_db_blocker):
+    """An uncached child lookup uses its parent's connection without a model router."""
+
+    alias = "lineage_secondary"
+    connections.databases[alias] = {**connections.databases["default"]}
+    selected = connections[alias]
+    with django_db_blocker.unblock():
+        selected.ensure_connection()
+    try:
+        with system_context(reason="test.lineage.secondary"):
+            child = MtiChild.objects.create(title="Parent", detail="Selected child")
+            parent = MtiParent._base_manager.using(alias).get(pk=child.pk)
+            with CaptureQueriesContext(connection) as default_queries, CaptureQueriesContext(selected) as queries:
+                found = concrete_child(parent, MtiChild)
+            assert found is not None and found.detail == "Selected child"
+            assert found._state.db == alias
+            assert len(queries) == 1
+            assert len(default_queries) == 0
+    finally:
+        selected.close()
+        del connections[alias]
+        del connections.databases[alias]

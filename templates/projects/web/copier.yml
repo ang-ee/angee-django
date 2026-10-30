@@ -19,7 +19,8 @@ _angee:
     root), settings.yaml, the consumer-addon namespace, and the Vite + React web
     package. The composed runtime graph owns frontend package discovery, Tailwind
     source scanning, app addon/schema wiring, and typed GraphQL operation codegen
-    through `runtime/web/*` artifacts emitted by the native Hatch runtime hook.
+    through `runtime/web/*` artifacts emitted by explicit native composition.
+    Native uv installs distributions; manage.py delegates to django-compose.
 
 # Machine name of the project — the slug used for the SECRET_KEY, the manage.py
 # docstring, and (by default) the web package's npm scope. Lowercase, no spaces.
@@ -41,12 +42,12 @@ package_name:
   default: "@{{ project_name }}/web"
   help: npm name for the rendered web package (its own private host package).
 
-# Directory name for the project's own consumer addons, under addons/<namespace>/.
+# Directory name for the project's own consumer addons, under src/<namespace>/.
 # INSTALLED_APPS references it as `<namespace>.<app>`.
 addon_namespace:
   type: str
   default: "{{ project_name }}"
-  help: Directory + import namespace for this project's consumer addons (addons/<namespace>/).
+  help: Directory + import namespace for this project's consumer addons (src/<namespace>/).
 
 # Path to the project's web package, relative to the project root — the directory
 # this template renders the web package into. Mirrors the `web_path` input the dev
@@ -87,21 +88,20 @@ addons_profile:
     - full
   help: Addon roster for the host — base (consumer scaffold) or full (the whole platform composition).
 
-# Opt-in: point an addon dir at the arpee product's workspace slot
-# (workspaces/src/angee-arp/addons). Discovery only — arp.* apps enter
-# INSTALLED_APPS via the marketplace installer or by hand.
+# Opt-in: install the ARP collection from its sibling workspace source slot.
+# Native requirements make its distributions available; root settings activate apps.
 include_arp:
   type: bool
   default: false
-  help: Add the angee-arp workspace slot's addons dir to ANGEE_ADDON_DIRS (no roster entries).
+  help: Install the angee-arp collection from its workspace source override; root app activation remains explicit.
 
 # Whether the host sits at the root of a stack that materializes the consolidated
-# framework source as workspaces/src/angee. When true, addon discovery points into
-# that monorepo slot and, per profile, the optional external bridge slot.
+# framework source as workspaces/src/angee. When true, native uv sources select
+# that workspace and, per profile, the optional external bridge distributions.
 framework_workspace:
   type: bool
   default: false
-  help: Point ANGEE_ADDON_DIRS at the stack's workspaces/src/* source slots (framework-dev layout).
+  help: Resolve native package sources from the stack's workspaces/src/* slots (framework-dev layout).
 
 # Appearance defaults are frontend build inputs. They are validated against the
 # composed theme catalogue by @angee/app's Vite integration and emitted once to
@@ -130,7 +130,7 @@ appearance_options:
 # PACKAGE NAME — `@angee/app/vite`, `@angee/app/vitest` — not a sibling path.
 # `@angee/app` is a dependency of the web package, so those exports resolve the
 # same way in a source workspace or the baked web image. The Python checkout
-# input below also supplies addon discovery roots; web configuration resolves
+# input below selects native Python distribution sources; web configuration resolves
 # its own dependencies through pnpm. The tsconfig is inlined rather than
 # extended because Vite's oxc loader does not resolve package-name extends.
 
@@ -141,8 +141,8 @@ react_version:
   default: "^19.2.0"
   help: React (and react-dom) version range for the rendered package.
 
-# Where the rendered pyproject.toml resolves django-angee from. Empty (default)
-# emits a plain PyPI dependency; a path (relative to the project root) emits a
+# Where the rendered pyproject.toml resolves the angee collection from. Empty
+# uses the configured package index; a path (relative to the project root) emits a
 # `[tool.uv.sources]` editable override onto a local framework checkout — the
 # `stacks/local` chain passes `sources/angee` so host-run `uv run manage.py`
 # and the framework=source stack share one code source. A chained baked stack
@@ -150,4 +150,4 @@ react_version:
 framework_source_path:
   type: str
   default: ""
-  help: Path (relative to the project root) of a local framework checkout for the pyproject `[tool.uv.sources]` editable override; empty = plain PyPI dependency.
+  help: Path (relative to the project root) of a local framework checkout for the pyproject `[tool.uv.sources]` editable override; empty = configured package index.

@@ -6,7 +6,7 @@ import { parse } from "graphql";
 import { StrictMode, type ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { authoredQueryKey, authoredQueryOptions, useAuthoredMutation, useAuthoredQuery, useAuthoredQueryBatch } from "./authored-hooks";
+import { authoredQueryKey, authoredQueryOptions, useAuthoredMutation, useAuthoredQuery, useAuthoredQueryBatch, useSetAuthoredQueryData } from "./authored-hooks";
 import type { TypedDocumentNode } from "../typed-document";
 import { invalidateAuthoredQueries } from "../query-invalidation";
 import { createRefineTestProviders } from "../testing";
@@ -522,26 +522,6 @@ test("authored singleton reads opt into native previous-data placeholders across
   await waitFor(() => expect(read.result.current.data?.notes[0]?.id).toBe("two"));
 });
 
-
-test("explicit discovery refetches on reopen despite the host freshness window", async () => {
-  const refreshed = deferred<{ data: Data }>();
-  const custom = vi.fn()
-    .mockResolvedValueOnce({ data: { notes: [{ id: "before" }] } })
-    .mockImplementationOnce(() => refreshed.promise);
-  const f = fixture(custom);
-  const read = renderHook(({ open }) => useAuthoredQuery(DOCUMENT, { id: "same" }, {
-    enabled: open, staleTime: 0,
-  }), { initialProps: { open: true }, wrapper: f.wrapper });
-  await waitFor(() => expect(read.result.current.data?.notes[0]?.id).toBe("before"));
-  read.rerender({ open: false });
-  read.rerender({ open: true });
-  await waitFor(() => expect(custom).toHaveBeenCalledTimes(2));
-  expect(read.result.current.isFetching).toBe(true);
-  await act(async () => { refreshed.resolve({ data: { notes: [{ id: "after" }] } }); });
-  await waitFor(() => expect(read.result.current.data?.notes[0]?.id).toBe("after"));
-  expect(read.result.current.isFetching).toBe(false);
-});
-
 test.each(["success", "failure"] as const)("transient %s rejects overlap without detaching its pending operation", async (outcome) => {
   let resolve!: (value: { data: Data }) => void;
   let reject!: (reason: Error) => void;
@@ -686,4 +666,53 @@ test("a transient mutation chained immediately after an ordinary mutation uses z
   await waitFor(() => expect(f.client.getMutationCache().findAll(mutationWithValues(nextVariables))).toHaveLength(0));
   expect(result.current[1].fetching).toBe(false);
   expect(result.current[1].error).toBeNull();
+});
+
+test("response-backed completion accepts typed cache data before held background refresh", async () => {
+  const refreshed = deferred<{ data: Data }>();
+  const custom = vi.fn(async () => ({ data: { notes: [{ id: "one" }] } }));
+  custom.mockResolvedValueOnce({ data: { notes: [{ id: "one" }] } });
+  custom.mockResolvedValueOnce({ data: { notes: [{ id: "accepted" }] } });
+  custom.mockImplementationOnce(() => refreshed.promise);
+  const f = fixture(custom);
+  const { result } = renderHook(() => {
+    const accept = useSetAuthoredQueryData();
+    return {
+      read: useAuthoredQuery(DOCUMENT, { id: "a" }, { models: ["notes.Note"] }),
+      mutation: useAuthoredMutation(MUTATION, {
+        invalidateModels: ["notes.Note"],
+        acceptResponse: async (data, variables) => {
+          if (data) await accept(DOCUMENT, variables, (current) => current ? { ...current, notes: data.notes } : undefined);
+        },
+      }),
+    };
+  }, { wrapper: f.wrapper });
+  await waitFor(() => expect(result.current.read.data).toBeDefined());
+  await act(async () => { await result.current.mutation[0]({ id: "a" }); });
+  await waitFor(() => expect(custom).toHaveBeenCalledTimes(3));
+  expect(result.current.mutation[1].fetching).toBe(false);
+  expect(result.current.read.isFetching).toBe(true);
+  expect(result.current.read.data).toEqual({ notes: [{ id: "accepted" }] });
+  await act(async () => { refreshed.resolve({ data: { notes: [{ id: "refreshed" }] } }); });
+  await waitFor(() => expect(result.current.read.data).toEqual({ notes: [{ id: "refreshed" }] }));
+});
+
+test("background refresh failure remains a native read error after accepted completion", async () => {
+  const custom = vi.fn(async () => ({ data: { notes: [{ id: "one" }] } }));
+  custom.mockResolvedValueOnce({ data: { notes: [{ id: "one" }] } });
+  custom.mockResolvedValueOnce({ data: { notes: [{ id: "accepted" }] } });
+  custom.mockRejectedValueOnce(new Error("Refresh unavailable"));
+  const f = fixture(custom);
+  const { result } = renderHook(() => ({
+    read: useAuthoredQuery(DOCUMENT, { id: "a" }, { models: ["notes.Note"] }),
+    mutation: useAuthoredMutation(MUTATION, {
+      invalidateModels: ["notes.Note"], acceptResponse: () => undefined,
+    }),
+  }), { wrapper: f.wrapper });
+  await waitFor(() => expect(result.current.read.data).toBeDefined());
+  await act(async () => { await result.current.mutation[0]({ id: "a" }); });
+  await waitFor(() => expect(result.current.read.error?.message).toBe("Refresh unavailable"));
+  expect(result.current.mutation[1].error).toBeNull();
+  expect(result.current.mutation[1].fetching).toBe(false);
+  expect(f.notify).toHaveBeenCalledOnce();
 });

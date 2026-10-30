@@ -70,7 +70,7 @@ class RetainedRow(models.Model):
         models_path.write_text(models_path.read_text().replace(
             "from angee.provenance.history import HistoryMixin, ModelHistory",
             "from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory",
-        ))
+        ).replace("use_base_model_db=False", "use_base_model_db=True"))
     script = """
 import os
 import sys
@@ -97,7 +97,7 @@ class StorageRouter:
             if sys.argv[1] in {"failed-bulk", "protected-delete"}:
                 return "default"
             if model._meta.model_name in {"row", "container"}:
-                return "default"
+                return "secondary" if sys.argv[1] == "retained-reference" else "default"
             if model._meta.model_name == "changeset":
                 return "secondary"
             return self.history_alias
@@ -205,7 +205,7 @@ with system_scope, changeset(fresh=True):
         assert Row.history.using("secondary").count() == before + 1
 """
     root = Path(__file__).resolve().parents[1]
-    environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "addons"), str(tmp_path)))}
+    environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "src"), str(tmp_path)))}
     result = subprocess.run(
         [sys.executable, "-c", script, operation, "angee" if angee_adapter else "native"],
         cwd=root,

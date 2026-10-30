@@ -6,16 +6,16 @@
 # dependency identities for every linked framework package.
 packages:
   - "{{ web_path }}"
-  - "addons/*/*/web"
+  - "src/*/*/web"
   - "workspaces/src/angee/packages/*"
-  - "workspaces/src/angee/addons/angee/*/web"
+  - "workspaces/src/angee/src/angee/*/web"
 {% if addons_profile == "full" %}
-  - "workspaces/src/angee-messaging-bridges/addons/angee/*/web"
-  - "workspaces/src/angee/examples/addons/*/*/web"
+  - "workspaces/src/angee-messaging-bridges/src/angee/*/web"
+  - "workspaces/src/angee/examples/src/*/*/web"
   - "workspaces/src/angee/examples/e2e"
 {% endif %}
 {% if include_arp %}
-  - "workspaces/src/angee-arp/addons/arp/*/web"
+  - "workspaces/src/angee-arp/src/arp/*/web"
 {% endif %}
 allowBuilds:
   esbuild: true

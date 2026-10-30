@@ -8,7 +8,7 @@ from django.core.cache.backends.base import BaseCache
 from django.core.cache.backends.filebased import FileBasedCache
 from django.core.cache.backends.locmem import LocMemCache
 
-from angee.cache import increment_window
+from angee.base.cache import increment_window
 
 
 @pytest.mark.parametrize("backend", ["memory", "file"])

@@ -16,9 +16,9 @@ from django.urls import path
 from rebac import system_context
 
 from angee.base.lineage import concrete_child_models
+from angee.base.serialization import canonical_json_sha256
 from angee.messaging.testing.models import Party
 from angee.provenance.context import changeset, changeset_model_label, current_changeset
-from angee.serialization import canonical_json_sha256
 from tests.conftest import create_user
 
 

@@ -19,14 +19,14 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 
 | File or module | Owns | Reference |
 |---|---|---|
-| `<addon>/testing/models.py`, `tests/settings.py`, `tests/conftest.py` | concrete models of the bare host, the app roster, one-time registration | `addons/angee/tags/testing/models.py:15-63`, `tests/settings.py:29-110`, `tests/conftest.py:645` |
-| `addons/angee/base/testing/fixtures.py`, `permissions.py` | `django_db_setup` (`:17`), `composed_tables` (`:58`); `composed_permissions` (`permissions.py:41`) | module docstrings |
+| `<addon>/testing/models.py`, `tests/settings.py`, `tests/conftest.py` | concrete models of the bare host, the app roster, one-time registration | `src/angee/tags/testing/models.py:15-63`, `tests/settings.py:29-110`, `tests/conftest.py:645` |
+| `src/angee/base/testing/fixtures.py`, `permissions.py` | `django_db_setup` (`:17`), `composed_tables` (`:58`); `composed_permissions` (`permissions.py:41`) | module docstrings |
 | `tests/conftest.py` | actors and schema drivers: `create_user` (`:789`), `create_platform_admin` (`:974`), `vault_for` (`:795`), `addon_schema` (`:871`), `execute_schema` (`:893`), `result_data` (`:913`) | `tests/test_tags.py:46-55` |
-| `tests/test_<addon>*.py` (framework) / `<addon>/tests/test_*.py` (consumer) | the test modules, one per concern | `tests/test_tags.py`, `examples/addons/example/notes/tests/` |
+| `tests/test_<addon>*.py` (framework) / `<addon>/tests/test_*.py` (consumer) | the test modules, one per concern | `tests/test_tags.py`, `examples/src/example/notes/tests/` |
 | `tests/composed_host.py` | the composed-host subprocess that runs consumer `TransactionTestCase` modules in the framework suite | `tests/test_composed_note_workflow.py:17-40` |
-| `packages/app/src/testing.tsx`, `packages/ui/src/testing.tsx` | `expectValidBaseAddon` (`:101`), `chromeSnapshotForRoute`, `TEST_SCHEMAS` (`:354`); `createUiTestProviders` (`ui:35`) | `addons/angee/tags/web/src/index.test.ts` |
-| `packages/app/config/vitest.ts`, `addons/angee/vitest.shared.ts` | `defineAngeeWebVitestConfig` (`:90`), `gqlAliasFor` (`:30`); the addon-tree `gqlAlias` | `addons/angee/tags/web/vitest.config.ts` |
-| `packages/storybook/src/stories/runtime-fixtures.tsx`, `.storybook/main.mjs`, `scripts/catalog.test.mjs` | `storySchema` (`:111`), `jsonResponse` (`:100`), `RuntimeFixture` (`:144`); addon story discovery; token-drift scan over `addons/` | `addons/angee/workflows/web/src/TriggersPage.stories.tsx` |
+| `packages/app/src/testing.tsx`, `packages/ui/src/testing.tsx` | `expectValidBaseAddon` (`:101`), `chromeSnapshotForRoute`, `TEST_SCHEMAS` (`:354`); `createUiTestProviders` (`ui:35`) | `src/angee/tags/web/src/index.test.ts` |
+| `packages/app/config/vitest.ts`, `src/angee/vitest.shared.ts` | `defineAngeeWebVitestConfig` (`:90`), `gqlAliasFor` (`:30`); the addon-tree `gqlAlias` | `src/angee/tags/web/vitest.config.ts` |
+| `packages/storybook/src/stories/runtime-fixtures.tsx`, `.storybook/main.mjs`, `scripts/catalog.test.mjs` | `storySchema` (`:111`), `jsonResponse` (`:100`), `RuntimeFixture` (`:144`); addon story discovery; token-drift scan over `src/` | `src/angee/workflows/web/src/TriggersPage.stories.tsx` |
 | `packages/e2e/src/` | `test`/`api` (`fixtures.ts:25`), `defineE2EConfig` (`config.ts:27`), `loginViaApi` (`auth.ts:23`), `roleStatePath` (`auth.ts:41`), `PageObject` (`pom.ts:9`) | `examples/e2e/` (`@angee-example/notes-e2e`) |
 
 ## Reuse first
@@ -42,12 +42,12 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 
 ## Steps
 
-1. **Map the set before writing.** A complete addon carries, backend: permissions per actor, verbs and querysets, resource load, GraphQL roots and mutations, schema metadata, query budget, and one module per shipped seam (steps, commands, MCP tools): `examples/addons/example/notes/tests/` has nine such modules; `tests/test_tags*.py` splits the vocabulary, the placeable field and the MTI edge. Web: `index.test.ts`, a page-declaration test, `.native.test.tsx` provider tests, widget tests, stories; browser: a Page Object and specs. Name modules `test_<concern>.py` and tests `test_<behavior>`. **Owner rule:** one concern per module so focused selection and discovery agree ([source-addon test models](../../../docs/checks.md#source-addon-test-models)).
+1. **Map the set before writing.** A complete addon carries, backend: permissions per actor, verbs and querysets, resource load, GraphQL roots and mutations, schema metadata, query budget, and one module per shipped seam (steps, commands, MCP tools): `examples/src/example/notes/tests/` has nine such modules; `tests/test_tags*.py` splits the vocabulary, the placeable field and the MTI edge. Web: `index.test.ts`, a page-declaration test, `.native.test.tsx` provider tests, widget tests, stories; browser: a Page Object and specs. Name modules `test_<concern>.py` and tests `test_<behavior>`. **Owner rule:** one concern per module so focused selection and discovery agree ([source-addon test models](../../../docs/checks.md#source-addon-test-models)).
 
 2. **Register concrete models (framework addon only).** The bare host runs no composer, so each abstract source model needs one concrete subclass, listed in `INSTALLED_APPS` and imported once from the root conftest before database setup.
 
    ```python
-   # addons/angee/tags/testing/models.py
+   # src/angee/tags/testing/models.py
    class TagAssignment(AbstractTagAssignment):
        class Meta(AbstractTagAssignment.Meta):
            abstract = False
@@ -71,7 +71,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
    pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("composed_permissions")]
    ```
 
-   Consumer modules are `TransactionTestCase` classes that `call_command("rebac", "sync")` and `call_command("resources", "load", include_demo=True, allow_non_dev=True)` in `setUp` and read `apps.get_model("notes", "Note")` (`examples/addons/example/notes/tests/test_rebac.py:23-33`); the framework suite drives them through `tests/composed_host.py --action tests --test-label example.notes.tests.<module>`, consumer CI through `consumer-tests`. Mark PostgreSQL-only modules `pytest.mark.skipif(connection.vendor != "postgresql", …)` (`tests/test_messaging_delivery_concurrency.py:8`). **Owner rule:** pytest-django and the base plugin own setup and flush; `--nomigrations` and PostgreSQL settings belong to the CI selection, never to a module ([Python contracts](../../../docs/checks.md#python-and-composition-contracts)).
+   Consumer modules are `TransactionTestCase` classes that `call_command("rebac", "sync")` and `call_command("resources", "load", include_demo=True, allow_non_dev=True)` in `setUp` and read `apps.get_model("notes", "Note")` (`examples/src/example/notes/tests/test_rebac.py:23-33`); the framework suite drives them through `tests/composed_host.py --action tests --test-label example.notes.tests.<module>`, consumer CI through `consumer-tests`. Mark PostgreSQL-only modules `pytest.mark.skipif(connection.vendor != "postgresql", …)` (`tests/test_messaging_delivery_concurrency.py:8`). **Owner rule:** pytest-django and the base plugin own setup and flush; `--nomigrations` and PostgreSQL settings belong to the CI selection, never to a module ([Python contracts](../../../docs/checks.md#python-and-composition-contracts)).
 
 4. **Prove permissions per actor.** Seed one fixture with the owner, an outsider and the record under `actor_context`, then assert read, write and deny for each actor, plus the backing (field-backed and const-backed relations store no tuples).
 
@@ -134,7 +134,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
    assert execute_schema(schema, _TAG, _verb_variables(edge), user=curator).errors   # denied
    data = result_data(execute_schema(schema, query, {"limit": size}, user=drive.alice))
 
-   # composed host (examples/addons/example/notes/tests/test_iam_graphql.py:505-539)
+   # composed host (examples/src/example/notes/tests/test_iam_graphql.py:505-539)
    self.login(client, "alice")                       # the login mutation, not force_login
    payload = self.post(Client(), 'mutation { insert_notes_one(object: {title: "x"}) { id } }')
    self.assertEqual(payload["errors"][0]["extensions"]["code"], "PERMISSION_DENIED")
@@ -145,7 +145,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 8. **Test the web fragment.** `web/vitest.config.ts` composes the published builder with the addon-tree alias; consumers pass `gqlAlias: []` until they import `@angee/gql`.
 
    ```ts
-   // addons/angee/tags/web/vitest.config.ts
+   // src/angee/tags/web/vitest.config.ts
    import { defineAngeeWebVitestConfig } from "@angee/app/vitest";
    import { gqlAlias } from "../../vitest.shared";
    export default defineAngeeWebVitestConfig({ gqlAlias });
@@ -155,7 +155,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
    expect(Object.keys(tags.containers ?? {})).toEqual(["tags.tags#facets", "tags.tags#columns", "tags.tags#fields"]);
    ```
 
-   Page declarations: call the page as a function and parse `pageChildren`/`parsePageColumns`, mocking `useContainer` per address (`TagsPage.test.tsx:22-30`). Providers: `.native.test.tsx` under `// @vitest-environment happy-dom` with `createUiTestProviders({ resources: [testDataResource(...)] })` and a `dataProvider` of `vi.fn`s (`RecordTagsWidget.native.test.tsx:15-31`). Widgets: render `widget.read`/`widget.edit` and assert currency-driven facts (`addons/angee/money/web/src/widgets/money.test.tsx`). Stories: export the fixture component from `*.stories.tsx` (`excludeStories`), feed it `storySchema(fetch)` + `jsonResponse`, and reuse it from the native test (`TriggersPage.native.test.tsx:4-11`); Storybook discovers `*/*/web/src/**/*.stories.tsx` from the stack root. **Owner rule:** `@angee/app` owns the Vitest defaults and the manifest contract; a fragment adds only its alias and its own assertions ([frontend packages and addon fragments](../../../docs/checks.md#frontend-packages-and-addon-fragments), [story fixtures](references/web-pitfalls.md)).
+   Page declarations: call the page as a function and parse `pageChildren`/`parsePageColumns`, mocking `useContainer` per address (`TagsPage.test.tsx:22-30`). Providers: `.native.test.tsx` under `// @vitest-environment happy-dom` with `createUiTestProviders({ resources: [testDataResource(...)] })` and a `dataProvider` of `vi.fn`s (`RecordTagsWidget.native.test.tsx:15-31`). Widgets: render `widget.read`/`widget.edit` and assert currency-driven facts (`src/angee/money/web/src/widgets/money.test.tsx`). Stories: export the fixture component from `*.stories.tsx` (`excludeStories`), feed it `storySchema(fetch)` + `jsonResponse`, and reuse it from the native test (`TriggersPage.native.test.tsx:4-11`); Storybook discovers `*/*/web/src/**/*.stories.tsx` from the stack root. **Owner rule:** `@angee/app` owns the Vitest defaults and the manifest contract; a fragment adds only its alias and its own assertions ([frontend packages and addon fragments](../../../docs/checks.md#frontend-packages-and-addon-fragments), [story fixtures](references/web-pitfalls.md)).
 
 9. **Add browser specs.** A consumer e2e package is `package.json` (`@angee/e2e` as `workspace:*`, `test:e2e: playwright test`), a one-line config, `tests/auth.setup.ts`, `pages/<route>-page.ts`, `tests/<concern>.spec.ts`.
 
@@ -183,7 +183,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 - Write a private REBAC-sync or table fixture beside `composed_tables`/`composed_permissions` ([source-addon test models](../../../docs/checks.md#source-addon-test-models)).
 - Register a second concrete model for a resource type, or create tables by hand instead of `tests/tables.py` `model_tables` ([environment and checks](references/environment.md)).
 - Ship admin-only GraphQL tests, or `force_login` without `backend="angee.iam.auth.ModelBackend"` ([GraphQL pitfalls](../angee-graphql/references/pitfalls.md), [authorization pitfalls](../angee-permissions/references/pitfalls.md)).
-- Add a caveated subject to make a conditional grant testable; use a field-backed relation (`angee.E024`, `addons/angee/base/checks.py:37`).
+- Add a caveated subject to make a conditional grant testable; use a field-backed relation (`angee.E024`, `src/angee/base/checks.py:37`).
 - Put `--nomigrations` or PostgreSQL settings into a module; mark PostgreSQL-only modules and let them skip on SQLite ([Python contracts](../../../docs/checks.md#python-and-composition-contracts)).
 - Pass a per-test timeout for a slow render, or copy provider setup instead of `createUiTestProviders`/`createRefineTestProviders` ([Frontend packages](../../../docs/checks.md#frontend-packages-and-addon-fragments)).
 - Import `test`/`expect` from `@playwright/test` in a spec or Page Object ([what ships](../../../docs/frontend/e2e.md#what-ships-in-the-framework)).
@@ -206,7 +206,7 @@ Validators: the new modules run standalone, the owning guards (`tests/test_layer
 - An abstract model imported while its app is absent keeps `app_label=None` for the whole process; the roster comment at `tests/settings.py:85-92` exists for that reason.
 - Patch an inherited manager method on `type(manager)`, not the instance; `db_manager()` copies lose an instance patch ([environment and checks](references/environment.md)).
 - A page rendered through the router must `findBy*` past the lazy boundary; importing the page component directly needs no wait ([page pitfalls](../angee-pages/references/pitfalls.md)).
-- A shared pytest plugin must defer model imports until the registry is populated (`addons/angee/base/testing/permissions.py:19`, [what CI runs](../../../docs/checks.md#what-ci-actually-runs)).
+- A shared pytest plugin must defer model imports until the registry is populated (`src/angee/base/testing/permissions.py:19`, [what CI runs](../../../docs/checks.md#what-ci-actually-runs)).
 - `composed_permissions` rewrites the synced schema with a forced overwrite into `tmp_path`; a module that edits a `.zed` on disk must do so under that fixture and never against the stack ([REBAC](../../../docs/backend/guidelines.md#rebac)).
 
 ## Read next
@@ -223,22 +223,22 @@ Validators: the new modules run standalone, the owning guards (`tests/test_layer
 <!--
 Docs: AGENTS.md (Checks, Definition of Done); docs/guidelines.md (whole); docs/checks.md (whole);
 docs/backend/guidelines.md #rules (test greps), #rebac, #pitfalls, #resource-loading, #development-server, #graphql-actor-and-write-contracts, #checks; docs/frontend/guidelines.md #rules, #authoring, #variants-and-impl, #context-aside, #rendering-and-testing, #form-save-contracts, #checks; docs/frontend/e2e.md (whole).
-Code: addons/angee/base/testing/{__init__,fixtures,permissions}.py; addons/angee/provenance/testing/fixtures.py:1-40;
-addons/angee/workflows/testing/__init__.py; addons/angee/tags/testing/{__init__,models}.py; tests/settings.py (whole);
+Code: src/angee/base/testing/{__init__,fixtures,permissions}.py; src/angee/provenance/testing/fixtures.py:1-40;
+src/angee/workflows/testing/__init__.py; src/angee/tags/testing/{__init__,models}.py; tests/settings.py (whole);
 tests/conftest.py:1-30,86-112,630-665,785-800,880-982; pyproject.toml:202-208; tests/test_tags.py:1-120,292-320,
 412-480,598-657; tests/test_tags_field.py:1-160; tests/test_tags_mti.py; tests/test_messaging_resources.py:1-60;
 tests/test_money.py:80-110; tests/test_resource_fixtures.py; tests/test_composed_note_workflow.py;
-tests/test_notes_owner_adoption.py; tests/composed_host.py (grep); examples/addons/example/notes/tests/* (test_rebac,
+tests/test_notes_owner_adoption.py; tests/composed_host.py (grep); examples/src/example/notes/tests/* (test_rebac,
 test_iam_graphql in full; heads of the other seven); examples/e2e/{package.json,playwright.config.ts,tsconfig.json,
 README.md,tests/auth.setup.ts,tests/notes.spec.ts,tests/addons-smoke.spec.ts,tests/fixtures/notes.ts,pages/notes-page.ts};
 packages/e2e/src/{index,fixtures,pom,config,auth,graphql,record-access}.ts; packages/app/src/testing.tsx;
-packages/app/config/{vitest,vitest-setup}.ts; packages/vitest.shared.ts; addons/angee/vitest.shared.ts; packages/ui and
+packages/app/config/{vitest,vitest-setup}.ts; packages/vitest.shared.ts; src/angee/vitest.shared.ts; packages/ui and
 packages/refine src/testing.tsx (exports); packages/storybook/{.storybook/main.mjs,scripts/catalog*.mjs,src/stories/runtime-fixtures.tsx};
-addons/angee/tags/web/{vitest.config.ts,package.json,src/index.test.ts,src/views/TagsPage.test.tsx,
-src/RecordTagsWidget.native.test.tsx}; addons/angee/money/web/src/widgets/money.test.tsx;
-addons/angee/workflows/web/src/{index.test.ts,TriggersPage.stories.tsx,TriggersPage.native.test.tsx,testing.ts};
+src/angee/tags/web/{vitest.config.ts,package.json,src/index.test.ts,src/views/TagsPage.test.tsx,
+src/RecordTagsWidget.native.test.tsx}; src/angee/money/web/src/widgets/money.test.tsx;
+src/angee/workflows/web/src/{index.test.ts,TriggersPage.stories.tsx,TriggersPage.native.test.tsx,testing.ts};
 templates/addons/web/template/{vitest.config.ts,src/index.test.ts}.jinja; .github/workflows/reusable-checks.yml:60-80,
-240-300,440-520; addons/angee/base/checks.py (E024 at :37).
+240-300,440-520; src/angee/base/checks.py (E024 at :37).
 Doc/code mismatches: examples/e2e/playwright.config.ts cites docs/testing/e2e.md and packages/e2e/src/{index,pom}.ts cite
 docs/e2e.md; the file is docs/frontend/e2e.md. The consumer example ships no fragment tests (notes/web has only
 typecheck). No doc owns a story-authoring guide.

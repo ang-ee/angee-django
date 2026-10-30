@@ -1,0 +1,17 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-uom"
+version = "3.0.0"
+description = "Units of measure: a category tree of convertible units with per-unit rounding."
+keywords = ["uom", "units", "measure", "conversion"]
+dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-resources>=3,<4", "angee-graphql>=3,<4"]
+dynamic = ["entry-points"]
+
+[tool.angee]
+
+[tool.angee.resources]
+master = ["master/010_uom.uomcategory.yaml", {path = "master/020_uom.uom.yaml", depends_on = "master/010_uom.uomcategory.yaml"}]
+
+[tool.angee.platform]
+category = "Foundation"

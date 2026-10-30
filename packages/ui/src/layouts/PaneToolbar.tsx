@@ -18,7 +18,7 @@ import { createLayoutBand } from "./layout-band";
  * retained but hidden pane never publishes into another pane's row. The band is a
  * `Toolbar` (roving focus); its controls are the one `Button` at `iconSm` (28px).
  */
-const band = createLayoutBand(ToolbarRoot, "flex min-w-0 flex-1 items-center gap-1");
+const band = createLayoutBand(ToolbarRoot, "flex w-full min-w-0 shrink-0 items-center gap-1");
 
 export interface PaneToolbarHostProps extends Pick<React.HTMLAttributes<HTMLDivElement>, "role" | "aria-label"> {
   children: React.ReactNode;

@@ -4,7 +4,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { AppRuntimeProvider } from "../runtime";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { displayMime, formatSize, normaliseMime } from "./model";
+import { displayMime, normaliseMime } from "./model";
 import { PreviewPane } from "./PreviewPane";
 import { resolvePreviewProvider, type PreviewProvider } from "./registry";
 
@@ -14,14 +14,6 @@ afterEach(() => {
 });
 
 describe("preview model", () => {
-  test("formatSize displays exact integer wire strings at the presentation boundary", () => {
-    expect(formatSize("5368709120")).toBe("5 GB");
-    expect(formatSize("9007199254740993")).toContain("TB");
-    expect(formatSize("not bytes")).toBe("—");
-    expect(formatSize("")).toBe("—");
-    expect(formatSize(2048)).toBe("2 KB");
-  });
-
   test("displayMime falls back to the extension then octet-stream", () => {
     expect(displayMime({ url: "/a", name: "note.md" })).toBe("text/markdown");
     expect(displayMime({ url: "/a", name: "pic.png", mime: "image/png" })).toBe(

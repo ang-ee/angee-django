@@ -1,230 +1,259 @@
-"""VCS discovery reconciles declarations and provenance into the one Addon row."""
+"""Built artifacts reconcile through native metadata; source never executes."""
 
 from __future__ import annotations
 
 import sys
-from importlib.metadata import EntryPoint
 from pathlib import Path
 
 import pytest
-from hatch_angee import AddonManifest, ManifestError
+from django.core.exceptions import ImproperlyConfigured
+from django.db import IntegrityError, connection, transaction
+from django.test.utils import CaptureQueriesContext
+from pydantic import BaseModel
 from rebac import system_context
 
-import tests.test_marketplace_graphql  # noqa: F401 -- register the fixture model graph before database setup
-from angee.platform_integrate_vcs.catalog import parse_addon_meta
-from tests.conftest import Addon, Repository, Source, VcsBridge, make_integration
+import tests.test_marketplace_graphql  # noqa: F401 -- register the source model graph before database setup
+from angee.integrate_vcs.backend import RepoDescriptor, VCSBackend, source_path, tree_entries
+from angee.platform.discovery import facts_from_distribution, installed_entry_points
+from angee.platform_integrate_vcs import catalog
+from tests.conftest import Addon, Repository, Source, VcsBridge, catalogue_package, make_integration
+from tests.wheel_fixtures import write_wheel
 
 
-@pytest.fixture()
-def catalog_source(composed_tables: None, tmp_path: Path) -> tuple[Source, Path]:
-    """Provide a real local VCS source with a remote-only addon declaration."""
+class CatalogueBackend(VCSBackend):
+    """Binary remote transport over test-authored, already built artifacts."""
 
-    del composed_tables
-    marker = tmp_path / "addons" / "base" / "addon.toml"
-    marker.parent.mkdir(parents=True)
-    marker.write_text(
-        '[addon]\nname = "catalog_remote.base"\ndescription = "Remote declaration"\n'
-        'keywords = ["catalogue"]\ncategory = "Integration"\n'
-        'depends_on = ["angee.iam", "catalog_remote.dependency"]\n'
+    key = "local"
+
+    class Config(BaseModel):
+        fixture_root: str
+
+    config_model = Config
+
+    def ls_repos(self, *, org=""):
+        return [RepoDescriptor(name="catalogue", org="tests", remote="https://example.com/catalogue.git")]
+
+    def rev_parse(self, repository, ref):
+        return "a" * 40
+
+    def ls_tree(self, repository, *, ref, path, recursive=False):
+        assert ref == "a" * 40
+        return tree_entries(Path(self.bridge.config["fixture_root"]), path=path, recursive=recursive)
+
+    def cat_file(self, repository, *, ref, path):
+        assert ref == "a" * 40
+        assert not connection.in_atomic_block
+        return source_path(Path(self.bridge.config["fixture_root"]), path).read_bytes()
+
+    def materialize(self, *args, **kwargs):
+        raise AssertionError("Catalogue may not materialize source")
+
+
+@pytest.fixture
+def catalog_source(composed_tables, tmp_path, settings):
+    settings.ANGEE_VCS_BACKEND_CLASSES = {
+        **settings.ANGEE_VCS_BACKEND_CLASSES, "local": "tests.test_platform_integrate_vcs.CatalogueBackend",
+    }
+    artifact = write_wheel(
+        tmp_path / "addons/base/base.whl", requirements=("angee-iam", "catalog-remote-dependency"),
+        description="Remote declaration", keywords=("catalogue",), category="Integration",
     )
+    write_wheel(tmp_path / "addons/dependency/dependency.whl", "catalog_remote.dependency", "catalog-remote-dependency")
     bridge = make_integration(
-        "addon-catalog",
-        model=VcsBridge,
-        backend_class="local",
-        config={"local_root": str(tmp_path), "local_name": "catalogue"},
+        "addon-catalog", model=VcsBridge, backend_class="local", config={"fixture_root": str(tmp_path)},
     )
     bridge.discover_repositories()
-    with system_context(reason="test catalogue source"):
-        repository = Repository.objects.get(name="catalogue")
-        source = Source.objects.create(repository=repository, kind="addon", path="addons")
-    return source, marker
+    with system_context(reason="tests.catalogue.source"):
+        source = Source.objects.create(repository=Repository.objects.get(name="catalogue"), kind="addon", path="addons")
+    return source, artifact
 
 
-def test_parse_addon_meta_reads_the_addon_block() -> None:
-    """The manifest's ``[addon]`` block becomes the catalog descriptor."""
-
-    blob = (
-        b'[addon]\nname = "angee.demo"\ndescription = "A demo addon."\n'
-        b'keywords = ["catalog", "demo"]\ncategory = "Tools"\n'
-        b'depends_on = ["angee.iam", "angee.platform"]\n'
-    )
-
-    meta = parse_addon_meta(blob)
-
-    assert meta["name"] == "angee.demo"
-    assert "label" not in meta
-    assert meta["namespace"] == "angee"
-    assert meta["description"] == "A demo addon."
-    assert meta["keywords"] == ["catalog", "demo"]
-    assert meta["category"] == "Tools"
-    assert meta["depends_on"] == ["angee.iam", "angee.platform"]
+def snapshot():
+    with system_context(reason="tests.catalogue.snapshot"):
+        return list(Addon.objects.order_by("pk").values())
 
 
-def test_parse_addon_meta_coerces_a_bare_string_depends_on() -> None:
-    """A scalar ``depends_on`` is normalised to a one-element list (manifest convention)."""
-
-    assert parse_addon_meta(b'[addon]\nname = "x.y"\ndepends_on = "x.z"\n')["depends_on"] == ["x.z"]
-
-
-def test_parse_addon_meta_tolerates_a_bare_manifest() -> None:
-    """A minimal manifest has no invented Django identity or dependencies."""
-
-    meta = parse_addon_meta(b'[addon]\nname = "solo"\n')
-
-    assert meta["name"] == "solo"
-    assert "label" not in meta
-    assert meta["depends_on"] == []
-    assert meta["description"] == ""
-
-
-@pytest.mark.parametrize(
-    "blob,key",
-    [
-        (b'[addon]\nname="angee.demo"\nkeywords=[1]\n', "addon.keywords[0]"),
-        (b'[addon]\nname="angee.demo"\ndescription=3\n', "addon.description"),
-        (b'[addon]\n', "addon.name"),
-    ],
-)
-def test_catalogue_uses_native_manifest_validation(blob: bytes, key: str) -> None:
-    """Malformed remote metadata has the native declaration error contract."""
-
-    with pytest.raises(ManifestError) as caught:
-        parse_addon_meta(blob)
-    assert caught.value.key == key
-    assert caught.value.path == Path("addon.toml")
-
-
-def test_remote_catalogue_reconciles_metadata_and_retains_removed_declarations(
-    catalog_source: tuple[Source, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Remote rows retain their declaration and provenance after disappearing."""
-
-    source, marker = catalog_source
-    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda _dirs: {})
-
-    assert source.refresh() == 1
-    with system_context(reason="test catalogue read"):
+def test_remote_catalogue_reconciles_native_metadata_and_retains_removed_artifacts(catalog_source, monkeypatch):
+    source, artifact = catalog_source
+    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda: {})
+    assert source.refresh() == 2
+    with system_context(reason="tests.catalogue.read"):
         row = Addon.objects.get(name="catalog_remote.base")
-    assert row.label == ""
-    assert str(row) == "catalog_remote.base"
-    assert row.namespace == "catalog_remote"
-    assert row.source == Addon.AddonSource.REMOTE
-    assert row.state == Addon.AddonState.DISABLED
-    assert row.description == "Remote declaration"
-    assert row.keywords == ["catalogue"]
-    assert row.category == "Integration"
-    assert row.depends_on == ["angee.iam", "catalog_remote.dependency"]
-    assert row.vcs_source_id == source.pk
-    assert row.vcs_path == "addons/base"
-    assert source.last_synced_at is not None
-
-    marker.write_text(marker.read_text().replace("Remote declaration", "Updated declaration"))
+        assert row.distribution == "catalog-remote-base" and row.namespace == "catalog_remote"
+        assert row.description == "Remote declaration" and row.keywords == ["catalogue"]
+        assert row.category == "Integration" and row.depends_on == ["angee.iam", "catalog_remote.dependency"]
+        assert row.vcs_path == "addons/base/base.whl" and row.source == Addon.AddonSource.REMOTE
+        assert row.state == Addon.AddonState.DISABLED
+    artifact.unlink()
     assert source.refresh() == 1
-    with system_context(reason="test catalogue read"):
+    with system_context(reason="tests.catalogue.removed"):
         row.refresh_from_db()
-        assert Addon.objects.filter(name=row.name).count() == 1
-    assert row.description == "Updated declaration"
-
-    marker.unlink()
-    assert source.refresh() == 0
-    with system_context(reason="test catalogue read"):
-        row.refresh_from_db()
-    assert row.state == Addon.AddonState.REMOVED
-    assert row.description == "Updated declaration"
-    assert row.depends_on == ["angee.iam", "catalog_remote.dependency"]
-    assert row.vcs_source_id == source.pk
-    assert row.vcs_path == "addons/base"
+        assert row.state == Addon.AddonState.REMOVED and row.description == "Remote declaration"
 
 
-@pytest.mark.parametrize("origin_kind", [Addon.AddonSource.LOCAL, Addon.AddonSource.INSTALLED])
-def test_available_catalogue_updates_provenance_and_clears_runtime_facts_when_it_becomes_remote(
-    catalog_source: tuple[Source, Path], monkeypatch: pytest.MonkeyPatch, origin_kind: str
-) -> None:
-    """Available metadata wins until materialization disappears; remote rows have no live counts."""
-
-    source, marker = catalog_source
-    manifest = AddonManifest(name="catalog_remote.base", depends_on=("local.dependency",))
-    origin = (
-        marker.parent
-        if origin_kind == Addon.AddonSource.LOCAL
-        else EntryPoint(name=manifest.name, value=manifest.name, group="angee.addons")
-    )
-    available = {manifest.name: (manifest, origin)}
-    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda _dirs: available)
-    with system_context(reason="test catalogue setup"):
+@pytest.mark.parametrize("origin", [Addon.AddonSource.LOCAL, Addon.AddonSource.INSTALLED])
+def test_installed_metadata_precedes_artifacts_until_the_distribution_disappears(catalog_source, monkeypatch, origin):
+    source, _artifact = catalog_source
+    manifest = catalogue_package("catalog_remote.base", description="Installed metadata", depends_on=("local.dep",))
+    with system_context(reason="tests.catalogue.installed_fixture"):
         row = Addon.objects.create(
-            name=manifest.name,
-            label="native_label",
-            source=origin_kind,
-            state=Addon.AddonState.ENABLED,
-            description="Available declaration",
-            depends_on=list(manifest.depends_on),
-            forced=True,
-            pending=True,
-            model_count=2,
-            field_count=7,
-            resource_count=3,
-            model_labels=["native_label.Record"],
-            depended_by=["local.consumer"],
+            name=manifest["name"], distribution=manifest["distribution"], description="Installed metadata",
+            source=origin, state=Addon.AddonState.ENABLED, forced=True, model_count=2,
         )
-
-    assert source.refresh() == 1
-    with system_context(reason="test catalogue read"):
+    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda: {row.name: (manifest, None)})
+    source.refresh()
+    with system_context(reason="tests.catalogue.precedence"):
         row.refresh_from_db()
-    assert row.source == origin_kind
-    assert row.state == Addon.AddonState.ENABLED
-    assert row.label == "native_label"
-    assert row.description == "Available declaration"
-    assert row.depends_on == ["local.dependency"]
-    assert row.model_count == 2
-    assert row.forced is True
-    assert row.vcs_source_id == source.pk
-    assert row.vcs_path == "addons/base"
-
-    available.clear()
-    assert source.refresh() == 1
-    with system_context(reason="test catalogue read"):
+        assert (row.description, row.source, row.state) == ("Installed metadata", origin, Addon.AddonState.ENABLED)
+        assert row.vcs_source_id == source.pk and row.model_count == 2
+    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda: {})
+    source.refresh()
+    with system_context(reason="tests.catalogue.became_remote"):
         row.refresh_from_db()
-    assert row.source == Addon.AddonSource.REMOTE
-    assert row.state == Addon.AddonState.DISABLED
-    assert row.label == ""
-    assert row.description == "Remote declaration"
-    assert row.depends_on == ["angee.iam", "catalog_remote.dependency"]
-    assert row.forced is False
-    assert row.pending is False
-    assert (row.model_count, row.field_count, row.resource_count) == (0, 0, 0)
-    assert row.model_labels == []
-    assert row.depended_by == []
-    assert row.vcs_source_id == source.pk
+        assert row.description == "Remote declaration" and row.model_count == 0 and not row.forced
+        assert row.source == Addon.AddonSource.REMOTE and row.state == Addon.AddonState.DISABLED
 
 
-def test_remote_catalogue_keeps_unknown_identity_without_importing_the_remote_name(
-    catalog_source: tuple[Source, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Remote declaration names never trigger local package or AppConfig imports."""
-
-    source, marker = catalog_source
-    marker.write_text('[addon]\nname = "catalog_remote_identity.base"\ndepends_on = ["catalog_remote.dependency"]\n')
-    package = tmp_path / "python" / "catalog_remote_identity" / "base"
-    package.mkdir(parents=True)
-    (package.parent / "__init__.py").write_text("")
-    (package / "__init__.py").write_text("")
-    (package / "apps.py").write_text(
-        "from django.apps import AppConfig\n"
-        "class RemoteConfig(AppConfig):\n"
-        '    name = "catalog_remote_identity.base"\n'
-        '    label = "remote_identity"\n'
+def test_built_dynamic_identity_and_packaged_capabilities_are_authoritative(catalog_source):
+    source, artifact = catalog_source
+    write_wheel(
+        artifact.parent / "notes.whl", "catalogue.integrate_notes", "catalogue-integrate-notes",
+        description="Native dynamic metadata", keywords=("native", "notes"), code=True,
+        document='[project]\nname="not-the-distribution-identity"\ndynamic=["entry-points"]\n'
+                 '[tool.angee.platform]\ncategory="Data"\n',
     )
-    monkeypatch.syspath_prepend(str(tmp_path / "python"))
-    monkeypatch.setattr("angee.platform_integrate_vcs.models.available_addons", lambda _dirs: {})
-    assert "catalog_remote_identity" not in sys.modules
+    write_wheel(artifact.parent / "ordinary.whl", None, "ordinary-library")
+    assert source.refresh() == 3
+    with system_context(reason="tests.catalogue.dynamic"):
+        row = Addon.objects.get(name="catalogue.integrate_notes")
+        assert row.distribution == "catalogue-integrate-notes" and row.category == "Data"
+        assert row.description == "Native dynamic metadata" and row.keywords == ["native", "notes"]
+        assert not Addon.objects.filter(distribution="ordinary-library").exists()
+    assert "catalogue.integrate_notes" not in sys.modules
 
-    assert source.refresh() == 1
-    with system_context(reason="test catalogue read"):
-        row = Addon.objects.get(name="catalog_remote_identity.base")
-    assert row.label == ""
-    assert row.state == Addon.AddonState.DISABLED
-    assert row.depends_on == ["catalog_remote.dependency"]
-    assert not any(
-        name == "catalog_remote_identity" or name.startswith("catalog_remote_identity.") for name in sys.modules
-    )
+
+@pytest.mark.parametrize("dependency_first", [False, True])
+def test_retained_requirements_reproject_across_sources(catalog_source, dependency_first):
+    source, artifact = catalog_source
+    write_wheel(artifact, "example.root", "example-root", requirements=("example-foo-bar>=1",))
+    (artifact.parents[1] / "dependency/dependency.whl").unlink()
+    root = artifact.parents[2]
+    dependency = write_wheel(root / "second/dependency.whl", "example.foo_bar", "example-foo-bar")
+    with system_context(reason="tests.catalogue.second_source"):
+        second = Source.objects.create(repository=source.repository, kind="addon", path="second")
+    first, last = (second, source) if dependency_first else (source, second)
+    assert first.refresh() == last.refresh() == 1
+    with system_context(reason="tests.catalogue.dependency"):
+        row = Addon.objects.get(name="example.root")
+        assert row.depends_on == ["example.foo_bar"]
+        assert Addon.objects.get(name="example.foo_bar").depended_by == ["example.root"]
+    write_wheel(dependency, "example.foo_bar", "example-foo-bar", requirements=("unavailable-package",))
+    assert second.refresh() == 1
+
+
+@pytest.mark.parametrize("collision", ["distribution", "app"])
+def test_native_identity_collisions_write_neither_catalogue_nor_timestamp(catalog_source, collision):
+    source, artifact = catalog_source
+    write_wheel(artifact, "example.one", "example-one")
+    write_wheel(artifact.parents[1] / "dependency/dependency.whl",
+                "example.two" if collision == "distribution" else "example.one",
+                "example-one" if collision == "distribution" else "example-two")
+    before = snapshot()
+    with CaptureQueriesContext(connection) as queries, pytest.raises(ImproperlyConfigured):
+        source.refresh()
+    assert not [query for query in queries if query["sql"].lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE"))
+                and any(f'"{model._meta.db_table}"' in query["sql"] for model in (Addon, Source))]
+    assert snapshot() == before
+
+
+@pytest.mark.parametrize("same_identity", [False, True])
+def test_another_source_cannot_take_live_catalogue_ownership(catalog_source, same_identity):
+    source, artifact = catalog_source
+    assert source.refresh() == 2
+    with system_context(reason="tests.catalogue.competing_source"):
+        second = Source.objects.create(repository=source.repository, kind="addon", path="other")
+    write_wheel(artifact.parents[2] / "other/competing.whl", "catalog_remote.base",
+                "catalog-remote-base" if same_identity else "different-provider")
+    before = snapshot()
+    with pytest.raises(ImproperlyConfigured, match="already owned|Conflicting catalogue identity"):
+        second.refresh()
+    assert snapshot() == before
+
+
+def test_installed_and_artifact_identity_share_one_row(catalog_source):
+    source, artifact = catalog_source
+    facts = facts_from_distribution(installed_entry_points()["angee.iam"].dist)
+    write_wheel(artifact, facts["name"], facts["distribution"])
+    assert source.refresh() == 2
+    with system_context(reason="tests.catalogue.native_installed"):
+        row = Addon.objects.get(name="angee.iam")
+        assert row.vcs_source_id == source.pk and row.distribution == facts["distribution"]
+        assert Addon.objects.filter(name="angee.iam").count() == 1
+
+
+@pytest.mark.parametrize("failure", ["invalid", "unavailable", "oversized", "source_only"])
+def test_bad_or_unavailable_artifacts_preserve_rows_and_timestamp(catalog_source, monkeypatch, failure):
+    source, artifact = catalog_source
+    source.refresh()
+    before, timestamp = snapshot(), source.last_synced_at
+    if failure == "invalid":
+        artifact.write_bytes(b"not a wheel")
+    elif failure == "unavailable":
+        def unavailable(*args, **kwargs):
+            raise OSError("offline")
+        monkeypatch.setattr(CatalogueBackend, "cat_file", unavailable)
+    elif failure == "oversized":
+        monkeypatch.setattr(catalog, "MAX_CATALOGUE_BYTES", 1)
+    else:
+        artifact.unlink()
+        (artifact.parents[1] / "dependency/dependency.whl").unlink()
+        (artifact.parent / "pyproject.toml").write_text('[build-system]\nrequires=[]\nbuild-backend="must-not-run"\n')
+    with pytest.raises(ImproperlyConfigured):
+        source.refresh()
+    assert snapshot() == before
+    with system_context(reason="tests.catalogue.failure_timestamp"):
+        source.refresh_from_db()
+        assert source.last_synced_at == timestamp
+
+
+@pytest.mark.parametrize("field,value", [("ref", "changed"), ("path", "changed"), ("repository_id", None)])
+def test_source_coordinate_change_during_metadata_read_cannot_publish(catalog_source, monkeypatch, field, value):
+    source, artifact = catalog_source
+    source.refresh()
+    before, timestamp = snapshot(), source.last_synced_at
+    if field == "repository_id":
+        with system_context(reason="tests.catalogue.replace_repository"):
+            value = Repository.objects.create(vcs_bridge=source.repository.vcs_bridge, name="other", org="tests",
+                                               remote=source.repository.remote).pk
+    original, changed = catalog.wheel_metadata, False
+    def read(*args, **kwargs):
+        nonlocal changed
+        assert not connection.in_atomic_block
+        result = original(*args, **kwargs)
+        if not changed:
+            changed = True
+            with system_context(reason="tests.catalogue.concurrent_edit"):
+                Source.objects.filter(pk=source.pk).update(**{field: value})
+        return result
+    monkeypatch.setattr(catalog, "wheel_metadata", read)
+    with pytest.raises(ImproperlyConfigured, match="Source changed"):
+        source.refresh()
+    assert snapshot() == before
+    with system_context(reason="tests.catalogue.stale_timestamp"):
+        source.refresh_from_db()
+        assert source.last_synced_at == timestamp
+
+
+def test_catalogue_never_imports_build_or_addon_code(catalog_source, monkeypatch):
+    source, artifact = catalog_source
+    write_wheel(artifact, code=True)
+    monkeypatch.setitem(sys.modules, "build", None)
+    assert source.refresh() == 2
+    assert "catalog_remote.base" not in sys.modules
+
+
+def test_catalogue_distribution_uniqueness_remains_database_enforced(composed_tables):
+    with system_context(reason="tests.catalogue.uniqueness"):
+        Addon.objects.create(name="example.foo_bar", distribution="example-foo-bar")
+        with pytest.raises(IntegrityError), transaction.atomic():
+            Addon.objects.create(name="example.foo.bar", distribution="example-foo-bar")

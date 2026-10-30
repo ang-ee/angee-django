@@ -8,7 +8,7 @@ from angee.base.models.base import AngeeDataModel
 from angee.base.models.ownership import OwnerMixin
 
 
-class {{ model_name }}(OwnerMixin, AngeeDataModel):
+class {{ model_name }}(OwnerMixin, AngeeDataModel, concrete=True):
     """One {{ model_name | lower }}, owned by the user who created it.
 
     ``OwnerMixin`` supplies the ``owner`` column the field-backed ``owner``
@@ -16,7 +16,6 @@ class {{ model_name }}(OwnerMixin, AngeeDataModel):
     relations a sharer may grant and the permission that allows it.
     """
 
-    runtime = True
     sqid_prefix = "{{ (model_name | lower)[:3] }}_"
     rebac_grantable = {"reader": "share", "editor": "share"}
 

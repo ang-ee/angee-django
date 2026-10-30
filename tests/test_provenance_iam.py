@@ -49,7 +49,7 @@ if sys.argv[1] == "no-iam":
     assert not hasattr(provenance, "UserSource")
     assert "angee.iam.models" not in sys.modules
 else:
-    from angee.compose.model_composition import ModelComposition
+    from django_compose.model_composition import ModelComposition
     from angee.iam.models import User
     donor = provenance.UserSource
     composition = ModelComposition.discover((apps.get_app_config("iam"), apps.get_app_config("provenance")))
@@ -74,7 +74,7 @@ else:
                 assert user.source_kind == ("person" if kind == "person" and active else None)
 '''
     root = Path(__file__).resolve().parents[1]
-    environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "addons")))}
+    environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "src")))}
     result = subprocess.run(
         [sys.executable, "-c", script, order], cwd=root, env=environment,
         text=True, capture_output=True, timeout=60, check=False,

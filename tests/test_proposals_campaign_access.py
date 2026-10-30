@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import copy
 from typing import Any
 
 import pytest
@@ -753,3 +754,73 @@ def test_subscription_gate_drops_sealed_answer_events_and_redacts_disclosed_offe
         assert event is not None
         assert event.changed_values == {"state": "draft"}
         assert set(event.changed_fields or ()) == {"state"}
+
+
+def test_requester_reassignment_rejects_an_existing_responder(campaign: ProposalCampaign) -> None:
+    c = campaign
+    round = c.round()
+    c.admit(round, "responder", track=True)
+    with system_context(reason="tests.proposals.requester.reverse_admission"):
+        round.requester_party = Person.objects.for_user(c.person("responder"))
+        with pytest.raises(RecordAccessSubjectRefused):
+            round.save(update_fields=("requester_party",))
+    round.refresh_from_db()
+    assert round.requester_party_id is None
+
+
+def test_requester_identity_cannot_bypass_round_owner_through_collections(campaign: ProposalCampaign) -> None:
+    c = campaign
+    round = c.round()
+    with system_context(reason="tests.proposals.requester.collection"):
+        party = Person.objects.for_user(c.person("requester"))
+        for manager in (Round.objects, Round._base_manager):
+            with pytest.raises(ValidationError):
+                manager.filter(pk=round.pk).update(requester_party=party)
+
+
+@pytest.mark.parametrize("manager_path", ("base", "sudo"))
+@pytest.mark.parametrize("positional", (False, True))
+def test_requester_identity_cannot_bypass_round_owner_through_conflict_updates(
+    campaign: ProposalCampaign, manager_path: str, positional: bool,
+) -> None:
+    """Even an explicitly elevated native upsert must use the locked round owner."""
+
+    round = campaign.round()
+    with system_context(reason="tests.proposals.requester.conflict_party"):
+        party = Person.objects.for_user(campaign.person("requester"))
+    candidate = copy(round)
+    candidate.requester_party = party
+    manager = (
+        Round._base_manager if manager_path == "base"
+        else Round.objects.sudo(reason="tests.proposals.requester.conflict")
+    )
+    with pytest.raises(ValidationError, match="Change requester identity through the round instance"):
+        if positional:
+            manager.bulk_create([candidate], None, False, True, ["requester_party"], ["pk"])
+        else:
+            manager.bulk_create(
+                [candidate], update_conflicts=True, update_fields=["requester_party"], unique_fields=["pk"],
+            )
+    round.refresh_from_db()
+    assert round.requester_party_id is None
+
+
+@pytest.mark.parametrize("referenced", (False, True))
+def test_requester_party_delete_uses_native_collector(campaign: ProposalCampaign, referenced: bool) -> None:
+    with system_context(reason="tests.proposals.requester.delete"):
+        party = Person.objects.create(display_name="Disposable requester")
+        round = campaign.round(**({"requester_party": party} if referenced else {}))
+        party.delete()
+        round.refresh_from_db()
+        assert round.requester_party_id is None
+
+
+def test_requester_party_merge_uses_round_identity_owner(campaign: ProposalCampaign) -> None:
+    manager = campaign.person("facilitator")
+    with actor_context(manager), system_context(reason="tests.proposals.requester.merge"):
+        source = Person.objects.create(display_name="Duplicate requester", owner=manager)
+        survivor = Person.objects.create(display_name="Kept requester", owner=manager)
+        round = campaign.round(requester_party=source)
+        survivor.merge(records=[source.public_id])
+        round.refresh_from_db()
+        assert round.requester_party_id == survivor.pk

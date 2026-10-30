@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from angee.base.testing.packages import write_addon_distribution
 from tests.composed_host import run_composed_tests
 
 
@@ -11,14 +12,11 @@ def test_graphql_native_crud_does_not_load_optional_provenance(tmp_path: Path) -
     addon = tmp_path / "addons" / "native_graphql"
     addon.mkdir(parents=True)
     (addon / "__init__.py").write_text("")
-    (addon / "addon.toml").write_text(
-        '[addon]\nname="native_graphql"\ndepends_on=["angee.graphql", "django.contrib.auth"]\n'
-    )
+    write_addon_distribution(addon , 'native_graphql', depends_on=('angee.graphql', 'angee.mcp', 'django.contrib.auth'))
     (addon / "models.py").write_text('''from django.db import models
 from angee.base.models.base import AngeeDataModel
 
-class Widget(AngeeDataModel):
-    runtime = True
+class Widget(AngeeDataModel, concrete=True):
     sqid_prefix = "ngq_"
     title = models.CharField(max_length=80)
     class Meta:
@@ -49,7 +47,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.test import TransactionTestCase
 from rebac import system_context
 from angee.graphql.schema import GraphQLSchemas
-from angee.graphql.views import AngeeGraphQLView
+from angee.mcp.graphql import _execute_sync
 
 class NativeCrudTests(TransactionTestCase):
     def test_native_crud_and_unsupported_claim(self):
@@ -61,6 +59,9 @@ class NativeCrudTests(TransactionTestCase):
                 result = schema.execute_sync(query, variable_values=variables or {}, context_value=context)
             self.assertIsNone(result.errors, result.errors)
             return result.data
+        with system_context(reason="native_graphql.mcp"):
+            direct = _execute_sync(schema, '{native_widgets {title}}', None)
+        self.assertIsNone(direct.errors)
         created = execute('mutation { insert_native_widgets_one(object:{title:"First"}) {id title} }')
         row = created["insert_native_widgets_one"]
         self.assertEqual(row["title"], "First")

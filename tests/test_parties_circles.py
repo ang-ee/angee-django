@@ -39,7 +39,7 @@ from angee.messaging.testing.models import (
     RelationshipKind,
     Thread,
 )
-from angee.parties.backends import ParsedAddress, ParsedContact
+from angee.parties.backends import ManualDirectoryBackend, ParsedAddress, ParsedContact
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
 from angee.provenance.statements import (
     SourceKind,
@@ -1211,7 +1211,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
             created_by=owner,
         )
 
-        again = Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk, link=link, target=person)
+        again = Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk, link=link)
         unchanged = Relationship._base_manager.get(
             party=again,
             kind=employee,
@@ -1228,6 +1228,30 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
         )
         Party.objects.ingest_contact(changed, folder=folder, created_by_id=owner.pk, link=link, target=person)
         refreshed = Relationship._base_manager.get(pk=first_pk)
+        backend = ManualDirectoryBackend(directory)
+        local = backend._local_states(stream, ("contact-1",), links=(RecordLink.objects.get(pk=link.pk),))
+        assert local["contact-1"][0].pk == person.pk
+
+        foreign, _created = get_user_model()._base_manager.get_or_create(
+            pk=person.pk, defaults={"username": "same-primary-key-contact-target"},
+        )
+        foreign_link = RecordLink.objects.observe(stream, "foreign-contact")
+        foreign_link.target = foreign
+        foreign_link.save(update_fields=["target_content_type", "target_object_id"])
+        foreign_link.refresh_from_db()
+        foreign_type = foreign_link.target_content_type_id
+        with pytest.raises(ValidationError, match="Party"):
+            Party.objects.ingest_contact(
+                replace(parsed, uid="foreign-contact", display_name="Wrong identity"),
+                folder=folder, created_by_id=owner.pk, link=foreign_link,
+            )
+        with pytest.raises(ValidationError, match="Party"):
+            backend._local_states(stream, ("foreign-contact",), links=(foreign_link,))
+        foreign_link.refresh_from_db()
+        person.refresh_from_db()
+        assert foreign_link.target_content_type_id == foreign_type
+        assert foreign_link.target_object_id == str(person.pk)
+        assert person.display_name == "Ada Lovelace"
 
     assert synced.other_name == "Analytical Engines"
     assert synced.title == "Mathematician"
@@ -1315,7 +1339,7 @@ def test_seed_vocabulary_matches_model_contract() -> None:
 
     seed_path = (
         Path(__file__).resolve().parent.parent
-        / "addons"
+        / "src"
         / "angee"
         / "parties"
         / "resources"

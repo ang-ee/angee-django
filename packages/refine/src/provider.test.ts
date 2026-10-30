@@ -1057,3 +1057,17 @@ describe("retryableQueryError", () => {
     expect(retryableQueryError({ graphQLErrors: [answer("INTERNAL_SERVER_ERROR")] })).toBe(true);
   });
 });
+
+test("the shared GraphQL transport resolves its configured endpoint on each request", async () => {
+  let endpoint = "https://daemon.example.test/ops/graphql";
+  const urls: string[] = [];
+  const client = createAngeeGraphQLClient({
+    url: () => endpoint,
+    auth: (fetch) => fetch,
+    fetch: async (input) => { urls.push(String(input)); return jsonResponse({ ping: true }); },
+  });
+  await client.request("query { ping }");
+  endpoint = "https://replacement.example.test/graphql";
+  await client.request("query { ping }");
+  expect(urls).toEqual(["https://daemon.example.test/ops/graphql", "https://replacement.example.test/graphql"]);
+});

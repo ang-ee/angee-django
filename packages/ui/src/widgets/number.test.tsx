@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, expect, test } from "vitest";
 
 import { setHumanDateLocale } from "../lib/human-locale";
 import { defaultWidgets } from "./index";
@@ -71,28 +71,4 @@ test.each([null, undefined, "", "NaN", NaN, "invalid"])("percent omits absent or
   const PercentRead = percentWidget.read;
   const { container } = render(<PercentRead value={value} />);
   expect(container.textContent).toBe("");
-});
-
-test.each([
-  ["BigInt", "9007199254740993", "9007199254740995", integerWidget],
-  ["Decimal", "9007199254740993.125", "9007199254740995.375", floatWidget],
-] as const)("%s controls preserve exact wire strings while editing", (scalar, initial, changed, widget) => {
-  const onChange = vi.fn();
-  const Edit = widget.edit;
-  render(<Edit value={initial} field={{ name: "amount", label: "Amount", scalar }} onChange={onChange} />);
-  const input = screen.getByRole("textbox", { name: "Amount" }) as HTMLInputElement;
-  expect(input.value).toBe(initial);
-  expect(input.type).toBe("text");
-  fireEvent.change(input, { target: { value: changed } });
-  expect(onChange).toHaveBeenLastCalledWith(changed);
-});
-
-test("an incomplete exact integer stays editable and reports draft invalidity", () => {
-  const valid = vi.fn();
-  const Edit = integerWidget.edit;
-  const view = render(<Edit value="-" field={{ name: "size", scalar: "BigInt" }} onValidityChange={valid} />);
-  expect((screen.getByRole("textbox") as HTMLInputElement).value).toBe("-");
-  expect(valid).toHaveBeenLastCalledWith(false);
-  view.rerender(<Edit value="9007199254740993" field={{ name: "size", scalar: "BigInt" }} onValidityChange={valid} />);
-  expect(valid).toHaveBeenLastCalledWith(true);
 });

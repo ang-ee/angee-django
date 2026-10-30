@@ -536,6 +536,7 @@ def test_saved_hierarchy_uses_one_write_database_for_scope_parent_and_descendant
     """A cached parent and loaded baseline from another database cannot govern a save."""
 
     from django.db import connections, router
+    from rebac.models import PermissionAuditEvent
 
     alias = "hierarchy_write_probe"
     write_hints: list[models.Model] = []
@@ -562,6 +563,7 @@ def test_saved_hierarchy_uses_one_write_database_for_scope_parent_and_descendant
     try:
         with django_db_blocker.unblock(), system_context(reason="test hierarchy write routing"):
             with database.schema_editor() as editor:
+                editor.create_model(PermissionAuditEvent)
                 editor.create_model(Scope)
                 editor.create_model(ScopedHierNode)
             default_scope = Scope.objects.using("default").create(name="Original scope")

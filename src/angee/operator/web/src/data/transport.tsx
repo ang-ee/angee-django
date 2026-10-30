@@ -1,0 +1,367 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { print } from "graphql";
+import { errorMessage } from "@angee/ui";
+import {
+  recordValue,
+  useAuthoredMutation,
+  useAuthoredQuery,
+  useStableVariables,
+  type AuthoredDocument,
+  type AuthoredQueryOptions,
+  type AuthoredVariables,
+  type DocumentData,
+  type DocumentVariables,
+} from "@angee/refine";
+import type { TypedDocumentNode } from "@graphql-typed-document-node/core";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
+
+import { updateSnapshotQueries } from "./snapshot-cache";
+import { OPERATOR_PROVIDER } from "./operator-provider";
+import { useOperatorT } from "../i18n";
+import { OperatorConnectionQuery } from "./documents";
+import { useDocumentSubscription } from "./document-subscription";
+import {
+  SNAPSHOT_QUERY,
+  STACK_SNAPSHOT_SUBSCRIPTION,
+} from "./documents.daemon";
+import { createOperatorClient, OperatorWsClientProvider } from "./operator-client";
+import { operatorToken } from "./operator-token";
+import type {
+  OperatorConnectionInfo,
+  OperatorSnapshot,
+  OperatorSnapshotQueryData,
+  OperatorSnapshotQueryVariables,
+  OperatorSnapshotSections,
+  OperatorSnapshotSubscriptionData,
+} from "./types";
+
+const CONSOLE_SCHEMA = "console";
+/** Schedule rotation from the daemon-issued expiry, with a shrinking safety window. */
+export function operatorConnectionRefresh(data: unknown): number {
+  const expiry = recordValue(recordValue(data)?.operator_connection)?.expires_at;
+  const expiresAt = typeof expiry === "string" ? Date.parse(expiry) : NaN;
+  return Number.isFinite(expiresAt) ? Math.max(1000, (expiresAt - Date.now()) * 0.8) : 30_000;
+}
+
+type OperatorDocument = TypedDocumentNode<object, any>;
+type OperatorVariables<TDocument extends OperatorDocument> =
+  DocumentVariables<TDocument> extends Record<string, unknown>
+    ? DocumentVariables<TDocument>
+    : Record<string, never>;
+
+// The one section→`@include` mapping: each snapshot pane and the matching
+// `$want<Pane>` toggle in `SNAPSHOT_QUERY`. The hook derives its variables from
+// this table so the pane list lives once (vs. an 8-line copy per concern).
+const SNAPSHOT_SECTIONS = [
+  "overview",
+  "services",
+  "workspaces",
+  "sources",
+  "gitOps",
+  "operations",
+  "templates",
+  "secrets",
+] as const satisfies readonly (keyof OperatorSnapshotSections)[];
+
+/** The `$want<Pane>` toggle name for a pane (`gitOps` → `wantGitOps`). */
+type WantVariable = `want${Capitalize<keyof OperatorSnapshotSections>}`;
+
+/** The snapshot query's `@include` toggle name for a pane (`gitOps` → `wantGitOps`). */
+function wantVariable(section: keyof OperatorSnapshotSections): WantVariable {
+  return `want${section.charAt(0).toUpperCase()}${section.slice(1)}` as WantVariable;
+}
+
+/** The snapshot query's `@include` toggles — one per pane (`$wantOverview`…). */
+type SnapshotVariables = OperatorSnapshotQueryVariables;
+
+export type OperatorConnectionState =
+  | { kind: "loading" }
+  | { kind: "not-configured" }
+  | { kind: "error"; message: string }
+  | { kind: "ready"; connection: OperatorConnectionInfo };
+
+/** The resolved daemon connection — the same-origin endpoint and minted bearer. */
+export interface OperatorConnection {
+  endpoint: string;
+  token: string;
+  restartJob: string | null;
+}
+const OperatorConnectionContext = createContext<OperatorConnection | null>(null);
+const OperatorConnectionStateContext = createContext<OperatorConnectionState>({ kind: "loading" });
+
+export interface OperatorTransportProviderProps {
+  children: ReactNode;
+}
+
+export function OperatorTransportProvider({
+  children,
+}: OperatorTransportProviderProps): ReactNode {
+  const t = useOperatorT();
+  const queryClient = useQueryClient();
+  const connectionQuery = useAuthoredQuery(OperatorConnectionQuery, undefined, {
+    dataProviderName: CONSOLE_SCHEMA,
+    refetchInterval: (query) => operatorConnectionRefresh(query.state.data),
+  });
+
+  const state = useMemo<OperatorConnectionState>(() => {
+    if (!connectionQuery.data && connectionQuery.isFetching) {
+      return { kind: "loading" };
+    }
+    if (connectionQuery.error) {
+      return { kind: "error", message: connectionQuery.error.message };
+    }
+    try {
+      const connection = parseOperatorConnection(connectionQuery.data?.operator_connection);
+      return connection ? { kind: "ready", connection } : { kind: "not-configured" };
+    } catch (error) {
+      return {
+        kind: "error",
+        message: errorMessage(error, t("transport.unknownError")),
+      };
+    }
+  }, [connectionQuery.data, connectionQuery.error, connectionQuery.isFetching, t]);
+
+  const [committedState, setCommittedState] = useState<OperatorConnectionState>({ kind: "loading" });
+  useEffect(() => {
+    const token = state.kind === "ready" ? state.connection.token : null;
+    // Child effects can start requests before this effect runs. Retain the old
+    // bearer until its replacement is installed, then publish the new state.
+    operatorToken.set(token, state.kind === "ready" ? state.connection.endpoint : null);
+    setCommittedState(state);
+  }, [state]);
+  useEffect(() => () => operatorToken.set(null), []);
+  const endpoint = committedState.kind === "ready" ? committedState.connection.endpoint : null;
+  const token = committedState.kind === "ready" ? committedState.connection.token : null;
+  // The daemon graphql-ws client for live subscriptions. Rebuilt on token
+  // rotation (graphql-ws captures the bearer in connectionParams at connect, so a
+  // new token needs a fresh socket) and absent without a WebSocket (SSR/test).
+  const daemonClient = useMemo(() => {
+    if (!endpoint || !token || typeof WebSocket === "undefined") return null;
+    return createOperatorClient({ endpoint, token });
+  }, [endpoint, token]);
+  // Stable connection value for non-GraphQL transports; non-null exactly when
+  // `daemonClient` is, so the `!daemonClient` guard below makes it present.
+  const connection = useMemo<OperatorConnection | null>(
+    () => (endpoint && token ? { endpoint, token, restartJob: committedState.kind === "ready" ? committedState.connection.restartJob ?? null : null } : null),
+    [committedState, endpoint, token],
+  );
+
+  // One subscription for this transport. Native Query entries own every pane's
+  // snapshot; socket pushes are cache writes, and later HTTP completions/refetches
+  // may replace them. The daemon supplies no revision ordering contract.
+  useEffect(() => {
+    if (!daemonClient) return;
+    return daemonClient.subscribe<OperatorSnapshotSubscriptionData>(
+      { query: print(STACK_SNAPSHOT_SUBSCRIPTION) },
+      {
+        next: ({ data }) => {
+          const snapshot = data?.onStackSnapshotChange;
+          if (snapshot) updateSnapshotQueries(queryClient, snapshot);
+        },
+        error: () => undefined,
+        complete: () => undefined,
+      },
+    );
+  }, [daemonClient, queryClient]);
+
+  return (
+    <OperatorWsClientProvider value={daemonClient}>
+      <OperatorConnectionContext.Provider value={connection}>
+        <OperatorConnectionStateContext.Provider value={committedState}>
+          {children}
+        </OperatorConnectionStateContext.Provider>
+      </OperatorConnectionContext.Provider>
+    </OperatorWsClientProvider>
+  );
+}
+
+export function useOperatorConnectionState(): OperatorConnectionState {
+  return useContext(OperatorConnectionStateContext);
+}
+
+/** The daemon connection (endpoint + bearer) for non-GraphQL transports (log sockets). */
+export function useOperatorConnection(): OperatorConnection | null {
+  return useContext(OperatorConnectionContext);
+}
+
+/**
+ * A daemon read on the `operator` refine data provider. It waits for the
+ * connection: the bearer is minted by the console, so a read sent before it
+ * arrives is refused (401) and surfaces as a request failure.
+ */
+export function useOperatorQuery<TDocument extends AuthoredDocument>(
+  document: TDocument,
+  variables?: AuthoredVariables<TDocument>,
+  options: Omit<AuthoredQueryOptions, "dataProviderName"> = {},
+) {
+  const connected = useOperatorConnectionState().kind === "ready";
+  return useAuthoredQuery(document, variables, {
+    ...options,
+    dataProviderName: OPERATOR_PROVIDER,
+    enabled: connected && (options.enabled ?? true),
+  });
+}
+
+export interface OperatorSnapshotResult {
+  result: { fetching: boolean; error: Error | null };
+  snapshot: OperatorSnapshot | null;
+  refetch: ReturnType<typeof useAuthoredQuery<typeof SNAPSHOT_QUERY>>["refetch"];
+}
+
+export function useOperatorSnapshot(
+  sections: OperatorSnapshotSections = { overview: true },
+): OperatorSnapshotResult {
+  const connectionState = useOperatorConnectionState();
+  // Complete by construction — SNAPSHOT_SECTIONS is pinned to every pane key,
+  // so the derived object carries every `WantVariable` the query requires. The
+  // shared structural owner keeps the query variables stable across renders.
+  const variables = useStableVariables(
+    Object.fromEntries(
+      SNAPSHOT_SECTIONS.map((section) => [
+        wantVariable(section),
+        sections[section] ?? false,
+      ]),
+    ) as SnapshotVariables,
+  );
+
+  // The one-shot query owns first paint: the daemon emits no snapshot on connect,
+  // so the console reads the current state once through the `operator` provider.
+  // The live subscription supersedes it for every subsequent change (no polling —
+  // see docs/frontend/guidelines.md).
+  const query = useOperatorQuery(SNAPSHOT_QUERY, variables);
+
+  const snapshot = useMemo(() => snapshotFromQueryData(query.data), [query.data]);
+
+  return {
+    result: {
+      fetching: connectionState.kind === "loading" || query.isFetching,
+      error: query.error ?? (connectionState.kind === "error"
+        ? new Error(connectionState.message)
+        : connectionState.kind === "not-configured"
+          ? new Error("Operator daemon is unavailable.")
+          : null),
+    },
+    snapshot,
+    refetch: query.refetch,
+  };
+}
+
+export interface OperatorActionHook<TDocument extends OperatorDocument> {
+  result: { fetching: boolean; error: Error | null };
+  run: (
+    variables: OperatorVariables<TDocument>,
+  ) => Promise<DocumentData<TDocument> | undefined>;
+}
+
+/**
+ * A daemon mutation on the `operator` refine data provider. Wraps
+ * `useAuthoredMutation` (the shared authored-mutation owner) bound to the daemon
+ * provider so every command RPC and Hasura CRUD doc rides the same bearer-authed
+ * transport as the rest of the console. The daemon refreshes its own state
+ * imperatively (`useRunDaemonAction` → snapshot refetch), not through refine's
+ * resource invalidation, so no `invalidateModels` is wired here.
+ */
+export function useOperatorAction<TDocument extends OperatorDocument>(
+  document: TDocument,
+): OperatorActionHook<TDocument> {
+  type Variables = OperatorVariables<TDocument>;
+  const [mutate, state] = useAuthoredMutation(document, {
+    dataProviderName: OPERATOR_PROVIDER,
+  });
+  const run = useCallback(
+    (variables: Variables) => mutate(variables),
+    [mutate],
+  );
+  return { result: state, run };
+}
+
+export interface OperatorSubscriptionOptions<TData> {
+  enabled?: boolean;
+  onData?: (data: TData) => void;
+}
+
+export interface OperatorSubscriptionResult<TData> {
+  data: TData | undefined;
+  fetching: boolean;
+  error: Error | null;
+}
+
+export function useOperatorSubscription<TDocument extends OperatorDocument>(
+  document: TDocument,
+  variables?: OperatorVariables<TDocument>,
+  options?: OperatorSubscriptionOptions<DocumentData<TDocument>>,
+): OperatorSubscriptionResult<DocumentData<TDocument>>;
+export function useOperatorSubscription<
+  TData extends object,
+  TVariables extends Record<string, unknown> = Record<string, never>,
+>(
+  document: string,
+  variables?: TVariables,
+  options?: OperatorSubscriptionOptions<TData>,
+): OperatorSubscriptionResult<TData>;
+export function useOperatorSubscription<
+  TData extends object,
+  TVariables extends Record<string, unknown>,
+>(
+  document: OperatorDocument | string,
+  variables?: TVariables,
+  options: OperatorSubscriptionOptions<TData> = {},
+): OperatorSubscriptionResult<TData> {
+  // Delegate to the document subscription runner over the daemon graphql-ws
+  // client: it fires `onData` from the socket's `next` callback (a real event, not
+  // a render-phase reducer), so a caller can set React state in it.
+  return useDocumentSubscription<TData, TVariables>(document, variables, options);
+}
+
+// The daemon exposes its state as separate root fields; assemble the roots each
+// pane requested into one snapshot, defaulting absent (un-`@include`d) lists.
+// Accepts the query data or a live subscription push (same root shape).
+function snapshotFromQueryData(
+  data: OperatorSnapshotQueryData | null | undefined,
+): OperatorSnapshot | null {
+  if (!data) return null;
+  return {
+    health: data.health ?? null,
+    stack: data.stackStatus ?? null,
+    services: data.services ?? [],
+    jobs: data.jobs ?? [],
+    sources: data.sources ?? [],
+    workspaces: data.workspaces ?? [],
+    templates: data.templates ?? [],
+    secrets: data.secrets ?? [],
+    gitOps: data.gitOpsTopology ?? null,
+  };
+}
+
+function parseOperatorConnection(value: unknown): OperatorConnectionInfo | null {
+  if (value == null) return null;
+  if (!isRecord(value)) {
+    throw new Error("operatorConnection returned an invalid payload.");
+  }
+  const endpoint = value.endpoint;
+  const token = value.token;
+  if (typeof endpoint !== "string" || typeof token !== "string") {
+    throw new Error("operatorConnection is missing endpoint or token.");
+  }
+  const expiresAt = value.expires_at;
+  if (typeof expiresAt !== "string" || !Number.isFinite(Date.parse(expiresAt))) {
+    throw new Error("operatorConnection is missing its issued expiry.");
+  }
+  const restartJob = value.restart_job;
+  if (restartJob != null && typeof restartJob !== "string") {
+    throw new Error("operatorConnection returned an invalid restart job.");
+  }
+  return { endpoint, token, expiresAt, restartJob };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}

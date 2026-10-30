@@ -10,7 +10,7 @@ import { createRoot } from "react-dom/client";
 import type { AngeeApp } from "./create-app";
 import type { ShellSettings } from "./define-addon";
 import { type ErrorReportingInput, startErrorReporting } from "./error-reporting";
-import { assertBrand } from "./menus";
+export { assertShellSettings } from "./shell-settings.mjs";
 
 /** A top-level menu root as selection reads it; its label and icon stand in for a brand it does not declare. */
 export type SelectableRoot = Pick<ChromeMenuNode, "id" | "displayLabel" | "iconName" | "home" | "brand" | "theme" | "railExpanded">;
@@ -102,46 +102,6 @@ export function appSelection(
     sources,
     diagnostics: [],
   };
-}
-
-/** Refuse a malformed `ANGEE_UI.shell`, which would otherwise select the wrong app silently.
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
-export function assertShellSettings(shell: unknown): asserts shell is ShellSettings {
-  const mapping = (value: unknown, where: string, keys?: readonly string[]): Record<string, unknown> => {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${where} must be a mapping.`);
-    const unknown = keys ? Object.keys(value).find((key) => !keys.includes(key)) : undefined;
-    if (unknown !== undefined) throw new Error(`${where} has unknown key "${unknown}".`);
-    return value as Record<string, unknown>;
-  };
-  const text = (value: unknown, where: string): void => {
-    if (typeof value !== "string" || !value.trim()) throw new Error(`${where} must be a non-empty string.`);
-  };
-  const facts = (value: Record<string, unknown>, where: string): void => {
-    if (value.brand !== undefined) assertBrand(where, value.brand);
-    if (value.theme !== undefined) text(value.theme, `${where}.theme`);
-    if (value.railExpanded !== undefined && typeof value.railExpanded !== "boolean") {
-      throw new Error(`${where}.railExpanded must be true or false.`);
-    }
-  };
-  const settings = mapping(shell, "ANGEE_UI.shell", ["brand", "theme", "apps", "hosts"]);
-  facts(settings, "ANGEE_UI.shell");
-  for (const [name, value] of Object.entries(mapping(settings.apps ?? {}, "ANGEE_UI.shell.apps"))) {
-    const where = `ANGEE_UI.shell.apps.${name}`;
-    const app = mapping(value, where, ["rail", "brand", "theme", "home", "railExpanded"]);
-    const rail = app.rail;
-    if (!Array.isArray(rail) || !rail.length || !rail.every((id) => typeof id === "string" && id)) {
-      throw new Error(`${where}.rail must be a non-empty list of menu root ids.`);
-    }
-    if (new Set(rail).size !== rail.length) throw new Error(`${where}.rail lists a root twice.`);
-    facts(app, where);
-    if (app.home !== undefined) text(app.home, `${where}.home`);
-  }
-  for (const [host, key] of Object.entries(mapping(settings.hosts ?? {}, "ANGEE_UI.shell.hosts"))) {
-    if (host !== host.toLowerCase()) throw new Error(`ANGEE_UI.shell.hosts["${host}"] must be a lower-case hostname.`);
-    text(key, `ANGEE_UI.shell.hosts["${host}"]`);
-  }
 }
 
 /** A record's own entry; inherited names such as `constructor` select nothing. */

@@ -10,7 +10,6 @@ from django.apps import AppConfig
 from django.db import models
 from django.test.utils import isolate_apps
 
-from angee.addons import addon_manifest
 from angee.base.models.base import AngeeModel
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.mixins import ResourceLoadMixin
@@ -29,7 +28,6 @@ def _addon(
     config = make_addon(
         name="tests.catalogue_addon", label="catalogue_addon", path=tmp_path, resources=dict(manifest or {})
     )
-    addon_manifest(config)
     return config
 
 

@@ -107,9 +107,11 @@ def test_src_workspace_agents_describes_the_consolidated_framework_slot() -> Non
     text = SRC_AGENTS.read_text(encoding="utf-8")
 
     assert "**`angee/`** — the consolidated framework repository" in text
-    for area in ("`angee/`", "`addons/`", "`packages/`", "`examples/`", "`templates/`"):
+    for area in ("`angee/`", "`src/`", "`packages/`", "`examples/`", "`templates/`"):
         assert area in text
-    assert "consumes their PyPI releases" in text
+    assert "native uv workspace" in text
+    assert "https://github.com/ang-ee/hatch-angee#readme" in text
+    assert "owning manifests declare" in text
     assert "never `git checkout`" in text
     assert "Never `pnpm install` inside a slot" in text
     assert "commit and push continuously" in text

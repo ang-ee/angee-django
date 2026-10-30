@@ -1,7 +1,7 @@
 """Collect integration joins in native composed SQLite and PostgreSQL hosts."""
-
 from django.db import connection
 
+from angee.base.testing.packages import write_addon_distribution
 from tests.composed_host import run_composed_tests
 
 
@@ -9,9 +9,9 @@ def test_framework_integration(tmp_path):
     addon = tmp_path / "addons" / "example" / "memory_test"
     addon.mkdir(parents=True)
     (addon / "__init__.py").write_text("")
-    (addon / "addon.toml").write_text(
-        '[addon]\nname = "example.memory_test"\n'
-        'depends_on = ["angee.posts", "angee.knowledge", "angee.projects", "angee.mcp"]\n'
+    write_addon_distribution(
+        addon, "example.memory_test",
+        depends_on=("angee.posts", "angee.knowledge", "angee.projects", "angee.mcp"),
     )
     (addon / "permissions.extends.zed").write_text(
         '// @rebac_package: memory_test\n// @rebac_schema_revision: 1\n'

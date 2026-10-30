@@ -7,7 +7,7 @@ bridge/repo creation or the discovery walk):
 - ``addSource`` inventories a repository on an existing ``VcsBridge``
   (``import_repository``) and points an addon ``Source`` at it;
 - ``scan`` runs ``Source.refresh()`` (→ ``AddonCatalog.sync_from_source``), which
-  discovers ``addon.toml`` rows into the one ``platform.Addon`` marketplace registry.
+  discovers ``pyproject.toml`` rows into the one ``platform.Addon`` marketplace registry.
 
 Driven over the stub VCS backend (canned tree/blobs ride on the bridge config), the
 same path the ``marketplace sync`` command and integrate's ``refresh_source`` use.
@@ -51,12 +51,21 @@ _REPOS = [
     },
 ]
 _TREE = [
-    {"path": "addons/angee/demo/addon.toml", "type": "blob", "oid": "a"},
-    {"path": "addons/angee/demo/README.md", "type": "blob", "oid": "b"},
+    {"path": "src/angee/demo/pyproject.toml", "type": "blob", "oid": "a"},
+    {"path": "src/angee/demo/README.md", "type": "blob", "oid": "b"},
 ]
 _BLOBS = {
-    "addons/angee/demo/addon.toml": '[addon]\nname = "angee.demo"\ndescription = "A demo addon."\n'
-    'depends_on = ["angee.platform"]\n',
+    "src/angee/demo/pyproject.toml": (
+                                            '[build-system]\nrequires=["hatchling>=1.27"]\nbuild-backend="hatchling.build"\n'
+                                            '[tool.hatch.build.targets.wheel]\nbypass-selection=true\n'
+                                            '[project]\n'
+                                            'name = "angee-demo"\n'
+                                            'version = "1.0.0"\n'
+                                            'description = "A demo addon."\n'
+                                            'dependencies = ["angee-platform"]\n'
+                                            '[project.entry-points."angee.addons"]\n'
+                                            '"angee.demo" = "angee.demo"\n'
+                                        ),
 }
 
 _ADD_SOURCE = """
@@ -91,7 +100,7 @@ def test_add_source_inventories_the_repo_and_points_an_addon_source_at_it(
         _execute(
             _schema(),
             _ADD_SOURCE,
-            {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "addons"}},
+            {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "src"}},
             user=admin,
         )
     )["add_source"]
@@ -101,10 +110,10 @@ def test_add_source_inventories_the_repo_and_points_an_addon_source_at_it(
     with system_context(reason="test.marketplace.add_source.verify"):
         repository = Repository.objects.get(name="acme/addons")
         source = Source.objects.get(repository=repository)
-    assert (source.kind, source.path) == ("addon", "addons")
+    assert (source.kind, source.path) == ("addon", "src")
 
 
-def test_scan_discovers_addon_toml_rows_into_the_registry(
+def test_scan_prepares_native_package_metadata_into_the_registry(
     composed_tables: None,
 ) -> None:
     """``scan`` runs the discovery walk and writes a REMOTE ``platform.Addon`` row."""
@@ -116,7 +125,7 @@ def test_scan_discovers_addon_toml_rows_into_the_registry(
         _execute(
             _schema(),
             _ADD_SOURCE,
-            {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "addons"}},
+            {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "src"}},
             user=admin,
         )
     )
@@ -130,7 +139,7 @@ def test_scan_discovers_addon_toml_rows_into_the_registry(
     with system_context(reason="test.marketplace.scan.verify"):
         row = Addon.objects.get(name="angee.demo")
     assert str(row.source) == Addon.AddonSource.REMOTE
-    assert row.vcs_path == "addons/angee/demo"
+    assert row.vcs_path == "src/angee/demo"
 
 
 def test_scan_refuses_a_non_addon_source(
@@ -163,7 +172,7 @@ def test_add_source_denies_a_non_admin(
     result = _execute(
         _schema(),
         _ADD_SOURCE,
-        {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "addons"}},
+        {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "src"}},
         user=plain,
     )
 

@@ -1,0 +1,18 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-messaging-integrate-slack"
+version = "3.0.0"
+description = "Slack messaging sync — polls workspace conversations into chat threads"
+keywords = ["slack", "chat", "messaging", "sync"]
+dependencies = ["angee-messaging>=3,<4", "angee-integrate>=3,<4", "angee-parties>=3,<4", "angee-web>=3,<4", "slack-sdk>=3.43.0"]
+dynamic = ["entry-points"]
+
+[tool.angee]
+
+[[tool.angee.resources.master]]
+path = "master/010_integrate.vendor.yaml"
+adopt = "slug"
+
+[tool.angee.platform]
+category = "Integration"

@@ -61,10 +61,6 @@ function useResourceOperation(
   return { target: resourceOperationTarget(resource, root), document };
 }
 
-/**
- * @kind null
- * @reason Runtime infrastructure: resolves the generated aggregate document and target for a resource.
- */
 export function useAggregateOperation(
   resource: DataResourceMetadata | null,
 ): ResourceOperation {

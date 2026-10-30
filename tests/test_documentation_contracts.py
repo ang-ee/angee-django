@@ -15,7 +15,7 @@ DOCUMENTS = sorted(
         *(ROOT / name for name in ("AGENTS.md", "README.md", "CONTRIBUTING.md")),
         *(ROOT / "docs").rglob("*.md"),
         *(ROOT / ".agents").rglob("*.md"),
-        *(ROOT / "addons/angee").glob("*/skills/**/*.md"),
+        *(ROOT / "src/angee").glob("*/skills/**/*.md"),
         *(ROOT / "packages").glob("*/README.md"),
         ROOT / "examples/e2e/README.md",
     }
@@ -109,5 +109,5 @@ def test_documented_verification_files_exist() -> None:
 def test_stack_documents_the_local_only_permission_backend() -> None:
     guide = prose((ROOT / "docs/stack.md").read_text())
     assert re.search(r"local backend is the only supported REBAC permission backend", guide)
-    assert "[Base autoconfig](../addons/angee/base/autoconfig.py)" in guide
+    assert "[Base autoconfig](../src/angee/base/autoconfig.py)" in guide
     assert "[REBAC rules](backend/guidelines.md#rebac)" in guide

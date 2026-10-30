@@ -1,4 +1,0 @@
-[addon]
-name = "tests.blankchoices"
-depends_on = ["angee.parties"]
-schemas = "schema.schemas"

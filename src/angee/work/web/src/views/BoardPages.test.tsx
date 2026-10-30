@@ -1,0 +1,139 @@
+// @vitest-environment happy-dom
+
+import { cleanup, render } from "@testing-library/react";
+import * as React from "react";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  listProps: null as Record<string, unknown> | null,
+  removedProps: null as Record<string, unknown> | null,
+  params: { queueId: "que_eng", id: "cyc_7" } as Record<string, string>,
+  leafLabel: undefined as string | undefined,
+}));
+
+vi.mock("@angee/projects", () => ({
+  TASK_MODEL: "projects.Task",
+  TaskBoardSurface: ({ children }: { children?: React.ReactNode }) => (
+    <>{children}</>
+  ),
+  useTaskFormDeclaration: () => null,
+}));
+
+vi.mock("@angee/ui", () => ({
+  Button: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  Column: () => null,
+  ErrorBanner: () => null,
+  List: (props: Record<string, unknown> & { children?: React.ReactNode }) => {
+    mocks.listProps = props;
+    return <>{props.children}</>;
+  },
+  Page: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  PageBody: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  CommandBand: ({ verbs }: { verbs?: React.ReactNode }) => <>{verbs}</>,
+  RecordHeader: () => null,
+  NavLink: ({ href, children }: { href?: string; children?: React.ReactNode }) => <a href={href}>{children}</a>,
+  useBreadcrumbLeafLabel: (label?: string) => {
+    mocks.leafLabel = label;
+  },
+  useResourceRecordHref: () => (id: string) => `/work/queues/${id}`,
+  ResourceList: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  useRouteHref: () => Object.assign(() => "/projects/tasks/task", { record: () => "/projects/tasks/task" }),
+  useRouteParam: (name: string) => mocks.params[name],
+}));
+
+vi.mock("@tanstack/react-router", () => ({
+  useNavigate: () => vi.fn(),
+  useParams: () => mocks.params,
+}));
+
+vi.mock("../context", () => ({
+  useQueueContext: () => ({
+    data: {
+      work_queues_by_pk: { name: "Engineering", estimate_scale: "FIBONACCI" },
+    },
+  }),
+  useCycleContext: () => ({
+    data: {
+      work_cycles_by_pk: {
+        id: "cyc_7",
+        name: "Cycle 7",
+        starts_on: "2026-08-17",
+        completed_at: null,
+      },
+    },
+  }),
+}));
+
+vi.mock("../cycle-actions", () => ({
+  CycleCloseControl: () => null,
+}));
+
+vi.mock("../i18n", () => ({
+  useWorkT: () => (key: string) => key,
+}));
+
+vi.mock("../removed-tasks", () => ({
+  RemovedTasks: (props: Record<string, unknown>) => {
+    mocks.removedProps = props;
+    return null;
+  },
+}));
+
+import { CycleBoardPage } from "./CycleBoardPage";
+import { QueueBoardPage } from "./QueueBoardPage";
+
+beforeEach(() => {
+  mocks.listProps = null;
+  mocks.removedProps = null;
+  mocks.leafLabel = undefined;
+  mocks.params = { queueId: "que_eng", id: "cyc_7" };
+});
+
+afterEach(cleanup);
+
+describe("work board stage lanes", () => {
+  test("offers the queue's removed tasks beside its board", () => {
+    render(<QueueBoardPage />);
+    expect(mocks.removedProps).toMatchObject({ queue: "que_eng" });
+  });
+
+  test("links the board to its queue's settings record instead of leaving Work, and names its crumb", () => {
+    const { getByRole } = render(<QueueBoardPage />);
+    expect(getByRole("link", { name: "queue.settings" }).getAttribute("href")).toBe("/work/queues/que_eng");
+    expect(mocks.leafLabel).toBe("Engineering");
+  });
+
+  test("keeps triage and duplicate stages out of both planning boards", () => {
+    // System stages are excluded by the LANE filters only: `stage` is an ID
+    // comparison on the wire, so a nested stage.category baseFilter is not
+    // expressible — rows in system stages simply have no lane to render in.
+    const queue = render(<QueueBoardPage />);
+    expectBoardStageScope(mocks.listProps, {
+      queue: { exact: "que_eng" },
+    });
+    queue.unmount();
+
+    render(<CycleBoardPage />);
+    expectBoardStageScope(mocks.listProps, {
+      queue: { exact: "que_eng" },
+      cycle: { exact: "cyc_7" },
+    });
+  });
+});
+
+function expectBoardStageScope(
+  props: Record<string, unknown> | null,
+  baseFilter: Record<string, unknown>,
+): void {
+  expect(props?.baseFilter).toEqual(baseFilter);
+  expect(props?.laneSource).toEqual({
+    field: "stage",
+    rankField: "sort_order",
+    rankInputField: "task_order",
+    filters: [
+      { field: "queue", operator: "eq", value: "que_eng" },
+      { field: "is_system", operator: "eq", value: false },
+    ],
+    sorters: [{ field: "position", order: "asc" }],
+  });
+}

@@ -10,9 +10,9 @@
 {# stack root (ANGEE_ROOT=.), so the defaults arrive as "." and the src slot path. #}
 {% set app_source = project_path %}
 {% set framework_source = framework_path %}
-{# The rendered project pyproject owns framework resolution (django-angee editable #}
-{# from the framework slot, postgres extra baked into the dep) and pins uv's cache #}
-{# to the stack-owned caches/uv — so process commands run bare `uv run` with no #}
+{# The rendered project pyproject owns framework resolution (the editable angee #}
+{# meta-distribution from the framework slot, postgres extra baked into the dep) #}
+{# and pins uv's cache to stack-owned caches/uv — commands run bare `uv run` with no #}
 {# --project, no --extra, and no UV_CACHE_DIR override in any layout. #}
 {# Process mode reaches published ports; Docker mode uses Compose DNS and the host gateway. #}
 {# Guarded sets stay on one physical line for pongo2 and the contract-test mini-renderer. #}

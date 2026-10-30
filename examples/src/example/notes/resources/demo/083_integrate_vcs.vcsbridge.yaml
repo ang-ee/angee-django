@@ -1,0 +1,9 @@
+# The portable local-template bridge starts unconfigured. The project supplies
+# config.local_root/config.local_name, then connects after demo load; see README.md.
+# LocalVCSBackend resolves relative project-owned paths against BASE_DIR.
+- xref: vcs_local_templates
+  owner: iam.user_admin
+  vendor: notes.vendor_local
+  backend_class: local
+  credential: notes.cred_local_templates
+  lifecycle: disconnected

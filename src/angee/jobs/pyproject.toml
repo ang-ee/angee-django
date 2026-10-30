@@ -1,0 +1,14 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-jobs"
+version = "3.0.0"
+description = "Deferred and periodic execution through native Celery"
+keywords = ["jobs", "celery", "scheduling"]
+dependencies = ["django-compose>=0.1.0.dev2,<0.2", "celery[redis]>=5.5", "billiard>=4.2.1,<4.3", "django-celery-beat @ git+https://github.com/celery/django-celery-beat.git@b5e3443d647baf910c0168f25b512dd388ba669e", "angee-base>=3,<4"]
+dynamic = ["entry-points"]
+
+[tool.angee]
+
+[tool.angee.platform]
+category = "Foundation"

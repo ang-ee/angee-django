@@ -735,6 +735,9 @@ class FakeIMAPClient:
             response[uid] = item
         return response
 
+    def __exit__(self, *args):
+        self.logout()
+
     def logout(self) -> None:
         self.account.logouts += 1
 
@@ -821,7 +824,7 @@ def _drain(backend: ImapChannelBackend) -> list[Any]:
 def test_web_sample_selection_limit_matches_backend() -> None:
     """The preview's selection cap must stay within the import owner's bound."""
 
-    action = Path(__file__).parents[1] / "addons/angee/messaging_integrate_imap/web/src/ImportImapSampleAction.tsx"
+    action = Path(__file__).parents[1] / "src/angee/messaging_integrate_imap/web/src/ImportImapSampleAction.tsx"
     assert f"const IMAP_SAMPLE_LIMIT = {MAX_SAMPLE_MESSAGES};" in action.read_text()
 
 
@@ -1561,6 +1564,8 @@ def test_login_refusal_names_the_account_and_host(monkeypatch: pytest.MonkeyPatc
     assert "pw" not in raised.value.public_message
     assert "Private server detail" not in raised.value.public_message
     assert isinstance(raised.value.__cause__, LoginError)
+    assert account.logouts == 1
+    assert backend._client is None
 
 
 def test_transport_failure_while_dialing_is_an_imap_error(monkeypatch: pytest.MonkeyPatch) -> None:

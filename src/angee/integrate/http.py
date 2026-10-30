@@ -1,0 +1,521 @@
+"""Shared SSRF-pinned outbound HTTP for integration backends.
+
+The single owner of "make one outbound HTTP request." The transport is httpx2 over
+a custom httpcore2 network backend (:class:`_PinnedBackend`) that resolves the host
+once and dials a validated IP — closing the resolve-then-connect (DNS-rebind) gap
+— while httpcore2's ``start_tls(server_hostname=…)`` keeps TLS verification on the
+original hostname. The address judgement is owned by ``net.is_unsafe_address``;
+this module only pins and dials.
+
+One outbound-network policy lives here and everything composes it: integration
+backends reach it as ``self.http`` (:class:`HttpClientMixin`), and the OAuth client
+hands the same :class:`PinnedTransport` to Authlib, whose OAuth2 client is an
+``httpx2.Client`` — a transport from another HTTP stack cannot serve it. TLS trusts
+the system store through the stdlib context (``ssl.create_default_context``) per
+docs/backend/guidelines.md, not httpx2's own default context.
+
+By default only public addresses are dialled. ``allow_private=True`` is the
+operator-configured-connection policy — a self-hosted host on a private network:
+it permits RFC-1918 / loopback so those connections work, but still rejects the
+SSRF escapes that have no legitimate target either way — cloud metadata (the
+well-known IPs, link-local ``169.254/16``, and the RFC 6598 shared range that
+front metadata services), multicast, and unspecified. Redirects are not followed
+unless requested through native ``follow_redirects`` or the bounded,
+method-preserving ``same_origin_redirects`` policy; each hop re-enters the pinned
+backend.
+"""
+
+from __future__ import annotations
+
+import ssl
+import time
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from functools import cached_property
+from typing import Any, ClassVar
+
+import httpcore2
+import httpx2
+from django.core.exceptions import ValidationError
+
+from .errors import RequestNotSentError
+from .net import (
+    AddressNotAllowedError,
+    canonical_address,
+    is_unsafe_address,
+    parse_http_url,
+    resolved_addresses,
+)
+
+HTTP_TIMEOUT_SECONDS = 10
+"""Default timeout (seconds) for one outbound request."""
+
+_DOWNLOAD_CHUNK_BYTES = 64 * 1024
+"""Maximum chunk read while enforcing a capped streamed download."""
+
+_SSL_CONTEXT = ssl.create_default_context()
+"""One shared system-trust-store TLS context reused by every pinned transport, so the
+CA bundle is parsed once rather than on every outbound request."""
+
+
+class RedirectOriginError(ValidationError):
+    """A redirect would send the request to a different origin."""
+
+
+class ResponseTooLargeError(ValidationError):
+    """The decoded response body exceeds the caller's byte limit."""
+
+
+def same_origin(first: str | httpx2.URL, second: str | httpx2.URL) -> bool:
+    """Compare normalized URL origins, including effective ports and excluding credentials."""
+
+    left, right = httpx2.URL(first), httpx2.URL(second)
+    return (left.scheme, left.host, left.port) == (right.scheme, right.host, right.port)
+
+
+@dataclass(frozen=True, slots=True)
+class OutboundBudget:
+    """Hard bounds for one redirecting, decoded outbound download."""
+
+    requests: int = 5
+    redirects: int = 4
+    bytes: int = 512 * 1024
+    deadline_seconds: float = 10.0
+
+    def __post_init__(self) -> None:
+        if self.requests < 1 or self.redirects < 0 or self.bytes < 1 or self.deadline_seconds <= 0:
+            raise ValueError("Outbound budget values must be positive (redirects may be zero).")
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadResult:
+    """Successful bounded download with the final validated response facts."""
+
+    content: bytes
+    final_url: str
+    content_type: str
+    status_code: int
+
+
+@dataclass(slots=True)
+class OutboundBudgetState:
+    """Mutable accounting shared by every download in one outbound operation."""
+
+    budget: OutboundBudget
+    started: float = field(default_factory=time.monotonic)
+    requests: int = 0
+    redirects: int = 0
+    bytes: int = 0
+
+    def remaining_seconds(self) -> float:
+        return self.budget.deadline_seconds - (time.monotonic() - self.started)
+
+
+class _PinnedBackend(httpcore2.SyncBackend):
+    """httpcore2 backend that resolves once, rejects SSRF-unsafe addresses, and dials
+    a validated IP — so a DNS rebind between check and connect cannot move the
+    request. ``net.is_unsafe_address`` owns the judgement; this only pins and dials.
+    """
+
+    def __init__(self, *, allow_private: bool) -> None:
+        """Bind the address policy for every connection this backend dials."""
+
+        super().__init__()
+        self._allow_private = allow_private
+
+    def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[Any] | None = None,
+    ) -> httpcore2.NetworkStream:
+        """Resolve ``host``, reject unsafe addresses, and dial a validated IP.
+
+        ``host`` is the origin hostname; httpcore2 later calls
+        ``start_tls(server_hostname=host)``, so dialing a validated IP here leaves
+        SNI and certificate verification on the real hostname.
+        """
+
+        last_error: Exception | None = None
+        for address in self._validated_addresses(host, port):
+            try:
+                return super().connect_tcp(
+                    str(address),
+                    port,
+                    timeout=timeout,
+                    local_address=local_address,
+                    socket_options=socket_options,
+                )
+            except (httpcore2.ConnectError, httpcore2.ConnectTimeout, OSError) as exc:
+                last_error = exc
+        raise RequestNotSentError() from last_error
+
+    def _validated_addresses(self, host: str, port: int) -> tuple[Any, ...]:
+        """Return every resolved address for ``host``, or raise if any is unsafe."""
+
+        addresses = tuple(canonical_address(address) for address in resolved_addresses(host, port))
+        for address in addresses:
+            if is_unsafe_address(address, allow_private=self._allow_private):
+                raise AddressNotAllowedError()
+        return addresses
+
+
+class PinnedTransport(httpx2.HTTPTransport):
+    """An httpx2 transport whose connections are SSRF-pinned and whose TLS trusts the
+    system store. The shared pinned-httpx2 primitive: :class:`HttpClient` issues
+    requests over it, and the OAuth client hands it to Authlib's ``OAuth2Client``.
+    """
+
+    def __init__(self, *, allow_private: bool = False) -> None:
+        """Build a pinned transport; ``allow_private`` permits self-hosted RFC-1918 hosts."""
+
+        super().__init__(verify=_SSL_CONTEXT, retries=0)
+        # httpx2.HTTPTransport builds the connection pool but exposes no public seam to
+        # inject a network backend, so swap httpcore2's private ``_network_backend``
+        # before any request. Fail loudly if a future httpx2/httpcore2 renames it: a
+        # silent fallback to the default backend would disable SSRF pinning (fail-open).
+        pool = self._pool
+        if not hasattr(pool, "_network_backend"):
+            raise RuntimeError(
+                "httpx2/httpcore2 changed: ConnectionPool exposes no '_network_backend'; SSRF "
+                "pinning would be disabled — re-verify PinnedTransport against the new version."
+            )
+        pool._network_backend = _PinnedBackend(allow_private=allow_private)
+
+    def handle_request(self, request: httpx2.Request) -> httpx2.Response:
+        """Classify only native connect/handshake failures as provably not sent."""
+
+        try:
+            return super().handle_request(request)
+        except (httpx2.ConnectError, httpx2.ConnectTimeout) as error:
+            raise RequestNotSentError() from error
+
+
+class HttpClient:
+    """A reusable SSRF-pinned outbound HTTP client over httpx2.
+
+    Stateless to the caller — one instance per backend is fine. Each call gates the
+    URL, pins via :class:`PinnedTransport`, and dials the validated IP; a DNS rebind
+    between check and connect cannot redirect it. A caller-supplied ``Host`` header
+    cannot displace the URL's real host. Redirects are followed only when
+    ``follow_redirects=True`` or a positive ``same_origin_redirects`` bound is
+    supplied to ``request`` (each hop re-validates).
+    """
+
+    transport_factory: ClassVar[Callable[..., httpx2.BaseTransport]] = PinnedTransport
+    """Build each transport with ``allow_private``.
+
+    Overrides must be a transport class or a ``staticmethod`` so instance access
+    does not bind the factory to this client.
+    """
+
+    def get(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        allow_private: bool = False,
+        follow_redirects: bool = False,
+        timeout: int = HTTP_TIMEOUT_SECONDS,
+    ) -> httpx2.Response:
+        """GET ``url`` and return the response."""
+
+        return self.request(
+            "GET", url, headers=headers, allow_private=allow_private, follow_redirects=follow_redirects, timeout=timeout
+        )
+
+    def download_capped(
+        self,
+        url: str,
+        *,
+        cap: int,
+        headers: dict[str, str] | None = None,
+        follow_redirects: bool = False,
+        allow_private: bool = False,
+        timeout: int = HTTP_TIMEOUT_SECONDS,
+    ) -> bytes | None:
+        """Stream a pinned GET without reading more than ``cap`` bytes."""
+
+        if cap <= 0:
+            return None
+        result = self.download_bounded(
+            url,
+            headers=headers,
+            allow_private=allow_private,
+            budget=OutboundBudget(
+                requests=6 if follow_redirects else 1,
+                redirects=5 if follow_redirects else 0,
+                bytes=cap,
+                deadline_seconds=float(timeout),
+            ),
+        )
+        return result.content if result is not None else None
+
+    def download_bounded(
+        self,
+        url: str,
+        *,
+        budget: OutboundBudget = OutboundBudget(),
+        budget_state: OutboundBudgetState | None = None,
+        max_bytes: int | None = None,
+        max_redirects: int | None = None,
+        headers: dict[str, str] | None = None,
+        allow_private: bool = False,
+    ) -> DownloadResult | None:
+        """Download decoded bytes within one explicit request/redirect/deadline budget.
+
+        Redirects are followed manually so every location re-enters URL parsing,
+        DNS validation and the pinned transport while request and hop counts remain
+        visible. ``iter_bytes`` enforces the cap after content decoding.
+        Identity encoding is requested; if ignored, httpx2 may allocate a decoded
+        network chunk before the cap is checked. See :meth:`request` for the
+        residual decoder-memory bound.
+        """
+
+        if max_bytes is not None and max_bytes < 1:
+            raise ValueError("max_bytes must be positive when provided.")
+        if max_redirects is not None and max_redirects < 0:
+            raise ValueError("max_redirects may not be negative.")
+        state = budget_state or OutboundBudgetState(budget)
+        if state.budget != budget:
+            raise ValueError("A shared outbound budget state must use the supplied budget.")
+        response_redirects = 0
+        redirect_limit = budget.redirects if max_redirects is None else max_redirects
+        parse_http_url(url)
+        with httpx2.Client(transport=self.transport_factory(allow_private=allow_private)) as client:
+            request = client.build_request("GET", url, headers=_request_headers(headers, capped=True))
+            while True:
+                parse_http_url(str(request.url))
+                remaining = state.remaining_seconds()
+                if remaining <= 0 or state.requests >= budget.requests:
+                    return None
+                request.extensions["timeout"] = httpx2.Timeout(min(float(HTTP_TIMEOUT_SECONDS), remaining)).as_dict()
+                state.requests += 1
+                try:
+                    response = client.send(request, stream=True, follow_redirects=False)
+                    try:
+                        if response.is_redirect:
+                            if (
+                                response.next_request is None or response_redirects >= redirect_limit
+                                or state.redirects >= budget.redirects
+                            ):
+                                return None
+                            response_redirects += 1
+                            state.redirects += 1
+                            # Native redirect construction owns auth, cookies and Host.
+                            request = response.next_request
+                            continue
+                        if not response.is_success:
+                            return None
+                        remaining_bytes = budget.bytes - state.bytes
+                        if remaining_bytes <= 0:
+                            return None
+                        response_limit = min(remaining_bytes, max_bytes) if max_bytes is not None else remaining_bytes
+                        content = _read_capped(response, max_bytes=response_limit, state=state)
+                        if content is None:
+                            return None
+                        return DownloadResult(
+                            content=content,
+                            final_url=str(response.url),
+                            content_type=response.headers.get("content-type", ""),
+                            status_code=response.status_code,
+                        )
+                    finally:
+                        response.close()
+                except RequestNotSentError as error:
+                    if response_redirects:
+                        raise httpx2.TransportError("HTTP request failed after an earlier request was sent.") from error
+                    raise
+
+    def post(
+        self,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        allow_private: bool = False,
+        follow_redirects: bool = False,
+        timeout: int = HTTP_TIMEOUT_SECONDS,
+    ) -> httpx2.Response:
+        """POST ``body`` to ``url`` and return the response."""
+
+        return self.request(
+            "POST",
+            url,
+            headers=headers,
+            body=body,
+            allow_private=allow_private,
+            follow_redirects=follow_redirects,
+            timeout=timeout,
+        )
+
+    @contextmanager
+    def stream(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        allow_private: bool = False,
+        timeout: int | httpx2.Timeout = HTTP_TIMEOUT_SECONDS,
+    ) -> Iterator[httpx2.Response]:
+        """Keep one pinned response open for its caller's context lifetime.
+
+        Native httpx2 owns streaming and closure. The shared URL, transport and
+        header policy applies; redirects remain disabled. Native ``httpx2.Timeout``
+        allows a transport owner to select separate connection and read limits.
+        """
+
+        parse_http_url(url)
+        with httpx2.Client(
+            transport=self.transport_factory(allow_private=allow_private), timeout=timeout,
+        ) as client:
+            with client.stream(
+                method, url, headers=_request_headers(headers, capped=False),
+                content=body, follow_redirects=False,
+            ) as response:
+                yield response
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        body: bytes | None = None,
+        allow_private: bool = False,
+        follow_redirects: bool = False,
+        same_origin_redirects: int = 0,
+        max_bytes: int | None = None,
+        timeout: int = HTTP_TIMEOUT_SECONDS,
+    ) -> httpx2.Response:
+        """Send one pinned request to ``url`` and return the response.
+
+        Raises ``ValidationError`` when the URL is rejected by the gate, the
+        permanent ``AddressNotAllowedError`` (a ``ValidationError``) when a resolved
+        address is refused by the SSRF policy, and the transient
+        ``RequestNotSentError`` for connection/DNS/TLS failures before sending.
+        Write/read failures retain their uncertain transport type.
+        ``same_origin_redirects`` follows at most that many 301/302/307/308 hops,
+        retaining the method, body and headers. A changed origin raises
+        ``RedirectOriginError`` before sending credentials. It is exclusive with native ``follow_redirects``;
+        a missing location or exhausted hop bound returns the redirect response.
+        ``max_bytes`` caps each decoded response body, including redirect hops,
+        raising ``ResponseTooLargeError`` on overflow. Capped reads request
+        ``Accept-Encoding: identity``. If a server still encodes its response,
+        httpx2 may decode a whole network chunk before the cap is checked: the
+        cap bounds accepted decoded content, not peak decoder memory.
+        """
+
+        if same_origin_redirects < 0 or (same_origin_redirects and follow_redirects):
+            raise ValueError("same_origin_redirects must be nonnegative and exclusive with follow_redirects.")
+        if max_bytes is not None and max_bytes < 1:
+            raise ValueError("max_bytes must be positive when provided.")
+
+        response_seen = False
+
+        def read_response(response: httpx2.Response) -> None:
+            """Enforce the cap before httpx2 buffers a response or follows its redirect."""
+
+            nonlocal response_seen
+            response_seen = True
+            if max_bytes is not None:
+                content = _read_capped(response, max_bytes=max_bytes)
+                if content is None:
+                    raise ResponseTooLargeError("HTTP response exceeds the byte limit.")
+                # httpx2's read() has no cap or public body-cache setter. Store
+                # the decoded cache it owns, preserving the native response.
+                response._content = content
+
+        with httpx2.Client(
+            transport=self.transport_factory(allow_private=allow_private),
+            timeout=timeout,
+            event_hooks={"response": [read_response]},
+        ) as client:
+            for hop in range(same_origin_redirects + 1):
+                parse_http_url(url)  # scheme/host gate; the pinned backend judges the address
+                try:
+                    response = client.request(
+                        method, url,
+                        headers=_request_headers(headers, capped=max_bytes is not None),
+                        content=body, follow_redirects=follow_redirects,
+                    )
+                except RequestNotSentError as error:
+                    if response_seen:
+                        raise httpx2.TransportError("HTTP request failed after an earlier request was sent.") from error
+                    raise
+                if (
+                    hop == same_origin_redirects
+                    or response.status_code not in {301, 302, 307, 308}
+                    or not response.headers.get("location")  # httpx2 also creates next_request for an empty Location.
+                    or response.next_request is None
+                ):
+                    break
+                destination = response.next_request.url
+                if not same_origin(destination, response.url):
+                    raise RedirectOriginError("Redirects must retain the request origin.")
+                url = str(destination)
+        return response
+
+
+def _read_capped(
+    response: httpx2.Response,
+    *,
+    max_bytes: int,
+    state: OutboundBudgetState | None = None,
+) -> bytes | None:
+    """Read decoded bytes within the cap and optional operation budget; refuse overflow."""
+
+    has_body = (
+        response.request.method != "HEAD"
+        and response.status_code not in {204, 304}
+        and not response.is_informational
+    )
+    declared_length = response.headers.get("content-length") if has_body else None
+    if declared_length is not None:
+        try:
+            if int(declared_length) > max_bytes:
+                return None
+        except ValueError:
+            pass
+    chunks: list[bytes] = []
+    response_bytes = 0
+    for chunk in response.iter_bytes(chunk_size=min(_DOWNLOAD_CHUNK_BYTES, max_bytes + 1)):
+        if state is not None:
+            if state.remaining_seconds() <= 0:
+                return None
+            state.bytes += len(chunk)
+        response_bytes += len(chunk)
+        if response_bytes > max_bytes:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+class HttpClientMixin:
+    """Gives an integration backend the shared SSRF-pinned client as ``self.http``.
+
+    Compose it into a backend that makes outbound calls so it calls
+    ``self.http.get(url, headers=…)`` rather than opening its own connection.
+    HTTP stays opt-in this way — an implementation that does no I/O carries no client.
+    """
+
+    @cached_property
+    def http(self) -> HttpClient:
+        """Return this backend's shared outbound HTTP client."""
+
+        return HttpClient()
+
+
+def _request_headers(headers: dict[str, str] | None, *, capped: bool) -> httpx2.Headers:
+    """Keep the URL's Host and request identity encoding for capped response reads."""
+
+    result = httpx2.Headers(headers)
+    result.pop("Host", None)
+    if capped:
+        result["Accept-Encoding"] = "identity"
+    return result

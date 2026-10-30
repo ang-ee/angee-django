@@ -41,7 +41,7 @@ print(response.usage.input_tokens, response.usage.output_tokens)
 
 `InferenceProvider.chat` accepts keyword-only `model=...`, `messages=...`,
 `model_settings=...`, `model_request_parameters=...`, and `credential=...`.
-[`InferenceModel.chat`](../../addons/angee/agents/models.py) resolves its wire
+[`InferenceModel.chat`](../../src/angee/agents/models.py) resolves its wire
 model name and takes native messages as its first argument. It returns
 `pydantic_ai.messages.ModelResponse`.
 
@@ -64,7 +64,7 @@ then `async with binding as model` inside the runner. Custom backends implement
 not add a second request/response protocol. Client contexts close on normal
 completion, provider errors and cancellation.
 
-[`InferenceModel.require_usable`](../../addons/angee/agents/models.py) requires
+[`InferenceModel.require_usable`](../../src/angee/agents/models.py) requires
 the actor's read access, approved deployment identity and a live model with an
 accepted use. Roles name approval policies independently of modality; callers
 declare their accepted `uses`. An absent
@@ -75,19 +75,19 @@ The effective endpoint comes from `InferenceBackend.endpoint` for both SDK
 clients and deployment approval. Provider and credential persistence follows the
 [Database routing rule](../backend/guidelines.md#rules).
 
-[`InferenceBackend.is_transient_error`](../../addons/angee/agents/backends.py)
+[`InferenceBackend.is_transient_error`](../../src/angee/agents/backends.py)
 classifies native HTTP 429/server errors and connection/timeout exceptions;
 vendor adapters extend that policy with SDK exception types. Invalid local
 timeout settings are terminal configuration errors. Adapter timestamps and
 provider ids in the response are retained evidence, not stable hash or reuse keys.
 
-[`normalize_inference_usage`](../../addons/angee/agents/models.py) is the one
+[`normalize_inference_usage`](../../src/angee/agents/models.py) is the one
 usage projection for direct requests and agent sessions. It emits non-zero
 `input_tokens`, `output_tokens`, `tokens`, `requests`, and `tool_calls` values.
 
-The independent [`extraction`](../../addons/angee/extraction/README.md) domain
+The independent [`extraction`](../../src/angee/extraction/README.md) domain
 uses `InferenceModel.infer` for grounded recognition and mapping. Its
-[`workflows_extraction`](../../addons/angee/workflows_extraction/README.md)
+[`workflows_extraction`](../../src/angee/workflows_extraction/README.md)
 adapter owns the workflow graph and steps: `infer_evidence` reads a pinned
 extraction revision, rechecks source access, and routes an unavailable model to
 the `inference_failed` outcome with a reader-facing reason. Provider selection,

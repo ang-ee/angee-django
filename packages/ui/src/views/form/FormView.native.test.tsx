@@ -529,7 +529,7 @@ test("a full acknowledgement rebases submitted graph values while retaining late
   });
   edit("title", "Submitted");
   edit("definition.nodes.new.name", "Submitted node");
-  let saving!: Promise<Row | null>;
+  let saving!: Promise<void>;
   act(() => { saving = f.surface().submitForm(); });
   await waitFor(() => expect(f.surface().pending).toBe(true));
   edit("definition.nodes.new.name", "Later node");
@@ -585,7 +585,7 @@ test.each(["add", "remove", "reorder"] as const)("a full acknowledgement preserv
     submit: () => new Promise((done) => { resolve = done; }),
   });
   act(() => f.surface().form.setValue("title", "Submitted", { shouldDirty: true }));
-  let saving!: Promise<Row | null>;
+  let saving!: Promise<void>;
   act(() => { saving = f.surface().submitForm(); });
   await waitFor(() => expect(f.surface().pending).toBe(true));
   act(() => f.surface().form.setValue(
@@ -920,16 +920,6 @@ test("accepted patches update the real detail cache and displayed record without
   expect(f.getOne).toHaveBeenCalledTimes(1);
 });
 
-test.each([null, "note-1"])("submitForm returns the acknowledged record for %s after native validation and saving", async (id) => {
-  const f = await fixture({ id });
-  edit("title", "Accepted");
-  let accepted: Row | null = null;
-  await act(async () => { accepted = await f.surface().submitForm(); });
-  expect(accepted).toMatchObject({ id: "note-1", title: "Accepted" });
-  expect(f.onSaved).toHaveBeenCalledWith(accepted);
-  expect(f.surface().formIsDirty).toBe(false);
-});
-
 test("partial custom saves preserve omitted fields and refetch canonical detail data", async () => {
   let f!: Awaited<ReturnType<typeof fixture>>;
   const submit = vi.fn(async () => {
@@ -948,7 +938,7 @@ test("partial custom saves preserve omitted fields and refetch canonical detail 
 test("a missing custom response reports failure and retains the draft", async () => {
   const f = await fixture({ submit: async () => savedFormSubmitResult<Row>(undefined, "No record returned.") });
   edit("title", "Unsaved");
-  await act(async () => { expect(await f.surface().submitForm()).toBeNull(); });
+  await act(async () => f.surface().submitForm());
   expect(f.surface().saveError).toBe("No record returned.");
   expect(f.surface().formIsDirty).toBe(true);
   expect(f.onSaved).not.toHaveBeenCalled();
@@ -957,7 +947,7 @@ test("a missing custom response reports failure and retains the draft", async ()
 test("native validation includes unmounted required fields and respects visibility", async () => {
   const f = await fixture({ id: null });
   edit("title", "Scheduled");
-  await act(async () => { expect(await f.surface().submitForm()).toBeNull(); });
+  await act(async () => f.surface().submitForm());
   expect(f.update).not.toHaveBeenCalled();
   expect(f.surface().form.getFieldState("deadline").error?.type).toBe("required");
   edit("title", "Unscheduled");
@@ -981,14 +971,14 @@ test("duplicate submits are ignored and a previous record save cannot reset or n
   const submit = vi.fn(() => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })));
   const f = await fixture({ submit });
   edit("title", "Old edit");
-  let first!: Promise<Row | null>;
+  let first!: Promise<void>;
   act(() => { first = f.surface().submitForm(); void f.surface().submitForm(); });
   await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
   f.setRecord({ id: "note-2", title: "Second", body: "Second body" });
   f.rerender({ recordId: "note-2" });
   await waitFor(() => expect(f.surface().form.getValues("title")).toBe("Second"));
   edit("title", "New edit");
-  await act(async () => { resolve({ id: "note-1", title: "Old saved" }); expect(await first).toBeNull(); });
+  await act(async () => { resolve({ id: "note-1", title: "Old saved" }); await first; });
   expect(f.surface().form.getValues("title")).toBe("New edit");
   expect(f.surface().formIsDirty).toBe(true);
   expect(f.onSaved).not.toHaveBeenCalled();
@@ -1000,7 +990,7 @@ test("same-record refresh during custom submit cannot clear the transport pendin
   const submit = vi.fn(() => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })));
   const f = await fixture({ submit });
   edit("title", "Submitting");
-  let saving!: Promise<Row | null>;
+  let saving!: Promise<void>;
   act(() => { saving = f.surface().submitForm(); });
   await waitFor(() => expect(f.surface().pending).toBe(true));
   f.setRecord({ id: "note-1", title: "Remote", body: "Fresh" });
@@ -1028,7 +1018,7 @@ test("a delayed custom save preserves later edits and rebases only the accepted 
   const submit = vi.fn(() => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })));
   const f = await fixture({ submit });
   edit("title", "Submitted title");
-  let saving!: Promise<Row | null>;
+  let saving!: Promise<void>;
   act(() => { saving = f.surface().submitForm(); });
   await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
   edit("title", "Later title");
@@ -1051,7 +1041,7 @@ test("native Refine write acceptance keeps later edits available to the next sav
   let resolve!: (value: { data: Row }) => void;
   f.update.mockImplementationOnce(() => new Promise<{ data: Row }>((done) => { resolve = done; }));
   edit("title", "Submitted title");
-  let saving!: Promise<Row | null>;
+  let saving!: Promise<void>;
   act(() => { saving = f.surface().submitForm(); });
   await waitFor(() => expect(f.update).toHaveBeenCalledTimes(1));
   edit("title", "Later title");
@@ -1069,7 +1059,7 @@ test("a change back to the old value during save stays dirty against the accepte
   let resolve!: (value: Row) => void;
   const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })) });
   edit("title", "Submitted title");
-  let saving!: Promise<Row | null>;
+  let saving!: Promise<void>;
   act(() => { saving = f.surface().submitForm(); });
   await waitFor(() => expect(f.surface().pending).toBe(true));
   edit("title", "First");
@@ -1085,7 +1075,7 @@ test.each(["failure", "no row"])("later edits survive a delayed %s without advan
   let reject!: (reason: Error) => void;
   const f = await fixture({ submit: () => new Promise<Row | null>((done, fail) => { resolve = done; reject = fail; }).then((data) => savedFormSubmitResult(data, "No record returned.")) });
   edit("title", "Submitted title");
-  let saving!: Promise<Row | null>;
+  let saving!: Promise<void>;
   act(() => { saving = f.surface().submitForm(); });
   await waitFor(() => expect(f.surface().pending).toBe(true));
   edit("title", "Later title");
@@ -1124,7 +1114,7 @@ test.each([false, true])("a native create accepts an unmounted server-assigned r
   fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Submitted title" } });
   expect(f.surface().form.getValues("parent")).toBeNull();
   expect(screen.queryByRole("textbox", { name: "Parent" })).toBeNull();
-  let saving!: Promise<Row | null>;
+  let saving!: Promise<void>;
   act(() => { saving = f.surface().submitForm(); });
   await waitFor(() => expect(f.update).toHaveBeenCalledTimes(1));
   expect(f.update).toHaveBeenCalledWith(expect.objectContaining({ variables: { title: "Submitted title" } }));
@@ -1163,7 +1153,7 @@ test.each([false, true])("a created record survives descriptor rerenders and pre
   let resolve!: (value: { data: Row }) => void;
   f.update.mockImplementationOnce(() => new Promise<{ data: Row }>((done) => { resolve = done; }));
   edit("title", "Submitted title");
-  let saving!: Promise<Row | null>;
+  let saving!: Promise<void>;
   act(() => { saving = f.surface().submitForm(); });
   await waitFor(() => expect(f.update).toHaveBeenCalledTimes(1));
   if (laterEdit) edit("title", "Later title");
@@ -1201,7 +1191,7 @@ test("a later edit equal to the canonical accepted value becomes clean", async (
   let resolve!: (value: Row) => void;
   const f = await fixture({ submit: () => new Promise<Row>((done) => { resolve = done; }).then((data) => ({ status: "ok" as const, data })) });
   edit("title", "  Normalized title  ");
-  let saving!: Promise<Row | null>;
+  let saving!: Promise<void>;
   act(() => { saving = f.surface().submitForm(); });
   await waitFor(() => expect(f.surface().pending).toBe(true));
   edit("title", "Normalized title");

@@ -4,7 +4,7 @@ A consumer addon contributes relations and permission arms to a definition owned
 by another addon through a sibling ``permissions.extends.zed`` fragment, instead
 of editing the owner's ``permissions.zed``. These tests pin the merge semantics
 (carries the relation, unions the arm, fails fast on collision / missing target /
-missing arm, deterministic), the round-trip renderer, and the full wiring:
+uniquely owned declarations, deterministic), the round-trip renderer, and the full wiring:
 emit + repoint + ``rebac sync`` so a tuple on the contributed relation resolves
 through the local evaluator.
 """
@@ -17,8 +17,8 @@ from types import SimpleNamespace
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
+from django_compose.artifacts import atomic_write
 from rebac import RelationshipTuple, system_context, to_subject_ref, write_relationships
 from rebac.backends import backend
 from rebac.schema.parser import parse_zed, validate_schema
@@ -31,8 +31,9 @@ from angee.base.build import (
     merged_schemas,
     render_zed,
 )
+from angee.base.permissions import declared_schema_path
 from angee.base.testing.permissions import installed_field_owners
-from angee.utils.files import write_atomic
+from tests.conftest import make_addon
 
 User = get_user_model()
 
@@ -171,16 +172,65 @@ def test_two_contributors_same_relation_collides(tmp_path: Path) -> None:
         merged_schemas([base, first, second])
 
 
-def test_arm_without_base_permission_fails_fast(tmp_path: Path) -> None:
-    """A fragment can only union into an existing permission, not introduce one."""
+def test_fragment_introduces_its_owned_permission_without_a_base_placeholder(tmp_path: Path) -> None:
+    """An optional capability owns its permission declaration beside its contributed relation."""
 
     base = _base_addon(tmp_path)
     contrib = _contrib_addon(
         tmp_path,
-        "definition demo/thing {\n    relation reviewer: auth/user\n    permission approve = reviewer\n}\n",
+        "definition demo/thing { relation reviewer: auth/user permission approve = reviewer }",
     )
-    with pytest.raises(SchemaExtensionError, match="approve"):
+    definition = merged_schemas([base, contrib])["base"].get_definition("demo/thing")
+    approve = next(permission for permission in definition.permissions if permission.name == "approve")
+    assert _render_expr_names(approve) == {"reviewer"}
+    assert {permission.name for permission in definition.permissions} == {"read", "write", "approve"}
+
+
+def test_two_contributors_cannot_introduce_the_same_permission(tmp_path: Path) -> None:
+    base = _base_addon(tmp_path)
+    first = _contrib_addon(
+        tmp_path, "definition demo/thing { permission approve = owner }", name="contrib_a",
+    )
+    second = _contrib_addon(
+        tmp_path, "definition demo/thing { permission approve = owner }", name="contrib_b",
+    )
+    with pytest.raises(SchemaExtensionError, match="approve.*already declared"):
+        merged_schemas([base, first, second])
+
+
+@pytest.mark.parametrize("name", ["owner", "reviewer"])
+def test_new_permission_cannot_collide_with_a_base_or_contributed_relation(tmp_path: Path, name: str) -> None:
+    base = _base_addon(tmp_path)
+    contrib = _contrib_addon(
+        tmp_path,
+        f"definition demo/thing {{ relation reviewer: auth/user permission {name} = owner }}",
+    )
+    with pytest.raises(SchemaExtensionError, match=name):
         merged_schemas([base, contrib])
+
+
+def test_new_permission_references_still_pass_native_final_validation(tmp_path: Path) -> None:
+    base = _base_addon(tmp_path)
+    contrib = _contrib_addon(tmp_path, "definition demo/thing { permission approve = reviewre }")
+    with pytest.raises(SchemaExtensionError, match="reviewre"):
+        merged_schemas([base, contrib])
+
+
+def test_new_permission_order_is_deterministic_and_existing_arms_remain_native(tmp_path: Path) -> None:
+    base = _base_addon(tmp_path)
+    first = _contrib_addon(
+        tmp_path, "definition demo/thing { permission approve = owner }", name="contrib_a",
+    )
+    second = _contrib_addon(
+        tmp_path,
+        "definition demo/thing { relation reviewer: auth/user permission audit = reviewer permission read = reviewer }",
+        name="contrib_b",
+    )
+    rendered = render_zed("base", merged_schemas([base, first, second])["base"])
+    assert rendered == render_zed("base", merged_schemas([base, second, first])["base"])
+    definition = parse_zed(rendered).get_definition("demo/thing")
+    read = next(permission for permission in definition.permissions if permission.name == "read")
+    assert _render_expr_names(read) == {"owner", "reviewer"}
 
 
 def test_merge_is_deterministic(tmp_path: Path) -> None:
@@ -290,11 +340,11 @@ def test_contributed_relation_syncs_and_resolves(tmp_path: Path, _restore_scoped
     source_map = extension_source_map(app_configs, field_owners=installed_field_owners(app_configs))
     assert merged_schema_relpath("tests.scopedemo") in source_map
     for relpath, text in source_map.items():
-        write_atomic(runtime_dir / relpath, text)
+        atomic_write(runtime_dir / relpath, text.encode("utf-8"))
     _apply_emitted_schema_paths(app_configs, runtime_dir, sources=source_map)
 
     scopedemo = _restore_scopedemo_schema
-    assert scopedemo.rebac_schema == str((runtime_dir / merged_schema_relpath("tests.scopedemo")).resolve())
+    assert scopedemo.rebac_schema == (runtime_dir / merged_schema_relpath("tests.scopedemo")).resolve()
 
     call_command("rebac", "sync", verbosity=0)
 
@@ -356,28 +406,28 @@ def test_render_retains_authored_metadata_and_directives():
     assert "rebac_package" not in schema.headers
 
 
-def test_effective_source_rewrites_do_not_leave_stale_field_gates(tmp_path, monkeypatch):
-    from angee.base.permissions import effective_rebac_definition
+def test_declared_source_rewrites_do_not_leave_stale_field_gates(tmp_path, monkeypatch):
+    from angee.base.permissions import declared_rebac_definition
     from tests.scopedemo.models import Scope
 
     config = apps.get_app_config(Scope._meta.app_label)
     path = tmp_path / "effective.zed"
     monkeypatch.setattr(config, "rebac_schema", str(path), raising=False)
     path.write_text("definition scopedemo/scope { permission read = anonymous }")
-    first = effective_rebac_definition(Scope)
+    first = declared_rebac_definition(Scope)
     assert [p.name for p in first.permissions] == ["read"]
     path.write_text("definition scopedemo/scope { permission read = anonymous permission read__name = nil }")
-    second = effective_rebac_definition(Scope)
+    second = declared_rebac_definition(Scope)
     assert [p.name for p in second.permissions] == ["read", "read__name"]
 
 
-def test_manifest_permission_path_wins_over_convention(tmp_path):
-    """The parsed manifest stays authoritative after repeated effective binding."""
+def test_native_permission_path_wins_over_convention(tmp_path):
+    """The native AppConfig declaration stays authoritative after repeated effective binding."""
 
-    base = _base_addon(tmp_path)
+    base = make_addon(name="base", label="base", path=Path(_base_addon(tmp_path).path))
     custom = Path(base.path) / "authored.zed"
     custom.write_text(_BASE.replace("demo/thing", "demo/custom"))
-    (Path(base.path) / "addon.toml").write_text('[addon]\nname = "base"\npermissions = "authored.zed"\n')
+    base.rebac_schema = "authored.zed"
     contrib = _contrib_addon(
         tmp_path,
         "definition demo/custom { relation viewer: auth/user permission read = viewer }",
@@ -390,48 +440,39 @@ def test_manifest_permission_path_wins_over_convention(tmp_path):
     assert "demo/thing" not in sources[merged_schema_relpath("base")]
 
 
-def test_manifest_permission_file_is_checked_before_any_fragment(tmp_path):
-    """An explicit missing declaration fails even when no extension is installed."""
-
-    from django.core.exceptions import ImproperlyConfigured
-
-    base = _base_addon(tmp_path)
-    (Path(base.path) / "addon.toml").write_text('[addon]\nname = "base"\npermissions = "missing.zed"\n')
-    with pytest.raises(ImproperlyConfigured, match="declared permissions file does not exist"):
-        extension_source_map([base])
+def test_missing_native_permission_source_is_absent_without_fragments(tmp_path):
+    """Native schema discovery treats a missing declared source as absent."""
 
 
-
-def test_emitted_wiring_preserves_an_explicit_external_manifest_source(tmp_path):
-    base = _base_addon(tmp_path)
-    external = tmp_path / "outside.zed"
-    external.write_text(_BASE.replace("demo/thing", "demo/external"))
-    (Path(base.path) / "addon.toml").write_text(
-        f'[addon]\nname = "base"\npermissions = {str(external)!r}\n',
-    )
-
-    _apply_emitted_schema_paths([base], tmp_path / "runtime", sources={})
-
-    assert base.rebac_schema == str(external.resolve())
-    assert base._angee_rebac_schema_source == external
+    base = make_addon(name="base", label="base", path=Path(_base_addon(tmp_path).path))
+    base.rebac_schema = "missing.zed"
+    assert declared_schema_path(base) is None
     assert extension_source_map([base]) == {}
 
 
-def test_emitted_wiring_refuses_a_missing_packaged_permission_source(tmp_path, monkeypatch):
-    import angee.base.build as permissions
+
+def test_emitted_wiring_preserves_an_explicit_external_native_source(tmp_path):
+    base = make_addon(name="base", label="base", path=Path(_base_addon(tmp_path).path))
+    external = tmp_path / "outside.zed"
+    external.write_text(_BASE.replace("demo/thing", "demo/external"))
+    base.rebac_schema = external
+
+    _apply_emitted_schema_paths([base], tmp_path / "runtime", sources={})
+
+    assert base.rebac_schema == external.resolve()
+    assert declared_schema_path(base) == external.resolve()
+    assert extension_source_map([base]) == {}
+
+
+def test_native_permission_source_rejects_a_directory(tmp_path):
+    """A declared directory remains a configuration error under native discovery."""
 
     base = _base_addon(tmp_path)
-    (Path(base.path) / "addon.toml").write_text('[addon]\nname = "base"\npermissions = "permissions.zed"\n')
-    original = permissions.schema_path_wiring
-
-    def remove_after_render(configs, *, sources):
-        body = original(configs, sources=sources)
-        (Path(base.path) / "permissions.zed").unlink()
-        return body
-
-    monkeypatch.setattr(permissions, "schema_path_wiring", remove_after_render)
-    with pytest.raises(ImproperlyConfigured, match="Missing packaged permission source for base"):
-        _apply_emitted_schema_paths([base], tmp_path / "runtime", sources={})
+    directory = Path(base.path) / "directory.zed"
+    directory.mkdir()
+    base.rebac_schema = directory
+    with pytest.raises(IsADirectoryError, match="REBAC schema source is not a file"):
+        extension_source_map([base])
 
 
 def test_permission_binding_does_not_repeat_merge(tmp_path, monkeypatch):
@@ -445,7 +486,7 @@ def test_permission_binding_does_not_repeat_merge(tmp_path, monkeypatch):
     sources = extension_source_map(configs)
     monkeypatch.setattr(permissions, "merged_schemas", lambda _: pytest.fail("binding remerged schemas"))
     _apply_emitted_schema_paths(configs, tmp_path / "runtime", sources=sources)
-    assert base.rebac_schema == str((tmp_path / "runtime" / merged_schema_relpath("base")).resolve())
+    assert base.rebac_schema == (tmp_path / "runtime" / merged_schema_relpath("base")).resolve()
 
 
 def test_native_schema_binding_restores_source_when_extensions_are_removed(tmp_path):
@@ -457,7 +498,7 @@ def test_native_schema_binding_restores_source_when_extensions_are_removed(tmp_p
     sources = extension_source_map(configs)
     _apply_emitted_schema_paths(configs, tmp_path / "runtime", sources=sources)
     _apply_emitted_schema_paths([base], tmp_path / "runtime", sources=extension_source_map([base]))
-    assert base.rebac_schema == str((Path(base.path) / "permissions.zed").resolve())
+    assert Path(base.rebac_schema) == (Path(base.path) / "permissions.zed").resolve()
 
 
 def test_native_schema_declaration_can_change_between_compositions(tmp_path):
@@ -471,4 +512,42 @@ def test_native_schema_declaration_can_change_between_compositions(tmp_path):
     replacement.write_text(_BASE.replace("demo/thing", "demo/replacement"))
     base.rebac_schema = "replacement.zed"
     _apply_emitted_schema_paths([base], tmp_path / "runtime", sources=extension_source_map([base]))
-    assert base.rebac_schema == str(replacement.resolve())
+    assert declared_schema_path(base) == replacement.resolve()
+
+
+def test_native_schema_binding_restores_absent_source_when_extensions_are_removed(tmp_path):
+    """An addon with no authored schema regains native absence after unbinding."""
+
+    from rebac.schema import resolve_schema_path
+
+    directory = tmp_path / "empty"
+    directory.mkdir()
+    config = SimpleNamespace(name="empty", label="empty", path=str(directory))
+    runtime = tmp_path / "runtime"
+    _apply_emitted_schema_paths(
+        [config], runtime,
+        sources={merged_schema_relpath("empty"): "definition demo/empty { permission read = anonymous }"},
+    )
+    assert resolve_schema_path(config) == runtime / merged_schema_relpath("empty")
+    _apply_emitted_schema_paths([config], runtime, sources={})
+    assert config.rebac_schema is None
+    assert resolve_schema_path(config) is None
+
+
+def test_native_schema_binding_restores_explicit_missing_source_without_fallback(tmp_path):
+    """An explicit missing source must not enable the conventional schema on unbind."""
+
+    from rebac.schema import resolve_schema_path
+
+    base = _base_addon(tmp_path)
+    base.rebac_schema = "missing.zed"
+    assert resolve_schema_path(base) is None
+    runtime = tmp_path / "runtime"
+    _apply_emitted_schema_paths(
+        [base], runtime,
+        sources={merged_schema_relpath("base"): _BASE},
+    )
+    assert resolve_schema_path(base) == runtime / merged_schema_relpath("base")
+    _apply_emitted_schema_paths([base], runtime, sources={})
+    assert base.rebac_schema == "missing.zed"
+    assert resolve_schema_path(base) is None

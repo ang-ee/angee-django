@@ -1,4 +1,4 @@
-/* Generated from addons/angee/base/schemas/form_spec.schema.json. Do not edit. */
+/* Generated from src/angee/base/schemas/form_spec.schema.json. Do not edit. */
 /** FormSpec presentation keywords beyond the native JSON Schema vocabulary.
  * @kind null
  * @reason Generated codec vocabulary consumed by the optional schema validator.

@@ -16,9 +16,15 @@ _message_after_copy: |
   - docker: Django, Celery, Vite, Storybook, Playwright{% if postgres_mode == "external" %}{% else %}, Postgres{% endif %}{% if redis_mode == "external" %}{% else %}, and Redis{% endif %} run as
     containers; the operator daemon remains host-local and orchestrates Docker.{% if postgres_mode == "external" %} PostgreSQL: {{ postgres_host }}:{{ postgres_port }}/{{ postgres_db }} as {{ postgres_user }} (set db-password to that role's password).{% endif %}{% if redis_mode == "external" %} Redis: {{ redis_host }}:{{ redis_port }} (databases {{ redis_db }} and {{ redis_broker_db }}).{% endif %}
 
-  1. Bring it up. `angee dev` materializes the declared source caches, cuts the
-     `src` workspace (the consolidated framework plus optional external addon
-     worktrees), runs the dependency/provision/codegen lifecycle, and boots:
+  1. Prepare tracked migration history before first provisioning.
+     In process mode, run each prerequisite explicitly:
+       angee job run deps
+       angee job run py-sync
+       angee job run compose
+       uv run --no-sync python manage.py makemigrations
+     Review and commit runtime/*/migrations. Container deployments consume this
+     same project history authored in the development host.
+     Then provision and start the stack (also the normal command on later starts):
        angee dev
   2. Point an external CLI shell at the tokenized local operator (run from this
      root; `angee secret reveal` reads the stack's secrets backend):
@@ -50,7 +56,7 @@ _angee:
   description: >-
     The framework-dev stack: the root folder IS the stack AND the project host
     (ANGEE_ROOT=.). It chains the `projects/web` project template to scaffold
-    the host (manage.py, settings.yaml, pyproject, addons, web), then overlays a
+    the host (manage.py, settings.yaml, pyproject, src, web), then overlays a
     process- or Docker-mode manifest against the framework source slot and the
     optional external slots its `src` workspace materializes under
     workspaces/src/. `angee dev` owns the whole bring-up: caches, the src
@@ -140,8 +146,8 @@ _angee:
         appearance_theme_id: "${inputs.appearance_theme_id}"
         appearance_color_scheme: "${inputs.appearance_color_scheme}"
         appearance_options: "${inputs.appearance_options}"
-        # The rendered pyproject resolves django-angee editable from the same
-        # slot the stack's processes run, so `uv run manage.py` works bare from
+        # The rendered pyproject resolves the editable angee meta-distribution
+        # from the stack's source slot, so `uv run manage.py` works bare from
         # the stack root with no --project flag.
         framework_source_path: "${inputs.framework_path}"
 
@@ -153,7 +159,7 @@ project_name:
     namespace of every workspace branch this stack cuts (`<project_name>/<workspace>`).
     Give each stack on a machine or a shared fork its own name.
 
-# Directory + import namespace for this project's own consumer addons (addons/<ns>/,
+# Directory + import namespace for this project's own consumer addons (src/<ns>/,
 # referenced in INSTALLED_APPS as <ns>.<app>). Must be a valid Python identifier.
 # Copier-go does not evaluate Jinja defaults before chain-input substitution, so
 # keep this concrete; override it alongside `project_name` for custom projects.
@@ -462,6 +468,11 @@ edge_port:
 process_compose_port:
   type: int
   default: 8080
+
+enable_celery:
+  type: bool
+  default: true
+  help: Run local Celery workers; disable for hosts without angee.jobs or with external workers.
 
 # Extra Celery queues, comma-separated; they share one `celery-queues` worker
 # service (threads pool, 8 threads per queue) beside the shared worker. An addon

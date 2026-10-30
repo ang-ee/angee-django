@@ -46,6 +46,7 @@ from angee.agents.testing.models import Agent
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import SqidMixin
+from angee.base.serialization import strip_null_bytes
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
@@ -86,7 +87,6 @@ from angee.provenance.statements import (
     SourceKind,
     StatementSourceMixin,
 )
-from angee.serialization import strip_null_bytes
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordChild
 from tests.conftest import Backend, Drive, MimeType, make_integration
 from tests.conftest import (

@@ -24,6 +24,21 @@ describe("angee-web-codegen", () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  it.each([
+    { apps: { desk: { rail: ["notes"], railExpanded: "false" } } },
+    { apps: { desk: { rail: [] } } },
+    { brand: { name: "Suite" } },
+    { hosts: { "BAD.example.test": "notes" } },
+  ])("rejects malformed shell configuration before emitting output: %j", async (shell) => {
+    const runtime = join(root, "runtime");
+    const web = join(root, "web");
+    await mkdir(join(runtime, "web"), { recursive: true });
+    await writeFile(join(runtime, "web", "manifest.json"), JSON.stringify({
+      schema: 1, addonPackages: [], codegen: [], documentRoots: [], deployment: { shell },
+    }));
+    await expect(run("node", [CODEGEN, "--runtime", runtime, "--web-root", web])).rejects.toThrow("ANGEE_UI.shell");
+  });
+
   it("emits extensioned addon entry imports", async () => {
     // Generated app imports point at concrete TypeScript entry files.
     const runtime = join(root, "runtime");

@@ -56,6 +56,7 @@ from angee.integrate.oauth.errors import (
     TOKEN_EXCHANGE_FAILED,
     OAuthFlowError,
 )
+from angee.integrate.oauth.providers import GenericOAuth2
 from angee.messaging.testing.models import Handle as PartiesHandle
 from tests.conftest import (
     Credential,
@@ -315,6 +316,7 @@ def test_refresh_token_posts_refresh_grant() -> None:
     assert captured["url"] == "https://issuer.example/oauth/token"
     assert captured["fields"] == {
         "audience": "https://api.example",
+        "expires_in": 31536000,
         "client_id": "oidc-client",
         "client_secret": "secret",
         "grant_type": "refresh_token",
@@ -330,6 +332,7 @@ def test_fixed_public_client_never_reads_encrypted_secret(request_format: str, g
     captured: dict[str, Any] = {}
 
     class PublicClient:
+        provider = GenericOAuth2
         is_public_client = OAuthClient.is_public_client
         slug = "public-client"
         client_id = "public-client-id"
@@ -376,6 +379,7 @@ def test_confidential_json_client_keeps_unreadable_secret_fail_closed() -> None:
     """A confidential client still fails before exchange when its secret is unreadable."""
 
     class ConfidentialClient:
+        provider = GenericOAuth2
         is_public_client = OAuthClient.is_public_client
         slug = "confidential-client"
         client_id = "confidential-client-id"
@@ -608,39 +612,26 @@ def test_oauth_protocol_round_trips_over_the_real_pinned_transport(
     assert dialled == ["127.0.0.1"] * 4
 
 
-def test_verify_id_token_rejects_bad_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ID token verification rejects a mismatched issuer claim."""
+@pytest.mark.parametrize("claim,value", [("iss", "https://wrong.example"), ("aud", "other-client")])
+def test_verify_id_token_rejects_wrong_native_claim(claim: str, value: str) -> None:
+    """Native PyJWT verification enforces issuer/audience for actual signed tokens."""
 
     oidc = _stub_login_oauth_client()
-    monkeypatch.setattr(
-        oidc_protocol.jwt,
-        "decode",
-        lambda *args, **kwargs: {
-            "iss": "https://wrong.example",
-            "aud": oidc.oauth_client.client_id,
-            "nonce": "nonce",
-        },
-    )
-
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    claims = {
+        "iss": oidc.issuer,
+        "aud": oidc.client_id,
+        "iat": int(time.time()),
+        "exp": int(time.time()) + 60,
+        "sub": "native-claim-test",
+        "nonce": "nonce",
+        claim: value,
+    }
+    token = oidc_protocol.jwt.encode(claims, private_key, algorithm="RS256")
     with pytest.raises(OAuthFlowError) as exc_info:
-        OAuthClientOidcProtocol(oidc).verify_id_token("token", nonce="nonce", jwks_client=_FakeJwksClient())
-
-    assert exc_info.value.code == INVALID_ID_TOKEN
-
-
-def test_verify_id_token_rejects_bad_audience(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ID token verification rejects a mismatched audience claim."""
-
-    oidc = _stub_login_oauth_client()
-    monkeypatch.setattr(
-        oidc_protocol.jwt,
-        "decode",
-        lambda *args, **kwargs: {"iss": oidc.issuer, "aud": "other-client", "nonce": "nonce"},
-    )
-
-    with pytest.raises(OAuthFlowError) as exc_info:
-        OAuthClientOidcProtocol(oidc).verify_id_token("token", nonce="nonce", jwks_client=_FakeJwksClient())
-
+        OAuthClientOidcProtocol(oidc).verify_id_token(
+            token, nonce="nonce", jwks_client=_FakeJwksClient(private_key.public_key()),
+        )
     assert exc_info.value.code == INVALID_ID_TOKEN
 
 
@@ -2045,7 +2036,7 @@ def test_google_preset_owns_the_subject_bearing_profile_endpoint() -> None:
 def test_google_seed_discovers_the_preset_profile_without_a_conflicting_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    seed_file = Path(__file__).parents[1] / "addons/angee/integrate/resources/install/010_integrate.oauthclient.yaml"
+    seed_file = Path(__file__).parents[1] / "src/angee/integrate/resources/install/010_integrate.oauthclient.yaml"
     seed = next(row for row in yaml.safe_load(seed_file.read_text()) if row["xref"] == "oauth_gemini")
     client = _stub_oauth_client(**{key: value for key, value in seed.items() if key != "xref"})
     endpoint = GoogleType.effective_defaults()["userinfo_endpoint"]
@@ -2302,3 +2293,62 @@ def test_oidc_userinfo_email_link_requires_matching_subject(
             identity.complete_login(client, code="code", state_token=token, redirect_uri=redirect)
         with system_context(reason="test untrusted userinfo never linked"):
             assert not ExternalAccount.objects.filter(oauth_client=client).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("domains,allowed", [(["corp.example"], False), ([], True)])
+def test_signup_without_email_respects_provider_domain_policy(
+    composed_tables: None, domains: list[str], allowed: bool,
+) -> None:
+    client = _oauth_client(create_on_login=True, allowed_email_domains=domains)
+    if allowed:
+        user = identity.resolve(client, sub="without-email", email=None, claims={"sub": "without-email"})
+        assert user.email == ""
+    else:
+        with pytest.raises(OAuthFlowError) as caught:
+            identity.resolve(client, sub="without-email", email=None, claims={"sub": "without-email"})
+        assert caught.value.code == IDENTITY_RESOLUTION_FAILED
+        assert not ExternalAccount.system_queryset().filter(external_id="without-email").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("unusable", ["revoked", "expired", "disabled"])
+def test_disconnect_does_not_count_unusable_oidc_alternatives(composed_tables: None, unusable: str) -> None:
+    user = get_user_model().objects.create_user("unusable-alternative")
+    client = _oauth_client()
+    account = ExternalAccount.objects.link(client, "working-subject", owner=user)
+    credential = Credential.objects.upsert_for_user(
+        user, client, "oauth", {"access_token": "token"}, external_account=account,
+    )
+    other_client = _oauth_client(slug="other-unusable")
+    other = ExternalAccount.objects.link(other_client, "other-subject", owner=user)
+    Credential.objects.upsert_for_user(user, other_client, "oauth", {"access_token": "other"}, external_account=other)
+    with system_context(reason="test.oidc.unusable_alternative"):
+        if unusable == "disabled":
+            type(other_client).objects.filter(pk=other_client.pk).update(is_enabled=False)
+        else:
+            type(other).objects.filter(pk=other.pk).update(status=unusable)
+    with pytest.raises(ValidationError) as caught:
+        credential.check_disconnect()
+    assert caught.value.code == "only_sign_in_method"
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("selected_status", ["revoked", "expired"])
+def test_disconnect_unusable_account_preserves_the_active_alternative(composed_tables, selected_status) -> None:
+    user = get_user_model().objects.create_user("disconnect-unusable-account")
+    client = _oauth_client()
+    selected = ExternalAccount.objects.link(client, "unusable-selected", owner=user)
+    credential = Credential.objects.upsert_for_user(
+        user, client, "oauth", {"access_token": "selected"}, external_account=selected,
+    )
+    alternative_client = _oauth_client(slug="usable-alternative")
+    alternative = ExternalAccount.objects.link(alternative_client, "active-alternative", owner=user)
+    kept = Credential.objects.upsert_for_user(
+        user, alternative_client, "oauth", {"access_token": "alternative"}, external_account=alternative,
+    )
+    with system_context(reason="test.oidc.disconnect_unusable"):
+        type(selected).objects.filter(pk=selected.pk).update(status=selected_status)
+    assert Credential.objects.disconnect_account(user, selected.sqid)
+    with system_context(reason="test.oidc.disconnect_unusable_result"):
+        assert not Credential.objects.filter(pk=credential.pk).exists()
+        assert Credential.objects.filter(pk=kept.pk).exists()

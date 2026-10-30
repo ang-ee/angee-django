@@ -8,7 +8,7 @@ An address is `node#name`. Framework containers sit at a kind node and take a mo
 
 ## 2. Declare a child in your namespace
 
-A key `<id>.<name>` under an address declares a child; a second declaration of one id at one address fails composition. Content is the kind's type: a direct `Group`/`Tab`/`Action` element for `#sections`, a `ReactNode` for verbs and chrome, `ChatterTabContent` for `#aside`. From work (`addons/angee/work/web/src/index.tsx:100-119`):
+A key `<id>.<name>` under an address declares a child; a second declaration of one id at one address fails composition. Content is the kind's type: a direct `Group`/`Tab`/`Action` element for `#sections`, a `ReactNode` for verbs and chrome, `ChatterTabContent` for `#aside`. From work (`src/angee/work/web/src/index.tsx:100-119`):
 
 ```tsx
 containers: {
@@ -25,7 +25,7 @@ Add `permission` (a projected record permission the row must hold), `requires` (
 
 ## 3. Contribute an aside tab or drill-in
 
-A `record#aside` child shows on saved model-backed record views; a `<model>#aside` child on that model's pages. `strip: false` plus `target` makes a drill-in. Gate on the fact the route already carries, never on a probe. From projects (`addons/angee/projects/web/src/index.tsx:75-84`):
+A `record#aside` child shows on saved model-backed record views; a `<model>#aside` child on that model's pages. `strip: false` plus `target` makes a drill-in. Gate on the fact the route already carries, never on a probe. From projects (`src/angee/projects/web/src/index.tsx:75-84`):
 
 ```tsx
 "record#aside": {
@@ -60,11 +60,11 @@ Narrowing another addon's container requires depending on it; the framework's co
 
 ## 5. Vary per row with `impl` and `variant`
 
-`impl: "<key>"` shows a child only on rows carrying that `ImplClassField` value; `variant: { of, impl }` stands in for another child on those rows and inherits its admission. Two variants of one child for one `impl` fail. Owners pass the row's implementations; the form resolves `#sections`, `#rail`, `#actions` and `#actions-menu` with `projection: true` ([variants and `impl`](../../../../docs/frontend/guidelines.md#variants-and-impl); reference: `addons/angee/messaging/web/src/channel-bridge-addon.tsx`).
+`impl: "<key>"` shows a child only on rows carrying that `ImplClassField` value; `variant: { of, impl }` stands in for another child on those rows and inherits its admission. Two variants of one child for one `impl` fail. Owners pass the row's implementations; the form resolves `#sections`, `#rail`, `#actions` and `#actions-menu` with `projection: true` ([variants and `impl`](../../../../docs/frontend/guidelines.md#variants-and-impl); reference: `src/angee/messaging/web/src/channel-bridge-addon.tsx`).
 
 ## 6. Own a container on your page
 
-Name an address on your own node, empty or with children; `models: true` makes it model-scoped, `unique: "key"` keys its children. Read it with `useContainer` and place the children with `containerContents` (declarations a parser reads) or `ContainerOutlet` (rendered nodes). From tags (`addons/angee/tags/web/src/index.tsx:47-52`, `views/TagsPage.tsx:15-24`):
+Name an address on your own node, empty or with children; `models: true` makes it model-scoped, `unique: "key"` keys its children. Read it with `useContainer` and place the children with `containerContents` (declarations a parser reads) or `ContainerOutlet` (rendered nodes). From tags (`src/angee/tags/web/src/index.tsx:47-52`, `views/TagsPage.tsx:15-24`):
 
 ```tsx
 // index.tsx
@@ -77,7 +77,7 @@ const scopeColumnEntries = useContainer("tags.tags#columns");
 </List>
 ```
 
-A new kind name is added by declaration merging into `ContainerKinds` (`addons/angee/iam/web/src/ShareAccess.tsx`). Memoize `models` and `impls` passed to `useContainer`; an undeclared address only warns in development (`packages/ui/src/runtime/containers.ts:438-441`).
+A new kind name is added by declaration merging into `ContainerKinds` (`src/angee/iam/web/src/ShareAccess.tsx`). Memoize `models` and `impls` passed to `useContainer`; an undeclared address only warns in development (`packages/ui/src/runtime/containers.ts:438-441`).
 
 ## 7. Test the contribution
 
@@ -95,6 +95,6 @@ Pass a `containerScope` when a `when` rule matters; stories mount the same runti
 <!--
 Sources: docs/frontend/guidelines.md:1423-1857; packages/app/README.md:162-200; packages/ui/src/runtime/containers.ts:16-260,425-452;
 packages/ui/src/runtime/contracts.ts:195-240; packages/ui/src/lib/container-outlet.tsx:17-26; packages/app/src/containers.ts:33-50;
-packages/app/src/testing.tsx:160-170; addons/angee/{work,projects,timeline,tags}/web/src/index.tsx; addons/angee/tags/web/src/views/TagsPage.tsx;
-examples/addons/example/notes/web/src/index.tsx:32-41.
+packages/app/src/testing.tsx:160-170; src/angee/{work,projects,timeline,tags}/web/src/index.tsx; src/angee/tags/web/src/views/TagsPage.tsx;
+examples/src/example/notes/web/src/index.tsx:32-41.
 -->

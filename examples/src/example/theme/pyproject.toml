@@ -1,0 +1,14 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "example-theme"
+version = "3.0.0"
+description = "A consumer-authored configurable theme example"
+keywords = ["theme", "appearance", "example"]
+dependencies = ["angee-web>=3,<4"]
+dynamic = ["entry-points"]
+
+[tool.angee]
+
+[tool.angee.platform]
+category = "Example"

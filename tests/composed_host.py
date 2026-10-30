@@ -15,7 +15,6 @@ import json
 import os
 import subprocess
 import sys
-from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 from unittest import TestSuite
@@ -105,53 +104,49 @@ def boot(
         worker = os.environ.get("PYTEST_XDIST_WORKER")
         suffix = f"_{worker}" if worker else ""
         database["TEST"] = {"NAME": f"test_composed_{database['NAME']}{suffix}"}
-    addon_dirs = [source_root / "addons"]
-    if include_examples:
-        addon_dirs.append(source_root / "examples" / "addons")
-    addon_dirs.extend(extra_addon_dirs)
-    sys.path[:0] = [str(source_root), *(str(path) for path in addon_dirs)]
+    # Every framework package is installed in this interpreter. Extra test packages
+    # carry their own real dist-info on the explicitly supplied source roots.
+    host_root = runtime_dir.parent
+    host_root.mkdir(parents=True, exist_ok=True)
+    python_paths = [str(host_root), str(source_root), *(str(path) for path in extra_addon_dirs)]
+    sys.path[:0] = python_paths
     for name in tuple(os.environ):
-        if name.startswith(("ANGEE_", "YAMLCONF_")) or name in {"DJANGO_SETTINGS_MODULE", "DATABASE_URL"}:
+        if name.startswith(("ANGEE_", "YAMLCONF_")) or name in {
+            "DJANGO_SETTINGS_MODULE", "DJANGO_COMPOSE_MODE", "DATABASE_URL", "SENTRY_DSN",
+        }:
             os.environ.pop(name)
 
     import django
     import yaml
-    from django.conf import settings
-    from hatch_angee import discover
+    from django_compose.components import installed_components
 
-    from angee.hatch import _compile
-
-    installed_apps = (
-        list(root_apps) if root_apps is not None else [manifest.name for _, manifest in discover(addon_dirs)]
+    index = installed_components("angee.addons")
+    installed_apps = list(root_apps) if root_apps is not None else sorted(
+        name for name in index.providers if include_examples or name.startswith("angee.")
     )
-    host_root = runtime_dir.parent
-    host_root.mkdir(parents=True, exist_ok=True)
-    declarations = host_root / "settings.yaml"
-    declarations.write_text(yaml.safe_dump({
+    settings_module = "composed_test_settings"
+    (host_root / f"{settings_module}.py").write_text(
+        "from angee.base.conf import configure\nconfigure(globals())\n", encoding="utf-8",
+    )
+    (host_root / "settings.yaml").write_text(yaml.safe_dump({
         "SECRET_KEY": "isolated-composition-check",
-        "COMPOSE_RUNTIME_DIR": str(runtime_dir),
-        "ANGEE_ADDON_DIRS": [str(path) for path in addon_dirs],
+        "COMPOSE_OUTPUT_DIR": str(runtime_dir),
+        "COMPOSE_OUTPUT_MODULE": runtime_dir.name,
         "INSTALLED_APPS": installed_apps,
+        "DATABASES": {"default": database},
         "ANGEE_MONEY_REFERENCE_CURRENCY": "USD",
     }, sort_keys=True), encoding="utf-8")
-    # The production Hatch worker is the sole compiler. It populates Django in
-    # its own interpreter; this interpreter then serves the prebuilt ordinary
-    # models, just as the installed host does. No global registry is reset.
-    python_paths = [str(source_root), *(str(path) for path in addon_dirs)]
     if os.environ.get("PYTHONPATH"):
         python_paths.append(os.environ["PYTHONPATH"])
     os.environ["PYTHONPATH"] = os.pathsep.join(python_paths)
-    _compile(host_root, runtime_dir, check_history=False)
-    import runpy
-
-    namespace = {
-        name: value for name, value in runpy.run_path(str(runtime_dir / "settings.py")).items()
-        if name.isupper()
-    }
-    # Only the test runner's database differs from the offline build. It owns
-    # the native test DB name and never projects credentials into the artifact.
-    namespace["DATABASES"] = {"default": database}
-    settings.configure(**namespace)
+    os.environ["DJANGO_SETTINGS_MODULE"] = settings_module
+    result = subprocess.run(
+        [sys.executable, "-m", "django_compose", "compose"], cwd=host_root,
+        env=dict(os.environ), capture_output=True, text=True, check=False,
+        timeout=COMPOSED_TEST_TIMEOUT,
+    )
+    if result.returncode:
+        raise RuntimeError(f"Native compose failed:\n{result.stdout}\n{result.stderr}")
     django.setup()
     if root_apps is None:
         importlib.import_module("tests.statement_models")
@@ -163,16 +158,18 @@ def resource_values() -> dict[str, Any]:
     from django.apps import apps
     from django.core.exceptions import FieldDoesNotExist, ValidationError
     from django.db.models.fields import NOT_PROVIDED
+    from django_compose.components import installed_components
 
-    from angee.addons import is_angee_addon
+    from angee.base.addons import is_angee_addon
     from angee.resources.entries import GRANT_KIND, ResourceEntry, resource_manifest_for
 
     failures: list[str] = []
     checked_values = 0
+    index = installed_components("angee.addons")
     for addon in apps.get_app_configs():
         if not is_angee_addon(addon):
             continue
-        for tier, declarations in sorted(resource_manifest_for(addon).items()):
+        for tier, declarations in sorted(resource_manifest_for(addon, index=index).items()):
             for declaration in declarations:
                 entry = ResourceEntry.from_declaration(addon, tier, declaration)
                 if entry.kind == GRANT_KIND:
@@ -227,7 +224,7 @@ def model_snapshot() -> dict[str, Any]:
     from django.db.migrations.state import ModelState
     from django.db.migrations.writer import MigrationWriter
 
-    from angee.addons import is_angee_addon
+    from angee.base.addons import is_angee_addon
 
     snapshot: dict[str, Any] = {}
     for addon in apps.get_app_configs():
@@ -263,6 +260,7 @@ def reset_migration_history_report() -> dict[str, Any]:
     from unittest.mock import patch
 
     from django.apps import apps
+    from django.conf import settings
     from django.core.management import call_command
     from django.core.management.base import CommandError
     from django.db import connection
@@ -272,15 +270,12 @@ def reset_migration_history_report() -> dict[str, Any]:
     from django.db.migrations.recorder import MigrationRecorder
     from django.db.migrations.state import ProjectState
     from django.utils.module_loading import module_dir
+    from django_compose.migrations import reset_migration_history
+    from django_compose.serving import read_receipt, verify
 
-    from angee.apps import AngeeConfig
-    from angee.compose.migrations import reset_migration_history
-    from angee.compose.runtime import Runtime
-
-    config = apps.get_app_config("angee")
-    assert isinstance(config, AngeeConfig)
-    labels = tuple(sorted(config.labels))
-    runtime = Runtime.from_django()
+    receipt = read_receipt(settings.COMPOSE_OUTPUT_DIR)
+    assert receipt is not None
+    labels = receipt.MODEL_LABELS
     call_command("makemigrations", *labels, interactive=False, include_header=False, verbosity=0)
     history_dirs = {
         label: Path(module_dir(importlib.import_module(MigrationLoader.migrations_module(label)[0])))
@@ -345,7 +340,7 @@ def reset_migration_history_report() -> dict[str, Any]:
             original(*args, **kwargs)
             raise RuntimeError("injected reset failure")
 
-        target = "angee.compose.migrations.call_command" if phase == "generation" else (
+        target = "django_compose.migrations.call_command" if phase == "generation" else (
             "django.db.migrations.recorder.MigrationRecorder.record_unapplied"
         )
         with patch(target, autospec=True, side_effect=fail_after_write):
@@ -391,7 +386,7 @@ def reset_migration_history_report() -> dict[str, Any]:
         trim_to_apps=set(labels),
         convert_apps=set(labels),
     )
-    runtime.check()
+    verify(settings.COMPOSE_SNAPSHOT, settings.COMPOSE_OUTPUT_MODULE)
     reset_sources = migration_sources()
     reset_records = list(recorder.migration_qs.order_by("pk").values())
     reset_migration_history(labels)
@@ -414,7 +409,6 @@ def reset_migration_history_report() -> dict[str, Any]:
         "plan_empty": executor.migration_plan(targets) == [],
         "changes_empty": changes == {},
         "runtime_check": True,
-        "declarations": len(runtime.runtime_migrations().plan()),
         "alpha_dependencies": alpha.dependencies,
         "command_output": output.getvalue().splitlines(),
     }
@@ -431,7 +425,7 @@ def main() -> None:
         "--app",
         action="append",
         default=None,
-        help="Root app to compose (repeatable); dependencies are resolved from addon manifests.",
+        help="Root app to compose (repeatable); dependencies are resolved from installed package metadata.",
     )
     parser.add_argument(
         "--no-examples",
@@ -457,17 +451,7 @@ def main() -> None:
         root_apps=args.app,
         test_postgresql=args.test_postgresql,
     )
-    from django.conf import settings
-    from django.utils.module_loading import import_string
-
-    context_path = getattr(settings, "ANGEE_MANAGEMENT_CONTEXT", "")
-    boundary = (
-        import_string(context_path)(args.action)
-        if context_path and args.action not in {"tests", "reset-migrations"}
-        else nullcontext()
-    )
-    with boundary:
-        run(args)
+    run(args)
 
 
 def run(args: argparse.Namespace) -> None:

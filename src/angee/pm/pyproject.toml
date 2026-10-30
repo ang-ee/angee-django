@@ -1,0 +1,28 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-pm"
+version = "3.0.0"
+description = "Project-management suite: projects, teams, intake, proposals and portfolio arranged as one rail app"
+keywords = ["pm", "projects", "work", "suite"]
+dependencies = ["angee-intake>=3,<4", "angee-portfolio>=3,<4", "angee-projects>=3,<4", "angee-proposals>=3,<4", "angee-proposals-work>=3,<4", "angee-work>=3,<4", "angee-web>=3,<4"]
+dynamic = ["entry-points"]
+
+[tool.angee]
+
+[[tool.angee.resources.demo]]
+path = "demo/010_iam.user.yaml"
+adopt = "username"
+
+[[tool.angee.resources.demo]]
+path = "demo/020_parties.person.yaml"
+depends_on = ["demo/010_iam.user.yaml", "iam:demo/010_iam.user.yaml"]
+adopt = "user"
+
+[[tool.angee.resources.demo]]
+path = "demo/030_spaces.membership.yaml"
+depends_on = ["demo/020_parties.person.yaml", "work:demo/010_work.queue.yaml"]
+adopt = ["group", "party"]
+
+[tool.angee.platform]
+category = "Productivity"

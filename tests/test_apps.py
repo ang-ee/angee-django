@@ -9,10 +9,11 @@ from types import ModuleType
 import pytest
 from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
+from django_compose.components import enabled_apps
 
-from angee.addons import addon_manifest
+from angee.base.addons import addon_facts, is_angee_addon
 from angee.graphql.schema import schema_parts_for
-from angee.resources.entries import ResourceEntry, resource_manifest_for
+from angee.resources.entries import EntryGraph, ResourceEntry, resource_manifest_for
 from angee.web.build import WebRuntime
 from tests.conftest import make_addon
 
@@ -38,15 +39,14 @@ def _resource_rows(config: AppConfig, tier: str, path: str) -> dict[str, dict[st
     }
 
 
-def test_base_addon_keeps_its_label_and_core_has_no_addon_contract() -> None:
-    """Foundation owns its manifest while the native host stays lifecycle-only."""
+def test_base_addon_keeps_its_label_and_foreign_django_app_has_no_addon_contract() -> None:
+    """Foundation owns its capability facts while ordinary Django apps keep native identity."""
 
     base = apps.get_app_config("base")
-    contract = addon_manifest(base)
-
+    
     assert base.name == "angee.base"
-    assert contract is not None and contract.name == "angee.base"
-    assert addon_manifest(apps.get_app_config("angee")) is None
+    assert is_angee_addon(base)
+    assert not is_angee_addon(apps.get_app_config("auth"))
 
 
 def test_resource_manifest_normalizes_tiers_and_entries(monkeypatch) -> None:
@@ -88,6 +88,30 @@ def test_resource_manifest_normalizes_tiers_and_entries(monkeypatch) -> None:
     assert manifest["demo"] == ({"url": "https://example.test/demo.csv"},)
 
 
+@pytest.mark.parametrize("with_work", [False, True])
+def test_projects_demo_graph_keeps_work_optional(with_work: bool) -> None:
+    """Projects seeds stand alone; Work's own task seed follows its stages."""
+
+    labels = ("iam", "projects", "work") if with_work else ("iam", "projects")
+    entries = tuple(
+        ResourceEntry.from_declaration(config, tier, declaration)
+        for label in labels
+        for config in (apps.get_app_config(label),)
+        for tier, declarations in resource_manifest_for(config).items()
+        for declaration in declarations
+    )
+    ordered = EntryGraph.from_entries(entries).ordered()
+    positions = {entry.key: index for index, entry in enumerate(ordered)}
+    project_tasks = ("angee.projects", "resources/demo/030_projects.task.yaml")
+    project_children = ("angee.projects", "resources/demo/031_projects.task.yaml")
+    assert positions[("angee.iam", "resources/demo/010_iam.user.yaml")] < positions[project_tasks]
+    assert positions[project_tasks] < positions[project_children]
+    if with_work:
+        work_tasks = ("angee.work", "resources/demo/020_projects.task.yaml")
+        assert positions[project_children] < positions[work_tasks]
+        assert positions[("angee.work", "resources/demo/012_work.stage.yaml")] < positions[work_tasks]
+
+
 def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     """Integrate ships public OAuth clients (OAuth only) without deployment secrets."""
 
@@ -100,6 +124,15 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
 
     entry = ResourceEntry.from_declaration(config, "install", manifest["install"][0])
     rows = entry.read_groups()[0].dataset.dict
+
+    assert {row["_xref"] for row in rows} == {"oauth_gemini", "oauth_grok"}
+    anthropic = apps.get_app_config("agents_integrate_anthropic")
+    anthropic_manifest = resource_manifest_for(anthropic)
+    declaration = next(item for item in anthropic_manifest["install"]
+                       if item["path"] == "resources/install/010_integrate.oauthclient.yaml")
+    anthropic_rows = ResourceEntry.from_declaration(anthropic, "install", declaration).read_groups()[0].dataset.dict
+    assert {row["_xref"] for row in anthropic_rows} == {"oauth_anthropic_platform", "oauth_anthropic_personal"}
+    rows.extend(anthropic_rows)
 
     # Anthropic ships two distinct OAuth surfaces on one public client id (Developer
     # Platform vs. personal Claude.ai plans), modelled as two providers. xrefs are
@@ -114,6 +147,7 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     assert {row["slug"] for row in rows} == {"anthropic-platform", "anthropic-personal", "gemini", "grok"}
     rows_by_xref = {row["_xref"]: row for row in rows}
     platform = rows_by_xref["oauth_anthropic_platform"]
+    assert platform["provider_type"] == "anthropic"
     assert platform["slug"] == "anthropic-platform"
     assert platform["environment"] == "prod"
     assert platform["client_id"] == "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -130,6 +164,7 @@ def test_integrate_config_installs_public_oauth_provider_resources() -> None:
     assert platform.get("issuer") is None
     assert platform.get("client_secret") is None
     personal = rows_by_xref["oauth_anthropic_personal"]
+    assert personal["provider_type"] == "anthropic"
     assert personal["slug"] == "anthropic-personal"
     assert personal["environment"] == "prod"
     assert personal["client_id"] == "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -217,10 +252,13 @@ def test_anthropic_addon_owns_install_provider_and_demo_models() -> None:
     config = AppConfig("angee.agents_integrate_anthropic", module)
     manifest = resource_manifest_for(config)
 
-    assert manifest["install"] == ({
-        "path": "resources/install/030_agents.inferenceprovider.yaml",
-        "depends_on": ("integrate:resources/master/010_integrate.vendor.yaml",),
-    },)
+    assert manifest["install"] == (
+        {"path": "resources/install/010_integrate.oauthclient.yaml", "adopt": ("slug", "environment")},
+        {
+            "path": "resources/install/030_agents.inferenceprovider.yaml",
+            "depends_on": ("integrate:resources/master/010_integrate.vendor.yaml",),
+        },
+    )
     assert [item["path"] for item in manifest["demo"]] == [
         "resources/demo/010_integrate.credential.yaml",
         "resources/demo/040_agents.inferencemodel.yaml",
@@ -263,11 +301,11 @@ def test_ollama_addon_owns_vendor_install_provider_and_demo_models() -> None:
 
     module = import_module("angee.agents_integrate_ollama")
     config = AppConfig("angee.agents_integrate_ollama", module)
-    contract = addon_manifest(config)
+    contract = addon_facts(config.name, "angee")
     manifest = resource_manifest_for(config)
 
     assert contract is not None
-    assert contract.depends_on == (
+    assert enabled_apps((config.name,), group="angee.addons").dependencies[config.name] == (
         "angee.agents",
         "angee.agents_integrate_openai",
         "angee.integrate",
@@ -314,7 +352,7 @@ def test_ollama_addon_owns_vendor_install_provider_and_demo_models() -> None:
 def test_notes_demo_only_composes_reusable_agent_seeds(monkeypatch) -> None:
     """The notes example keeps demo rows separate from master-tier catalogue seeds."""
 
-    notes_addons = Path(__file__).parents[1] / "examples" / "addons"
+    notes_addons = Path(__file__).parents[1] / "examples" / "src"
     monkeypatch.syspath_prepend(str(notes_addons))
     module = import_module("example.notes")
     config = AppConfig("example.notes", module)
@@ -462,13 +500,14 @@ def test_messaging_imap_config_contributes_schema_web_and_vendor_resource() -> N
         "angee.messaging_integrate_imap",
         import_module("angee.messaging_integrate_imap"),
     )
-    contract = addon_manifest(config)
+    contract = addon_facts(config.name, "angee")
     manifest = resource_manifest_for(config)
 
     assert contract is not None
-    assert contract.schemas is None
+    assert "graphql" not in contract
     assert (Path(config.path) / "schema.py").is_file()
-    assert WebRuntime((config,)).manifest["addonPackages"][0]["package"] == "@angee/messaging-integrate-imap"
+    web_manifest = WebRuntime((config,), dependencies={config.name: ()}).manifest
+    assert web_manifest["addonPackages"][0]["package"] == "@angee/messaging-integrate-imap"
     assert manifest["master"] == ({"path": "resources/master/010_integrate.vendor.yaml", "adopt": "slug"},)
     rows = _resource_rows(config, "master", "resources/master/010_integrate.vendor.yaml")
     assert rows["imap"]["slug"] == "imap"
@@ -499,7 +538,7 @@ def test_resource_manifest_rejects_unknown_tiers(monkeypatch) -> None:
 def _schema_config(monkeypatch, schemas: object) -> AppConfig:
     """Return a config whose resolved schema declaration is ``schemas``."""
 
-    monkeypatch.setattr("angee.graphql.schema._raw_schemas", lambda _config: schemas)
+    monkeypatch.setattr("angee.graphql.schema._raw_schemas", lambda _config, *, index: schemas)
     return apps.get_app_config("base")
 
 
@@ -538,13 +577,13 @@ def test_get_schema_parts_missing_module_is_empty() -> None:
     assert schema_parts_for(config) == {}
 
 
-def test_addon_manifest_is_owned_by_the_manifest() -> None:
-    """The contract is read from addon.toml; plain Django apps have none."""
+def test_addon_identity_and_dependencies_are_owned_by_installed_metadata() -> None:
+    """Installed package metadata supplies addon identity and dependencies."""
 
-    iam = addon_manifest(apps.get_app_config("iam"))
+    iam = apps.get_app_config("iam")
     assert iam is not None
-    assert "angee.graphql" in iam.depends_on
+    assert "angee.graphql" in enabled_apps((iam.name,), group="angee.addons").dependencies[iam.name]
     config = apps.get_app_config("iam")
     assert "public" in schema_parts_for(config)
-    assert WebRuntime((config,)).manifest["addonPackages"][0]["package"] == "@angee/iam"
-    assert addon_manifest(apps.get_app_config("contenttypes")) is None
+    assert WebRuntime((config,), dependencies={config.name: ()}).manifest["addonPackages"][0]["package"] == "@angee/iam"
+    assert not is_angee_addon(apps.get_app_config("contenttypes"))

@@ -6,7 +6,7 @@ on the [Angee platform](https://angee.ai).**
 [![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg)](https://github.com/ang-ee/angee-django/blob/main/LICENSE)
 [![Docs](https://img.shields.io/badge/docs-docs.angee.ai-1f6feb.svg)](https://docs.angee.ai)
 ![Python](https://img.shields.io/badge/python-3.14%2B-3776AB.svg)
-![Django](https://img.shields.io/badge/django-6.0%2B-092E20.svg)
+![Django](https://img.shields.io/badge/django-6.1-092E20.svg)
 ![React](https://img.shields.io/badge/react-19-61DAFB.svg)
 ![Status](https://img.shields.io/badge/status-early%20alpha%20preview-orange.svg)
 
@@ -16,10 +16,10 @@ on the [Angee platform](https://angee.ai).**
 > teams building Angee applications and addons. If you want a product to use,
 > start with a product-specific distribution built on Angee.
 
-Public [feed streams and held replies](addons/angee/posts/README.md) compose
-[integration discovery](addons/angee/integrate/README.md),
-[delivery settlement](addons/angee/messaging/README.md) and
-[workflow conversations](addons/angee/workflows_posts/README.md).
+Public [feed streams and held replies](src/angee/posts/README.md) compose
+[integration discovery](src/angee/integrate/README.md),
+[delivery settlement](src/angee/messaging/README.md) and
+[workflow conversations](src/angee/workflows_posts/README.md).
 
 > **Public alpha / active refactor.** Angee is being opened while major addon,
 > API, and UI surfaces are still moving. Use it for exploration and feedback,
@@ -60,7 +60,7 @@ are.*
    │                                                              │
    │    addons  (source models · GraphQL · REBAC · React views)   │
    │        │                                                     │
-   │        │  uv build · native Hatch composition                │
+   │        │  compose · explicit native composition               │
    │        ▼                                                     │
    │    runtime/   →   Django + GraphQL + React application       │
    └──────────────────────────────────────────────────────────────┘
@@ -90,7 +90,12 @@ source inside a framework-dev stack's `src` workspace.
 brew install ang-ee/tap/angee      # or: curl -fsSL https://raw.githubusercontent.com/ang-ee/angee-operator/main/scripts/install.sh | sh
 angee init myproject               # dev is the default template; add -y for non-interactive use
 cd myproject
-angee dev                          # materialize sources and boot everything
+angee job run deps                 # install JS dependencies
+angee job run py-sync              # install Python dependencies
+angee job run compose              # generate runtime models and artifacts
+uv run --no-sync python manage.py makemigrations
+# Review and commit runtime/*/migrations before first provisioning.
+angee dev                          # provision tracked history and start services
 ```
 
 On macOS, create the stack in a normal working directory, not under `/tmp`:
@@ -105,17 +110,19 @@ hand. For the full onboarding path
 
 This repository holds the framework's source surfaces together:
 
-- **`angee/`** — generic Django composition, host configuration and serving
-  entrypoints, and shared framework primitives.
-- **`addons/`** — the `angee.base` model foundation and capability addons,
+- **`src/angee/base/`** — model foundation, deployment settings and shared primitives.
+- **`src/angee/server/`** — optional HTTP serving policy over native compiler seams.
+- **`src/`** — the `angee.base` model foundation and capability addons,
   including provenance, jobs, web builds and GraphQL, with co-located web fragments.
+  Generic composition is owned by the `django-compose` dependency.
 - **`packages/`** — the published `@angee/*` React packages and workshops.
 - **`examples/`** — showcase consumer addons and the reference e2e suite.
 - **`templates/`** — Copier sources for projects, stacks, workspaces, and services.
 - **`docs/`**, **`tests/`** — intent documentation and the merged contract suite.
 
-The optional personal-messaging bridges remain in
-`ang-ee/angee-messaging-bridges`.
+The published [hatch-angee](https://github.com/ang-ee/hatch-angee) backend owns
+addon layout and metadata defaults over Hatchling. The optional personal-messaging
+bridges remain in `ang-ee/angee-messaging-bridges`.
 
 The full annotated layout lives in
 **[`AGENTS.md`](https://github.com/ang-ee/angee-django/blob/main/AGENTS.md)**.

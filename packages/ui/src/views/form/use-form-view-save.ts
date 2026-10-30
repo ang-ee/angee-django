@@ -168,8 +168,7 @@ export interface FormViewSaveSurface {
   linesResource: DataResourceLinesMetadata | null;
   linesField: string | null;
   linesActive: boolean;
-  /** Validate and save through the form owner; return the accepted record, or null if not accepted. */
-  submitForm: (event?: React.BaseSyntheticEvent) => Promise<Row | null>;
+  submitForm: (event?: React.BaseSyntheticEvent) => Promise<void>;
   discardChanges: () => void;
   applyPatch: (patch: Record<string, unknown>) => Promise<Row | null>;
   patchRecord: (patch: Record<string, unknown>) => void;
@@ -569,7 +568,7 @@ export function useFormViewSave({
       notify?: boolean;
       message?: string;
       refetchPartial?: boolean;
-    } = {}): Row | null => {
+    } = {}): void => {
       // A mutation response is a patch over the latest cache, which may have
       // refreshed while the write was pending. Accepted submitted values fill
       // response omissions until canonical refetch; unsubmitted fields stay current.
@@ -583,7 +582,7 @@ export function useFormViewSave({
         (current) => ({ ...current, data: { ...(current?.data ?? record), ...acceptedPatch } }),
       )?.data ?? acceptedPatch;
       editBasisRecordRef.current = accepted;
-      if (!mounted.current) return null;
+      if (!mounted.current) return;
       const savedValues = options.acceptedValues
         ?? recordToValues(accepted, formFields, linesSeed(rowsFromRecord(accepted)));
       if (isCreate || (options.acceptedValues && acknowledgedSource !== undefined)) {
@@ -654,13 +653,12 @@ export function useFormViewSave({
         formFields.some((field) => !Object.hasOwn(saved, field.name))
         || (linesActive && linesField !== null && !Object.hasOwn(saved, linesField))
       )) reload();
-      return accepted;
     },
     [acknowledgedSource, detailKey, emptyValues, form, formFields, isCreate, linesActive, linesConfig, linesField, linesSeed, onSaved, queryClient, record, reload, reset, resetDefaultValues, resetHistory, rowsFromRecord, setValue, syncRecordValues, t, toast],
   );
   const submitValues = React.useCallback(
-    async (value: FormValues): Promise<Row | null> => {
-      if (submittingRef.current || previewBlockedRef.current) return null;
+    async (value: FormValues) => {
+      if (submittingRef.current || previewBlockedRef.current) return;
       clearErrors();
       if (formReadOnly) {
         throw new Error(`Resource mutation for "${resource}" is disabled.`);
@@ -693,7 +691,7 @@ export function useFormViewSave({
         if (baseline.some((row) => row[linesConfig.idField] == null)
           || !sameObservedLines(baseline, rowsFromRecord(latest) ?? [], linesConfig)) {
           applyFormErrors(form, { status: "conflict", message: t("form.linesChanged"), field: linesField });
-          return null;
+          return;
         }
       }
       submittingRef.current = true;
@@ -704,7 +702,7 @@ export function useFormViewSave({
           const response = result.data;
           const acknowledgement = isFormSubmitAcknowledgement(response) ? response : undefined;
           const saved: Row = acknowledgement ? acknowledgement.record : response as Row;
-          return commitSavedRecord(saved, {
+          commitSavedRecord(saved, {
             submitted: value,
             submittedFields: acknowledgement
               ? []
@@ -716,9 +714,10 @@ export function useFormViewSave({
             message: result.message,
           });
         }
-        return null;
+
       } finally {
         submittingRef.current = false;
+
       }
     },
     [
@@ -751,11 +750,7 @@ export function useFormViewSave({
       record,
     ],
   );
-  const submitForm = React.useCallback(async (event?: React.BaseSyntheticEvent): Promise<Row | null> => {
-    let accepted: Row | null = null;
-    await form.handleSubmit(async (values) => { accepted = await submitValues(values); })(event);
-    return accepted;
-  }, [form, submitValues]);
+  const submitForm = form.handleSubmit(submitValues);
   const applyPatch = React.useCallback(
     async (patch: Record<string, unknown>): Promise<Row | null> => {
       if (previewBlockedRef.current) return null;

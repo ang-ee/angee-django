@@ -1,6 +1,4 @@
 // @vitest-environment happy-dom
-import { ResourceQuery } from "@angee/metadata";
-import { buildFilterFields } from "../views/resource/resource-view-utils";
 import { useState } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
@@ -147,20 +145,4 @@ test("empty catalogs offer no submit action", () => {
   render(<FilterClauseEditor fields={[]} onSubmit={vi.fn()} />, { wrapper: Provider });
   expect(screen.getByText("No filter fields")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
-});
-
-test.each([
-  ["BigInt", "9007199254740993"],
-  ["Decimal", "9007199254740993.125"],
-])("a rendered %s query filter submits its exact string operand", (scalar, value) => {
-  const query = ResourceQuery.forRows({ fields: { size: { scalar } } });
-  const fields = buildFilterFields([{ field: "size", header: "Size" }], [], null, query);
-  const onSubmit = vi.fn();
-  render(<FilterClauseEditor fields={fields} onSubmit={onSubmit} />, { wrapper: Provider });
-  const input = screen.getByLabelText("Filter value") as HTMLInputElement;
-  expect(input.type).toBe("text");
-  fireEvent.change(input, { target: { value } });
-  fireEvent.click(screen.getByRole("button", { name: "Add" }));
-  expect(onSubmit).toHaveBeenCalledWith({ field: "size", operator: "exact", type: "number", value });
-  expect(query.filterFrom({ size: { exact: value } })).toEqual({ size: { exact: value } });
 });

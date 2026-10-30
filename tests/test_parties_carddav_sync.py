@@ -31,6 +31,7 @@ from django.db import connection
 from django.utils import timezone
 from rebac import system_context
 
+from angee.base.serialization import canonical_json_sha256
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClient, PinnedTransport, ResponseTooLargeError
 from angee.integrate.states import (
@@ -71,7 +72,6 @@ from angee.parties_integrate_carddav.backend import (
     _parse_vcard,
     _xml,
 )
-from angee.serialization import canonical_json_sha256
 from angee.storage.exceptions import UploadTargetNotFound, UploadTooLarge
 from angee.storage.models import UploadState
 from tests.conftest import Backend, Drive, File, MimeType, current_stream, make_integration
@@ -2428,6 +2428,9 @@ def test_request_preserves_url_gate_validation_error(
     url: str,
 ) -> None:
     monkeypatch.setattr(HttpClient, "transport_factory", PinnedTransport)
+    # An unsafe configured origin reaches the native URL gate. Foreign origins
+    # are separately refused before credential headers can leave the server.
+    replica.directory.config = {"server_url": url}
     with pytest.raises(ValidationError):
         replica.backend._request("PROPFIND", url, "<propfind/>")
 

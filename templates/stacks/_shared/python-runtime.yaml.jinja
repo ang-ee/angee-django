@@ -8,6 +8,9 @@
       - bind://./data:{{ container_project_dir }}/data
     workdir: {{ container_project_dir }}
 {% endif %}    env:
+      # Docker jobs/services share a Linux environment through the writable data
+      # bind; the mounted source's host .venv remains a separate environment.
+      UV_PROJECT_ENVIRONMENT: {% if runtime_mode == "process" %}".venv"{% else %}"{{ container_project_dir }}/data/.venv-linux"{% endif %}
       ANGEE_PROJECT_DIR: {% if runtime_mode == "process" %}"."{% else %}{{ container_project_dir }}{% endif %}
       DATABASE_URL: "{{ database_url }}"{% if pool_for_django and effective_serve_mode == "production" %}
       ANGEE_DB_POOL: "true"

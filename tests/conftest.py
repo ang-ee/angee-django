@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import itertools
+import json
 import os
 import sys
 import tempfile
 from collections.abc import Iterator
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
+from importlib.util import spec_from_file_location
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
@@ -22,9 +24,9 @@ from django.test import RequestFactory
 from rebac import ObjectRef, actor_context, system_context, to_object_ref
 from rebac.roles import grant as grant_role
 
-from angee.addons import addon_manifest
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
 from angee.agents.testing import models as agents_models  # noqa: F401 -- register shared FK targets
+from angee.base.testing.packages import write_addon_distribution
 from angee.decisions.testing import models as decisions_models  # noqa: F401 -- register shared FK targets
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
@@ -39,7 +41,7 @@ from angee.integrate.models import WebhookSubscription as AbstractWebhookSubscri
 from angee.integrate.states import StreamDefinition
 from angee.integrate.streams import StreamPage
 from angee.integrate.testing.integration import Integration
-from angee.integrate_vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
+from angee.integrate_vcs.backend import Checkout, RepoDescriptor, TreeEntry, VCSBackend
 from angee.integrate_vcs.models import Repository as AbstractRepository
 from angee.integrate_vcs.models import Source as AbstractSource
 from angee.integrate_vcs.models import Template as AbstractTemplate
@@ -93,6 +95,21 @@ def standalone_relation(source: type[models.Model], name: str) -> models.Field:
     field = source._meta.get_field(name)
     _, _, args, kwargs = field.deconstruct()
     return type(field)(*args, **(kwargs | {"related_name": "+"}))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def source_change_publishers() -> Iterator[None]:
+    """Wire source-model feeds explicitly; these tests have no compiler receipt."""
+
+    from angee.graphql.publishing import connect_change_publishers, disconnect_publishers
+
+    connected = connect_change_publishers(GraphQLSchemas.from_discovery().render_publishers())
+    try:
+        yield
+    finally:
+        for model in connected:
+            disconnect_publishers(model)
+        connect_change_publishers({})
 
 
 @pytest.fixture
@@ -438,6 +455,19 @@ class StubVCSBackend(VCSBackend):
         del repository, ref
         return "stubsha"
 
+    @contextmanager
+    def materialize(self, repository: Any, *, ref: str, checkout: Checkout) -> Iterator[tuple[Path, str]]:
+        """Provide the configured source files through the native ingestion seam."""
+
+        del repository, ref, checkout
+        with tempfile.TemporaryDirectory(prefix="angee-stub-source-") as temporary:
+            root = Path(temporary).resolve()
+            for name, content in self.bridge.config.get("stub_blobs", {}).items():
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(str(content), encoding="utf-8")
+            yield root, "stubsha"
+
     def verify_webhook(self, vcs_bridge: Any, request: Any) -> bool:
         """Accept every webhook in tests."""
 
@@ -638,7 +668,6 @@ class ExtcontribRole(Role):
 # Every installed backing needs its concrete model before native database setup.
 from angee.nexus.testing import models as nexus_models  # noqa: E402, F401
 from angee.operator.testing import models as operator_models  # noqa: E402, F401
-from angee.operator_backup.testing import models as operator_backup_models  # noqa: E402, F401
 from angee.portfolio.testing import models as portfolio_models  # noqa: E402, F401
 from angee.projects.testing import models as projects_models  # noqa: E402, F401
 from angee.provenance.testing import load_statement_sources  # noqa: E402
@@ -822,49 +851,94 @@ def make_addon(
     path: Path | None = None,
     web: dict[str, Any] | None = None,
     resources: dict[str, Any] | None = None,
-    migrations: tuple[dict[str, str], ...] = (),
 ) -> AppConfig:
-    """Return a native AppConfig backed by a real manifest and optional schema module.
+    """Create a package-backed config and native editable distribution metadata.
 
-    Tests outside this conftest's directory import ``addon_fixture_resources``
-    alongside the factory so pytest scopes its modules and temporary directories.
+    Resource convenience inputs use canonical ledger paths; authored TOML carries
+    resources-relative paths. Dependencies on known addon apps become native
+    Requires-Dist edges; foreign app declarations remain ``requires_apps``.
+    Tests outside this directory import ``addon_fixture_resources`` to scope the
+    temporary packages and metadata alongside their module monkeypatches.
     """
 
     name = name or f"tests._addon_{next(_TEST_ADDON_SEQ)}"
     path = path or Path(_TEST_ADDON_CONTEXTS.enter_context(tempfile.TemporaryDirectory()))
     path.mkdir(parents=True, exist_ok=True)
+    (path / "__init__.py").touch()
     monkeypatch = _TEST_ADDON_CONTEXTS.enter_context(pytest.MonkeyPatch.context())
     module = ModuleType(name)
-    module.__file__ = str(path / "apps.py")
+    module.__file__ = str(path / "__init__.py")
     module.__path__ = [str(path)]
+    module.__spec__ = spec_from_file_location(name, module.__file__, submodule_search_locations=[str(path)])
     monkeypatch.setitem(sys.modules, name, module)
-    declaration: dict[str, Any] = {"name": name, "depends_on": depends_on}
+    tool: dict[str, Any] = {}
     if schemas is not None:
         schema_module = ModuleType(f"{name}.schema")
         schema_module.schemas = schemas
         monkeypatch.setitem(sys.modules, f"{name}.schema", schema_module)
-        declaration["schemas"] = "schema.schemas"
-    document: dict[str, Any] = {"addon": declaration}
-    for section, value in (("web", web), ("resources", resources), ("migrations", migrations)):
-        if value:
-            document[section] = value
-    (path / "addon.toml").write_text(tomlkit.dumps(document), encoding="utf-8")
-    config = AppConfig(name, module)
-    if label is not None:
-        config.label = label
+        tool["graphql"] = {"schema": "schema.schemas"}
+    if resources is not None:
+        def authored_source(value: Any) -> Any:
+            if isinstance(value, str):
+                addon, separator, source = value.partition(":")
+                if "://" in value:
+                    return value
+                if separator:
+                    return f"{addon}:{source.removeprefix('resources/')}"
+                return value.removeprefix("resources/")
+            if isinstance(value, dict):
+                return {
+                    key: authored_source(item) if key in {"path", "depends_on"} else item
+                    for key, item in value.items()
+                }
+            if isinstance(value, tuple | list):
+                return [authored_source(item) for item in value]
+            return value
+        tool["resources"] = {
+            key: value if key == "retired_models" else authored_source(value)
+            for key, value in resources.items()
+        }
+    write_addon_distribution(path, name, depends_on=depends_on, label=label, capabilities=tool, metadata_root=path)
+    monkeypatch.syspath_prepend(str(path))
+    if web is not None:
+        web_root = path / "web"
+        web_root.mkdir(exist_ok=True)
+        package: dict[str, Any] = {}
+        if "package" in web:
+            package["name"] = web["package"]
+        if "codegen" in web:
+            package["angee"] = {"codegen": web["codegen"]}
+        (web_root / "package.json").write_text(json.dumps(package), encoding="utf-8")
+    # Foreign app edges belong to the selected native class, so rediscovery by
+    # dependency traversal sees the same declarations as the returned root.
+    monkeypatch.delitem(sys.modules, f"{name}.apps", raising=False)
+    _TEST_ADDON_CONTEXTS.callback(sys.modules.pop, f"{name}.apps", None)
+    config = AppConfig.create(name)
     return config
 
 
-def write_addon_manifest(config: AppConfig, **sections: Any) -> None:
-    """Replace a fixture's authoritative declarations and start a fresh binding."""
+def write_addon_package(config: AppConfig, **capabilities: Any) -> None:
+    """Replace the fixture's capability tables in the native package document."""
 
-    document = {"addon": {"name": config.name}, **sections}
-    (Path(config.path) / "addon.toml").write_text(tomlkit.dumps(document), encoding="utf-8")
-    addon_manifest(config, refresh=True)
+    path = Path(config.path) / "pyproject.toml"
+    document = tomlkit.parse(path.read_text())
+    document["tool"] = {"angee": capabilities}
+    path.write_text(tomlkit.dumps(document), encoding="utf-8")
+
+
+def catalogue_package(name: str, *, depends_on: tuple[str, ...] = (), description: str = "") -> dict[str, Any]:
+    """One already-projected catalogue value for isolated marketplace tests."""
+
+    return {
+        "name": name, "namespace": name.split(".", 1)[0],
+        "distribution": name.replace(".", "-").replace("_", "-"), "description": description,
+        "keywords": (), "category": "", "depends_on": depends_on,
+        "requirements": tuple(dependency.replace(".", "-").replace("_", "-") for dependency in depends_on),
+    }
 
 
 def SchemaAddon(schemas: dict[str, dict[str, tuple[object, ...]]]) -> AppConfig:  # noqa: N802 - kept for call sites
-    """Build a real-manifest addon exposing the supplied executable schema objects."""
+    """Build a package-backed addon exposing the supplied executable schema objects."""
 
     return make_addon(schemas=schemas)
 

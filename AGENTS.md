@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Angee is a thin composition framework for Django + React applications. The
-framework owns the seams; addons own product capabilities. The composer turns
+framework owns the seams; addons own product capabilities. The upstream compiler turns
 addon contracts and project settings into a runnable project. Projects declare
 root apps through Django `INSTALLED_APPS`.
 
@@ -65,9 +65,10 @@ highest standard.
 - **Dependencies point toward stable owners.** Framework and base addons never
   depend on consumers or examples; serving code never imports the build-time
   composer. Commands, resolvers, routes, and adapters dispatch to policy owners.
-- **Compose through declared contracts.** Addon declaration facts belong to
-  `addon.toml`; Django `AppConfig` owns app identity and lifecycle. Use schema
-  buckets, model `extends`, input/type extensions, settings/autoconfig,
+- **Compose through declared contracts.** Addon identity and requirements belong to native package metadata in
+  `pyproject.toml`; capability facts belong to its `[tool.angee]` tables; Django `AppConfig` owns app identity and lifecycle. Use schema
+  buckets, native `Composable` class keywords (`concrete`, `extends`, `inherits`,
+  `demands`), input/type extensions, settings/autoconfig,
   `ImplClassField`, containers, registered forms/glyphs, generated SDL, and native
   dependency extension points. Never probe foreign object shapes or monkey-patch
   composed model classes. The [owner decision tree](docs/guidelines.md#put-behavior-on-the-owning-object)
@@ -80,9 +81,12 @@ highest standard.
   framework seam instead of editing a framework/base-addon file to name a product
   concept. `tests/extcontrib` is the living REBAC extension example.
 - **Docs teach intent; code explains concrete contracts.** Public APIs explain
-  their current behavior in names, types, and docstrings. A mismatch requires
-  [reconciliation](docs/guidelines.md#reconcile-code-docs-and-tests), not automatic
-  acceptance of either stale prose or defective code.
+  their current behavior in names, types, and docstrings. Operational and
+  contributor instructions describe current implemented contracts. Proposals and
+  private history stay in the [resolved work-state](#where-knowledge-lives);
+  delete superseded guidance when its replacement implementation lands. A mismatch
+  requires [reconciliation](docs/guidelines.md#reconcile-code-docs-and-tests), not
+  automatic acceptance of either stale prose or defective code.
 
 If no Angee pattern exists, follow the underlying framework. When a new
 architectural convention still has multiple plausible shapes after researching
@@ -150,8 +154,10 @@ already been loaded. Read the relevant owner before acting.
 
 The first question for any change is *what level does it belong to?*
 
-- **Framework core** — generic Django composition, the Angee host, serving
-  entrypoints and small shared primitives. Core owns no product models.
+- **Upstream compiler (`django-compose`)** — generic Django composition, artifact
+  verification, explicit database preparation/readiness and native lifecycle seams. Angee consumes its public contracts.
+- **Serving addon (`angee.server`)** — HTTP defaults, Uvicorn commands and connection
+  policy; model-only projects do not activate it.
 - **Foundation addon (`angee.base`)** — reusable Django models, fields, managers,
   querysets, identity, validation and permission integration. Its app label is `base`.
 - **Framework addon** — a reusable capability that ships with Angee. Provenance,
@@ -165,36 +171,48 @@ product specifics down into the framework. Every fact lives at its owning level.
 
 ```text
 .                    # consolidated framework source slot
-├── angee/           # django-angee host, generic compose/, serving seams and shared primitives
-├── addons/          # angee.base foundation and capability addons; co-located web fragments
+├── src/             # angee.base foundation and capability addons; co-located web fragments
 ├── packages/        # schema-independent @angee/* packages and workshop/test tooling
 ├── examples/        # consumer addons and reference browser suite
 ├── templates/       # Copier project, stack, workspace, service, and addon sources
-├── tests/           # core, addon, and template contract tests
+├── tests/           # shared-owner, addon, and template contract tests
 ├── docs/            # principles, operational guidance, and owner links
 ├── .agents/         # public shared agent methodology
 └── README.md        # human entry point; this file is the contributor entry point
 ```
 
-The `angee.*` namespace spans the core and folder addons. The core wheel is
-`django-angee`; each addon is a source folder with `addon.toml`, not a separately
-distributed Python package. Core dependencies belong to `pyproject.toml`, addon
-dependencies to their manifests, and resolved versions to lockfiles. In a
-materialized workspace the stack root owns the JS install; the repository's own
-pnpm manifest also supports standalone package CI. See [the stack](docs/stack.md).
+The `angee.*` namespace is a native PEP 420 namespace contributed by addon
+packages. Each addon is a component distribution with a `pyproject.toml` and one
+`angee.addons` entry point in its native distribution metadata. Ordinary addons
+author `dynamic = ["entry-points"]`; Hatch owns its generation. The current compiler component contract selects one
+Django app per distribution; models and provision hooks are optional. The root `angee` meta-distribution requires the
+framework cohort. Dependencies belong to the owning package's
+`[project].dependencies`, resolved versions to native lockfiles, and capability
+facts to `[tool.angee.<capability>]`. A library is explicitly packaged without an
+addon entry point; absence of `apps.py` never changes package identity.
+
+`angee.base` owns reusable models, settings/bootstrap and small shared primitives;
+`angee.server` owns HTTP policy. Generic composition belongs to `django-compose`.
+The published [hatch-angee](https://github.com/ang-ee/hatch-angee) backend owns
+addon layout and metadata defaults over Hatchling; its README owns the authoring
+contract. In a materialized workspace the stack root owns JS installation; the
+repository manifest also supports standalone package CI.
+See [the stack](docs/stack.md).
 
 Personal-messaging bridges remain in the optional external
-`angee-messaging-bridges` repository. The Go operator, `hatch-angee`, and
+`angee-messaging-bridges` repository. The Go operator and
 `strawberry-django-hasura` remain independently published. Private work-state is
 an optional **workspace sibling slot**, not a required directory in this tree;
 see [Where Knowledge Lives](#where-knowledge-lives).
 
 ## Area Rules
 
-- **Core:** do not absorb product capability or addon vocabulary. Core changes
-  require the full Python suite because every composed area can be affected.
-- **Addons:** keep the manifest, capability, resources, permissions, and web
-  fragment together. Generated SDL and `@angee/gql` belong to the composed host.
+- **Shared owners:** keep generic composition in the upstream compiler and Angee
+  primitives in base. Changes affecting every composed area require the full
+  relevant Python suite.
+- **Addons:** keep package metadata, capability declarations, resources,
+  permissions, and web fragments together. Generated SDL and `@angee/gql` belong
+  to the composed host.
 - **Packages:** all published framework packages, including `@angee/app`, remain
   schema-independent and never import project-generated `@angee/gql/*`.
   `refine` and `metadata` are independent leaves; `ui` uses both; `app` composes
@@ -265,7 +283,7 @@ watchers by hand. The angee operator is the stack's monitoring and management
 service: it is not part of the frontend or backend and keeps running while it
 restarts them, so use it for every restart.
 `angee --root "$angee_root" job run deps --chained-restart` restarts the whole
-application (current instance templates start that chain at `runtime-build`), and
+application (instance templates start that chain at `py-sync`), and
 `angee --root "$angee_root" restart <service>...` restarts single services. Apply
 dependency changes with the whole-application restart; never `uv sync` the stack's
 venv while the stack runs. Existing stacks retain their rendered job names until

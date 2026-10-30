@@ -880,3 +880,15 @@ def test_scalar_state_copy_does_not_inherit_the_source_models_transition_policy(
     source = TransitionTask(state=TransitionTask.State.DRAFT)
     with pytest.raises(TransitionNotAllowed, match="direct assignment"):
         source.state = TransitionTask.State.RUNNING
+
+
+def test_transition_eligibility_uses_execution_guards_without_side_effects():
+    task = TransitionTask(ready=True)
+    assert task.state_transitions.can_run(task, "mark_running")
+    assert task.state == task.State.DRAFT
+    assert not hasattr(task, "body_state")
+    task.ready = False
+    assert not task.state_transitions.can_run(task, "mark_running")
+    task.ready = True
+    done = TransitionTask(state=TransitionTask.State.DONE)
+    assert not done.state_transitions.can_run(done, "mark_running")

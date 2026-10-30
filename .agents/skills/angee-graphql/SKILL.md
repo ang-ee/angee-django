@@ -20,16 +20,16 @@ Run `angee-design` first for the owner map; `angee-models` and
 
 | File or module | Owns | Reference |
 |---|---|---|
-| `<addon>/schema.py` | Strawberry types, resources, authored roots, the `schemas` mapping | `addons/angee/tags/schema.py:44-72,205-261`, `addons/angee/money/schema.py:62-109`, `examples/addons/example/notes/schema.py:22-95` |
-| `<addon>/addon.toml` `schemas` | Only a non-default schema module reference; default is `schema.py` | `addons/angee/graphql/schema.py:668` (`_raw_schemas`) |
-| `addons/angee/graphql/schema.py` | Buckets `SCHEMA_PART_KEYS:75`, merge/build per name and finalized metadata `GraphQLSchemas:306`, error sanitizer `AngeeSchema:90` | `:237` `SchemaParts`, `:650` `schema_parts_for` |
-| `addons/angee/graphql/data/hasura.py` | `hasura_model_resource:1374`, `AngeeHasuraWriteBackend:201`, `HasuraLines:107`, `public_pk_decoder:644`, `declared_hasura_resource_fields:1005` | `:1796` writable-relation decode guard |
-| `addons/angee/graphql/data/pydantic_resource.py` | `hasura_pydantic_resource:50` (computed, read-only rows) | `addons/angee/iam/schema.py:692-709` |
-| `addons/angee/graphql/actions.py` | `ActionResult:40`, `action_guard:195`, `authorized_action_target:240`, `authorized_permission_target:276`, `resolve_action_target:321` | `addons/angee/work/schema.py:480-495` |
-| `addons/angee/graphql/{node,ids,deletion,capabilities}.py` | `AngeeNode` (`node.py:18`), `instance_for_id`/`require_instance_for_id` (`ids.py:54,68`), `delete_by_public_id`/`attach_delete_preview_metadata` (`deletion.py:334,396`), `permissions_field` (`capabilities.py:135`) | `examples/addons/example/notes/schema.py:41-62` |
-| `addons/angee/graphql/subscriptions.py`, `apps.py` | `changes:30`; `GraphQLConfig.ready` (`apps.py:22`) registers the schema checks and connects publishers | `addons/angee/knowledge/schema.py:845-852` |
-| `addons/angee/graphql/sdl.py`, `management/commands/schema.py`, `urls.py` | `GraphQLSdl:27` renders `runtime/schemas/<name>.graphql` + `<name>.metadata.json`; `schema [--check]`; `graphql/<schema_name>/` (`urls.py:11`) | `docs/composer.md#serving` |
-| `packages/app/bin/angee-web-codegen.mjs`, `<addon>/web/src/documents*.ts` | One `@angee/gql/<name>` per SDL (`:67-70`), document globs by file name (`:467-472`), derived action documents (`:475`) | `addons/angee/tags/web/src/documents.ts`, `packages/refine/src/dialect/authored-hooks.tsx:92,213` |
+| `<addon>/schema.py` | Strawberry types, resources, authored roots, the `schemas` mapping | `src/angee/tags/schema.py:44-72,205-261`, `src/angee/money/schema.py:62-109`, `examples/src/example/notes/schema.py:22-95` |
+| `<addon>/pyproject.toml` `[tool.angee.graphql] schema` | Only a non-default schema module reference; default is `schema.py` | `src/angee/graphql/schema.py:668` (`_raw_schemas`) |
+| `src/angee/graphql/schema.py` | Buckets `SCHEMA_PART_KEYS:75`, merge/build per name and finalized metadata `GraphQLSchemas:306`, error sanitizer `AngeeSchema:90` | `:237` `SchemaParts`, `:650` `schema_parts_for` |
+| `src/angee/graphql/data/hasura.py` | `hasura_model_resource:1374`, `AngeeHasuraWriteBackend:201`, `HasuraLines:107`, `public_pk_decoder:644`, `declared_hasura_resource_fields:1005` | `:1796` writable-relation decode guard |
+| `src/angee/graphql/data/pydantic_resource.py` | `hasura_pydantic_resource:50` (computed, read-only rows) | `src/angee/iam/schema.py:692-709` |
+| `src/angee/graphql/actions.py` | `ActionResult:40`, `action_guard:195`, `authorized_action_target:240`, `authorized_permission_target:276`, `resolve_action_target:321` | `src/angee/work/schema.py:480-495` |
+| `src/angee/graphql/{node,ids,deletion,capabilities}.py` | `AngeeNode` (`node.py:18`), `instance_for_id`/`require_instance_for_id` (`ids.py:54,68`), `delete_by_public_id`/`attach_delete_preview_metadata` (`deletion.py:334,396`), `permissions_field` (`capabilities.py:135`) | `examples/src/example/notes/schema.py:41-62` |
+| `src/angee/graphql/subscriptions.py`, `apps.py` | `changes:30`; `GraphQLConfig.ready` (`apps.py:22`) registers the schema checks and connects publishers | `src/angee/knowledge/schema.py:845-852` |
+| `src/angee/graphql/sdl.py`, `management/commands/schema.py`, `urls.py` | `GraphQLSdl:27` renders `runtime/schemas/<name>.graphql` + `<name>.metadata.json`; ready-phase `SchemaIntegration` emits through compose; `schema --check` reads; `graphql/<schema_name>/` (`urls.py:11`) | `docs/composer.md#serving` |
+| `packages/app/bin/angee-web-codegen.mjs`, `<addon>/web/src/documents*.ts` | One `@angee/gql/<name>` per SDL (`:67-70`), document globs by file name (`:467-472`), derived action documents (`:475`) | `src/angee/tags/web/src/documents.ts`, `packages/refine/src/dialect/authored-hooks.tsx:92,213` |
 
 ## Reuse first
 
@@ -161,7 +161,7 @@ Run `angee-design` first for the owner map; `angee-models` and
    Admin-only surfaces go to `console` alone (money, tags); outward reads also to `public`. Every resource's `.types` ride the `types` bucket. Values are sequences, never sets.
    **Owner rule:** the addon declares exposure per named schema; `GraphQLSchemas` merges buckets across addons, builds one Strawberry schema per name and finalizes resource metadata from it ([Rules](../../../docs/backend/guidelines.md#rules) "GraphQL authoring is native Strawberry").
 
-8. **Emit SDL, run codegen, then ship documents only for authored operations.** Order: `schema` → host codegen → fragment checks ([Composition and schema](../../../docs/checks.md#composition-and-schema)).
+8. **Emit SDL, run codegen, then ship documents only for authored operations.** Order: native `compose` (including SDL/metadata) → host codegen → fragment checks ([Composition and schema](../../../docs/checks.md#composition-and-schema)).
 
    ```ts
    import { graphql } from "@angee/gql/console";
@@ -176,26 +176,18 @@ Run `angee-design` first for the owner map; `angee-models` and
    `documents.ts`/`documents.<name>.ts` bind to a non-public schema, `documents.public.ts` to `public`; consume with `useAuthoredMutation(TagRecord, options)` (`tags/web/src/RecordTagsWidget.tsx:23`). If the mutation returns `ActionResult` with an eligible signature → no document; `useRecordActionMutation<ActionFieldName>("field")`. If the view is a resource list, detail or form → no document; metadata drives it.
    **Owner rule:** Python ships schema and operations, TypeScript ships UX; `@angee/*` packages stay schema-independent and only addon fragments import `@angee/gql` ([Frontend rules](../../../docs/frontend/guidelines.md#rules) "Python ships schema and operations. TypeScript ships UX." and **Schema dependence stops at the composition boundary**).
 
-9. **Prove it with a non-admin reader.** A framework test builds the schema and executes as a user (`tests/conftest.py:893` `execute_schema`, `tests/test_graphql_insert.py:100-127`); an addon test drives the HTTP endpoint after `rebac sync` and resources (`examples/addons/example/notes/tests/test_iam_graphql.py:19-43`); a metadata snapshot pins the roots (`.../tests/test_schema_metadata.py:15-60`).
+9. **Prove it with a non-admin reader.** A framework test builds the schema and executes as a user (`tests/conftest.py:893` `execute_schema`, `tests/test_graphql_insert.py:100-127`); an addon test drives the HTTP endpoint after `rebac sync` and resources (`examples/src/example/notes/tests/test_iam_graphql.py:19-43`); a metadata snapshot pins the roots (`.../tests/test_schema_metadata.py:15-60`).
    **Owner rule:** admin-only tests pin neither deny behavior nor leaked `sudo()` scope ([GraphQL pitfalls](references/pitfalls.md) **GraphQL authorization tests include a non-admin reader**).
 
-<details><summary>Changes under the build/host plan</summary>
 
-Under the planned build/host split, SDL and
-metadata are emitted by `provision` in a plain Django process after migrate, `rebac sync`
-and resources; boot-time SDL writes and `emit_if_stale` are deleted. Step 8 then depends
-on provision, not on a served process. `angee/hooks.py` (the `ANGEE_GRAPHQL_RESOURCE_FILTERS`
-check in `graphql/apps.py:13`) follows the host into `angee.base`; re-cite on move.
-
-</details>
 
 ## Do not
 
 - A hand-written list query or CRUD mutation for a model → `hasura_model_resource`; [Rules](../../../docs/backend/guidelines.md#rules) "GraphQL schema files declare Strawberry types".
 - `from <addon>.models import Model` to bind a type → `apps.get_model`; [Rules](../../../docs/backend/guidelines.md#rules) "Cross-addon and generated-model references go through Django's app registry".
 - Editing another addon's type or input, or importing its schema to add a field → `type_extensions` / `input_extensions`; [Rules](../../../docs/backend/guidelines.md#rules) **Extension is symmetric across five axes**.
-- Permission, status or implementation branching in a resolver → model/manager verb + `authorized_*_target`; [Boundary leaks](../../../docs/guidelines.md#boundary-leaks-and-detail-driven-policy). Caveated subjects are rejected by `angee.E024` (`addons/angee/base/checks.py:37`); the path is field-backed conditional relations.
-- A writable FK or M2M without a decode → `public_id_fields` / `field_id_decode`; `addons/angee/graphql/data/hasura.py:1796`.
+- Permission, status or implementation branching in a resolver → model/manager verb + `authorized_*_target`; [Boundary leaks](../../../docs/guidelines.md#boundary-leaks-and-detail-driven-policy). Caveated subjects are rejected by `angee.E024` (`src/angee/base/checks.py:37`); the path is field-backed conditional relations.
+- A writable FK or M2M without a decode → `public_id_fields` / `field_id_decode`; `src/angee/graphql/data/hasura.py:1796`.
 - `readOnly` in a form to hide a server-owned column → exclude it from `insertable`/`updatable`; [GraphQL actor and write contracts](../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts) **Server-owned fields are excluded from the write surface**.
 - `= None` on an optional create input over a non-null column → `strawberry.UNSET`; [GraphQL pitfalls](references/pitfalls.md) **`hasura_model_resource` create `full_clean`s the input**.
 - Connecting publishers or signals at schema import → `apps.py` `ready()`; [Schema lifecycle and change publication](../../../docs/backend/guidelines.md#schema-lifecycle-and-change-publication) **Publishers wire during `angee.graphql` app `ready()`**.
@@ -204,7 +196,7 @@ check in `graphql/apps.py:13`) follows the host into `angee.base`; re-cite on mo
 
 ## Verify
 
-Validators: `angee.graphql.E001`/`E002` from Django system checks (every named schema builds, `addons/angee/graphql/checks.py`), `schema --check` for SDL and metadata drift, host codegen for documents, `tests/test_layering.py` for the contracts import closure, the focused pytest module, `ruff` and `mypy` on touched files. Commands and roots: [Python and composition contracts](../../../docs/checks.md#python-and-composition-contracts) (lane), [Composition and schema](../../../docs/checks.md#composition-and-schema) and [Frontend packages and addon fragments](../../../docs/checks.md#frontend-packages-and-addon-fragments) (stack root). Loop: `.agents/skills/slice/SKILL.md`.
+Validators: `angee.graphql.E001`/`E002` from Django system checks (every named schema builds, `src/angee/graphql/checks.py`), `schema --check` for SDL and metadata drift, host codegen for documents, `tests/test_layering.py` for the contracts import closure, the focused pytest module, `ruff` and `mypy` on touched files. Commands and roots: [Python and composition contracts](../../../docs/checks.md#python-and-composition-contracts) (lane), [Composition and schema](../../../docs/checks.md#composition-and-schema) and [Frontend packages and addon fragments](../../../docs/checks.md#frontend-packages-and-addon-fragments) (stack root). Loop: `.agents/skills/slice/SKILL.md`.
 
 Done means: `check` is clean; `runtime/schemas/<name>.graphql` shows the roots the resource declaration and authored fields imply, and `<name>.metadata.json` lists the resource with those roots as in the notes snapshot (`test_schema_metadata.py:15-60`); `runtime/gql/<name>/` exports each authored document; the composed and per-package web typechecks pass; a non-admin reader test passes and a denied actor reads not-found.
 
@@ -217,7 +209,7 @@ A jj workspace lane has no host, database or JS install: run the focused pytest 
 - `only=[...]` must list every column the resolver or an inherited `display_name` dereferences; test narrow selections at several row counts ([GraphQL pitfalls](references/pitfalls.md) **A `strawberry_django.field(only=[...])` hint must list every column the resolver dereferences**, [Rules](../../../docs/backend/guidelines.md#rules) "Declare computed GraphQL field dependencies with native Strawberry-Django").
 - Intersect write-only fields out of the read selection or the detail query is invalid and the form loads blank ([GraphQL pitfalls](references/pitfalls.md) **Intersect write-only fields out of the read/return selection**).
 - Input coercion errors fire before resolvers and never reach `validationErrors`; guard required inputs from `rootFields.requiredCreateFields` ([GraphQL actor and write contracts](../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts) **Validation surfaces two ways**).
-- A custom value field registers its wire type beside its field module (`register_field_type`, `addons/angee/graphql/field_types.py:33`), never from a later `ready()` ([Schema lifecycle and change publication](../../../docs/backend/guidelines.md#schema-lifecycle-and-change-publication) **A custom model value field registers its GraphQL wire type when its field module imports**).
+- A custom value field registers its wire type beside its field module (`register_field_type`, `src/angee/graphql/field_types.py:33`), never from a later `ready()` ([Schema lifecycle and change publication](../../../docs/backend/guidelines.md#schema-lifecycle-and-change-publication) **A custom model value field registers its GraphQL wire type when its field module imports**).
 
 ## Read next
 
@@ -233,7 +225,7 @@ A jj workspace lane has no host, database or JS install: run the focused pytest 
 
 <!--
 Docs read in full: AGENTS.md; docs/guidelines.md; docs/backend/guidelines.md #composition-owners, #rules, #graphql-and-authorization, #addon-websocket-endpoints, #graphql-actor-and-write-contracts, #schema-lifecycle-and-change-publication; docs/stack.md #backend (strawberry-django, strawberry-django-aggregates, strawberry-django-hasura, channels, django-zed-rebac rows); docs/composer.md #serving; docs/checks.md #python-and-composition-contracts, #composition-and-schema, #frontend-packages-and-addon-fragments; docs/frontend/guidelines.md #package-layering, #rules, #framework-containers, #context-aside.
-Code read: addons/angee/graphql/schema.py:1-90 and def list (:90 AngeeSchema, :237 SchemaParts, :306 GraphQLSchemas, :650-690 discovery); actions.py:1-80, :195-376; sdl.py (whole); data/hasura.py:1-160, :1374-1500, :1786-1842 and def list; data/pydantic_resource.py:1-120; subscriptions.py:1-82; node.py (whole); deletion.py:334-405; ids.py def list; capabilities.py:135-150; checks.py (whole); apps.py (whole); urls.py:11; management/commands/schema.py (whole); field_types.py:33; packages/app/bin/angee-web-codegen.mjs:55-260, :435-480; packages/refine/src/dialect/authored-hooks.tsx:92,213; packages/ui/src/views/resource/record-action.ts:93; tests/conftest.py:893-912; tests/test_graphql_insert.py:1-127; tests/test_layering.py:95-135. No addons/angee/graphql/README.md exists.
-Reference addons (whole): addons/angee/tags/schema.py, addons/angee/money/schema.py, examples/addons/example/notes/schema.py, addons/angee/tags/web/src/documents.ts, RecordTagsWidget.tsx:1-40, index.tsx:46; examples/addons/example/notes/tests/test_schema_metadata.py:1-60, test_iam_graphql.py:1-50. Extension and lines examples: addons/angee/iam_integrate_oidc/schema.py:250-300; addons/angee/knowledge/schema.py:800-853; addons/angee/iam/schema.py:692-720, :747; addons/angee/work/schema.py:480-560; addons/angee/base/models/inputs.py:9-15.
+Code read: src/angee/graphql/schema.py:1-90 and def list (:90 AngeeSchema, :237 SchemaParts, :306 GraphQLSchemas, :650-690 discovery); actions.py:1-80, :195-376; sdl.py (whole); data/hasura.py:1-160, :1374-1500, :1786-1842 and def list; data/pydantic_resource.py:1-120; subscriptions.py:1-82; node.py (whole); deletion.py:334-405; ids.py def list; capabilities.py:135-150; checks.py (whole); apps.py (whole); urls.py:11; management/commands/schema.py (whole); field_types.py:33; packages/app/bin/angee-web-codegen.mjs:55-260, :435-480; packages/refine/src/dialect/authored-hooks.tsx:92,213; packages/ui/src/views/resource/record-action.ts:93; tests/conftest.py:893-912; tests/test_graphql_insert.py:1-127; tests/test_layering.py:95-135. No src/angee/graphql/README.md exists.
+Reference addons (whole): src/angee/tags/schema.py, src/angee/money/schema.py, examples/src/example/notes/schema.py, src/angee/tags/web/src/documents.ts, RecordTagsWidget.tsx:1-40, index.tsx:46; examples/src/example/notes/tests/test_schema_metadata.py:1-60, test_iam_graphql.py:1-50. Extension and lines examples: src/angee/iam_integrate_oidc/schema.py:250-300; src/angee/knowledge/schema.py:800-853; src/angee/iam/schema.py:692-720, :747; src/angee/work/schema.py:480-560; src/angee/base/models/inputs.py:9-15.
 Mismatches: docs/frontend/guidelines.md#rules (**Generated authored operations are typed, never hand-mirrored**, "file name picks its schema") says documents.ts/documents.console.ts map to console; packages/app/bin/angee-web-codegen.mjs:467-472 (`documentGlobs`) maps documents.ts plus documents.<name>.ts to every non-public schema name, so documents.ts also feeds any further named schema. No doc walks through declaring a resource end to end or the documents.ts consumer.
 -->

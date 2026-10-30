@@ -1,7 +1,8 @@
 import { useMemo, type ReactElement, type ReactNode } from "react";
 import { useModelMetadata } from "@angee/metadata";
 
-import { useResourceRecordHrefLookup } from "../../runtime";
+import { makeContext, useContainer, useResourceRecordHrefLookup, type CoreContainer } from "../../runtime";
+import { ContainerOutlet, containerHasContent } from "../../lib/container-outlet";
 import { PaneRow, type PaneRowProps } from "../../communication/pane-list";
 import { ChipList } from "../../ui/chip";
 import { NavLink } from "../../ui/nav-link";
@@ -25,6 +26,34 @@ export function RecordReference({ model, id, label, tab, search }: RecordReferen
   const href = recordHref(model, id);
   const className = "max-w-full whitespace-normal text-left leading-snug [overflow-wrap:anywhere]";
   return href ? <NavLink href={recordTargetHref(href, { tab, search })} variant="inline" className={className}>{content}</NavLink> : <span className={className}>{content}</span>;
+}
+
+/** Opt-in record previews contributed by the record's addon.
+ * @kind contribution
+ */
+export const REFERENCE_CONTAINERS: readonly CoreContainer[] = [
+  { address: "reference#preview", models: true },
+];
+
+const ReferenceContext = makeContext<RecordReferenceProps>("RecordReferencePreview");
+
+/** Identity and navigation supplied to a model's preview contribution.
+ * @kind null
+ * @reason Runtime context for an addon-owned record preview.
+ */
+export function useRecordReference(): RecordReferenceProps {
+  return ReferenceContext.use();
+}
+
+/** Show the owning addon's preview when contributed, otherwise its canonical link.
+ * @owner RecordReference
+ */
+export function RecordReferencePreview(props: RecordReferenceProps): ReactElement {
+  const models = useMemo(() => [props.model], [props.model]);
+  const entries = useContainer("reference#preview", { models });
+  return <ReferenceContext.Provider value={props}>
+    {containerHasContent(entries) ? <ContainerOutlet entries={entries} /> : <RecordReference {...props} />}
+  </ReferenceContext.Provider>;
 }
 
 export interface RecordReferenceRowProps extends Pick<RecordReferenceProps, "model" | "id" | "tab" | "search">,

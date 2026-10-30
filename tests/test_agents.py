@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any
 
@@ -419,7 +420,7 @@ def test_openai_compatible_model_discovery_keeps_config_and_deny_policy(monkeypa
             ]
         )
     )
-    monkeypatch.setattr(backend, "client", lambda: client)
+    monkeypatch.setattr(backend, "client", lambda: nullcontext(client))
     assert [spec.handle for spec in backend.list_models()] == ["llama3.2:latest", "openai/llama3.2:latest"]
     provider.config = {"model_allow_prefixes": ["gpt-"]}
     assert backend.list_models() == []
@@ -521,6 +522,12 @@ class _FakeAnthropicClient:
 
     instances: list[Any] = []
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.closed = True
+
     def __init__(self, **kwargs: Any) -> None:
         self.kwargs = kwargs
         self.models = _FakeAnthropicModels(self)
@@ -594,6 +601,12 @@ class _FakeOpenAIClient:
 
     instances: list[Any] = []
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.closed = True
+
     def __init__(self, **kwargs: Any) -> None:
         self.kwargs = kwargs
         self.models = _FakeOpenAIModels(self)
@@ -621,6 +634,7 @@ def test_anthropic_backend_refresh_syncs_native_and_broker_models(
     assert provider.refresh_models() == 4
 
     client = _FakeAnthropicClient.instances[-1]
+    assert client.closed
     assert client.kwargs == {"api_key": "api-key"}
     assert client.models.calls == [{"limit": 1000}]
     with system_context(reason="test read"):
@@ -705,6 +719,7 @@ def test_openai_backend_refresh_syncs_native_and_broker_models(
     assert provider.refresh_models() == 4
 
     client = _FakeOpenAIClient.instances[-1]
+    assert client.closed
     assert client.kwargs == {"api_key": "api-key"}
     assert client.models.calls == [{}]
     with system_context(reason="test read"):
@@ -873,25 +888,33 @@ def test_ollama_refresh_repairs_alias_uses_and_preserves_curated_defaults(
         return httpx2.Response(200, json={"capabilities": capabilities[json.loads(request.content)["model"]]})
 
     settings.ANGEE_INFERENCE_APPROVED_DEPLOYMENTS = None
-    with DefaultHttpxClient(transport=httpx2.MockTransport(handle)) as http_client:
-        monkeypatch.setattr("openai.DefaultHttpxClient", lambda **kwargs: http_client)
-        for metadata in ("native", "missing", "failed"):
-            assert provider.refresh_models() == 6
-            with system_context(reason="test.agents.ollama.refreshed_models"):
-                models = {model.name: model for model in InferenceModel.objects.filter(provider=provider)}
-            assert models[glm.name].pk == glm.pk
-            assert models[glm.name].context_window == 131072
-            assert models[glm.name].model_use == models[f"ollama/{glm.name}"].model_use == InferenceModelUse.MULTIMODAL
-            assert models["nomic-embed-text:latest"].model_use == InferenceModelUse.EMBEDDING
-            assert models["ollama/nomic-embed-text:latest"].model_use == InferenceModelUse.EMBEDDING
-            assert [model.name for model in models.values() if model.is_default] == [qwen.name]
-            mapping = InferenceModel.objects.usable(provider.owner, "mapping", uses=TEXT_INFERENCE_MODEL_USES)
-            recognition = InferenceModel.objects.usable(provider.owner, "recognition", uses=IMAGE_INFERENCE_MODEL_USES)
-            assert mapping[0].pk == qwen.pk
-            assert {model.name for model in mapping} == {
-                glm.name, f"ollama/{glm.name}", qwen.name, f"ollama/{qwen.name}",
-            }
-            assert {model.name for model in recognition} == {glm.name, f"ollama/{glm.name}"}
+    clients = []
+
+    def client_factory(**kwargs):
+        client = DefaultHttpxClient(transport=httpx2.MockTransport(handle), **kwargs)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr("openai.DefaultHttpxClient", client_factory)
+    for metadata in ("native", "missing", "failed"):
+        assert provider.refresh_models() == 6
+        with system_context(reason="test.agents.ollama.refreshed_models"):
+            models = {model.name: model for model in InferenceModel.objects.filter(provider=provider)}
+        assert models[glm.name].pk == glm.pk
+        assert models[glm.name].context_window == 131072
+        assert models[glm.name].model_use == models[f"ollama/{glm.name}"].model_use == InferenceModelUse.MULTIMODAL
+        assert models["nomic-embed-text:latest"].model_use == InferenceModelUse.EMBEDDING
+        assert models["ollama/nomic-embed-text:latest"].model_use == InferenceModelUse.EMBEDDING
+        assert [model.name for model in models.values() if model.is_default] == [qwen.name]
+        mapping = InferenceModel.objects.usable(provider.owner, "mapping", uses=TEXT_INFERENCE_MODEL_USES)
+        recognition = InferenceModel.objects.usable(provider.owner, "recognition", uses=IMAGE_INFERENCE_MODEL_USES)
+        assert mapping[0].pk == qwen.pk
+        assert {model.name for model in mapping} == {
+            glm.name, f"ollama/{glm.name}", qwen.name, f"ollama/{qwen.name}",
+        }
+        assert {model.name for model in recognition} == {glm.name, f"ollama/{glm.name}"}
+    assert len(clients) == 3
+    assert all(client.is_closed for client in clients)
 
 
 @pytest.mark.django_db(transaction=True)

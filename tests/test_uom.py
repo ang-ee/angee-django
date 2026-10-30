@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 from django.contrib.auth.models import AnonymousUser
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import actor_context, system_context, to_object_ref
 from rebac.models import active_relationship_model
@@ -329,3 +330,16 @@ def test_reference_with_offset_is_rejected(composed_tables: None) -> None:
             rounding=Decimal("0.01"),
             is_reference=True,
         )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("field,value", [
+    ("ratio", "0"), ("ratio", "-1"), ("rounding", "0"), ("rounding", "-0.1"), ("rounding", "0.5"),
+])
+def test_invalid_conversion_units_fail_validation_and_database_admission(field: str, value: str) -> None:
+    category = _make_category(name="Validity")
+    unit = Uom(name="Invalid", category=category, **{field: Decimal(value)})
+    with system_context(reason="uom invalid validation"), pytest.raises(ValidationError):
+        unit.full_clean()
+    with pytest.raises(IntegrityError), transaction.atomic(), system_context(reason="uom invalid admission"):
+        unit.save()

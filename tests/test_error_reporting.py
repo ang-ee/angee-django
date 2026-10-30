@@ -12,7 +12,6 @@ from typing import Any
 import pytest
 import sentry_sdk
 import strawberry
-from django.conf import settings
 from django.test import Client, override_settings
 from django.urls import path
 from django.views.decorators.csrf import csrf_exempt
@@ -20,7 +19,8 @@ from sentry_sdk.envelope import Envelope
 from sentry_sdk.transport import Transport
 from strawberry.django.views import GraphQLView
 
-from angee.conf import ProjectContract
+from angee.base.conf import _start_error_reporting
+from angee.graphql.autoconfig import SETTINGS as GRAPHQL_SETTINGS
 from angee.graphql.schema import GraphQLSchemas
 from tests.test_graphql import addon
 from tests.test_settings_composition_errors import _environment, _project
@@ -48,11 +48,12 @@ class _Query:
 _PROBE = """
 import json
 import sentry_sdk
-from angee.build import ProjectBuildContract
-from angee.conf import ProjectContract
+from pathlib import Path
+from angee.base.conf import configure
 
 try:
-    ProjectBuildContract({"__name__": "probe_settings"}).compose()
+    configure({"__name__": "probe_settings", "__file__": str(Path("settings.py").resolve()),
+               "COMPOSE_OUTPUT_DIR": Path("runtime").resolve()})
     failure = None
 except Exception as error:
     failure = type(error).__name__
@@ -88,16 +89,17 @@ def _compose(tmp_path: Path, *, installed_apps: tuple[str, ...] = (), **environm
         (tmp_path / "settings.yaml").write_text(
             "SECRET_KEY: isolated-error-reporting-test\n"
             f"INSTALLED_APPS: {json.dumps(installed_apps)}\n"
-            'COMPOSE_RUNTIME_DIR: "{BASE_DIR}/runtime"\n',
+            'COMPOSE_OUTPUT_DIR: "{BASE_DIR}/runtime"\n',
             encoding="utf-8",
         )
     env = _environment(tmp_path)
     for name in ("SENTRY_DSN", "SENTRY_ENVIRONMENT", "SENTRY_RELEASE"):
         env.pop(name, None)
     env.update(environment)
+    env["DJANGO_COMPOSE_MODE"] = "write"
     result = subprocess.run(
         [sys.executable, "-c", _PROBE],
-        cwd=Path(__file__).resolve().parents[1],
+        cwd=tmp_path,
         env=env,
         capture_output=True,
         text=True,
@@ -146,13 +148,17 @@ def test_a_composition_failure_is_reported(tmp_path: Path) -> None:
 
 @pytest.mark.django_db
 def test_graphql_failures_reach_sentry_once_without_sanitized_values(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replay ProjectContract's own Sentry options against the GraphQL view."""
+    """Replay base configure's own Sentry options against the GraphQL view."""
 
     start = sentry_sdk.init
     recorded: list[dict[str, Any]] = []
     monkeypatch.setattr(sentry_sdk, "init", lambda **options: recorded.append(options))
     monkeypatch.setenv("SENTRY_DSN", DSN)
-    ProjectContract({"SENTRY_DISABLED_INTEGRATIONS": settings.SENTRY_DISABLED_INTEGRATIONS})._start_error_reporting()
+    import environ
+
+    _start_error_reporting(
+        {"SENTRY_DISABLED_INTEGRATIONS": GRAPHQL_SETTINGS["SENTRY_DISABLED_INTEGRATIONS:append"]}, environ.Env(),
+    )
     [options] = recorded
 
     schema = GraphQLSchemas([addon(public={"query": [_Query]})]).build("public")

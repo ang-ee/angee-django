@@ -34,19 +34,19 @@ builds its schemas lazily on its first observable write.
   registration; a broad run does not replace the direct module run.
 - **Temporary app registries can wire shared signals.** Django's `isolate_apps`
   runs app ready hooks. Tests including auth restore the sign-in stamp through
-  [IAM's signal owner](../../../../addons/angee/iam/signals.py), as the
+  [IAM's signal owner](../../../../src/angee/iam/signals.py), as the
   [deletion tests](../../../../tests/test_deletion.py) do, so later tests retain the
   configured lifecycle.
 - **Django owns static test-table lifecycle.** Register concrete models before
   database setup in installed, unmigrated apps, and use pytest-django's native
   setup and transactional flush. Share source compositions through the owning
-  [`resources`](../../../../addons/angee/resources/testing/__init__.py),
-  [`workflows`](../../../../addons/angee/workflows/testing/__init__.py), and
-  [`integrate`](../../../../addons/angee/integrate/testing/__init__.py) test apps.
+  [`resources`](../../../../src/angee/resources/testing/__init__.py),
+  [`workflows`](../../../../src/angee/workflows/testing/__init__.py), and
+  [`integrate`](../../../../src/angee/integrate/testing/__init__.py) test apps.
   Import the reusable addon-owned concrete compositions from the root test
   conftest before database setup, including
-  [`decisions`](../../../../addons/angee/decisions/testing/models.py) and
-  [`messaging`](../../../../addons/angee/messaging/testing/models.py); decisions tests
+  [`decisions`](../../../../src/angee/decisions/testing/models.py) and
+  [`messaging`](../../../../src/angee/messaging/testing/models.py); decisions tests
   import those models without workflow test support.
   Framework probes declared after setup, in isolated registries, unmanaged, or
   under uninstalled or migrated

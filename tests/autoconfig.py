@@ -1,6 +1,10 @@
-"""Fixture implementations contributed through the same contract as addon defaults."""
+"""Fixture-only providers composed beside their production registry owners."""
 
 SETTINGS = {
+    "ANGEE_TEST_CONNECTION_CLASSES": {
+        "connection": "tests.integrate_fixtures.ConnectionAdapter",
+        "live": "tests.integrate_fixtures.LiveConnectionAdapter",
+    },
     "ANGEE_VCS_BACKEND_CLASSES.stub": "tests.conftest.StubVCSBackend",
     "ANGEE_INFERENCE_BACKEND_CLASSES.stub_inference": "tests.conftest.StubInferenceBackend",
     "ANGEE_CHANNEL_BACKEND_CLASSES.fake_live": "tests.pairing_backend.FakePairingBackend",

@@ -1,8 +1,0 @@
-# Angee addon manifest. The declarative contract hatch-angee compiles into
-# the package's [project] + entry points; see hatch-angee's native AddonManifest.
-[addon]
-name = "angee.knowledge_graph_pgvector"
-description = "Skeleton knowledge retrieval plugin using lexical search; pgvector embeddings and graph retrieval are not implemented"
-keywords = ["pgvector", "embeddings", "knowledge"]
-category = "Integration"
-depends_on = ["angee.knowledge", "angee.mcp"]

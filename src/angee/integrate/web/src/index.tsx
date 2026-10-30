@@ -1,0 +1,217 @@
+import { Tab } from "@angee/ui";
+import { defineBaseAddon, resourcePageRoutes, type BaseAddonRoute, type MenuDeclarations } from "@angee/app";
+import { lazyRouteComponent } from "@tanstack/react-router";
+import {
+  Cable,
+  Link2,
+  Store,
+  Webhook,
+} from "lucide-react";
+
+import { credentialCreateForm } from "./connect/credential-form";
+import {
+  CONNECT_CALLBACK_LOOPBACK_PATH,
+  CONNECT_CALLBACK_PATH,
+} from "./connect/redirects";
+import { enIntegrateMessages } from "./i18n";
+import {
+  INTEGRATION_STREAMS_TAB_ID,
+  INTEGRATION_STREAM_SEARCH_KEYS,
+  IntegrationStreamsPane,
+  integrationHasStreams,
+  integrationSyncCursorWidget,
+} from "./IntegrationStreams";
+import {
+  DisconnectIntegrationAction,
+  INTEGRATION_DISCONNECT_ACTION_ID,
+  INTEGRATION_MODEL,
+  INTEGRATION_PAUSE_ACTION_ID,
+  INTEGRATION_RESUME_ACTION_ID,
+  INTEGRATION_TEST_CONNECTION_ACTION_ID,
+  INTEGRATION_RETRY_DISCOVERY_ACTION_ID,
+  PauseIntegrationAction,
+  ResumeIntegrationAction,
+  RetryDiscoveryAction,
+  TestConnectionAction,
+} from "./IntegrationLifecycleActions";
+import { RECORD_SOURCES_GROUP_ID, recordSourcesGroup, StatementRecordLinkReference } from "./RecordSourcesPane";
+
+const INTEGRATE_ID = "integrate";
+
+// Both connect-callback routes render the same page — split it once and share.
+const oauthConnectCallback = lazyRouteComponent(
+  () => import("./connect/OAuthConnectCallbackPage"),
+  "OAuthConnectCallbackPage",
+);
+
+const integrateRoutes: readonly BaseAddonRoute[] = [
+  {
+    name: "integrate.add",
+    path: "/integrate/add",
+    component: lazyRouteComponent(() => import("./views/AddIntegrationPage"), "AddIntegrationPage"),
+  },
+  // The inventory lists parents; generic parent links resolve to their child page.
+  ...resourcePageRoutes("integrate.integrations", "/integrate", lazyRouteComponent(() => import("./views/IntegrationsPage"), "IntegrationsPage"), "integrate.Integration", {
+    detailName: "integrate.integration",
+    detailComponent: lazyRouteComponent(() => import("./views/IntegrationsPage"), "IntegrationRecordRedirect"),
+  }),
+  ...resourcePageRoutes("integrate.vendors", "/integrate/vendors", lazyRouteComponent(() => import("./views/VendorsPage"), "VendorsPage"), "integrate.Vendor", { detailName: "integrate.vendor" }),
+  ...resourcePageRoutes("integrate.webhooks", "/integrate/webhooks", lazyRouteComponent(() => import("./views/WebhooksPage"), "WebhooksPage"), "integrate.WebhookSubscription", { detailName: "integrate.webhook" }),
+
+  // --- Connect surface (outbound OAuth) -----------------------------------
+  // The account-connect callback: the provider redirects back here after the user
+  // approves. It stays on the authenticated `console` layout (unlike the public
+  // sign-in callback) because the connect flow's actor is an already-signed-in
+  // admin linking an outbound account — there is no pre-session bootstrap.
+  {
+    name: "integrate.connect.callback",
+    path: CONNECT_CALLBACK_PATH,
+    component: oauthConnectCallback,
+  },
+  // Loopback alias for fixed public clients (e.g. Anthropic) whose allow-list registers
+  // only the bare `/callback` loopback: on localhost the backend rewrites the connect
+  // redirect to this path (OAuthClient.loopback_redirect_path), so the provider returns
+  // here. Same completion page — `currentConnectCallbackRedirectUri()` reflects the path.
+  {
+    name: "integrate.connect.callbackLoopback",
+    path: CONNECT_CALLBACK_LOOPBACK_PATH,
+    component: oauthConnectCallback,
+  },
+  ...resourcePageRoutes("integrate.providers", "/integrate/providers", lazyRouteComponent(() => import("./connect/views/ProvidersPage"), "ProvidersPage"), "integrate.OAuthClient", { detailName: "integrate.provider" }),
+  ...resourcePageRoutes("integrate.accounts", "/integrate/accounts", lazyRouteComponent(() => import("./connect/views/ExternalAccountsPage"), "ExternalAccountsPage"), "integrate.ExternalAccount", { detailName: "integrate.account" }),
+  ...resourcePageRoutes("integrate.credentials", "/integrate/credentials", lazyRouteComponent(() => import("./connect/views/CredentialsPage"), "CredentialsPage"), "integrate.Credential", { detailName: "integrate.credential" }),
+];
+
+const integrateMenu: MenuDeclarations = {
+  [INTEGRATE_ID]: { label: "Integrations", icon: "integration" },
+  "integrate.integrations.group": { label: "Integrations", icon: "integration", parent: INTEGRATE_ID },
+  "integrate.integrations": { label: "Integrations", icon: "integration", route: "integrate.integrations", parent: "integrate.integrations.group" },
+  "integrate.vendors": { label: "Vendors", icon: "vendor", route: "integrate.vendors", parent: "integrate.integrations.group" },
+  "integrate.webhooks": { label: "Webhooks", icon: "webhook", route: "integrate.webhooks", parent: "integrate.integrations.group" },
+  "integrate.oauth.group": { label: "OAuth", icon: "auth", parent: INTEGRATE_ID },
+  "integrate.providers": { label: "OAuth providers", route: "integrate.providers", icon: "auth", parent: "integrate.oauth.group" },
+  "integrate.accounts": { label: "External accounts", route: "integrate.accounts", icon: "users", parent: "integrate.oauth.group" },
+  "integrate.credentials": { label: "Credentials", route: "integrate.credentials", icon: "check", parent: INTEGRATE_ID },
+};
+
+const integrate = defineBaseAddon({
+  id: INTEGRATE_ID,
+  routes: integrateRoutes,
+  recordSearchKeys: [...Object.values(INTEGRATION_STREAM_SEARCH_KEYS)],
+  menus: integrateMenu,
+  i18n: { integrate: enIntegrateMessages },
+  widgets: {
+    "angee.integrate.integrationSyncCursor": integrationSyncCursorWidget,
+  },
+  // The credential CRUD form: used by the Credentials page "New" and the
+  // relation-picker inline create (e.g. an Integration's credential field).
+  forms: {
+    "integrate.Credential": credentialCreateForm,
+  },
+  // Saved-record streams and lifecycle verbs target the MTI parent, so every
+  // integration subtype's form inherits them. Connecting means a real
+  // handshake wherever an integration has credentials, and the addon that owns
+  // the vendor contributes that against its own model.
+  containers: {
+    "integrate.RecordLink#statement-references": {
+      "integrate.source": { content: StatementRecordLinkReference },
+    },
+    // The Links tab's Sources group, on records that admit RecordLink edges.
+    "related#groups": { [RECORD_SOURCES_GROUP_ID]: recordSourcesGroup },
+    [`${INTEGRATION_MODEL}#sections`]: {
+      [INTEGRATION_STREAMS_TAB_ID]: {
+        sequence: 30,
+        content: (
+          <Tab
+            id="streams"
+            label={{ namespace: "integrate", key: "streams.title", fallback: enIntegrateMessages["streams.title"] }}
+            requiredFields={["stream_count"]}
+            visibleWhen={integrationHasStreams}
+          >
+            <IntegrationStreamsPane />
+          </Tab>
+        ),
+      },
+    },
+    [`${INTEGRATION_MODEL}#actions`]: {
+      [INTEGRATION_PAUSE_ACTION_ID]: { sequence: 11, requiredFields: ["can_pause", "can_disconnect"], content: <PauseIntegrationAction /> },
+      [INTEGRATION_RESUME_ACTION_ID]: {
+        sequence: 12, requiredFields: ["can_resume"], content: <ResumeIntegrationAction />,
+      },
+    },
+    [`${INTEGRATION_MODEL}#actions-menu`]: {
+      [INTEGRATION_DISCONNECT_ACTION_ID]: { sequence: 13, requiredFields: ["can_pause", "can_disconnect"], content: <DisconnectIntegrationAction /> },
+      [INTEGRATION_TEST_CONNECTION_ACTION_ID]: { sequence: 14, requiredFields: ["can_pause", "can_disconnect"], content: <TestConnectionAction /> },
+      [INTEGRATION_RETRY_DISCOVERY_ACTION_ID]: {
+        sequence: 15, requiredFields: ["can_retry_discovery"], content: <RetryDiscoveryAction />,
+      },
+    },
+  },
+  icons: {
+    connect: Cable,
+    integration: Link2,
+    vendor: Store,
+    webhook: Webhook,
+  },
+});
+
+export { ConnectIntegration } from "./documents";
+export {
+  CONNECT_RECORD_FIELDS,
+  ConnectOAuthButton,
+  type ConnectOAuthButtonProps,
+  parseManualCode,
+  type OAuthConnectPayload,
+} from "./connect/ConnectOAuthButton";
+export {
+  useOAuthAuthorization,
+  type OAuthAuthorization,
+  type OAuthAuthorizationStart,
+} from "./connect/use-oauth-authorization";
+export {
+  ConditionalMutationButton,
+  type ConditionalMutationButtonContext,
+  type ConditionalMutationButtonProps,
+} from "./ConditionalMutationButton";
+export {
+  DisconnectIntegrationAction,
+  INTEGRATION_CONNECTION_FIELDS,
+  INTEGRATION_DISCONNECT_ACTION_ID,
+  INTEGRATION_MODEL,
+  INTEGRATION_LIFECYCLE_TOKENS,
+  INTEGRATION_PAUSE_ACTION_ID,
+  INTEGRATION_RESUME_ACTION_ID,
+  INTEGRATION_TEST_CONNECTION_ACTION_ID,
+  INTEGRATION_RETRY_DISCOVERY_ACTION_ID,
+  integrationHasCredential,
+  integrationLifecycle,
+  integrationLifecycleIs,
+  type IntegrationLifecycleToken,
+  isConnectedOrPaused,
+  PauseIntegrationAction,
+  ResumeIntegrationAction,
+  RetryDiscoveryAction,
+  TestConnectionAction,
+} from "./IntegrationLifecycleActions";
+export {
+  CONNECT_CALLBACK_LOOPBACK_PATH,
+  CONNECT_CALLBACK_PATH,
+  connectCallbackRedirectUri,
+  currentConnectCallbackRedirectUri,
+} from "./connect/redirects";
+export {
+  IntegrationSyncColumns,
+  IntegrationSyncFields,
+  useIntegrationSyncAction,
+  type IntegrationSyncFieldName,
+  type IntegrationSyncFieldsOptions,
+  type IntegrationSyncFragmentOptions,
+} from "./sync-fragments";
+export {
+  RECORD_LINK_MODEL,
+  RECORD_SOURCES_GROUP_ID,
+  RecordSourcesPane,
+  recordSourcesGroup,
+} from "./RecordSourcesPane";
+
+export default integrate;

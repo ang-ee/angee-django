@@ -1,0 +1,13 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-proposals-work"
+version = "3.0.0"
+description = "Route proposal questions through work queues"
+dependencies = ["angee-proposals>=3,<4", "angee-work>=3,<4", "angee-web>=3,<4", "django-compose>=0.1.0.dev1,<0.2"]
+dynamic = ["entry-points"]
+
+[tool.angee]
+
+[tool.angee.platform]
+category = "Productivity"

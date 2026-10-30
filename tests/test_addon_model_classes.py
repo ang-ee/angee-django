@@ -15,10 +15,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_MODULES = sorted(
-    [f"angee.{path.parent.name}.models" for path in (ROOT / "addons" / "angee").glob("*/models.py")]
+    [f"angee.{path.parent.name}.models" for path in (ROOT / "src" / "angee").glob("*/models.py")]
     + [
         f"{path.parent.parent.name}.{path.parent.name}.models"
-        for path in (ROOT / "examples" / "addons").glob("*/*/models.py")
+        for path in (ROOT / "examples" / "src").glob("*/*/models.py")
     ]
 )
 

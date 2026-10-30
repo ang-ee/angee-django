@@ -98,7 +98,7 @@ SKILLS = sorted(
     [
         *(ROOT / ".agents/skills").glob("*/SKILL.md"),
         # Capability guides live beside the engine they extend; they are skills in every other respect.
-        *(ROOT / "addons/angee").glob("*/skills/*/SKILL.md"),
+        *(ROOT / "src/angee").glob("*/skills/*/SKILL.md"),
     ]
 )
 SKILL_NAME = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -144,7 +144,10 @@ def test_skill_links_resolve_and_bundled_files_are_one_reference_level_deep(skil
 
 @pytest.mark.parametrize("skill", SKILLS, ids=lambda path: path.parent.name)
 def test_skill_declares_codex_invocation_policy(skill: Path) -> None:
-    """Only ``angee-design`` may be invoked implicitly; every other skill, including every addon-local guide, is explicit."""
+    """Only ``angee-design`` may be invoked implicitly.
+
+    Every other skill, including every addon-local guide, is explicit.
+    """
     policy = yaml.safe_load((skill.parent / "agents/openai.yaml").read_text())["policy"]
     allowed = policy["allow_implicit_invocation"]
     assert isinstance(allowed, bool), skill.parent.name

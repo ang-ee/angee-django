@@ -1,0 +1,17 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-workflows-integrate"
+version = "3.0.0"
+description = "Durable bridge sync cycles and reviewed archive imports"
+keywords = ["workflows", "integrate", "sync", "archive"]
+dependencies = ["angee-base>=3,<4", "angee-workflows>=3,<4", "angee-decisions>=3,<4", "angee-integrate>=3,<4", "angee-storage>=3,<4", "angee-jobs>=3,<4", "angee-provenance>=3,<4"]
+dynamic = ["entry-points"]
+
+[tool.angee]
+
+[tool.angee.resources]
+install = ["install/100_workflows.workflow.yaml"]
+
+[tool.angee.platform]
+category = "Workflows"

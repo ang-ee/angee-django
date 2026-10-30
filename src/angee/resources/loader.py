@@ -1,0 +1,886 @@
+"""Import-export resource classes for loading Angee resource rows."""
+
+from __future__ import annotations
+
+import functools
+from collections import defaultdict
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, cast
+
+import tablib
+from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
+from django.db import models
+from django.db.models.fields import NOT_PROVIDED
+from import_export import fields, resources
+from import_export.instance_loaders import BaseInstanceLoader
+from import_export.utils import get_related_model
+
+from angee.base.models.identity import instances_from_public_ids, public_id_of
+from angee.base.models.implementations import ImplDefaultsMixin
+from angee.base.models.refs import RecordRefMixin
+from angee.base.models.timestamps import update_fields_with_auto_now
+from angee.base.models.transitions import StateTransitions
+from angee.base.serialization import ASCII_JSON, canonical_json_sha256, json_safe
+from angee.resources.entries import ResourceEntry, resolve_model
+from angee.resources.exceptions import ResourceLoadError
+from angee.resources.kinds import ResourceKindDeclarations
+from angee.resources.mixins import ResourceLoadMixin
+from angee.resources.widgets import (
+    ContentTypeForeignKeyWidget,
+    ContentTypeManyToManyWidget,
+    RecordRefField,
+    XrefForeignKeyWidget,
+    XrefManyToManyWidget,
+    XrefWidgetMixin,
+    _NativeJSONWidget,
+)
+
+if TYPE_CHECKING:
+    from angee.resources.models import Resource
+
+
+class DryRunRollback(Exception):
+    """Signal that a successful dry run should roll back its transaction."""
+
+
+@dataclass(frozen=True)
+class ResourceResolution:
+    """Existing row target and retained ledger target, which may differ after adoption."""
+
+    instance: models.Model | None
+    retained_instance: models.Model | None
+
+
+class AngeeResource(resources.ModelResource):
+    """Import-export resource with xref identity and ledger persistence."""
+
+    WIDGETS_MAP = {
+        **resources.ModelResource.WIDGETS_MAP,
+        "JSONField": lambda **kwargs: _NativeJSONWidget(**kwargs),
+    }
+    """Widget map that accepts native JSON values from structured files."""
+
+    def __init__(
+        self,
+        *,
+        entry: ResourceEntry,
+        ledger_model: type[Resource],
+        addon_aliases: Mapping[str, str],
+        kind_declarations: ResourceKindDeclarations | None = None,
+    ) -> None:
+        """Bind one resource entry and concrete ledger model."""
+
+        self.entry = entry
+        self.ledger_model = ledger_model
+        self.addon_aliases = addon_aliases
+        self.kind_declarations = kind_declarations
+        self._existing_ledgers: dict[str, Resource | None] = {}
+        self._instances: dict[str, models.Model | None] = {}
+        self._row_hashes: dict[str, str] = {}
+        self._hash_skips: set[str] = set()
+        super().__init__()
+        for field in self.fields.values():
+            if isinstance(field.widget, (XrefWidgetMixin, ContentTypeForeignKeyWidget, ContentTypeManyToManyWidget)):
+                field.widget.using = self.get_db_connection_name()
+            if isinstance(field.widget, XrefWidgetMixin):
+                field.widget.ledger_model = ledger_model
+                field.widget.addon_aliases = addon_aliases
+
+    @classmethod
+    def lock_imports(cls, loaded_groups: Sequence[tuple[Any, AngeeResource]]) -> None:
+        """Acquire batch-wide domain locks before imports; never import or write rows.
+
+        Called once per declared resource class inside the loader's transaction.
+        A subclass may inspect the complete batch solely to order its locks.
+        """
+
+    @classmethod
+    def get_fk_widget(cls, field: Any) -> functools.partial[Any]:
+        """Return the foreign-key widget factory: model labels for content types, xrefs otherwise."""
+
+        model = get_related_model(field)
+        widget = ContentTypeForeignKeyWidget if model is ContentType else XrefForeignKeyWidget
+        return functools.partial(widget, model=model)
+
+    @classmethod
+    def get_m2m_widget(cls, field: Any) -> functools.partial[Any]:
+        """Return the many-to-many widget factory: model labels for content types, xrefs otherwise."""
+
+        model = get_related_model(field)
+        widget = ContentTypeManyToManyWidget if model is ContentType else XrefManyToManyWidget
+        return functools.partial(widget, model=model)
+
+    def before_import(self, dataset: tablib.Dataset, **kwargs: Any) -> None:
+        """Validate headers and reset any batch-planning state before importing."""
+
+        del kwargs
+        self._validate_catalogue_tier()
+        self._validate_headers(list(dataset.headers or []))
+        self._hash_skips = set()
+        self._instances.clear()
+        self._row_hashes.clear()
+        self._prime_existing_ledgers(dataset)
+
+    def before_import_row(self, row: dict[str, Any], **kwargs: Any) -> None:
+        """Record row identity inside the native row diagnostic boundary."""
+
+        for name in tuple(row):
+            if row[name] is NOT_PROVIDED:
+                del row[name]
+        row_number = kwargs["row_number"]
+        xref = self._row_xref(row.get("_xref"), row_number=row_number)
+        row["_xref"] = xref
+        self._row_hashes[xref] = self._row_content_hash(row)
+        super().before_import_row(row, **kwargs)
+
+    def bind_instance(self, xref: str, instance: models.Model, *, replace: bool = False) -> None:
+        """Ledger an owner-created identity; retarget only through an explicit owner verb."""
+
+        xref = self._row_xref(xref, row_number=0)
+        identity = str(public_id_of(instance))
+        defaults = self._ledger_defaults(instance, self._row_content_hash({"identity": identity}))
+        manager = self.ledger_model._default_manager.db_manager(self.get_db_connection_name())
+        if replace:
+            ledger, _created = manager.update_or_create(
+                source_addon=self.entry.addon.name, xref=xref, defaults=defaults,
+            )
+        else:
+            ledger, _created = manager.get_or_create(
+                source_addon=self.entry.addon.name, xref=xref, defaults=defaults,
+            )
+        self._check_ledger_target(xref, ledger)
+        if ledger.target_id != identity:
+            raise ResourceLoadError(f"{self.entry.addon.name}.{xref} already identifies another record.")
+        self._existing_ledgers[xref] = ledger
+        self._instances[xref] = instance
+
+    @functools.cached_property
+    def _transition_state_fields(self) -> tuple[fields.Field, ...]:
+        """Project model-owned state names onto native import fields."""
+
+        names = StateTransitions.get_field_names(self._meta.model)
+        return tuple(field for field in self.get_import_fields() if field.attribute in names)
+
+    def init_instance(self, row: Mapping[str, Any] | None = None) -> models.Model:
+        """Supply seeded state during initial model construction."""
+
+        values = {
+            field.attribute: field.clean(row)
+            for field in self._transition_state_fields
+            if row is not None and field.column_name in row and not field.readonly
+        }
+        instance = self._meta.model(**values)
+        instance._state.db = self.get_db_connection_name()
+        return instance
+
+    def after_init_instance(
+        self, instance: models.Model, new: bool, row: dict[str, Any], **kwargs: Any,
+    ) -> None:
+        """Leave live state intact on existing targets, including adopted rows."""
+
+        if not new:
+            for field in self._transition_state_fields:
+                if field.column_name in row and not field.readonly:
+                    model_field = instance._meta.get_field(field.attribute)
+                    if not isinstance(model_field, models.Field):
+                        raise ImproperlyConfigured(f"Transition field {field.attribute!r} must be a concrete field.")
+                    try:
+                        model_field.clean(field.clean(row), instance)
+                    except ValidationError as error:
+                        raise ValidationError({field.attribute: error}) from error
+                row.pop(field.column_name, None)
+        super().after_init_instance(instance, new, row, **kwargs)
+
+    def import_instance(self, instance: models.Model, row: Mapping[str, Any], **kwargs: Any) -> None:
+        """Keep hash-skipped instances intact, including operator-authored values."""
+
+        if row["_xref"] not in self._hash_skips:
+            super().import_instance(instance, row, **kwargs)
+
+    def skip_row(
+        self, instance: Any, original: Any, row: Mapping[str, Any], import_validation_errors: Any = None,
+    ) -> bool:
+        """Let native import-export record hash skips and all other row outcomes."""
+
+        return row["_xref"] in self._hash_skips or super().skip_row(instance, original, row, import_validation_errors)
+
+    def after_save_instance(
+        self,
+        instance: models.Model,
+        row: Mapping[str, Any],
+        **kwargs: Any,
+    ) -> None:
+        """Restore auto-managed source values and upsert the ledger row."""
+
+        xref = self._row_xref(row.get("_xref"), row_number=kwargs["row_number"])
+        self._restore_auto_fields(instance, row)
+        self._upsert_ledger(
+            xref=xref,
+            instance=instance,
+            row_hash=self._row_hashes[xref],
+        )
+        self._instances[xref] = instance
+
+    def before_save_instance(
+        self,
+        instance: models.Model,
+        row: Mapping[str, Any],
+        **kwargs: Any,
+    ) -> None:
+        """Select imported columns for saving and mark them before impl defaults."""
+
+        del kwargs
+        imported_fields = {
+            field.attribute
+            for field in self.fields.values()
+            if not field.readonly and isinstance(field.attribute, str) and field.column_name in row
+        }
+        self._update_fields = {
+            field.name
+            for field in instance._meta.concrete_fields
+            if not field.primary_key and (field.name in imported_fields or field.attname in imported_fields)
+        }
+        if isinstance(instance, RecordRefMixin):
+            reference = instance.record_ref_field()
+            if reference.name in imported_fields:
+                self._update_fields.update((reference.ct_field, reference.fk_field))
+        if isinstance(instance, ImplDefaultsMixin):
+            instance.mark_impl_provided_fields(imported_fields)
+
+    def do_instance_save(self, instance: models.Model, is_create: bool) -> None:
+        """Save updates without writing omitted columns or stale live state."""
+
+        if is_create:
+            instance.save(using=self.get_db_connection_name())
+        else:
+            instance.save(using=self.get_db_connection_name(),
+                          update_fields=update_fields_with_auto_now(instance, self._update_fields))
+
+    def instance_for_xref(self, xref: str) -> models.Model | None:
+        """Return an existing or adopted instance for a row xref."""
+
+        if xref not in self._instances:
+            ledger = self._ledger_for_xref(xref)
+            self._instances[xref] = self._declared_instance(ledger.target_instance()) if ledger is not None else None
+        return self._instances[xref]
+
+    def instance_for_row(self, row: Mapping[str, Any]) -> models.Model | None:
+        """Resolve row identity and record native import hash skips."""
+
+        xref = self._row_xref(row.get("_xref"), row_number=0)
+        ledger = self._ledger_for_xref(xref)
+        identity = self._adopt_identity(row)
+        instance = self.instance_for_xref(xref)
+        if instance is not None and self._ledger_resolution_is_stale(identity, instance):
+            # A surviving ledger may point at a reused pk. Adoption repairs it.
+            instance = None
+        if instance is None:
+            instance = self._adopt_existing_target(row, identity)
+        elif ledger is not None and (row_hash := self._row_hashes.get(xref)) is not None:
+            if ledger.content_hash == row_hash:
+                self._hash_skips.add(xref)
+        self._instances[xref] = instance
+        return instance
+
+    @staticmethod
+    def resolve_existing(
+        batches: Sequence[tuple[tablib.Dataset, AngeeResource]],
+        *,
+        references: Sequence[tuple[str, str]] = (),
+    ) -> tuple[dict[tuple[AngeeResource, str], ResourceResolution], dict[tuple[str, str], models.Model | None]]:
+        """Resolve batch rows, retained ledgers, and related xrefs without importing.
+
+        Return owned resolutions keyed by resource/xref and related targets
+        keyed by addon/xref. Source moves retain each facet's resolution.
+        Each call refreshes batched ledger/target reads and delegates adoption
+        to the native instance loader. Omitted rows retain their ledger target;
+        stale ledger targets remain available alongside their adopted target.
+        Invalid input is left to the native import's source-row diagnostics.
+        No import hooks, row writes, or ledger writes run here. Planning primes
+        per-import caches; ``before_import`` resets them before row processing.
+        """
+
+        if not batches:
+            return {}, {}
+        ledgers: dict[tuple[str, str], Resource | None] = {}
+        for dataset, resource in batches:
+            resource._instances.clear()
+            resource._row_hashes.clear()
+            resource._hash_skips.clear()
+            resource._prime_existing_ledgers(dataset)
+            resource._existing_ledgers.update(
+                (ledger.xref, ledger)
+                for ledger in resource.ledger_model._default_manager.using(resource.get_db_connection_name()).filter(
+                    source_addon=resource.entry.addon.name,
+                    source_path=resource.entry.source,
+                    target_model=resource._meta.model._meta.label,
+                )
+            )
+            ledgers.update(
+                ((resource.entry.addon.name, xref), ledger)
+                for xref, ledger in resource._existing_ledgers.items()
+            )
+        missing: dict[str, set[str]] = defaultdict(set)
+        for key in references:
+            if key not in ledgers:
+                missing[key[0]].add(key[1])
+        for addon, xrefs in missing.items():
+            ledgers.update(
+                ((addon, ledger.xref), ledger)
+                for ledger in batches[0][1].ledger_model._default_manager.using(
+                    batches[0][1].get_db_connection_name(),
+                ).filter(source_addon=addon, xref__in=xrefs)
+            )
+        lookups: dict[tuple[str, str], tuple[type[models.Model], str]] = {}
+        values_by_model: dict[type[models.Model], set[str]] = defaultdict(set)
+        for key, ledger in ledgers.items():
+            if ledger is None or not ledger.target_id:
+                continue
+            try:
+                model = resolve_model(ledger.target_model)
+            except ImproperlyConfigured:
+                continue
+            lookups[key] = (model, ledger.target_id)
+            values_by_model[model].add(ledger.target_id)
+        instances = {
+            (model, value): instance
+            for model, values in values_by_model.items()
+            for value, instance in instances_from_public_ids(
+                model, values, queryset=model._default_manager.using(batches[0][1].get_db_connection_name()),
+            ).items()
+        }
+        targets = {key: instances.get(lookup) for key, lookup in lookups.items()}
+        resolved: dict[tuple[AngeeResource, str], ResourceResolution] = {}
+        for _dataset, resource in batches:
+            addon = resource.entry.addon.name
+            for xref, ledger in resource._existing_ledgers.items():
+                target = targets.get((addon, xref))
+                try:
+                    resource._check_ledger_target(xref, ledger)
+                except ResourceLoadError:
+                    # Import reports collisions with the source-row context.
+                    continue
+                target = resource._declared_instance(target)
+                resource._instances[xref] = target
+                resolved[(resource, xref)] = ResourceResolution(None, target)
+        for dataset, resource in batches:
+            addon = resource.entry.addon.name
+            loader = resource._meta.instance_loader_class(resource, dataset)
+            for source_row in dataset.dict:
+                row = {name: value for name, value in source_row.items() if value is not NOT_PROVIDED}
+                try:
+                    xref = resource._row_xref(row.get("_xref"), row_number=0)
+                    instance = resource.get_instance(loader, row)
+                except (ResourceLoadError, ValueError, ValidationError, ImproperlyConfigured):
+                    continue
+                retained = resolved[(resource, xref)]
+                resolved[(resource, xref)] = ResourceResolution(instance, retained.retained_instance)
+                targets[(addon, xref)] = instance or retained.retained_instance
+        return resolved, {key: targets.get(key) for key in references}
+
+    def _prime_existing_ledgers(self, dataset: tablib.Dataset) -> None:
+        """Load existing ledger rows for this import dataset in one query."""
+
+        xrefs = {self._row_xref(value, row_number=index) for index, value in enumerate(dataset["_xref"], start=1)}
+        self._existing_ledgers = {xref: None for xref in xrefs}
+        if not xrefs:
+            return
+        ledgers = self.ledger_model._default_manager.using(self.get_db_connection_name()).filter(
+            source_addon=self.entry.addon.name,
+            xref__in=xrefs,
+        )
+        for ledger in ledgers:
+            self._existing_ledgers[str(getattr(ledger, "xref"))] = cast(
+                "Resource",
+                ledger,
+            )
+
+    def _row_xref(self, value: Any, *, row_number: int) -> str:
+        """Return the normalized xref for one import row."""
+
+        if not isinstance(value, str) or not value.strip():
+            raise ResourceLoadError(f"{self.entry.display} row {row_number}: missing _xref")
+        return value.strip()
+
+    def _row_content_hash(self, row: Mapping[str, Any]) -> str:
+        """Hash updateable seed values, excluding identity and initial state."""
+
+        excluded = {"_xref", *(field.column_name for field in self._transition_state_fields)}
+        payload = {key: value for key, value in sorted(row.items()) if key not in excluded}
+        digest = canonical_json_sha256(chunks=(ASCII_JSON.encode(json_safe(payload)),))
+        return f"sha256:{digest}"
+
+    def _ledger_for_xref(self, xref: str) -> Resource | None:
+        """Return this entry's ledger row for ``xref`` if it exists."""
+
+        if xref in self._existing_ledgers:
+            ledger = self._existing_ledgers[xref]
+        else:
+            ledger = (
+                self.ledger_model._default_manager.using(self.get_db_connection_name()).filter(
+                    source_addon=self.entry.addon.name,
+                    xref=xref,
+                )
+                .order_by("pk")
+                .first()
+            )
+            self._existing_ledgers[xref] = cast("Resource | None", ledger)
+        self._check_ledger_target(xref, ledger)
+        return ledger
+
+    def _check_ledger_target(
+        self,
+        xref: str,
+        ledger: Resource | None,
+    ) -> None:
+        """Raise when an existing xref belongs to another target model."""
+
+        if ledger is None:
+            return
+        model = self._meta.model
+        expected = model._meta.label
+        # A row moved onto a multi-table child keeps its parent's ledger until saved.
+        parents = {parent._meta.label for parent in model._meta.get_parent_list()}
+        if ledger.target_model != expected and ledger.target_model not in parents:
+            raise ResourceLoadError(
+                f"xref collision in {self.entry.addon.name}: {xref!r} "
+                f"already targets {ledger.target_model}, not {expected}"
+            )
+
+    def _declared_instance(self, instance: models.Model | None) -> models.Model | None:
+        """Return the entry model's row for a ledger target recorded as its concrete parent.
+
+        The parent row's child shares its primary key; a parent without one has
+        no row to update, so the entry adopts or creates as for a missing target.
+        """
+
+        model = self._meta.model
+        if instance is None or isinstance(instance, model):
+            return instance
+        return model._base_manager.using(self.get_db_connection_name()).filter(pk=instance.pk).first()
+
+    def _upsert_ledger(
+        self,
+        *,
+        xref: str,
+        instance: models.Model,
+        row_hash: str,
+    ) -> None:
+        """Create or update the ledger row for an imported object."""
+
+        ledger, _ = self.ledger_model._default_manager.db_manager(self.get_db_connection_name()).update_or_create(
+            source_addon=self.entry.addon.name,
+            xref=xref,
+            defaults=self._ledger_defaults(instance, row_hash),
+        )
+        self._existing_ledgers[xref] = ledger
+
+    def _ledger_defaults(self, instance: models.Model, row_hash: str) -> dict[str, Any]:
+        """Project ledger metadata once for file imports and owner-created identities."""
+
+        return {
+            "source_path": self.entry.source,
+            "target_model": self._meta.model._meta.label,
+            "content_hash": row_hash,
+            "target_id": public_id_of(instance),
+            "tier": self.entry.tier,
+        }
+
+    def _ledger_resolution_is_stale(
+        self,
+        identity: dict[str, Any] | None,
+        instance: models.Model,
+    ) -> bool:
+        """Whether a ledger-resolved live row fails the entry's adopt identity.
+
+        The adopt key is the seed's declared natural identity, so a resolved
+        row that disagrees on it marks the ledger pointer stale rather than the
+        row adopted. Entries without an adopt key carry no seed-side identity
+        to check, and a row that omits its adopt values offers nothing to
+        compare — both trust the resolved row as-is (the prior behavior; xref
+        plus target-model checks still apply).
+        """
+
+        if identity is None or (self.entry.adopt is True and len(identity) != 1):
+            return False
+        for field_name, value in identity.items():
+            field = self._meta.model._meta.get_field(field_name)
+            if not isinstance(field, models.Field):
+                return False
+            current = self._prepared_condition_value(field, getattr(instance, field.attname))
+            wanted = self._prepared_condition_value(field, value)
+            if (
+                isinstance(self.entry.adopt, str)
+                and self.entry.adopt == field_name
+                and current in (None, "")
+                and wanted not in (None, "")
+                and self._adoption_condition is not None
+            ):
+                # A conditional stable key may be introduced after the ledger
+                # already owns the row. Its empty sentinel is unassigned, not a
+                # conflicting natural identity; the model still owns whether
+                # this one-time assignment is valid.
+                continue
+            if current != wanted:
+                return True
+        return False
+
+    @functools.cached_property
+    def _adoption_fields(self) -> tuple[models.Field[Any, Any], ...]:
+        """Resolve and validate the declaration once for this model import."""
+
+        adopt = self.entry.adopt
+        if isinstance(adopt, str):
+            return (self._unique_adoption_field(adopt),)
+        if isinstance(adopt, tuple):
+            return self._unique_adoption_fields(adopt)
+        if adopt:
+            return tuple(field for field in self._meta.model._meta.fields if self._is_adoptable_field(field))
+        return ()
+
+    @functools.cached_property
+    def _adoption_condition(self) -> models.Q | None:
+        """Read the selected model-owned uniqueness condition once."""
+
+        adopt = self.entry.adopt
+        if isinstance(adopt, str):
+            field = self._adoption_fields[0]
+            return None if field.unique else self._unique_field_set_condition((field.name,))
+        if isinstance(adopt, tuple):
+            return self._unique_field_set_condition(adopt)
+        return None
+
+    def _adopt_identity(self, row: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Prepare one row's natural identity once through native field widgets."""
+
+        if not self.entry.adopt:
+            return None
+        condition = self._adoption_condition
+        if isinstance(self.entry.adopt, str) and condition is not None:
+            if not self._row_matches_condition(row, condition):
+                return None
+        identity: dict[str, Any] = {}
+        for field in self._adoption_fields:
+            resource_field = self.fields.get(field.name)
+            if resource_field is None:
+                raise ImproperlyConfigured(f"{self.entry.display}: adopt field {field.name!r} is not importable")
+            value = resource_field.clean(row) if resource_field.column_name in row else None
+            if value in (None, ""):
+                if self.entry.adopt is True:
+                    continue
+                return None
+            identity[field.name] = value
+        return identity or None
+
+    def _adopt_existing_target(
+        self,
+        row: Mapping[str, Any],
+        identity: dict[str, Any] | None,
+    ) -> models.Model | None:
+        """Find the prepared natural identity without repeating row coercion."""
+
+        if identity is None:
+            return None
+        if self.entry.adopt is True and len(identity) > 1:
+            names = ", ".join(identity)
+            raise ImproperlyConfigured(f"{self.entry.display}: adopt=True matched multiple unique fields: {names}")
+        condition = self._adoption_condition
+        if isinstance(self.entry.adopt, tuple) and condition is not None:
+            if not self._row_matches_condition(row, condition):
+                return None
+        queryset = self._meta.model._default_manager.using(self.get_db_connection_name()).filter(**identity)
+        if condition is not None:
+            queryset = queryset.filter(condition)
+        matches = list(queryset[:2])
+        if len(matches) > 1 and isinstance(self.entry.adopt, str):
+            raise ImproperlyConfigured(f"{self.entry.display}: adopt field {self.entry.adopt!r} matched multiple rows")
+        return matches[0] if len(matches) == 1 else None
+
+    def _row_matches_condition(self, row: Mapping[str, Any], condition: models.Q) -> bool:
+        """Match the bounded exact/isnull adoption declaration without I/O.
+
+        Django Q.check executes SQL and returns True after DatabaseError.
+        Keep this narrower fail-fast contract until a native strict evaluator
+        exists; expanding its lookup grammar is not an import concern.
+        """
+
+        results: list[bool] = []
+        for child in condition.children:
+            if isinstance(child, models.Q):
+                results.append(self._row_matches_condition(row, child))
+                continue
+            if not isinstance(child, tuple):
+                raise ImproperlyConfigured(f"{self.entry.display}: adopt conditions require field lookups or Q nodes")
+            lookup, expected = child
+            results.append(self._row_matches_lookup(row, str(lookup), expected))
+        if condition.connector == models.Q.OR:
+            matched = any(results)
+        elif condition.connector == models.Q.AND:
+            matched = all(results)
+        else:
+            raise ImproperlyConfigured(
+                f"{self.entry.display}: adopt condition connector {condition.connector!r} is not supported"
+            )
+        return not matched if condition.negated else matched
+
+    def _row_matches_lookup(self, row: Mapping[str, Any], lookup: str, expected: Any) -> bool:
+        """Return whether a row value satisfies one supported Q lookup."""
+
+        parts = lookup.split("__")
+        operator = "exact"
+        if parts[-1] in {"exact", "isnull"}:
+            operator = parts.pop()
+        if len(parts) != 1:
+            raise ImproperlyConfigured(f"{self.entry.display}: adopt condition lookup {lookup!r} is not supported")
+        field = self._condition_field(parts[0])
+        value = self._condition_field_value(field, row)
+        if operator == "isnull":
+            return (value is None) is bool(expected)
+        if operator == "exact":
+            return self._prepared_condition_value(field, value) == self._prepared_condition_value(field, expected)
+        raise ImproperlyConfigured(f"{self.entry.display}: adopt condition lookup {lookup!r} is not supported")
+
+    def _condition_field(self, field_name: str) -> models.Field[Any, Any]:
+        """Return one model field named by a conditional unique constraint."""
+
+        try:
+            field = self._meta.model._meta.get_field(field_name)
+        except FieldDoesNotExist as error:
+            raise ImproperlyConfigured(
+                f"{self.entry.display}: adopt condition field {field_name!r} does not exist"
+            ) from error
+        if not isinstance(field, models.Field):
+            raise ImproperlyConfigured(f"{self.entry.display}: adopt condition field {field_name!r} is not importable")
+        return field
+
+    def _condition_field_value(self, field: models.Field[Any, Any], row: Mapping[str, Any]) -> Any:
+        """Return one condition field value from the row or the model default."""
+
+        resource_field = self.fields.get(field.name)
+        if resource_field is not None and resource_field.column_name in row:
+            return resource_field.clean(row)
+        if field.has_default():
+            return field.get_default()
+        return None
+
+    def _prepared_condition_value(self, field: models.Field[Any, Any], value: Any) -> Any:
+        """Return one condition value normalized for model-field comparison."""
+
+        if isinstance(field, models.ForeignKey) and isinstance(value, models.Model):
+            value = value.pk
+        return field.get_prep_value(value)
+
+    def _unique_adoption_field(
+        self,
+        field_name: str,
+    ) -> models.Field[Any, Any]:
+        """Return the unique model field named by an adoption declaration."""
+
+        try:
+            field = self._meta.model._meta.get_field(field_name)
+        except FieldDoesNotExist as error:
+            raise ImproperlyConfigured(f"{self.entry.display}: adopt field {field_name!r} does not exist") from error
+        if not isinstance(field, models.Field) or field.primary_key:
+            raise ImproperlyConfigured(f"{self.entry.display}: adopt field {field_name!r} must be a unique model field")
+        if not field.unique:
+            found, condition = self._find_unique_field_set_condition((field_name,))
+            if not found or condition is None:
+                raise ImproperlyConfigured(
+                    f"{self.entry.display}: adopt field {field_name!r} must be a unique model field"
+                )
+        return field
+
+    def _unique_adoption_fields(
+        self,
+        field_names: tuple[str, ...],
+    ) -> tuple[models.Field[Any, Any], ...]:
+        """Return model fields named by a composite adoption declaration."""
+
+        if not field_names:
+            raise ImproperlyConfigured(f"{self.entry.display}: adopt fields must not be empty")
+        if len(set(field_names)) != len(field_names):
+            raise ImproperlyConfigured(f"{self.entry.display}: adopt fields must not contain duplicates")
+        if len(field_names) == 1:
+            return (self._unique_adoption_field(field_names[0]),)
+
+        fields: list[models.Field[Any, Any]] = []
+        for field_name in field_names:
+            try:
+                field = self._meta.model._meta.get_field(field_name)
+            except FieldDoesNotExist as error:
+                raise ImproperlyConfigured(
+                    f"{self.entry.display}: adopt field {field_name!r} does not exist"
+                ) from error
+            if not isinstance(field, models.Field) or field.primary_key:
+                raise ImproperlyConfigured(
+                    f"{self.entry.display}: adopt field {field_name!r} must be a non-primary-key model field"
+                )
+            fields.append(field)
+        if not self._has_unique_field_set(field_names):
+            names = ", ".join(repr(name) for name in field_names)
+            raise ImproperlyConfigured(
+                f"{self.entry.display}: adopt fields ({names}) must match a unique model constraint"
+            )
+        return tuple(fields)
+
+    def _has_unique_field_set(self, field_names: tuple[str, ...]) -> bool:
+        """Return whether ``field_names`` identify a model-owned unique constraint."""
+
+        return self._find_unique_field_set_condition(field_names)[0]
+
+    def _unique_field_set_condition(self, field_names: tuple[str, ...]) -> models.Q | None:
+        """Return the unique constraint condition for one adoption key, if any."""
+
+        found, condition = self._find_unique_field_set_condition(field_names)
+        return condition if found else None
+
+    def _find_unique_field_set_condition(self, field_names: tuple[str, ...]) -> tuple[bool, models.Q | None]:
+        """Return whether ``field_names`` match a unique constraint and its condition."""
+
+        expected = frozenset(field_names)
+        model = self._meta.model
+        for owner in (model, *model._meta.get_parent_list()):
+            for unique_together in owner._meta.unique_together:
+                if frozenset(unique_together) == expected:
+                    return True, None
+            for constraint in owner._meta.constraints:
+                if not isinstance(constraint, models.UniqueConstraint):
+                    continue
+                if constraint.expressions:
+                    continue
+                if frozenset(constraint.fields) == expected:
+                    return True, constraint.condition
+        return False, None
+
+    def _is_adoptable_field(self, field: models.Field[Any, Any]) -> bool:
+        """Return whether ``field`` can identify an adopted target."""
+
+        return not field.primary_key and bool(getattr(field, "unique", False))
+
+    def _validate_headers(self, headers: Sequence[str]) -> None:
+        """Reject primary-key and unknown field headers."""
+
+        allowed = set(self.fields) | {field.column_name for field in self.fields.values()}
+        pk = self._meta.model._meta.pk
+        primary_keys = {pk.name, pk.attname}
+
+        blocked = sorted(set(headers) & primary_keys)
+        if blocked:
+            names = ", ".join(blocked)
+            raise ResourceLoadError(f"{self.entry.display}: primary key field(s) are managed by _xref: {names}")
+
+        unknown = sorted(set(headers) - allowed)
+        if unknown:
+            names = ", ".join(unknown)
+            raise ResourceLoadError(
+                f"{self.entry.display}: unknown field(s) for {self._meta.model._meta.label}: {names}"
+            )
+
+    def _validate_catalogue_tier(self) -> None:
+        """Reject resource manifests whose tier disagrees with a catalogue model."""
+
+        model = self._meta.model
+        if not issubclass(model, ResourceLoadMixin):
+            return
+        if not model.is_catalogue_model():
+            return
+        declared_tiers = model.get_catalogue_tiers()
+        if self.entry.tier in declared_tiers:
+            return
+        raise ResourceLoadError(
+            f"{self.entry.display}: catalogue tier mismatch for {model._meta.label}; "
+            f"manifest tier {self.entry.tier!r}, model declares {declared_tiers!r}"
+        )
+
+    def _restore_auto_fields(
+        self,
+        instance: models.Model,
+        row: Mapping[str, Any],
+    ) -> None:
+        """Persist explicit values for auto-managed fields when provided."""
+
+        updates: dict[str, Any] = {}
+        for field in self._meta.model._meta.fields:
+            if field.name not in row:
+                continue
+            if not getattr(field, "auto_now", False) and not getattr(
+                field,
+                "auto_now_add",
+                False,
+            ):
+                continue
+            resource_field = self.fields.get(field.name)
+            if resource_field is None:
+                continue
+            updates[field.name] = resource_field.clean(row)
+
+        if not updates:
+            return
+        type(instance)._default_manager.using(self.get_db_connection_name()).filter(pk=instance.pk).update(**updates)
+        instance.refresh_from_db(fields=list(updates))
+
+
+class XrefInstanceLoader(BaseInstanceLoader):
+    """Resolve existing import rows through ledger identity and declared adoption."""
+
+    resource: AngeeResource
+
+    def get_instance(self, row: Mapping[str, Any]) -> models.Model | None:
+        """Return the existing target for one dataset row."""
+
+        return self.resource.instance_for_row(row)
+
+
+def build_resource(
+    model: type[models.Model],
+    entry: ResourceEntry,
+    *,
+    ledger_model: type[Resource],
+    addon_aliases: Mapping[str, str],
+    kind_declarations: ResourceKindDeclarations | None = None,
+    using: str | None = None,
+) -> AngeeResource:
+    """Compose the model's ``resource_class`` with native xref import options.
+
+    ResourceLoadMixin declares the adapter; other models use AngeeResource.
+    A custom declaration must subclass AngeeResource so every
+    adapter retains the same identity, row diagnostics and canonical ledger.
+    """
+
+    resource_class = model.resource_class if issubclass(model, ResourceLoadMixin) else None
+    if resource_class is None:
+        resource_class = AngeeResource
+    if not isinstance(resource_class, type) or not issubclass(resource_class, AngeeResource):
+        raise ImproperlyConfigured(f"{model._meta.label}.resource_class must subclass AngeeResource")
+    custom_fields = {"_xref": fields.Field(attribute=None, column_name="_xref", readonly=True)}
+    if issubclass(model, RecordRefMixin):
+        prefix = model.record_ref_field().name
+        if prefix in resource_class.fields:
+            raise ImproperlyConfigured(f"{model._meta.label}: resource field {prefix!r} is owned by RecordRefMixin")
+        custom_fields[prefix] = RecordRefField(model)
+    resource_type = resources.modelresource_factory(
+        model,
+        resource_class=resource_class,
+        meta_options={
+            "using_db": using,
+            "clean_model_instances": True,
+            "import_id_fields": (),
+            "instance_loader_class": XrefInstanceLoader,
+            "report_skipped": True,
+            "skip_diff": True,
+            "store_instance": True,
+            "use_bulk": False,
+        },
+        custom_fields=custom_fields,
+    )
+    return cast(
+        AngeeResource,
+        resource_type(
+            entry=entry,
+            ledger_model=ledger_model,
+            addon_aliases=addon_aliases,
+            kind_declarations=kind_declarations,
+        ),
+    )

@@ -33,25 +33,25 @@ const FRAMEWORK_IMPORT_RULES: Record<string, readonly string[]> = {
   "@angee/app": ["@angee/refine", "@angee/metadata", "@angee/ui"],
 };
 const REQUIRED_ADDON_ROOTS = [
-  join(MONOREPO_ROOT, "addons"),
-  join(MONOREPO_ROOT, "examples", "addons"),
+  join(MONOREPO_ROOT, "src"),
+  join(MONOREPO_ROOT, "examples", "src"),
 ] as const;
 const OPTIONAL_ADDON_ROOTS = [
-  resolve(MONOREPO_ROOT, "../angee-messaging-bridges/addons"),
+  resolve(MONOREPO_ROOT, "../angee-messaging-bridges/src"),
 ] as const;
 // Consumer repositories materialized beside this slot compose the same owners; the
 // UX ontology guard covers them when present, the layering guards stay in-repo.
 const CONSUMER_ADDON_ROOTS = [
-  resolve(MONOREPO_ROOT, "../angee-arp/addons"),
-  resolve(MONOREPO_ROOT, "../angee-odoo/addons"),
-  resolve(MONOREPO_ROOT, "../angee-phrogg/addons"),
+  resolve(MONOREPO_ROOT, "../angee-arp/src"),
+  resolve(MONOREPO_ROOT, "../angee-odoo/src"),
+  resolve(MONOREPO_ROOT, "../angee-phrogg/src"),
 ] as const;
 // Parsing every framework, tooling, and addon source file grows with the tree,
 // not with a hang; Vitest's 5s unit default fails it on loaded CI runners.
 const FULL_TREE_SCAN_TIMEOUT_MS = 30_000;
 
 test("addon TypeScript resolves host-generated GraphQL before the standalone cache", () => {
-  const path = join(MONOREPO_ROOT, "addons", "angee", "tsconfig.base.json");
+  const path = join(MONOREPO_ROOT, "src", "angee", "tsconfig.base.json");
   const parsed = ts.parseConfigFileTextToJson(path, readFileSync(path, "utf8"));
   expect(parsed.error).toBeUndefined();
   expect(parsed.config.compilerOptions.paths["@angee/gql/*"]).toEqual([
@@ -375,7 +375,7 @@ describe("React architecture guardrails", () => {
     "discovers the explicit in-repo addon roots",
     () => {
       expect(REQUIRED_ADDON_ROOTS.map((root) => relative(MONOREPO_ROOT, root)))
-        .toEqual(["addons", join("examples", "addons")]);
+        .toEqual(["src", join("examples", "src")]);
       expect(addonRepositoryRoots()).toEqual(expect.arrayContaining([...REQUIRED_ADDON_ROOTS]));
     },
   );
@@ -438,7 +438,7 @@ describe("React architecture guardrails", () => {
   );
 
   test("lazy route import guard detects runtime imports but ignores type imports", () => {
-    const file = join(MONOREPO_ROOT, "addons", "example", "web", "src", "index.tsx");
+    const file = join(MONOREPO_ROOT, "src", "example", "web", "src", "index.tsx");
     expect(lazyRouteImportViolations(file, `
       import type { PageProps } from "./views/Page";
       import { form } from "./views/../views/Page";
@@ -446,9 +446,9 @@ describe("React architecture guardrails", () => {
       export { usePage } from "./views/Page";
       const route = lazyRouteComponent(() => import("./views/Page"), "Page");
     `)).toEqual([
-      "addons/example/web/src/index.tsx imports ./views/../views/Page and loads it lazily",
-      "addons/example/web/src/index.tsx imports ./views/Page.tsx and loads it lazily",
-      "addons/example/web/src/index.tsx imports ./views/Page and loads it lazily",
+      "src/example/web/src/index.tsx imports ./views/../views/Page and loads it lazily",
+      "src/example/web/src/index.tsx imports ./views/Page.tsx and loads it lazily",
+      "src/example/web/src/index.tsx imports ./views/Page and loads it lazily",
     ]);
   });
 
@@ -457,6 +457,16 @@ describe("React architecture guardrails", () => {
       ["@angee/a", ["@angee/b"]],
       ["@angee/b", ["@angee/a"]],
     ]))).toEqual(["@angee/a -> @angee/b -> @angee/a"]);
+  });
+
+  test("shell validation has one native JS export for boot and codegen", () => {
+    const manifest = JSON.parse(readFileSync(resolve(MONOREPO_ROOT, "packages/app/package.json"), "utf8"));
+    expect(manifest.exports["./shell-runtime"]).toEqual({
+      types: "./src/shell-settings.d.mts", import: "./src/shell-settings.mjs",
+    });
+    expect(manifest.publishConfig.exports["./shell-runtime"]).toEqual({
+      types: "./dist/shell-settings.d.mts", default: "./dist/shell-settings.mjs",
+    });
   });
 
   test("framework critical exports exist in their declared owners", () => {
@@ -632,7 +642,7 @@ describe("React architecture guardrails", () => {
     ["local-recipe", 'import { Chip, tv } from "@angee/ui"; const pill = tv({ base: "x" });', "declares a local tv() recipe"],
     ["local-tone-map", 'const TONES = { DONE: "success", FAILED: "danger" } as const;', "maps status values to tones locally"],
   ])("UX ontology guard %s reports a seeded violation", (rule, text, detail) => {
-    const hits = uxGuardViolations("addons/fixture/web/src/View.tsx", text);
+    const hits = uxGuardViolations("src/fixture/web/src/View.tsx", text);
     expect(hits.map((hit) => hit.rule)).toContain(rule);
     expect(hits.find((hit) => hit.rule === rule)?.detail).toContain(detail);
   });
@@ -648,7 +658,7 @@ describe("React architecture guardrails", () => {
       'const hidden = <input type="hidden" value="x" />;',
       "const when = formatDate(at);",
     ].join("\n");
-    expect(uxGuardViolations("addons/fixture/web/src/View.tsx", text)).toEqual([]);
+    expect(uxGuardViolations("src/fixture/web/src/View.tsx", text)).toEqual([]);
   });
 
   test(

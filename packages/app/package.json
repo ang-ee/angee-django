@@ -54,6 +54,10 @@
     "./vitest": {
       "types": "./config/vitest.ts",
       "import": "./config/vitest.ts"
+    },
+    "./shell-runtime": {
+      "types": "./src/shell-settings.d.mts",
+      "import": "./src/shell-settings.mjs"
     }
   },
   "publishConfig": {
@@ -99,13 +103,17 @@
       "./vitest": {
         "types": "./dist/config/vitest.d.ts",
         "default": "./dist/config/vitest.js"
+      },
+      "./shell-runtime": {
+        "types": "./dist/shell-settings.d.mts",
+        "default": "./dist/shell-settings.mjs"
       }
     }
   },
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R dist/src/. dist && rm -rf dist/src && mkdir -p dist/bin && cp bin/angee-web-codegen.mjs dist/bin/angee-web-codegen.mjs"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R dist/src/. dist && rm -rf dist/src && mkdir -p dist/bin && cp bin/angee-web-codegen.mjs dist/bin/angee-web-codegen.mjs && cp src/shell-settings.mjs src/shell-settings.d.mts dist/"
   },
   "dependencies": {
     "@angee/logo-react": "^0.2.1",

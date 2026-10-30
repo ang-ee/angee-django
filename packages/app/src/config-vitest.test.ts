@@ -26,8 +26,9 @@ describe("gqlAliasFor", () => {
 
 test("the emitted addon Vitest config loads the public web defaults", async () => {
   const appRoot = fileURLToPath(new URL("..", import.meta.url));
+  const templateRoot = fileURLToPath(new URL("../../../templates/addons/web/template/", import.meta.url));
   const template = readFileSync(
-    new URL("../../../templates/addons/web/template/vitest.config.ts.jinja", import.meta.url),
+    join(templateRoot, "{% if include_web %}web{% endif %}", "vitest.config.ts.jinja"),
     "utf8",
   );
   // The config is static; require rendering if the template gains substitutions.

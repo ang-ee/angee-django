@@ -4,7 +4,7 @@
 @source "../../ui/src/**/*.{ts,tsx}";
 @source "../.storybook/**/*.{ts,tsx,mjs,js}";
 @source "./**/*.{ts,tsx}";
-@source "../../../../*/addons/*/*/web/src/**/*.{ts,tsx}";
+@source "../../../../*/src/*/*/web/src/**/*.{ts,tsx}";
 
 @layer base {
   *, ::before, ::after, ::backdrop, ::file-selector-button {

@@ -34,7 +34,7 @@ def public_policy(request, db, settings):
     reset_backend()
     active = backend()
     assert isinstance(active, LocalBackend)
-    root = Path(__file__).parents[1] / "addons/angee"
+    root = Path(__file__).parents[1] / "src/angee"
     install_schema(parse_zed("\n".join(
         (root / addon / "permissions.zed").read_text()
         for addon in ("iam", "dashboards", "money", "spaces", "work")

@@ -87,7 +87,7 @@
   {
     "package": "@angee/app",
     "name": "assertShellSettings",
-    "source": "packages/app/src/boot-app.tsx",
+    "source": "packages/app/src/shell-settings.d.mts",
     "kind": null,
     "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
     "status": "stable",
@@ -3507,6 +3507,14 @@
   },
   {
     "package": "@angee/ui",
+    "name": "REFERENCE_CONTAINERS",
+    "source": "packages/ui/src/views/relation/RecordReference.tsx",
+    "kind": "contribution",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "REFINE_CREATE_ID",
     "source": "packages/ui/src/runtime/route-href.ts",
     "kind": null,
@@ -3747,6 +3755,15 @@
     "kind": "fragment",
     "status": "stable",
     "storyId": "library-owners--facts"
+  },
+  {
+    "package": "@angee/ui",
+    "name": "RecordReferencePreview",
+    "source": "packages/ui/src/views/relation/RecordReference.tsx",
+    "kind": "fragment",
+    "owner": "@angee/ui:RecordReference",
+    "status": "stable",
+    "storyId": null
   },
   {
     "package": "@angee/ui",
@@ -7838,15 +7855,6 @@
   },
   {
     "package": "@angee/ui",
-    "name": "useAggregateOperation",
-    "source": "packages/ui/src/views/resource/resource-operations.ts",
-    "kind": null,
-    "reason": "Runtime infrastructure: resolves the generated aggregate document and target for a resource.",
-    "status": "stable",
-    "storyId": null
-  },
-  {
-    "package": "@angee/ui",
     "name": "useAppRuntime",
     "source": "packages/ui/src/runtime/runtime.ts",
     "kind": null,
@@ -8498,6 +8506,15 @@
     "source": "packages/ui/src/views/form/record-field-marks.tsx",
     "kind": "surface",
     "owner": "@angee/ui:FormView",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
+    "name": "useRecordReference",
+    "source": "packages/ui/src/views/relation/RecordReference.tsx",
+    "kind": null,
+    "reason": "Runtime context for an addon-owned record preview.",
     "status": "stable",
     "storyId": null
   },

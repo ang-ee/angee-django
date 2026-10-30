@@ -1,0 +1,14 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-integrate-vcs"
+version = "3.0.0"
+description = "VCS bridges, repository inventory, sources, and templates"
+keywords = ["integrations", "vcs", "repositories"]
+dependencies = ["angee-base>=3,<4", "angee-integrate>=3,<4", "angee-web>=3,<4"]
+dynamic = ["entry-points"]
+
+[tool.angee]
+
+[tool.angee.platform]
+category = "Integration"

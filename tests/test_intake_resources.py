@@ -35,7 +35,8 @@ def _addon(tmp_path: Path, needs: str, *, task_owner: str = "decider"):
         "040_intake.need.yaml": needs,
     }
     for name, body in files.items():
-        (tmp_path / name).write_text(body)
+        (tmp_path / "resources").mkdir(exist_ok=True)
+        (tmp_path / "resources" / name).write_text(body)
     return make_addon(name="tests.access_seed", label="access_seed", path=tmp_path, resources={"install": list(files)})
 
 
@@ -85,7 +86,8 @@ def test_an_answered_question_keeps_its_answer_when_the_row_changes(composed_tab
     del composed_tables
     addon = _addon(tmp_path, NEEDS)
     _load(addon)
-    (tmp_path / "040_intake.need.yaml").write_text(NEEDS.replace("access: deny", "access: approve"))
+    (tmp_path / "resources").mkdir(exist_ok=True)
+    (tmp_path / "resources" / "040_intake.need.yaml").write_text(NEEDS.replace("access: deny", "access: approve"))
 
     _load(addon)
 

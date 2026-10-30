@@ -35,7 +35,7 @@ def inspect(container: Model, record: DeliveryRecord, stages: QuerySet[DeliveryS
     command = [
         sys.executable, "-m", "mypy", "--config-file", str(root / "tests/typing_app/mypy.ini"), str(source),
     ]
-    env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "addons")))}
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "src")))}
     positive = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, check=False)
     assert positive.returncode == 0, positive.stdout + positive.stderr
 

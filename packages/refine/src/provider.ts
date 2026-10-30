@@ -39,7 +39,8 @@ export const ANGEE_HASURA_PROVIDER_OPTIONS = {
 } satisfies HasuraDataProviderOptions;
 
 export interface AngeeHasuraClientOptions {
-  url: string;
+  /** Resolve an asynchronously configured connection at request time. */
+  url: string | (() => string);
   headers?: HeadersInit;
   auth?: AuthFetch;
   csrfEndpoint?: string;
@@ -76,6 +77,8 @@ export interface AngeeHasuraLiveProviderOptions {
 
 export interface AngeeHasuraSchemaConfig
   extends AngeeHasuraDataProviderOptions {
+  /** Composed schemas have a deployment URL; asynchronously resolved providers register separately. */
+  url: string;
   sdl?: string;
   metadata?: unknown;
   live?: AngeeHasuraLiveProviderOptions | boolean;
@@ -98,8 +101,11 @@ export function createAngeeGraphQLClient(
     endpoint: options.csrfEndpoint,
     fetch: baseFetch,
   });
-  return new GraphQLClient(options.url, {
-    fetch: auth(baseFetch),
+  const authenticatedFetch = auth(baseFetch);
+  const requestFetch: FetchFn = (input, init) =>
+    authenticatedFetch(typeof options.url === "function" ? options.url() : input, init);
+  return new GraphQLClient(typeof options.url === "string" ? options.url : "", {
+    fetch: requestFetch,
     headers: options.headers,
     responseMiddleware(response) {
       if (response instanceof Error) throw boundedGraphQLTransportError(response, options.errorMessages);
