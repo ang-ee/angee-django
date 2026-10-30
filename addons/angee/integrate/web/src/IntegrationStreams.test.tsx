@@ -51,7 +51,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
 
 import integrate from "./index";
 import provenance from "@angee/provenance";
-import timeline from "../../../timeline/web/src";
+import timeline from "@angee/timeline";
 import { IntegrationSyncStream } from "./documents";
 import { INTEGRATION_MODEL } from "./IntegrationLifecycleActions";
 import {

@@ -405,12 +405,20 @@ promising planned coverage as though it already exists.
 
 ### Consumer CI Publication
 
-Consumer callers use `main` for the reusable workflow, framework checkout, and
-source dependencies. The caller's own source always uses its exact `github.sha`;
-its declared source ref is replaced by that revision. Workspace branches do not
+During a coordinated draft cutover, publish the reviewed framework commit first.
+Consumer callers temporarily pin that public immutable SHA in both the reusable
+workflow `uses` reference and `framework-ref`. Pin source dependencies to published,
+reviewed cohort commits as well; an unpublished local hash is not a CI dependency.
+Run full consumer verification through published CI after the draft cohort
+converges; do not recreate its profiles or shards in a private local harness.
+
+After the reviewed framework and source dependencies land, durable consumer
+callers use `main` for the reusable workflow, framework checkout, and source
+dependencies. In either phase, the caller's own source uses its exact
+`github.sha`; its declared source ref is replaced by that revision. Workspace branches do not
 define the durable CI dependency contract.
 
-Publish in dependency order:
+For durable `main` wiring, land in dependency order:
 
 1. Publish required upstream fixes and record their versions or immutable Git
    revisions in the framework dependency declarations and lockfile.
@@ -421,7 +429,8 @@ Publish in dependency order:
    those already-landed dependencies.
 
 Local source checks do not establish that this publication chain or a remote CI
-run has completed.
+run has completed. Billing rejections and private-source checkout failures are
+external blockers, not evidence that the consumer checks executed or passed.
 
 Framework requirements pin the native compiler to its public PyPI release,
 and `uv.lock` records the distribution artifacts. Clean checkouts and Docker

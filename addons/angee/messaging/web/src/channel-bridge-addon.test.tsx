@@ -45,8 +45,8 @@ import {
 } from "./channel-bridge-addon";
 import { CHANNEL_MODEL } from "./documents";
 import { expectValidChannelBridgeAddon } from "./testing";
-import provenance from "../../../provenance/web/src";
-import timeline from "../../../timeline/web/src";
+import provenance from "@angee/provenance";
+import timeline from "@angee/timeline";
 
 const VENDOR = "messaging-integrate-example";
 
