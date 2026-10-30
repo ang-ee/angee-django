@@ -74,7 +74,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 3. **Let migrations follow the swappable storage.** Django's `makemigrations` on the built runtime owns the history tables;
    a hand-written migration that references the changeset FK depends on
    `migrations.swappable_dependency(settings.ANGEE_CHANGESET_MODEL)` ([README](../../README.md)). **Owner rule:**
-   [addon-owned runtime migrations](../../../../../docs/composer.md#addon-owned-runtime-migrations).
+   [project migration history](../../../../../docs/composer.md#project-migration-history).
 
 4. **Write under the entrypoint's boundary; attribute, and open only a distinct logical write.** Attribution is ambient: the
    changeset projects REBAC's current actor and sudo reason (`Changeset.ambient_attribution`, `models.py:188`), so domain code
