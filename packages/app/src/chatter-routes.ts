@@ -50,7 +50,9 @@ export function chatterRouteIndex(
       ...(canonicalLabel ? { canonicalLabel } : {}),
       ...(recordEdges ? { recordEdges } : {}),
       ...(history !== undefined ? { history } : {}),
-      ...(recordParam ? { recordParam } : {}),
+      // Computed sources explicitly have no canonical Django record. Their
+      // detail URL still identifies a row, but cannot address record services.
+      ...(recordParam && canonicalLabel !== null ? { recordParam } : {}),
     };
   });
 }
