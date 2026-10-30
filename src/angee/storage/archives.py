@@ -9,7 +9,7 @@ import zipfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO
+from typing import Any, BinaryIO, cast
 
 RECOGNITION_READ_LIMIT = 128 * 1024 * 1024
 """Aggregate compressed bytes available to one independent archive recognition probe."""
@@ -27,12 +27,18 @@ class BoundedReader:
 
     ZIP recognition runs once per registered extractor, so every probe must use
     an explicit byte budget and must never issue an unbounded read. Callers may
-    reset :attr:`remaining` between independent candidates inside one archive.
+    call :meth:`reset_budget` between independent candidates inside one archive.
     """
 
     def __init__(self, stream: BinaryIO, *, limit: int) -> None:
         self.stream = stream
+        self.limit = limit
         self.remaining = limit
+
+    def reset_budget(self) -> None:
+        """Start the same bounded read allowance for an independent candidate."""
+
+        self.remaining = self.limit
 
     def read(self, size: int = -1) -> bytes:
         """Read at most the remaining budget, rejecting unbounded requests."""
@@ -79,6 +85,24 @@ def archive_entries(archive: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
             raise ArchiveError(f"Archive repeats member {name!r}.")
         entries[name] = info
     return entries
+
+
+@contextmanager
+def probe_archive(file: Any) -> Iterator[tuple[zipfile.ZipFile, dict[str, zipfile.ZipInfo], BoundedReader]]:
+    """Open a validated ZIP under the recognition budget and close its stream.
+
+    Consumers may call the yielded reader's ``reset_budget`` before each
+    independent candidate. ZIP and stream failures become ``ArchiveError``;
+    domain-specific interpretation and its failures remain with the consumer.
+    """
+
+    try:
+        with file.open_stream() as stream:
+            bounded = BoundedReader(stream, limit=RECOGNITION_READ_LIMIT)
+            with zipfile.ZipFile(cast(BinaryIO, bounded)) as archive:
+                yield archive, archive_entries(archive), bounded
+    except (NotImplementedError, OSError, zipfile.BadZipFile, zipfile.LargeZipFile) as error:
+        raise ArchiveError("This file is not a readable ZIP archive.") from error
 
 
 def safe_member_name(value: str) -> str:

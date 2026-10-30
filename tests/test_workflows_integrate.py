@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import stat
+import warnings
 import zipfile
 from pathlib import PurePosixPath
 
@@ -15,6 +16,7 @@ from angee.storage.archives import (
     ArchiveError,
     BoundedReader,
     archive_entries,
+    probe_archive,
     safe_member_name,
     stage_subtree,
 )
@@ -89,3 +91,46 @@ def test_registry_uses_canonical_storage_models_and_stable_keys():
 def test_archive_gate_targets_are_discovered_instead_of_static_config():
     from angee.workflows_integrate.archive_steps import ArchiveGateConfig
     assert set(ArchiveGateConfig.model_fields) == {"assignee"}
+
+
+@pytest.mark.parametrize("entries", [[("../escape", "bad")], [("same", "one"), ("same", "two")], None])
+def test_zip_probe_rejects_invalid_inventory_and_closes_stream(entries):
+    content = io.BytesIO()
+    if entries is None:
+        content.write(b"not a ZIP")
+    else:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            with zipfile.ZipFile(content, "w") as archive:
+                for name, value in entries:
+                    archive.writestr(name, value)
+    content.seek(0)
+
+    class File:
+        def open_stream(self):
+            return content
+
+    with pytest.raises(ArchiveError):
+        with probe_archive(File()):
+            pytest.fail("Invalid archive reached its consumer")
+    assert content.closed
+
+
+def test_zip_probe_validates_inventory_resets_budget_and_closes_on_consumer_failure():
+    with _zip([("nested/store", "payload")]) as source:
+        content = io.BytesIO(source.fp.getvalue())
+
+    class File:
+        def open_stream(self):
+            return content
+
+    with pytest.raises(ValueError, match="domain failure"):
+        with probe_archive(File()) as (archive, entries, bounded):
+            assert tuple(entries) == ("nested/store",)
+            bounded.remaining = 0
+            with pytest.raises(ArchiveError, match="budget"):
+                archive.read(entries["nested/store"])
+            bounded.reset_budget()
+            assert archive.read(entries["nested/store"]) == b"payload"
+            raise ValueError("domain failure")
+    assert content.closed
