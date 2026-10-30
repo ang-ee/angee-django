@@ -665,7 +665,7 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
 
     def merge_values(self, merged: Sequence[Any]) -> dict[str, Any]:
         """Project missing contact display/control values without writing a fold."""
-        values = {}
+        values: dict[str, Any] = {}
         for row in merged:
             for name in ("controller", "label", "display_name", "is_verified"):
                 field = self._meta.get_field(name)
