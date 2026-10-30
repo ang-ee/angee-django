@@ -759,6 +759,7 @@ def test_local_django_source_mode_shares_one_held_environment() -> None:
     assert "uv sync" not in django["command"][-1]
     assert "exec uv run --no-sync python manage.py serve --host 0.0.0.0 --port 8000" in django["command"][-1]
     assert stack["jobs"]["py-sync"]["holds"] == ["django", "celery-worker"]
+    assert stack["jobs"]["compose"]["holds"] == ["django", "celery-worker"]
     assert "exec uv sync --locked" in stack["jobs"]["py-sync"]["command"][-1]
     assert stack["jobs"]["provision"]["command"][-3:] == ["provision", "--wait-db", "60"]
     assert stack["jobs"]["provision"]["depends_on"] == ["compose", "postgres"]
@@ -1108,6 +1109,7 @@ def test_dev_stack_has_explicit_lifecycle_job_graph() -> None:
         jobs = stack["jobs"]
         assert set(jobs) == {"deps", "py-sync", "compose", "provision", "operator-schema", "codegen"}
         assert jobs["py-sync"]["holds"] == ["django", "celery-worker", "celery-queues"]
+        assert jobs["compose"]["holds"] == ["django", "celery-worker", "celery-queues"]
         assert jobs["py-sync"]["depends_on"] == ["deps"]
         assert jobs["compose"]["command"] == ["uv", "run", "--no-sync", "python", "manage.py", "compose"]
         assert jobs["compose"]["depends_on"] == ["py-sync"]
