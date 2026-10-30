@@ -1343,17 +1343,17 @@ class Task(
                     Q(subject_content_type__isnull=True, subject_object_id__isnull=True)
                     | Q(subject_content_type__isnull=False, subject_object_id__isnull=False)
                 ),
-                name="ck_projects_task_subject_pair",
+                name="ck_%(app_label)s_%(class)s_subject_pair",
             ),
             models.UniqueConstraint(
                 fields=("project", "sort_order"),
-                name="uq_projects_task_project_rank",
+                name="uq_%(app_label)s_%(class)s_project_rank",
                 nulls_distinct=False,
             ),
             models.UniqueConstraint(
                 fields=("parent", "sub_sort_order"),
                 condition=models.Q(parent__isnull=False),
-                name="uq_projects_task_parent_sub_rank",
+                name="uq_%(app_label)s_%(class)s_parent_sub_rank",
             ),
         )
         indexes = (
