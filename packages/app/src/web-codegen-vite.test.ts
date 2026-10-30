@@ -193,11 +193,12 @@ test("dev discovers direct Django SDL and metadata after startup and tracks thei
   const schema = join(runtime, "schemas", "console.graphql");
   const metadata = join(runtime, "schemas", "console.metadata.json");
   const generated = join(runtime, "gql", "console", "graphql.ts");
+  write(join(addon, "src", "headless", "documents.ts"), "export const Ping = /* GraphQL */ `query Ping { ping }`;");
   write(metadata, "{}\n");
   write(schema, "type Query { ping: String! }");
-  await vi.waitFor(() => expect(readFileSync(generated, "utf8")).toContain("ping:"));
-  write(schema, "type Query { pong: String! }");
-  await vi.waitFor(() => expect(readFileSync(generated, "utf8")).toContain("pong:"));
+  await vi.waitFor(() => expect(readFileSync(generated, "utf8")).toContain("PingDocument"));
+  write(schema, "type Query { ping: Int! }");
+  await vi.waitFor(() => expect(readFileSync(generated, "utf8")).toMatch(/type PingQuery = \{\s*ping: number/));
   await vi.waitFor(() => expect(sent).toHaveBeenCalledWith({ type: "full-reload" }));
   sent.mockClear();
   write(metadata, "{ }\n");
