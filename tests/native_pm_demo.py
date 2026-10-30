@@ -6,6 +6,8 @@ from django.core.management import call_command
 from django.test import TransactionTestCase
 from rebac import system_context
 
+from angee.base.fields.ordering import FractionalRankField
+
 
 class PMDemoTests(TransactionTestCase):
     """Exercise PM's declared demo closure through the production ORM loader."""
@@ -59,9 +61,16 @@ class PMDemoTests(TransactionTestCase):
             self.assertTrue(reviews)
             for review in reviews:
                 self.assertTrue(review.proposal.with_actor(review.reviewer).has_access("evaluate"))
-            # Model a stack with parentless tasks created after the original demo.
+            child = Resource.objects.resolve("projects.opening_day_signs", model=self.Task)
+            sibling = self.Task.objects.create(
+                title="Later child task", parent=child.parent, project=child.project, queue=child.queue,
+            )
+            self.assertGreater(sibling.sub_sort_order, child.sub_sort_order)
+            children = self.Task.objects.filter(parent=child.parent).order_by("sub_sort_order")
+            child_ranks = list(children.values_list("pk", "parent_id", "sort_order", "sub_sort_order"))
+            # Omitted root ranks append within the project, across assignees.
             later = self.Task.objects.create(
-                title="Later stack task", queue=queue, sort_order=32768.0, sub_sort_order=32768.0,
+                title="Later stack task", project=done.project, queue=queue, assignee=alice, sort_order=32768.0,
             )
             Resource.objects.filter(
                 source_addon="angee.work", xref__in=("eng_prepare_orientation", "eng_confirm_tool_storage"),
@@ -75,16 +84,23 @@ class PMDemoTests(TransactionTestCase):
             self.assertEqual(Review.objects.count(), len(reviews))
             tasks = self.Task.objects.filter(
                 title__in=("Prepare the volunteer orientation checklist", "Confirm shared tool storage"),
-            ).order_by("sub_sort_order")
+            ).order_by("sort_order")
+            self.assertEqual(set(tasks.values_list("project_id", flat=True)), {later.project_id})
+            self.assertEqual(set(tasks.values_list("parent_id", flat=True)), {None})
             ranks = list(tasks.values_list("pk", "sort_order", "sub_sort_order"))
             self.assertEqual(len(ranks), 2)
-            self.assertEqual(len({rank[2] for rank in ranks}), 2)
-            self.assertTrue(all(rank[2] > later.sub_sort_order for rank in ranks))
+            self.assertEqual(len({rank[1] for rank in ranks}), 2)
+            self.assertTrue(all(rank[1] > later.sort_order for rank in ranks))
+            self.assertEqual({rank[2] for rank in ranks}, {FractionalRankField.STEP})
         # Force ORM replay rather than a hash skip, preserving ledger identities.
         with system_context(reason="tests.pm.demo.force_replay"):
             Resource.objects.filter(
                 source_addon="angee.work", xref__in=("eng_prepare_orientation", "eng_confirm_tool_storage"),
             ).update(content_hash="")
+            Resource.objects.filter(source_addon="angee.projects", xref="opening_day_signs").update(content_hash="")
         Resource.objects.load_addons(apps.get_app_configs(), tiers=("master", "install", "demo"), allow_non_dev=True)
         with system_context(reason="tests.pm.demo.rank_replay"):
             self.assertEqual(list(tasks.values_list("pk", "sort_order", "sub_sort_order")), ranks)
+            self.assertEqual(
+                list(children.values_list("pk", "parent_id", "sort_order", "sub_sort_order")), child_ranks,
+            )
