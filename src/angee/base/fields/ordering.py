@@ -8,12 +8,12 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import models
+from django.db import models, transaction
 from django.db.backends.base.base import BaseDatabaseWrapper
 from django.utils.hashable import make_hashable
 
 
-class FractionalRankExhausted(ValueError):
+class FractionalRankExhausted(ValidationError, ValueError):
     """Raised when binary64 cannot represent another safe fractional rank."""
 
 
@@ -226,11 +226,40 @@ class FractionalRankField(models.FloatField):
             valid = math.isfinite(candidate) and candidate < upper
         else:
             lower = cls._coerce_endpoint(previous, name="previous")
+            if lower >= upper:
+                raise ValueError("Ordering neighbors must be strictly increasing.")
             candidate = lower / 2 + upper / 2
             valid = lower < candidate < upper
         if not valid:
             raise FractionalRankExhausted("No finite rank remains between these ordering neighbors.")
         return candidate
+
+    def rebalance(self, rows: models.QuerySet[Any]) -> int:
+        """Spread a complete context under its owner's write lock, preserving order.
+
+        Both phases use native tracked updates in one transaction. The caller
+        supplies every row of the context and holds its insertion/reorder lock.
+        Staging avoids all stored and final ranks, including an exhausted tail.
+        """
+
+        using = rows.db
+        with transaction.atomic(using=using):
+            instances = list(rows.select_for_update(of=("self",)).order_by(self.name, "pk"))
+            if not instances:
+                return 0
+            finals = [self.STEP * (index + 1) for index in range(len(instances))]
+            occupied = {getattr(row, self.attname) for row in instances} | set(finals)
+            temporary = []
+            candidate = 0.0
+            for _row in instances:
+                while candidate in occupied:
+                    candidate -= self.STEP
+                temporary.append(candidate)
+                occupied.add(candidate)
+            for ranks in (temporary, finals):
+                for row, rank in zip(instances, ranks, strict=True):
+                    rows.filter(pk=row.pk).update(**{self.name: rank})
+            return len(instances)
 
     def get_temporary_ranks(
         self,

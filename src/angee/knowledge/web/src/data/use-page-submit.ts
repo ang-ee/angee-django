@@ -19,7 +19,7 @@ export function usePageSubmit(): FormSubmit {
       await acceptQuery(KnowledgePage, { id: String(variables.page) }, (current) => {
         const page = current?.pages_by_pk;
         if (!page || !page.markdown) return current;
-        return { ...current, pages_by_pk: { ...page, title: accepted.title,
+        return { ...current, pages_by_pk: { ...page, title: accepted.title, revision: accepted.revision,
           markdown: { ...page.markdown, body: accepted.body, body_hash: accepted.body_hash, word_count: accepted.word_count } } };
       });
     },
@@ -27,22 +27,24 @@ export function usePageSubmit(): FormSubmit {
   return async (data, context) => {
     if (!context.id || !context.baselineRecord) return formSubmitError(t("editor.saveFailed"));
     const hash = rowValueAtPath(context.baselineRecord, "markdown.body_hash");
-    if (typeof hash !== "string") return formSubmitError(t("editor.saveFailed"));
+    const revision = context.baselineRecord.revision;
+    if (typeof hash !== "string" || typeof revision !== "number") return formSubmitError(t("editor.saveFailed"));
     const result = (await write({
       page: context.id,
       ...(typeof data.title === "string" ? { title: data.title.trim() } : {}),
       body: String(context.values.body ?? ""),
       expected_hash: hash,
+      expected_revision: revision,
     }))?.update_page_body;
     if (!result?.ok || !result.markdown) {
       const message = result?.error || t("editor.saveFailed");
-      return result?.error_code === "STALE_BODY"
+      return (result?.error_code === "STALE_BODY" || result?.error_code === "STALE_REVISION")
         ? { status: "conflict", message }
         : formSubmitError(message);
     }
     const title = result.markdown.title;
     return acknowledgeFormSubmit(
-      { ...context.record, title, markdown: result.markdown },
+      { ...context.record, title, revision: result.markdown.revision, body: result.markdown.body, markdown: result.markdown },
       { ...context.values, title, body: result.markdown.body },
     );
   };

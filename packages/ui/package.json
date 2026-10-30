@@ -777,7 +777,7 @@
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
-    "build": "pnpm generate:form-spec && rm -rf dist && tsc -p tsconfig.build.json && cp -R src/styles dist/styles && cp src/theme/runtime.mjs dist/theme/runtime.mjs && cp src/theme/runtime.d.ts dist/theme/runtime.d.ts && cp src/views/calendar/calendar-surface.css dist/views/calendar/calendar-surface.css && cp src/views/form/form-spec.validator.generated.js src/views/form/form-spec.validator.generated.d.ts dist/views/form/",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R src/styles dist/styles && cp src/theme/runtime.mjs dist/theme/runtime.mjs && cp src/theme/runtime.d.ts dist/theme/runtime.d.ts && cp src/views/calendar/calendar-surface.css dist/views/calendar/calendar-surface.css && cp src/views/form/form-spec.validator.generated.js src/views/form/form-spec.validator.generated.d.ts dist/views/form/",
     "generate:form-spec": "node scripts/generate-form-spec.mjs"
   },
   "dependencies": {
@@ -804,7 +804,7 @@
     "@tanstack/react-table": "^8.21.3",
     "@tanstack/react-virtual": "^3.14.3",
     "@xyflow/react": "^12.11.1",
-    "ajv": "^8.20.0",
+    "ajv": "8.20.0",
     "ajv-formats": "^3.0.1",
     "cmdk": "^1.1.1",
     "codemirror": "^6.0.0",
@@ -841,7 +841,7 @@
     "react-dom": "^19.2.7",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9",
-    "json-schema-to-typescript": "^16.0.0",
-    "esbuild": "^0.28.1"
+    "json-schema-to-typescript": "16.0.0",
+    "esbuild": "0.28.1"
   }
 }

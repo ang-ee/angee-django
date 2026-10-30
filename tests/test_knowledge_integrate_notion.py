@@ -149,7 +149,9 @@ def test_import_replay_database_rows_and_late_parents(bridge, api):
     assert bridge.vault.owner_id == bridge.owner_id
     before = {key: (row.pk, row.updated_at, row.parent_id) for key, row in rows.items()}
 
+    api.requests.clear()
     assert sync_bridge(bridge) == 0
+    assert not any(path.endswith("/markdown") for _, path in api.requests)
     assert {key: (row.pk, row.updated_at, row.parent_id) for key, row in targets(bridge).items()} == before
     assert bridge.sync_streams.get().cursor == {}
 
@@ -160,6 +162,7 @@ def test_remote_update_uses_body_history_and_local_edits_become_conflicts(bridge
     original = targets(bridge)[key]
     api.nodes[key]["properties"]["Custom title"]["title"][0]["plain_text"] = "Renamed"
     api.bodies[key] = "Second"
+    api.nodes[key]["last_edited_time"] = "2026-10-26T13:00:00Z"
     assert sync_bridge(bridge) == 1
     updated = targets(bridge)[key]
     assert updated.pk == original.pk
@@ -168,6 +171,7 @@ def test_remote_update_uses_body_history_and_local_edits_become_conflicts(bridge
     with actor_context(bridge.owner):
         MarkdownPage.objects.write_body(updated, "Local edit")
     api.bodies[key] = "Remote edit"
+    api.nodes[key]["last_edited_time"] = "2026-10-26T14:00:00Z"
     sync_bridge(bridge)
     assert targets(bridge)[key].markdown.body == "Local edit"
     link = bridge.sync_streams.get().links.get(external_key=key)
@@ -235,6 +239,7 @@ def test_late_target_and_rename_refresh_links_without_overwriting_local_edits(br
 def test_incomplete_content_is_quarantined_without_overwriting_good_body(bridge, api, truncated, markdown, code):
     key = api.add(node(1, "Complete"), "Keep this")
     sync_bridge(bridge)
+    api.nodes[key]["last_edited_time"] = "2026-10-26T13:00:00Z"
     api.refusals[f"pages/{key}/markdown"] = httpx2.Response(
         200,
         json={
@@ -296,6 +301,7 @@ def test_rate_limit_after_progress_commits_completed_pages(bridge, api):
 def test_unavailable_page_does_not_block_neighbors_or_erase_prior_content(bridge, api, status):
     key = api.add(node(1, "Private"), "Keep this")
     sync_bridge(bridge)
+    api.nodes[key]["last_edited_time"] = "2026-10-26T13:00:00Z"
     api.refusals[f"pages/{key}/markdown"] = httpx2.Response(status)
     api.add(node(2, "Healthy"), "Arrives")
     sync_bridge(bridge)
@@ -410,3 +416,13 @@ def test_sync_action_requires_write_access(composed_tables, monkeypatch):
     assert result.errors is None
     assert result.data["sync_notion_connection"]["ok"]
     assert [row.pk for row in queued] == [connection.pk]
+
+
+def test_rewrite_converts_original_markup_once(bridge, api):
+    destination = api.add(node(2, "Destination"), "Target")
+    source = api.add(node(1, "Source"),
+        f'<unknown url="https://example.com" alt="a &lt;b&gt; c"/> '
+        f'<page url="https://notion.so/{destination}">Target</page>')
+    sync_bridge(bridge)
+    assert bridge.sync_streams.get().cursor == {}
+    assert "a <b> c" in targets(bridge)[source].markdown.body

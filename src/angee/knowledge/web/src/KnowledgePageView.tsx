@@ -37,7 +37,8 @@ export function KnowledgePageView({ pageId, navigation }: KnowledgePageViewProps
     return <EmptyState fill icon="note" title={t("page.notFoundTitle")} description={t("page.notFoundDescription")} />;
   }
   return <WikilinkProvider resolve={(title) => {
-    const target = detail.wikilinks.find((link) => link.title === title)?.page;
+    const pageTitle = title.split("#", 1)[0]!.trim();
+    const target = detail.wikilinks.find((link) => link.title === pageTitle)?.page;
     return target ? { broken: false, href: href("knowledge.page", { id: target }) } : { broken: true };
   }}>
     {readError}

@@ -1,13 +1,13 @@
 import { useModelMetadata } from "@angee/metadata";
 import { useAuthoredQuery, useInvalidateAuthoredModels } from "@angee/refine";
-import { useCallback, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
-  CollectionTreeView, EmptyState, ErrorBanner, InlineTextAction, LoadingPanel, PaneToolbarMenu,
+  CollectionTreeView, EmptyState, ErrorBanner, InlineTextAction, LoadingPanel, PaneToolbar, PaneToolbarMenu,
   ResourceViewProvider, ScopedExplorerPane, TreeView, useConfirm, useFilePicker, useLatestRef,
   relationFieldInfoForResource, useRelationOptions, useScopedTreeExplorer,
   type FieldDescriptor, type ListViewProps, type ScopedExplorerController,
 } from "@angee/ui";
-import { StorageFolderById, type StorageDrive, type StorageFile } from "../data/documents";
+import { StorageFolderById, StorageDriveById, type StorageDrive, type StorageFile } from "../data/documents";
 import { ALL_SCOPE, STORAGE_FILE_DND, TRASH_SCOPE, fileDragData, folderTreeRows,
   type FileDragData, type StorageTreeRow } from "../data/file-rows";
 import { FOLDER_MODEL, FOLDER_MODELS, folderSource } from "../data/folder-source";
@@ -62,7 +62,7 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
   // Scope/detail reads are independent of sibling pages. They retain the requested
   // folder for actions and deep links without copying the collection's row cache.
   const getTreeRows = useCallback((rootId: string) => folderTreeRows(
-    folder && !folder.is_virtual ? [folder] : [], rootId, openFile,
+    folder && !folder.is_virtual ? [...folder.ancestors, folder].map((row, index, rows) => ({ ...row, parent: index ? rows[index - 1]!.id : null })) : [], rootId, openFile,
   ), [folder, openFile]);
   const isSelectedIdValid = useCallback((id: string, rows: readonly StorageTreeRow[]) =>
     id === ALL_SCOPE || id === TRASH_SCOPE || rows.some((row) => row.id === id)
@@ -73,6 +73,14 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
     selectedRootId: openFileId ? openFile?.drive ?? null : requestedFolder ? folder?.drive ?? null : undefined,
     selectedId: folderScope, onSelectedIdChange: selectScope, defaultSelectedId: ALL_SCOPE, isSelectedIdValid,
   });
+  const driveRead = useAuthoredQuery(StorageDriveById, { id: controller.rootId }, {
+    enabled: Boolean(controller.rootId), models: ["storage.Drive"],
+  });
+  useEffect(() => {
+    if (controller.rootId && driveRead.isSuccess && !driveRead.isFetching && !driveRead.data?.drives_by_pk) {
+      controller.invalidateRoot(controller.rootId);
+    }
+  }, [controller.rootId, controller.invalidateRoot, driveRead.data, driveRead.isFetching, driveRead.isSuccess]);
   // Inline folder drafts belong to the actual scope, including resolved links.
   const [folderEdit, setFolderEdit] = useState<"create" | "rename" | null>(null);
   const [editingRootId, setEditingRootId] = useState(controller.rootId);
@@ -80,7 +88,7 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
     setEditingRootId(controller.rootId);
     setFolderEdit(null);
   }
-  const { picker: driveOptions, roots: drives } = useDrivePicker(controller.rootId, Boolean(controller.rootId));
+  const { picker: driveOptions, roots: drives } = useDrivePicker(controller.rootId);
   const driveCreateFields = useMemo<readonly FieldDescriptor[]>(() => [
     { name: "name", label: t("drive.create.name") },
     { name: "slug", label: t("drive.create.slug"), placeholder: t("drive.create.slugPlaceholder") },
@@ -261,7 +269,7 @@ function StorageFolders({ drive, selectedId, revealRows, onSelect, onFileDrop, r
   const t = useStorageT();
   const metadata = useModelMetadata(FOLDER_MODEL);
   const source = useMemo(() => metadata ? folderSource(metadata, drive) : null, [drive, metadata]);
-  if (!source) return null;
+  if (!source) return <PaneToolbar selector={pane?.selector} actions={toolbarActions} />;
   return <CollectionTreeView<StorageTreeRow> source={source} resource={FOLDER_MODEL} presentation="workspace" pane={pane} toolbarActions={toolbarActions}
     columns={[{ field: "name", header: t("folder.nameLabel") }]} textFilterField="name" search={{ box: true }}
     rowKey="id" parent="parent" label="name" icon="icon" hasChildren="hasChildren"

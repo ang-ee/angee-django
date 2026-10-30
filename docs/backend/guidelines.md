@@ -298,8 +298,10 @@ Use these owners instead of maintaining another contract in an addon:
 - Manually ordered rows use `FractionalRankField` (NOT NULL) plus a database
   `UniqueConstraint` over their context fields and rank. Use the field's
   append allocation when a rank is omitted. `FractionalRankExhausted` refuses
-  the write; an ordering owner must perform any deliberate contextual reranking
-  under its own lock. For cyclic reorders, the field's `get_temporary_ranks`
+  the write as a validation error; an ordering owner can call the field's
+  `rebalance` on its complete context under its own lock to preserve order and
+  restore gaps. Task board placement retries after this contextual repair. For
+  cyclic reorders, the field's `get_temporary_ranks`
   allocates outside the stored context and requested destinations; the owning
   writer stages and finalizes through its native queryset/model lifecycle in
   one transaction. Both phases retain capture and a failure rolls back the whole
@@ -309,7 +311,10 @@ Use these owners instead of maintaining another contract in an addon:
   and the field allocates between adjacent stored ranks. Assignee/stage lanes
   never define uniqueness. Task's ordering transaction covers ordinary explicit
   rank writers and creation too; the Hasura adapter acquires it before its row
-  lock. Explicit numeric ranks, including Stage positions, retain exact values.
+  lock. Task ranks serialize within each project (including no project);
+  child subranks serialize within each non-null parent, including children from
+  different projects. Root subranks are inert and need no global allocation or
+  uniqueness. Explicit numeric ranks, including Stage positions, retain exact values.
 - Runtime model modules, generated schemas and codegen stubs are output.
   Change their source declarations. Native Django migration history is reviewed,
   version-controlled project source; preserve it across runtime rebuilds.

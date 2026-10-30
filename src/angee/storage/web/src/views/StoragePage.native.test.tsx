@@ -13,7 +13,7 @@ import { AppRuntimeProvider, ConsoleLayout, ModalsHost, ToastProvider, baseIcons
 import { afterEach, expect, test, vi } from "vitest";
 
 import storage from "../index";
-import { StorageFileById, StorageFoldersPage, StorageFolderById } from "../data/documents";
+import { StorageFileById, StorageFoldersPage, StorageFolderById, StorageDriveById } from "../data/documents";
 import { StoragePage } from "./StoragePage";
 
 const fileResource = testDataResource("storage.File", {
@@ -77,6 +77,7 @@ test("cold Files navigation preserves the real shell, tree, pager and the detail
   });
   const update = vi.fn();
   const custom = vi.fn(({ meta }: { meta?: Record<string, unknown> }) => {
+    if (meta?.gqlQuery === StorageDriveById) return Promise.resolve({ data: { drives_by_pk: drive } });
     if (meta?.gqlQuery === StorageFoldersPage) return Promise.resolve({ data: { folders: [], folders_aggregate: { aggregate: { count: 0 } } } });
     if (meta?.gqlQuery === StorageFolderById) return Promise.resolve({ data: { folders_by_pk: null } });
     if (meta?.gqlQuery === StorageFileById) {
@@ -232,6 +233,7 @@ test("All files starts with server folder grouping and a clean URL; changing the
   const record = { ...file("file-a", "Alpha"), folder: "folder-a" };
   const groupRequests = vi.fn();
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
+    if (meta?.gqlQuery === StorageDriveById) return Promise.resolve({ data: { drives_by_pk: drive } });
     if (meta?.gqlQuery === StorageFoldersPage) return { data: { folders: [], folders_aggregate: { aggregate: { count: 0 } } } };
     if (meta?.gqlQuery === StorageFolderById) return { data: { folders_by_pk: null } };
     groupRequests(meta?.gqlVariables);

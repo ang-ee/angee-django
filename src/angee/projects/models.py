@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from contextlib import AbstractContextManager, contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext
 from enum import StrEnum
 from typing import Any, ClassVar, Self, cast
 
@@ -30,7 +30,7 @@ from rebac.backends import backend
 from rebac.field_backing import canonical_model
 
 from angee.base.exceptions import RecordAccessSubjectRefused
-from angee.base.fields.ordering import FractionalRankField
+from angee.base.fields.ordering import FractionalRankExhausted, FractionalRankField
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
@@ -209,24 +209,72 @@ class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
 class TaskOrderingQuerySet[TaskT: Task](models.QuerySet[TaskT]):
     """Keep every tracked Task rank writer inside its one ordering transaction."""
 
-    def _ordering_write(self, fields: Iterable[str] | None = None) -> AbstractContextManager[None]:
+    @contextmanager
+    def _ordering_write(
+        self, fields: Iterable[str] | None = None, *,
+        project_ids: Iterable[Any] = (), parent_ids: Iterable[Any] = (),
+    ) -> Iterator[Self]:
         if fields is not None and not self.model.ORDERING_FIELDS.intersection(fields):
-            return nullcontext()
+            yield self
+            return
         self._for_write = True
-        return self.model.ordering_write(using=self.db)
+        with self.model.ordering_write(
+            using=self.db, rows=self, project_ids=project_ids, parent_ids=parent_ids,
+        ) as rows:
+            yield cast(Self, rows)
 
     def update(self, **kwargs: Any) -> int:
-        """Serialize explicit ranks and project moves without bypassing native guards."""
+        """Lock selected source and destination contexts before native tracked writes.
 
-        with self._ordering_write(kwargs):
+        Django evaluates project/parent expressions once for the selected rows.
+        Freeze those destinations through native CASE expressions so a later
+        subquery change cannot write into a context outside this lock set.
+        """
+
+        if not self.model.ORDERING_FIELDS.intersection(kwargs):
             return super().update(**kwargs)
+        self._for_write = True
+        rows = self
+        destinations = {}
+        for name in ("project", "parent"):
+            key = next((key for key in (name, f"{name}_id") if key in kwargs), None)
+            if key is None:
+                continue
+            field = self.model._meta.get_field(name)
+            assert isinstance(field, models.ForeignKey)
+            value = kwargs.pop(key)
+            if isinstance(value, models.Model):
+                value = field.target_field.value_from_object(value)
+            if not isinstance(value, (models.expressions.BaseExpression, models.F, models.QuerySet)):
+                value = models.Value(value, output_field=field.target_field)
+            destinations[name] = value
+        project_ids, parent_ids = (), ()
+        if destinations:
+            aliases = {f"_ordering_{name}": value for name, value in destinations.items()}
+            selected = list(self.annotate(**aliases).values_list("pk", *aliases))
+            rows = self.filter(pk__in=[row[0] for row in selected])
+            contexts = {}
+            for index, name in enumerate(destinations, 1):
+                field = self.model._meta.get_field(name)
+                assert isinstance(field, models.ForeignKey)
+                contexts[name] = tuple(row[index] for row in selected)
+                kwargs[field.attname] = models.Case(*(
+                    models.When(pk=row[0], then=models.Value(row[index], output_field=field.target_field))
+                    for row in selected
+                ), default=models.Value(None), output_field=field.target_field)
+            project_ids, parent_ids = contexts.get("project", ()), contexts.get("parent", ())
+        with rows._ordering_write(kwargs, project_ids=project_ids, parent_ids=parent_ids) as locked:
+            return super(TaskOrderingQuerySet, locked).update(**kwargs)
 
     def bulk_update(self, objs: Any, fields: Any, *args: Any, **kwargs: Any) -> int:
-        """Keep native bulk updates and their nested updates in the same transaction."""
+        """Lock only this batch's persisted and requested ordering contexts."""
 
-        fields = tuple(fields)
-        with self._ordering_write(fields):
-            return super().bulk_update(objs, fields, *args, **kwargs)
+        fields, objs = tuple(fields), tuple(objs)
+        rows = self.filter(pk__in=[row.pk for row in objs])
+        projects = [row.project_id for row in objs] if {"project", "project_id"}.intersection(fields) else ()
+        parents = [row.parent_id for row in objs] if {"parent", "parent_id"}.intersection(fields) else ()
+        with rows._ordering_write(fields, project_ids=projects, parent_ids=parents) as locked:
+            return super(TaskOrderingQuerySet, locked).bulk_update(objs, fields, *args, **kwargs)
 
     def _allocate_missing_ranks(self, rows: Sequence[TaskT]) -> None:
         for name in self.model.ORDERING_RANK_FIELDS:
@@ -234,13 +282,37 @@ class TaskOrderingQuerySet[TaskT: Task](models.QuerySet[TaskT]):
             assert isinstance(field, FractionalRankField)
             field.allocate_missing_ranks(rows, using=self.db)
 
-    def bulk_create(self, objs: Any, *args: Any, **kwargs: Any) -> list[TaskT]:
-        """Serialize and prepare native multirow inserts without duplicate defaults."""
+    def bulk_create(
+        self, objs: Any, batch_size: int | None = None, ignore_conflicts: bool = False,
+        update_conflicts: bool = False, update_fields: Iterable[str] | None = None,
+        unique_fields: Iterable[str] | None = None,
+    ) -> list[TaskT]:
+        """Lock inserted destinations and any native upsert conflict sources."""
 
+        self._for_write = True
         rows = list(objs)
-        with self._ordering_write():
+        unique_fields = tuple(unique_fields) if unique_fields is not None else None
+        sources = self.none()
+        if update_conflicts and unique_fields:
+            fields = []
+            for name in unique_fields:
+                field = self.model._meta.pk if name == "pk" else self.model._meta.get_field(name)
+                assert isinstance(field, models.Field)
+                fields.append(field)
+            matches = Q(pk__in=[])
+            for row in rows:
+                matches |= Q(**{field.attname: getattr(row, field.attname) for field in fields})
+            sources = self.model._base_manager.using(self.db).filter(matches)
+        for row in rows:
+            row._default_root_subrank()
+        with sources._ordering_write(
+            project_ids=(row.project_id for row in rows), parent_ids=(row.parent_id for row in rows),
+        ):
             self._allocate_missing_ranks(rows)
-            return super().bulk_create(rows, *args, **kwargs)
+            return super().bulk_create(
+                rows, batch_size, ignore_conflicts, update_conflicts,
+                tuple(update_fields) if update_fields is not None else None, unique_fields,
+            )
 
 
 class TaskOrderingUnscopedQuerySet[TaskT: Task](
@@ -292,7 +364,12 @@ class TaskQuerySet[TaskT: Task](
     def create_forest(self, rows: Sequence[TaskT]) -> list[TaskT]:
         """Bracket the hierarchy owner's native insert/path initialization once."""
 
-        with self._ordering_write():
+        self._for_write = True
+        for row in rows:
+            row._default_root_subrank()
+        with self.none()._ordering_write(
+            project_ids=(row.project_id for row in rows), parent_ids=(row.parent_id for row in rows),
+        ):
             return super().create_forest(rows)
 
     def waiting_on(self, actor: Any) -> Self:
@@ -1029,26 +1106,50 @@ class Task(
 
     @classmethod
     @contextmanager
-    def ordering_write(cls, *, using: str) -> Iterator[None]:
-        """Serialize Task rank writers before they acquire target-row locks.
+    def ordering_write(
+        cls, *, using: str, rows: models.QuerySet | None = None,
+        project_ids: Iterable[Any] = (), parent_ids: Iterable[Any] = (),
+    ) -> Iterator[models.QuerySet]:
+        """Lock project order and non-root sibling order before target-row locks.
 
-        One short transaction lock covers nullable projects and native queryset
-        expressions spanning projects. The lock is shared by the actual rank
-        column owner, including MTI callers. Scope and uniqueness remain the
-        model's project constraint; no lane or actor defines that scope.
-        SQLite serializes writers through its native atomic transaction.
+        Cross-project children still share their parent's sibling context.
+        Root subranks have no ordering meaning; project ranks order roots.
+        Freeze selected keys and refuse a concurrent context move after waiting.
         """
 
+        rows = cls._base_manager.using(using).none() if rows is None else rows
+        observed = {pk: (project, parent) for pk, project, parent in rows.order_by().values_list(
+            "pk", "project_id", "parent_id",
+        )}
+        projects = {*project_ids, *(project for project, _parent in observed.values())}
+        parents = {*parent_ids, *(parent for _project, parent in observed.values())} - {None}
+        owner = cls._meta.get_field("sort_order").model
+        scopes = sorted({
+            *(f"project:{project}" for project in projects),
+            *(f"parent:{parent}" for parent in parents),
+        })
         with transaction.atomic(using=using):
             connection = connections[using]
             if connection.vendor == "postgresql":
-                owner = cls._meta.get_field("sort_order").model
                 with connection.cursor() as cursor:
-                    cursor.execute(
-                        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                        [f"angee.projects.task.ordering:{owner._meta.db_table}"],
-                    )
-            yield
+                    for scope in scopes:
+                        cursor.execute(
+                            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                            [f"angee.projects.task.ordering:{owner._meta.db_table}:{scope}"],
+                        )
+            selected = cls._base_manager.using(using).filter(pk__in=observed)
+            if any(observed[pk] != (project, parent) for pk, project, parent in selected.values_list(
+                "pk", "project_id", "parent_id",
+            )):
+                raise ValidationError({"task_order": "The task moved; reload it before changing order."})
+            yield rows.filter(pk__in=observed)
+
+    def _default_root_subrank(self) -> None:
+        """An omitted root subrank is inert, independent of other root rows."""
+
+        parent = type(self)._meta.get_field("parent")
+        if self.sub_sort_order is None and self.parent_id is None and parent.get_cached_value(self, None) is None:
+            self.sub_sort_order = FractionalRankField.STEP
 
     def apply_input_extensions(self, *, task_order: Any = None, **values: Any) -> None:
         """Place a board drop in the persisted project order under native admission."""
@@ -1056,7 +1157,9 @@ class Task(
         if task_order is not None:
             order = validate_value(TaskOrder, task_order, field="task_order")
             using = self._state.db or router.db_for_write(type(self), instance=self)
-            with type(self).ordering_write(using=using):
+            with type(self).ordering_write(
+                using=using, rows=type(self).system_queryset().using(using).filter(pk=self.pk),
+            ):
                 actor, bypass = self.effective_actor(strict=True)
                 project_id = (
                     type(self).system_queryset().using(using).values_list("project_id", flat=True).get(pk=self.pk)
@@ -1099,7 +1202,13 @@ class Task(
                 else:
                     lower = ranks.order_by("-sort_order").values_list("sort_order", flat=True).first()
                     upper = None
-                self.sort_order = FractionalRankField.get_rank_between(lower, upper)
+                try:
+                    self.sort_order = FractionalRankField.get_rank_between(lower, upper)
+                except FractionalRankExhausted:
+                    field = type(self)._meta.get_field("sort_order")
+                    assert isinstance(field, FractionalRankField)
+                    field.rebalance(type(self).system_queryset().using(using).filter(project_id=project_id))
+                    return self.apply_input_extensions(task_order=task_order, **values)
                 # Keep the original actor: native write/write__sort_order and
                 # history capture decide this save, including extension-only writes.
                 self.save(using=using, update_fields=("sort_order", "updated_at"))
@@ -1243,8 +1352,8 @@ class Task(
             ),
             models.UniqueConstraint(
                 fields=("parent", "sub_sort_order"),
+                condition=models.Q(parent__isnull=False),
                 name="uq_projects_task_parent_sub_rank",
-                nulls_distinct=False,
             ),
         )
         indexes = (
@@ -1258,12 +1367,15 @@ class Task(
 
         return self.title
 
-    def lock_for_merge(self) -> None:
-        """Take ordering ownership before core merge/fold locks Task rows."""
+    @classmethod
+    def lock_merge_records(cls, records: Sequence[Self]) -> None:
+        """Acquire every merge participant's contexts before any Task row lock."""
 
-        using = self._state.db or router.db_for_write(type(self), instance=self)
-        with type(self).ordering_write(using=using):
-            super().lock_for_merge()
+        using = records[0]._state.db or router.db_for_write(cls)
+        keys = [record.pk for record in records]
+        affected = cls.system_queryset().using(using).filter(Q(pk__in=keys) | Q(parent_id__in=keys))
+        with cls.ordering_write(using=using, rows=affected, parent_ids=keys):
+            super().lock_merge_records(records)
 
     @classmethod
     def merge_contract(cls, reference: Any, rows: Any, *, survivor: Any) -> Any:
@@ -1363,11 +1475,16 @@ class Task(
         fields = kwargs.get("update_fields")
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         guard = (
-            type(self).ordering_write(using=using)
+            type(self).ordering_write(
+                using=using, rows=type(self).system_queryset().using(using).filter(pk=self.pk),
+                project_ids=(self.project_id,), parent_ids=(self.parent_id,),
+            )
             if self._state.adding or fields is None or self.ORDERING_FIELDS.intersection(fields)
             else nullcontext()
         )
         with guard:
+            if self._state.adding or fields is None or {"parent", "parent_id", "sub_sort_order"}.intersection(fields):
+                self._default_root_subrank()
             update_fields = kwargs.get("update_fields")
             deferred = self.get_deferred_fields()
             project_is_written = (update_fields is None and "project_id" not in deferred) or (

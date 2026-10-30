@@ -262,7 +262,7 @@ vi.mock("./FileDetail", () => ({
     <section data-testid="file-detail" data-file-id={id} />
   ), }));
 
-import { StorageFileById, StorageFoldersPage, StorageFolderById } from "../data/documents";
+import { StorageFileById, StorageFoldersPage, StorageFolderById, StorageDriveById } from "../data/documents";
 import storage from "../index";
 import { StoragePage } from "./StoragePage";
 
@@ -347,9 +347,22 @@ beforeEach(() => {
     refetch.mockClear();
   }
   sdkMocks.useAuthoredQuery.mockImplementation((document, variables) => {
+    if (document === StorageDriveById) {
+      const id = String((variables as { id?: string })?.id ?? "");
+      return queryResult("drives", { drives_by_pk: storageData.drives.find((row) => row.id === id) ?? null });
+    }
     if (document === StorageFolderById) {
       const id = String((variables as { id?: string })?.id ?? "");
-      return queryResult("folders", { folders_by_pk: storageData.folders.find((row) => row.id === id) ?? null });
+      const row = storageData.folders.find((row) => row.id === id);
+      const ancestors = [];
+      let parent = row?.parent;
+      while (parent) {
+        const ancestor = storageData.folders.find((folder) => folder.id === parent);
+        if (!ancestor) break;
+        ancestors.unshift(ancestor);
+        parent = ancestor.parent;
+      }
+      return queryResult("folders", { folders_by_pk: row ? { ...row, ancestors } : null });
     }
     if (document === StorageFileById) {
       const id = String((variables as { id?: string })?.id ?? "");
@@ -506,6 +519,14 @@ describe("StoragePage explorer wiring", () => {
     expect(await screen.findByRole("menuitem", { name: "Rename folder" })).toBeTruthy();
     expect(screen.getByRole("menuitem", { name: "Delete folder" })).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: "Folder name, ascending" })).toBeTruthy();
+  });
+
+  test("a nested folder deep link reveals its readable ancestor chain", () => {
+    routerState.setSearch({ folder: "folder-a-child" });
+    render(pageTree());
+    expect(rootPickerValue()).toBe("drive-a");
+    expect(treeAttribute("data-row-ids")).toBe("__all__, __trash__, folder-a, folder-a-child");
+    expect(treeAttribute("data-selected")).toBe("folder-a-child");
   });
 
   test("selects the folder scope from the `?folder=` URL param on load", () => {

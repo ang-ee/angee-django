@@ -47,10 +47,18 @@ export const StorageFoldersPage = graphql(`
   }
 `);
 
+export const StorageDriveById = graphql(`
+  query StorageDriveById($id: String!) {
+    drives_by_pk(id: $id) { id name }
+  }
+`);
+
 // A requested scope is independent of whichever sibling page is visible.
 export const StorageFolderById = graphql(`
   query StorageFolderById($id: String!) {
-    folders_by_pk(id: $id) { id name description is_virtual drive parent }
+    folders_by_pk(id: $id) { id name description is_virtual drive parent
+      ancestors { id name description is_virtual drive parent }
+    }
   }
 `);
 

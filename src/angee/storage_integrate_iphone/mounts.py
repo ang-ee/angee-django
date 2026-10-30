@@ -9,9 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, BinaryIO, cast
 
-from django.apps import apps
 from django.core.exceptions import ValidationError
-from rebac import system_context
 
 from angee.integrate_iphone.backup import BackupError, IosBackup, logical_key, split_logical_key
 from angee.storage.exceptions import UploadError
@@ -162,16 +160,3 @@ def _iphone_backup_location(location: MountLocation) -> MountLocation:
         is_mountable=not reason,
         blocked_reason=reason,
     )
-
-
-def backup_root(drive: Any) -> Path | None:
-    """Return the first on-disk backup root exposed by a drive's live Manifest.db."""
-
-    file_model = apps.get_model("storage", "File")
-    with system_context(reason="storage_integrate_iphone.mount.manifest"):
-        manifest = (file_model._base_manager.filter(drive=drive, filename="Manifest.db", is_trashed=False)
-                    .order_by("storage_path").first())
-    if manifest is None:
-        return None
-    local = manifest.local_path()
-    return local.parent if local is not None and local.exists() else None

@@ -9,6 +9,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.db.models import Prefetch, prefetch_related_objects
 from django.urls import reverse
 from graphql import GraphQLError
 from rebac import ObjectRef, PermissionDenied, generic_target, system_context
@@ -16,6 +17,7 @@ from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
+from strawberry_django.optimizer import optimize
 from strawberry_django.utils.requests import get_request
 
 from angee.base.models.identity import instance_from_public_id
@@ -35,7 +37,9 @@ from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
 from angee.iam.permissions import RolePermission
 from angee.storage import exceptions
 from angee.storage.models import File as FileModel
-from angee.storage.models import FileVisibility, UploadState
+from angee.storage.models import FileVisibility
+from angee.storage.models import Folder as FolderModel
+from angee.storage.models import FolderQuerySet, UploadState
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
 Backend = apps.get_model("storage", "Backend")
@@ -90,6 +94,13 @@ class DriveType(AngeeNode):
     owns_items: auto
 
 
+def _folder_ancestors_prefetch(info: strawberry.Info) -> Prefetch:
+    """Optimize the hierarchy owner's readable ancestors with native selection hints."""
+
+    rows = cast("FolderQuerySet[FolderModel]", optimize(Folder.objects.all(), info))
+    return rows.model.ancestors_prefetch(rows, to_attr="_storage_ancestors")
+
+
 @strawberry_django.type(Folder)
 class FolderType(AngeeNode):
     """GraphQL projection of a folder or smart folder."""
@@ -103,6 +114,14 @@ class FolderType(AngeeNode):
 
     drive: strawberry.ID | None = actor_scoped_public_id("drive")
     parent: strawberry.ID | None = actor_scoped_public_id("parent")
+
+    @strawberry_django.field(only=["path"], prefetch_related=[_folder_ancestors_prefetch])
+    def ancestors(self, info: strawberry.Info) -> list[FolderType]:
+        """Readable ancestors in path order; hidden parents contribute no label."""
+
+        if not hasattr(self, "_storage_ancestors"):
+            prefetch_related_objects([cast(FolderModel, self)], _folder_ancestors_prefetch(info))
+        return cast(list[FolderType], cast(Any, self)._storage_ancestors)
 
 
 @strawberry_django.type(File)

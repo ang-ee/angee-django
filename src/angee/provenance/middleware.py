@@ -1,4 +1,4 @@
-"""Request and connection attribution after REBAC actor resolution.
+"""Request and connection attribution with lazy capture of the ambient actor.
 
 Streaming response iteration runs after the request boundary closes; streaming
 writers must open their own changeset around iteration.

@@ -803,3 +803,24 @@ def test_requester_identity_cannot_bypass_round_owner_through_conflict_updates(
             )
     round.refresh_from_db()
     assert round.requester_party_id is None
+
+
+@pytest.mark.parametrize("referenced", (False, True))
+def test_requester_party_delete_uses_native_collector(campaign: ProposalCampaign, referenced: bool) -> None:
+    with system_context(reason="tests.proposals.requester.delete"):
+        party = Person.objects.create(display_name="Disposable requester")
+        round = campaign.round(**({"requester_party": party} if referenced else {}))
+        party.delete()
+        round.refresh_from_db()
+        assert round.requester_party_id is None
+
+
+def test_requester_party_merge_uses_round_identity_owner(campaign: ProposalCampaign) -> None:
+    manager = campaign.person("facilitator")
+    with actor_context(manager), system_context(reason="tests.proposals.requester.merge"):
+        source = Person.objects.create(display_name="Duplicate requester", owner=manager)
+        survivor = Person.objects.create(display_name="Kept requester", owner=manager)
+        round = campaign.round(requester_party=source)
+        survivor.merge(records=[source.public_id])
+        round.refresh_from_db()
+        assert round.requester_party_id == survivor.pk

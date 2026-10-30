@@ -10,6 +10,8 @@
     "changeset": "pnpm dlx @changesets/cli@2.29.7",
     "version-packages": "pnpm run changeset version",
     "release": "pnpm -r --filter './packages/**' --filter '!@angee/storybook' build && pnpm run changeset publish",
+    "generate:form-spec": "pnpm --filter @angee/ui generate:form-spec --schema ../../src/angee/base/schemas/form_spec.schema.json",
+    "check:form-spec": "pnpm generate:form-spec --check",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test"
   }

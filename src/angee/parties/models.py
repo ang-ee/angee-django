@@ -663,21 +663,27 @@ class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataMod
             party_ids=(), handle_ids=(self.pk, *(row.pk for row in merged)),
         )
 
-    def merge_fields(self, merged: Sequence[Any], **options: Any) -> None:
-        """Fill missing contact display/control facts; retain the survivor's choices."""
-
-        super().merge_fields(merged, **options)
+    def merge_values(self, merged: Sequence[Any]) -> dict[str, Any]:
+        """Project missing contact display/control values without writing a fold."""
+        values = {}
         for row in merged:
-            filled = []
             for name in ("controller", "label", "display_name", "is_verified"):
                 field = self._meta.get_field(name)
                 assert isinstance(field, models.Field)
                 attname = field.attname
-                if not getattr(self, attname) and getattr(row, attname):
-                    setattr(self, attname, getattr(row, attname))
-                    filled.append(name)
-            if filled:
-                self.save(using=self._state.db, update_fields=(*filled, "updated_at"))
+                if not values.get(attname, getattr(self, attname)) and getattr(row, attname):
+                    values[attname] = getattr(row, attname)
+        return values
+
+    def merge_fields(self, merged: Sequence[Any], **options: Any) -> None:
+        """Fill missing contact display/control facts; retain the survivor's choices."""
+        super().merge_fields(merged, **options)
+        values = self.merge_values(merged)
+        for name, value in values.items():
+            setattr(self, name, value)
+        if values:
+            self.save(using=self._state.db, update_fields=(*values, "updated_at"))
+        for row in merged:
             if self.avatar_id is None and row.avatar_id is not None:
                 type(self).objects.db_manager(self._state.db).set_avatar(self, row.avatar)
 
