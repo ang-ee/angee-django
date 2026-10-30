@@ -179,7 +179,8 @@ sources_home:
 
 # jj workspace slots (templates/README.md). Each default renders nothing: the
 # operator's vcs default is git, and the src template's slot_mode default is
-# worktree. `stack update --template` does not apply vcs.
+# worktree. `stack update --template` applies vcs from angee 0.26.0, pinning
+# each existing slot's recorded vcs first.
 vcs:
   type: str
   default: git
