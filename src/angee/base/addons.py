@@ -8,7 +8,7 @@ from __future__ import annotations
 import importlib
 import json
 import tomllib
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from importlib import metadata
 from pathlib import Path
 from types import ModuleType
@@ -19,7 +19,7 @@ from urllib.request import url2pathname
 from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django.utils.module_loading import import_string, module_has_submodule
+from django.utils.module_loading import module_has_submodule
 from django_compose.components import InstalledComponents, installed_components
 
 
@@ -100,35 +100,3 @@ def optional_addon_module(
         return importlib.import_module(module_path)
     except ImportError as error:
         raise ImproperlyConfigured(f"{module_path} failed to import") from error
-
-
-def resolve_addon_reference(app_config: AppConfig, dotted: str, *, attr: str) -> Any:
-    """Resolve a capability-owned dotted reference relative to its addon package."""
-
-    if not isinstance(dotted, str):
-        raise ImproperlyConfigured(f"{app_config.name}.{attr} must be a dotted reference")
-    path = dotted if dotted.startswith(f"{app_config.name}.") else f"{app_config.name}.{dotted}"
-    try:
-        return import_string(path)
-    except ImportError as error:
-        raise ImproperlyConfigured(f"{app_config.name}.{attr} references {path!r}") from error
-
-
-def addon_contribution(
-    app_config: AppConfig, module_name: str, attr: str, *, allow_callable: bool = False,
-    index: InstalledComponents | None = None,
-) -> list[Any]:
-    """Return an installed addon's conventional iterable contribution."""
-
-    module = optional_addon_module(app_config, module_name, index=index)
-    if module is None:
-        return []
-    module_path = module.__name__
-    if not hasattr(module, attr):
-        return []
-    contribution = getattr(module, attr)
-    value = contribution() if allow_callable and callable(contribution) else contribution
-    if not isinstance(value, Iterable) or isinstance(value, str | bytes | Mapping | set | frozenset):
-        suffix = "iterable or callable" if allow_callable else "iterable"
-        raise ImproperlyConfigured(f"{module_path}.{attr} must be {suffix}")
-    return list(value)

@@ -16,6 +16,7 @@ from django.apps import AppConfig, apps
 from django.core.exceptions import NON_FIELD_ERRORS, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.utils.functional import cached_property
+from django.utils.module_loading import import_string
 from django_compose.components import InstalledComponents, installed_components
 from rebac import MissingActorError, PermissionDenied
 from rebac.graphql.strawberry import RebacExtension
@@ -32,7 +33,7 @@ from strawberry.types.scalar import ScalarDefinition
 from strawberry.types.union import StrawberryUnion
 from strawberry_django_hasura import hasura_config
 
-from angee.base.addons import addon_facts, is_angee_addon, optional_addon_module, resolve_addon_reference
+from angee.base.addons import addon_facts, is_angee_addon, optional_addon_module
 from angee.base.exceptions import DomainError, classify_error, validation_error
 from angee.base.models.locks import StaleRevisionError
 from angee.base.permissions import require_rebac_queryset
@@ -676,7 +677,14 @@ def _raw_schemas(app_config: AppConfig, *, index: InstalledComponents) -> object
         return None
     facts = addon_facts(app_config.name, "angee.graphql", index=index)
     if "schema" in facts:
-        schemas = resolve_addon_reference(app_config, facts["schema"], attr="graphql.schema")
+        reference = facts["schema"]
+        if not isinstance(reference, str):
+            raise ImproperlyConfigured(f"{app_config.name}.graphql.schema must be a dotted reference")
+        path = reference if reference.startswith(f"{app_config.name}.") else f"{app_config.name}.{reference}"
+        try:
+            schemas = import_string(path)
+        except ImportError as error:
+            raise ImproperlyConfigured(f"{app_config.name}.graphql.schema references {path!r}") from error
     else:
         module = optional_addon_module(app_config, "schema", index=index)
         if module is None or not hasattr(module, "schemas"):
