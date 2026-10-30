@@ -56,11 +56,11 @@ def foundation_classes() -> list[tuple[str, str]]:
 
 
 def addons() -> list[tuple[str, str]]:
-    """Return ``(declared name, repository folder)`` for every framework addon manifest."""
+    """Return native addon entry-point names and folders, excluding library packages."""
     return sorted(
         (name, package.parent.relative_to(ROOT).as_posix())
         for package in ADDONS.glob("*/pyproject.toml")
-        for name in tomllib.loads(package.read_text())["project"]["entry-points"]["angee.addons"]
+        for name in tomllib.loads(package.read_text())["project"].get("entry-points", {}).get("angee.addons", {})
     )
 
 
