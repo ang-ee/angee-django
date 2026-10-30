@@ -29,7 +29,7 @@ Run `angee-design` first for the owner map; `angee-models` and
 | `src/angee/graphql/{node,ids,deletion,capabilities}.py` | `AngeeNode` (`node.py:18`), `instance_for_id`/`require_instance_for_id` (`ids.py:54,68`), `delete_by_public_id`/`attach_delete_preview_metadata` (`deletion.py:334,396`), `permissions_field` (`capabilities.py:135`) | `examples/src/example/notes/schema.py:41-62` |
 | `src/angee/graphql/subscriptions.py`, `apps.py` | `changes:30`; `GraphQLConfig.ready` (`apps.py:22`) registers the schema checks and connects publishers | `src/angee/knowledge/schema.py:845-852` |
 | `src/angee/graphql/sdl.py`, `management/commands/schema.py`, `urls.py` | `GraphQLSdl:27` renders `runtime/schemas/<name>.graphql` + `<name>.metadata.json`; ready-phase `SchemaIntegration` emits through compose; `schema --check` reads; `graphql/<schema_name>/` (`urls.py:11`) | `docs/composer.md#serving` |
-| `packages/app/src/web-codegen.mjs`, `<addon>/web/src/documents*.ts` | Shared `generateWebRuntime:57` emits one `@angee/gql/<name>` per SDL; `documentGlobs:525` selects authored documents by file name; `buildOperationDocuments:529` derives action documents. Vite dev/build and the explicit CLI compose this owner | `src/angee/tags/web/src/documents.ts`, `packages/refine/src/dialect/authored-hooks.tsx:92,213` |
+| `packages/app/src/web-codegen.mjs`, `<addon>/web/src/documents*.ts` | Shared `generateWebRuntime:57` emits one `@angee/gql/<name>` per SDL; `documentGlobs:523` selects authored documents by file name; `buildOperationDocuments:527` derives action documents. Vite dev/build and the explicit CLI compose this owner | `src/angee/tags/web/src/documents.ts`, `packages/refine/src/dialect/authored-hooks.tsx:92,213` |
 
 ## Reuse first
 

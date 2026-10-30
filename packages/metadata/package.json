@@ -10,6 +10,7 @@
   "homepage": "https://docs.angee.ai/react/",
   "files": [
     "dist",
+    "!dist/.tsbuildinfo",
     "README.md",
     "LICENSE"
   ],
