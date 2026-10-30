@@ -7,14 +7,14 @@ from collections.abc import Sequence
 from django.apps import AppConfig
 from django.core import checks
 
-from angee.graphql.schema import GraphQLSchemas
-
 
 def check_graphql_schemas(
     app_configs: Sequence[AppConfig] | None = None,
     **kwargs: object,
 ) -> list[checks.CheckMessage]:
     """Build every named schema and report all invalid compositions."""
+
+    from angee.graphql.schema import GraphQLSchemas
 
     del app_configs, kwargs
     try:

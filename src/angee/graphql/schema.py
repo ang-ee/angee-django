@@ -8,7 +8,7 @@ import threading
 import traceback
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from functools import lru_cache, partial
+from functools import lru_cache
 from typing import Any, ClassVar, cast
 
 import strawberry
@@ -315,9 +315,6 @@ class GraphQLSchemas:
 
         self.addons = tuple(addons)
         self._builds: dict[str, strawberry.Schema] = {}
-        self._model_readable_fields: dict[type[models.Model], frozenset[str]] = {}
-        # Projection resolution calls resources(), which can enter build() while
-        # this same owner is already serializing its first-use cache population.
         self._build_lock = threading.RLock()
 
     @classmethod
@@ -417,66 +414,24 @@ class GraphQLSchemas:
                         raise ValidationError(str(error)) from error
         raise ValidationError(f"{model._meta.label} has no filterable resource.")
 
-    def change_publisher_models(self) -> tuple[type[models.Model], ...]:
-        """Return every model declared into the GraphQL change feed.
+    def render_publishers(self) -> dict[str, list[str]]:
+        """Project server-only feeds and concrete readable fields across named schemas.
 
-        Memoized per instance: the published set is fixed for a process.
+        Final resource metadata retains Django field aliases that public metadata
+        deliberately omits. Build this projection at compose time, never on writes.
         """
 
-        cached: tuple[type[models.Model], ...] | None = getattr(self, "_change_publisher_models", None)
-        if cached is not None:
-            return cached
-        models_by_label: dict[str, type[models.Model]] = {}
-        for schema_name in self.names():
-            parts = self.parts[schema_name]
-            for surface in parts.subscription:
-                for contribution in data_resource_contributions(surface):
-                    if contribution.model is None or "changes" not in contribution.capabilities:
-                        continue
-                    models_by_label[contribution.model._meta.label_lower] = contribution.model
-        result = tuple(models_by_label[label] for label in sorted(models_by_label))
-        self._change_publisher_models = result
-        return result
-
-    def change_publisher_model_labels(self) -> frozenset[str]:
-        """Return lower-case Django labels for models declared into the change feed."""
-
-        return frozenset(model._meta.label_lower for model in self.change_publisher_models())
-
-    def model_readable_fields(self, model: type[models.Model]) -> frozenset[str]:
-        """Return model fields projected readably across every named schema.
-
-        First use builds named schemas as needed to obtain their finalized
-        resources, then memoizes the union for ``model`` on this instance.
-        """
-
-        cached = self._model_readable_fields.get(model)
-        if cached is not None:
-            return cached
-        with self._build_lock:
-            cached = self._model_readable_fields.get(model)
-            if cached is not None:
-                return cached
-            readable = frozenset(
-                field
-                for schema_name in self.names()
-                for resource in self.resources(schema_name)
-                if resource.model is model
-                for field in readable_model_field_names(resource)
-            )
-            self._model_readable_fields[model] = readable
-            return readable
-
-    def connect_change_publishers(self) -> None:
-        """Connect save/delete publishers for every declared change-feed model."""
-
-        from angee.graphql.publishing import connect_publishers
-
-        for model in self.change_publisher_models():
-            connect_publishers(
-                model,
-                readable_fields=partial(self.model_readable_fields, model),
-            )
+        readable: dict[str, set[str]] = {}
+        published: set[str] = set()
+        for name in self.names():
+            for resource in self.resources(name):
+                if resource.model is None:
+                    continue
+                label = resource.model._meta.label_lower
+                readable.setdefault(label, set()).update(readable_model_field_names(resource))
+                if "changes" in resource.capabilities:
+                    published.add(label)
+        return {label: sorted(readable[label]) for label in sorted(published)}
 
     def _build(
         self,

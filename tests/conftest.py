@@ -97,6 +97,21 @@ def standalone_relation(source: type[models.Model], name: str) -> models.Field:
     return type(field)(*args, **(kwargs | {"related_name": "+"}))
 
 
+@pytest.fixture(scope="session", autouse=True)
+def source_change_publishers() -> Iterator[None]:
+    """Wire source-model feeds explicitly; these tests have no compiler receipt."""
+
+    from angee.graphql.publishing import connect_change_publishers, disconnect_publishers
+
+    connected = connect_change_publishers(GraphQLSchemas.from_discovery().render_publishers())
+    try:
+        yield
+    finally:
+        for model in connected:
+            disconnect_publishers(model)
+        connect_change_publishers({})
+
+
 @pytest.fixture
 def composed_tables(composed_tables: None) -> None:
     """The source host's composed tables also carry the declared statement principals.

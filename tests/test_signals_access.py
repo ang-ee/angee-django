@@ -33,6 +33,7 @@ from angee.base.testing.packages import write_addon_distribution
 from angee.graphql import access, publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.data.hasura import hasura_model_resource
+from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.events import ChangePayload
 from angee.graphql.field_types import register_field_type
 from angee.graphql.mixins import ChangeBroadcastMixin
@@ -145,6 +146,10 @@ def test_publisher_parent_views_are_explicit(monkeypatch: pytest.MonkeyPatch, in
             class Meta:
                 app_label = "change_views"
 
+        assert readable_model_field_names(SimpleNamespace(
+            model=Child,
+            fields=(SimpleNamespace(readable=True, model_field_name="name"),),
+        )) == frozenset({"name"})
         sent = []
         monkeypatch.setattr(publishing, "_send_change", lambda model, payload: sent.append((model, payload)))
         with model_tables((Parent, Child)):
@@ -449,10 +454,10 @@ def test_publish_change_robust_receivers_log_and_continue(
 
 
 @pytest.mark.django_db(transaction=True)
-def test_graphql_ready_connects_publishers_without_building_until_partial_save(
+def test_prebuilt_publishers_do_not_build_schemas_on_first_partial_save(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """App ready wires publishers while the first partial save builds field metadata."""
+    """Finalized named-schema aliases become eager fields before any model writes."""
 
     class ReadyPublished(models.Model):
         """Concrete model exposed as a changes-capable resource by a fake discovery."""
@@ -528,9 +533,9 @@ def test_graphql_ready_connects_publishers_without_building_until_partial_save(
         payloads.append(payload)
 
     with model_tables((ReadyPublished,)):
-        from angee.graphql.apps import GraphQLConfig
-
-        monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
+        monkeypatch.setattr(publishing, "_publisher_model_labels", publishing._publisher_model_labels)
+        projection = schemas.render_publishers()
+        monkeypatch.setattr(schemas, "build", lambda *args: pytest.fail("write rebuilt schema"))
         monkeypatch.setattr(publishing, "_broadcast", lambda model, event: None)
         monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
         publishing.disconnect_publishers(ReadyPublished)
@@ -539,10 +544,8 @@ def test_graphql_ready_connects_publishers_without_building_until_partial_save(
             dispatch_uid="tests.graphql_ready_connects_publishers_without_schema_build",
         )
         try:
-            GraphQLConfig("graphql", importlib.import_module("angee.graphql")).ready()
-            assert schemas._builds == {}
+            publishing.connect_change_publishers(projection)
             row = ReadyPublished.objects.create(name="ready")
-            assert schemas._builds == {}
             row.name = "updated"
             row.code = "second"
             row.secret = "still hidden"
@@ -560,10 +563,10 @@ def test_graphql_ready_connects_publishers_without_building_until_partial_save(
         assert tuple(sorted(schemas._builds)) == ("internal", "public")
 
 
-def test_publisher_membership_discovery_does_not_build_or_require_field_registration(
+def test_publisher_projection_waits_for_registered_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The early membership pass reads changes declarations without finalizing fields."""
+    """Compose finalizes publisher resources after app-owned field registration."""
 
     class LateRegisteredDecimalField(models.DecimalField):
         """Value field whose GraphQL type is registered after publisher discovery."""
@@ -603,11 +606,9 @@ def test_publisher_membership_discovery_does_not_build_or_require_field_registra
     prior = field_type_map.pop(LateRegisteredDecimalField, None)
     publishing.disconnect_publishers(LateValuePublished)
     try:
-        assert schemas.change_publisher_models() == (LateValuePublished,)
-        assert schemas._builds == {}
-
         register_field_type(LateRegisteredDecimalField, decimal.Decimal)
         sdl = schemas.build(DEFAULT_SCHEMA_NAME).as_str()
+        assert schemas.render_publishers() == {LateValuePublished._meta.label_lower: []}
     finally:
         publishing.disconnect_publishers(LateValuePublished)
         if prior is None:
@@ -673,22 +674,23 @@ def test_alias_imported_changes_declaration_connects_publisher(
         monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
         from angee.graphql.apps import GraphQLConfig
 
+        monkeypatch.setattr(publishing, "_publisher_model_labels", publishing._publisher_model_labels)
         GraphQLConfig("graphql", importlib.import_module("angee.graphql")).ready()
-
-        assert _receiver_count(post_save, "angee-changes-auth.AliasPublished-save") == 1
-        assert schemas.change_publisher_models() == (AliasPublished,)
         assert schemas._builds == {}
+        publishing.connect_change_publishers(schemas.render_publishers())
+        assert _receiver_count(post_save, "angee-changes-auth.AliasPublished-save") == 1
+        assert schemas.render_publishers() == {AliasPublished._meta.label_lower: []}
     finally:
         publishing.disconnect_publishers(AliasPublished)
         sys.modules.pop(f"{module_name}.schema", None)
         sys.modules.pop(module_name, None)
 
 
-def test_graphql_ready_discovers_declarations_before_later_ready_and_finalizes_on_demand(
+def test_bare_ready_defers_declarations_to_explicit_source_projection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
 ) -> None:
-    """Declarations load at GraphQL ready while resource finalization waits for demand."""
+    """Bare source hosts explicitly project only after all app ready callbacks."""
 
     class LateReadyPublished(models.Model):
         name = models.CharField(max_length=40)
@@ -746,15 +748,14 @@ def test_graphql_ready_discovers_declarations_before_later_ready_and_finalizes_o
 
         GraphQLConfig("graphql", importlib.import_module("angee.graphql")).ready()
 
-        assert module.events == ["schema-import"]
+        assert module.events == []
         assert schemas._builds == {}
-        [resource] = schemas.resources("public")
-        assert tuple(schemas._builds) == ("public",)
-        assert resource.roots.changes_name == "lateReadyPublishedChanged"
-
         addon.ready()
-        assert module.events == ["schema-import", "addon-ready"]
-        assert schemas.resources("public") == (resource,)
+        assert module.events == ["addon-ready"]
+        assert schemas.render_publishers() == {LateReadyPublished._meta.label_lower: []}
+        assert module.events == ["addon-ready", "schema-import"]
+        [resource] = schemas.resources("public")
+        assert resource.roots.changes_name == "lateReadyPublishedChanged"
     finally:
         publishing.disconnect_publishers(LateReadyPublished)
         sys.modules.pop(f"{module_name}.schema", None)
@@ -929,3 +930,13 @@ def test_change_read_gate_keeps_allowed_field_gates(
     assert event.changed_fields == ["name", "secret"]
     assert event.changed_values == {"name": "editors", "secret": "visible"}
     assert actions == ["read", "read__secret"]
+
+
+def test_publisher_projection_validates_before_wiring(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A malformed later entry never leaves earlier signal connections behind."""
+
+    wired = []
+    monkeypatch.setattr(publishing, "connect_publishers", lambda *args, **kwargs: wired.append(args))
+    with pytest.raises(publishing.ImproperlyConfigured, match="model labels and field lists"):
+        publishing.connect_change_publishers({"auth.group": ["name"], "auth.user": "username"})
+    assert wired == []

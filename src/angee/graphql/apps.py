@@ -42,11 +42,17 @@ class GraphQLConfig(AppConfig):
         # Django calls ready() after app population.
         # Base value fields cannot import GraphQL, so their field types register here
         # before any schema resource resolves them.
+        from django.conf import settings
+        from django_compose.serving import mode
+
         from angee.graphql import field_types  # noqa: F401
         from angee.graphql.checks import check_graphql_schemas
-        from angee.graphql.schema import GraphQLSchemas
+        from angee.graphql.publishing import connect_change_publishers
 
         checks.register(check_settings, checks.Tags.models)
 
         checks.register(check_graphql_schemas)
-        GraphQLSchemas.from_discovery().connect_change_publishers()
+        if getattr(settings, "COMPOSE_SNAPSHOT", None) is not None and mode() is None:
+            connect_change_publishers()
+        # Compose connects in SchemaIntegration after all ready callbacks. Bare
+        # source-model hosts wire their explicit projection in test fixtures.

@@ -1542,12 +1542,16 @@ open fresh evaluator scopes for authorization and change-feed reads.
   seam. A verb completing a conditional or bulk write publishes after its
   related rows are ready. `change_batch_targets` may coalesce publications;
   local observers still receive original bulk batches where needed.
-- **Publishers wire during `angee.graphql` app `ready()`, not schema build or
-  schema import.** GraphQL schema modules declare subscription surfaces;
-  `GraphQLSchemas` connects publishers from declared `changes` metadata after
-  model population without constructing schemas. Readable-field projection is
-  resolved only when an observable partial update needs changed values, through
-  that schema owner. Building a schema never mutates process-global signal state.
+- **Publisher wiring reads prebuilt server metadata.** The ready-phase
+  [schema integration](../../src/angee/graphql/sdl.py) emits `schemas/publishers.json`
+  from finalized resources: published model labels and readable concrete fields,
+  unioned across named schemas with aliases and FK attnames preserved. Public
+  resource JSON omits these field origins. Ordinary app `ready()` reads the
+  native receipt-verified artifact and connects eager field sets; startup,
+  partial writes and related-record invalidations never discover addon schemas.
+  Missing or stale output requires compose. Compose wires publishers only after
+  all ready callbacks; bare source-model tests wire the same projection explicitly
+  in their [session fixture](../../tests/conftest.py), without a serving fallback.
 - **Validate every named schema before deploying writer processes.** The GraphQL
   addon's [Django system check](../../src/angee/graphql/checks.py) builds every
   named schema through `GraphQLSchemas` and reports construction failures. It runs
