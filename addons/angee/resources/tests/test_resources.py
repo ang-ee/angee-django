@@ -290,8 +290,8 @@ def test_resource_entries_exclude_settings_declared_entry(tmp_path: Path, settin
             "master": (),
             "install": (),
             "demo": (
-                {"path": "resources/demo/010_iam.user.yaml", "adopt": "username"},
-                {"path": "resources/demo/020_iam.directory_wildcard_reader.yaml", "kind": "grants"},
+                {"path": 'demo/010_iam.user.yaml', "adopt": "username"},
+                {"path": 'demo/020_iam.directory_wildcard_reader.yaml', "kind": "grants"},
             ),
         },
     )
@@ -767,7 +767,7 @@ def test_resource_manager_keeps_same_path_groups_addon_scoped(
         name="tests.alpha",
         label="alpha",
         manifest={
-            "master": ({"path": "resources/010_base.shareduser.csv"},),
+            "master": ({"path": '010_base.shareduser.csv'},),
             "install": (),
             "demo": (),
         },
@@ -778,10 +778,10 @@ def test_resource_manager_keeps_same_path_groups_addon_scoped(
         label="beta",
         manifest={
             "master": (
-                {"path": "resources/010_base.shareduser.csv"},
+                {"path": '010_base.shareduser.csv'},
                 {
-                    "path": "resources/020_base.sharednote.yaml",
-                    "depends_on": "resources/010_base.shareduser.csv",
+                    "path": '020_base.sharednote.yaml',
+                    "depends_on": '010_base.shareduser.csv',
                 },
             ),
             "install": (),
@@ -858,8 +858,8 @@ def test_resource_load_rejects_existing_xref_for_another_model(
     owner = addon(
         tmp_path,
         manifest={
-            "master": ({"path": "resources/010_base.collisionuser.csv"},),
-            "install": ({"path": "resources/020_base.collisionnote.csv"},),
+            "master": ({"path": '010_base.collisionuser.csv'},),
+            "install": ({"path": '020_base.collisionnote.csv'},),
             "demo": (),
         },
     )
@@ -911,7 +911,7 @@ def test_resource_load_moves_a_parent_xref_onto_its_child(tmp_path: Path) -> Non
     )
     owner = addon(tmp_path, manifest={
         "master": (),
-        "install": ({"path": "resources/020_base.movednote.csv"},),
+        "install": ({"path": '020_base.movednote.csv'},),
         "demo": (),
     })
 
@@ -985,7 +985,7 @@ def test_resource_validate_cleans_rows_and_resolves_xrefs(
     owner = addon(
         tmp_path,
         manifest={
-            "master": ({"path": "resources/010_base.validatenote.yaml"},),
+            "master": ({"path": '010_base.validatenote.yaml'},),
             "install": (),
             "demo": (),
         },
@@ -1032,18 +1032,17 @@ def test_resource_adoption_is_opt_in(tmp_path: Path) -> None:
         "master": (),
         "install": (
             {
-                "path": "resources/010_base.adoptuser.csv",
+                "path": "010_base.adoptuser.csv",
                 "adopt": True,
             },
         ),
         "demo": (),
     }
-    owner = addon(tmp_path, manifest=manifest)
     no_adopt = addon(
         tmp_path,
         manifest={
             **manifest,
-            "install": ({"path": "resources/010_base.adoptuser.csv"},),
+            "install": ({"path": '010_base.adoptuser.csv'},),
         },
     )
 
@@ -1058,6 +1057,7 @@ def test_resource_adoption_is_opt_in(tmp_path: Path) -> None:
                 tiers=[Resource.Tier.INSTALL],
             )
 
+        owner = addon(tmp_path, manifest=manifest)
         result = AdoptLedger.objects.load_addons(
             (owner,),
             tiers=[Resource.Tier.INSTALL],
@@ -1112,7 +1112,7 @@ def test_resource_adoption_uses_explicit_unique_field(
             "master": (),
             "install": (
                 {
-                    "path": "resources/010_base.explicitadoptuser.csv",
+                    "path": '010_base.explicitadoptuser.csv',
                     "adopt": "username",
                 },
             ),
@@ -1176,7 +1176,7 @@ def test_resource_adoption_repairs_stale_ledger_target(tmp_path: Path) -> None:
             "master": (),
             "install": (
                 {
-                    "path": "resources/010_base.staleledgeruser.csv",
+                    "path": '010_base.staleledgeruser.csv',
                     "adopt": "username",
                 },
             ),
@@ -1265,7 +1265,7 @@ def test_stale_ledger_pointer_to_wrong_live_row_is_repaired(tmp_path: Path) -> N
             "master": (),
             "install": (
                 {
-                    "path": "resources/010_base.stalepointeruser.csv",
+                    "path": '010_base.stalepointeruser.csv',
                     "adopt": "username",
                 },
             ),
@@ -1353,7 +1353,7 @@ def test_resource_adoption_accepts_composite_unique_fields(tmp_path: Path) -> No
             "master": (),
             "install": (
                 {
-                    "path": "resources/010_base.compositeclient.csv",
+                    "path": '010_base.compositeclient.csv',
                     "adopt": ["slug", "environment"],
                 },
             ),
@@ -1437,7 +1437,7 @@ def test_resource_adoption_accepts_mti_parent_unique_fields(tmp_path: Path) -> N
     )
     owner = addon(tmp_path, manifest={
         "master": (),
-        "install": ({"path": "resources/010_base.childdocument.csv", "adopt": ["vault", "title"]},),
+        "install": ({"path": '010_base.childdocument.csv', "adopt": ["vault", "title"]},),
         "demo": (),
     })
 
@@ -1504,7 +1504,7 @@ def test_resource_adoption_accepts_a_single_conditional_unique_field(tmp_path: P
             "master": (),
             "install": (
                 {
-                    "path": "resources/010_base.conditionalkeyrow.csv",
+                    "path": '010_base.conditionalkeyrow.csv',
                     "adopt": "key",
                 },
             ),
@@ -1579,7 +1579,7 @@ def test_resource_adoption_rejects_ambiguous_conditional_key_matches(tmp_path: P
             "master": (),
             "install": (
                 {
-                    "path": "resources/010_base.ambiguousconditionalkeyrow.csv",
+                    "path": '010_base.ambiguousconditionalkeyrow.csv',
                     "adopt": "key",
                 },
             ),
@@ -1641,7 +1641,7 @@ def test_resource_adoption_rejects_an_uncovered_string_field(tmp_path: Path) -> 
             "master": (),
             "install": (
                 {
-                    "path": "resources/010_base.uncoveredadoptrow.csv",
+                    "path": '010_base.uncoveredadoptrow.csv',
                     "adopt": "key",
                 },
             ),
@@ -1720,17 +1720,17 @@ def test_resource_adoption_accepts_conditional_composite_unique_fields(tmp_path:
             "master": (),
             "install": (
                 {
-                    "path": "resources/010_base.conditionalowner.csv",
+                    "path": '010_base.conditionalowner.csv',
                     "adopt": "username",
                 },
                 {
-                    "path": "resources/010_base.conditionalcredential.csv",
-                    "depends_on": "resources/010_base.conditionalowner.csv",
+                    "path": '010_base.conditionalcredential.csv',
+                    "depends_on": '010_base.conditionalowner.csv',
                     "adopt": ["user", "name"],
                 },
                 {
-                    "path": "resources/020_base.conditionalcredential.csv",
-                    "depends_on": "resources/010_base.conditionalcredential.csv",
+                    "path": '020_base.conditionalcredential.csv',
+                    "depends_on": '010_base.conditionalcredential.csv',
                     "adopt": ["user", "name"],
                 },
             ),
@@ -1809,7 +1809,7 @@ def test_resource_adoption_rejects_ambiguous_unique_fields(
             "master": (),
             "install": (
                 {
-                    "path": "resources/010_base.ambiguousadoptuser.csv",
+                    "path": '010_base.ambiguousadoptuser.csv',
                     "adopt": True,
                 },
             ),
@@ -1994,8 +1994,8 @@ def test_grant_fixtures_load_and_are_idempotent(tmp_path: Path, monkeypatch: Any
                 target_model=user_model._meta.label,
                 target_id=alice.public_id,
             )
-        grants_dir = tmp_path / "grants"
-        grants_dir.mkdir()
+        grants_dir = tmp_path / "resources" / "grants"
+        grants_dir.mkdir(parents=True)
         (grants_dir / "010_demo.yaml").write_text(
             '- resource: "storage/role:storage_admin"\n'
             '  relation: "member"\n'
@@ -2087,11 +2087,12 @@ def test_row_dependency_on_grant_is_applied_before_validation(tmp_path: Path) ->
             app_label = "base"
             abstract = False
 
-    (tmp_path / "grants.yaml").write_text(
+    (tmp_path / "resources").mkdir()
+    (tmp_path / "resources" / "grants.yaml").write_text(
         '- resource: "storage/drive:ordered-drive"\n'
         '  relation: "editor"\n  subject: "auth/user:*"\n', encoding="utf-8",
     )
-    rows_path = tmp_path / "010_base.grantdependentrow.csv"
+    rows_path = tmp_path / "resources" / "010_base.grantdependentrow.csv"
     rows_path.write_text("_xref,title\ndependent,invalid\n", encoding="utf-8")
     owner = addon(tmp_path, manifest={"master": (), "install": (), "demo": (
         {"path": rows_path.name, "depends_on": "grants.yaml"},
@@ -2306,8 +2307,8 @@ def test_mti_grants_follow_ancestor_relation_contract(
     # Xref resolution and real MTI identity enumeration are covered by the
     # integration test above; exercise distinct native relation contracts here.
     monkeypatch.setattr(grants, "backend", lambda: active)
-    monkeypatch.setattr(grants, "_resolve_resource_refs", lambda *args: [child, parent])
-    monkeypatch.setattr(grants, "_resolve_subject", lambda *args: subject)
+    monkeypatch.setattr(grants, "_resolve_resource_refs", lambda *args, using: [child, parent])
+    monkeypatch.setattr(grants, "_resolve_subject", lambda *args, using: subject)
     row = GrantRow(
         entry=entry(tmp_path, {"path": "grants/demo.yaml", "kind": "grants"}),
         resource="resource_addon.child", relation="reviewer", subject="iam.reader", index=1,
@@ -2338,8 +2339,8 @@ def test_invalid_explicit_mti_grant_still_fails_native_validation(
     """), backend=active)
     child, parent = ObjectRef("mtidemo/child", "1"), ObjectRef("mtidemo/parent", "1")
     monkeypatch.setattr(grants, "backend", lambda: active)
-    monkeypatch.setattr(grants, "_resolve_resource_refs", lambda *args: [child, parent])
-    monkeypatch.setattr(grants, "_resolve_subject", lambda *args: SubjectRef.of("auth/user", "2"))
+    monkeypatch.setattr(grants, "_resolve_resource_refs", lambda *args, using: [child, parent])
+    monkeypatch.setattr(grants, "_resolve_subject", lambda *args, using: SubjectRef.of("auth/user", "2"))
     row = GrantRow(
         entry=entry(tmp_path, {"path": "grants/demo.yaml", "kind": "grants"}),
         resource="resource_addon.child", relation="unknown", subject="iam.reader", index=1,
@@ -2373,8 +2374,8 @@ def _write_resource_files(tmp_path: Path) -> AppConfig:
         tmp_path,
         manifest={
             "master": (
-                {"path": "resources/010_base.importuser.csv"},
-                {"path": "resources/020_base.importnote.yaml"},
+                {"path": '010_base.importuser.csv'},
+                {"path": '020_base.importnote.yaml'},
             ),
             "install": (),
             "demo": (),
@@ -2437,7 +2438,8 @@ def _content_type_seed(tmp_path: Path, rows: list[dict[str, Any]]) -> AppConfig:
     """Write one ``ContentTypeRow`` seed and return the addon that owns it."""
 
     payload = {"_meta": {"model": ContentTypeRow._meta.label}, "rows": rows}
-    (tmp_path / "rows.yaml").write_text(yaml.safe_dump(payload), encoding="utf-8")
+    (tmp_path / "resources").mkdir(exist_ok=True)
+    (tmp_path / "resources" / "rows.yaml").write_text(yaml.safe_dump(payload), encoding="utf-8")
     return addon(tmp_path, manifest={"master": ({"path": "rows.yaml"},)})
 
 

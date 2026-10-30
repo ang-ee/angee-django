@@ -14,7 +14,9 @@ def test_bootstrap_admin_creates_platform_admin(monkeypatch: Any) -> None:
     manager = _Manager()
     _patch_command_owners(monkeypatch, manager)
 
-    bootstrap_admin.Command().handle(username="root", email="root@example.com", password="first-secret")
+    bootstrap_admin.Command().handle(
+        database="default", username="root", email="root@example.com", password="first-secret",
+    )
 
     user = manager.user
     assert user is not None
@@ -36,7 +38,7 @@ def test_bootstrap_admin_promotes_existing_user_without_resetting_password(monke
     manager = _Manager(existing)
     _patch_command_owners(monkeypatch, manager)
 
-    bootstrap_admin.Command().handle(username=None, email=None, password="generated-secret")
+    bootstrap_admin.Command().handle(database="default", username=None, email=None, password="generated-secret")
 
     assert existing.email == "admin@example.com"
     assert existing.is_active is True
@@ -52,7 +54,7 @@ def _patch_command_owners(monkeypatch: Any, manager: "_Manager") -> None:
 
     _User._default_manager = manager
     monkeypatch.setattr(bootstrap_admin, "get_user_model", lambda: _User)
-    monkeypatch.setattr(bootstrap_admin.transaction, "atomic", lambda: nullcontext())
+    monkeypatch.setattr(bootstrap_admin.transaction, "atomic", lambda *, using: nullcontext())
     monkeypatch.setattr(bootstrap_admin, "system_context", lambda *, reason: nullcontext())
     monkeypatch.setattr(
         bootstrap_admin,
@@ -72,6 +74,10 @@ class _Manager:
         self.user = user
         self.system_reason: str | None = None
         self.granted_user: _User | None = None
+
+    def db_manager(self, using: str) -> "_Manager":
+        assert using == "default"
+        return self
 
     def system_context(self, *, reason: str) -> "_QuerySet":
         """Record the system-scope reason and return this manager."""
@@ -134,7 +140,7 @@ class _User:
 
         self.password = password
 
-    def save(self, *, update_fields: list[str]) -> None:
+    def save(self, *, using: str, update_fields: list[str]) -> None:
         """Record the updated fields."""
 
         self.saved_update_fields = update_fields

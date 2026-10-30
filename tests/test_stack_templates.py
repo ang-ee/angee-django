@@ -731,7 +731,8 @@ def test_local_stack_copier_contract() -> None:
 
     message = manifest["_message_after_copy"]
     assert "git clone https://github.com/ang-ee/angee-django sources/angee" in message
-    assert "sources/angee/examples/addons" in message
+    assert "declaring its distribution and native source override" in message
+    assert "enabling example.notes" in message
     assert "angee dev" in manifest["_message_after_copy"]
     # The CLI shell recipe reads the token through the secrets backend owner —
     # never by hand-parsing .env, whose values are quoted.
@@ -1898,8 +1899,13 @@ def test_production_serve_workers_use_configured_app_cpu_count_and_reject_one(
     settings.ASGI_APPLICATION = application
     started: list[dict[str, Any]] = []
     monkeypatch.setattr(serve.os, "cpu_count", lambda: 8)
-    monkeypatch.setattr(serve.uvicorn, "run", lambda app, **kwargs: started.append({"app": app, **kwargs}))
-    options = {"workers": 0, "production": True, "host": "0.0.0.0", "port": 8000, "forwarded_allow_ips": "10.0.0.2"}
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: started.append({"app": app, **kwargs}))
+    options = {
+        "require_provisioned": False, "workers": 0, "production": True, "host": "0.0.0.0",
+        "port": 8000, "forwarded_allow_ips": "10.0.0.2",
+    }
     serve.Command().handle(**options)
     module, _, attribute = application.rpartition(".")
     assert started[0]["app"] == f"{module}:{attribute}"

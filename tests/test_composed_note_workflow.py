@@ -9,8 +9,8 @@ import sys
 from pathlib import Path
 
 from django.db import connection
+from django_compose.addons import installed_addons
 
-from hatch_angee import discover
 from tests.composed_host import COMPOSED_TEST_TIMEOUT
 
 
@@ -23,7 +23,7 @@ def test_composed_note_workflow(tmp_path: Path) -> None:
     env = dict(os.environ)
     env.pop("DJANGO_SETTINGS_MODULE", None)
     apps = sorted(
-        manifest.name for _, manifest in discover([root / "addons", root / "examples" / "addons"])
+        installed_addons("angee.addons").providers
     )
     result = subprocess.run(
         [

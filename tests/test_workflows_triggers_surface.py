@@ -271,6 +271,7 @@ def test_integration_grant_uses_record_label_in_preview_and_listing(trigger_surf
         assert listed == [{"relation": "reader", "relation_label": "Reader", "target_label": label}]
 
 
+@pytest.mark.django_db
 def test_relation_label_humanizes_an_undeclared_display_name() -> None:
     """A relation without a native label still has a readable grant caption."""
 
@@ -471,14 +472,15 @@ def test_resource_installs_trigger_disabled(trigger_surface, tmp_path, execution
     source = "100_workflows.trigger.yaml"
     workflow_source = "000_workflows.workflow.yaml"
     owner = make_addon(path=tmp_path, resources={"demo": [{"path": workflow_source}, {"path": source}]})
-    (tmp_path / workflow_source).write_text(yaml.safe_dump({"rows": [{"xref": "graph", "fields": {
+    (tmp_path / "resources").mkdir()
+    (tmp_path / "resources" / workflow_source).write_text(yaml.safe_dump({"rows": [{"xref": "graph", "fields": {
         "key": "installed-trigger-workflow", "name": workflow.name, "draft": document("entry"),
     }}]}))
     fields = {
         "workflow": f"{owner.name}.graph", "source": "record_changed", "model_label": "knowledge.vault",
         "condition": {}, "enabled": True,
     }
-    (tmp_path / source).write_text(yaml.safe_dump({"rows": [{"xref": "trigger", "fields": fields}]}))
+    (tmp_path / "resources" / source).write_text(yaml.safe_dump({"rows": [{"xref": "trigger", "fields": fields}]}))
     result = Resource.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
     assert result.created == 2
     trigger = Trigger.system_queryset().get()
@@ -488,7 +490,7 @@ def test_resource_installs_trigger_disabled(trigger_surface, tmp_path, execution
     assert unchanged.skipped == 2
     assert Trigger.system_queryset().get(pk=trigger.pk).enabled
     fields["condition"] = {"name": {"_eq": "Ready"}}
-    (tmp_path / source).write_text(yaml.safe_dump({"rows": [{"xref": "trigger", "fields": fields}]}))
+    (tmp_path / "resources" / source).write_text(yaml.safe_dump({"rows": [{"xref": "trigger", "fields": fields}]}))
     replaced = Resource.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
     assert replaced.updated == 1
     trigger = Trigger.system_queryset().get(pk=trigger.pk)

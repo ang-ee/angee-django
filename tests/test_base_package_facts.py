@@ -32,13 +32,13 @@ def _distribution(tmp_path: Path, document: str, *, editable: bool = False) -> m
 def test_read_disabled_third_party_capability_from_native_record_or_editable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, editable: bool,
 ) -> None:
-    distribution = _distribution(tmp_path, '''
+    _distribution(tmp_path, '''
 [tool.acme.billing]
 currency = "EUR"
 [tool.angee.platform]
 category = "invoicing"
 ''', editable=editable)
-    monkeypatch.setattr(metadata, 'distributions', lambda: iter((distribution,)))
+    monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setattr(importlib, 'import_module', lambda *args, **kwargs: pytest.fail('disabled addon imported'))
     assert addon_facts('acme.invoice', 'acme.billing') == {'currency': 'EUR'}
     assert addon_facts('acme.invoice', 'angee.platform') == {'category': 'invoicing'}
@@ -47,8 +47,8 @@ category = "invoicing"
 
 
 def test_malformed_capability_is_rejected_at_reader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    distribution = _distribution(tmp_path, '[tool.acme]\nbilling = "wrong"\n')
-    monkeypatch.setattr(metadata, 'distributions', lambda: iter((distribution,)))
+    _distribution(tmp_path, '[tool.acme]\nbilling = "wrong"\n')
+    monkeypatch.syspath_prepend(str(tmp_path))
     with pytest.raises(ImproperlyConfigured, match='tool.acme.billing must be a TOML table'):
         addon_facts('acme.invoice', 'acme.billing')
 

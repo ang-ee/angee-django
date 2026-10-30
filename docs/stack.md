@@ -42,6 +42,7 @@ into a remote permission store.
 | Pick | Owns | Angee adds |
 |---|---|---|
 | Python >= 3.14 | Runtime and typing | Project conventions |
+| tomlkit >= 0.13 | TOML authoring that preserves fixture document structure | The [base testing extra](../addons/angee/base/pyproject.toml) declares it for native addon distribution fixtures in `angee.base.testing.packages`; production package reads use native `tomllib` |
 | packaging | PEP 508 requirement parsing/markers and distribution-name normalization | The native compiler projects active requirements onto declared addon entry points; `extra=""` selects activation edges |
 | tldextract >= 5.3, < 6 | Public Suffix List registrable-domain parsing, including private suffixes | Bundled PSL snapshot with request-time networking disabled |
 | Django >= 6.1.2, < 6.2 | ORM, migrations, admin, auth contract, app registry, response security headers (`SecurityMiddleware`, `ContentSecurityPolicyMiddleware` with per-view `csp_override`) | Abstract bases and build-time composition into runtime apps; the optional server addon installs both security middlewares. [`base.expressions`](../addons/angee/base/expressions.py) supplies an ordered JSON subquery across PostgreSQL/SQLite and adapts Django's text SHA256 to PostgreSQL's built-in digest without requiring pgcrypto. |

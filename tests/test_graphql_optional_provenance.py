@@ -16,8 +16,7 @@ def test_graphql_native_crud_does_not_load_optional_provenance(tmp_path: Path) -
     (addon / "models.py").write_text('''from django.db import models
 from angee.base.models.base import AngeeDataModel
 
-class Widget(AngeeDataModel):
-    runtime = True
+class Widget(AngeeDataModel, concrete=True):
     sqid_prefix = "ngq_"
     title = models.CharField(max_length=80)
     class Meta:

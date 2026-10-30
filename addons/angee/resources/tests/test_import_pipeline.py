@@ -129,8 +129,9 @@ def test_native_import_pipeline_rolls_back_all_groups_grants_and_hooks(
         },
     ]
     grant = {"resource": "iam/directory:main", "relation": "reader", "subject": "resource_addon.user"}
-    data_path = tmp_path / "data.json"
-    grant_path = tmp_path / "grants.json"
+    (tmp_path / "resources").mkdir()
+    data_path = tmp_path / "resources" / "data.json"
+    grant_path = tmp_path / "resources" / "grants.json"
     data_path.write_text(json.dumps({"rows": rows}))
     grant_path.write_text(json.dumps([grant]))
     owner = addon(

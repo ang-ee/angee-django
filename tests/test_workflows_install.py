@@ -46,8 +46,9 @@ def _extensible_document() -> dict[str, Any]:
 def _write_workflow(path: Path, draft: dict[str, Any]) -> str:
     """Write one base workflow resource and return its relative source."""
 
+    (path / "resources").mkdir(exist_ok=True)
     source = "100_workflows.workflow.yaml"
-    (path / source).write_text(yaml.safe_dump({"rows": [{
+    (path / "resources" / source).write_text(yaml.safe_dump({"rows": [{
         "xref": "extensible",
         "fields": {"key": "extensible", "name": "Extensible", "draft": draft},
     }]}))
@@ -59,10 +60,11 @@ def _extension_addon(tmp_path: Path):
 
     path = tmp_path / "consumer"
     path.mkdir()
+    (path / "resources").mkdir()
     source = "100_workflows.workflowextension.yaml"
     copyfile(
         Path(__file__).parent / "extcontrib/resources/install" / source,
-        path / source,
+        path / "resources" / source,
     )
     return make_addon(
         name="tests.workflow_extension_consumer",
@@ -183,7 +185,7 @@ def test_resource_composes_extensions_without_editing_the_base_draft(
     loaded.refresh_from_db()
     assert loaded.published_id == first_version and replay.skipped == 1
 
-    extension_path = Path(consumer.path) / "100_workflows.workflowextension.yaml"
+    extension_path = Path(consumer.path) / "resources" / "100_workflows.workflowextension.yaml"
     changed = yaml.safe_load(extension_path.read_text())
     changed["rows"][0]["nodes"]["contributed_review"]["label"] = "Changed contribution"
     extension_path.write_text(yaml.safe_dump(changed))
@@ -230,8 +232,9 @@ def test_resource_fails_fast_on_unknown_points_and_node_collisions(
         path=base_path,
         resources={"demo": [{"path": _write_workflow(base_path, _extensible_document())}]},
     )
+    (consumer_path / "resources").mkdir()
     source = "100_workflows.workflowextension.yaml"
-    (consumer_path / source).write_text(yaml.safe_dump({"rows": [{
+    (consumer_path / "resources" / source).write_text(yaml.safe_dump({"rows": [{
         "extends": "extensible",
         "at": at,
         "nodes": {node_key: {"step": "install_probe"}},
@@ -264,7 +267,8 @@ def test_resource_row_installs_one_document_and_reuses_its_hash(
     if publish is not None:
         fields["publish"] = publish
     source = "100_workflows.workflow.yaml"
-    (tmp_path / source).write_text(yaml.safe_dump({"rows": [{"xref": "graph", "fields": fields}]}))
+    (tmp_path / "resources").mkdir(exist_ok=True)
+    (tmp_path / "resources" / source).write_text(yaml.safe_dump({"rows": [{"xref": "graph", "fields": fields}]}))
     owner = make_addon(path=tmp_path, resources={"demo": [{"path": source}]})
     result = Resource.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
     assert result.created == 1

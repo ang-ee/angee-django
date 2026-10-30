@@ -114,7 +114,7 @@ def test_autodetected_table_drop_lets_rows_its_retiring_addon_seeded_go(monkeypa
     owner = apps.get_app_config("resources")
     seeded = retired._base_manager.create()
     seed_ledger("probe.Retired", public_id(seeded), addon=owner.name)
-    refused = r"probe\.retired: table probe_retired holds data in 1 row\(s\)"
+    refused = r"probe\.retired: probe_retired\.\* holds data in 1 rows"
     with pytest.raises(CommandError, match=refused):  # No addon vouches for the row yet.
         DropGuardAutodetector(history, current).changes(graph=graph)
 

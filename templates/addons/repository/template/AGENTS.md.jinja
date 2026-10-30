@@ -1,9 +1,8 @@
 # AGENTS.md
-
 This repository holds the **Angee consumer addons** of {{ repository_title }}:
 `addons/{{ addon_namespace }}/<name>` is the `{{ addon_namespace }}.<name>` addon. It
 is a source slot the owning stack materializes, not a stack or a Django project.
-This repository owns its root uv workspace and addon distribution metadata in
+It owns its root uv workspace and addon distribution metadata in
 `pyproject.toml`. The stack owns `angee.yaml`, application `settings.yaml` and
 `manage.py`, the running Python and JS environments, composition, migrations,
 SDL and codegen. Never run `angee init` or `pnpm install` here, or synchronize the
@@ -19,8 +18,8 @@ These rules are its consumer application, not a second set:
 
 - **Declared seams only.** An addon composes the framework through `pyproject.toml`
   (`[project].dependencies` for requirements and capability-owned tool tables),
-  models on `angee.base` bases, `permissions.zed`
-  and `permissions.extends.zed`, `schema.py` buckets with type and input
+  models on `angee.base` bases, `permissions.zed` and `permissions.extends.zed`,
+  `schema.py` buckets with type and input
   extensions, `resources/<tier>/` rows, `autoconfig.py` fragments,
   `ImplClassField` implementations, and a `web/` fragment declared with
   `defineBaseAddon`.
