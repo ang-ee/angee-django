@@ -259,12 +259,13 @@ jobs:
         exec uv sync --locked{% if effective_serve_mode == "production" %} --no-editable{% endif %}; fi;
         exec "{{ job_dollar }}UV_PROJECT_ENVIRONMENT/bin/python" -m angee.platform_integrate_operator.preflight{% if effective_serve_mode == "production" %} --no-editable{% endif %}
         -- "{{ job_dollar }}ANGEE_DEPENDENCY_ACTION" "{{ job_dollar }}ANGEE_DEPENDENCY_REQUIREMENT"
-    holds: [django, celery-worker{% if celery_queues %}, celery-queues{% endif %}]
+    holds: &python-consumers [django, celery-worker{% if celery_queues %}, celery-queues{% endif %}]
 {% if stack_flavor == "framework" %}    depends_on: [deps]
 {% endif %}
   compose:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
     command: ["uv", "run", "--no-sync", "python", "manage.py", "compose"]
+    holds: *python-consumers
     depends_on: [py-sync]
 
   provision:
