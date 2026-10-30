@@ -270,7 +270,7 @@ def reset_migration_history_report() -> dict[str, Any]:
     from django.db.migrations.recorder import MigrationRecorder
     from django.db.migrations.state import ProjectState
     from django.utils.module_loading import module_dir
-    from django_compose.migrations import TransitionBinding, reset_migration_history
+    from django_compose.migrations import reset_migration_history
     from django_compose.serving import read_receipt, verify
 
     receipt = read_receipt(settings.COMPOSE_OUTPUT_DIR)
@@ -409,7 +409,6 @@ def reset_migration_history_report() -> dict[str, Any]:
         "plan_empty": executor.migration_plan(targets) == [],
         "changes_empty": changes == {},
         "runtime_check": True,
-        "declarations": len(TransitionBinding(labels=labels).declarations),
         "alpha_dependencies": alpha.dependencies,
         "command_output": output.getvalue().splitlines(),
     }

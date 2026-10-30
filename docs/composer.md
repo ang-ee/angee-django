@@ -60,7 +60,7 @@ Custom integrations consume `django_compose.components` and
 | Angee package data and optional modules | [`angee.base.addons`](../src/angee/base/addons.py) reads packaged `[tool.angee.*]` tables through the native installed index and discovers optional addon modules; capability owners interpret their declarations |
 | Source declarations, model composition and collision checks | `django_compose.models.Composable`, `model_composition`, and Django |
 | Build/check publication, artifact receipt and serving verification | `django_compose.build`, `artifacts` and `serving` |
-| Migration binding, drop guards and retained history | `django_compose.migrations` and native Django migration commands |
+| Native migration safeguards and retained history | `django_compose.migrations` and native Django migration commands |
 | REBAC projection and additive schema fragments | [`PermissionIntegration`](../src/angee/base/build.py) |
 | Source-local catalogue facts and resource retirement exemptions | [`CatalogueIntegration`](../src/angee/resources/build.py) |
 | Web manifest and Tailwind projection | [`WebIntegration`](../src/angee/web/build.py) |
@@ -175,48 +175,33 @@ and artifact rendering. Register dotted integration classes in
 owns deterministic publication and receipt checking. Serving code consumes
 published results and never imports an addon build adapter.
 
-### Addon-owned runtime migrations
+### Project migration history
 
-An addon may supply a self-contained Django transition at
-`compose_migrations/<app_label>/<name>.py`, outside conventional `migrations/`.
-Its native `Migration` and pure `applies(ProjectState)` guard are compiler
-inputs. The source label, name and exact body are durable identities; ordering
-comes from Django dependencies and `run_before`, not filename order.
+Each project owns ordinary Django migration files in
+`runtime/<app_label>/migrations/`. Compose preserves that history and emits models;
+native `makemigrations` compares the generated model state with the retained
+history. Review and commit schema changes before provisioning.
 
-After compose, native `makemigrations` binds applicable transitions and authors
-remaining changes. Review and commit the resulting native history. Copied bodies,
-origin fingerprints and released names remain immutable. A false guard cannot
-prove a data-only backfill ran. Partially upgraded deployments retain the original
-chain. For a newly authored final-schema baseline, an addon owner may explicitly
-declare that a particular transition is already satisfied:
+Data upgrades use native `RunPython` or `RunSQL` operations with explicit Django
+dependencies. Use the historical `apps` registry and the schema editor's database
+alias. Addon releases describe required data upgrades; the project authors them
+against its own retained history. Fresh installations need only their applicable
+initialization, not completed upgrades from older deployments.
 
-```toml
-[tool.angee.migrations.initial_baseline]
-stage_fractional_position = "satisfied"
-```
-
-This is a promise about the baseline, including databases adopted later with
-Django's `--fake-initial`; table existence alone does not prove it. Base's eager
-settings callback annotates `django_compose.snapshot.discover_transitions` records
-from the resolved closure. The compiler seals an inapplicable opted-in transition
-as a native no-op history node, preserving its origin and source hash. Applicable
-bootstrap/backfill work still runs; undeclared or ambiguous skips still fail.
-Unknown transition names fail configuration. An explicit project
-`COMPOSE_TRANSITION_SOURCE` remains authoritative. Do not edit a released source
-migration to express this promise; retire its declaration when the transition is
-retired under the native history policy.
-
-For a retained initial migration that already satisfies the owner declaration,
-use native `adopt_transition` explicitly. This attests that the named baseline
-is covered by that declaration; the compiler does not infer historical data
-completion from a false guard. Dry-run first, then review and commit the appended
-empty origin alongside ordinary schema migrations. Existing files remain intact,
-and native `migrate` applies and records the new node.
+The django-compose 0.1 migration cutoff removes transition discovery, baseline
+assertions and adoption. Remove `COMPOSE_TRANSITION_SOURCE` from project settings
+and `[tool.angee.migrations.initial_baseline]` from package metadata. Previously
+shipped `compose_migrations/` files are historical upgrade assets, not compiler
+inputs. Before upgrading an existing project, inventory pending data operations
+and author any still required into its native history. Retained materialized
+migrations continue as ordinary Django files; preserve their bytes and required
+Python imports. Do not create empty origins to certify work already represented
+by the project's native history.
 
 `MIGRATION_MODULES` is Django's routing contract. The compiler preserves tracked
 histories, including history-only apps whose source addon has been removed.
 Read-only checks never author missing packages. A disabled migration mapping
-cannot receive an authored transition or a history reset.
+cannot receive authored migrations or a history reset.
 
 The native drop guard refuses autodetected removal of populated storage.
 Declare a reviewed data cutover when retiring data. Resources' retirement policy

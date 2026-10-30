@@ -15,6 +15,3 @@ master = ["master/010_uom.uomcategory.yaml", {path = "master/020_uom.uom.yaml", 
 
 [tool.angee.platform]
 category = "Foundation"
-
-[tool.angee.migrations.initial_baseline]
-preflight_unit_constraints = "satisfied"

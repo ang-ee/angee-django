@@ -76,8 +76,9 @@ wires declarations only; the reference example throughout is `examples/src/examp
    permission paths belong to `AppConfig.rebac_schema`. MCP uses its Python
    contribution owner rather than redundant tool metadata. Resource paths are
    relative to `resources/`; the resource owner preserves canonical ledger paths.
-   Native upgrade sources live at `compose_migrations/<label>/<name>.py`, outside
-   Django's conventional `migrations/`. Web identity and external codegen belong
+   Describe required data upgrades for existing projects; projects author them
+   in native `runtime/<label>/migrations/` with explicit dependencies. Web identity
+   and external codegen belong
    to `web/package.json` (`name`, `angee.codegen`).
    **Owner rule:** package metadata owns requirements, capability owners interpret
    their tool tables, and Django owns app lifecycle

@@ -192,5 +192,5 @@ new file and rows; `resources load` creates the rows and a second run reports 0 
 
 - [Resource pitfalls](references/pitfalls.md)
 - [Resource loading](../../../docs/backend/guidelines.md#resource-loading), [Composition owners](../../../docs/backend/guidelines.md#composition-owners), [Migration history](../../../docs/backend/guidelines.md#migration-history)
-- [Addon declarations](../../../docs/composer.md#addon-declarations), [Addon-owned runtime migrations](../../../docs/composer.md#addon-owned-runtime-migrations)
+- [Addon declarations](../../../docs/composer.md#addon-declarations), [Project migration history](../../../docs/composer.md#project-migration-history)
 - [Composition and schema](../../../docs/checks.md#composition-and-schema), [Glossary: Resource file](../../../docs/glossary.md#backend); skills `angee-addon`, `angee-models`, `angee-permissions`, `angee-tests`, `slice`
