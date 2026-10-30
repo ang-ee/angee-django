@@ -5,7 +5,7 @@ from celery import Celery
 from celery.worker import WorkController, components
 from django.core.management.base import CommandError
 
-import angee.base
+from angee.jobs import bootsteps
 from angee.jobs.bootsteps import RequireProvisioned
 
 
@@ -20,7 +20,7 @@ def test_provision_failure_aborts_blueprint_initialization(monkeypatch):
         assert kwargs == {'using': 'default', 'timeout': 60}
         raise CommandError('provision record is in_progress')
 
-    monkeypatch.setattr(angee.base, 'require_provisioned', refuse, raising=False)
+    monkeypatch.setattr(bootsteps, 'require_provisioned', refuse)
     app = Celery('readiness-gate', broker='memory://', fixups=[])
     app.steps['worker'].add(RequireProvisioned)
     try:

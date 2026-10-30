@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from graphlib import CycleError, TopologicalSorter
 from importlib import metadata
 from typing import Any
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db.models import TextChoices
-from django_compose.addons import InstalledAddons, installed_addons
+from django_compose.components import InstalledComponents, active_requirements, installed_components
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
@@ -47,10 +46,10 @@ def catalogue_category(value: object) -> str:
     )
 
 
-def installed_entry_points() -> dict[str, metadata.EntryPoint]:
+def installed_entry_points(*, index: InstalledComponents | None = None) -> dict[str, metadata.EntryPoint]:
     """Project the native provider index into catalogue app identities."""
 
-    index = installed_addons("angee.addons")
+    index = installed_components("angee.addons") if index is None else index
     return {app: index.entry_points[provider] for app, provider in sorted(index.providers.items())}
 
 
@@ -87,8 +86,6 @@ def _requirement_apps(requirements: Iterable[Requirement], identities: Mapping[s
 def requirement_addons(requirements: Iterable[str], identities: Mapping[str, str]) -> tuple[str, ...]:
     """Resolve catalogue requirements through the native extra-free marker owner."""
 
-    from django_compose.addons import active_requirements
-
     return _requirement_apps(active_requirements(requirements), identities)
 
 
@@ -122,7 +119,7 @@ def facts_from_toml(
     if not isinstance(provider, str) or not provider:
         raise ImproperlyConfigured("An addon project must declare its distribution name")
     if dependencies is None:
-        index = installed_addons("angee.addons")
+        index = installed_components("angee.addons")
         dependencies = {provider: app for app, provider in index.providers.items()}
     requirements = tuple(project.get("dependencies", ()))
     return {
@@ -134,11 +131,11 @@ def facts_from_toml(
 
 
 def facts_from_distribution(
-    distribution: metadata.Distribution, *, index: InstalledAddons | None = None,
+    distribution: metadata.Distribution, *, index: InstalledComponents | None = None,
 ) -> dict[str, Any]:
     """Use native METADATA and package platform facts without loading a disabled app."""
 
-    index = installed_addons("angee.addons") if index is None else index
+    index = installed_components("angee.addons") if index is None else index
     provider = canonicalize_name(distribution.metadata["Name"])
     if provider not in index.entry_points:
         return {}
@@ -162,48 +159,12 @@ def facts_from_distribution(
     }
 
 
-def resolve_catalogue_roots(
-    roots: Iterable[str], packages: Iterable[Mapping[str, Any]], *, aliases: Mapping[str, str] | None = None,
-    dependencies: Mapping[str, Iterable[str]] | None = None,
-) -> tuple[Mapping[str, Any], ...]:
-    """Order a metadata-only proposal; this never activates an app/config.
-
-    Ordinary Django roots have no catalogue row and are not package impacts.
-    The native compiler remains the activation validator when settings are used.
-    """
-
-    aliases = aliases or {}
-    packages = tuple(packages)
-    by_name = {package["name"]: package for package in packages}
-    if len(by_name) != len(packages):
-        raise ImproperlyConfigured("Duplicate catalogue app identity in proposed selection")
-    graph = {name: tuple(package.get("depends_on", ())) for name, package in by_name.items()}
-    graph.update({name: tuple(edges) for name, edges in (dependencies or {}).items()})
-    selected: dict[str, tuple[str, ...]] = {}
-    pending = list(sorted(roots, reverse=True))
-    while pending:
-        raw = pending.pop()
-        # Resolve only declared aliases, never import or infer a config path.
-        name = aliases.get(raw, raw)
-        if name in selected or name not in graph:
-            continue
-        edges = tuple(sorted({aliases.get(value, value) for value in graph[name]}))
-        selected[name] = edges
-        pending.extend(value for value in reversed(edges) if value not in selected)
-    try:
-        ordered = TopologicalSorter({
-            name: tuple(dependency for dependency in dependencies if dependency in selected)
-            for name, dependencies in sorted(selected.items())
-        }).static_order()
-        return tuple(by_name[name] for name in ordered if name in by_name)
-    except CycleError as error:
-        raise ImproperlyConfigured(f"Catalogue dependency cycle: {error.args[1]}") from error
-
-
-def available_addons() -> dict[str, tuple[Mapping[str, Any], metadata.EntryPoint]]:
+def available_addons(
+    *, index: InstalledComponents | None = None,
+) -> dict[str, tuple[Mapping[str, Any], metadata.EntryPoint]]:
     """List installed addon facts without importing apps or loading entry points."""
 
-    index = installed_addons("angee.addons")
+    index = installed_components("angee.addons") if index is None else index
     return {
         app: (facts_from_distribution(index.distributions[provider], index=index), index.entry_points[provider])
         for app, provider in sorted(index.providers.items())

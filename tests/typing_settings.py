@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
-from django_compose.addons import installed_addons
+from django_compose.components import installed_components
 
 from angee.base.conf import configure
 from tests.composed_host import COMPOSED_TEST_TIMEOUT as composed_test_timeout
@@ -33,7 +33,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 SECRET_KEY = "framework-type-checking"
 COMPOSE_OUTPUT_DIR = BASE_DIR / ".mypy_cache" / "typing_runtime"
 COMPOSE_OUTPUT_MODULE = "typing_runtime"
-INSTALLED_APPS = sorted(name for name in installed_addons("angee.addons").providers if name.startswith("angee."))
+INSTALLED_APPS = sorted(name for name in installed_components("angee.addons").providers if name.startswith("angee."))
 DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
 ANGEE_MONEY_REFERENCE_CURRENCY = "USD"
 configure(globals())

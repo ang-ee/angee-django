@@ -28,16 +28,12 @@ def _probe(source: str, directory: Path) -> None:
 _SEAM = '''
 import sys, os
 from pathlib import Path
-from types import ModuleType
 root = Path(sys.argv[1])
 # Only the boundary is substituted: native yamlconf/environ/Sentry owners run.
 # Compiler closure, snapshot and receipt behavior are tested in its own repo.
-from django_compose.conf import expand_attribute_refs
+import django_compose.conf as native
 from django_compose.autoreload import inputs
-native = ModuleType('django_compose.conf')
-native.expand_attribute_refs = expand_attribute_refs
 native.configure = lambda namespace: None
-sys.modules['django_compose.conf'] = native
 from angee.base.conf import configure
 '''
 
@@ -59,7 +55,7 @@ namespace = {'__name__':'settings', '__file__':str(source / 'settings.py'), 'VAL
 configure(namespace)
 assert namespace['VALUES'] == ['python', 'source', 'project', 'final'], namespace['VALUES']
 assert authored == {'nested': {'value': 'original'}}
-assert namespace['COMPOSE_ADDON_GROUP'] == 'angee.addons'
+assert namespace['COMPOSE_COMPONENT_GROUP'] == 'angee.addons'
 assert namespace['COMPOSE_ENV_PREFIXES'] == ('ANGEE_',)
 assert inputs.files == {source/'settings.yaml', project/'settings.yaml', final, project/'.env'}
 assert namespace['COMPOSE_WATCH_PATHS']==(root/'authored-watch',)

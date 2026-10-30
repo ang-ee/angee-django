@@ -27,10 +27,13 @@ from django.db.models import Exists, F, OuterRef, Q, TextField
 from django.db.models.functions import Cast
 from django.utils import timezone
 from rebac import (
+    ObjectRef,
     PermissionDenied,
     SubjectRef,
+    app_settings,
     check_new,
     current_actor,
+    database_context,
     resolve_subjects,
     system_context,
     to_subject_ref,
@@ -511,6 +514,59 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
             raise ValueError("Superuser must have is_superuser=True.")
 
         return self._create_user(username, email, password, **extra_fields)
+
+    def ensure_bootstrap_admin(
+        self,
+        username: str,
+        *,
+        email: str | None = None,
+        password: str | None = None,
+    ) -> tuple[UserT, bool]:
+        """Atomically create or promote the initial admin and grant its platform role.
+
+        Uses this manager's database for the account, REBAC schema, membership
+        and audit writes. Existing usable passwords and non-empty emails survive
+        repeated provisioning. A new account requires a password; an existing
+        passwordless account receives one only when supplied.
+        """
+
+        if not username:
+            raise ValueError("bootstrap_admin requires a username.")
+        role = app_settings.REBAC_UNIVERSAL_ADMIN_ROLE
+        if not role:
+            raise ValueError("bootstrap_admin requires REBAC_UNIVERSAL_ADMIN_ROLE.")
+        using = self._db or router.db_for_write(self.model)
+        manager = self.db_manager(using)
+        with database_context(using), system_context(reason="iam.bootstrap_admin"), transaction.atomic(using=using):
+            try:
+                user = manager.system_context(reason="iam.bootstrap_admin").get(
+                    **{self.model.USERNAME_FIELD: username},
+                )
+            except self.model.DoesNotExist:
+                if not password:
+                    raise ValueError(
+                        "bootstrap_admin needs ANGEE_BOOTSTRAP_ADMIN_PASSWORD "
+                        "or --password when creating a new admin."
+                    )
+                user = manager.create_superuser(username=username, email=email, password=password)
+                created = True
+            else:
+                created = False
+                update_fields = set()
+                if email and not user.email:
+                    user.email = self.normalize_email(email)
+                    update_fields.add("email")
+                for field in ("is_active", "is_staff", "is_superuser"):
+                    if getattr(user, field) is not True:
+                        setattr(user, field, True)
+                        update_fields.add(field)
+                if password and not user.has_usable_password():
+                    user.set_password(password)
+                    update_fields.add("password")
+                if update_fields:
+                    user.save(using=using, update_fields=sorted(update_fields))
+            grant_membership(subject=user, container=ObjectRef.parse(role))
+        return user, created
 
     def _create_user(
         self,

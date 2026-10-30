@@ -12,6 +12,7 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, models, transaction
+from django_compose.components import installed_components
 from import_export.exceptions import ImportError as ResourceImportError
 from rebac import database_context, system_context
 
@@ -107,13 +108,14 @@ class ResourceQuerySet[LedgerT: Resource](AngeeQuerySet[LedgerT]):
         """Return the keys of ``model_label`` rows seeded by the installed addons that retire the model.
 
         Those addons name it under ``retired_models`` in their pyproject.toml
-        ``[resources]`` (:func:`retired_models_for`); with none, no row is seeded.
+        ``[tool.angee.resources]`` (:func:`retired_models_for`); with none, no row is seeded.
         """
 
         label = model_label.lower()
+        index = installed_components("angee.addons")
         owners = [
             config.name for config in apps.get_app_configs()
-            if label in {retired.lower() for retired in retired_models_for(config)}
+            if label in {retired.lower() for retired in retired_models_for(config, index=index)}
         ]
         return self.seeded_target_keys(model_label, source_addons=owners) if owners else set()
 
@@ -525,8 +527,9 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
         active_tiers = self._normalize_tiers(tiers)
         excluded = self._excluded_entry_keys()
         entries: list[ResourceEntry] = []
+        index = installed_components("angee.addons")
         for addon in addons:
-            manifest = resource_manifest_for(addon)
+            manifest = resource_manifest_for(addon, index=index)
             for tier in active_tiers:
                 for declaration in manifest.get(tier, ()):
                     entry = ResourceEntry.from_declaration(

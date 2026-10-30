@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, cast
 from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django_compose.addons import installed_addons
+from django_compose.components import installed_components
 from django_compose.serving import GENERATED_SENTINEL
 
 if TYPE_CHECKING:
@@ -77,7 +77,7 @@ class WebRuntime:
         codegen_entries: list[dict[str, Any]] = []
         packages_seen: dict[str, str] = {}
         schemas_seen: dict[str, str] = {}
-        providers = installed_addons("angee.addons").providers
+        providers = installed_components("angee.addons").providers
         for addon in addons:
             if addon.name not in providers:
                 continue

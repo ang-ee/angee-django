@@ -155,7 +155,7 @@ already been loaded. Read the relevant owner before acting.
 The first question for any change is *what level does it belong to?*
 
 - **Upstream compiler (`django-compose`)** — generic Django composition, artifact
-  verification and native lifecycle seams. Angee consumes its public contracts.
+  verification, explicit database preparation/readiness and native lifecycle seams. Angee consumes its public contracts.
 - **Serving addon (`angee.server`)** — HTTP defaults, Uvicorn commands and connection
   policy; model-only projects do not activate it.
 - **Foundation addon (`angee.base`)** — reusable Django models, fields, managers,
@@ -183,8 +183,9 @@ product specifics down into the framework. Every fact lives at its owning level.
 ```
 
 The `angee.*` namespace is a native PEP 420 namespace contributed by addon
-packages. Each addon is a separate distribution with a `pyproject.toml` and one
-`angee.addons` entry point. The root `angee` meta-distribution requires the
+packages. Each addon is a component distribution with a `pyproject.toml` and one
+`angee.addons` entry point. The current compiler component contract selects one
+Django app per distribution; models and provision hooks are optional. The root `angee` meta-distribution requires the
 framework cohort. Dependencies belong to the owning package's
 `[project].dependencies`, resolved versions to native lockfiles, and capability
 facts to `[tool.angee.<capability>]`. A library is explicitly packaged without an
@@ -208,8 +209,9 @@ see [Where Knowledge Lives](#where-knowledge-lives).
 - **Shared owners:** keep generic composition in the upstream compiler and Angee
   primitives in base. Changes affecting every composed area require the full
   relevant Python suite.
-- **Addons:** keep the manifest, capability, resources, permissions, and web
-  fragment together. Generated SDL and `@angee/gql` belong to the composed host.
+- **Addons:** keep package metadata, capability declarations, resources,
+  permissions, and web fragments together. Generated SDL and `@angee/gql` belong
+  to the composed host.
 - **Packages:** all published framework packages, including `@angee/app`, remain
   schema-independent and never import project-generated `@angee/gql/*`.
   `refine` and `metadata` are independent leaves; `ui` uses both; `app` composes

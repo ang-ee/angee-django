@@ -7,7 +7,7 @@ from pathlib import Path
 
 import environ
 from django.apps import AppConfig
-from django_compose.addons import enabled_apps
+from django_compose.components import enabled_apps
 from django_compose.conf import apply_app_settings
 
 

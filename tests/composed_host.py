@@ -118,9 +118,9 @@ def boot(
 
     import django
     import yaml
-    from django_compose.addons import installed_addons
+    from django_compose.components import installed_components
 
-    index = installed_addons("angee.addons")
+    index = installed_components("angee.addons")
     installed_apps = list(root_apps) if root_apps is not None else sorted(
         name for name in index.providers if include_examples or name.startswith("angee.")
     )
@@ -158,16 +158,18 @@ def resource_values() -> dict[str, Any]:
     from django.apps import apps
     from django.core.exceptions import FieldDoesNotExist, ValidationError
     from django.db.models.fields import NOT_PROVIDED
+    from django_compose.components import installed_components
 
     from angee.base.addons import is_angee_addon
     from angee.resources.entries import GRANT_KIND, ResourceEntry, resource_manifest_for
 
     failures: list[str] = []
     checked_values = 0
+    index = installed_components("angee.addons")
     for addon in apps.get_app_configs():
         if not is_angee_addon(addon):
             continue
-        for tier, declarations in sorted(resource_manifest_for(addon).items()):
+        for tier, declarations in sorted(resource_manifest_for(addon, index=index).items()):
             for declaration in declarations:
                 entry = ResourceEntry.from_declaration(addon, tier, declaration)
                 if entry.kind == GRANT_KIND:

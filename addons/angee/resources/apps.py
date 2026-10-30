@@ -8,7 +8,7 @@ from django import conf
 from django.apps import AppConfig
 
 if TYPE_CHECKING:
-    from angee.base.provision import ProvisionContext
+    from django_compose.provision import ProvisionContext
 from django.core import checks
 
 

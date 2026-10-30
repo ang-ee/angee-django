@@ -68,16 +68,11 @@ def project_settings_yaml(tmp_path: Path, settings: Any, monkeypatch: pytest.Mon
     return path
 
 
-@pytest.mark.parametrize("label", [None, "", "remote_label"])
-def test_change_impact_uses_addon_display_label(label: str | None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Preview and catalogue labels agree for resolved and unresolved addons."""
+@pytest.mark.parametrize("label", ["", "remote_label"])
+def test_catalogue_display_label_preserves_native_identity(label: str) -> None:
+    """Unloaded catalogue rows display the canonical name until a label is known."""
 
-    name = "example.remote"
-    config = SimpleNamespace(label=label) if label is not None else None
-    impacts = Addon.objects._change_impacts(
-        [name], {name: catalogue_package(name=name)}, [name], {}, {name: config} if config is not None else {},
-    )
-    assert impacts[0].label == (label or name)
+    assert platform_models.get_addon_display_label("example.remote", label) == (label or "example.remote")
 
 
 def test_enable_appends_the_root_and_reflects_pending(

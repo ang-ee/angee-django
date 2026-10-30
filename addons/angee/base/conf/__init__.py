@@ -11,9 +11,8 @@ import django_yamlconf
 import environ
 from django.core.exceptions import ImproperlyConfigured
 from django_compose.autoreload import report_inputs
-from django_compose.conf import expand_attribute_refs
+from django_compose.conf import expand_attribute_refs, fail_on_yamlconf_errors
 
-from angee.base.conf import yamlconf
 from angee.base.paths import resolve_path
 
 
@@ -36,14 +35,14 @@ def configure(namespace: MutableMapping[str, Any]) -> None:
         env.read_env(env_file)
     target = ModuleType(str(namespace.get("__name__", "settings")))
     target.__dict__.update({
-        name: deepcopy(value) if yamlconf.is_setting_name(name) and isinstance(value, dict) else value
+        name: deepcopy(value) if _is_setting_name(name) and isinstance(value, dict) else value
         for name, value in namespace.items()
     })
     if final := os.environ.get("YAMLCONF_CONFFILE"):
         candidates.append(resolve_path(final))
     candidates = list(dict.fromkeys(path.resolve() for path in candidates))
     report_inputs(files=candidates)
-    with yamlconf.fail_on_yamlconf_errors():
+    with fail_on_yamlconf_errors():
         attributes = django_yamlconf.bootstrap_attributes(str(project))
         django_yamlconf.add_attr_info(attributes, "SOURCE_DIR", str(source))
         bootstrap = frozenset(attributes) - {"BASE_DIR"}
@@ -57,7 +56,7 @@ def configure(namespace: MutableMapping[str, Any]) -> None:
         django_yamlconf.inject_attr(attributes, target)
     namespace.update({
         name: value for name, value in vars(target).items()
-        if name == yamlconf.YAMLCONF_ATTRIBUTES or yamlconf.is_setting_name(name) and name not in bootstrap
+        if name == "_YAMLCONF_ATTRIBUTES" or _is_setting_name(name) and name not in bootstrap
     })
     namespace.setdefault("BASE_DIR", project)
     # Carry native yamlconf provenance into the compiler. Its protected-input
@@ -73,7 +72,7 @@ def configure(namespace: MutableMapping[str, Any]) -> None:
     if origin := env.str("ANGEE_PUBLIC_ORIGIN", default=""):
         if origin not in namespace["CSRF_TRUSTED_ORIGINS"]:
             namespace["CSRF_TRUSTED_ORIGINS"].append(origin)
-    namespace["COMPOSE_ADDON_GROUP"] = "angee.addons"
+    namespace["COMPOSE_COMPONENT_GROUP"] = "angee.addons"
     namespace["COMPOSE_ENV_PREFIXES"] = ("ANGEE_",)
     from django_compose.conf import configure as compose_configure
 
@@ -125,3 +124,9 @@ def _start_error_reporting(namespace: MutableMapping[str, Any], env: environ.Env
         include_local_variables=False,
         max_request_body_size="never",
     )
+
+
+def _is_setting_name(name: str) -> bool:
+    """Select public Django settings for the native composition handoff."""
+
+    return not name.startswith("_") and name.isupper()

@@ -26,8 +26,9 @@ direct class-base calls and `Any` annotations bypass django-stubs' native factor
 
 ## Django-Native Rule
 
-Angee is not a second framework on top of Django. It is a build-time composer
-for Django apps.
+Angee supplies reusable Django addons and their capability integrations.
+`django-compose` owns generic app selection and build-time model composition;
+Django owns the resulting application lifecycle and ORM.
 
 Before adding an Angee abstraction, ask: does Django already have an object,
 method, or convention that owns this fact?
@@ -42,16 +43,18 @@ Use Django's native owners:
 - Table names, app labels, migrations, and model metadata follow Django
   defaults.
 
-Angee code should own only the composition seam: discovering addons, ordering
-them deterministically, emitting runtime apps, merging schemas, syncing
-resources, and failing fast on collisions.
+Angee addons own capability semantics: merging GraphQL schemas, projecting
+permission policy, syncing declared resources and contributing web fragments.
+Generic discovery, dependency ordering and generated model publication belong
+to `django-compose`; callers consume those results instead of rebuilding them.
 
 A wrapper must prove it adds a real new concept. If it only forwards,
 normalizes, or renames a Django object, delete it.
 
 Django-native also means app-native. Addons are reusable Django apps with
-conventional files: `pyproject.toml` declares the addon contract (and its presence is
-the marker that makes the app an addon), `models.py` owns data and row behavior,
+conventional files: `pyproject.toml` declares package metadata, and its
+`angee.addons` entry point identifies the package as an addon. A pyproject alone
+may describe an ordinary library. `models.py` owns data and row behavior,
 `managers.py` owns reusable row-set APIs when they outgrow the model module,
 `schema.py` owns Strawberry declarations, `permissions.zed` owns REBAC structure,
 `mcp_tools.py` owns MCP tool registration, `forms.py` owns Django form
@@ -106,7 +109,7 @@ Use these owners instead of maintaining another contract in an addon:
 
 | Concern | Owner and durable rule |
 |---|---|
-| Addon discovery and declarations | The native `django_compose.addons` index owns identity/closure; [`angee.base.addons`](../../addons/angee/base/addons.py) reads capability-owned package TOML. Addon requirements stay in `[project].dependencies`; foreign app edges use `AppConfig.requires_apps`. |
+| Addon discovery and declarations | The native `django_compose.components` index owns identity/closure; [`angee.base.addons`](../../addons/angee/base/addons.py) reads capability-owned package TOML. Addon requirements stay in `[project].dependencies`; foreign app edges use django-compose's `AppConfig.requires_apps` extension. |
 | Settings and app ordering | [Settings bootstrap and app graph](../composer.md#settings-bootstrap) compose one app set. Keep source-model imports out of settings loading; do not create separate build/run registries. |
 | Capability conventions | [Addon declarations](../composer.md#addon-declarations) identifies the readers. Each capability reads its own `[tool.angee]` table and conventional defaults; dependencies, resource tiers, and intent stay explicit. |
 | Models and runtime import | [Runtime build and import](../composer.md#runtime-build-and-import) describes source selection and Django phase 2. Use narrow abstract contributors; let Django own inheritance, field cloning, managers, and registration. |

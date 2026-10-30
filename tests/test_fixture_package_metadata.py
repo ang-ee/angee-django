@@ -6,7 +6,7 @@ import sys
 from importlib import metadata
 
 from django.apps import AppConfig
-from django_compose.addons import installed_addons
+from django_compose.components import installed_components
 
 from angee.base.testing.packages import write_addon_distribution
 
@@ -23,7 +23,7 @@ def test_fixture_distribution_preserves_native_identity_and_config(tmp_path, mon
     monkeypatch.setattr(metadata, "distributions", lambda **kwargs: distributions)
     monkeypatch.syspath_prepend(str(tmp_path))
     try:
-        index = installed_addons("angee.addons")
+        index = installed_components("angee.addons")
         assert "fixture_identity" not in sys.modules
         assert index.providers["fixture_identity"] == "fixture-identity"
         assert index.active_requirements("fixture-identity") == ()

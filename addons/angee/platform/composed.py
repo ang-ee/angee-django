@@ -14,7 +14,7 @@ from django.apps import AppConfig, apps
 from django.conf import settings
 from django.db import connections, router
 from django.db.models import Field, Model
-from django_compose.addons import installed_addons
+from django_compose.components import installed_components
 from pydantic import BaseModel, PrivateAttr
 
 from angee.base.fields.implementation import ImplClassField
@@ -216,7 +216,7 @@ def addons() -> list[AppConfig]:
     """Return the composed Angee addon app configs, sorted by name."""
 
     closure = getattr(settings, "COMPOSE_CLOSURE", None)
-    names = closure.addons if closure is not None else installed_addons("angee.addons").providers
+    names = closure.components.values() if closure is not None else installed_components("angee.addons").providers
     return sorted(
         (config for config in apps.get_app_configs() if config.name in names),
         key=lambda config: config.name,

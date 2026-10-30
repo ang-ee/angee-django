@@ -9,6 +9,7 @@ from asgiref.typing import ASGI3Application
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.urls import re_path
+from django_compose.components import installed_components
 
 from angee.base.addons import addon_contribution
 from angee.graphql.consumers import AngeeGraphQLWSConsumer
@@ -36,11 +37,16 @@ def websocket_application() -> ASGI3Application:
     from channels.routing import URLRouter
 
     configs = tuple(apps.get_app_configs())
-    patterns = [pattern for config in configs
-                for pattern in addon_contribution(config, "asgi", "websocket_urlpatterns", allow_callable=True)]
+    index = installed_components("angee.addons")
+    patterns = [
+        pattern for config in configs
+        for pattern in addon_contribution(config, "asgi", "websocket_urlpatterns", allow_callable=True, index=index)
+    ]
     application = cast(ASGI3Application, URLRouter(patterns))
-    wrappers = [wrapper for config in configs
-                for wrapper in addon_contribution(config, "asgi", "websocket_middleware")]
+    wrappers = [
+        wrapper for config in configs
+        for wrapper in addon_contribution(config, "asgi", "websocket_middleware", index=index)
+    ]
     for wrapper in reversed(wrappers):
         if not callable(wrapper):
             raise ImproperlyConfigured("asgi.websocket_middleware must contain callables")

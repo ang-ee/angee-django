@@ -26,8 +26,7 @@ class Command(BaseCommand):
 
     def handle(self, **options: Any) -> None:
         import uvicorn
-
-        from angee.base import require_provisioned
+        from django_compose.provision import require_provisioned
 
         if options["require_provisioned"]:
             require_provisioned(using=options["database"], timeout=options["wait_db"])

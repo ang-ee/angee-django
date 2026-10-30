@@ -12,7 +12,7 @@ from django.core import checks
 from angee.base.hooks import check_hooks
 
 if TYPE_CHECKING:
-    from angee.base.provision import ProvisionContext
+    from django_compose.provision import ProvisionContext
 
 check_settings = partial(check_hooks, ("ANGEE_MERGE_GUARDS",))
 

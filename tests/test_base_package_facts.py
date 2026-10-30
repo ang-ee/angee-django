@@ -7,9 +7,13 @@ from importlib import metadata
 from pathlib import Path
 
 import pytest
+from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
+from django_compose.components import enabled_apps, installed_components
 
+from angee.base import addons
 from angee.base.addons import addon_facts, package_document
+from angee.graphql.schema import GraphQLSchemas
 
 
 def _distribution(tmp_path: Path, document: str, *, editable: bool = False) -> metadata.PathDistribution:
@@ -58,3 +62,34 @@ def test_distribution_without_packaged_toml_fails_without_python_import(tmp_path
     info.mkdir()
     with pytest.raises(ImproperlyConfigured, match='expected one packaged pyproject.toml'):
         package_document(metadata.PathDistribution(info), 'acme.invoice')
+
+
+def test_explicit_package_index_is_reused_without_rescanning(tmp_path, monkeypatch):
+    _distribution(tmp_path, '[tool.acme.billing]\ncurrency = "EUR"\n')
+    monkeypatch.syspath_prepend(str(tmp_path))
+    index = installed_components("angee.addons")
+    monkeypatch.setattr(addons, "installed_components", lambda group: pytest.fail("repeated metadata scan"))
+    assert addon_facts("acme.invoice", "acme.billing", index=index) == {"currency": "EUR"}
+    assert addon_facts("django.contrib.auth", "acme.billing", index=index) == {}
+
+
+def test_composed_membership_uses_existing_closure(settings, monkeypatch):
+    settings.COMPOSE_CLOSURE = enabled_apps(("angee.base",), group="angee.addons")
+    monkeypatch.setattr(addons, "installed_components", lambda group: pytest.fail("repeated metadata scan"))
+    assert addons.is_angee_addon(apps.get_app_config("base"))
+    assert not addons.is_angee_addon(apps.get_app_config("auth"))
+
+
+def test_graphql_discovery_scans_installed_metadata_once(monkeypatch):
+    original = metadata.distributions
+    calls = 0
+
+    def distributions(**kwargs):
+        nonlocal calls
+        calls += 1
+        return original(**kwargs)
+
+    monkeypatch.setattr(metadata, "distributions", distributions)
+    graph = GraphQLSchemas((apps.get_app_config("base"), apps.get_app_config("resources")))
+    assert graph.parts == {}
+    assert calls == 1

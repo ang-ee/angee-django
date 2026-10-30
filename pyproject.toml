@@ -91,7 +91,7 @@ dev = [
     "django-zed-rebac[caveats] @ git+https://github.com/ang-ee/django-zed-rebac.git@f43f0773f2c2a86a6882aeb1b46b34b8c19a0d13",
     "faker>=30.0",
     "psycopg[binary,pool]>=3.2",
-    "angee-django-stubs[compatible-mypy]==6.1.2.post2",
+    "angee-django-stubs[compatible-mypy]==6.1.2.post3",
     "angee-mypy==2.1.0",
     "pytest>=8.0",
     "pytest-django>=4.8",

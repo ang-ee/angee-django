@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -16,14 +15,14 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import override_settings
 from django.test.utils import override_system_checks
+from django_compose import provision
+from django_compose.management.commands.provision import Command
 from rebac import schema_changes
 from rebac.backends import reset_backend
 from rebac.checks import check_universal_admin_in_roles
 from rebac.errors import SchemaError
 from rebac.models import SchemaRelation
 
-from angee.base import provision
-from angee.base.management.commands.provision import Command
 from angee.graphql.checks import check_graphql_schemas
 from angee.graphql.schema import GraphQLSchemas, SchemaParts
 from angee.graphql.sdl import SchemaIntegration
@@ -39,81 +38,6 @@ def _environment(tmp_path: Path) -> dict[str, str]:
         filter(None, (str(tmp_path), str(source_root), environment.get("PYTHONPATH", "")))
     )
     return environment
-
-
-def _write_topology_host(root: Path) -> Path:
-    """Write a native host recording Angee's real step and hook dispatch."""
-
-    package = root / "probe"
-    package.mkdir()
-    (package / "__init__.py").write_text("")
-    (root / "manage.py").write_text(
-        "import os\nfrom django_compose.management import execute\n"
-        "os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'probe.settings')\nexecute()\n",
-    )
-    (package / "settings.py").write_text(
-        "from pathlib import Path\nfrom django_compose.conf import configure\n"
-        "SECRET_KEY='provision-process-probe'\nINSTALLED_APPS=['probe.apps.ProbeConfig']\n"
-        f"COMPOSE_OUTPUT_DIR=Path({str(root / 'runtime')!r})\nCOMPOSE_OUTPUT_MODULE='runtime'\n"
-        f"DATABASES={{'default': {{'ENGINE':'django.db.backends.sqlite3','NAME':{str(root / 'probe.sqlite3')!r}}}}}\n"
-        "configure(globals())\n",
-    )
-    (package / "apps.py").write_text("""import json
-import os
-from pathlib import Path
-from django.apps import AppConfig
-
-def record(step):
-    with (Path(__file__).resolve().parent.parent / 'events.jsonl').open('a') as stream:
-        stream.write(json.dumps({'step':step,'pid':os.getpid()})+'\\n')
-
-class ProbeConfig(AppConfig):
-    name='probe'
-    def ready(self):
-        from angee.base import provision
-        original=provision.run_step
-        def run_step(command,step):
-            record(step)
-            return original(command,step)
-        provision.run_step=run_step
-    def compose_provision(self,context):
-        context.call('probe_step',database=context.database)
-""")
-    commands = package / "management/commands"
-    commands.mkdir(parents=True)
-    (commands.parent / "__init__.py").write_text("")
-    (commands / "__init__.py").write_text("")
-    (commands / "provision.py").write_text("from angee.base.management.commands.provision import Command\n")
-    (commands / "probe_step.py").write_text("""from django.core.management.base import BaseCommand
-from probe.apps import record
-class Command(BaseCommand):
-    requires_system_checks=[]
-    def add_arguments(self,parser):
-        parser.add_argument('--database')
-    def handle(self,**options):
-        record(['hook',options['database']])
-""")
-    return root / "manage.py"
-
-
-def test_provision_runs_native_steps_and_addon_hooks_in_one_process(tmp_path: Path) -> None:
-    """Native prebuilt checks/migrate and AppConfig hooks share selected command IO."""
-
-    manage_py = _write_topology_host(tmp_path)
-    environment = _environment(tmp_path)
-    for arguments in (("compose",), ("provision", "--wait-db", "1")):
-        result = subprocess.run(
-            [sys.executable, str(manage_py), *arguments], cwd=tmp_path, env=environment,
-            capture_output=True, text=True, timeout=60, check=False,
-        )
-        assert result.returncode == 0, result.stdout + result.stderr
-    events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
-    assert [event["step"] for event in events] == [
-        ["check_migrations"], ["check_migrations", "--imports"],
-        ["migrate", "--database", "default", "--noinput", "--skip-checks"],
-        ["hook", "default"], ["check", "--database", "default"],
-    ]
-    assert len({event["pid"] for event in events}) == 1
 
 
 def test_native_composed_test_runner_does_not_require_provenance(tmp_path: Path) -> None:
@@ -142,51 +66,6 @@ def test_native_composed_test_runner_does_not_require_provenance(tmp_path: Path)
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}
-
-
-def test_native_makemigrations_then_migrate_sees_new_file_in_same_process(tmp_path: Path) -> None:
-    """Django reloads a migration file created earlier in the same process."""
-
-    app = tmp_path / "native_app"
-    app.mkdir()
-    (app / "__init__.py").write_text("", encoding="utf-8")
-    (app / "models.py").write_text(
-        "from django.db import models\n\nclass Entry(models.Model):\n    value = models.CharField(max_length=20)\n",
-        encoding="utf-8",
-    )
-    database = tmp_path / "native.sqlite3"
-    script = tmp_path / "migrate_in_process.py"
-    script.write_text(
-        f"""from django.conf import settings
-settings.configure(
-    SECRET_KEY="probe",
-    INSTALLED_APPS=["django.contrib.contenttypes", "native_app"],
-    DATABASES={{"default": {{"ENGINE": "django.db.backends.sqlite3", "NAME": {str(database)!r}}}}},
-    DEFAULT_AUTO_FIELD="django.db.models.BigAutoField",
-)
-import django
-django.setup()
-from django.core.management import call_command
-call_command("makemigrations", "native_app", verbosity=0, skip_checks=True)
-call_command("migrate", verbosity=0, interactive=False, skip_checks=True)
-""",
-        encoding="utf-8",
-    )
-    result = subprocess.run(
-        [sys.executable, str(script)],
-        cwd=tmp_path,
-        env=_environment(tmp_path),
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    assert result.returncode == 0, f"native migration sequence failed:\n{result.stdout}\n{result.stderr}"
-    assert (app / "migrations" / "0001_initial.py").is_file()
-    with sqlite3.connect(database) as connection:
-        assert connection.execute(
-            "select name from sqlite_master where type = 'table' and name = 'native_app_entry'"
-        ).fetchone() == ("native_app_entry",)
 
 
 @pytest.mark.django_db

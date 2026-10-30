@@ -28,7 +28,7 @@ description: "Declares and wires REBAC permissions for an Angee addon: permissio
 | `addons/angee/base/models/ownership.py` | `angee.E022` `:134` and `angee.E027` `:171`: the `transfer` + `write__owner` gate every `OwnerMixin` model's definition carries | `OwnerMixin.check` `:91` |
 | `addons/angee/iam/permissions.zed` | `auth/user` `:6`, `iam/kind` `:104`, `auth/group` `:110`, `angee/role` `:120` — the subjects every addon targets | whole file |
 | `addons/angee/graphql/actions.py` | `authorized_action_target` `:240`, `authorized_permission_target` `:276` resolver preflight | `addons/angee/graphql/trash.py:57` (`trash_target`) |
-| `addons/angee/base/provision.py` | Native provision hook and readiness lifecycle | `AppConfig.compose_provision`; explicit `ANGEE_REBAC_FORCE_OVERWRITE` setting |
+| `addons/angee/base/apps.py` | REBAC synchronization contribution to upstream provisioning | `BaseConfig.compose_provision`; explicit `ANGEE_REBAC_FORCE_OVERWRITE` setting |
 
 Parsing, sync, point checks, actor-scoped querysets and gated-field projection are
 `django-zed-rebac` (`docs/stack.md#backend`, line 76); `composed_tables`

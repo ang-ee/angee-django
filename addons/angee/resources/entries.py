@@ -17,6 +17,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.models.fields import NOT_PROVIDED
 from django.db.models.utils import make_model_tuple
+from django_compose.components import InstalledComponents
 from import_export.results import Result, RowResult
 
 from angee.base.addons import addon_facts
@@ -91,22 +92,15 @@ STRUCTURED_FORMATS = frozenset({"json", "yaml"})
 
 
 RETIRED_MODELS_KEY = "retired_models"
-"""The ``[resources]`` key naming removed models whose seeded rows retire with them; not a tier."""
+"""The ``[tool.angee.resources]`` key naming removed models whose seeded rows retire with them; not a tier."""
 
 
-def _resource_declarations(app_config: AppConfig) -> Mapping[str, Any]:
-    """Read and validate the table shared by tier and retirement declarations."""
-
-    resources = addon_facts(app_config.name, "angee.resources")
-    if not isinstance(resources, Mapping):
-        raise ImproperlyConfigured(f"{app_config.name}: tool.angee.resources must be a table")
-    return resources
-
-
-def resource_manifest_for(app_config: AppConfig) -> dict[str, tuple[dict[str, Any], ...]]:
+def resource_manifest_for(
+    app_config: AppConfig, *, index: InstalledComponents | None = None,
+) -> dict[str, tuple[dict[str, Any], ...]]:
     """Return canonical resource declarations keyed by tier for one addon."""
 
-    resources = _resource_declarations(app_config)
+    resources = addon_facts(app_config.name, "angee.resources", index=index)
     manifest: dict[str, tuple[dict[str, Any], ...]] = {tier: () for tier in ResourceTier.values}
     for raw_tier, declarations in resources.items():
         if raw_tier == RETIRED_MODELS_KEY:
@@ -142,7 +136,7 @@ def _package_resource_entry(entry: dict[str, Any]) -> dict[str, Any]:
     return entry
 
 
-def retired_models_for(app_config: AppConfig) -> tuple[str, ...]:
+def retired_models_for(app_config: AppConfig, *, index: InstalledComponents | None = None) -> tuple[str, ...]:
     """Return the removed model labels whose rows ``app_config``'s resource files seeded.
 
     An addon that removes such a model names it under ``retired_models`` in its
@@ -150,7 +144,7 @@ def retired_models_for(app_config: AppConfig) -> tuple[str, ...]:
     and only those, go with the model's table.
     """
 
-    labels = _resource_declarations(app_config).get(RETIRED_MODELS_KEY, [])
+    labels = addon_facts(app_config.name, "angee.resources", index=index).get(RETIRED_MODELS_KEY, [])
     if not isinstance(labels, list) or not all(isinstance(label, str) and label for label in labels):
         raise ImproperlyConfigured(
             f"{app_config.name}: pyproject.toml [tool.angee.resources] "
