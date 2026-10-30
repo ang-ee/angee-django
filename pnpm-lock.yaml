@@ -436,6 +436,9 @@ importers:
         specifier: ^1.21.0
         version: 1.24.0(react@19.2.7)
     devDependencies:
+      '@angee/timeline':
+        specifier: workspace:*
+        version: link:../../timeline/web
       '@tanstack/react-router':
         specifier: ^1.170.41
         version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -641,6 +644,12 @@ importers:
         specifier: ^10.1.1
         version: 10.1.1(react@19.2.7)
     devDependencies:
+      '@angee/provenance':
+        specifier: workspace:*
+        version: link:../../provenance/web
+      '@angee/timeline':
+        specifier: workspace:*
+        version: link:../../timeline/web
       '@tanstack/react-router':
         specifier: ^1.170.41
         version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -828,6 +837,9 @@ importers:
         specifier: ^1.21.0
         version: 1.24.0(react@19.2.7)
     devDependencies:
+      '@angee/iam':
+        specifier: workspace:*
+        version: link:../../iam/web
       '@tanstack/react-router':
         specifier: ^1.170.41
         version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
