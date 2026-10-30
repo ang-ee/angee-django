@@ -294,6 +294,7 @@ _ADDON_RESOURCE = hasura_model_resource(
     model=_Addon,
     name="platform_addons",
     model_label="platform.Addon",
+    public_id_field="id",
     filterable=[
         "name",
         "label",
