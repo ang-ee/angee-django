@@ -21,7 +21,7 @@ use the native compiler owner for generic Django composition.
 | Database preparation and readiness | `django_compose.provision` |
 | Optional HTTP policy and Uvicorn commands | `addons/angee/server/` |
 | REBAC, resource and web projections | Their owning addon `build.py` integrations |
-| Native package layout | `tools/hatch-angee/` over Hatchling |
+| Native addon layout and metadata defaults | Published [hatch-angee](https://github.com/ang-ee/hatch-angee) over Hatchling |
 | React package boundaries | `packages/app/src/architecture-guardrails.test.ts` |
 | Project/stack/addon source | `templates/`; edit source and its contract tests |
 
@@ -42,8 +42,8 @@ use the native compiler owner for generic Django composition.
    addon index. Do not introduce a parallel discovery cache or loader.
 5. Change dependencies at the owning package's `pyproject.toml` or JS manifest,
    update the concern row in `docs/stack.md`, and regenerate the native lock at
-   its owner. Root releases select the framework cohort; fixtures, examples and
-   the backend retain independent versions.
+   its owner. Root releases select the framework cohort; fixtures and examples
+   retain independent versions. The external backend has its own release process.
 6. A template change preserves Copier answers and relative-path semantics across
    project, stack and workspace templates. Shared Python runtime settings live
    in `templates/stacks/_shared/python-runtime.yaml.jinja`; lifecycle sequencing

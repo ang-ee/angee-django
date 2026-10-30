@@ -57,8 +57,8 @@ def catalog_source(composed_tables: None, tmp_path: Path) -> tuple[Source, Path]
     return source, marker
 
 
-def test_parse_addon_meta_reads_the_addon_block() -> None:
-    """The manifest's ``[addon]`` block becomes the catalog descriptor."""
+def test_parse_addon_meta_projects_static_package_metadata() -> None:
+    """Static project metadata and Platform facts become the catalogue descriptor."""
 
     blob = (
         (
@@ -92,6 +92,12 @@ def test_parse_addon_meta_ignores_non_addon_projects() -> None:
                                 b'name="ordinary"\n'
                                 b'version="1.0"\n'
                             )) == {}
+
+
+def test_parse_addon_meta_does_not_infer_dynamic_entry_points_from_a_source_blob() -> None:
+    assert parse_addon_meta(
+        b'[project]\nname="angee-demo"\nversion="1.0"\ndynamic=["entry-points"]\n'
+    ) == {}
 
 
 def test_parse_addon_meta_projects_uninstalled_dependencies_through_known_identity_index() -> None:

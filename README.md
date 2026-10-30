@@ -107,7 +107,6 @@ This repository holds the framework's source surfaces together:
 
 - **`addons/angee/base/`** — model foundation, deployment settings and shared primitives.
 - **`addons/angee/server/`** — optional HTTP serving policy over native compiler seams.
-- **`tools/hatch-angee/`** — native Hatchling package layout defaults.
 - **`addons/`** — the `angee.base` model foundation and capability addons,
   including provenance, jobs, web builds and GraphQL, with co-located web fragments.
   Generic composition is owned by the `django-compose` dependency.
@@ -116,8 +115,9 @@ This repository holds the framework's source surfaces together:
 - **`templates/`** — Copier sources for projects, stacks, workspaces, and services.
 - **`docs/`**, **`tests/`** — intent documentation and the merged contract suite.
 
-The optional personal-messaging bridges remain in
-`ang-ee/angee-messaging-bridges`.
+The published [hatch-angee](https://github.com/ang-ee/hatch-angee) backend owns
+addon layout and metadata defaults over Hatchling. The optional personal-messaging
+bridges remain in `ang-ee/angee-messaging-bridges`.
 
 The full annotated layout lives in
 **[`AGENTS.md`](https://github.com/ang-ee/angee-django/blob/main/AGENTS.md)**.

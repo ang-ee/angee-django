@@ -116,7 +116,7 @@ default-groups = ["dev"]
 # other invocation uses uv's default per-user cache.
 
 [tool.uv.workspace]
-members = ["tools/hatch-angee", "addons/angee/*", "examples/addons/example/*", "tests/blankchoices"]
+members = ["addons/angee/*", "examples/addons/example/*", "tests/blankchoices"]
 
 [tool.uv.sources]
 angee-agents = {workspace = true}
@@ -191,7 +191,6 @@ angee-workflows-parties = {workspace = true}
 angee-workflows-posts = {workspace = true}
 example-notes = {workspace = true}
 example-theme = {workspace = true}
-hatch-angee = {workspace = true}
 tests-blankchoices = {workspace = true}
 [tool.hatch.build.targets.wheel]
 bypass-selection = true
@@ -211,7 +210,7 @@ addopts = "-ra --strict-markers --import-mode=importlib -p no:randomly"
 line-length = 120
 target-version = "py314"
 cache-dir = ".ruff_cache"
-src = ["addons", "examples/addons", "tools/hatch-angee/src"]
+src = ["addons", "examples/addons"]
 exclude = [
   ".angee",
   ".git",

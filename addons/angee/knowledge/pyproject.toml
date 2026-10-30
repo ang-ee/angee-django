@@ -1,4 +1,4 @@
-build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
 
 [project]
 name = "angee-knowledge"
@@ -29,6 +29,3 @@ adopt = ["vault", "title"]
 
 [tool.angee.platform]
 category = "Data"
-
-[tool.hatch.metadata]
-allow-direct-references = true
