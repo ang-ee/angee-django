@@ -802,7 +802,9 @@ def test_local_project_uses_installed_metadata_for_addon_discovery() -> None:
     for framework in ("source", "baked"):
         command = _render_local_stack(framework=framework)["jobs"]["frontend-build"]["command"][-1]
         subprocess.run(["sh", "-n", "-c", command], check=True, timeout=10)
-        assert command.index("pnpm config set packages") < command.index("if [ ! -f /opt/angee-project/pnpm-lock.yaml ]")
+        assert command.index("pnpm config set packages") < command.index(
+            "if [ ! -f /opt/angee-project/pnpm-lock.yaml ]"
+        )
         assert "pnpm install --lockfile-only --no-frozen-lockfile --lockfile-dir /opt/angee-project" in command
         assert "pnpm install --frozen-lockfile --lockfile-dir /opt/angee-project" in command
         assert "codegen" not in command
