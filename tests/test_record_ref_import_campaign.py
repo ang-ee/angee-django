@@ -184,12 +184,14 @@ def test_resource_file_loads_ownerless_vault_and_both_binding_kinds(composed_tab
             "040_knowledge.recordbinding.yaml",
         ]},
     )
-    (tmp_path / "010_knowledge.vault.yaml").write_text("- _xref: vault\n  name: Seeded vault\n")
-    (tmp_path / "020_knowledge.page.yaml").write_text(
+    resources = tmp_path / "resources"
+    resources.mkdir()
+    (resources / "010_knowledge.vault.yaml").write_text("- _xref: vault\n  name: Seeded vault\n")
+    (resources / "020_knowledge.page.yaml").write_text(
         "- _xref: page\n  vault: knowledge_seed.vault\n  title: Seeded page\n"
     )
-    (tmp_path / "030_mtidemo.mtiparent.yaml").write_text("- _xref: record\n  title: Seeded record\n")
-    (tmp_path / "040_knowledge.recordbinding.yaml").write_text(
+    (resources / "030_mtidemo.mtiparent.yaml").write_text("- _xref: record\n  title: Seeded record\n")
+    (resources / "040_knowledge.recordbinding.yaml").write_text(
         "- _xref: page_binding\n  page: knowledge_seed.page\n  target: knowledge_seed.record\n"
         "- _xref: vault_binding\n  vault: knowledge_seed.vault\n  target: knowledge_seed.record\n"
     )

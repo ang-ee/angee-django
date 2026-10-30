@@ -320,7 +320,7 @@ def test_catalogue_rejects_ambiguous_source_documents_before_catalogue_writes(ca
     with system_context(reason="test catalogue collision snapshot"):
         before = list(Addon.objects.order_by("pk").values())
     with CaptureQueriesContext(connection) as queries:
-        with pytest.raises(ImproperlyConfigured, match="claims both addon|Duplicate catalogue addon"):
+        with pytest.raises(ImproperlyConfigured, match="Conflicting catalogue identity|Duplicate catalogue addon"):
             source.refresh()
     assert not [
         query["sql"] for query in queries
@@ -348,7 +348,7 @@ def test_catalogue_rejects_another_sources_conflicting_identity_or_ownership(cat
         second = Source.objects.create(repository=source.repository, kind="addon", path="second-source")
         before = list(Addon.objects.order_by("pk").values())
     with CaptureQueriesContext(connection) as queries:
-        with pytest.raises(ImproperlyConfigured, match="claims both addon|already owned by source"):
+        with pytest.raises(ImproperlyConfigured, match="Conflicting catalogue identity|already owned by source"):
             second.refresh()
     assert not [
         query["sql"] for query in queries

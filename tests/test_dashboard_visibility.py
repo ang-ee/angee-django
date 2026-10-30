@@ -19,6 +19,7 @@ def test_direct_or_dotted_undeclared_scope_is_rejected(key):
         widget_visibility_answers([{"resource": resource, "key": key, "value": "incoming"}], actor=None)
 
 
+@pytest.mark.usefixtures("composed_permissions")
 def test_declared_related_scope_resolves_real_queue_field(monkeypatch):
     assert apps.get_model("projects.Task") is projects_models.Task
     assert apps.get_model("work.Queue") is projects_models.Queue
@@ -49,6 +50,7 @@ def test_declared_related_scope_resolves_real_queue_field(monkeypatch):
     assert seen == [(projects_models.Queue, actor)]
 
 
+@pytest.mark.usefixtures("composed_permissions")
 def test_declared_task_queue_scope_validates_in_a_widget_snapshot():
     snapshot = canonical_dashboard_snapshot({
         "schemaVersion": 1,
