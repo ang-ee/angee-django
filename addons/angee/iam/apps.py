@@ -6,12 +6,14 @@ from typing import TYPE_CHECKING
 
 from django.apps import AppConfig
 
+from angee.iam.autoconfig import bootstrap_admin_settings
+
 if TYPE_CHECKING:
-    from angee.base.provision import ProvisionContext
+    from django_compose.provision import ProvisionContext
 
 
 class IAMConfig(AppConfig):
-    """Source app manifest for Angee identity models."""
+    """Django app configuration for Angee identity models."""
 
     default = True
     name = "angee.iam"
@@ -20,13 +22,7 @@ class IAMConfig(AppConfig):
     def compose_provision(self, context: ProvisionContext) -> None:
         """Bootstrap only when deployment inputs explicitly request an initial admin."""
 
-        from angee.iam.management.commands.bootstrap_admin import _configured
-
-        if any(_configured(name, env_fallbacks=(fallback,)) for name, fallback in (
-            ('ANGEE_BOOTSTRAP_ADMIN_USERNAME', 'DJANGO_SUPERUSER_USERNAME'),
-            ('ANGEE_BOOTSTRAP_ADMIN_EMAIL', 'DJANGO_SUPERUSER_EMAIL'),
-            ('ANGEE_BOOTSTRAP_ADMIN_PASSWORD', 'DJANGO_SUPERUSER_PASSWORD'),
-        )):
+        if any(bootstrap_admin_settings().values()):
             context.call('bootstrap_admin', database=context.database)
 
     def ready(self) -> None:

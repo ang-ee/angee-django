@@ -51,9 +51,9 @@ The framework is a thin composition layer. You write **source models**
 (abstract Django models), GraphQL contributions, REBAC permissions, and React
 views inside **addons**; the **composer** assembles those addon contracts into a
 concrete, runnable Django + GraphQL + React application under a generated
-`runtime/` tree. The framework core supplies the language and composition
-machinery, while every product capability — including GraphQL — is an addon. The
-first question for any change is always *which level owns it.*
+`runtime/` tree. The upstream `django-compose` library owns composition; Angee addons
+contribute project defaults, reusable models and product capabilities, including
+GraphQL. The first question for any change is always *which level owns it.*
 
 Concretely, you build in **addons**, and each addon bundles two halves that ship
 together: a **Django app** — models, permissions, and operations — and the
@@ -125,7 +125,7 @@ Concretely, today:
 
 - **Already landed here.** The operator (Stacks, Services, Jobs, Sources,
   Workspaces, secrets, ports, and gitops topology over CLI, REST, and GraphQL),
-  the framework core (including composition from source models to `runtime/`),
+  composition from source models to `runtime/` through `django-compose`,
   and the framework addons: GraphQL via strawberry-django, relationship-based
   authorization (REBAC), aggregates, tiered resources, changeset history in
   Activity with revert, and the React frontend (layouts, list/board/form views).

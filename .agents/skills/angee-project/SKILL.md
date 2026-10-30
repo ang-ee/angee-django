@@ -17,7 +17,7 @@ package or stack profile. Addon-local declarations belong to `angee-addon`.
 | Deployment YAML, `.env`, typed service URLs | `angee.base.conf.configure` |
 | Closure, ordered addon settings, build/serving mode | `django_compose.conf.configure` |
 | Management dispatch | `django_compose.management.execute` |
-| Database hooks and readiness | `angee.base.provision` |
+| Database hooks and readiness | `django_compose.provision` |
 | Dependency chain and service holds | Controlling stack `angee.yaml` |
 | Fragment install membership | Stack `pnpm-workspace.yaml` |
 | Codegen and generated app entry | Host `web/package.json` and `@angee/app` CLI |

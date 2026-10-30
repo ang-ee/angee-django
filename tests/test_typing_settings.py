@@ -168,7 +168,7 @@ def test_authored_project_typing_settings_never_read_live_database_or_runtime(tm
     (tmp_path / "project_typing_settings.py").write_text(
         "from pathlib import Path\nfrom django_compose.conf import configure\n"
         f"BASE_DIR=Path({str(project)!r})\nCOMPOSE_OUTPUT_DIR=Path({str(output)!r})\n"
-        "COMPOSE_OUTPUT_MODULE='project_typing_runtime'\nCOMPOSE_ADDON_GROUP='angee.addons'\n"
+        "COMPOSE_OUTPUT_MODULE='project_typing_runtime'\nCOMPOSE_COMPONENT_GROUP='angee.addons'\n"
         "INSTALLED_APPS=['typing_consumer']\nSECRET_KEY='isolated-project-type-checking'\n"
         "DATABASES={'default':{'ENGINE':'django.db.backends.sqlite3','NAME':':memory:'}}\nconfigure(globals())\n",
     )

@@ -9,7 +9,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any
 
-from django_compose.addons import active_requirements
+from django_compose.components import active_requirements
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 

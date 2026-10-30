@@ -119,7 +119,7 @@ def test_autodetected_table_drop_lets_rows_its_retiring_addon_seeded_go(monkeypa
         DropGuardAutodetector(history, current).changes(graph=graph)
 
     monkeypatch.setattr("angee.resources.entries.addon_facts",
-        lambda name, capability: {"retired_models": ["probe.Retired"]})
+        lambda name, capability, **kwargs: {"retired_models": ["probe.Retired"]})
     (migration,) = DropGuardAutodetector(history, current).changes(graph=graph)["probe"]
     assert [type(operation).__name__ for operation in migration.operations] == ["DeleteModel"]
 
@@ -147,6 +147,6 @@ def test_retired_models_are_a_resources_declaration_not_a_tier(monkeypatch) -> N
     assert retired_models_for(messaging) == ("messaging.ActivityType",)
     assert "retired_models" not in resource_manifest_for(messaging)
     monkeypatch.setattr("angee.resources.entries.addon_facts",
-        lambda name, capability: {"retired_models": "messaging.ActivityType"})
+        lambda name, capability, **kwargs: {"retired_models": "messaging.ActivityType"})
     with pytest.raises(ImproperlyConfigured, match="retired_models must be an array of model labels"):
         retired_models_for(messaging)

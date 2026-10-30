@@ -12,7 +12,7 @@ import pytest
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import OperationalError, models
-from django_compose.addons import enabled_apps
+from django_compose.components import enabled_apps
 from django_compose.declarations import model_declaration
 from django_compose.model_composition import ModelComposition
 from django_compose.models import Composable

@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError, CommandParser
-from django.db import transaction
-from rebac import ObjectRef, app_settings, database_context, system_context
-from rebac.memberships import grant as grant_membership
+
+from angee.iam.autoconfig import bootstrap_admin_settings
 
 
 class Command(BaseCommand):
@@ -34,95 +31,15 @@ class Command(BaseCommand):
         """Create or promote the configured admin without weakening REBAC."""
 
         del args
-        username = options["username"] or _configured(
-            "ANGEE_BOOTSTRAP_ADMIN_USERNAME",
-            env_fallbacks=("DJANGO_SUPERUSER_USERNAME",),
-            default="admin",
-        )
-        if not username:
-            raise CommandError("bootstrap_admin requires a username.")
-        email = options["email"] or _configured(
-            "ANGEE_BOOTSTRAP_ADMIN_EMAIL",
-            env_fallbacks=("DJANGO_SUPERUSER_EMAIL",),
-            default=f"{username}@example.com",
-        )
-        password = options["password"] or _configured(
-            "ANGEE_BOOTSTRAP_ADMIN_PASSWORD",
-            env_fallbacks=("DJANGO_SUPERUSER_PASSWORD",),
-        )
-
-        User = get_user_model()
-
-        using = options["database"]
-        manager = User._default_manager.db_manager(using)
-        lookup_manager = _system_lookup_manager(User, using=using)
-        username_field = User.USERNAME_FIELD
-
-        with database_context(using), system_context(reason="iam.bootstrap_admin"), transaction.atomic(using=using):
-            try:
-                user = lookup_manager.get(**{username_field: username})
-            except User.DoesNotExist:
-                if not password:
-                    raise CommandError(
-                        "bootstrap_admin needs ANGEE_BOOTSTRAP_ADMIN_PASSWORD "
-                        "or --password when creating a new admin."
-                    )
-                user = manager.create_superuser(username=username, email=email, password=password)
-                created = True
-            else:
-                created = False
-                update_fields = _promote_existing_admin(user, email=email, password=password)
-                if update_fields:
-                    user.save(using=using, update_fields=sorted(update_fields))
-            role = app_settings.REBAC_UNIVERSAL_ADMIN_ROLE
-            if not role:
-                raise CommandError("bootstrap_admin requires REBAC_UNIVERSAL_ADMIN_ROLE.")
-            grant_membership(subject=user, container=ObjectRef.parse(role))
+        configured = bootstrap_admin_settings()
+        username = options["username"] or configured["username"] or "admin"
+        email = options["email"] or configured["email"] or f"{username}@example.com"
+        password = options["password"] or configured["password"]
+        manager = get_user_model()._default_manager.db_manager(options["database"])
+        try:
+            _, created = manager.ensure_bootstrap_admin(username, email=email, password=password)
+        except ValueError as exc:
+            raise CommandError(str(exc)) from exc
 
         action = "created" if created else "ensured"
         self.stdout.write(self.style.SUCCESS(f"bootstrap admin: {action} '{username}'"))
-
-
-def _configured(
-    setting_name: str,
-    *,
-    env_fallbacks: tuple[str, ...] = (),
-    default: str | None = None,
-) -> str | None:
-    """Return a non-empty value from Django settings, env, or ``default``."""
-
-    value = getattr(settings, setting_name, None)
-    if value not in (None, ""):
-        return str(value)
-    for env_name in (setting_name, *env_fallbacks):
-        value = os.environ.get(env_name)
-        if value not in (None, ""):
-            return value
-    return default
-
-
-def _system_lookup_manager(user_model: type[Any], *, using: str | None = None) -> Any:
-    """Return a queryset/manager that can see users before an admin exists."""
-
-    manager = user_model._default_manager.db_manager(using)
-    system_context = getattr(manager, "system_context", None)
-    if system_context is None:
-        return manager
-    return system_context(reason="iam.bootstrap_admin")
-
-
-def _promote_existing_admin(user: Any, *, email: str | None, password: str | None) -> set[str]:
-    """Promote an existing user without resetting an already usable password."""
-
-    update_fields: set[str] = set()
-    if hasattr(user, "email") and email and not getattr(user, "email"):
-        user.email = email
-        update_fields.add("email")
-    for field in ("is_active", "is_staff", "is_superuser"):
-        if hasattr(user, field) and getattr(user, field) is not True:
-            setattr(user, field, True)
-            update_fields.add(field)
-    if password and hasattr(user, "has_usable_password") and not user.has_usable_password():
-        user.set_password(password)
-        update_fields.add("password")
-    return update_fields

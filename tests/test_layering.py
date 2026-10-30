@@ -386,9 +386,9 @@ assert settings.SECRET_KEY=='deployment-secret'
 assert settings.CELERY_BROKER_URL=='redis://deployment.invalid:6379/3'
 assert apps.is_installed('angee.base')
 assert addon_facts('angee.base','angee.platform')['category']=='Foundation'
-assert get_commands()['provision']=='angee.base'
-command=load_command_class('angee.base','provision')
-assert type(command).__module__=='angee.base.management.commands.provision'
+assert get_commands()['provision']=='django_compose'
+command=load_command_class('django_compose','provision')
+assert type(command).__module__=='django_compose.management.commands.provision'
 print(json.dumps({'deployment_overrides':'retained','provision_owner':type(command).__module__}))
 """
     result = subprocess.run(

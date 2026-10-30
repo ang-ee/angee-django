@@ -3,13 +3,12 @@
 from django.core.management.base import CommandError
 from django.http import HttpRequest, JsonResponse
 from django.views.decorators.http import require_GET
-
-from angee.base import require_provisioned
+from django_compose.provision import require_provisioned
 
 
 @require_GET
 def readiness(request: HttpRequest) -> JsonResponse:
-    """Report the base-owned provision predicate without mutating state."""
+    """Report the composition provision predicate without mutating state."""
 
     del request
     try:

@@ -225,7 +225,7 @@ def test_manifest_wires_the_seams() -> None:
     """
 
     from django.apps import AppConfig
-    from django_compose.addons import enabled_apps
+    from django_compose.components import enabled_apps
 
     import angee.knowledge_graph_pgvector as plugin_pkg
 

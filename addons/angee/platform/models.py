@@ -19,15 +19,15 @@ reconcile retains removed rows as history.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from importlib import metadata
 from typing import Any
 
 from django.apps import AppConfig, apps
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import DatabaseError, models, transaction
-from django_compose.addons import installed_addons
+from django_compose.components import AppSelection, InstalledComponents, inspect_apps, installed_components
 from rebac import database_context, system_context
 
 from angee.base.fields.state import StateField
@@ -38,11 +38,9 @@ from angee.platform import composed
 from angee.platform.discovery import (
     AddonCategory,
     available_addons,
-    facts_from_distribution,
     installed_entry_points,
     package_identity_index,
     requirement_addons,
-    resolve_catalogue_roots,
 )
 from angee.platform.installer import (
     AddonInstaller,
@@ -168,7 +166,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
         *,
         installer: AddonInstaller | None = None,
     ) -> AddonChangePreview:
-        """Forecast one settings edit against the loaded graph without changing state."""
+        """Validate proposed roots in isolation and project their loaded-data impact."""
 
         if action not in {"enable", "disable"}:
             raise ValueError(f"Unknown addon change action {action!r}")
@@ -188,45 +186,66 @@ class AddonManager[T: Addon](AngeeManager[T]):
                 data_inventory=(),
                 migration_warning=None,
             )
-        available = available_addons()
-        manifests = tuple(manifest for manifest, _origin in available.values())
+        index = installed_components("angee.addons")
+        available = available_addons(index=index)
+        packages = tuple(package for package, _origin in available.values())
         loaded_configs = {config.name: config for config in composed.addons()}
         roots_before = snapshot.names
-        aliases, configs = self._app_identity()
-        canonical_roots = tuple(aliases.get(root, root) for root in roots_before)
+        roots_after = roots_before
         refusal: str | None = None
-        if action == "enable":
-            if name not in available:
-                refusal = f"{name} is not installed and cannot be enabled."
-            roots_after = roots_before if refusal or name in canonical_roots else (*roots_before, name)
+        selection: AppSelection | None = None
+        if action == "enable" and name not in available:
+            refusal = f"{name} is not installed and cannot be enabled."
         else:
-            declarations = tuple(root for root in roots_before if aliases.get(root, root) == name)
-            refusal = self.disable_block_reason(
-                name, loaded=loaded_configs, declared=bool(declarations), aliases=aliases
-            )
-            roots_after = roots_before if refusal else tuple(root for root in roots_before if root not in declarations)
-        closure = getattr(settings, "COMPOSE_CLOSURE", None)
-        after = resolve_catalogue_roots(
-            roots_after, manifests, aliases=aliases,
-            dependencies={} if closure is None else closure.dependencies,
-        )
-        after_by_name = {manifest["name"]: manifest for manifest in after}
+            try:
+                aliases, _configs = self._app_identity(index=index)
+                declarations = tuple(root for root in roots_before if aliases.get(root, root) == name)
+                current: AppSelection | None = None
+                if not declarations:
+                    current = inspect_apps(roots_before, group="angee.addons")
+                    aliases.update({
+                        alias: entry["name"] for entry in current["app_entries"]
+                        for alias in (entry["name"], entry["entry"], entry["config"])
+                    })
+                    declarations = tuple(root for root in roots_before if aliases.get(root, root) == name)
+                if action == "enable":
+                    roots_after = roots_before if declarations else (*roots_before, name)
+                else:
+                    refusal = self.disable_block_reason(name, loaded=loaded_configs, declared=bool(declarations))
+                    if refusal is None:
+                        roots_after = tuple(root for root in roots_before if root not in declarations)
+                if refusal is None:
+                    selection = (
+                        current if current is not None and roots_after == roots_before
+                        else inspect_apps(roots_after, group="angee.addons")
+                    )
+            except ImproperlyConfigured as error:
+                refusal = str(error)
         loaded_names = set(loaded_configs)
-        target_names = set(after_by_name)
-        enabled = self._change_impacts(target_names - loaded_names, after_by_name, roots_after, aliases, configs)
-        disabled_impacts = []
-        for disabled_name in sorted(loaded_names - target_names):
-            config = loaded_configs[disabled_name]
-            manifest = available.get(config.name, ({"depends_on": ()}, None))[0]
-            disabled_impacts.append(
-                AddonChangeImpact(
-                    name=config.name,
-                    label=config.label,
-                    root=config.name in composed.root_app_names(),
-                    depends_on=tuple(manifest["depends_on"]) if manifest else (),
-                )
+        target_names = loaded_names if selection is None else set(selection["components"].values())
+        enabled = () if selection is None else tuple(
+            AddonChangeImpact(
+                name=entry["name"],
+                label=entry["label"],
+                root=entry["name"] in selection["roots"],
+                depends_on=tuple(selection["dependencies"][entry["name"]]),
             )
-        disabled = tuple(disabled_impacts)
+            for entry in sorted(selection["app_entries"], key=lambda entry: entry["name"])
+            if entry["name"] in target_names - loaded_names
+        )
+        closure = getattr(settings, "COMPOSE_CLOSURE", None)
+        dependencies = {} if closure is None else closure.dependencies
+        loaded_roots = composed.root_app_names()
+        loaded = tuple(
+            AddonChangeImpact(
+                name=name,
+                label=loaded_configs[name].label,
+                root=name in loaded_roots,
+                depends_on=tuple(dependencies.get(name, ())),
+            )
+            for name in sorted(loaded_names)
+        )
+        disabled = tuple(impact for impact in loaded if impact.name not in target_names)
         inventory = self._data_inventory((impact.name for impact in disabled))
         warning = (
             "Disabling addons may require schema migrations that remove model data or contributed fields. "
@@ -234,7 +253,10 @@ class AddonManager[T: Addon](AngeeManager[T]):
             "provision refuses schema drift without authored migration history."
             if disabled else None
         )
-        revision = _preview_revision(snapshot.text, manifests, action=action, addon=name, roots_after=roots_after)
+        revision = _preview_revision(
+            snapshot.text, packages, action=action, addon=name, roots_after=roots_after,
+            selection=selection, loaded=loaded,
+        )
         return AddonChangePreview(
             action=action,
             addon=name,
@@ -266,25 +288,25 @@ class AddonManager[T: Addon](AngeeManager[T]):
         *,
         loaded: Mapping[str, AppConfig],
         declared: bool,
-        aliases: Mapping[str, str],
     ) -> str | None:
         """Refuse loaded dependencies or unknown targets, ignoring stale catalogue flags."""
 
         config = loaded.get(name)
         if config is not None and name not in composed.root_app_names():
-            index = installed_addons("angee.addons")
-            manifests = (
-                facts_from_distribution(index.distributions[provider], index=index)
-                for app_name, provider in index.providers.items() if app_name in loaded
-            )
-            required_by = ", ".join(self._dependants(manifests, aliases=aliases).get(name, ())) or "another enabled app"
+            closure = getattr(settings, "COMPOSE_CLOSURE", None)
+            dependencies = {} if closure is None else closure.dependencies
+            required_by = ", ".join(sorted(
+                app for app, required in dependencies.items() if name in required
+            )) or "another enabled app"
             return f"{name} is required by {required_by} and cannot be disabled."
         if name not in loaded and not declared and not self.filter(name=name).exists():
             return f"{name} is not known to this project."
         return None
 
     @staticmethod
-    def _app_identity() -> tuple[dict[str, str], dict[str, AppConfig]]:
+    def _app_identity(
+        *, index: InstalledComponents | None = None,
+    ) -> tuple[dict[str, str], dict[str, AppConfig]]:
         """Read only loaded identity and installed entry-point aliases."""
 
         configs = {config.name: config for config in apps.get_app_configs()}
@@ -293,30 +315,8 @@ class AddonManager[T: Addon](AngeeManager[T]):
             for key in (config.name, config.label, f"{type(config).__module__}.{type(config).__qualname__}")
         }
         aliases.update(composed.root_app_aliases())
-        aliases.update({entry.value: name for name, entry in installed_entry_points().items()})
+        aliases.update({entry.value: name for name, entry in installed_entry_points(index=index).items()})
         return aliases, configs
-
-    @staticmethod
-    def _change_impacts(
-        names: Iterable[str],
-        manifests: Mapping[str, Mapping[str, Any]],
-        roots: Iterable[str],
-        aliases: Mapping[str, str],
-        configs: Mapping[str, AppConfig],
-    ) -> tuple[AddonChangeImpact, ...]:
-        declarations = {aliases.get(root, root): root for root in roots}
-        impacts = []
-        for name in sorted(names):
-            config = configs.get(name)
-            impacts.append(
-                AddonChangeImpact(
-                    name=name,
-                    label=get_addon_display_label(name, config.label if config is not None else ""),
-                    root=name in declarations,
-                    depends_on=tuple(manifests[name]["depends_on"]),
-                )
-            )
-        return tuple(impacts)
 
     @staticmethod
     def _data_inventory(names: Iterable[str]) -> tuple[AddonDataInventory, ...]:
@@ -368,9 +368,10 @@ class AddonManager[T: Addon](AngeeManager[T]):
         declarations and excludes removed declarers.
         """
 
-        available = available_addons()
+        index = installed_components("angee.addons")
+        available = available_addons(index=index)
         loaded = {config.name: config for config in composed.addons()}
-        aliases, configs = self._app_identity()
+        aliases, configs = self._app_identity(index=index)
         configs.update(loaded)
         canonical_desired = (
             None
@@ -429,10 +430,10 @@ class AddonManager[T: Addon](AngeeManager[T]):
                     },
                 )
 
-            self.reconcile_dependencies()
+            self.reconcile_dependencies(index=index)
 
-    def reconcile_dependencies(self) -> None:
-        """Reproject live native requirements, then reflect reverse catalogue edges.
+    def reconcile_dependencies(self, *, index: InstalledComponents | None = None) -> None:
+        """Project loaded compiler edges and catalogue requirements, then reverse them.
 
         A newly discovered package can resolve requirements retained from an older
         source refresh. Removed declarers keep historical forward edges but do
@@ -440,28 +441,40 @@ class AddonManager[T: Addon](AngeeManager[T]):
         snapshot until their source or installed distribution refreshes.
         """
 
+        index = installed_components("angee.addons") if index is None else index
+        closure = getattr(settings, "COMPOSE_CLOSURE", None)
+        dependencies = {} if closure is None else closure.dependencies
         with database_context(self.db), transaction.atomic(using=self.db):
             rows = list(self.select_for_update().order_by("name"))
             identities = package_identity_index((
-                *((entry.dist.metadata["Name"], name) for name, entry in installed_entry_points().items()
+                *((entry.dist.metadata["Name"], name) for name, entry in installed_entry_points(index=index).items()
                   if entry.dist is not None),
                 *((row.distribution, row.name) for row in rows if row.distribution),
             ))
             live = [row for row in rows if row.state != self.model.AddonState.REMOVED]
+            forward_changes = []
             for row in live:
-                if row.distribution:
+                if row.name in dependencies:
+                    projected = list(dependencies[row.name])
+                elif row.distribution:
                     projected = list(requirement_addons(row.requirements, identities))
-                    if row.depends_on != projected:
-                        self.filter(pk=row.pk).update(depends_on=projected)
-                        row.depends_on = projected
-            aliases, _configs = self._app_identity()
+                else:
+                    continue
+                if row.depends_on != projected:
+                    row.depends_on = projected
+                    forward_changes.append(row)
+            self.bulk_update(forward_changes, ["depends_on"])
+            aliases, _configs = self._app_identity(index=index)
             incoming = self._dependants(
                 ({"name": row.name, "depends_on": row.depends_on} for row in live), aliases=aliases,
             )
+            reverse_changes = []
             for row in rows:
                 value = incoming.get(row.name, [])
                 if row.depended_by != value:
-                    self.filter(pk=row.pk).update(depended_by=value)
+                    row.depended_by = value
+                    reverse_changes.append(row)
+            self.bulk_update(reverse_changes, ["depended_by"])
 
     def pending_changes(self) -> bool | None:
         """Return verified desired-vs-loaded drift, or ``None`` when settings are unreadable.
@@ -487,12 +500,16 @@ def _preview_revision(
     action: str,
     addon: str,
     roots_after: tuple[str, ...],
+    selection: AppSelection | None = None,
+    loaded: Iterable[AddonChangeImpact] = (),
 ) -> str:
-    """Bind the reviewed action and result to exact settings and package facts."""
+    """Bind the decision to settings, package facts, and loaded/proposed app graphs."""
 
     payload = [
         {
             "name": manifest["name"],
+            "distribution": manifest["distribution"],
+            "requirements": list(manifest["requirements"]),
             "depends_on": list(manifest["depends_on"]),
             "description": manifest["description"],
             "category": manifest["category"],
@@ -505,6 +522,8 @@ def _preview_revision(
         "action": action,
         "addon": addon,
         "roots_after": roots_after,
+        "selection": selection,
+        "loaded": [asdict(impact) for impact in sorted(loaded, key=lambda impact: impact.name)],
     }
     return canonical_json_sha256(decision)
 

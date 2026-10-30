@@ -17,19 +17,24 @@ from urllib.parse import urlsplit
 from urllib.request import url2pathname
 
 from django.apps import AppConfig
+from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string, module_has_submodule
-from django_compose.addons import installed_addons
+from django_compose.components import InstalledComponents, installed_components
 
 
-def addon_facts(app_name: str, capability: str) -> dict[str, Any]:
+def addon_facts(
+    app_name: str, capability: str, *, index: InstalledComponents | None = None,
+) -> dict[str, Any]:
     """Read ``[tool.<capability>]`` for a group member without importing it.
 
     Each capability supplies its own app name, including third-party names.
     Ordinary Django apps contribute no package facts. The compiler validates
-    installed identities before enabled capabilities consume these facts.
+    installed identities before enabled capabilities consume these facts. Collection
+    callers pass one native index for their operation; standalone reads discover
+    current metadata without retaining a process-global cache.
     """
-    installed = installed_addons("angee.addons")
+    installed = installed_components("angee.addons") if index is None else index
     provider = installed.providers.get(app_name)
     if provider is None:
         return {}
@@ -67,16 +72,28 @@ def package_document(dist: metadata.Distribution, app_name: str) -> dict[str, An
         raise ImproperlyConfigured(f"{app_name}: cannot read package pyproject.toml") from error
 
 
-def is_angee_addon(app_config: AppConfig) -> bool:
-    """Return whether installed distribution metadata declares this addon."""
+def is_angee_addon(app_config: AppConfig, *, index: InstalledComponents | None = None) -> bool:
+    """Read component identity, reusing the closure for already selected apps.
 
-    return app_config.name in installed_addons("angee.addons").providers
+    A supplied index supports one discovery operation. Candidates outside the
+    loaded closure still use installed metadata, so availability and activation
+    remain separate facts. This reader also works before settings are configured.
+    """
+
+    if index is None:
+        closure = getattr(settings, "COMPOSE_CLOSURE", None) if settings.configured else None
+        if closure is not None and app_config.name in closure.dependencies:
+            return app_config.name in closure.components.values()
+        index = installed_components("angee.addons")
+    return app_config.name in index.providers
 
 
-def optional_addon_module(app_config: AppConfig, module_name: str) -> ModuleType | None:
+def optional_addon_module(
+    app_config: AppConfig, module_name: str, *, index: InstalledComponents | None = None,
+) -> ModuleType | None:
     """Import an optional addon module, preserving errors in a present module."""
 
-    if not is_angee_addon(app_config) or not module_has_submodule(app_config.module, module_name):
+    if not is_angee_addon(app_config, index=index) or not module_has_submodule(app_config.module, module_name):
         return None
     module_path = f"{app_config.name}.{module_name}"
     try:
@@ -99,10 +116,11 @@ def resolve_addon_reference(app_config: AppConfig, dotted: str, *, attr: str) ->
 
 def addon_contribution(
     app_config: AppConfig, module_name: str, attr: str, *, allow_callable: bool = False,
+    index: InstalledComponents | None = None,
 ) -> list[Any]:
     """Return an installed addon's conventional iterable contribution."""
 
-    module = optional_addon_module(app_config, module_name)
+    module = optional_addon_module(app_config, module_name, index=index)
     if module is None:
         return []
     module_path = module.__name__

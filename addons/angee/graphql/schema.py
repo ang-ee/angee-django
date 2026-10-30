@@ -16,6 +16,7 @@ from django.apps import AppConfig, apps
 from django.core.exceptions import NON_FIELD_ERRORS, ImproperlyConfigured, ValidationError
 from django.db import models
 from django.utils.functional import cached_property
+from django_compose.components import InstalledComponents, installed_components
 from rebac import MissingActorError, PermissionDenied
 from rebac.graphql.strawberry import RebacExtension
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
@@ -331,8 +332,9 @@ class GraphQLSchemas:
         """Return deduplicated schema parts folded in addon order."""
 
         collected: dict[str, SchemaParts] = {}
+        index = installed_components("angee.addons")
         for addon in self.addons:
-            for name, parts in schema_parts_for(addon).items():
+            for name, parts in schema_parts_for(addon, index=index).items():
                 collected[name] = collected.get(name, SchemaParts()).merge(parts)
         return collected
 
@@ -647,10 +649,12 @@ class GraphQLSchemas:
                 value.description = label
 
 
-def schema_parts_for(app_config: AppConfig) -> dict[str, SchemaParts]:
+def schema_parts_for(
+    app_config: AppConfig, *, index: InstalledComponents | None = None,
+) -> dict[str, SchemaParts]:
     """Return normalized GraphQL schema parts declared by one addon."""
 
-    raw_schemas = _raw_schemas(app_config)
+    raw_schemas = _raw_schemas(app_config, index=installed_components("angee.addons") if index is None else index)
     if raw_schemas is None:
         return {}
     if not isinstance(raw_schemas, Mapping):
@@ -665,18 +669,16 @@ def schema_parts_for(app_config: AppConfig) -> dict[str, SchemaParts]:
     return parts
 
 
-def _raw_schemas(app_config: AppConfig) -> object:
+def _raw_schemas(app_config: AppConfig, *, index: InstalledComponents) -> object:
     """Return the raw schema declaration object for one addon, when present."""
 
-    if not is_angee_addon(app_config):
+    if not is_angee_addon(app_config, index=index):
         return None
-    facts = addon_facts(app_config.name, "angee.graphql")
-    if not isinstance(facts, Mapping):
-        raise ImproperlyConfigured(f"{app_config.name}: tool.angee.graphql must be a table")
+    facts = addon_facts(app_config.name, "angee.graphql", index=index)
     if "schema" in facts:
         schemas = resolve_addon_reference(app_config, facts["schema"], attr="graphql.schema")
     else:
-        module = optional_addon_module(app_config, "schema")
+        module = optional_addon_module(app_config, "schema", index=index)
         if module is None or not hasattr(module, "schemas"):
             return None
         schemas = module.schemas

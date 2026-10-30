@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from django.apps import AppConfig
-from django_compose.addons import enabled_apps
+from django_compose.components import enabled_apps
 
 from angee.base.addons import is_angee_addon
 from tests.conftest import make_addon
@@ -23,7 +23,7 @@ def test_fixture_foreign_dependencies_survive_native_config_rediscovery(tmp_path
     assert rediscovered.requires_apps == ("django.contrib.contenttypes",)
     closure = enabled_apps((declared.name,), group="angee.addons")
     assert tuple(config.name for config in closure.app_configs) == ("django.contrib.contenttypes", declared.name)
-    assert closure.addons == {declared.name}
+    assert set(closure.components.values()) == {declared.name}
 
 
 def test_native_package_dependencies_activate_angee_fixture_configs(tmp_path: Path) -> None:

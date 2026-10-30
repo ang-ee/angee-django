@@ -21,7 +21,7 @@ wires declarations only; the reference example throughout is `examples/addons/ex
 |---|---|---|
 | `pyproject.toml` | Identity, dependencies, declared capability seams | `examples/addons/example/notes/pyproject.toml` |
 | Native `EntryPoint`, `Distribution`, `packaging.Requirement` | Addon identity, installed requirement activation, and package metadata | `addons/angee/base/addons.py` |
-| `addons/angee/base/addons.py` | Package-data projection and entry-point identity agreement, optional-module and dotted-reference conventions | `native `django_compose.addons` index + base reader` |
+| `addons/angee/base/addons.py` | Package-data projection and entry-point identity agreement, optional-module and dotted-reference conventions | `native `django_compose.components` index + base reader` |
 | `apps.py` (optional) | `name`, pinned `label`, `ready()` hooks, check registration | `addons/angee/money/apps.py:17`, `addons/angee/base/apps.py:22` |
 | `autoconfig.py` | Settings fragments merged by native `django_compose.conf` in dependency order | `examples/addons/example/notes/autoconfig.py:5`, `addons/angee/base/autoconfig.py:23,42` |
 | `testing/models.py`, `tests/settings.py`, `tests/conftest.py` | Concrete models and roster of the bare test host | `addons/angee/tags/testing/models.py`, `tests/settings.py:29,144`, `tests/conftest.py:645` |
@@ -66,7 +66,8 @@ wires declarations only; the reference example throughout is `examples/addons/ex
    ```
 
    Only requirements whose markers are true with `extra=""` activate addon apps.
-   `apps.py` declares foreign Django app edges with `requires_apps`; it carries no
+   `apps.py` declares foreign Django app edges through django-compose's
+   `requires_apps` extension; it carries no
    copy of addon requirements. GraphQL overrides live under `tool.angee.graphql`;
    permission paths belong to `AppConfig.rebac_schema`. MCP uses its Python
    contribution owner rather than redundant tool metadata. Resource paths are

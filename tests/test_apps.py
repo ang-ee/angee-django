@@ -9,7 +9,7 @@ from types import ModuleType
 import pytest
 from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
-from django_compose.addons import enabled_apps
+from django_compose.components import enabled_apps
 
 from angee.base.addons import addon_facts, is_angee_addon
 from angee.graphql.schema import schema_parts_for
@@ -538,7 +538,7 @@ def test_resource_manifest_rejects_unknown_tiers(monkeypatch) -> None:
 def _schema_config(monkeypatch, schemas: object) -> AppConfig:
     """Return a config whose resolved schema declaration is ``schemas``."""
 
-    monkeypatch.setattr("angee.graphql.schema._raw_schemas", lambda _config: schemas)
+    monkeypatch.setattr("angee.graphql.schema._raw_schemas", lambda _config, *, index: schemas)
     return apps.get_app_config("base")
 
 

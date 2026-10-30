@@ -13,12 +13,13 @@ import pytest
 from django.apps import AppConfig, apps
 from django.db import DatabaseError, connection, connections
 from django.test.utils import CaptureQueriesContext, isolate_apps
-from django_compose.addons import enabled_apps
+from django_compose.components import enabled_apps
 from rebac import system_context
 
 import tests.test_platform_install  # noqa: F401 -- register fixture models before database setup
+from angee.base.testing.packages import write_addon_distribution
 from angee.platform import models as platform_models
-from angee.platform.discovery import available_addons, resolve_catalogue_roots
+from angee.platform.discovery import available_addons
 from angee.resources.models import Resource as AbstractResource
 from tests.conftest import catalogue_package, make_addon
 
@@ -76,14 +77,15 @@ def test_available_addons_uses_installed_entry_points() -> None:
         assert isinstance(origin, EntryPoint)
 
 
-def test_package_root_resolution_uses_exact_app_config_aliases() -> None:
-    dependency = catalogue_package("example.dependency")
-    root = catalogue_package("example.root", depends_on=("example.dependency",))
-    resolved = resolve_catalogue_roots(
-        ("example.root.apps.RootConfig", "django.contrib.auth"), (root, dependency),
-        aliases={"example.root.apps.RootConfig": "example.root"},
-    )
-    assert [package["name"] for package in resolved] == ["example.dependency", "example.root"]
+def _installed_addon(root: Path, name: str, monkeypatch, *, depends_on=(), label=None) -> AppConfig:
+    """Create a real importable distribution for isolated compiler inspection."""
+
+    package = root.joinpath(*name.split("."))
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "__init__.py").write_text("")
+    monkeypatch.syspath_prepend(str(root))
+    write_addon_distribution(package, name, depends_on=depends_on, label=label, metadata_root=root)
+    return AppConfig.create(name)
 
 
 def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
@@ -111,7 +113,7 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
         def resource_counts():
             return {loaded.name: 7, "fakeaddon.base": 99}
 
-        patch.setattr(platform_models, "available_addons", lambda: available)
+        patch.setattr(platform_models, "available_addons", lambda **kwargs: available)
         patch.setattr(platform_models.composed, "addons", lambda: [loaded])
         patch.setattr(platform_models.composed, "root_app_aliases", lambda: {loaded.name: loaded.name})
         patch.setattr(platform_models.composed, "resource_counts", resource_counts)
@@ -195,11 +197,11 @@ def test_reconciliation_projects_native_facts_and_preserves_catalogue_history(
         assert str(materialised) == local_manifest["name"]
 
 
-def test_enable_preview_uses_canonical_name_when_django_label_is_unknown(tmp_path, settings, monkeypatch) -> None:
-    """An unresolved addon's display label falls back to its canonical name."""
+def test_enable_preview_refuses_an_unimportable_component(tmp_path, settings, monkeypatch) -> None:
+    """Catalogue availability cannot bypass native AppConfig validation."""
 
     manifest = catalogue_package(name="unavailable_package.addon", depends_on=("unavailable_package.dependency",))
-    monkeypatch.setattr(platform_models, "available_addons", lambda: {manifest["name"]: (manifest, tmp_path)})
+    monkeypatch.setattr(platform_models, "available_addons", lambda **kwargs: {manifest["name"]: (manifest, tmp_path)})
     monkeypatch.setattr(platform_models.composed, "addons", lambda: [])
     monkeypatch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
     settings.BASE_DIR = tmp_path
@@ -208,13 +210,11 @@ def test_enable_preview_uses_canonical_name_when_django_label_is_unknown(tmp_pat
 
     preview = apps.get_model("platform", "Addon").objects.change_preview(manifest["name"], "enable")
 
-    assert preview.can_apply is True
-    assert preview.roots_after == (manifest["name"],)
-    assert len(preview.addons_to_enable) == 1
-    impact = preview.addons_to_enable[0]
-    assert (impact.name, impact.label, impact.depends_on) == (
-        manifest["name"], manifest["name"], manifest["depends_on"],
-    )
+    assert preview.can_apply is False
+    assert "unavailable_package" in preview.refusal
+    assert preview.addons_to_enable == ()
+    assert preview.addons_to_disable == ()
+    assert (tmp_path / "settings.yaml").read_text() == "INSTALLED_APPS: []\n"
 
 
 @pytest.fixture
@@ -278,7 +278,7 @@ def test_unknown_desired_reads_pending_flags_once(composed_tables, tmp_path, mon
         addon = apps.get_model("platform", "Addon")
         pending = {f"pending_fixture.addon_{index}": bool(index % 2) for index in range(addon_count)}
         available = {name: (catalogue_package(name=name), tmp_path / name) for name in pending}
-        patch.setattr(platform_models, "available_addons", lambda: available)
+        patch.setattr(platform_models, "available_addons", lambda **kwargs: available)
         patch.setattr(platform_models.composed, "addons", lambda: [])
         patch.setattr(platform_models.composed, "root_app_aliases", lambda: {})
         patch.setattr(platform_models.composed, "resource_counts", lambda **kwargs: {})
@@ -340,18 +340,24 @@ def test_loaded_root_pending_and_forced_admission_follow_the_composed_graph(
     with monkeypatch.context() as patch:
         del composed_tables
         addon = apps.get_model("platform", "Addon")
-        root = make_addon(name="example.root", path=tmp_path / "root", depends_on=("example.dep",))
-        dependency = make_addon(name="example.dep", path=tmp_path / "dep")
+        dependency = _installed_addon(tmp_path, "selection_probe.dependency", patch)
+        root = _installed_addon(
+            tmp_path, "selection_probe.root", patch,
+            depends_on=(dependency.name, "django.contrib.contenttypes"),
+        )
         closure = enabled_apps((root.name,), group="angee.addons")
+        settings.COMPOSE_CLOSURE = closure
         configs = tuple(AppConfig.create(entry) for entry in closure.entries)
         for config in configs:
             config.apps = apps
             config.models = {}
-        patch.setattr(platform_models, "available_addons", lambda: {
+        patch.setattr(platform_models, "available_addons", lambda **kwargs: {
             config.name: (catalogue_package(config.name, depends_on=closure.dependencies[config.name]), None)
-            for config in configs
+            for config in configs if config.name in closure.components.values()
         })
-        patch.setattr(platform_models.composed, "addons", lambda: list(configs))
+        patch.setattr(platform_models.composed, "addons", lambda: [
+            config for config in configs if config.name in closure.components.values()
+        ])
         patch.setattr(platform_models.composed, "root_app_aliases", lambda: {root.name: root.name})
         patch.setattr(platform_models.composed, "resource_counts", lambda **kwargs: {})
         settings.BASE_DIR = tmp_path
@@ -365,6 +371,8 @@ def test_loaded_root_pending_and_forced_admission_follow_the_composed_graph(
             assert root_row.pending is True
             assert dependency_row.pending is False
             assert dependency_row.forced is True
+            assert root_row.depends_on == list(closure.dependencies[root.name])
+            assert "django.contrib.contenttypes" in root_row.depends_on
             addon.objects.filter(name=dependency.name).update(forced=False, depended_by=[])
             addon.objects.filter(name=root.name).update(forced=True, depended_by=[dependency.name])
             refused = addon.objects.change_preview(dependency.name, "disable")
@@ -382,9 +390,9 @@ def test_composed_membership_reuses_native_selected_closure(settings, monkeypatc
 
     from angee.platform import composed
 
-    settings.COMPOSE_CLOSURE = SimpleNamespace(addons=frozenset({"angee.base"}))
+    settings.COMPOSE_CLOSURE = SimpleNamespace(components={"angee-base": "angee.base"})
     monkeypatch.setattr(
-        composed, "installed_addons",
+        composed, "installed_components",
         lambda *args: (_ for _ in ()).throw(AssertionError("installed metadata rediscovered")),
     )
     assert [config.name for config in composed.addons()] == ["angee.base"]
@@ -405,7 +413,7 @@ def test_passive_preview_retains_native_foreign_root_edges_and_canonical_pending
         "    requires_apps = ('angee.resources',)\n",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
-    extra = make_addon(name='example.preview_extra', path=tmp_path / 'extra')
+    extra = _installed_addon(tmp_path, 'selection_probe.extra', monkeypatch, label='selected_extra')
     closure = enabled_apps(('preview_host.apps.Config',), group='angee.addons')
     settings.COMPOSE_CLOSURE = closure
     settings.COMPOSE_ROOTS = ('preview_host.apps.Config',)
@@ -414,7 +422,7 @@ def test_passive_preview_retains_native_foreign_root_edges_and_canonical_pending
     settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({'INSTALLED_APPS'})
     (tmp_path / 'settings.yaml').write_text('INSTALLED_APPS:\n  - preview_host.apps.Config\n')
     monkeypatch.setattr(platform_models.composed, 'addons', lambda: [
-        config for config in closure.app_configs if config.name in closure.addons
+        config for config in closure.app_configs if config.name in closure.components.values()
     ])
     monkeypatch.setattr(
         AppConfig, 'create',
@@ -426,4 +434,114 @@ def test_passive_preview_retains_native_foreign_root_edges_and_canonical_pending
     assert preview.can_apply
     assert preview.addons_to_disable == ()
     assert [impact.name for impact in preview.addons_to_enable] == [extra.name]
+    assert preview.addons_to_enable[0].label == "selected_extra"
     assert 'preview_host' not in available_addons()
+
+
+def test_preview_refuses_missing_native_requirement(tmp_path, settings, monkeypatch):
+    component = _installed_addon(tmp_path, "selection_probe.missing", monkeypatch)
+    info = tmp_path / "selection_probe_missing-0.0.0.dist-info" / "METADATA"
+    info.write_text(info.read_text() + "Requires-Dist: absent-component-dependency-184572\n")
+    settings.BASE_DIR = tmp_path
+    settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
+    (tmp_path / "settings.yaml").write_text("INSTALLED_APPS: []\n")
+    monkeypatch.setattr(platform_models.composed, "addons", lambda: [])
+    preview = apps.get_model("platform", "Addon").objects.change_preview(component.name, "enable")
+    assert not preview.can_apply
+    assert "absent-component-dependency-184572" in preview.refusal
+    assert preview.addons_to_disable == ()
+
+
+def test_preview_revision_tracks_config_owned_edges(tmp_path, settings, monkeypatch):
+    component = _installed_addon(tmp_path, "selection_probe.revision", monkeypatch)
+    settings.BASE_DIR = tmp_path
+    settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
+    (tmp_path / "settings.yaml").write_text("INSTALLED_APPS: []\n")
+    monkeypatch.setattr(platform_models.composed, "addons", lambda: [])
+    manager = apps.get_model("platform", "Addon").objects
+    before = manager.change_preview(component.name, "enable")
+    assert before.can_apply
+    (Path(component.path) / "apps.py").write_text(
+        "from django.apps import AppConfig\n"
+        "class Config(AppConfig):\n"
+        f"    name = {component.name!r}\n"
+        "    requires_apps = ('django.contrib.contenttypes',)\n"
+    )
+    after = manager.change_preview(component.name, "enable")
+    assert after.can_apply
+    assert after.revision != before.revision
+    assert after.addons_to_enable[0].depends_on == ("django.contrib.contenttypes",)
+
+
+@pytest.mark.parametrize("action", ["enable", "disable"])
+def test_pending_custom_config_root_keeps_native_identity(tmp_path, settings, monkeypatch, action):
+    component = _installed_addon(
+        tmp_path, f"selection_probe.custom_{action}", monkeypatch, label=f"custom_{action}",
+    )
+    config_path = Path(component.path) / "apps.py"
+    config_path.write_text(config_path.read_text() + "\nclass AlternateConfig(FixtureConfig):\n    default = False\n")
+    declaration = f"{component.name}.apps.AlternateConfig"
+    settings.BASE_DIR = tmp_path
+    settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
+    path = tmp_path / "settings.yaml"
+    original = f"INSTALLED_APPS:\n  - {declaration}\n"
+    path.write_text(original)
+    monkeypatch.setattr(platform_models.composed, "addons", lambda: [])
+    monkeypatch.setattr(AppConfig, "create", classmethod(lambda *args: pytest.fail("parent app activation")))
+
+    preview = apps.get_model("platform", "Addon").objects.change_preview(component.name, action)
+
+    assert preview.can_apply, preview.refusal
+    assert preview.roots_after == ((declaration,) if action == "enable" else ())
+    assert path.read_text() == original
+
+
+@pytest.mark.django_db
+def test_preview_revision_changes_with_running_graph(tmp_path, settings, monkeypatch):
+    first = _installed_addon(tmp_path, "selection_probe.running_first", monkeypatch)
+    second = _installed_addon(tmp_path, "selection_probe.running_second", monkeypatch)
+    for config in (first, second):
+        config.apps = apps
+        config.models = {}
+    loaded = [first]
+    monkeypatch.setattr(platform_models.composed, "addons", lambda: loaded)
+    monkeypatch.setattr(platform_models.composed, "root_app_names", lambda: frozenset(config.name for config in loaded))
+    settings.BASE_DIR = tmp_path
+    settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
+    path = tmp_path / "settings.yaml"
+    original = f"INSTALLED_APPS:\n  - {second.name}\n"
+    path.write_text(original)
+    manager = apps.get_model("platform", "Addon").objects
+    settings.COMPOSE_CLOSURE = enabled_apps((first.name,), group="angee.addons")
+    before = manager.change_preview(second.name, "disable")
+    assert before.can_apply, before.refusal
+    assert [impact.name for impact in before.addons_to_disable] == [first.name]
+
+    loaded[:] = [second]
+    settings.COMPOSE_CLOSURE = enabled_apps((second.name,), group="angee.addons")
+    after = manager.change_preview(second.name, "disable")
+    assert after.can_apply, after.refusal
+    assert [impact.name for impact in after.addons_to_disable] == [second.name]
+    assert after.revision != before.revision
+    result = manager.disable(second.name, revision=before.revision)
+    assert not result.ok
+    assert "stale" in result.summary
+    assert path.read_text() == original
+
+
+def test_disable_can_remove_a_broken_queued_root(tmp_path, settings, monkeypatch):
+    component = _installed_addon(tmp_path, "selection_probe.broken", monkeypatch)
+    info = tmp_path / "selection_probe_broken-0.0.0.dist-info" / "METADATA"
+    info.write_text(info.read_text() + "Requires-Dist: absent-component-dependency-184572\n")
+    settings.BASE_DIR = tmp_path
+    settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
+    path = tmp_path / "settings.yaml"
+    original = f"INSTALLED_APPS:\n  - {component.name}\n"
+    path.write_text(original)
+    monkeypatch.setattr(platform_models.composed, "addons", lambda: [])
+
+    preview = apps.get_model("platform", "Addon").objects.change_preview(component.name, "disable")
+
+    assert preview.can_apply, preview.refusal
+    assert preview.roots_after == ()
+    assert path.read_text() == original

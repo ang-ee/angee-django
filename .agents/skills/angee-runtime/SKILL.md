@@ -14,11 +14,11 @@ an owner. Normal application data changes belong to their addon.
 | Concern | Owner |
 |---|---|
 | Build/serving mode and reloader parent | `django_compose.management.execute` |
-| Composition snapshot and app closure | `django_compose.conf`, `snapshot`, `addons` |
+| Composition snapshot and app closure | `django_compose.conf`, `snapshot`, `components` |
 | Models and structural integrations | `django_compose.models`, `model_composition`, `declarations` |
 | Artifact publication and serving verification | `django_compose.build`, `artifacts`, `serving` |
 | Transition binding, native history, guarded drops and retirement | `django_compose.migrations` and native management commands |
-| Database prep, per-app hooks and readiness | `addons/angee/base/provision.py` |
+| Database prep, per-app hooks and readiness | `django_compose.provision` |
 | HTTP child and production worker serving | `addons/angee/server/management/commands/` |
 | Dependency order and held service recovery | Stack `angee.yaml` jobs; native Go operator |
 
@@ -46,7 +46,7 @@ an owner. Normal application data changes belong to their addon.
    `reset_migration_history` only for their explicit intent. Read the command
    owner before choosing options. Retirement/reset requires applied-history and
    dependent-history proofs; it is not routine deployment repair.
-7. Provisioning is a separate base-owned database operation. It uses native
+7. Provisioning is a separate compiler-owned database operation. It uses native
    migration checks/execution and idempotent `AppConfig.compose_provision` hooks.
    Writer readiness consumes the recorded provision state; a successful compose
    or permission check alone does not prove readiness.

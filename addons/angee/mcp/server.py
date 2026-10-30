@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 from django.apps import AppConfig, apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django_compose.components import InstalledComponents, installed_components
 from fastmcp import FastMCP
 
 from angee.base.addons import optional_addon_module
@@ -95,13 +96,17 @@ def _registrars() -> tuple[ToolRegistrar, ...]:
     deterministic.
     """
 
-    return tuple(registrar for config in apps.get_app_configs() if (registrar := tool_registrar(config)) is not None)
+    index = installed_components("angee.addons")
+    return tuple(
+        registrar for config in apps.get_app_configs()
+        if (registrar := tool_registrar(config, index=index)) is not None
+    )
 
 
-def tool_registrar(app_config: AppConfig) -> ToolRegistrar | None:
+def tool_registrar(app_config: AppConfig, *, index: InstalledComponents | None = None) -> ToolRegistrar | None:
     """Load the conventional registrar only from an enabled addon."""
 
-    module = optional_addon_module(app_config, 'mcp_tools')
+    module = optional_addon_module(app_config, 'mcp_tools', index=index)
     if module is None or not hasattr(module, 'register'):
         return None
     registrar = module.register

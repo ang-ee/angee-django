@@ -305,7 +305,7 @@ provides-extras = ["postgres"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "angee-django-stubs", extras = ["compatible-mypy"], specifier = "==6.1.2.post2" },
+    { name = "angee-django-stubs", extras = ["compatible-mypy"], specifier = "==6.1.2.post3" },
     { name = "angee-mypy", specifier = "==2.1.0" },
     { name = "daphne", specifier = ">=4.0" },
     { name = "django-zed-rebac", extras = ["caveats"], git = "https://github.com/ang-ee/django-zed-rebac.git?rev=f43f0773f2c2a86a6882aeb1b46b34b8c19a0d13" },
@@ -509,7 +509,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=44" },
     { name = "django", specifier = ">=6.1.2,<6.2" },
     { name = "django-choices-field", git = "https://github.com/ang-ee/django-choices-field.git?rev=b02c1488660d0bf1f4483d2e73bc842b41b70632" },
-    { name = "django-compose", specifier = "==0.1.0.dev1" },
+    { name = "django-compose", specifier = "==0.1.0.dev2" },
     { name = "django-environ", specifier = ">=0.12" },
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
@@ -575,7 +575,7 @@ requires-dist = [
 
 [[package]]
 name = "angee-django-stubs"
-version = "6.1.2.post2"
+version = "6.1.2.post3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "angee-django-stubs-ext" },
@@ -583,9 +583,9 @@ dependencies = [
     { name = "types-pyyaml" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cd/a7/cc3347dc431ed513777ad9569580fcd25e40c88399b3687b43ca95d31506/angee_django_stubs-6.1.2.post2.tar.gz", hash = "sha256:271f303c8b9863d4fc1f36f2720b82e8867108f4bf9d9666a41965cab3fc64e2", size = 303320, upload-time = "2026-10-30T02:32:29.262Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a3/88/8f25131f810264434f64714d521385fbd65f1c9b7468986551e8f5ff8333/angee_django_stubs-6.1.2.post3.tar.gz", hash = "sha256:554ab487d2f26470392e3e55595899855dc9b84a6b78c759eff79c16c59cfe68", size = 303403, upload-time = "2026-10-30T12:22:41.093Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/16/84/c1c3c8c4d94c27a804059e68604c27e260d8adb7afb4c22ebbadce48ff06/angee_django_stubs-6.1.2.post2-py3-none-any.whl", hash = "sha256:75a96e746fede7e3dbc43a61895ef049ecd1d34694a8a0c82a270c631c3f4591", size = 566967, upload-time = "2026-10-30T02:32:27.846Z" },
+    { url = "https://files.pythonhosted.org/packages/e0/fa/0d36c9f73268f0df90cbad2006f3c8a4e518ca0ae0fcea3ffc5ce2c66cf9/angee_django_stubs-6.1.2.post3-py3-none-any.whl", hash = "sha256:23585f5a63ca63177b1c7fcdb501ca4f14f44fc60965f7485e6ef803700c40e5", size = 567116, upload-time = "2026-10-30T12:22:39.516Z" },
 ]
 
 [package.optional-dependencies]
@@ -646,6 +646,7 @@ dependencies = [
     { name = "angee-server" },
     { name = "channels" },
     { name = "channels-redis" },
+    { name = "django-compose" },
     { name = "django-zed-rebac", extra = ["strawberry-django"] },
     { name = "graphql-core" },
     { name = "pydantic" },
@@ -662,6 +663,7 @@ requires-dist = [
     { name = "angee-server", editable = "addons/angee/server" },
     { name = "channels", specifier = ">=4.0" },
     { name = "channels-redis", specifier = ">=4.2" },
+    { name = "django-compose", specifier = ">=0.1.0.dev2,<0.2" },
     { name = "django-zed-rebac", extras = ["strawberry-django"], git = "https://github.com/ang-ee/django-zed-rebac.git?rev=f43f0773f2c2a86a6882aeb1b46b34b8c19a0d13" },
     { name = "graphql-core", specifier = ">=3.3.1,<3.4" },
     { name = "pydantic", specifier = ">=2.13" },
@@ -828,6 +830,7 @@ dependencies = [
     { name = "billiard" },
     { name = "celery", extra = ["redis"] },
     { name = "django-celery-beat" },
+    { name = "django-compose" },
 ]
 
 [package.metadata]
@@ -836,6 +839,7 @@ requires-dist = [
     { name = "billiard", specifier = ">=4.2.1,<4.3" },
     { name = "celery", extras = ["redis"], specifier = ">=5.5" },
     { name = "django-celery-beat", git = "https://github.com/celery/django-celery-beat.git?rev=b5e3443d647baf910c0168f25b512dd388ba669e" },
+    { name = "django-compose", specifier = ">=0.1.0.dev2,<0.2" },
 ]
 
 [[package]]
@@ -912,6 +916,7 @@ dependencies = [
     { name = "angee-iam" },
     { name = "angee-provenance" },
     { name = "angee-server" },
+    { name = "django-compose" },
     { name = "fastmcp" },
     { name = "mcp" },
 ]
@@ -922,6 +927,7 @@ requires-dist = [
     { name = "angee-iam", editable = "addons/angee/iam" },
     { name = "angee-provenance", editable = "addons/angee/provenance" },
     { name = "angee-server", editable = "addons/angee/server" },
+    { name = "django-compose", specifier = ">=0.1.0.dev2,<0.2" },
     { name = "fastmcp", specifier = ">=3.4.7,<4" },
     { name = "mcp", specifier = ">=1.2" },
 ]
@@ -1165,6 +1171,7 @@ dependencies = [
     { name = "angee-iam" },
     { name = "angee-resources" },
     { name = "angee-web" },
+    { name = "django-compose" },
     { name = "ruamel-yaml" },
 ]
 
@@ -1174,6 +1181,7 @@ requires-dist = [
     { name = "angee-iam", editable = "addons/angee/iam" },
     { name = "angee-resources", editable = "addons/angee/resources" },
     { name = "angee-web", editable = "addons/angee/web" },
+    { name = "django-compose", specifier = ">=0.1.0.dev2,<0.2" },
     { name = "ruamel-yaml", specifier = ">=0.18" },
 ]
 
@@ -1408,6 +1416,7 @@ version = "3.0.0"
 source = { editable = "addons/angee/resources" }
 dependencies = [
     { name = "angee-base" },
+    { name = "django-compose" },
     { name = "django-import-export" },
     { name = "pyyaml" },
     { name = "tablib" },
@@ -1416,6 +1425,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "angee-base", editable = "addons/angee/base" },
+    { name = "django-compose", specifier = ">=0.1.0.dev2,<0.2" },
     { name = "django-import-export", specifier = ">=4.4" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "tablib", specifier = ">=3" },
@@ -1466,7 +1476,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "angee-base", editable = "addons/angee/base" },
-    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+    { name = "django-compose", specifier = ">=0.1.0.dev2,<0.2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 
@@ -1716,12 +1726,14 @@ source = { editable = "addons/angee/web" }
 dependencies = [
     { name = "angee-base" },
     { name = "angee-server" },
+    { name = "django-compose" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "angee-base", editable = "addons/angee/base" },
     { name = "angee-server", editable = "addons/angee/server" },
+    { name = "django-compose", specifier = ">=0.1.0.dev2,<0.2" },
 ]
 
 [[package]]
@@ -2657,16 +2669,16 @@ dependencies = [
 
 [[package]]
 name = "django-compose"
-version = "0.1.0.dev1"
+version = "0.1.0.dev2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
     { name = "django-yamlconf" },
     { name = "packaging" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fc/59/d60d05f122069e3b2424259d00f8154d4898b02ecb1f103d476372a461c4/django_compose-0.1.0.dev1.tar.gz", hash = "sha256:75cd4b1fd437992b8f77de28f38c00e0268835536aaae75709c8c85826765a10", size = 227556, upload-time = "2026-10-30T01:23:55.383Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4a/27/47be86003b64c89349a970425f8daff97ecfc547a930387b43f7474b898a/django_compose-0.1.0.dev2.tar.gz", hash = "sha256:0cd0f7187f18d5f3add2dba4abf9e1642099e07b632c3434fdbeb6b81360dc47", size = 257804, upload-time = "2026-10-30T13:42:24.29Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/74/dd/e89104ce72d5c9f8dc8a933a5475529360ed437ab3c10b28563ec30ea42c/django_compose-0.1.0.dev1-py3-none-any.whl", hash = "sha256:0c6d108ee25ff6948a2a2cf030a164cf388725fa7866e567b5163f002b1622e4", size = 92660, upload-time = "2026-10-30T01:23:54.257Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/58/8393d8e65e0ab2a53bcb937688ed32523e87996b4fd96fc641a2d8965698/django_compose-0.1.0.dev2-py3-none-any.whl", hash = "sha256:594cbbb4a45c99cf909ffdfe874d11d702ae7568be74600e694648684d9bdde3", size = 100705, upload-time = "2026-10-30T13:42:23.163Z" },
 ]
 
 [[package]]

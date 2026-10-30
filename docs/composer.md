@@ -1,9 +1,9 @@
 # The Composer
 
-`django-compose` owns generic Django composition: installed-addon discovery,
+`django-compose` owns generic Django composition: component discovery,
 settings order, abstract source declarations, generated models and artifacts,
-verified serving imports, and native migration authoring. Angee composes those
-contracts through its addons. There is no separate framework core package.
+verified serving imports, native migration authoring, and explicit provisioning.
+Angee composes those contracts through its addons. There is no separate framework core package.
 
 This guide routes intent to owners. Exact signatures and validation belong to
 the linked source and the installed `django_compose` modules.
@@ -24,21 +24,37 @@ the linked source and the installed `django_compose` modules.
    the authored settings module. Native serving verification checks the receipt
    before importing emitted models; startup does not repair missing output.
 5. **Provision separately.** `python manage.py provision` applies database
-   state through [`angee.base.provision`](../addons/angee/base/provision.py).
-   The operator's job graph orders dependency sync, compose, provision and service
-   recovery. [Checks](checks.md#composition-and-schema) owns the commands.
+   state through `django_compose.provision`.
+   The compiler invokes each enabled app's optional idempotent `AppConfig.compose_provision` hook
+   after migrations. The operator's job graph orders dependency sync, compose,
+   provision and service recovery. [Checks](checks.md#composition-and-schema) owns the commands.
 
 Development `runserver` uses the native compiler launcher to compose in a fresh
 process before each reloader child. Django owns the reload loop; Angee's
 [`server command`](../addons/angee/server/management/commands/runserver.py)
 serves the child with Uvicorn. Production serving consumes prepared output.
 
+## Provision Ownership Upgrade
+
+When upgrading a stack that still has the former `base_provision` completion
+table, stop its serving processes and old provisioners through the operator,
+install the pinned compiler, and compose the new receipt. Run the host's native
+`python manage.py provision --upgrade-from base_provision` once before restoring
+service. The compiler validates and invalidates the old completion record before
+renaming its table; application data and Django migration history are preserved.
+Normal provisioning and readiness use only `django_compose_provision` afterward.
+Do not keep an old provisioner running during the cutover.
+
+Custom integrations consume `django_compose.components` and
+`COMPOSE_COMPONENT_GROUP`. Angee supplies the `angee.addons` entry-point group;
+`AppConfig.compose_provision` remains the optional app-owned preparation hook.
+
 ## Owner Map
 
 | Concern | Owner |
 |---|---|
 | Distribution requirements, entry points, editable installs and locks | Native Python metadata, uv and Hatchling |
-| Addon providers, requirement closure and Django app identity | `django_compose.addons` and Django `AppConfig` |
+| Component providers, requirement closure and Django app identity | `django_compose.components` and Django `AppConfig` |
 | Deployment YAML, `.env`, service URLs and Angee defaults | [`angee.base.conf`](../addons/angee/base/conf/__init__.py) and [`base.autoconfig`](../addons/angee/base/autoconfig.py) |
 | Settings merge, structural provenance and immutable snapshot | `django_compose.conf` and `django_compose.snapshot` |
 | Capability-owned package facts | [`angee.base.addons`](../addons/angee/base/addons.py) reads packaged TOML through the native installed index |
@@ -48,7 +64,7 @@ serves the child with Uvicorn. Production serving consumes prepared output.
 | REBAC projection and additive schema fragments | [`PermissionIntegration`](../addons/angee/base/build.py) |
 | Source-local catalogue facts and resource retirement exemptions | [`CatalogueIntegration`](../addons/angee/resources/build.py) |
 | Web manifest and Tailwind projection | [`WebIntegration`](../addons/angee/web/build.py) |
-| Database readiness and idempotent addon provision hooks | [`angee.base.provision`](../addons/angee/base/provision.py) |
+| Database readiness and optional app preparation hooks | `django_compose.provision` |
 | Explicit URL and ASGI contributions | `django_compose.urls` and `django_compose.asgi` |
 | HTTP defaults, Uvicorn commands and connection policy | [`angee.server`](../addons/angee/server/) |
 | GraphQL schema, SDL and WebSocket policy | [`angee.graphql`](../addons/angee/graphql/); ready-phase [`SchemaIntegration`](../addons/angee/graphql/sdl.py) emits SDL/metadata during compose |
@@ -74,7 +90,7 @@ Runtime secrets and service URLs stay deployment inputs.
 
 `INSTALLED_APPS` declares project roots, including ordinary third-party Django
 apps. Each addon distribution advertises one entry point in `angee.addons`.
-The compiler's native installed index supplies addon providers and requirements;
+The compiler's native component index supplies distribution providers and requirements;
 Django owns config selection, labels and lifecycle. Requirement markers are
 interpreted for the base installation (`extra=""`); optional extras install
 libraries without implicitly activating addon apps.
@@ -88,8 +104,17 @@ or importing candidate models. A missing `apps.py` does not make a package a
 library. A library is explicitly packaged without an addon entry point.
 
 Addon requirements belong in `[project].dependencies`. Foreign Django app edges
-belong in `AppConfig.requires_apps`; do not repeat addon requirements there.
-Identity collisions, missing requirements and cycles fail at the native owner.
+belong in django-compose's `AppConfig.requires_apps` extension; do not repeat
+addon requirements there.
+Identity collisions, missing requirements and cycles fail at the compiler owner.
+Platform uses that same owner for proposed app selections in an isolated process.
+Loaded dependency edges come from `COMPOSE_CLOSURE`; model and field views read
+Django's registry and `_meta`, with contribution origins from emitted compiler facts.
+Catalogue display remains metadata-only. Selection checks do not prove model
+composition or migration safety; those remain explicit composition/history checks.
+`requires_apps`, `autoconfig`, `Composable` and `compose_urls` are django-compose
+extension contracts; they are not built-in Django behavior. Django owns
+`AppConfig`, app population and the final `INSTALLED_APPS` registry.
 
 ## Autoconfig
 

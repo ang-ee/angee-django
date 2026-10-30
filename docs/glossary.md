@@ -10,10 +10,16 @@ the smallest accurate statement.
 **Angee** — a thin composition framework that binds proven libraries into one
 deterministic product surface. It owns the seams, not the concerns.
 
-**Addon** — the unit of capability. An addon declares a contract (source models,
-operations, routes, containers, resources) that the composer assembles into a project.
-Everything that gives a product a capability, including its API protocol, is an
-addon. The framework core is not. **Addon** is also the user-facing name;
+**Component** — a Python distribution authored by `pyproject.toml`. For the
+current django-compose contract, each participating component provides one Django
+app; models, a custom AppConfig and a provisioning hook are optional. Installed
+identity, version and requirements come from native distribution metadata.
+
+**Addon** — an Angee component advertised by an `angee.addons` entry point.
+Its package declares requirements and capability facts; its Python
+and web modules implement those capabilities. Installation makes it available;
+project roots and their required apps determine whether it is enabled.
+**Addon** is also the user-facing name;
 **App** is reserved for a domain root or an included, non-flattened app in the
 product rail.
 
@@ -21,29 +27,30 @@ product rail.
 shows root apps and their sub-apps at most two levels; each app's own menu items
 belong in the top bar.
 
-**Framework core** — generic Django composition, Angee host configuration and
-serving entrypoints, and shared framework primitives. Reusable model behavior
-and product capabilities belong to addons.
-
-**Framework addon** — a reusable product capability that is part of Angee itself
-and builds on the framework core. Framework addons live under `addons/`.
+**Framework addon** — a reusable capability shipped with Angee under `addons/`.
+Foundation primitives belong to `angee.base`, HTTP serving policy to
+`angee.server`, and generic composition to the independent `django-compose`
+library. There is no separate Angee core package.
 
 **Foundation addon (`angee.base`)** — the reusable model foundation: models,
-mixins, fields, managers, querysets, identity, validation and permission
-integration. Its persisted Django app label is `base`.
+mixins, fields, managers, querysets, identity, validation, permission integration,
+deployment settings and its permission-synchronization provision hook. Its
+persisted Django app label is `base`.
 
 **Consumer addon** — an addon written by a product team for a specific project,
 built on top of the framework and its reusable addons.
 
-**Composer** — the framework machinery that resolves addon declarations and
-emits concrete model modules, permission extensions and other `runtime/`
-artifacts. It selects class definitions before Django imports and registers them;
-runtime model classes are not monkey-patched. See [The Composer](composer.md).
+**Composer** — the independent `django-compose` library. It resolves app
+selection, emits concrete models, and publishes and verifies artifacts supplied
+by capability integrations. It also owns explicit database preparation and
+readiness for the verified composition. Permission, resource and web semantics
+stay with those integrations. See [The Composer](composer.md).
 
-**Project settings** — the `settings.yaml` and optional Python settings module
-selected by `ANGEE_PROJECT_SETTINGS`. They declare root apps with Django
-`INSTALLED_APPS`, addon directories, and project-specific overrides. Angee's
-composed settings module turns that contract into the running Django settings.
+**Project settings** — the authored Python module selected by Django's
+`DJANGO_SETTINGS_MODULE`, with optional terse `settings.yaml` loaded through
+`angee.base.conf.configure`. Projects declare root `INSTALLED_APPS` and overrides;
+the loader delegates app selection and contribution merging to django-compose.
+Settings are not generated.
 
 **Project** — a runnable product: project settings, consumer addons, frontend
 entrypoints, and generated runtime output. A project is scaffolded from a
