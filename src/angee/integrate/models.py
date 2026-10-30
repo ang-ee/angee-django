@@ -1307,6 +1307,12 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
 
         return self.handler.auth_headers(self)
 
+    def git_credentials(self, *, token_username: str) -> dict[str, str]:
+        """Refresh through the native lifecycle before revealing kind-owned Git material."""
+
+        self.ensure_fresh()
+        return self.handler.git_credentials(self, token_username=token_username)
+
     def secret_value(self) -> str:
         """Return the primary secret value through the kind handler."""
 

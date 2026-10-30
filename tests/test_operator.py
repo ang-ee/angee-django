@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,7 +18,7 @@ from rebac.schema import ConstBinding, parse_zed
 from rebac.testing import install_schema
 
 from angee.integrate.errors import RequestNotSentError
-from angee.integrate.http import HTTP_TIMEOUT_SECONDS, HttpClient
+from angee.integrate.http import HttpClient
 from angee.operator import daemon as daemon_module
 from angee.operator import schema as operator_schema
 from angee.operator.daemon import (
@@ -783,78 +782,32 @@ def test_mint_refuses_absent_invalid_naive_or_expired_issue_metadata(settings, m
     assert OperatorDaemon.from_settings().mint_token("auth/user:invalid-expiry") is None
 
 
-@pytest.mark.parametrize("fail", [False, True])
-def test_checkout_stream_keeps_operator_tree_alive_until_context_exit(
-    monkeypatch: pytest.MonkeyPatch, settings, tmp_path: Path, fail: bool,
-) -> None:
-    """Native iter_lines must stay alive while the checkout consumer prepares metadata."""
-
-    settings.BASE_DIR = tmp_path
-    checkout = tmp_path / "run" / "source-checkouts" / "fixture" / "repository"
-    checkout.mkdir(parents=True)
-    revision = "a" * 40
-    closed = False
-
-    class Body(httpx2.SyncByteStream):
-        def __iter__(self) -> Iterator[bytes]:
-            data = {"path": checkout.relative_to(tmp_path).as_posix(), "revision": revision}
-            yield (json.dumps(data) + "\n").encode()
-            yield b"\n"
-
-        def close(self) -> None:
-            nonlocal closed
-            closed = True
-            shutil.rmtree(checkout)
-
-    def respond(request: httpx2.Request) -> httpx2.Response:
-        assert request.url.path == "/source-checkouts"
-        timeout = request.extensions["timeout"]
-        assert timeout["read"] is None
-        assert all(timeout[phase] == HTTP_TIMEOUT_SECONDS for phase in ("connect", "write", "pool"))
-        assert request.headers["authorization"] == "Bearer admin"
-        assert json.loads(request.content) == {"repository": "https://example.com/repo.git", "revision": revision}
-        return httpx2.Response(200, stream=Body())
-
+def test_source_build_uses_the_native_job_endpoint_and_existing_receipt(monkeypatch):
+    calls = []
+    def respond(request):
+        calls.append((request.method, request.url.path))
+        if request.method == "POST":
+            assert request.url.path == "/jobs/catalogue-metadata/source-build"
+            payload = json.loads(request.content)
+            assert payload == {
+                "repository_url": "https://example.com/repository.git", "revision": "a" * 40,
+                "artifact": "print('metadata')", "package_path": "src", "credential": {
+                    "username": "x-access-token", "password": "one-run-token",
+                },
+            }
+            return httpx2.Response(202, json={"id": "operation", "status": "pending"})
+        assert request.url.path == "/job-runs/operation"
+        return httpx2.Response(200, json={"id": "operation", "status": "succeeded", "output": "{}"})
     monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(respond)))
     daemon = OperatorDaemon(
         endpoint="http://op/graphql", server_base="http://op", admin_bearer="admin", scope=(), ttl="1h",
     )
-    try:
-        with daemon.source_checkout("https://example.com/repo.git", revision) as (path, actual):
-            assert path == checkout and actual == revision
-            assert path.is_dir() and not closed
-            if fail:
-                raise ValueError("metadata failed")
-    except ValueError:
-        assert fail
-    assert closed and not checkout.exists()
-
-
-@pytest.mark.parametrize("path", ["../outside", "/outside", "."])
-def test_checkout_refuses_paths_outside_the_shared_source_tree(monkeypatch, settings, tmp_path, path):
-    settings.BASE_DIR = tmp_path
-    response = httpx2.Response(200, content=(json.dumps({"path": path, "revision": "a" * 40}) + "\n").encode())
-    monkeypatch.setattr(
-        HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(lambda _: response)),
+    receipt = daemon.run_source_build(
+        "catalogue-metadata", repository_url="https://example.com/repository.git", revision="a" * 40,
+        artifact="print('metadata')", package_path="src",
+        credential={"username": "x-access-token", "password": "one-run-token"},
     )
-    daemon = OperatorDaemon(
-        endpoint="http://op/graphql", server_base="http://op", admin_bearer="admin", scope=(), ttl="1h",
-    )
-    with pytest.raises(OperatorDaemonError, match="inside the shared stack root"):
-        with daemon.source_checkout("https://example.com/repo.git", "main"):
-            pytest.fail("invalid checkout was yielded")
-    assert response.is_closed
-
-
-def test_checkout_reports_operator_credential_failure_without_yielding(monkeypatch):
-    response = httpx2.Response(403, content=b'{"error":"checkout credentials unavailable"}')
-    monkeypatch.setattr(
-        HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(lambda _: response)),
-    )
-    daemon = OperatorDaemon(
-        endpoint="http://op/graphql", server_base="http://op", admin_bearer="admin", scope=(), ttl="1h",
-    )
-    with pytest.raises(OperatorDaemonError, match="checkout credentials unavailable"):
-        with daemon.source_checkout("https://example.com/private.git", "main"):
-            pytest.fail("failed checkout was yielded")
-    assert response.is_closed
+    assert receipt == {"id": "operation", "status": "pending"}
+    assert daemon.job_run(receipt["id"])["output"] == "{}"
+    assert not hasattr(daemon, "source_checkout")
+    assert calls == [("POST", "/jobs/catalogue-metadata/source-build"), ("GET", "/job-runs/operation")]

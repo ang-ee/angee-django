@@ -3,18 +3,24 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
+import tomllib
 from importlib.metadata import EntryPoint
 from pathlib import Path
 
 import pytest
-from build import BuildBackendException
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, connection, transaction
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
 import tests.test_marketplace_graphql  # noqa: F401 -- register the fixture model graph before database setup
+from angee.integrate_vcs.backend import RepoDescriptor, VCSBackend
+from angee.operator.daemon import OperatorDaemon, OperatorDaemonError
 from angee.platform.discovery import facts_from_distribution, installed_entry_points
 from angee.platform_integrate_vcs import catalog
 from tests.conftest import Addon, Repository, Source, VcsBridge, catalogue_package, make_addon, make_integration
@@ -28,9 +34,55 @@ bypass-selection=true
 """
 
 
+class CatalogueBackend(VCSBackend):
+    """Remote test transport; only the isolated metadata producer sees fixture files."""
+
+    key = "local"
+
+    def ls_repos(self, *, org=""):
+        return [RepoDescriptor(name="catalogue", org="tests", remote="https://example.com/catalogue.git")]
+
+    def rev_parse(self, repository, ref):
+        return "a" * 40
+
+
+def fixture_metadata(root: Path, package_path: str) -> str:
+    """Run the real trusted worker against test-authored projects offline.
+
+    Minimal Hatchling fixtures explicitly package their capability document.
+    Production never adds or interprets authored identity metadata this way.
+    """
+
+    image = os.environ.get("CATALOGUE_METADATA_TEST_IMAGE", "catalogue-metadata:prepared")
+    worker = Path(catalog.__file__).with_name("metadata_worker.py")
+    with tempfile.TemporaryDirectory(prefix="catalogue-fixture-", dir="/private/tmp") as temporary:
+        snapshot = Path(temporary) / "repository"
+        shutil.copytree(root, snapshot)
+        snapshot.chmod(0o755)
+        for marker in snapshot.rglob("pyproject.toml"):
+            document = tomllib.loads(marker.read_text())
+            points = document.get("project", {}).get("entry-points", {}).get("angee.addons", {})
+            if document.get("build-system", {}).get("build-backend") == "hatchling.build" and len(points) == 1:
+                target = next(iter(points)).replace(".", "/") + "/pyproject.toml"
+                marker.write_text(marker.read_text() + '\n[tool.hatch.build.targets.wheel.force-include]\n'
+                                  + json.dumps("pyproject.toml") + "=" + json.dumps(target) + "\n")
+        result = subprocess.run([
+            "docker", "run", "--rm", "--pull", "never", "--network", "none", "--read-only", "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges", "--user", "65532:65532",
+            "--tmpfs", "/work:rw,uid=65532,gid=65532,size=536870912",
+            "--tmpfs", "/tmp:rw,uid=65532,gid=65532,size=33554432",
+            "--mount", f"type=bind,source={snapshot},target=/work/repository,readonly",
+            "--mount", f"type=bind,source={worker},target=/work/artifact,readonly",
+            "--env", f"PACKAGE_PATH={package_path}", image,
+        ], capture_output=True, text=True, timeout=60)
+        if result.returncode:
+            raise OperatorDaemonError(result.stderr[-8192:])
+        return result.stdout
+
+
 @pytest.fixture()
-def catalog_source(composed_tables: None, tmp_path: Path) -> tuple[Source, Path]:
-    """Provide a real local VCS source with a remote-only addon declaration."""
+def catalog_source(composed_tables: None, tmp_path: Path, monkeypatch, settings) -> tuple[Source, Path]:
+    """Provide a remote source whose native metadata job runs test-authored fixture builds."""
 
     del composed_tables
     marker = tmp_path / "addons" / "base" / "pyproject.toml"
@@ -54,12 +106,19 @@ def catalog_source(composed_tables: None, tmp_path: Path) -> tuple[Source, Path]
     sibling.parent.mkdir()
     sibling.write_text(_BUILD_SYSTEM + '[project]\nname="catalog-remote-dependency"\nversion="1.0"\n'
                        '[project.entry-points."angee.addons"]\n"catalog_remote.dependency"="catalog_remote.dependency"\n')
-    bridge = make_integration(
-        "addon-catalog",
-        model=VcsBridge,
-        backend_class="local",
-        config={"local_root": str(tmp_path), "local_name": "catalogue"},
-    )
+    settings.ANGEE_VCS_BACKEND_CLASSES = {
+        **settings.ANGEE_VCS_BACKEND_CLASSES,
+        "local": "tests.test_platform_integrate_vcs.CatalogueBackend",
+    }
+    def run_job(daemon, name, **values):
+        assert values["repository_url"] == "https://example.com/catalogue.git"
+        assert values["revision"] == "a" * 40
+        assert values["credential"] == {"username": "git", "password": "x"}
+        assert not connection.in_atomic_block
+        return {"id": "metadata-operation", "status": "succeeded",
+                "output": fixture_metadata(tmp_path, values["package_path"])}
+    monkeypatch.setattr(OperatorDaemon, "run_source_build", run_job)
+    bridge = make_integration("addon-catalog", model=VcsBridge, backend_class="local")
     bridge.discover_repositories()
     with system_context(reason="test catalogue source"):
         repository = Repository.objects.get(name="catalogue")
@@ -236,6 +295,7 @@ def _catalogue_document(app: str, distribution: str, requirements: tuple[str, ..
         f"[project]\nname={json.dumps(distribution)}\nversion=\"1.0\"\n"
         f"dependencies={json.dumps(requirements)}\n"
         f"[project.entry-points.\"angee.addons\"]\n{json.dumps(app)}={json.dumps(app)}\n"
+        + _BUILD_SYSTEM
     )
 
 
@@ -385,11 +445,11 @@ def test_build_failure_preserves_existing_catalogue_and_sync_time(catalog_source
         before = list(Addon.objects.order_by("pk").values())
     timestamp = source.last_synced_at
 
-    def fail(*args):
+    def fail(*args, **kwargs):
         assert not connection.in_atomic_block
         raise RuntimeError("native metadata failed")
 
-    monkeypatch.setattr(catalog, "build_distribution", fail)
+    monkeypatch.setattr(OperatorDaemon, "run_source_build", fail)
     with pytest.raises(RuntimeError, match="native metadata failed"):
         source.refresh()
     with system_context(reason="test catalogue after failure"):
@@ -413,20 +473,20 @@ def test_source_coordinate_change_during_build_cannot_publish(catalog_source, mo
                 default_branch=source.repository.default_branch,
             )
         value = replacement.pk
-    original = catalog.build_distribution
+    original = OperatorDaemon.run_source_build
     changed = False
 
-    def prepare(*args):
+    def prepare(*args, **kwargs):
         nonlocal changed
         assert not connection.in_atomic_block
-        result = original(*args)
+        result = original(*args, **kwargs)
         if not changed:
             changed = True
             with system_context(reason="test concurrent source edit"):
                 Source.objects.filter(pk=source.pk).update(**{field: value})
         return result
 
-    monkeypatch.setattr(catalog, "build_distribution", prepare)
+    monkeypatch.setattr(OperatorDaemon, "run_source_build", prepare)
     with pytest.raises(ImproperlyConfigured, match="Source changed"):
         source.refresh()
     with system_context(reason="test stale source after"):
@@ -443,9 +503,38 @@ def test_malformed_non_addon_build_project_is_not_silently_ignored(catalog_sourc
         '[project]\nname="ordinary"\nversion="1.0"\n'
         '[build-system]\nrequires=[]\nbuild-backend="missing_native_backend"\n'
     )
-    with pytest.raises(BuildBackendException, match="missing_native_backend"):
+    with pytest.raises(OperatorDaemonError, match="missing_native_backend"):
         source.refresh()
     with system_context(reason="test malformed catalogue remains empty"):
         assert not Addon.objects.filter(vcs_source=source).exists()
         source.refresh_from_db()
     assert source.last_synced_at is None
+
+
+def test_serving_catalogue_never_imports_the_build_frontend(catalog_source, monkeypatch):
+    source, _marker = catalog_source
+    monkeypatch.setitem(sys.modules, "build", None)
+    assert source.refresh() == 2
+
+
+@pytest.mark.parametrize("failure", ("failed", "unavailable", "bad_json", "oversized"))
+def test_job_failures_preserve_previous_catalogue_and_sync_time(catalog_source, monkeypatch, failure):
+    source, _marker = catalog_source
+    assert source.refresh() == 2
+    with system_context(reason="tests.catalogue.job_failure_before"):
+        before = list(Addon.objects.order_by("pk").values())
+    timestamp = source.last_synced_at
+    def fail(*args, **kwargs):
+        if failure == "unavailable":
+            raise OperatorDaemonError("Declare the trusted catalogue-metadata source-build job")
+        if failure == "failed":
+            return {"id": "failed-operation", "status": "failed", "error": "prepared backend unavailable"}
+        return {"id": "bad-operation", "status": "succeeded",
+                "output": "not-json" if failure == "bad_json" else "x" * 262145}
+    monkeypatch.setattr(OperatorDaemon, "run_source_build", fail)
+    with pytest.raises((OperatorDaemonError, ImproperlyConfigured)):
+        source.refresh()
+    with system_context(reason="tests.catalogue.job_failure_after"):
+        assert list(Addon.objects.order_by("pk").values()) == before
+        source.refresh_from_db()
+        assert source.last_synced_at == timestamp

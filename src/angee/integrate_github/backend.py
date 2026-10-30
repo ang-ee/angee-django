@@ -45,6 +45,8 @@ class GitHubApiError(Exception):
 class GitHubBackend(VCSBackend):
     """A :class:`VCSBackend` that reads a GitHub remote over the REST API."""
 
+    git_token_username = "x-access-token"
+
     key = "github"
     label = "GitHub"
     icon = "github"

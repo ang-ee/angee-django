@@ -108,16 +108,16 @@ distribution metadata. Ordinary addons author `dynamic = ["entry-points"]`;
 [hatch-angee](https://github.com/ang-ee/hatch-angee#readme) owns the naming rule.
 Explicit entry points remain available for custom mappings and additional groups.
 
-Source ingestion builds a wheel through PyPA build in an isolated environment
-and reads its native distribution metadata through the same catalogue owner as
-installed packages. The wheel is temporary; the addon is not installed or loaded
-into the serving process.
-Remote sources use an operator-managed complete checkout pinned to one commit;
-local sources retain their configured working-tree semantics. The operator and
-build process must share the stack filesystem, and the operator's native Git
-credentials must permit access to the remote. Preparation runs before catalogue
-writes; a failed build or changed source leaves the catalogue unchanged.
-`pyproject.toml` supplies capability facts, not a parallel identity parser.
+Remote source ingestion submits a selected connection's immutable revision to
+an operator-owned `source-build` job. Its credentialed fetch phase is separate
+from its offline build phase, whose dependencies come from a trusted prepared
+image. Django interprets only bounded wheel metadata and packaged capability
+TOML through the native catalogue owners. It never receives a checkout or runs
+package build hooks. Local catalogue sources instead index explicitly built
+wheels under `Source.path`, preserving other local VCS consumers' working-tree
+semantics. Preparation finishes before catalogue writes; failure or changed
+source coordinates preserve prior rows and sync time. See the
+[VCS catalogue setup](../src/angee/platform_integrate_vcs/README.md).
 
 Addon requirements belong in `[project].dependencies`. Foreign Django app edges
 belong in django-compose's `AppConfig.requires_apps` extension; do not repeat

@@ -70,6 +70,11 @@ class CredentialKindHandler:
 
         raise NotImplementedError
 
+    def git_credentials(self, credential: Any, *, token_username: str) -> dict[str, str]:
+        """Refuse material kinds that cannot authenticate HTTPS Git."""
+
+        raise ValueError("Selected credential kind does not support HTTPS Git; select a token or HTTP Basic credential")
+
     def secret_value(self, credential: Any) -> str:
         """Return the credential's primary secret value."""
 
@@ -93,16 +98,25 @@ class CredentialKindHandler:
         return json.loads(credential.material or "{}")
 
 
-class OAuthCredentialHandler(CredentialKindHandler):
+class _BearerCredentialHandler(CredentialKindHandler):
+    """Shared bearer material for HTTP and provider-selected HTTPS Git usernames."""
+
+    def auth_headers(self, credential: Any) -> dict[str, str]:
+        """Render this kind's primary secret as bearer authorization."""
+
+        return {"Authorization": f"Bearer {self.secret_value(credential)}"}
+
+    def git_credentials(self, credential: Any, *, token_username: str) -> dict[str, str]:
+        """Use the provider's declared Git username and this kind's primary token."""
+
+        return {"username": token_username, "password": self.secret_value(credential)}
+
+
+class OAuthCredentialHandler(_BearerCredentialHandler):
     """Handler for OAuth bearer-token material."""
 
     kind = "oauth"
     material_field = "access_token"
-
-    def auth_headers(self, credential: Any) -> dict[str, str]:
-        """Return OAuth bearer authorization headers."""
-
-        return {"Authorization": f"Bearer {self.secret_value(credential)}"}
 
     def upsert_fields(self, material: dict[str, Any]) -> dict[str, Any]:
         """Return persisted credential metadata derived from an OAuth token response."""
@@ -174,7 +188,7 @@ class OAuthCredentialHandler(CredentialKindHandler):
         credential.refresh_from_db()
 
 
-class StaticTokenCredentialHandler(CredentialKindHandler):
+class StaticTokenCredentialHandler(_BearerCredentialHandler):
     """Handler for static API key material."""
 
     kind = "static_token"
@@ -191,11 +205,6 @@ class StaticTokenCredentialHandler(CredentialKindHandler):
         """
 
         del material
-
-    def auth_headers(self, credential: Any) -> dict[str, str]:
-        """Return static-token bearer authorization headers."""
-
-        return {"Authorization": f"Bearer {self.secret_value(credential)}"}
 
     def refresh(self, credential: Any) -> None:
         """Static tokens do not expire through a refresh flow."""
@@ -237,11 +246,17 @@ class BasicAuthCredentialHandler(CredentialKindHandler):
     material_field = "password"
     material_fields = ("username", "password")
 
-    def auth_headers(self, credential: Any) -> dict[str, str]:
-        """Return an HTTP Basic ``Authorization`` header from the username and password."""
+    def git_credentials(self, credential: Any, *, token_username: str) -> dict[str, str]:
+        """Use this kind's encrypted username/password, independent of token conventions."""
 
         material = self.reveal(credential)
-        raw = f"{material.get('username', '')}:{material.get('password', '')}".encode()
+        return {name: str(material.get(name) or "") for name in ("username", "password")}
+
+    def auth_headers(self, credential: Any) -> dict[str, str]:
+        """Return native HTTP Basic authorization from this kind's transport material."""
+
+        material = self.git_credentials(credential, token_username="")
+        raw = f"{material['username']}:{material['password']}".encode()
         return {"Authorization": f"Basic {base64.b64encode(raw).decode('ascii')}"}
 
     def refresh(self, credential: Any) -> None:

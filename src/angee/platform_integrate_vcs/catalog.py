@@ -1,78 +1,155 @@
-"""Prepare native package metadata from a scoped VCS source view."""
+"""Interpret native metadata returned by the operator's offline source build."""
 
 from __future__ import annotations
 
+import json
 import tempfile
-import tomllib
-import zipfile
-from contextlib import ExitStack
+import time
+from configparser import Error as IniError
 from importlib import metadata
 from pathlib import Path
 from typing import Any
 
-from build import ProjectBuilder
-from build.env import DefaultIsolatedEnv
+from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django_compose.components import index_components
 
-from angee.operator.daemon import OperatorDaemon
+from angee.integrate_vcs.backend import LocalVCSBackend, source_path
+from angee.operator.daemon import OperatorDaemon, OperatorDaemonError
 from angee.platform.discovery import facts_from_distribution
+from angee.platform_integrate_vcs.metadata_worker import (
+    MAX_FILES,
+    MAX_METADATA_BYTES,
+    MAX_OUTPUT_BYTES,
+    MAX_PACKAGES,
+    relative_path,
+    validate_record,
+    wheel_metadata,
+)
 
 
-def build_distribution(project: Path, output: Path, archives: ExitStack) -> metadata.PathDistribution:
-    """Build a native wheel and retain its distribution metadata within ``archives``.
+def metadata_output(daemon: OperatorDaemon, operation: dict[str, Any]) -> str:
+    """Await the existing job receipt, refusing failed, malformed or bounded-out runs."""
 
-    The mandatory wheel hook supplies complete entry-point metadata even when a
-    backend's optional preparation hook returns only core METADATA. Native build
-    isolation owns backend loading and build requirements. No addon is imported
-    into the serving process.
-    """
-
-    output.mkdir()
-    with DefaultIsolatedEnv(installer="uv") as environment:
-        builder = ProjectBuilder.from_isolated_env(environment, str(project))
-        environment.install(builder.build_system_requires)
-        environment.install(builder.get_requires_for_build("wheel"))
-        wheel = builder.build("wheel", str(output))
-    archive = archives.enter_context(zipfile.ZipFile(wheel))
-    directories = [
-        path for path in zipfile.Path(archive).iterdir() if path.is_dir() and path.name.endswith(".dist-info")
-    ]
-    if len(directories) != 1:
-        raise ValueError("A built wheel must contain one native dist-info directory")
-    return metadata.PathDistribution(directories[0])
+    deadline = time.monotonic() + 910
+    while operation.get("status") in {"pending", "running"}:
+        identifier = operation.get("id")
+        if not isinstance(identifier, str) or not identifier:
+            raise OperatorDaemonError("Catalogue metadata job returned no operation identifier")
+        if time.monotonic() >= deadline:
+            raise OperatorDaemonError(f"Catalogue metadata job {identifier} did not finish within its deadline")
+        time.sleep(0.25)
+        operation = daemon.job_run(identifier)
+    if operation.get("status") != "succeeded":
+        raise OperatorDaemonError(
+            "Catalogue metadata preparation failed: " + str(operation.get("error") or "invalid job receipt")
+        )
+    output = operation.get("output")
+    if not isinstance(output, str) or len(output.encode("utf-8")) > MAX_OUTPUT_BYTES:
+        raise OperatorDaemonError("Catalogue metadata job returned missing or oversized output")
+    return output
 
 
 def source_descriptors(source: Any) -> list[dict[str, Any]]:
-    """Read one complete source view into plain catalogue facts before database writes.
+    """Prepare all metadata before the source owner's CAS/reconcile transaction.
 
-    Remote Git credentials and complete checkout cleanup belong to the operator.
-    Local backends retain working-tree semantics. The metadata frontend installs
-    build requirements only in its temporary environment; neither the addon nor
-    its AppConfig is imported into the serving process. No persistent source or
-    metadata cache is maintained here.
+    The selected VCS backend owns revision resolution and refreshed Git material.
+    Only the operator's declared offline build job executes package backends.
+    Django receives data files, never a checkout, wheel or executable module.
     """
 
-    daemon = OperatorDaemon.from_settings()
-    with source.materialized(checkout=daemon.source_checkout) as (root, _revision):
-        with tempfile.TemporaryDirectory(prefix="angee-catalogue-metadata-") as temporary, ExitStack() as archives:
-            prepared: list[tuple[Path, dict[str, Any], metadata.Distribution]] = []
-            for marker in source.marker_paths(root, marker="pyproject.toml"):
-                document = tomllib.loads(marker.read_text(encoding="utf-8"))
-                built_distribution = build_distribution(marker.parent, Path(temporary) / str(len(prepared)), archives)
-                prepared.append((marker.parent, document, built_distribution))
-            index = index_components(
-                (distribution for _path, _document, distribution in prepared), group="angee.addons",
-            )
+    repository = source.repository
+    backend = repository.vcs_bridge.backend
+    scope = relative_path(source.path or ".", root=True)
+    if isinstance(backend, LocalVCSBackend):
+        def no_checkout(*args: Any) -> Any:
+            raise ImproperlyConfigured("Local wheel indexing never checks out or builds source")
+        with source.materialized(checkout=no_checkout) as (root, _revision):
+            entries = backend.ls_tree(repository, ref=source.ref, path=source.path, recursive=True)
+            wheels = [entry for entry in entries if entry.type == "blob" and entry.name.endswith(".whl")]
+            if not wheels:
+                raise ImproperlyConfigured(
+                    "Local catalogue sources index explicitly built wheels only. Build wheels outside Django, "
+                    "then set Source.path to their directory; no wheel was found."
+                )
+            if len(wheels) > MAX_PACKAGES:
+                raise ImproperlyConfigured("Local wheel inventory exceeds its package limit")
+            result = {"schema": 1, "packages": [
+                {"path": entry.path, "files": wheel_metadata(source_path(root, entry.path))} for entry in wheels
+            ]}
+        output = json.dumps(result)
+        if len(output.encode("utf-8")) > MAX_OUTPUT_BYTES:
+            raise ImproperlyConfigured("Local wheel metadata exceeds its output byte limit")
+    else:
+        credential = backend.git_credentials()
+        revision = backend.rev_parse(repository, source.ref or repository.default_branch)
+        daemon = OperatorDaemon.from_settings()
+        operation = daemon.run_source_build(
+            str(getattr(settings, "ANGEE_CATALOGUE_METADATA_JOB", "catalogue-metadata")),
+            repository_url=str(repository.remote), revision=revision, credential=credential,
+            artifact=Path(__file__).with_name("metadata_worker.py").read_text(encoding="utf-8"),
+            package_path=scope.as_posix(),
+        )
+        output = metadata_output(daemon, operation)
+    return descriptors_from_metadata(output, scope=scope.as_posix())
+
+
+def descriptors_from_metadata(output: str, *, scope: str = ".") -> list[dict[str, Any]]:
+    """Project bounded wheel data through native distribution and capability owners."""
+
+    try:
+        if len(output.encode("utf-8")) > MAX_OUTPUT_BYTES:
+            raise ValueError("Catalogue metadata exceeds its output byte limit")
+        result = json.loads(output)
+        if not isinstance(result, dict) or set(result) != {"schema", "packages"} or result["schema"] != 1:
+            raise ValueError("Unsupported catalogue metadata envelope")
+        packages = result["packages"]
+        if not isinstance(packages, list) or len(packages) > MAX_PACKAGES:
+            raise ValueError("Catalogue package inventory is invalid or oversized")
+        with tempfile.TemporaryDirectory(prefix="angee-catalogue-data-") as temporary:
+            prepared = []
+            paths = set()
+            for index, package in enumerate(packages):
+                if not isinstance(package, dict) or set(package) != {"path", "files"}:
+                    raise ValueError("Invalid catalogue package metadata")
+                relative = relative_path(package["path"], root=True)
+                if not relative.is_relative_to(relative_path(scope, root=True)):
+                    raise ValueError("Catalogue package path escapes the selected source scope")
+                path = relative.as_posix()
+                if path in paths:
+                    raise ValueError("Duplicate source package path")
+                paths.add(path)
+                files = package["files"]
+                if not isinstance(files, dict) or len(files) > MAX_FILES:
+                    raise ValueError("Invalid or oversized package data inventory")
+                base = Path(temporary) / str(index)
+                directories = set()
+                for name, content in files.items():
+                    relative = relative_path(name)
+                    if not isinstance(content, str) or len(content.encode("utf-8")) > MAX_METADATA_BYTES:
+                        raise ValueError("Invalid or oversized package metadata file")
+                    info = len(relative.parts) == 2 and relative.parts[0].endswith(".dist-info")
+                    if info and relative.name in {"METADATA", "entry_points.txt", "RECORD"}:
+                        directories.add(relative.parts[0])
+                    elif relative.name != "pyproject.toml":
+                        raise ValueError("Catalogue job returned an executable or unsupported data file")
+                    target = base / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(content, encoding="utf-8")
+                if len(directories) != 1:
+                    raise ValueError("Expected one native dist-info directory")
+                distribution = metadata.PathDistribution(base / directories.pop())
+                if distribution.read_text("METADATA") is None or distribution.read_text("RECORD") is None:
+                    raise ValueError("Incomplete native wheel metadata")
+                validate_record(distribution.read_text("RECORD") or "")
+                prepared.append((path, distribution))
+            component_index = index_components((distribution for _path, distribution in prepared), group="angee.addons")
             descriptors = []
-            for path, document, distribution in prepared:
-                facts = facts_from_distribution(distribution, index=index, document=document)
-                if not facts:
-                    continue
-                relative = path.relative_to(root)
-                descriptors.append({
-                    **facts,
-                    "keywords": list(facts["keywords"]),
-                    "depends_on": list(facts["depends_on"]),
-                    "path": "" if relative == Path(".") else relative.as_posix(),
-                })
+            for path, distribution in prepared:
+                facts = facts_from_distribution(distribution, index=component_index)
+                if facts:
+                    descriptors.append({**facts, "keywords": list(facts["keywords"]),
+                                        "depends_on": list(facts["depends_on"]), "path": "" if path == "." else path})
             return descriptors
+    except (KeyError, TypeError, ValueError, OSError, IniError) as error:
+        raise ImproperlyConfigured(f"Catalogue metadata was invalid; previous catalogue retained: {error}") from error

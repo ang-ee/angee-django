@@ -41,6 +41,14 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Python types | `PYTHONPATH=src uv run --locked python -m mypy src` |
 | Dead-code review | `uv run --locked python -m vulture` |
 
+Catalogue metadata tests (`test_platform_integrate_vcs.py`) execute the real
+producer inside a network-disabled container. Prepare its trusted image first:
+`docker build -t catalogue-metadata:prepared src/angee/platform_integrate_vcs/metadata-image`.
+Set `CATALOGUE_METADATA_TEST_IMAGE` to the immutable image ID when pinning a
+particular preparation. Tests never pull an absent image. The reusable SQLite
+shards prepare this image explicitly before pytest; native operator source-build
+isolation belongs to the operator repository's Docker integration tests.
+
 Mypy loads native compiler and addon-owned plugins through the declared Python
 installation and its configured source roots. `mypy_path` controls static
 resolution, not runtime imports. Use the owning CI invocation and typing settings;

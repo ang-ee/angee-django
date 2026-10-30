@@ -122,6 +122,15 @@ class VCSBackend(BridgeImpl, HttpClientMixin):
     repository_search_scope_config_key = ""
     """Optional ``VcsBridge.config`` key whose value scopes repository search/listing."""
 
+    git_token_username = "git"
+    """Provider-selected username for token-backed HTTPS Git authentication."""
+
+    def git_credentials(self) -> dict[str, str] | None:
+        """Use only this selected connection's refreshed credential for one fetch."""
+
+        credential = self.bridge.credential
+        return None if credential is None else credential.git_credentials(token_username=self.git_token_username)
+
     def ls_repos(self, *, org: str = "") -> list[RepoDescriptor]:
         """List repositories visible to this bridge, optionally within ``org``."""
 

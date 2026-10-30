@@ -1,20 +1,13 @@
-"""The VCS source tier of the addon marketplace.
+"""Native package metadata catalogue from isolated remote builds or built local wheels.
 
-Platform projects installed distributions into its one ``Addon`` registry. This
-addon extends those rows with VCS source/path provenance and owns declarations
-not installed in the project, created ``REMOTE``/``DISABLED`` and marked
-``REMOVED`` when they disappear from their source.
+Remote sources resolve through their selected VCS connection and submit an
+immutable revision to the operator's declared source-build job. Fetch credentials
+exist only in its separate fetch phase; the prepared build image runs offline.
+Only bounded native metadata and packaged capability TOML return to Django.
+Local sources index explicitly built wheels under Source.path; they never build
+working trees. Both paths use django-compose's native identity index.
 
-An addon ``Source`` obtains a complete pinned checkout from the operator, or the
-current working tree from a local backend. Each package is built in native PyPA
-isolation; django-compose indexes its wheel distributions and Platform projects
-the same metadata facts as installed packages. Authored TOML supplies capability
-facts only. Addon code is never imported into the serving process.
-
-Remote checkout lifetime, submodules and Git credentials belong to the operator;
-Django and the operator must share the stack filesystem. Any checkout, build or
-identity failure preserves the previous catalogue and sync timestamp. Network and
-build work finish before the transaction that validates source ownership and
-reconciles rows. Platform retains installed-row precedence; this addon adds only
-provenance to those rows.
+Preparation finishes before source CAS and catalogue reconciliation. Failed,
+unavailable or invalid metadata operations preserve prior rows and sync time.
+Installed rows retain their native precedence; this addon adds their provenance.
 """
