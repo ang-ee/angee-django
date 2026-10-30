@@ -8,7 +8,7 @@ Two contributions onto the platform console, both one-way (this tier reaches up 
 - ``MarketplaceSourceMutation`` adds the *source* controls (admin-gated): ``addSource``
   inventories a repository on an existing ``VcsBridge`` and points an addon ``Source``
   at it; ``scan`` runs the existing ``Source.refresh()`` (→ ``AddonCatalog`` reconcile)
-  that discovers ``addon.toml`` rows into ``platform.Addon``. Both compose integrate's
+  that discovers ``pyproject.toml`` rows into ``platform.Addon``. Both compose integrate's
   existing owners (``VcsBridge.import_repository``, ``Source``); neither re-implements
   bridge/repo creation or the discovery walk.
 """

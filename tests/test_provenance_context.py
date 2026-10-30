@@ -106,3 +106,4 @@ def test_storage_required_context_error_preserves_both_public_catch_contracts() 
     model = apps.get_model(changeset_model_label())
     assert issubclass(model.required_context_error, ChangesetRequired)
     assert issubclass(model.required_context_error, MissingActorError)
+

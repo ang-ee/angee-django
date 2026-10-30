@@ -49,7 +49,7 @@ class NeedResource(AngeeResource):
         if not isinstance(value, str) or not value:
             raise ValidationError({"access_by": "An access answer names who answered it."})
         try:
-            decider = resolve_xref(value, self.ledger_model, self.addon_aliases)
+            decider = resolve_xref(value, self.ledger_model, self.addon_aliases, using=self.get_db_connection_name())
         except ValueError as error:
             raise ValidationError({"access_by": str(error)}) from error
         if not isinstance(decider, get_user_model()):

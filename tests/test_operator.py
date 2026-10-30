@@ -744,7 +744,7 @@ def test_operator_admin_role_reaches_connection_read_tuple_free() -> None:
 def test_operator_schema_writes_the_live_sdl_into_the_runtime(monkeypatch, settings, tmp_path) -> None:
     """The stack job's export lands in the runtime, never in the operator package's committed snapshot."""
 
-    settings.COMPOSE_RUNTIME_DIR = tmp_path
+    settings.COMPOSE_OUTPUT_DIR = tmp_path
     stub = SimpleNamespace(
         admin_bearer="token", server_base="http://operator", introspect_sdl=lambda: "type Query { ping: String }",
     )

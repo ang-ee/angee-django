@@ -13,7 +13,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, models, transaction
 from import_export.exceptions import ImportError as ResourceImportError
-from rebac import system_context
+from rebac import database_context, system_context
 
 from angee.base.fields.identity import SqidField
 from angee.base.fields.text import ModelLabelField
@@ -106,7 +106,7 @@ class ResourceQuerySet[LedgerT: Resource](AngeeQuerySet[LedgerT]):
     def retired_seed_keys(self, model_label: str) -> set[Any]:
         """Return the keys of ``model_label`` rows seeded by the installed addons that retire the model.
 
-        Those addons name it under ``retired_models`` in their addon.toml
+        Those addons name it under ``retired_models`` in their pyproject.toml
         ``[resources]`` (:func:`retired_models_for`); with none, no row is seeded.
         """
 
@@ -125,7 +125,7 @@ def seeded_record_merge_guard(record: models.Model) -> str | None:
     """
 
     with system_context(reason="resources.seeded_record_merge_guard"):
-        ledger = apps.get_model("resources", "Resource").objects.seeding(record).first()
+        ledger = apps.get_model("resources", "Resource").objects.db_manager(record._state.db).seeding(record).first()
     if ledger is None:
         return None
     return f"{record} is loaded from {ledger.source_addon} resources, which would recreate it; keep it instead."
@@ -146,7 +146,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
     def resolve(self, handle: str, *, model: type[models.Model] | None = None) -> models.Model:
         """Resolve a ledger handle under the current actor, optionally checking its type."""
 
-        return resolve_xref(handle, self.model, self._addon_aliases(apps.get_app_configs()), model=model)
+        return resolve_xref(handle, self.model, self._addon_aliases(apps.get_app_configs()), model=model, using=self.db)
 
     def resolve_config_references(self, value: Any, *, schema: dict[str, Any]) -> Any:
         """Resolve dotted xrefs only at schema-declared relation positions.
@@ -182,10 +182,10 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
 
         if instance.pk is None:
             raise ResourceLoadError("Installation identities require a saved target.")
-        with transaction.atomic():
+        with database_context(self.db), transaction.atomic(using=self.db):
             resource = build_resource(
                 type(instance), ResourceEntry(addon=addon, tier=self.model.Tier.INSTALL, source_value=source),
-                ledger_model=self.model, addon_aliases=self._addon_aliases(apps.get_app_configs()),
+                ledger_model=self.model, addon_aliases=self._addon_aliases(apps.get_app_configs()), using=self.db,
             )
             resource.bind_instance(xref, instance, replace=replace)
 
@@ -287,8 +287,10 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                     group.dataset.subset(rows=[index]),
                     [group.source_rows[index]],
                 )
-                with transaction.atomic():
-                    resource = build_resource(model, group.entry, ledger_model=self.model, addon_aliases=aliases)
+                with database_context(self.db), transaction.atomic(using=self.db):
+                    resource = build_resource(
+                        model, group.entry, ledger_model=self.model, addon_aliases=aliases, using=self.db,
+                    )
                     with system_context(reason="resources.load_xref resolve existing target"):
                         resolved, _ = resource.resolve_existing(((selected.dataset, resource),))
                     resolution = resolved.get((resource, xref))
@@ -306,7 +308,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                         actor=actor,
                     )
                     with system_context(reason="resources.load_xref resolve imported target"):
-                        instance = resolve_xref(handle, self.model, aliases)
+                        instance = resolve_xref(handle, self.model, aliases, using=self.db)
                     if not isinstance(instance, model):
                         raise ResourceLoadError(f"Resource {handle!r} did not produce {model._meta.label}.")
                     if resolution is None or resolution.instance is None:
@@ -347,6 +349,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                     ledger_model=self.model,
                     addon_aliases=addon_aliases,
                     kind_declarations=kind_declarations,
+                    using=self.db,
                 ),
             )
             for group in row_groups
@@ -359,11 +362,12 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
         try:
             reason = "resources.validate" if dry_run else "resources.load"
             with (
+                database_context(self.db),
                 system_context(reason=reason),
                 ExitStack() as contexts,
-                transaction.atomic(),
+                transaction.atomic(using=self.db),
             ):
-                pre_load.send(sender=self.model, contexts=contexts)
+                pre_load.send(sender=self.model, contexts=contexts, using=self.db)
                 resource_classes = {
                     group.model.resource_class
                     for group, _ in loaded_groups
@@ -377,6 +381,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                             (grants_by_entry[entry.key],),
                             ledger_model=self.model,
                             addon_aliases=addon_aliases,
+                            using=self.db,
                         )
                         load_result = LoadResult(
                             created=load_result.created + created,

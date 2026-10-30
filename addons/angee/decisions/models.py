@@ -16,10 +16,9 @@ from angee.decisions.managers import DecisionManager, DecisionRecordManager
 from angee.graphql.events import ChangeRelatedRecord
 
 
-class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel):
+class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=True):
     """An immutable question; answering records choices without applying them."""
 
-    runtime = True
     sqid_prefix = "dcn_"
     kind = models.CharField(max_length=200)
     requester = models.ForeignKey(
@@ -92,10 +91,9 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel):
         """Allow composed policy to refuse an answer before its verdict is retained."""
 
 
-class DecisionRecord(DerivedFrom):
+class DecisionRecord(DerivedFrom, concrete=True):
     """A concern link: decision, canonical content type and object id, with no payload."""
 
-    runtime = True
     sqid_prefix = "dcr_"
     decision = models.ForeignKey("decisions.Decision", on_delete=models.CASCADE, related_name="records")
     objects = DecisionRecordManager()

@@ -50,12 +50,13 @@ from strawberry_django_hasura.filtering import filter_queryset, where_to_q
 from strawberry_django_hasura.inputs import comparison_for_python_type
 
 from angee.base.fields.ordering import FractionalRankField
+from angee.base.hooks import resolve_hooks
 from angee.base.identity import public_data_id_field
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for, public_id_of
 from angee.base.models.locks import OptimisticLockMixin, RowLockMixin
 from angee.base.models.refs import RecordRefMixin
-from angee.base.permissions import require_rebac_queryset
+from angee.base.permissions import declared_rebac_definition, require_rebac_queryset
 from angee.base.querysets import row_lock_paths
 from angee.graphql.access import assert_no_gated_read_fields
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
@@ -97,7 +98,6 @@ from angee.graphql.introspection import (
 )
 from angee.graphql.relations import RecordReferenceNode, actor_scoped_relation_expression, with_record_reference_access
 from angee.graphql.writes import write_queryset
-from angee.hooks import resolve_hooks
 
 if TYPE_CHECKING:
     from django.db.models.sql.compiler import _AsSqlType
@@ -1116,6 +1116,7 @@ def _declared_aliases(
                     )
             assert_no_gated_read_fields(
                 model, paths, f"sortable alias {name!r}", "field-gated reads cannot be query axes",
+                definition_for=declared_rebac_definition,
             )
             expression = models.ExpressionWrapper(
                 expression, output_field=expression.resolve_expression(model._default_manager.all().query).output_field,
@@ -1529,6 +1530,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             tuple(field for field in fields if field not in expressions),
             f"hasura_model_resource {axis} axis",
             "field-gated reads cannot be query axes",
+            definition_for=declared_rebac_definition,
         )
 
     resource_name = name or model.__name__.lower()

@@ -14,8 +14,9 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.utils import timezone
+from django_compose.models import Composable
 from rebac import (
     RebacMixin,
     RelationshipTuple,
@@ -24,6 +25,7 @@ from rebac import (
     app_settings,
     backend,
     current_actor,
+    database_context,
     is_anonymous_actor,
     system_context,
     to_object_ref,
@@ -42,17 +44,17 @@ from angee.base.models.merge_references import MergePolicy
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.roles import role_anchor
 from angee.base.permissions import actor_user_id, instance_actor
+from angee.base.serialization import canonical_json, canonical_json_sha256, json_safe
 from angee.base.signals import bulk_updated
 from angee.provenance.context import changeset, current_changeset
 from angee.provenance.contrib.angee.exceptions import ChangesetRequired
-from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.managers import ChangesetManager
 from angee.provenance.querysets import model_history
 from angee.provenance.statements import (
     SourceKind,
     StatementSourceMixin,
 )
-from angee.serialization import canonical_json, canonical_json_sha256, json_safe
 
 ProvenanceRole = role_anchor("provenance/role")
 
@@ -75,10 +77,9 @@ class StatementPrincipal(StatementSourceMixin, AngeeDataModel):
         abstract = True
 
 
-class Rule(StatementPrincipal):
+class Rule(StatementPrincipal, concrete=True):
     """Persisted principal for one registered rule or matcher, keyed by its name."""
 
-    runtime = True
     sqid_prefix = "rul_"
     statement_source_kind = cast(SourceKind, SourceKind.RULE)
 
@@ -87,10 +88,9 @@ class Rule(StatementPrincipal):
         rebac_resource_type = "provenance/rule"
 
 
-class Seed(StatementPrincipal):
+class Seed(StatementPrincipal, concrete=True):
     """Persisted principal for one seed load, keyed by that load's identity."""
 
-    runtime = True
     sqid_prefix = "sed_"
     statement_source_kind = cast(SourceKind, SourceKind.SEED)
 
@@ -99,7 +99,7 @@ class Seed(StatementPrincipal):
         rebac_resource_type = "provenance/seed"
 
 
-class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
+class Changeset(Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True):
     """One logical write's attribution and touched-model index; never historized.
 
     ``actor_ref`` stores the native SubjectRef wire representation in the historical
@@ -110,7 +110,6 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
 
     required_context_error: ClassVar[type[Exception]] = ChangesetRequired
 
-    runtime = True
     sqid_prefix = "cst_"
     merge_policy: ClassVar[MergePolicy] = MergePolicy.KEEP
     objects = ChangesetManager()
@@ -235,7 +234,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         if not self.scope or not self.key:
             raise RuntimeError("Only a claimed changeset can record a created row.")
         self.created_row = row
-        type(self)._base_manager.db_manager(hints={"instance": self}).filter(pk=self.pk).update(
+        type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).filter(pk=self.pk).update(
             created_content_type_id=self.created_content_type_id,
             created_object_id=self.created_object_id,
         )
@@ -255,7 +254,9 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         actor = SubjectRef.parse(self.actor_ref)
         if is_anonymous_actor(actor):
             return {}
-        definition = backend().schema().get_definition(model_resource_type(type(self)) or "")
+        alias = using or self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(alias):
+            definition = backend().schema().get_definition(model_resource_type(type(self)) or "")
         if definition is None:
             return {}
         return {
@@ -273,10 +274,10 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         """
 
         inserting = self._state.adding
-        manager = type(self)._base_manager.db_manager(hints={"instance": self})
-        alias = manager.db
+        alias = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
         recording = inserting and current_changeset() is self
         with (
+            database_context(alias),
             transaction.atomic(using=alias),
             system_context(reason="changeset.record") if recording else nullcontext(),
         ):
@@ -290,7 +291,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
                             relation=relation,
                             subject=subject,
                         )
-                        for relation, subjects in self.proposed_relationships().items()
+                        for relation, subjects in self.proposed_relationships(using=alias).items()
                         for subject in subjects
                     ]
                 )
@@ -306,7 +307,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         self.state = self.State(self.State.CLOSED)
         self.outcome = self.Outcome(outcome)
         self.touched = sorted(set(self.touched))
-        type(self)._base_manager.filter(pk=self.pk).update(
+        type(self)._base_manager.using(self._state.db).filter(pk=self.pk).update(
             state=self.state,
             outcome=self.outcome,
             touched=self.touched,
@@ -322,7 +323,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
     def history_rows(self) -> Any:
         """Yield touched owners and their native versions in deterministic order."""
 
-        using = type(self)._base_manager.db_manager(hints={"instance": self}).db
+        using = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
         for label in sorted(set(self.touched)):
             model = apps.get_model(label)
             if model_history(model) is None:
@@ -364,7 +365,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         digest = canonical_json_sha256(chunks=(text,))
         if self.hash != digest:
             self.hash = digest
-            type(self)._base_manager.filter(pk=self.pk).update(hash=digest)
+            type(self)._base_manager.using(self._state.db).filter(pk=self.pk).update(hash=digest)
         return text
 
     def revert(self) -> Any:
@@ -376,21 +377,22 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
         detection queues the corrected projection on the next sync.
         """
 
-        using = type(self)._base_manager.db_manager(hints={"instance": self}).db
+        using = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
         actor = instance_actor(self) or current_actor()
         if self.state != self.State.CLOSED or self.outcome != self.Outcome.SUCCESS:
             raise ValidationError("Only a successfully closed changeset can be reverted.")
         with (
+            database_context(using),
             actor_context(actor) if actor is not None else nullcontext(),
             transaction.atomic(using=using),
-            changeset(fresh=True, activity="revert", origin=self),
+            changeset(fresh=True, activity="revert", origin=self, using=using),
         ):
             histories = []
             subjects: dict[tuple[type[models.Model], Any], Any] = {}
             for model, _ in self.history_rows():
                 history = model_history(model)
-                if history is None:
-                    raise ValidationError(f"{model._meta.label}: no history owner.")
+                if not isinstance(history, ModelHistory):
+                    raise ValidationError(f"{model._meta.label}: no record history policy owner.")
                 histories.append((model, history))
                 for version in (
                     model.history.using(using)
@@ -401,6 +403,7 @@ class Changeset(RecordRefMixin, SqidMixin, RebacMixin):
                     .iterator()
                 ):
                     subject = version.history_object
+                    subject._state.db = using
                     subjects.setdefault((type(subject), subject.pk), subject)
             for subject in sorted(subjects.values(), key=lambda row: (row._meta.label_lower, str(row.pk))):
                 try:

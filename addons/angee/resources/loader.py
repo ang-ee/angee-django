@@ -22,6 +22,7 @@ from angee.base.models.implementations import ImplDefaultsMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.models.transitions import StateTransitions
+from angee.base.serialization import ASCII_JSON, canonical_json_sha256, json_safe
 from angee.resources.entries import ResourceEntry, resolve_model
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.kinds import ResourceKindDeclarations
@@ -35,7 +36,6 @@ from angee.resources.widgets import (
     XrefWidgetMixin,
     _NativeJSONWidget,
 )
-from angee.serialization import ASCII_JSON, canonical_json_sha256, json_safe
 
 if TYPE_CHECKING:
     from angee.resources.models import Resource
@@ -82,6 +82,8 @@ class AngeeResource(resources.ModelResource):
         self._hash_skips: set[str] = set()
         super().__init__()
         for field in self.fields.values():
+            if isinstance(field.widget, (XrefWidgetMixin, ContentTypeForeignKeyWidget, ContentTypeManyToManyWidget)):
+                field.widget.using = self.get_db_connection_name()
             if isinstance(field.widget, XrefWidgetMixin):
                 field.widget.ledger_model = ledger_model
                 field.widget.addon_aliases = addon_aliases
@@ -139,7 +141,7 @@ class AngeeResource(resources.ModelResource):
         xref = self._row_xref(xref, row_number=0)
         identity = str(public_id_of(instance))
         defaults = self._ledger_defaults(instance, self._row_content_hash({"identity": identity}))
-        manager = self.ledger_model._default_manager
+        manager = self.ledger_model._default_manager.db_manager(self.get_db_connection_name())
         if replace:
             ledger, _created = manager.update_or_create(
                 source_addon=self.entry.addon.name, xref=xref, defaults=defaults,
@@ -169,7 +171,9 @@ class AngeeResource(resources.ModelResource):
             for field in self._transition_state_fields
             if row is not None and field.column_name in row and not field.readonly
         }
-        return self._meta.model(**values)
+        instance = self._meta.model(**values)
+        instance._state.db = self.get_db_connection_name()
+        return instance
 
     def after_init_instance(
         self, instance: models.Model, new: bool, row: dict[str, Any], **kwargs: Any,
@@ -249,9 +253,10 @@ class AngeeResource(resources.ModelResource):
         """Save updates without writing omitted columns or stale live state."""
 
         if is_create:
-            super().do_instance_save(instance, is_create)
+            instance.save(using=self.get_db_connection_name())
         else:
-            instance.save(update_fields=update_fields_with_auto_now(instance, self._update_fields))
+            instance.save(using=self.get_db_connection_name(),
+                          update_fields=update_fields_with_auto_now(instance, self._update_fields))
 
     def instance_for_xref(self, xref: str) -> models.Model | None:
         """Return an existing or adopted instance for a row xref."""
@@ -307,7 +312,7 @@ class AngeeResource(resources.ModelResource):
             resource._prime_existing_ledgers(dataset)
             resource._existing_ledgers.update(
                 (ledger.xref, ledger)
-                for ledger in resource.ledger_model._default_manager.filter(
+                for ledger in resource.ledger_model._default_manager.using(resource.get_db_connection_name()).filter(
                     source_addon=resource.entry.addon.name,
                     source_path=resource.entry.source,
                     target_model=resource._meta.model._meta.label,
@@ -324,7 +329,9 @@ class AngeeResource(resources.ModelResource):
         for addon, xrefs in missing.items():
             ledgers.update(
                 ((addon, ledger.xref), ledger)
-                for ledger in batches[0][1].ledger_model._default_manager.filter(source_addon=addon, xref__in=xrefs)
+                for ledger in batches[0][1].ledger_model._default_manager.using(
+                    batches[0][1].get_db_connection_name(),
+                ).filter(source_addon=addon, xref__in=xrefs)
             )
         lookups: dict[tuple[str, str], tuple[type[models.Model], str]] = {}
         values_by_model: dict[type[models.Model], set[str]] = defaultdict(set)
@@ -340,7 +347,9 @@ class AngeeResource(resources.ModelResource):
         instances = {
             (model, value): instance
             for model, values in values_by_model.items()
-            for value, instance in instances_from_public_ids(model, values).items()
+            for value, instance in instances_from_public_ids(
+                model, values, queryset=model._default_manager.using(batches[0][1].get_db_connection_name()),
+            ).items()
         }
         targets = {key: instances.get(lookup) for key, lookup in lookups.items()}
         resolved: dict[tuple[AngeeResource, str], ResourceResolution] = {}
@@ -378,7 +387,7 @@ class AngeeResource(resources.ModelResource):
         self._existing_ledgers = {xref: None for xref in xrefs}
         if not xrefs:
             return
-        ledgers = self.ledger_model._default_manager.filter(
+        ledgers = self.ledger_model._default_manager.using(self.get_db_connection_name()).filter(
             source_addon=self.entry.addon.name,
             xref__in=xrefs,
         )
@@ -410,7 +419,7 @@ class AngeeResource(resources.ModelResource):
             ledger = self._existing_ledgers[xref]
         else:
             ledger = (
-                self.ledger_model._default_manager.filter(
+                self.ledger_model._default_manager.using(self.get_db_connection_name()).filter(
                     source_addon=self.entry.addon.name,
                     xref=xref,
                 )
@@ -450,7 +459,7 @@ class AngeeResource(resources.ModelResource):
         model = self._meta.model
         if instance is None or isinstance(instance, model):
             return instance
-        return model._base_manager.filter(pk=instance.pk).first()
+        return model._base_manager.using(self.get_db_connection_name()).filter(pk=instance.pk).first()
 
     def _upsert_ledger(
         self,
@@ -461,7 +470,7 @@ class AngeeResource(resources.ModelResource):
     ) -> None:
         """Create or update the ledger row for an imported object."""
 
-        ledger, _ = self.ledger_model._default_manager.update_or_create(
+        ledger, _ = self.ledger_model._default_manager.db_manager(self.get_db_connection_name()).update_or_create(
             source_addon=self.entry.addon.name,
             xref=xref,
             defaults=self._ledger_defaults(instance, row_hash),
@@ -581,7 +590,7 @@ class AngeeResource(resources.ModelResource):
         if isinstance(self.entry.adopt, tuple) and condition is not None:
             if not self._row_matches_condition(row, condition):
                 return None
-        queryset = self._meta.model._default_manager.filter(**identity)
+        queryset = self._meta.model._default_manager.using(self.get_db_connection_name()).filter(**identity)
         if condition is not None:
             queryset = queryset.filter(condition)
         matches = list(queryset[:2])
@@ -809,7 +818,7 @@ class AngeeResource(resources.ModelResource):
 
         if not updates:
             return
-        type(instance)._default_manager.filter(pk=instance.pk).update(**updates)
+        type(instance)._default_manager.using(self.get_db_connection_name()).filter(pk=instance.pk).update(**updates)
         instance.refresh_from_db(fields=list(updates))
 
 
@@ -831,6 +840,7 @@ def build_resource(
     ledger_model: type[Resource],
     addon_aliases: Mapping[str, str],
     kind_declarations: ResourceKindDeclarations | None = None,
+    using: str | None = None,
 ) -> AngeeResource:
     """Compose the model's ``resource_class`` with native xref import options.
 
@@ -854,6 +864,7 @@ def build_resource(
         model,
         resource_class=resource_class,
         meta_options={
+            "using_db": using,
             "clean_model_instances": True,
             "import_id_fields": (),
             "instance_loader_class": XrefInstanceLoader,

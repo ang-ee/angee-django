@@ -9,8 +9,9 @@ from types import ModuleType
 import pytest
 from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
+from django_compose.addons import enabled_apps
 
-from angee.addons import addon_manifest
+from angee.base.addons import addon_facts, is_angee_addon
 from angee.graphql.schema import schema_parts_for
 from angee.resources.entries import EntryGraph, ResourceEntry, resource_manifest_for
 from angee.web.build import WebRuntime
@@ -38,15 +39,14 @@ def _resource_rows(config: AppConfig, tier: str, path: str) -> dict[str, dict[st
     }
 
 
-def test_base_addon_keeps_its_label_and_core_has_no_addon_contract() -> None:
-    """Foundation owns its manifest while the native host stays lifecycle-only."""
+def test_base_addon_keeps_its_label_and_foreign_django_app_has_no_addon_contract() -> None:
+    """Foundation owns its capability facts while ordinary Django apps keep native identity."""
 
     base = apps.get_app_config("base")
-    contract = addon_manifest(base)
-
+    
     assert base.name == "angee.base"
-    assert contract is not None and contract.name == "angee.base"
-    assert addon_manifest(apps.get_app_config("angee")) is None
+    assert is_angee_addon(base)
+    assert not is_angee_addon(apps.get_app_config("auth"))
 
 
 def test_resource_manifest_normalizes_tiers_and_entries(monkeypatch) -> None:
@@ -301,11 +301,11 @@ def test_ollama_addon_owns_vendor_install_provider_and_demo_models() -> None:
 
     module = import_module("angee.agents_integrate_ollama")
     config = AppConfig("angee.agents_integrate_ollama", module)
-    contract = addon_manifest(config)
+    contract = addon_facts(config.name, "angee")
     manifest = resource_manifest_for(config)
 
     assert contract is not None
-    assert contract.depends_on == (
+    assert enabled_apps((config.name,), group="angee.addons").dependencies[config.name] == (
         "angee.agents",
         "angee.agents_integrate_openai",
         "angee.integrate",
@@ -500,13 +500,14 @@ def test_messaging_imap_config_contributes_schema_web_and_vendor_resource() -> N
         "angee.messaging_integrate_imap",
         import_module("angee.messaging_integrate_imap"),
     )
-    contract = addon_manifest(config)
+    contract = addon_facts(config.name, "angee")
     manifest = resource_manifest_for(config)
 
     assert contract is not None
-    assert contract.schemas is None
+    assert "graphql" not in contract
     assert (Path(config.path) / "schema.py").is_file()
-    assert WebRuntime((config,)).manifest["addonPackages"][0]["package"] == "@angee/messaging-integrate-imap"
+    web_manifest = WebRuntime((config,), dependencies={config.name: ()}).manifest
+    assert web_manifest["addonPackages"][0]["package"] == "@angee/messaging-integrate-imap"
     assert manifest["master"] == ({"path": "resources/master/010_integrate.vendor.yaml", "adopt": "slug"},)
     rows = _resource_rows(config, "master", "resources/master/010_integrate.vendor.yaml")
     assert rows["imap"]["slug"] == "imap"
@@ -576,13 +577,13 @@ def test_get_schema_parts_missing_module_is_empty() -> None:
     assert schema_parts_for(config) == {}
 
 
-def test_addon_manifest_is_owned_by_the_manifest() -> None:
-    """The contract is read from addon.toml; plain Django apps have none."""
+def test_addon_identity_and_dependencies_are_owned_by_installed_metadata() -> None:
+    """Installed package metadata supplies addon identity and dependencies."""
 
-    iam = addon_manifest(apps.get_app_config("iam"))
+    iam = apps.get_app_config("iam")
     assert iam is not None
-    assert "angee.graphql" in iam.depends_on
+    assert "angee.graphql" in enabled_apps((iam.name,), group="angee.addons").dependencies[iam.name]
     config = apps.get_app_config("iam")
     assert "public" in schema_parts_for(config)
-    assert WebRuntime((config,)).manifest["addonPackages"][0]["package"] == "@angee/iam"
-    assert addon_manifest(apps.get_app_config("contenttypes")) is None
+    assert WebRuntime((config,), dependencies={config.name: ()}).manifest["addonPackages"][0]["package"] == "@angee/iam"
+    assert not is_angee_addon(apps.get_app_config("contenttypes"))

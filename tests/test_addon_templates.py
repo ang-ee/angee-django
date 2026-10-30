@@ -30,7 +30,7 @@ BARE_TEST = '{% if test_host == "bare" %}test_{{ addon_id }}.py{% endif %}'
 
 ADDON_FILES = {
     "__init__.py",
-    "addon.toml",
+    "pyproject.toml",
     "models.py",
     "permissions.zed",
     "schema.py",
@@ -94,12 +94,12 @@ def test_addon_template_renders_one_complete_source_addon() -> None:
     # The route claims the canonical `<label>.<Model>` label, never a bare model name.
     index = (ADDON_TEMPLATE / "template" / WEB_DIR / "src" / "index.tsx.jinja").read_text(encoding="utf-8")
     assert '"{{ addon_id }}.{{ model_name }}",' in index
-    manifest = (ADDON_TEMPLATE / "template" / "addon.toml.jinja").read_text(encoding="utf-8")
-    assert '"angee.base",' in manifest
-    assert '{%- if include_web %}\n  "angee.web",' in manifest
+    manifest = (ADDON_TEMPLATE / "template" / "pyproject.toml.jinja").read_text(encoding="utf-8")
+    assert '"angee-base>=3,<4",' in manifest
+    assert '{% if include_web %}\n  "angee-web>=3,<4",' in manifest
     model = (ADDON_TEMPLATE / "template" / "models.py.jinja").read_text(encoding="utf-8")
     for declaration in (
-        "runtime = True",
+        "concrete=True",
         "sqid_prefix = ",
         'rebac_resource_type = "{{ addon_id }}/{{ model_name | lower }}"',
     ):
@@ -243,10 +243,11 @@ def test_copier_renders_the_addon_template(tmp_path: Path, include_web: bool, te
         assert "TransactionTestCase" in test_module
         assert "testing" not in test_module
 
-    manifest = tomllib.loads((target / "addon.toml").read_text(encoding="utf-8"))
-    assert manifest["addon"]["name"] == "acme.contacts"
-    assert ("angee.web" in manifest["addon"]["depends_on"]) is include_web
-    assert manifest["resources"]["demo"][0]["path"] == "resources/demo/010_contacts.contact.yaml"
+    manifest = tomllib.loads((target / "pyproject.toml").read_text(encoding="utf-8"))
+    assert manifest["project"]["name"] == "acme-contacts"
+    assert manifest["project"]["entry-points"]["angee.addons"] == {"acme.contacts": "acme.contacts"}
+    assert ("angee-web>=3,<4" in manifest["project"]["dependencies"]) is include_web
+    assert manifest["tool"]["angee"]["resources"]["demo"][0]["path"] == "demo/010_contacts.contact.yaml"
     rows = yaml.safe_load((target / "resources/demo/010_contacts.contact.yaml").read_text(encoding="utf-8"))
     assert rows["_meta"] == {"model": "contacts.Contact"}
     assert len(rows["rows"]) == 1
@@ -261,7 +262,7 @@ import importlib
 import os
 import sys
 
-sys.path[:0] = [{addons!r}, {root!r}, {framework_addons!r}, {example_addons!r}]
+sys.path[:0] = [{addons!r}, {core!r}, {root!r}, {framework_addons!r}, {example_addons!r}]
 os.environ["DJANGO_SETTINGS_MODULE"] = "tests.settings"
 
 import django
@@ -305,6 +306,7 @@ def test_rendered_addon_boots_on_the_bare_django_host(tmp_path: Path, test_host:
     script = textwrap.dedent(BOOT_SCRIPT).format(
         addons=str(target.parents[1]),
         root=str(ROOT),
+        core=str(ROOT / "core"),
         framework_addons=str(ROOT / "addons"),
         example_addons=str(ROOT / "examples" / "addons"),
         test_host=test_host,

@@ -24,7 +24,7 @@ def role_anchor(
     addon's ``permissions.zed``) needs a model carrying that ``<ns>/role``
     ``rebac_resource_type`` so the ``rebac.E009`` system check resolves the type;
     the anchor is ``managed = False`` (Django owns no table, there are never any
-    rows) and ``runtime = True`` (the composer materializes it into the generated
+    rows) and ``concrete=True`` (the composer materializes it into the generated
     runtime, exactly like the hand-rolled anchors it replaces). One adopter
     declares its role in one line::
 
@@ -40,9 +40,9 @@ def role_anchor(
     a helper that wraps this factory would capture the helper's module, not the
     adopter's, and emit an import that resolves to the wrong symbol. Call
     ``role_anchor`` directly at module level, or pass ``module=__name__`` when
-    indirecting it. The composer verifies the captured module actually binds the
-    anchor at emission (``angee.compose.rendering``) and fails loudly on a mis-capture
-    rather than emitting a broken import.
+    indirecting it. Native ``django_compose.model_composition.ModelComposition`` verifies the
+    captured module actually binds the anchor before rendering and fails loudly
+    on a mis-capture.
 
     The ``.zed`` fragment stays **co-located and static** — each adopter ships its
     own ``definition <ns>/role`` block beside its models; the factory owns only
@@ -67,10 +67,9 @@ def role_anchor(
         "__module__": anchor_module,
         "__qualname__": anchor_name,
         "__doc__": doc or f"Table-less REBAC type anchor for the ``{resource_type}`` namespace.",
-        "runtime": True,
         "Meta": meta,
     }
-    return cast("type[AngeeModel]", type(anchor_name, (AngeeModel,), namespace))
+    return cast("type[AngeeModel]", type(anchor_name, (AngeeModel,), namespace, concrete=True))
 
 
 def _role_anchor_name(resource_type: str) -> str:

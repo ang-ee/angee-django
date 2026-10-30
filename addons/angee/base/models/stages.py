@@ -85,7 +85,10 @@ class Stage(models.Model):
         """Return every stage configured for ``container`` in pipeline order."""
 
         cls.container_field()
-        return cls._base_manager.filter(**{cls.container_field_name: container}).order_by("position", "pk")
+        stages = cls._base_manager
+        if isinstance(container, models.Model):
+            stages = stages.db_manager(container._state.db, hints={"instance": container})
+        return stages.filter(**{cls.container_field_name: container}).order_by("position", "pk")
 
     @classmethod
     def resolve_default(cls, container: models.Model) -> Self | None:

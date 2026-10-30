@@ -8,7 +8,7 @@ authoritatively *derived*, never authored: ``settings.yaml`` (enabled) and
 ``uv.lock`` (available) remain the source of truth; this table is the queryable
 mirror that backs the console.
 
-The registry reconcile owns installed/local availability and running composition.
+The registry reconcile owns installed availability and running composition.
 The same ``Addon`` table also holds remote catalogue rows;
 ``platform_integrate_vcs`` supplies their declarations and provenance. Each source
 reconcile retains removed rows as history.
@@ -20,28 +20,35 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from importlib.metadata import EntryPoint
 from typing import Any
 
 from django.apps import AppConfig, apps
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import DatabaseError, models, transaction
-from hatch_angee import AddonManifest
-from rebac import system_context
+from django_compose.addons import installed_addons
+from rebac import database_context, system_context
 
-from angee.addons import addon_manifest, resolve_manifest_roots
 from angee.base.fields.state import StateField
 from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeModel
+from angee.base.serialization import canonical_json_sha256
 from angee.platform import composed
-from angee.platform.discovery import available_addons, resolve_app_config
+from angee.platform.discovery import (
+    AddonCategory,
+    available_addons,
+    facts_from_distribution,
+    installed_entry_points,
+    package_identity_index,
+    requirement_addons,
+    resolve_catalogue_roots,
+)
 from angee.platform.installer import (
     AddonInstaller,
     InstallResult,
     StaleAddonPreviewError,
     addon_installer,
 )
-from angee.serialization import canonical_json_sha256
 
 
 def get_addon_display_label(name: str, label: str) -> str:
@@ -106,22 +113,38 @@ class AddonChangePreview:
 
 
 class AddonManager[T: Addon](AngeeManager[T]):
-    """Manager owning reflection, change previews, and install/disable flow."""
+    """Manager owning reflection, authored roots, and native dependency jobs."""
 
-    def install(self, name: str, revision: str | None = None) -> InstallResult:
+    def enable(self, name: str, revision: str | None = None) -> InstallResult:
         """Validate and queue an addon root through the same plan the preview shows."""
 
-        return self._apply_change(name, "install", revision)
+        return self._apply_change(name, "enable", revision)
 
     def disable(self, name: str, revision: str | None = None) -> InstallResult:
         """Queue root removal, refusing an addon the running graph still requires."""
 
         return self._apply_change(name, "disable", revision)
 
+    def install(self, name: str) -> dict[str, Any]:
+        """Queue the native held dependency job; activation is a separate root edit."""
+
+        return self._dependency_change(name, remove=False)
+
+    def uninstall(self, name: str) -> dict[str, Any]:
+        """Delegate package removal admission and execution to the native job owner."""
+
+        return self._dependency_change(name, remove=True)
+
+    def _dependency_change(self, name: str, *, remove: bool) -> dict[str, Any]:
+        distribution = self.only("distribution").get(name=name).distribution
+        if not distribution:
+            raise ValidationError(f"{name} has no native distribution identity.")
+        return addon_installer().backend.queue_dependency_change(distribution, remove=remove)
+
     def _apply_change(self, name: str, action: str, revision: str | None) -> InstallResult:
         """Validate one plan, write its exact roots, then reconcile the committed intent."""
 
-        with system_context(reason=f"platform.addon.{action}"):
+        with database_context(self.db), system_context(reason=f"platform.addon.{action}"):
             installer = addon_installer()
             preview = self.change_preview(name, action, installer=installer)
             if not preview.can_apply or (revision is not None and preview.revision != revision):
@@ -146,7 +169,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
     ) -> AddonChangePreview:
         """Forecast one settings edit against the loaded graph without changing state."""
 
-        if action not in {"install", "disable"}:
+        if action not in {"enable", "disable"}:
             raise ValueError(f"Unknown addon change action {action!r}")
         bound_installer = installer or addon_installer()
         snapshot = bound_installer.installed_apps_snapshot()
@@ -164,16 +187,16 @@ class AddonManager[T: Addon](AngeeManager[T]):
                 data_inventory=(),
                 migration_warning=None,
             )
-        available = available_addons(getattr(settings, "ANGEE_ADDON_DIRS", ()))
+        available = available_addons()
         manifests = tuple(manifest for manifest, _origin in available.values())
         loaded_configs = {config.name: config for config in composed.addons()}
         roots_before = snapshot.names
-        aliases, configs = self._resolve_app_configs(roots_before)
+        aliases, configs = self._app_identity()
         canonical_roots = tuple(aliases.get(root, root) for root in roots_before)
         refusal: str | None = None
-        if action == "install":
+        if action == "enable":
             if name not in available:
-                refusal = f"{name} is not available to install."
+                refusal = f"{name} is not installed and cannot be enabled."
             roots_after = roots_before if refusal or name in canonical_roots else (*roots_before, name)
         else:
             declarations = tuple(root for root in roots_before if aliases.get(root, root) == name)
@@ -181,28 +204,33 @@ class AddonManager[T: Addon](AngeeManager[T]):
                 name, loaded=loaded_configs, declared=bool(declarations), aliases=aliases
             )
             roots_after = roots_before if refusal else tuple(root for root in roots_before if root not in declarations)
-        after = resolve_manifest_roots(roots_after, manifests, aliases=aliases)
-        after_by_name = {manifest.name: manifest for manifest in after}
+        closure = getattr(settings, "COMPOSE_CLOSURE", None)
+        after = resolve_catalogue_roots(
+            roots_after, manifests, aliases=aliases,
+            dependencies={} if closure is None else closure.dependencies,
+        )
+        after_by_name = {manifest["name"]: manifest for manifest in after}
         loaded_names = set(loaded_configs)
         target_names = set(after_by_name)
         enabled = self._change_impacts(target_names - loaded_names, after_by_name, roots_after, aliases, configs)
         disabled_impacts = []
         for disabled_name in sorted(loaded_names - target_names):
             config = loaded_configs[disabled_name]
-            manifest = addon_manifest(config)
+            manifest = available.get(config.name, ({"depends_on": ()}, None))[0]
             disabled_impacts.append(
                 AddonChangeImpact(
                     name=config.name,
                     label=config.label,
-                    root=bool(getattr(config, "compose_root", False)),
-                    depends_on=tuple(manifest.depends_on) if manifest else (),
+                    root=config.name in composed.root_app_names(),
+                    depends_on=tuple(manifest["depends_on"]) if manifest else (),
                 )
             )
         disabled = tuple(disabled_impacts)
         inventory = self._data_inventory((impact.name for impact in disabled))
         warning = (
-            "Provisioning may generate and apply schema migrations that remove model data or contributed fields; "
-            "the exact database effect cannot be forecast safely before migration planning."
+            "Disabling addons may require schema migrations that remove model data or contributed fields. "
+            "Review and author migration history before provisioning; "
+            "provision refuses schema drift without authored migration history."
             if disabled else None
         )
         revision = _preview_revision(snapshot.text, manifests, action=action, addon=name, roots_after=roots_after)
@@ -222,13 +250,13 @@ class AddonManager[T: Addon](AngeeManager[T]):
         )
 
     @staticmethod
-    def _dependants(manifests: Iterable[AddonManifest | Addon], *, aliases: Mapping[str, str]) -> dict[str, list[str]]:
+    def _dependants(manifests: Iterable[Mapping[str, Any]], *, aliases: Mapping[str, str]) -> dict[str, list[str]]:
         """Invert the caller's declaration set using canonical dependency names."""
 
         depended_by: dict[str, list[str]] = {}
-        for manifest in sorted(manifests, key=lambda item: item.name):
-            for dependency in sorted({aliases.get(name, name) for name in manifest.depends_on}):
-                depended_by.setdefault(dependency, []).append(manifest.name)
+        for manifest in sorted(manifests, key=lambda item: item["name"]):
+            for dependency in sorted({aliases.get(name, name) for name in manifest["depends_on"]}):
+                depended_by.setdefault(dependency, []).append(manifest["name"])
         return depended_by
 
     def disable_block_reason(
@@ -242,9 +270,11 @@ class AddonManager[T: Addon](AngeeManager[T]):
         """Refuse loaded dependencies or unknown targets, ignoring stale catalogue flags."""
 
         config = loaded.get(name)
-        if config is not None and getattr(config, "compose_required", False):
+        if config is not None and name not in composed.root_app_names():
+            index = installed_addons("angee.addons")
             manifests = (
-                manifest for candidate in loaded.values() if (manifest := addon_manifest(candidate)) is not None
+                facts_from_distribution(index.distributions[provider], index=index)
+                for app_name, provider in index.providers.items() if app_name in loaded
             )
             required_by = ", ".join(self._dependants(manifests, aliases=aliases).get(name, ())) or "another enabled app"
             return f"{name} is required by {required_by} and cannot be disabled."
@@ -253,23 +283,22 @@ class AddonManager[T: Addon](AngeeManager[T]):
         return None
 
     @staticmethod
-    def _resolve_app_configs(declarations: Iterable[str]) -> tuple[dict[str, str], dict[str, AppConfig]]:
-        """Resolve authored declarations once, reusing the composed root aliases."""
+    def _app_identity() -> tuple[dict[str, str], dict[str, AppConfig]]:
+        """Read only loaded identity and installed entry-point aliases."""
 
-        aliases = {key: config.name for config in apps.get_app_configs() for key in (config.name, config.label)}
+        configs = {config.name: config for config in apps.get_app_configs()}
+        aliases = {
+            key: config.name for config in configs.values()
+            for key in (config.name, config.label, f"{type(config).__module__}.{type(config).__qualname__}")
+        }
         aliases.update(composed.root_app_aliases())
-        configs: dict[str, AppConfig] = {}
-        for declaration in sorted(set(declarations)):
-            config = resolve_app_config(aliases.get(declaration, declaration))
-            if config is not None:
-                aliases[declaration] = config.name
-                configs[config.name] = config
+        aliases.update({entry.value: name for name, entry in installed_entry_points().items()})
         return aliases, configs
 
     @staticmethod
     def _change_impacts(
         names: Iterable[str],
-        manifests: Mapping[str, AddonManifest],
+        manifests: Mapping[str, Mapping[str, Any]],
         roots: Iterable[str],
         aliases: Mapping[str, str],
         configs: Mapping[str, AppConfig],
@@ -277,13 +306,13 @@ class AddonManager[T: Addon](AngeeManager[T]):
         declarations = {aliases.get(root, root): root for root in roots}
         impacts = []
         for name in sorted(names):
-            config = configs.get(name) or resolve_app_config(name, expected_name=name)
+            config = configs.get(name)
             impacts.append(
                 AddonChangeImpact(
                     name=name,
                     label=get_addon_display_label(name, config.label if config is not None else ""),
                     root=name in declarations,
-                    depends_on=manifests[name].depends_on,
+                    depends_on=tuple(manifests[name]["depends_on"]),
                 )
             )
         return tuple(impacts)
@@ -313,7 +342,7 @@ class AddonManager[T: Addon](AngeeManager[T]):
         return tuple(inventories)
 
     def reconcile_loaded_registry(self) -> None:
-        """Converge after startup using the effective roots recorded by AppGraph."""
+        """Converge after startup using the effective roots recorded by the native snapshot."""
 
         self.reconcile_from_registry(desired=composed.root_app_names())
 
@@ -338,9 +367,9 @@ class AddonManager[T: Addon](AngeeManager[T]):
         declarations and excludes removed declarers.
         """
 
-        available = available_addons(getattr(settings, "ANGEE_ADDON_DIRS", ()))
+        available = available_addons()
         loaded = {config.name: config for config in composed.addons()}
-        aliases, configs = self._resolve_app_configs(desired or ())
+        aliases, configs = self._app_identity()
         configs.update(loaded)
         canonical_desired = (
             None
@@ -348,12 +377,13 @@ class AddonManager[T: Addon](AngeeManager[T]):
             else frozenset(aliases.get(declaration, declaration) for declaration in desired)
         )
         manifests = {name: manifest for name, (manifest, _origin) in available.items()}
-        for name, loaded_config in loaded.items():
-            if (manifest := addon_manifest(loaded_config)) is not None:
-                manifests[name] = manifest
         counts = composed.resource_counts()
         rows = self.all()
-        with transaction.atomic():
+        with database_context(self.db), transaction.atomic(using=self.db):
+            package_identity_index((
+                *((row.distribution, row.name) for row in rows.select_for_update() if row.distribution),
+                *((package["distribution"], name) for name, package in manifests.items()),
+            ))
             pending_by_name = dict(rows.values_list("name", "pending")) if canonical_desired is None else {}
             rows.filter(source__in=(Addon.AddonSource.INSTALLED, Addon.AddonSource.LOCAL)).exclude(
                 name__in=manifests
@@ -362,17 +392,14 @@ class AddonManager[T: Addon](AngeeManager[T]):
                 **self.model.reset_runtime_facts(),
             )
             for name, manifest in sorted(manifests.items()):
-                origin = available[name][1] if name in available else None
                 config = configs.get(name)
-                if config is None:
-                    config = resolve_app_config(name, expected_name=name)
                 enabled = name in loaded
-                root = enabled and bool(getattr(config, "compose_root", False))
+                root = enabled and name in composed.root_app_names()
                 runtime_facts = self.model.reset_runtime_facts()
                 if enabled:
                     data_models = composed.data_models(loaded[name])
                     runtime_facts.update(
-                        forced=bool(getattr(config, "compose_required", False)),
+                        forced=not root,
                         model_count=len(data_models),
                         field_count=sum(len(composed.own_fields(model)) for model in data_models),
                         resource_count=counts.get(name, 0),
@@ -388,39 +415,52 @@ class AddonManager[T: Addon](AngeeManager[T]):
                         **runtime_facts,
                         "label": config.label if config is not None else "",
                         "namespace": name.split(".")[0],
-                        "description": manifest.description,
-                        "keywords": list(manifest.keywords),
-                        "category": manifest.category or "",
+                        "distribution": manifest["distribution"],
+                        "requirements": list(manifest["requirements"]),
+                        "description": manifest["description"],
+                        "keywords": list(manifest["keywords"]),
+                        "category": manifest["category"] or "",
                         "kind": Addon.AddonKind.CONSUMER if root else Addon.AddonKind.REQUIRED,
-                        "source": (
-                            Addon.AddonSource.INSTALLED if isinstance(origin, EntryPoint) else Addon.AddonSource.LOCAL
-                        ),
+                        "source": Addon.AddonSource.INSTALLED,
                         "state": Addon.AddonState.ENABLED if enabled else Addon.AddonState.DISABLED,
                         "pending": pending,
-                        "depends_on": list(manifest.depends_on),
+                        "depends_on": list(manifest["depends_on"]),
                     },
                 )
 
             self.reconcile_dependencies()
 
     def reconcile_dependencies(self) -> None:
-        """Reflect current local and remote declarations; removed declarers are history.
+        """Reproject live native requirements, then reflect reverse catalogue edges.
 
-        Historical target rows retain current incoming edges, but their old
-        outgoing declarations no longer contribute to the live catalogue graph.
+        A newly discovered package can resolve requirements retained from an older
+        source refresh. Removed declarers keep historical forward edges but do
+        not contribute outgoing edges. Rows predating native metadata retain their
+        snapshot until their source or installed distribution refreshes.
         """
 
-        rows = list(self.all())
-        aliases, _configs = self._resolve_app_configs(
-            dependency for row in rows if row.state != self.model.AddonState.REMOVED for dependency in row.depends_on
-        )
-        incoming = self._dependants(
-            (row for row in rows if row.state != self.model.AddonState.REMOVED), aliases=aliases,
-        )
-        for row in rows:
-            value = incoming.get(row.name, [])
-            if row.depended_by != value:
-                self.filter(pk=row.pk).update(depended_by=value)
+        with database_context(self.db), transaction.atomic(using=self.db):
+            rows = list(self.select_for_update().order_by("name"))
+            identities = package_identity_index((
+                *((entry.dist.metadata["Name"], name) for name, entry in installed_entry_points().items()
+                  if entry.dist is not None),
+                *((row.distribution, row.name) for row in rows if row.distribution),
+            ))
+            live = [row for row in rows if row.state != self.model.AddonState.REMOVED]
+            for row in live:
+                if row.distribution:
+                    projected = list(requirement_addons(row.requirements, identities))
+                    if row.depends_on != projected:
+                        self.filter(pk=row.pk).update(depends_on=projected)
+                        row.depends_on = projected
+            aliases, _configs = self._app_identity()
+            incoming = self._dependants(
+                ({"name": row.name, "depends_on": row.depends_on} for row in live), aliases=aliases,
+            )
+            for row in rows:
+                value = incoming.get(row.name, [])
+                if row.depended_by != value:
+                    self.filter(pk=row.pk).update(depended_by=value)
 
     def pending_changes(self) -> bool | None:
         """Return verified desired-vs-loaded drift, or ``None`` when settings are unreadable.
@@ -435,27 +475,28 @@ class AddonManager[T: Addon](AngeeManager[T]):
             return None
         loaded = composed.root_app_names()
         desired = addon_installer().desired_app_names()
-        return None if desired is None else desired != loaded
+        aliases = composed.root_app_aliases()
+        return None if desired is None else frozenset(aliases.get(root, root) for root in desired) != loaded
 
 
 def _preview_revision(
     text: str,
-    manifests: Iterable[AddonManifest],
+    manifests: Iterable[Mapping[str, Any]],
     *,
     action: str,
     addon: str,
     roots_after: tuple[str, ...],
 ) -> str:
-    """Bind the reviewed action and result to exact settings and manifest facts."""
+    """Bind the reviewed action and result to exact settings and package facts."""
 
     payload = [
         {
-            "name": manifest.name,
-            "depends_on": list(manifest.depends_on),
-            "description": manifest.description,
-            "category": manifest.category,
+            "name": manifest["name"],
+            "depends_on": list(manifest["depends_on"]),
+            "description": manifest["description"],
+            "category": manifest["category"],
         }
-        for manifest in sorted(manifests, key=lambda item: item.name)
+        for manifest in sorted(manifests, key=lambda item: item["name"])
     ]
     decision = {
         "settings": text,
@@ -467,14 +508,13 @@ def _preview_revision(
     return canonical_json_sha256(decision)
 
 
-class Addon(AngeeModel):
+class Addon(AngeeModel, concrete=True):
     """The composed-runtime addon registry — local reflection, system-synced.
 
     Identity is ``name`` (e.g. ``angee.iam``) — the stable key the console
     cross-links on — not a sqid.
     """
 
-    runtime = True
 
     objects = AddonManager()
 
@@ -488,7 +528,7 @@ class Addon(AngeeModel):
         """Where the available addon resolved from."""
 
         INSTALLED = "installed", "Installed"  # an installed bundle's entry point (uv.lock)
-        LOCAL = "local", "Local"  # an addon.toml under ANGEE_ADDON_DIRS
+        LOCAL = "local", "Local"  # historical source-directory catalogue entry
         REMOTE = "remote", "Remote"  # known from a VCS source, not materialised (platform_integrate_vcs)
 
     class AddonState(models.TextChoices):
@@ -501,12 +541,18 @@ class Addon(AngeeModel):
     name = models.CharField(max_length=200, unique=True)
     label = models.CharField(max_length=100, blank=True, default="")
     namespace = models.CharField(max_length=100, blank=True, default="")
-    # Manifest metadata (the addon's ``addon.toml``), reflected for the marketplace
-    # board: the freeform ``category`` it groups by and the ``description``/``keywords``
+    # Package metadata (the addon's ``pyproject.toml``), reflected for the marketplace
+    # board: the declared ``category`` it groups by and the ``description``/``keywords``
     # the cards show. The contract owns these; the reconcile only mirrors them.
+    distribution = models.CharField(max_length=200, blank=True, default="")
+    """Canonical native distribution identity; empty until metadata is refreshed."""
+
+    requirements = models.JSONField(default=list, blank=True)
+    """Native PEP 508 requirements, retained so other catalogue sources can resolve them."""
+
     description = models.TextField(blank=True, default="")
     keywords = models.JSONField(default=list, blank=True)
-    category = models.CharField(max_length=100, blank=True, default="", db_index=True)
+    category = models.CharField(max_length=100, blank=True, default="", db_index=True, choices=AddonCategory.choices)
     kind = StateField(choices_enum=AddonKind, default=AddonKind.REQUIRED)
     source = StateField(choices_enum=AddonSource, default=AddonSource.INSTALLED)
     state = StateField(choices_enum=AddonState, default=AddonState.DISABLED, db_index=True)
@@ -529,6 +575,12 @@ class Addon(AngeeModel):
         """Django model options."""
 
         abstract = True
+        constraints = (
+            models.UniqueConstraint(
+                fields=("distribution",), condition=~models.Q(distribution=""),
+                name="%(app_label)s_%(class)s_distribution_uniq",
+            ),
+        )
         ordering = ("name",)
         rebac_resource_type = "platform/addon"
 
@@ -557,10 +609,9 @@ class Addon(AngeeModel):
         }
 
 
-class PlatformExplorer(AngeeModel):
+class PlatformExplorer(AngeeModel, concrete=True):
     """Table-less REBAC type anchor for the platform introspection surface."""
 
-    runtime = True
 
     class Meta:
         abstract = True

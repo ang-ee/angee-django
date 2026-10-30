@@ -54,7 +54,7 @@ concern and for consumers of any contract the feature changes.
    - If the fact is a generic row contract any addon could compose (a flag, lock, edge, ordering, identity) → `angee.base`, extending the existing mixin or field before adding one.
    - If it is a reusable product capability shipped with Angee (money, tags, files, threads, jobs, workflows, provenance, decisions, knowledge, agents, integrate) → that framework addon; a cross-addon rule goes to the base or capability addon both compose.
    - If it is one product's logic → the consumer addon, contributing to framework definitions additively (`permissions.extends.zed`, `extends`, type and input extensions, containers).
-   - If it is composition mechanics (discovery, ordering, emission, serving) → core, with no product vocabulary.
+   - If it is generic composition mechanics (discovery, ordering, emission, verified imports) → `django-compose`, with no Angee/product vocabulary. Angee deployment defaults/primitives belong to base; HTTP policy belongs to server.
    **Owner rule:** [Repository Role](../../../AGENTS.md#repository-role) decides by the fact's reach: "every fact lives at its owning level", bounded on both sides — a fact the framework should own does not stop at the consumer, and product vocabulary never moves below the consumer addon.
 
 5. **Check the dependency.** For a concern a library owns per [docs/stack.md](../../../docs/stack.md#backend), wire that library's native type and extension point. A new dependency needs its stack row and manifest entry together ([Change Policy](../../../docs/stack.md#change-policy)).
@@ -82,13 +82,7 @@ concern and for consumers of any contract the feature changes.
 
 8. **Continue** with the artifact skill that owns the result where the repository ships one, else the owning guide section from the owner map; run `slice` when the user requested it. The route for a feature is `angee-addon` → `angee-models` and `angee-permissions` → `angee-graphql` and `angee-resources` → `angee-forms` and `angee-pages`, with `angee-tests` beside each step → `angee-project` → `angee-runtime` → acceptance; a seam change starts at `angee-framework`.
 
-<details><summary>Changes under the build/host plan</summary>
 
-Under the planned build/host split `angee.base` owns the host: the index rows citing `angee/hooks.py` and `angee/compose/autoconfig.py`
-follow those modules into `angee.base`, and step 4 has no core below `angee.base`
-for host facts; `tests/test_owner_index.py` failing on the stale paths is the signal to re-cite.
-
-</details>
 
 ## Do not
 
@@ -131,14 +125,3 @@ that names a copy, a wrapper or an unowned fact.
 - [docs/backend/guidelines.md — Rules](../../../docs/backend/guidelines.md#rules), [docs/frontend/guidelines.md — Component ontology](../../../docs/frontend/guidelines.md#component-ontology)
 - capability guides beside the engine a feature extends, loaded by path from a source checkout: [mcp-tools](../../../addons/angee/mcp/skills/mcp-tools/SKILL.md), [jobs-tasks](../../../addons/angee/jobs/skills/jobs-tasks/SKILL.md), [integrate-bridges](../../../addons/angee/integrate/skills/integrate-bridges/SKILL.md), [workflow-definitions](../../../addons/angee/workflows/skills/workflow-definitions/SKILL.md), [provenance-attribution](../../../addons/angee/provenance/skills/provenance-attribution/SKILL.md), [agent-composition](../../../addons/angee/agents/skills/agent-composition/SKILL.md); other engines keep only `addons/angee/<addon>/README.md`
 - skills: `slice`, `angee-workspace`; command: `lift` (reconstructing from another repo)
-
-## Sources
-
-<!--
-AGENTS.md, docs/guidelines.md, docs/glossary.md (whole); docs/stack.md #backend; docs/backend/guidelines.md #django-native-rule, #package-layering, #composition-owners, #rules, #rebac, #persistence-primitives, #migration-history, #addon-websocket-endpoints, #graphql-actor-and-write-contracts, #integration-and-worker-contracts, #workflow-contracts, #naming, #checks;
-docs/frontend/guidelines.md #native-state-owners, #reserved-translation-namespace, #component-ontology, #rules, #addresses-kinds-and-inheritance, #authoring, #narrowing-and-when; docs/composer.md #addon-discovery, #autoconfig; docs/checks.md #choose-the-working-directory, #python-and-composition-contracts, #agent-methodology-and-documentation, #what-ci-actually-runs;
-addons/angee/base/{models,fields}/*.py docstrings and the class docstrings cited in references/owners.md; base/implementations.py:1-60, expressions.py, checks.py:26-38; graphql/trash.py:50-70; angee/hooks.py;
-money (README, autoconfig, fields); tags (models, zed, addon.toml, TagForm, index.tsx); READMEs of messaging, workflows, provenance, integrate, decisions, knowledge, storage; examples/addons/example/notes (README, models, mcp_tools);
-tests/test_agent_methodology.py, tests/test_documentation_contracts.py; skills slice, angee-workspace; commands/lift.md;
-Mismatches: addon-level skills ship only for mcp, jobs, integrate, workflows, provenance and agents (addons/angee/<addon>/skills/<name>/SKILL.md); other engines keep only their README; the glossary has section anchors only; docs/backend/guidelines.md#graphql-actor-and-write-contracts (**Lines are owned parts, written as the user**) links `Stage` to addons/angee/work/models.py while the abstract owner is addons/angee/base/models/stages.py:37.
--->

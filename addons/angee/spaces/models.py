@@ -17,6 +17,7 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils.text import slugify
+from django_compose.models import Composable
 from rebac import PermissionDenied, current_actor
 
 from angee.base.fields.state import StateField
@@ -29,10 +30,9 @@ from angee.parties.mixins import MembershipDecisionMixin
 from angee.spaces.managers import GroupManager, MembershipManager
 
 
-class Group(ThreadAudienceMixin, HierarchyMixin, OwnerMixin, AngeeDataModel):
+class Group(ThreadAudienceMixin, HierarchyMixin, OwnerMixin, AngeeDataModel, concrete=True):
     """A shared group with one canonical roster and an unscoped parent tree."""
 
-    runtime = True
     sqid_prefix = "grp_"
 
     class GroupVisibility(models.TextChoices):
@@ -120,7 +120,7 @@ class Group(ThreadAudienceMixin, HierarchyMixin, OwnerMixin, AngeeDataModel):
         return candidate
 
 
-class Membership(MembershipDecisionMixin, AuditMixin, AngeeDataModel):
+class Membership(MembershipDecisionMixin, AuditMixin, AngeeDataModel, concrete=True):
     """One party's role-bearing roster row in a shared group.
 
     Confirmation resolves live through the canonical ``Person.user`` identity
@@ -128,7 +128,6 @@ class Membership(MembershipDecisionMixin, AuditMixin, AngeeDataModel):
     REBAC access.
     """
 
-    runtime = True
     sqid_prefix = "mbr_"
 
     class MembershipRole(models.TextChoices):
@@ -224,10 +223,9 @@ class Membership(MembershipDecisionMixin, AuditMixin, AngeeDataModel):
         return self
 
 
-class ThreadSpace(models.Model):
+class ThreadSpace(Composable, extends="messaging.Thread"):
     """Group audience contributed onto ``messaging.Thread`` as a same-row field."""
 
-    extends: ClassVar[str | None] = "messaging.Thread"
 
     groups = models.ManyToManyField(
         "spaces.Group",
@@ -241,10 +239,9 @@ class ThreadSpace(models.Model):
         abstract = True
 
 
-class ChannelSpace(models.Model):
+class ChannelSpace(Composable, extends="messaging.Channel"):
     """Bind a messaging channel to a team through its integration parent."""
 
-    extends: ClassVar[str | None] = "messaging.Channel"
     hasura_readable_fields: ClassVar[tuple[str, ...]] = ("team",)
     hasura_filterable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
     hasura_insertable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
@@ -264,7 +261,7 @@ class ChannelSpace(models.Model):
         abstract = True
 
 
-class VaultSpace(models.Model):
+class VaultSpace(Composable, extends="knowledge.Vault"):
     """Bind a knowledge vault's access to the roster of an optional team.
 
     The column is the one record of the binding: the roster reads the vault
@@ -273,7 +270,6 @@ class VaultSpace(models.Model):
     roster. Group viewers and public readers gain nothing through it.
     """
 
-    extends: ClassVar[str | None] = "knowledge.Vault"
     hasura_readable_fields: ClassVar[tuple[str, ...]] = ("team",)
     hasura_filterable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
     hasura_insertable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields

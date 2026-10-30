@@ -3,11 +3,11 @@
 The daemon owns its GraphQL schema; rather than hand-maintain types, the console
 derives them from the daemon's own SDL. This command introspects the running
 daemon over the addon's authenticated connection and writes the SDL to
-`<COMPOSE_RUNTIME_DIR>/schemas/external/operator.graphql`, which frontend codegen
+`<COMPOSE_OUTPUT_DIR>/schemas/external/operator.graphql`, which frontend codegen
 prefers over the package's committed snapshot (`web/schema/operator.graphql`).
-It is the daemon-side analogue of `manage.py schema`: generated output belongs to
-the runtime, so a stack's job never rewrites a source checkout. Refresh the
-committed snapshot by copying this file when the supported operator changes.
+This explicit codegen input is owned by the operator export job, separately from
+the compiler-owned application SDL. A stack job never rewrites a source checkout.
+Refresh the committed snapshot by copying this file when the supported operator changes.
 """
 
 from __future__ import annotations
@@ -18,15 +18,15 @@ from typing import Any
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
+from django_compose.artifacts import atomic_write
 
 from angee.operator.daemon import OperatorDaemon
-from angee.utils.files import write_atomic
 
 
 def sdl_path() -> Path:
     """The live SDL's runtime location, read by codegen before the committed snapshot."""
 
-    return Path(settings.COMPOSE_RUNTIME_DIR) / "schemas" / "external" / "operator.graphql"
+    return Path(settings.COMPOSE_OUTPUT_DIR) / "schemas" / "external" / "operator.graphql"
 
 
 class Command(BaseCommand):
@@ -56,5 +56,5 @@ class Command(BaseCommand):
         if sdl is None:
             raise CommandError(f"operator daemon unreachable after {options['retries']} attempts; SDL not refreshed")
         path = sdl_path()
-        write_atomic(path, sdl if sdl.endswith("\n") else f"{sdl}\n")
+        atomic_write(path, (sdl if sdl.endswith("\n") else f"{sdl}\n").encode("utf-8"))
         self.stdout.write(self.style.SUCCESS(f"operator schema -> {path}"))

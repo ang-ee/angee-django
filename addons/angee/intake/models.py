@@ -15,6 +15,7 @@ from django.core.validators import DomainNameValidator, validate_email
 from django.db import models, transaction
 from django.db.models.expressions import BaseExpression
 from django.db.models.functions import Coalesce, NullIf
+from django_compose.models import Composable
 from rebac import (
     PermissionDenied,
     actor_context,
@@ -355,10 +356,9 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
         return sender.party_id if sender.party_link_confirmed else None
 
 
-class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel):
+class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel, concrete=True):
     """One external or manually-authored request attached to one semantic target."""
 
-    runtime = True
     resource_class = NeedResource
     sqid_prefix = "ned_"
     # The requester's name is a sort axis through the linked party: an empty
@@ -1001,10 +1001,9 @@ def _requested_by_viewer_filter(queryset: models.QuerySet[Any]) -> models.Expres
     )
 
 
-class TaskIntakeFilters(models.Model):
+class TaskIntakeFilters(Composable, extends="projects.Task"):
     """Filter tasks by who filed them, the way the task shows it: intake's first request."""
 
-    extends: ClassVar[str | None] = "projects.Task"
     hasura_filter_expressions: ClassVar[Mapping[str, Callable[[models.QuerySet[Any]], BaseExpression]]] = {
         "requester_name": _requester_name_filter,
         "requested_by_viewer": _requested_by_viewer_filter,
@@ -1014,10 +1013,9 @@ class TaskIntakeFilters(models.Model):
         abstract = True
 
 
-class ProjectIntakeSetup(models.Model):
+class ProjectIntakeSetup(Composable, extends="projects.Project"):
     """Link unassigned request parties before downstream setup admits people."""
 
-    extends: ClassVar[str | None] = "projects.Project"
 
     class Meta:
         abstract = True
@@ -1039,10 +1037,9 @@ class ProjectIntakeSetup(models.Model):
         super().apply_setup(**options)
 
 
-class ChannelIntake(models.Model):
+class ChannelIntake(Composable, extends="messaging.Channel"):
     """Same-row intake fields and capture behavior for ``messaging.Channel``."""
 
-    extends: ClassVar[str | None] = "messaging.Channel"
 
     class IntakeTrigger(models.TextChoices):
         """Declared capture triggers; only all-messages is implemented in v1."""

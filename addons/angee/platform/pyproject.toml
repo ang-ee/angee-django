@@ -1,0 +1,16 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-platform"
+version = "3.0.0"
+description = "The admin console — schema/addon explorer, the marketplace board, and contributed sections"
+keywords = ["console", "admin", "explorer"]
+dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-resources>=3,<4", "angee-web>=3,<4", "ruamel.yaml>=0.18"]
+
+[project.entry-points]
+"angee.addons" = {"angee.platform" = "angee.platform"}
+
+[tool.angee]
+
+[tool.angee.platform]
+category = "Platform"

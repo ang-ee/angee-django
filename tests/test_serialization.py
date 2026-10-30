@@ -9,7 +9,7 @@ from decimal import Decimal
 
 import pytest
 
-from angee.serialization import canonical_json, canonical_json_sha256, json_safe
+from angee.base.serialization import canonical_json, canonical_json_sha256, json_safe
 
 
 def test_canonical_json_digest_has_one_stable_unicode_spelling() -> None:

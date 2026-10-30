@@ -19,7 +19,7 @@ from django.db.models.fields import NOT_PROVIDED
 from django.db.models.utils import make_model_tuple
 from import_export.results import Result, RowResult
 
-from angee.addons import addon_manifest
+from angee.base.addons import addon_facts
 from angee.base.fields.text import ModelLabelField
 from angee.base.implementations import impl_registry, resolve_impl_class
 from angee.resources import sources
@@ -94,33 +94,67 @@ RETIRED_MODELS_KEY = "retired_models"
 """The ``[resources]`` key naming removed models whose seeded rows retire with them; not a tier."""
 
 
-def resource_manifest_for(app_config: AppConfig) -> dict[str, tuple[dict[str, Any], ...]]:
-    """Return normalized resource declarations keyed by tier for one addon."""
+def _resource_declarations(app_config: AppConfig) -> Mapping[str, Any]:
+    """Read and validate the table shared by tier and retirement declarations."""
 
-    contract = addon_manifest(app_config)
-    resources = contract.resources if contract is not None else {}
+    resources = addon_facts(app_config.name, "angee.resources")
+    if not isinstance(resources, Mapping):
+        raise ImproperlyConfigured(f"{app_config.name}: tool.angee.resources must be a table")
+    return resources
+
+
+def resource_manifest_for(app_config: AppConfig) -> dict[str, tuple[dict[str, Any], ...]]:
+    """Return canonical resource declarations keyed by tier for one addon."""
+
+    resources = _resource_declarations(app_config)
     manifest: dict[str, tuple[dict[str, Any], ...]] = {tier: () for tier in ResourceTier.values}
     for raw_tier, declarations in resources.items():
         if raw_tier == RETIRED_MODELS_KEY:
             continue
         tier = ResourceTier.from_value(raw_tier)
-        manifest[tier] = _resource_entries(app_config, declarations)
+        manifest[tier] = tuple(
+            _package_resource_entry(entry) for entry in _resource_entries(app_config, declarations)
+        )
     return manifest
+
+
+def _package_resource_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """Keep ledger paths addon-relative while package declarations use resources-relative paths.
+
+    Both local files and dependency addresses use the historical ``resources/``
+    prefix in entry keys and persisted ``source_path``. URLs retain their native
+    identity. Direct ``ResourceEntry`` callers already supply canonical sources.
+    """
+
+    if "path" in entry:
+        entry["path"] = (Path("resources") / entry["path"]).as_posix()
+    if "depends_on" in entry:
+        dependencies = []
+        for dependency in entry["depends_on"]:
+            if "://" in dependency:
+                dependencies.append(dependency)
+                continue
+            addon, separator, source = dependency.partition(":")
+            source = source if separator else addon
+            canonical = (Path("resources") / source).as_posix()
+            dependencies.append(f"{addon}:{canonical}" if separator else canonical)
+        entry["depends_on"] = tuple(dependencies)
+    return entry
 
 
 def retired_models_for(app_config: AppConfig) -> tuple[str, ...]:
     """Return the removed model labels whose rows ``app_config``'s resource files seeded.
 
     An addon that removes such a model names it under ``retired_models`` in its
-    addon.toml ``[resources]``; the composer's drop guard then lets those rows,
+    pyproject.toml ``[tool.angee.resources]``; the composer's drop guard then lets those rows,
     and only those, go with the model's table.
     """
 
-    contract = addon_manifest(app_config)
-    labels = contract.resources.get(RETIRED_MODELS_KEY, []) if contract is not None else []
+    labels = _resource_declarations(app_config).get(RETIRED_MODELS_KEY, [])
     if not isinstance(labels, list) or not all(isinstance(label, str) and label for label in labels):
         raise ImproperlyConfigured(
-            f"{app_config.name}: addon.toml [resources] {RETIRED_MODELS_KEY} must be an array of model labels"
+            f"{app_config.name}: pyproject.toml [tool.angee.resources] "
+            f"{RETIRED_MODELS_KEY} must be an array of model labels"
         )
     return tuple(labels)
 

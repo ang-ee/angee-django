@@ -7,8 +7,8 @@ from typing import Any
 from django.core.exceptions import ValidationError
 from jsonpointer import JsonPointer, JsonPointerException
 
+from angee.base.serialization import canonical_json
 from angee.extraction.profiles import EvidenceLayout
-from angee.serialization import canonical_json
 
 JSON_POINTER_MISSING = object()
 """Sentinel distinguishing an absent path from a retained JSON null."""

@@ -8,6 +8,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+from angee.base.testing.packages import write_addon_distribution
+
 
 def test_graphql_startup_discovers_publishers_without_building_schema(tmp_path: Path) -> None:
     """Django startup wires changes while explicit schema access remains lazy."""
@@ -72,15 +74,8 @@ def test_graphql_startup_discovers_publishers_without_building_schema(tmp_path: 
         ),
         encoding="utf-8",
     )
-    (package / "addon.toml").write_text(
-        textwrap.dedent(
-            """
-            [addon]
-            name = "cold_graphql_addon"
-            schemas = "schema.schemas"
-            """
-        ),
-        encoding="utf-8",
+    write_addon_distribution(
+        package, "cold_graphql_addon", depends_on=("angee.graphql",), metadata_root=tmp_path,
     )
 
     program = textwrap.dedent(

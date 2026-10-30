@@ -227,12 +227,11 @@ workspaces:
 {% endif %}
 
 {# The template chooses the entry job; the operator follows only declared edges. #}
-{% set restart_job = "deps" %}{% if stack_flavor == "instance" %}{% set restart_job = "runtime-build" %}{% endif %}
-{% set python_sync = "uv sync --frozen --inexact --no-build && " %}{% if effective_serve_mode == "production" %}{% set python_sync = "uv sync --frozen --inexact --no-build --no-editable && " %}{% endif %}
+{% set job_dollar = "$" %}{% if runtime_mode == "docker" %}{% set job_dollar = "$$" %}{% endif %}
+{% set restart_job = "deps" %}{% if stack_flavor == "instance" %}{% set restart_job = "py-sync" %}{% endif %}
 
-# Hatch builds the project runtime during native installation. Provision consumes
-# that artifact without compiling models or writing native migration history.
-# The operator follows only these declared edges and stops on a failed job.
+# Stop application consumers before mutating their shared environment. Composition
+# emits files; provision alone mutates the database. Failed jobs keep holds stopped.
 jobs:
 {% if stack_flavor == "framework" %}
   # Install at the host's JS workspace owner, including its addon packages.
@@ -248,36 +247,40 @@ jobs:
     command: ["sh", "-c", "corepack enable pnpm && exec pnpm install"]
 {% endif %}{% endif %}
 
-  # Editable installation builds local artifacts; production installs the same
-  # hook's sealed wheel. Both use the host's native pyproject and lockfile.
-  runtime-build:
+  py-sync:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
-{% if runtime_mode == "process" %}    command: ["uv", "sync"]
-{% else %}    command: ["uv", "sync"{% if effective_serve_mode == "production" %}, "--no-editable"{% endif %}]
-{% endif %}{% if stack_flavor == "framework" %}    depends_on: [deps]
+      ANGEE_DEPENDENCY_ACTION: "${inputs.action | default('sync')}"
+      ANGEE_DEPENDENCY_REQUIREMENT: "${inputs.requirement | default('')}"
+    command:
+      - sh
+      - "-c"
+      - >-
+        if [ "{{ job_dollar }}ANGEE_DEPENDENCY_ACTION" = sync ]; then
+        exec uv sync --locked{% if effective_serve_mode == "production" %} --no-editable{% endif %}; fi;
+        exec "{{ job_dollar }}UV_PROJECT_ENVIRONMENT/bin/python" -m angee.platform_integrate_operator.preflight{% if effective_serve_mode == "production" %} --no-editable{% endif %}
+        -- "{{ job_dollar }}ANGEE_DEPENDENCY_ACTION" "{{ job_dollar }}ANGEE_DEPENDENCY_REQUIREMENT"
+    holds: [django, celery-worker{% if celery_queues %}, celery-queues{% endif %}]
+{% if stack_flavor == "framework" %}    depends_on: [deps]
 {% endif %}
+  compose:
+{% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
+    command: ["uv", "run", "--no-sync", "python", "manage.py", "compose"]
+    depends_on: [py-sync]
 
   provision:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
 {% if stack_flavor == "instance" %}      YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_USERNAME: "admin"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_EMAIL: "admin@example.com"
       YAMLCONF_ANGEE_BOOTSTRAP_ADMIN_PASSWORD: "${secret.admin-password}"
-{% endif %}{% if runtime_mode == "process" %}    command: ["sh", "-c", "exec uv run --no-sync python manage.py angee provision --force-rebac --after-if-installed 'resources load --include-demo' --after-if-installed schema"]
-    depends_on: [runtime-build, operator]
-{% else %}    command:
-      - sh
-      - "-c"
-      - >-
-        {{ python_sync }}exec python manage.py angee provision {% if stack_flavor == "framework" %}--force-rebac --after-if-installed 'resources load{% if effective_serve_mode != "production" %} --include-demo{% endif %}'{% else %}--after-if-installed 'resources load'{% endif %} --after-if-installed schema{% if stack_flavor != "framework" %} --after-if-installed bootstrap_admin{% endif %}
-    depends_on: [{% if postgres_mode == "external" %}{% else %}postgres, {% endif %}operator, runtime-build]
-{% endif %}
+{% endif %}    command: ["uv", "run", "--no-sync", "python", "manage.py", "provision", "--wait-db", "60"]
+    depends_on: [compose{% if runtime_mode == "docker" %}{% if postgres_mode == "external" %}{% else %}, postgres{% endif %}{% endif %}]
 
-  # Codegen consumes both the provisioned Django SDL and this live daemon SDL.
+  # Compose owns application SDL; this job exports the live operator SDL.
+  # Both are codegen inputs and need no provisioned DB.
   operator-schema:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="" %}
-{% if runtime_mode == "process" %}    command: ["uv", "run", "--no-sync", "python", "manage.py", "operator_schema"]
-{% else %}    command: ["sh", "-c", "{{ python_sync }}exec python manage.py operator_schema"]
-{% endif %}    depends_on: [operator, provision]
+    command: ["uv", "run", "--no-sync", "python", "manage.py", "operator_schema"]
+    depends_on: [operator, compose]
 
 {% if stack_flavor == "framework" %}
   codegen:
@@ -290,7 +293,7 @@ jobs:
       - source://app:/app
     workdir: /app
     command: ["sh", "-c", "corepack enable pnpm && exec pnpm --dir {{ web_path }} codegen"]
-{% endif %}    depends_on: [deps, provision, operator-schema]{% if effective_serve_mode == "production" %}
+{% endif %}    depends_on: [deps, compose, operator-schema]{% if effective_serve_mode == "production" %}
   frontend-build:
     runtime: container
     image: {{ node_image }}
@@ -325,7 +328,7 @@ jobs:
     env:
       VITE_SENTRY_DSN: "{{ sentry_web_dsn }}"
       VITE_SENTRY_ENVIRONMENT: "{{ effective_serve_mode }}"{% endif %}
-    depends_on: [provision, operator-schema]
+    depends_on: [compose, operator-schema]
 
 {% endif %}
 
@@ -399,22 +402,22 @@ services:
     ports:
       - "${ports.ollama}:11434"
 {% endif %}{% endif %}
-  # Each container syncs its own venv; the provision job already prepared the host.
+  # Python jobs and consumers use the environment prepared once by py-sync.
   django:
 {% include "../_shared/python-runtime.yaml.jinja" with pool_for_django="true" %}
 {% if runtime_mode == "process" %}    command: ["uv", "run", "--no-sync", "python", "manage.py", "runserver", "127.0.0.1:{{ django_port }}"]
     ready:
-      tcp: { port: {{ django_port }} }
+      http: { port: {{ django_port }}, path: /health/ready }
 {% else %}    # Trust the connected Compose network, not a frontend IP that can change
     # independently when the frontend container restarts.
     command:
       - sh
       - "-c"
       - >-
-        {{ python_sync }}{% if stack_flavor == "framework" and effective_serve_mode == "development" %}exec python manage.py runserver 0.0.0.0:8000{% else %}TRUSTED_PROXY_CIDR=$$(python -c 'import ipaddress as ip, socket; peer = ip.ip_address(socket.gethostbyname("{% if stack_flavor == "framework" %}frontend{% else %}caddy{% endif %}")); routes = (line.split() for line in open("/proc/net/route").read().splitlines()[1:]); networks = (ip.ip_network((ip.IPv4Address(int.from_bytes(bytes.fromhex(row[1]), "little")), int.from_bytes(bytes.fromhex(row[7]), "little").bit_count()), strict=False) for row in routes if row[7] != "00000000"); print(next(str(network) for network in networks if peer in network))')
-        && exec python manage.py serve --host 0.0.0.0 --port 8000 --forwarded-allow-ips "$$TRUSTED_PROXY_CIDR" --workers {% if effective_serve_mode == "production" %}{{ serve_workers }} --production{% else %}1{% endif %}{% endif %}
+        {% if stack_flavor == "framework" and effective_serve_mode == "development" %}exec uv run --no-sync python manage.py runserver 0.0.0.0:8000{% else %}TRUSTED_PROXY_CIDR=$$(uv run --no-sync python -c 'import ipaddress as ip, socket; peer = ip.ip_address(socket.gethostbyname("{% if stack_flavor == "framework" %}frontend{% else %}caddy{% endif %}")); routes = (line.split() for line in open("/proc/net/route").read().splitlines()[1:]); networks = (ip.ip_network((ip.IPv4Address(int.from_bytes(bytes.fromhex(row[1]), "little")), int.from_bytes(bytes.fromhex(row[7]), "little").bit_count()), strict=False) for row in routes if row[7] != "00000000"); print(next(str(network) for network in networks if peer in network))')
+        && exec uv run --no-sync python manage.py serve --host 0.0.0.0 --port 8000 --forwarded-allow-ips "$$TRUSTED_PROXY_CIDR" --workers {% if effective_serve_mode == "production" %}{{ serve_workers }} --production{% else %}1{% endif %}{% endif %}
     ready:
-      cmd: ["python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 1).close()"]
+      cmd: ["uv", "run", "--no-sync", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/ready', timeout=2).close()"]
 {% endif %}      interval: 5s
       timeout: 3s
       start_period: 30s
@@ -443,7 +446,7 @@ services:
       - sh
       - "-c"
       - >-
-        {{ python_sync }}exec python manage.py celery worker {% if role == "worker" %}--beat{% else %}-Q {{ celery_queues }} --pool threads --concurrency {{ celery_queues|split:","|length * 8 }}{% endif %} --loglevel=INFO
+        exec uv run --no-sync python manage.py celery worker {% if role == "worker" %}--beat{% else %}-Q {{ celery_queues }} --pool threads --concurrency {{ celery_queues|split:","|length * 8 }}{% endif %} --loglevel=INFO
     after: [provision{% if redis_mode == "external" %}{% else %}, redis{% endif %}]
 {% endif %}
 {% endif %}{% endfor %}

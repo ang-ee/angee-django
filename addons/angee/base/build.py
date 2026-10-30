@@ -37,7 +37,7 @@ package name):
 - Extending a definition no installed package declares is a hard error.
 
 The merged definition's identity changes whenever any contribution changes: the
-relation/arm lines move the file's bytes (so ``angee check`` reports drift) and
+relation/arm lines move the file's bytes (so ``compose --check`` reports drift) and
 the per-relation/permission payload hash moves (so ``rebac sync`` re-applies).
 The emitted header additionally records each contributor and its fragment
 revision in ``@rebac_extended_by`` for provenance. The base package does **not**
@@ -59,20 +59,19 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from django.apps import AppConfig
+from django.apps.registry import Apps
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
+from django_compose.declarations import DeclarationValue, ModelDeclaration, ModelsView
+from django_compose.serving import GENERATED_SENTINEL
 from rebac.resources import model_resource_type
-from rebac.schema import Definition, Permission, Schema, parse_zed, resolve_schema_path, validate_schema
+from rebac.schema import Definition, Permission, Schema, parse_zed, validate_schema
 from rebac.schema import render_zed as render_schema
 
-from angee.addons import addon_manifest
-from angee.base.permissions import declared_grants
-from angee.compose.declarations import BuildIntegration, DeclarationValue, ModelDeclaration
-from angee.compose.runtime import GENERATED_SENTINEL
+from angee.base.permissions import declared_grants, declared_schema_path, merged_schema_relpath
 
 if TYPE_CHECKING:
-    from angee.compose.model_composition import ModelComposition
-    from angee.compose.runtime import Runtime
+    from django_compose.model_composition import ModelComposition
 
 __all__ = [
     "EXTENSION_FILENAME",
@@ -81,9 +80,7 @@ __all__ = [
     "field_gate_owners",
     "SchemaExtensionError",
     "extension_source_map",
-    "schema_path_wiring",
     "merged_schemas",
-    "merged_schema_relpath",
 ]
 
 # A consumer addon contributes to another addon's definitions through this
@@ -93,7 +90,6 @@ EXTENSION_FILENAME = "permissions.extends.zed"
 
 # Merged effective zed lives under this runtime subtree, one file per owning
 # package: ``runtime/permissions/<package>.zed``.
-_MERGED_SUBDIR = "permissions"
 
 
 class SchemaExtensionError(RuntimeError):
@@ -117,33 +113,6 @@ def _schema_path(app_config: AppConfig, filename: str) -> Path | None:
     return path if path.exists() else None
 
 
-def declared_schema_path(app_config: AppConfig) -> Path | None:
-    """Resolve authored input independently of previously bound effective output."""
-
-    manifest = addon_manifest(app_config)
-    if manifest is None:
-        # Native Django apps have no addon manifest. Capture their upstream
-        # declaration before a derived merged path is assigned to the same seam.
-        if (
-            "_angee_rebac_schema_effective" not in app_config.__dict__
-            or getattr(app_config, "rebac_schema", None) != getattr(app_config, "_angee_rebac_schema_effective")
-        ):
-            setattr(app_config, "_angee_rebac_schema_source", resolve_schema_path(app_config))
-        return getattr(app_config, "_angee_rebac_schema_source")
-
-    path = Path(app_config.path) / (manifest.permissions or "permissions.zed")
-    configured = getattr(app_config, "rebac_schema", None)
-    bound = app_config.__dict__.get("_angee_rebac_schema_effective")
-    if configured is not None and configured != bound:
-        configured_path = Path(app_config.path) / configured
-        if configured_path.resolve() != path.resolve():
-            raise ImproperlyConfigured(
-                f"{app_config.name}: declare permissions in addon.toml; "
-                "AppConfig.rebac_schema conflicts with the manifest"
-            )
-    if manifest.permissions is not None and not path.is_file():
-        raise ImproperlyConfigured(f"{app_config.name}: declared permissions file does not exist: {path}")
-    return path if path.is_file() else None
 
 
 def _parse(path: Path, package: str) -> Schema:
@@ -370,10 +339,6 @@ def render_zed(package: str, schema: Schema) -> str:
 # ---------- build-time wiring ----------
 
 
-def merged_schema_relpath(package: str) -> Path:
-    """Return the merged zed path relative to the runtime dir for ``package``."""
-
-    return Path(_MERGED_SUBDIR) / f"{package}.zed"
 
 
 def extension_source_map(
@@ -383,8 +348,8 @@ def extension_source_map(
 ) -> dict[Path, str]:
     """Return ``{runtime-relative path -> merged zed text}`` for emission.
 
-    Consumed by :meth:`Runtime.render_sources` so the merged files ride the one
-    emit/drift/clean/sentinel lifecycle. Empty when dormant.
+    Consumed by PermissionIntegration in the compiler models phase.
+    Empty when no addon contributes an extension.
     """
 
     return {
@@ -393,77 +358,11 @@ def extension_source_map(
     }
 
 
-PERMISSION_WIRING = Path("_permission_paths.py")
-
-
-def schema_path_wiring(
-    app_configs: Iterable[AppConfig], *, sources: Mapping[Path, str],
-) -> str:
-    """Render native REBAC path assignments; serving does not import this compiler."""
-
-    lines = [
-        '"""Generated native REBAC schema paths."""',
-        "from pathlib import Path",
-        "from django.apps import apps",
-        "from django.core.exceptions import ImproperlyConfigured",
-        "from rebac.schema import resolve_schema_path",
-        "",
-    ]
-    for app_config in app_configs:
-        source = declared_schema_path(app_config)
-        merged = merged_schema_relpath(app_config.name)
-        manifest = addon_manifest(app_config)
-        if (
-            merged not in sources
-            and "_angee_rebac_schema_effective" not in app_config.__dict__
-            and (manifest is None or source is None)
-        ):
-            continue
-        lines.append(f"app = apps.get_app_config({app_config.label!r})")
-        if source is None:
-            source_expression = "None"
-        elif source.is_relative_to(Path(app_config.path)):
-            relative = source.relative_to(Path(app_config.path))
-            source_expression = f"Path(app.path) / {str(relative)!r}"
-        elif manifest is not None:
-            # An explicit manifest path remains the source of truth even when
-            # absolute; native AppConfig resolution does not read addon.toml.
-            source_expression = f"Path({manifest.permissions!r})"
-        else:
-            # Native external declarations remain late-bound to their AppConfig;
-            # an already-bound config retains its original source on reimport.
-            source_expression = (
-                "getattr(app, '_angee_rebac_schema_source', None) "
-                "if getattr(app, 'rebac_schema', None) == "
-                "getattr(app, '_angee_rebac_schema_effective', object()) "
-                "else resolve_schema_path(app)"
-            )
-        lines.append(f"app._angee_rebac_schema_source = {source_expression}")
-        if source is not None and (manifest is not None or source.is_relative_to(Path(app_config.path))):
-            lines.extend((
-                "if not app._angee_rebac_schema_source.is_file():",
-                "    raise ImproperlyConfigured("
-                f"{f'Missing packaged permission source for {app_config.name}; rebuild explicitly'!r})",
-            ))
-        if merged in sources:
-            lines.extend((
-                f"effective = Path(__file__).resolve().parent / {str(merged)!r}",
-                "if not effective.is_file():",
-                "    raise ImproperlyConfigured("
-                f"{f'Missing prebuilt permission schema for {app_config.name}; rebuild explicitly'!r})",
-                "app.rebac_schema = str(effective)",
-            ))
-        else:
-            lines.append(
-                "app.rebac_schema = str(app._angee_rebac_schema_source.resolve()) "
-                "if app._angee_rebac_schema_source is not None else None"
-            )
-        lines.extend(("app._angee_rebac_schema_effective = app.rebac_schema", ""))
-    return "\n".join(lines) + "\n"
-
-
-class PermissionIntegration(BuildIntegration):
+class PermissionIntegration:
     """Project Angee's REBAC contracts without making the compiler own them."""
+
+    external_root = "permissions"
+    phase = "models"
 
     def model_declaration(self, composition: ModelComposition, source: type[models.Model]) -> ModelDeclaration:
         """Preserve per-model Meta declarations and additive same-record grants."""
@@ -483,17 +382,25 @@ class PermissionIntegration(BuildIntegration):
             attributes["rebac_grantable"] = dict(grants)
         return ModelDeclaration(attributes=attributes, meta_options=meta_options)
 
-    def render_sources(self, runtime: Runtime) -> Mapping[Path, str]:
-        """Render effective permission files using the compiler's donor facts."""
+    def render(self, composition: ModelComposition, models: ModelsView | Apps) -> Mapping[Path, bytes]:
+        """Render sync inputs after native concrete models exist, before ready()."""
 
-        sources = extension_source_map(runtime.addons, field_owners=field_gate_owners(runtime.composition))
-        sources[PERMISSION_WIRING] = schema_path_wiring(runtime.addons, sources=sources)
-        return sources
+        from django.apps import apps
 
-    def runtime_imports(self, runtime: Runtime) -> tuple[str, ...]:
-        """Import the same native path assignments during build and serving."""
+        del models
+        configs = tuple(apps.get_app_configs())
+        sources = {
+            merged_schema_relpath(config.name): path.read_bytes()
+            for config in configs if (path := declared_schema_path(config)) is not None
+        }
+        sources.update({
+            path: source.encode("utf-8")
+            for path, source in extension_source_map(
+                configs, field_owners=field_gate_owners(composition),
+            ).items()
+        })
+        return dict(sorted(sources.items()))
 
-        return (f"{runtime.runtime_module}.{PERMISSION_WIRING.stem}",)
 
 
 def composed_grants(composition: ModelComposition, source: type[models.Model]) -> dict[str, str]:

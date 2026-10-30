@@ -1,0 +1,20 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-workflows-parties"
+version = "3.0.0"
+description = "Party identity review and mapped same_as pair reviews"
+keywords = ["workflows", "parties", "reviews", "dedupe"]
+dependencies = ["angee-base>=3,<4", "angee-workflows>=3,<4", "angee-decisions>=3,<4", "angee-parties>=3,<4", "angee-provenance>=3,<4"]
+
+[project.entry-points]
+"angee.addons" = {"angee.workflows_parties" = "angee.workflows_parties"}
+
+[tool.angee]
+
+[tool.angee.resources]
+install = ["install/100_workflows.workflow.yaml"]
+demo = ["demo/010_parties.party.yaml", {path = "demo/020_parties.handle.yaml", depends_on = "demo/010_parties.party.yaml"}]
+
+[tool.angee.platform]
+category = "Workflows"

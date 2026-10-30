@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from importlib import metadata
 
-from angee.management.dependencies import AddonDependencyGroup
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TransactionTestCase
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 from rebac import system_context
 
 Note = apps.get_model("notes", "Note")
@@ -19,10 +21,13 @@ User = get_user_model()
 class SeedLoremNotesDependencyTests(SimpleTestCase):
     """The composed host installs the dependency needed to import this command."""
 
-    def test_notes_projects_faker_into_runtime_dependencies(self) -> None:
-        group = AddonDependencyGroup.from_app_configs((apps.get_app_config("notes"),), project_dir=None)
+    def test_notes_declares_faker_in_native_runtime_metadata(self) -> None:
+        requirements = tuple(Requirement(value) for value in metadata.requires("example-notes") or ())
+        faker = tuple(item for item in requirements if canonicalize_name(item.name) == "faker")
 
-        self.assertIn("faker>=30.0", group.compile())
+        self.assertEqual(len(faker), 1)
+        self.assertEqual(str(faker[0].specifier), ">=30.0")
+        self.assertIsNone(faker[0].marker)
 
 
 class SeedLoremNotesTests(TransactionTestCase):

@@ -9,8 +9,8 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models
 
+from angee.base.serialization import strip_null_bytes
 from angee.base.validators import HEX_COLOR_VALIDATOR
-from angee.serialization import strip_null_bytes
 
 
 class DiagnosticTextField(models.TextField):

@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import re
+from typing import cast
 
+from asgiref.typing import ASGI3Application
+from django.apps import apps
+from django.core.exceptions import ImproperlyConfigured
 from django.urls import re_path
 
+from angee.base.addons import addon_contribution
 from angee.graphql.consumers import AngeeGraphQLWSConsumer
+from angee.graphql.middleware import WebsocketOriginValidator
 from angee.graphql.schema import GraphQLSchemas
 
 
@@ -21,3 +27,22 @@ def websocket_urlpatterns() -> list[object]:
         )
         for name in schemas.names()
     ]
+
+
+def websocket_application() -> ASGI3Application:
+    """Compose installed WebSocket routes with native Channels auth and origin policy."""
+
+    from channels.auth import AuthMiddlewareStack
+    from channels.routing import URLRouter
+
+    configs = tuple(apps.get_app_configs())
+    patterns = [pattern for config in configs
+                for pattern in addon_contribution(config, "asgi", "websocket_urlpatterns", allow_callable=True)]
+    application = cast(ASGI3Application, URLRouter(patterns))
+    wrappers = [wrapper for config in configs
+                for wrapper in addon_contribution(config, "asgi", "websocket_middleware")]
+    for wrapper in reversed(wrappers):
+        if not callable(wrapper):
+            raise ImproperlyConfigured("asgi.websocket_middleware must contain callables")
+        application = wrapper(application)
+    return WebsocketOriginValidator(AuthMiddlewareStack(application))

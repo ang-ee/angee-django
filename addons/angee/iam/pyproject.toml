@@ -1,0 +1,24 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-iam"
+version = "3.0.0"
+description = "Identity, the swappable user model, and the REBAC permission hub"
+keywords = ["identity", "rebac", "auth"]
+dependencies = ["angee-base>=3,<4", "angee-resources>=3,<4", "angee-graphql>=3,<4", "angee-web>=3,<4", "django-axes>=8.0"]
+
+[project.entry-points]
+"angee.addons" = {"angee.iam" = "angee.iam"}
+
+[tool.angee]
+
+[[tool.angee.resources.demo]]
+path = "demo/010_iam.user.yaml"
+adopt = "username"
+
+[[tool.angee.resources.demo]]
+path = "demo/030_iam.admin_grant.yaml"
+kind = "grants"
+
+[tool.angee.platform]
+category = "Foundation"

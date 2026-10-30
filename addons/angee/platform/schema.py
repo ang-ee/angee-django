@@ -35,7 +35,7 @@ strawberry.enum(cast(Any, _Addon.AddonKind))
 
 @strawberry.enum
 class AddonChangeAction(StrEnum):
-    INSTALL = "install"
+    ENABLE = "enable"
     DISABLE = "disable"
 
 
@@ -495,7 +495,7 @@ _LEDGER_RESOURCE = hasura_model_resource(
 
 
 @strawberry.type
-class AddonInstallMutation:
+class AddonLifecycleMutation:
     """Dispatch admin-authorized changes to the addon manager's reviewed plan.
 
     The manager owns loaded-graph admission, settings edits and reconciliation.
@@ -503,10 +503,10 @@ class AddonInstallMutation:
     """
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
-    def install(self, addon: str, revision: str | None = None) -> ActionResult:
-        """Install an addon root and report the manager's outcome."""
+    def enable(self, addon: str, revision: str | None = None) -> ActionResult:
+        """Enable an installed addon root and report the manager's outcome."""
 
-        result = _Addon.objects.install(addon, revision)
+        result = _Addon.objects.enable(addon, revision)
         return ActionResult(ok=result.ok, message=result.summary)
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
@@ -515,6 +515,20 @@ class AddonInstallMutation:
 
         result = _Addon.objects.disable(addon, revision)
         return ActionResult(ok=result.ok, message=result.summary)
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def install(self, addon: str) -> JSON:
+        """Queue package installation and return the operator's native operation."""
+
+        with system_context(reason="platform.addon.install"):
+            return JSON(_Addon.objects.install(addon))
+
+    @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
+    def uninstall(self, addon: str) -> JSON:
+        """Queue package removal through native dependency admission."""
+
+        with system_context(reason="platform.addon.uninstall"):
+            return JSON(_Addon.objects.uninstall(addon))
 
 
 schemas = {
@@ -527,7 +541,7 @@ schemas = {
             _IMPLEMENTATION_RESOURCE.query,
             _LEDGER_RESOURCE.query,
         ],
-        "mutation": [AddonInstallMutation],
+        "mutation": [AddonLifecycleMutation],
         "types": [
             PlatformExplorerData,
             AddonChangePreview,

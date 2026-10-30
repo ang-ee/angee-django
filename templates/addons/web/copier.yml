@@ -8,7 +8,7 @@ _angee:
   name: web
   description: >-
     Complete source-addon scaffold, rendered into `addons/<namespace>/<label>/`:
-    `addon.toml`, one abstract source model on `AngeeDataModel` with its
+    `pyproject.toml`, one abstract source model on `AngeeDataModel` with its
     field-backed ownership gate in `permissions.zed`, the console resource in
     `schema.py`, a demo resource row and one per-actor visibility test. The test
     runs on the host `test_host` selects: `composed` (the default, a consumer

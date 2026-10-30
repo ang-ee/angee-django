@@ -24,7 +24,8 @@ def _addon(tmp_path: Path, files: dict[str, str]):
     """Write one install-tier addon whose files load in the given order."""
 
     for name, body in files.items():
-        (tmp_path / name).write_text(body)
+        (tmp_path / "resources").mkdir(exist_ok=True)
+        (tmp_path / "resources" / name).write_text(body)
     return make_addon(
         name="tests.chatter_seed", label="chatter_seed", path=tmp_path, resources={"install": list(files)},
     )
@@ -86,7 +87,8 @@ def test_a_changed_chatter_row_is_refused_rather_than_reposted(composed_tables: 
     files = dict(CHATTER)
     addon = _addon(tmp_path, files)
     _load(addon)
-    (tmp_path / "030_messaging.message.yaml").write_text(
+    (tmp_path / "resources").mkdir(exist_ok=True)
+    (tmp_path / "resources" / "030_messaging.message.yaml").write_text(
         files["030_messaging.message.yaml"].replace("Which day does it break?", "Which hour does it break?")
     )
 

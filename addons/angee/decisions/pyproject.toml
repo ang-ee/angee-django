@@ -1,0 +1,12 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-decisions"
+version = "3.0.0"
+description = "Questions on records with alternatives and audited verdicts"
+dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-graphql>=3,<4", "angee-timeline>=3,<4", "angee-provenance>=3,<4", "angee-web>=3,<4"]
+
+[project.entry-points]
+"angee.addons" = {"angee.decisions" = "angee.decisions"}
+
+[tool]

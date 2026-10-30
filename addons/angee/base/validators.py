@@ -15,7 +15,7 @@ from referencing import Registry
 from referencing.jsonschema import UnknownDialect
 
 from angee.base.schemas.references import LocalSchemaReferences, schema_nodes
-from angee.serialization import canonical_json
+from angee.base.serialization import canonical_json
 
 HEX_COLOR_VALIDATOR = RegexValidator(r"^#[0-9a-fA-F]{6}$", "Enter a colour as #rrggbb.")
 """The one colour form a colour column stores and the colour chooser writes."""

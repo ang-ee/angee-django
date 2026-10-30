@@ -7,8 +7,7 @@ Traps moved from the frontend guide's Pitfalls section. The layering, manifest a
   schema change, refresh the host's SDL and codegen before checking consumers;
   [Composition and schema](../../../../docs/checks.md#composition-and-schema) owns the
   command order and working directories. Addon fragments resolve the composed
-  stack's generated documents first. The repository-local `.angee/runtime`
-  fallback may be stale in a workspace slot.
+  stack's generated documents first. Select the controlling host's declared output rather than a stale repository-local runtime fallback.
 - **Generate operator types from the daemon-owned SDL.** A hand-authored daemon
   result type drifts from the committed SDL the operator manifest feeds into the
   shared codegen pass; regenerate instead

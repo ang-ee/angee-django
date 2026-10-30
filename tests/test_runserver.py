@@ -9,11 +9,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from django.apps import apps
+from django.apps import AppConfig, apps
 from django.core.management import get_commands
 from django.core.management.commands.runserver import Command as DjangoRunserver
 
-from angee.management.commands.runserver import Command
+from angee.server.management.commands.runserver import Command
 
 
 def test_runserver_is_a_django_runserver_subclass() -> None:
@@ -25,19 +25,18 @@ def test_runserver_is_a_django_runserver_subclass() -> None:
 def test_native_command_precedes_staticfiles_when_foundation_is_first(settings: Any) -> None:
     """Django discovers the host override even with the competing contrib command."""
 
-    host = apps.get_app_config("angee")
+    host = AppConfig.create("angee.server")
     settings.INSTALLED_APPS = [
         host, "django.contrib.staticfiles", *(config for config in apps.get_app_configs() if config is not host),
     ]
-    assert get_commands()["runserver"] == "angee"
-    assert get_commands()["serve"] == "angee"
-    assert get_commands()["angee"] == "angee"
+    assert get_commands()["runserver"] == "angee.server"
+    assert get_commands()["serve"] == "angee.server"
 
 
 def test_inner_run_serves_resolved_app(monkeypatch: pytest.MonkeyPatch, settings: Any) -> None:
     """``inner_run`` resolves the configured app and runs uvicorn."""
 
-    settings.ASGI_APPLICATION = "angee.asgi.application"
+    settings.ASGI_APPLICATION = "angee.server.application"
     app = object()
     captured: dict[str, Any] = {}
 
@@ -48,9 +47,9 @@ def test_inner_run_serves_resolved_app(monkeypatch: pytest.MonkeyPatch, settings
         def run(self) -> None:
             captured["ran"] = True
 
-    module = "angee.management.commands.runserver"
+    module = "angee.server.management.commands.runserver"
     monkeypatch.setattr(f"{module}.import_string", lambda path: app)
-    monkeypatch.setattr(f"{module}.uvicorn.Server", _FakeServer)
+    monkeypatch.setattr("uvicorn.Server", _FakeServer)
 
     command = Command()
     command.addr = "127.0.0.1"
@@ -83,7 +82,7 @@ import uvicorn
 from django.conf import settings
 from django.utils import autoreload
 
-from angee.management.commands import runserver
+from angee.server.management.commands import runserver
 
 settings.configure(DEBUG=True, INSTALLED_APPS=[], ASGI_APPLICATION="__main__.application")
 django.setup()
@@ -135,7 +134,7 @@ autoreload.file_changed.connect(handle_change, weak=False)
 autoreload.get_reloader = NativeChanges
 os.environ[autoreload.DJANGO_AUTORELOAD_ENV] = "true"
 original_trigger = autoreload.trigger_reload
-runserver.uvicorn.Server = SocketFreeServer
+uvicorn.Server = SocketFreeServer
 command = runserver.Command()
 command.addr = "127.0.0.1"
 command.port = "0"

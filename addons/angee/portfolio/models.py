@@ -16,6 +16,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
+from django_compose.models import Composable
 from rebac import (
     current_actor,
     generic_target,
@@ -137,10 +138,9 @@ class ProductManager[ProductT: Product](AngeeHistoryManager[ProductT]):
             return product
 
 
-class Product(OwnerMixin, HistoryMixin, AngeeDataModel):
+class Product(OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """A perpetual subject passing through phases rather than toward fulfillment."""
 
-    runtime = True
     sqid_prefix = "pdt_"
 
     name = models.CharField(max_length=240)
@@ -186,10 +186,9 @@ class InitiativeQuerySet[InitiativeT: Initiative](HierarchyQuerySet[InitiativeT]
 _InitiativeManager = AngeeHistoryManager.from_queryset(InitiativeQuerySet)
 
 
-class Initiative(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
+class Initiative(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """A tree-shaped long-horizon intent whose pushes can be fulfilled."""
 
-    runtime = True
     sqid_prefix = "ini_"
     objects = _InitiativeManager()
 
@@ -285,10 +284,9 @@ class Initiative(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
         return self.name
 
 
-class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel):
+class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
     """An ordered Project placement on an ancestry-safe Initiative tree."""
 
-    runtime = True
     sqid_prefix = "inp_"
 
     initiative = models.ForeignKey(
@@ -387,7 +385,7 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                 ),
             )
             for target, health, body in targets:
-                if update_model._base_manager.filter(
+                if update_model._base_manager.using(placement._state.db).filter(
                     **generic_target(target).lookups(update_model, "target"),
                     body=body,
                 ).exists():
@@ -399,7 +397,7 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel):
                     created_by_id=placement.created_by_id,
                     updated_by_id=placement.updated_by_id,
                 )
-                report.sudo(reason="portfolio.demo.report").save()
+                report.sudo(reason="portfolio.demo.report").save(using=placement._state.db)
 
 
 class UpdateManager[UpdateT: Update](AngeeHistoryManager[UpdateT]):
@@ -430,11 +428,10 @@ class UpdateManager[UpdateT: Update](AngeeHistoryManager[UpdateT]):
             return self.insert(report)
 
 
-class Update(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
+class Update(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=True):
     """A required-health report on a Project or Initiative, never a Product."""
 
     merge_policy = MergePolicy.MOVE
-    runtime = True
     sqid_prefix = "upd_"
 
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
@@ -532,10 +529,9 @@ class Update(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
         return f"{self.record_model_label}:{self.record_public_id} {self.health}"
 
 
-class Release(HistoryMixin, AuditMixin, AngeeDataModel):
+class Release(HistoryMixin, AuditMixin, AngeeDataModel, concrete=True):
     """The named artifact a ship Project leaves on a Product timeline."""
 
-    runtime = True
     sqid_prefix = "rls_"
 
     product = models.ForeignKey(
@@ -568,14 +564,13 @@ class Release(HistoryMixin, AuditMixin, AngeeDataModel):
         return f"{self.product_id}:{self.name}"
 
 
-class ProjectPortfolio(models.Model):
+class ProjectPortfolio(Composable, extends="projects.Project"):
     """Same-row portfolio placement folded into ``projects.Project``.
 
     Placement (``product``, ``priority``, and ``sort_order``) is deliberately
     project-side.
     """
 
-    extends: ClassVar[str | None] = "projects.Project"
 
     hasura_readable_fields: ClassVar[tuple[str, ...]] = (
         "product",
@@ -632,10 +627,9 @@ class ProjectPortfolio(models.Model):
         return product_model.objects.from_project(self)
 
 
-class TaskPortfolio(models.Model):
+class TaskPortfolio(Composable, extends="projects.Task"):
     """Same-row release attribution folded into ``projects.Task``."""
 
-    extends: ClassVar[str | None] = "projects.Task"
 
     hasura_readable_fields: ClassVar[tuple[str, ...]] = ("release",)
     hasura_filterable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields

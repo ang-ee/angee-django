@@ -10,7 +10,7 @@ copy of each one.
 | dir | kind | renders |
 |-----|------|---------|
 | `projects/` | `project` | a downstream host repo — `manage.py`, `settings.yaml`, the consumer-addon namespace, the web package; owns the project root |
-| `addons/` | `addon` | `web`: one complete source addon into `addons/<ns>/<label>/` — `addon.toml`, the abstract model and its ownership gate, `schema.py`, a demo resource row, a per-actor test under the addon's `tests/` (composed host, the default), and (optionally) the web fragment; `test_host=bare` instead renders the concrete bare-host test model and a `test_<label>.py` to move into the framework repository's `tests/`; `repository`: the root of a consumer addon repository — `AGENTS.md`, `CLAUDE.md`, the `addons/<ns>/` namespace. The operator lists but does not render addon templates; render them with Copier |
+| `addons/` | `addon` | `web`: one complete source addon into `addons/<ns>/<label>/` — `pyproject.toml`, the abstract model and its ownership gate, `schema.py`, a demo resource row, a per-actor test under the addon's `tests/` (composed host, the default), and (optionally) the web fragment; `test_host=bare` instead renders the concrete bare-host test model and a `test_<label>.py` to move into the framework repository's `tests/`; `repository`: the root of a consumer addon repository — `AGENTS.md`, `CLAUDE.md`, the `addons/<ns>/` namespace. The operator lists but does not render addon templates; render them with Copier |
 | `stacks/` | `stack` | a runnable `angee.yaml` the operator brings up on docker-compose / process-compose |
 | `workspaces/` | `workspace` | a set of sources + agentic config, materialized as files |
 | `services/` | `service` | one long-running service added to a stack |
@@ -48,7 +48,7 @@ the chain instead of restarting against incomplete generated state.
   git `sources:` and the `src` workspace; `angee dev` materializes their clone
   caches, cuts the workspace, and runs Django/Celery/Vite/Storybook as local
   processes against those worktrees. The rendered pyproject resolves
-  `django-angee` editable from the consolidated `angee` slot, so
+  the `angee` meta-distribution editable from the consolidated `angee` slot, so
   `uv run manage.py` works bare from the root. For developing the framework —
   or a consumer project against live framework source.
 - **`stacks/local`** (`runtime_mode: docker`) — a self-contained instance run on
@@ -158,7 +158,8 @@ Commit what you author; ignore what a tool regenerates:
 <root>/                    # project == stack (ANGEE_ROOT=.)
   ── committed ──
   angee.yaml               # stack: operator · postgres · django · frontend ingress
-  manage.py                # ANGEE_PROJECT_DIR = here
+  manage.py                # native django-compose management launcher
+  settings.py              # authored base.configure entrypoint
   settings.yaml            # INSTALLED_APPS (base) · DATABASE_URL → postgres
   AGENTS.md · CLAUDE.md    # stack-root ownership rules for coding agents
   addons/<ns>/             # your addons
@@ -169,15 +170,19 @@ Commit what you author; ignore what a tool regenerates:
   other runtime output · dist/ · data/ · .env · run/ · sources/ · docker-compose.yaml · process-compose.yaml
 ```
 
-`runtime/<label>/migrations/` is **committed**; other runtime output is ignored. The native Hatch hook builds disposable runtime
-sources during `uv sync` and packages the project-specific runtime with reviewed
-history during `uv build`. Author model changes after the editable build with
-native `makemigrations`, then review and commit history before packaging.
+`runtime/<label>/migrations/` is **committed**; other runtime output is ignored.
+`uv sync --locked` installs distributions on a stopped/new host. The explicit
+`compose` job emits artifacts, then `provision` applies database state. The operator
+keeps the `py-sync` holds stopped until the full chained run succeeds; a plain
+held job leaves them stopped. `uv build` builds distribution archives only.
+After rebuilding changed models, author native migrations with `makemigrations`,
+then review and commit history before provisioning.
 Generated runtime, resolved secrets, compiled compose files and materialized
 sources stay out of git. The database is a stack service and the app
-reads `DATABASE_URL`, so no SQLite file lives in the tree. Add the framework's
-in-repo example later by including `sources/angee/examples/addons` in
-discovery and enabling it in `INSTALLED_APPS`.
+reads `DATABASE_URL`, so no SQLite file lives in the tree. To add a framework
+example, declare its distribution and local source in the host's `pyproject.toml`,
+install it through the stack's dependency workflow, and enable its app in
+`INSTALLED_APPS`. A source directory alone does not install a distribution.
 
 > **Status.** The `local` template now *is* this shape: a thin `kind: stack` that
 > chains `projects/web` and includes the shared manifest body in `docker` mode. By

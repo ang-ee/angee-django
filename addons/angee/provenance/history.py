@@ -15,9 +15,13 @@ from django.db.models.base import ModelBase
 from django.utils import timezone
 from django.utils.functional import classproperty
 from simple_history.manager import HistoryManager
-from simple_history.models import HistoricalRecords
+from simple_history.models import HistoricalChanges, HistoricalRecords
 from simple_history.signals import pre_create_historical_record
-from simple_history.utils import get_change_reason_from_object, get_history_manager_for_model
+from simple_history.utils import (
+    get_change_reason_from_object,
+    get_history_manager_for_model,
+    get_history_model_metadata,
+)
 
 from angee.provenance.context import changeset_model_label, current_changeset, write_group
 from angee.provenance.querysets import HistoryQuerySet, model_history
@@ -48,7 +52,7 @@ class _ChangesetHistory(models.Model):
         abstract = True
 
 
-class ModelHistoryManager(HistoryManager):
+class ModelHistoryManager[T: HistoricalChanges](HistoryManager[T]):
     """Native bulk construction extended to accept deletion snapshots."""
 
     def bulk_history_create(
@@ -70,7 +74,9 @@ class ModelHistoryManager(HistoryManager):
             return []
         if any(obj.pk is None for obj in objects):
             raise ValueError("History capture requires a primary key for every stored row.")
-        history = self.model._provenance_history
+        history = model_history(self.model.instance_type)
+        if history is None:
+            raise ImproperlyConfigured(f"{self.model._meta.label}: no native history capture owner.")
         by_database: dict[str, list[models.Model]] = {}
         for obj in objects:
             alias = obj._state.db or router.db_for_write(self.model.instance_type, instance=obj)
@@ -105,18 +111,19 @@ class ModelHistoryManager(HistoryManager):
         custom_historical_attrs: dict[str, Any] | None = None,
         *,
         history_type: str | None = None,
-    ) -> list[models.Model]:
+    ) -> list[T]:
         """Fill upstream 3.13's constructor-loop gap for explicit deletion history types."""
 
         if not getattr(settings, "SIMPLE_HISTORY_ENABLED", True):
             return []
+        metadata = get_history_model_metadata(self.model)
         rows = []
         for instance in objs:
-            attrs = {field.attname: getattr(instance, field.attname) for field in self.model.tracked_fields}
+            attrs = {field.attname: getattr(instance, field.attname) for field in metadata.tracked_fields}
             row = self.model(
                 history_date=getattr(instance, "_history_date", default_date or timezone.now()),
                 history_user=getattr(
-                    instance, "_history_user", default_user or self.model.get_default_history_user(instance)
+                    instance, "_history_user", default_user or metadata.get_default_history_user(instance)
                 ),
                 history_change_reason=get_change_reason_from_object(instance) or default_change_reason,
                 history_type=history_type or ("~" if update else "+"),
@@ -124,9 +131,9 @@ class ModelHistoryManager(HistoryManager):
                 **(custom_historical_attrs or {}),
             )
             if hasattr(self.model, "history_relation"):
-                row.history_relation_id = instance.pk
+                setattr(row, "history_relation_id", instance.pk)
             rows.append(row)
-        return cast(list[models.Model], self.model.objects.using(self.db).bulk_create(rows, batch_size=batch_size))
+        return self.model._meta.managers_map["objects"].using(self.db).bulk_create(rows, batch_size=batch_size)
 
 
 class ModelHistory(HistoricalRecords):
@@ -179,9 +186,10 @@ class ModelHistory(HistoricalRecords):
         )
 
     def set_changeset(self, instance: models.Model, history_instance: _ChangesetHistory, **kwargs: Any) -> None:
-        """Bind attribution after native construction and before the history save."""
+        """Set nullable attribution according to the storage owner's context policy."""
 
-        history_instance.changeset = current_changeset(required=True, record=True)
+        context = current_changeset(required=True, record=True)
+        history_instance.changeset_id = context.pk if context is not None else None
 
     def get_change_reason_for_object(self, instance: models.Model, history_type: str, using: str | None) -> str:
         """Honor a native instance override before the logical boundary's reason."""

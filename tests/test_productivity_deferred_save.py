@@ -17,7 +17,7 @@ import angee.spaces.testing.models  # noqa: F401 -- register related models befo
 import tests.scopedemo.models  # noqa: F401 -- register related models before native database setup
 from angee.portfolio.testing.models import Initiative, InitiativeProject, Update
 from angee.projects.testing.models import Cycle, Project, ProjectBinding, Queue, Stage, Task, TaskRelation
-from tests.conftest import Backend, Drive
+from tests.conftest import Backend, Drive, create_user
 from tests.test_project_access import project_access_schema as project_access_schema
 
 
@@ -103,7 +103,7 @@ def test_system_stage_deferred_identity_allows_unrelated_edit(deferred_save_rows
     stage = Stage._base_manager.only("id", "tone").get(queue=queue, category="triage")
     stage.tone = "info"
     stage.sudo(reason="tests.productivity.stage.persist")
-    # Instance-level authorization bypass leaves the Stage identity guard active.
+    # Native instance sudo permits this edit; the deferred identity stays unchanged.
     stage.save()
     assert Stage._base_manager.get(pk=stage.pk).tone == "info"
 
@@ -112,7 +112,7 @@ def test_system_stage_deferred_identity_still_rejects_rename(deferred_save_rows:
     queue = deferred_save_rows["queue"]
     stage = Stage._base_manager.only("id", "tone").get(queue=queue, category="triage")
     stage.name = "Renamed"
-    stage.sudo(reason="tests.productivity.stage.rename")
+    stage.with_actor(create_user("stage-identity-editor"))
     with pytest.raises(ValidationError, match="name of triage and duplicate stages cannot change"):
         stage.save()
     assert Stage._base_manager.get(pk=stage.pk).name == "Triage"

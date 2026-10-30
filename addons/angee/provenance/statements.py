@@ -355,7 +355,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T]):
         refs = validate_value(list[EvidenceReference], list(evidence), field="evidence")
         if kind == SourceKind.PERSON:
             readable_records(refs, (source,))
-        members = declaration.coerce_members(self.model, source, member_key, kind=SourceKind(kind))
+        members = declaration.coerce_members(self.model, source, member_key, kind=SourceKind(kind), using=self.db)
         defaults = {name: values.get(name) for name in declaration.fields}
         defaults.update(
             snak=snak,
@@ -782,7 +782,7 @@ class Aspect:
         return index + 1 if index >= person else index
 
     def coerce_members(
-        self, model: type[models.Model], source: SubjectRef, key: dict[str, Any], *, kind: SourceKind
+        self, model: type[models.Model], source: SubjectRef, key: dict[str, Any], *, kind: SourceKind, using: str
     ) -> dict[str, Any]:
         """Consume this aspect's complete identity through native field ownership."""
 
@@ -798,7 +798,7 @@ class Aspect:
                     if kind == SourceKind.PERSON and not is_sudo()
                     else field.remote_field.model._base_manager.all()
                 )
-                members[name] = rows.get(**{field.target_field.name: pk})
+                members[name] = rows.using(using).get(**{field.target_field.name: pk})
             else:
                 members[name] = field.to_python(value)
         return members
@@ -1391,8 +1391,8 @@ class StatementPair(
 
     objects = _StatementPairManager()
     _angee_base = _StatementPairUnscopedManager()
-    left: Any
-    right: Any
+    left: models.ForeignKey[Any, Any]
+    right: models.ForeignKey[Any, Any]
     pair_name: str
     statements: StatementManager[Statement]
 
@@ -1496,7 +1496,7 @@ class StatementRecords(HistoricalRecords):
 
         Declarations are read down the MRO until an inherited concrete table's
         descriptor. The composer orders donors before the subject source in the
-        composed bases (``angee.compose.rendering``), so the last declaration at
+        composed bases (``django_compose.rendering``), so the last declaration at
         this level is the source's own: it owns bases, prefix, queryset and link,
         while every donor contributes its aspects through :meth:`aspects_for`.
         """

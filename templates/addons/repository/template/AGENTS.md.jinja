@@ -2,33 +2,35 @@
 
 This repository holds the **Angee consumer addons** of {{ repository_title }}:
 `addons/{{ addon_namespace }}/<name>` is the `{{ addon_namespace }}.<name>` addon. It
-is a source slot the owning stack materializes, not a stack or a Django project:
-the stack owns `angee.yaml`, `settings.yaml`, `manage.py`, `pyproject.toml`, the
-Python and JS environments, composition, migrations, SDL and codegen. Never run
-`angee init`, `pnpm install` or `uv sync` here, and never `git checkout` or
-`git switch` inside this slot; the parent stack and workspace `AGENTS.md` own
-lifecycle and branches.
+is a source slot the owning stack materializes, not a stack or a Django project.
+It owns its root uv workspace and addon distribution metadata in
+`pyproject.toml`. The stack owns `angee.yaml`, application `settings.yaml` and
+`manage.py`, the running Python and JS environments, composition, migrations,
+SDL and codegen. Never run `angee init` or `pnpm install` here, or synchronize the
+live stack's environment from this slot. Never `git checkout` or `git switch`
+inside this slot; parent stack and workspace `AGENTS.md` own lifecycle and branches.
 
 ## Consumer Scope
 
-The framework's `AGENTS.md` (the `angee` slot beside this one, or the
-`django-angee` checkout the stack resolves) owns the constitution and the
-Architecture Gate. These rules are its consumer application, not a second set:
+The framework's `AGENTS.md` (the `angee` slot beside this one, or the framework
+checkout the stack resolves) owns the constitution and the Architecture Gate.
+These rules are its consumer application, not a second set:
 
-- **Declared seams only.** An addon composes the framework through `addon.toml`
-  (`depends_on`, resource tiers), models on `angee.base` bases, `permissions.zed`
-  and `permissions.extends.zed`, `schema.py` buckets with type and input
+- **Declared seams only.** An addon composes the framework through `pyproject.toml`
+  (`[project].dependencies` for requirements and capability-owned tool tables),
+  models on `angee.base` bases, `permissions.zed` and `permissions.extends.zed`,
+  `schema.py` buckets with type and input
   extensions, `resources/<tier>/` rows, `autoconfig.py` fragments,
   `ImplClassField` implementations, and a `web/` fragment declared with
   `defineBaseAddon`.
 - **No framework edits.** A missing or insufficient framework primitive is fixed
-  at its owner in the framework checkout (`angee-framework`), never patched or
+  at its owner in the sibling framework checkout (`angee`), never patched or
   copied here; this repository holds no `angee.*` addon.
 - **No monkey-patching composed models.** Never probe a foreign object's shape or
   mutate another addon's composed model class, schema or registry at import time;
   extend through `extends`, extension types, containers and declared hooks.
 - **Product vocabulary stays in the addon.** Product names, states, roles and copy
-  belong to the owning `{{ addon_namespace }}.*` addon's manifest, models,
+  belong to the owning `{{ addon_namespace }}.*` addon's package metadata, models,
   `permissions.zed`, resources and i18n namespace (`== label`); the framework and
   its base addons never learn them.
 - Generated `runtime/`, `@angee/gql/*` and SDL live at the consuming stack; they
@@ -55,7 +57,7 @@ harness discovers these on its own: read each step's file before that step.
 1. [`angee-design`](../angee/.agents/skills/angee-design/SKILL.md) — the
    Architecture Gate: facts, owners, level, owner map.
 2. [`angee-addon`](../angee/.agents/skills/angee-addon/SKILL.md) — folder,
-   `addon.toml`, app label, fragment; render a new addon from the framework's
+   `pyproject.toml`, app label, fragment; render a new addon from the framework's
    `templates/addons/web` Copier template into `addons/{{ addon_namespace }}/<name>/`
    with `addon_name={{ addon_namespace }}.<name>` and the default
    `test_host=composed` (consumer tests read the composed model through

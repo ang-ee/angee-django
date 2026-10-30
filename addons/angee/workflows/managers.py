@@ -32,6 +32,7 @@ from angee.base.models.identity import public_id_of
 from angee.base.models.locks import StaleRevisionError, require_revision
 from angee.base.permissions import actor_user_id
 from angee.base.querysets import AngeeQuerySet, by_key, query_batch_size, row_lock_paths
+from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.base.signals import bulk_updated
 from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.publishing import changes_muted, mute_changes, publish_change
@@ -39,7 +40,6 @@ from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.evidence import EvidenceReference, readable_records
-from angee.serialization import canonical_json_sha256, strip_null_bytes
 from angee.workflows.definition import (
     MAP_BODY_SUFFIX,
     Body,
@@ -65,7 +65,15 @@ from angee.workflows.subjects import RunSubject
 from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
 
 if TYPE_CHECKING:
-    from angee.workflows.models import StepAttempt, StepRecord, StepRun, StepWatch, Workflow, WorkflowRun
+    from angee.workflows.models import (
+        StepAttempt,
+        StepRecord,
+        StepRun,
+        StepWatch,
+        Workflow,
+        WorkflowRun,
+        WorkflowVersion,
+    )
 
 logger = logging.getLogger(__name__)
 RETRYABLE_SQLSTATES = frozenset({"57014", "40P01", "55P03"})
@@ -346,6 +354,7 @@ class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
             assert definition is not None
             document = definition.published_document()
             digest = canonical_json_sha256(document)
+            version: WorkflowVersion
             if published is not None and published.content_hash == digest:
                 version = published
             else:

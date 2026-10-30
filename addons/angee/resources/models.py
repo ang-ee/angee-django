@@ -13,10 +13,9 @@ from angee.resources.managers import ResourceManager
 from angee.resources.tiers import ResourceTier
 
 
-class Resource(AngeeModel):
+class Resource(AngeeModel, concrete=True):
     """Ledger row linking source resource xrefs to imported targets."""
 
-    runtime = True
 
     Tier = ResourceTier
     """Tier enum used by resource declarations and ledger rows."""
@@ -55,7 +54,9 @@ class Resource(AngeeModel):
             return None
 
         model = resolve_model(self.target_model)
-        return instance_from_public_id(model, self.target_id)
+        return instance_from_public_id(
+            model, self.target_id, queryset=model._default_manager.using(self._state.db),
+        )
 
     class Meta:
         """Django model options for the abstract resource ledger."""

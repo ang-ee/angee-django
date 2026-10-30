@@ -6,40 +6,35 @@ import re
 import tomllib
 from pathlib import Path
 
-try:
-    from packaging.requirements import Requirement
-except ImportError:  # pragma: no cover - the dev venv ships packaging; the regex covers a bare interpreter
-    Requirement = None
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
 ROOT = Path(__file__).resolve().parents[1]
 STACK = ROOT / "docs" / "stack.md"
-REQUIREMENT_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 SEPARATOR_ROW = re.compile(r"^\|(?:\s*:?-+:?\s*\|)+\s*$")
 PICK_TOKEN = re.compile(r"[a-z0-9]+(?:[.-][a-z0-9]+)*")
 
 
 def normalize(name: str) -> str:
-    return name.lower().replace("_", "-")
+    return canonicalize_name(name)
 
 
 def requirement_name(requirement: str) -> str:
     """The normalized distribution name a requirement string declares."""
-    if Requirement is not None:
-        return normalize(Requirement(requirement).name)
-    match = REQUIREMENT_NAME.match(requirement)
-    assert match, f"unparseable requirement: {requirement!r}"
-    return normalize(match.group(1))
+    return canonicalize_name(Requirement(requirement).name)
 
 
 def declared_requirements() -> dict[str, set[str]]:
     """Map each declared Python dependency to the manifests that declare it."""
     owners: dict[str, set[str]] = {}
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-    groups = {"pyproject.toml": project.get("dependencies", [])}
-    groups |= {f"pyproject.toml[{extra}]": reqs for extra, reqs in project.get("optional-dependencies", {}).items()}
-    for manifest in sorted(ROOT.glob("addons/*/*/addon.toml")):
-        addon = tomllib.loads(manifest.read_text(encoding="utf-8"))["addon"]
-        groups[manifest.relative_to(ROOT).as_posix()] = addon.get("dependencies", [])
+    projects = sorted(ROOT.glob("addons/*/*/pyproject.toml"))
+    internal = {tomllib.loads(path.read_text())["project"]["name"] for path in projects}
+    groups = {}
+    for path in projects:
+        project = tomllib.loads(path.read_text())["project"]
+        owner = path.relative_to(ROOT).as_posix()
+        groups[owner] = [raw for raw in project.get("dependencies", []) if Requirement(raw).name not in internal]
+        groups.update({f"{owner}[{extra}]": reqs for extra, reqs in project.get("optional-dependencies", {}).items()})
     for owner, requirements in groups.items():
         for requirement in requirements:
             owners.setdefault(requirement_name(requirement), set()).add(owner)
@@ -56,17 +51,19 @@ def test_stack_names_celery_not_procrastinate() -> None:
 
 
 def test_task_and_web_dependencies_belong_to_their_addons() -> None:
-    """Jobs owns task transport; core and GraphQL declare native Channels usage."""
+    """Jobs owns task transport; GraphQL owns Channels; server owns uvicorn."""
 
-    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    data = tomllib.loads((ROOT / "addons/angee/base/pyproject.toml").read_text(encoding="utf-8"))
     dependencies = set(data["project"]["dependencies"])
 
-    jobs = tomllib.loads((ROOT / "addons/angee/jobs/addon.toml").read_text())["addon"]["dependencies"]
-    graphql = tomllib.loads((ROOT / "addons/angee/graphql/addon.toml").read_text())["addon"]["dependencies"]
+    jobs = tomllib.loads((ROOT / "addons/angee/jobs/pyproject.toml").read_text())["project"]["dependencies"]
+    graphql = tomllib.loads((ROOT / "addons/angee/graphql/pyproject.toml").read_text())["project"]["dependencies"]
     assert any(dependency.startswith("celery[redis]") for dependency in jobs)
     assert any(dependency.startswith("channels>=") for dependency in graphql)
     assert not any(dependency.startswith("celery") for dependency in dependencies)
-    assert any(dependency.startswith("channels>=") for dependency in dependencies)
+    assert not any(dependency.startswith("channels>=") for dependency in dependencies)
+    server = tomllib.loads((ROOT / "addons/angee/server/pyproject.toml").read_text())["project"]["dependencies"]
+    assert any(dependency.startswith("uvicorn[standard]") for dependency in server)
     assert not any(dependency.startswith("channels-redis") for dependency in dependencies)
     assert not any("procrastinate" in dependency for dependency in dependencies)
 

@@ -1,94 +1,210 @@
-"""Available addon manifests and native Django app identity for the marketplace."""
+"""Installed addon facts and catalogue presentation vocabulary."""
 
 from __future__ import annotations
 
-import importlib.util
-import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from graphlib import CycleError, TopologicalSorter
 from importlib import metadata
-from pathlib import Path
-from typing import cast
+from typing import Any
 
-from django.apps import AppConfig, apps
 from django.core.exceptions import ImproperlyConfigured
-from hatch_angee import AddonManifest, ManifestError, discover, parse_manifest
+from django.db.models import TextChoices
+from django_compose.addons import InstalledAddons, installed_addons
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
-ADDON_ENTRY_POINT_GROUP = "angee.addons"
-logger = logging.getLogger(__name__)
+from angee.base.addons import capability_facts, package_document
 
 
-def available_addons(
-    addon_dirs: Iterable[Path | str] = (),
-) -> dict[str, tuple[AddonManifest, metadata.EntryPoint | Path]]:
-    """Return unchanged manifests and native discovery origins, keyed by name.
+class AddonCategory(TextChoices):
+    """Catalogue group vocabulary shared by installed and remote package facts."""
 
-    Installed ``angee.addons`` entry points take precedence over local paths;
-    local roots retain hatch-angee's caller-defined precedence. Duplicate
-    installed names are ambiguous and rejected. Discovery does not populate
-    Django's registry or invoke app lifecycle hooks.
+    ARP = "ARP"
+    AGENTS = "Agents"
+    DATA = "Data"
+    EXAMPLE = "Example"
+    FOUNDATION = "Foundation"
+    INTEGRATION = "Integration"
+    PHROGG = "Phrogg"
+    PLATFORM = "Platform"
+    PRODUCTIVITY = "Productivity"
+    USER_INTERFACE = "User interface"
+    WORKFLOWS = "Workflows"
+
+
+def catalogue_category(value: object) -> str:
+    """Validate a package's optional catalogue grouping at its capability owner."""
+
+    if isinstance(value, str):
+        if value == "":
+            return ""
+        try:
+            return AddonCategory(value)
+        except ValueError:
+            pass
+    raise ImproperlyConfigured(
+        f"Unknown tool.angee.platform.category {value!r}; expected {AddonCategory.values}"
+    )
+
+
+def installed_entry_points() -> dict[str, metadata.EntryPoint]:
+    """Project the native provider index into catalogue app identities."""
+
+    index = installed_addons("angee.addons")
+    return {app: index.entry_points[provider] for app, provider in sorted(index.providers.items())}
+
+
+def package_identity_index(identities: Iterable[tuple[str, str]]) -> dict[str, str]:
+    """Validate installed and retained catalogue ownership before database writes.
+
+    Native installed metadata is already validated by django-compose. This owner
+    also reconciles uninstalled source claims and permits equal installed/source
+    pairs while refusing conflicting ownership across catalogue sources.
     """
 
-    available: dict[str, tuple[AddonManifest, metadata.EntryPoint | Path]] = {}
-    for entry_point in sorted(
-        metadata.entry_points(group=ADDON_ENTRY_POINT_GROUP), key=lambda entry: (entry.name, entry.value)
-    ):
-        if entry_point.name in available:
-            previous = cast(metadata.EntryPoint, available[entry_point.name][1])
+    providers: dict[str, str] = {}
+    apps: dict[str, str] = {}
+    for distribution, app in identities:
+        provider = canonicalize_name(distribution)
+        previous_app = providers.setdefault(provider, app)
+        previous_provider = apps.setdefault(app, provider)
+        if previous_app != app or previous_provider != provider:
             raise ImproperlyConfigured(
-                f"Duplicate installed addon entry point {entry_point.name!r}: "
-                f"{previous.value!r} and {entry_point.value!r}"
+                f"Conflicting catalogue identity: {distribution!r} / {app!r}; "
+                f"existing {provider!r} / {previous_app!r}, provider {previous_provider!r}"
             )
-        try:
-            spec = importlib.util.find_spec(entry_point.module)
-        except (ImportError, AttributeError, ValueError) as error:
-            raise ImproperlyConfigured(f"Cannot resolve addon entry point {entry_point.value!r}") from error
-        roots = tuple(Path(path) for path in spec.submodule_search_locations or ()) if spec else ()
-        if not roots and spec is not None and spec.origin:
-            roots = (Path(spec.origin).parent,)
-        markers = tuple(root / "addon.toml" for root in roots if (root / "addon.toml").is_file())
-        if len(markers) != 1:
-            raise ImproperlyConfigured(
-                f"{entry_point.value}: expected one import-package addon.toml, found {len(markers)}"
-            )
-        marker = markers[0]
-        try:
-            manifest = parse_manifest(marker)
-        except (ManifestError, OSError) as error:
-            raise ImproperlyConfigured(str(error)) from error
-        if manifest.name != entry_point.name:
-            raise ImproperlyConfigured(
-                f"{marker}: addon.name {manifest.name!r} disagrees with entry point {entry_point.name!r}"
-            )
-        available[entry_point.name] = (manifest, entry_point)
-    for addon_dir, manifest in discover(addon_dirs):
-        available.setdefault(manifest.name, (manifest, addon_dir))
-    return dict(sorted(available.items()))
+    return providers
 
 
-def resolve_app_config(declaration: str, *, expected_name: str | None = None) -> AppConfig | None:
-    """Resolve native identity without enabling an available app.
+def _requirement_apps(requirements: Iterable[Requirement], identities: Mapping[str, str]) -> tuple[str, ...]:
+    identities = package_identity_index(identities.items())
+    return tuple(sorted({
+        app for requirement in requirements
+        if (app := identities.get(canonicalize_name(requirement.name))) is not None
+    }))
 
-    Reuse a populated config by its canonical name.
-    Otherwise Django's factory preserves explicit config-class declarations and
-    default-config selection. Import and configuration errors leave identity
-    unknown and log the declaration; unexpected application errors propagate.
-    Construction may import app packages and
-    ``apps.py`` but never populates a registry or calls ``ready()``. A supplied
-    manifest name must agree with the resolved native name.
+
+def requirement_addons(requirements: Iterable[str], identities: Mapping[str, str]) -> tuple[str, ...]:
+    """Resolve catalogue requirements through the native extra-free marker owner."""
+
+    from django_compose.addons import active_requirements
+
+    return _requirement_apps(active_requirements(requirements), identities)
+
+
+def _project_identity(document: Mapping[str, Any]) -> tuple[str, str] | None:
+    project = document.get("project", {})
+    entries = project.get("entry-points", {}).get("angee.addons")
+    if entries is None:
+        return None
+    if not isinstance(entries, Mapping) or len(entries) != 1:
+        raise ImproperlyConfigured("An addon project must declare one angee.addons entry point")
+    name, value = next(iter(entries.items()))
+    if not isinstance(name, str) or not isinstance(value, str):
+        raise ImproperlyConfigured("Addon entry-point names and values must be strings")
+    return name, value
+
+
+def _category(document: Mapping[str, Any]) -> str:
+    return catalogue_category(capability_facts(document, "angee.platform").get("category", ""))
+
+
+def facts_from_toml(
+    document: Mapping[str, Any], *, dependencies: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Project a VCS project's native metadata into retained catalogue facts."""
+
+    identity = _project_identity(document)
+    if identity is None:
+        return {}
+    project = document["project"]
+    provider = project.get("name")
+    if not isinstance(provider, str) or not provider:
+        raise ImproperlyConfigured("An addon project must declare its distribution name")
+    if dependencies is None:
+        index = installed_addons("angee.addons")
+        dependencies = {provider: app for app, provider in index.providers.items()}
+    requirements = tuple(project.get("dependencies", ()))
+    return {
+        "name": identity[0], "distribution": canonicalize_name(provider),
+        "requirements": requirements, "description": project.get("description", ""),
+        "keywords": tuple(project.get("keywords", ())), "category": _category(document),
+        "depends_on": requirement_addons(requirements, dependencies),
+    }
+
+
+def facts_from_distribution(
+    distribution: metadata.Distribution, *, index: InstalledAddons | None = None,
+) -> dict[str, Any]:
+    """Use native METADATA and package platform facts without loading a disabled app."""
+
+    index = installed_addons("angee.addons") if index is None else index
+    provider = canonicalize_name(distribution.metadata["Name"])
+    if provider not in index.entry_points:
+        return {}
+    point = index.entry_points[provider]
+    document = package_document(distribution, point.name)
+    if _project_identity(document) != (point.name, point.value):
+        raise ImproperlyConfigured(f"{point.name}: package and installed entry-point identities disagree")
+    if canonicalize_name(document["project"]["name"]) != provider:
+        raise ImproperlyConfigured(f"{point.name}: package and installed distribution identities disagree")
+    return {
+        "name": point.name, "distribution": provider,
+        "requirements": tuple(distribution.requires or ()),
+        "description": distribution.metadata.get("Summary", ""),
+        "keywords": tuple(
+            value.strip() for value in distribution.metadata.get("Keywords", "").split(",") if value.strip()
+        ),
+        "category": _category(document),
+        "depends_on": _requirement_apps(
+            index.active_requirements(provider), {provider: app for app, provider in index.providers.items()},
+        ),
+    }
+
+
+def resolve_catalogue_roots(
+    roots: Iterable[str], packages: Iterable[Mapping[str, Any]], *, aliases: Mapping[str, str] | None = None,
+    dependencies: Mapping[str, Iterable[str]] | None = None,
+) -> tuple[Mapping[str, Any], ...]:
+    """Order a metadata-only proposal; this never activates an app/config.
+
+    Ordinary Django roots have no catalogue row and are not package impacts.
+    The native compiler remains the activation validator when settings are used.
     """
 
-    config = None
-    if apps.apps_ready:
-        for candidate in apps.get_app_configs():
-            if candidate.name == declaration:
-                config = candidate
-                break
-    if config is None:
-        try:
-            config = AppConfig.create(declaration)
-        except (ImportError, ImproperlyConfigured) as error:
-            logger.warning("Cannot resolve addon app declaration %r: %s", declaration, error)
-            return None
-    if expected_name is not None and config.name != expected_name:
-        raise ImproperlyConfigured(f"Addon name {expected_name!r} disagrees with AppConfig.name {config.name!r}")
-    return config
+    aliases = aliases or {}
+    packages = tuple(packages)
+    by_name = {package["name"]: package for package in packages}
+    if len(by_name) != len(packages):
+        raise ImproperlyConfigured("Duplicate catalogue app identity in proposed selection")
+    graph = {name: tuple(package.get("depends_on", ())) for name, package in by_name.items()}
+    graph.update({name: tuple(edges) for name, edges in (dependencies or {}).items()})
+    selected: dict[str, tuple[str, ...]] = {}
+    pending = list(sorted(roots, reverse=True))
+    while pending:
+        raw = pending.pop()
+        # Resolve only declared aliases, never import or infer a config path.
+        name = aliases.get(raw, raw)
+        if name in selected or name not in graph:
+            continue
+        edges = tuple(sorted({aliases.get(value, value) for value in graph[name]}))
+        selected[name] = edges
+        pending.extend(value for value in reversed(edges) if value not in selected)
+    try:
+        ordered = TopologicalSorter({
+            name: tuple(dependency for dependency in dependencies if dependency in selected)
+            for name, dependencies in sorted(selected.items())
+        }).static_order()
+        return tuple(by_name[name] for name in ordered if name in by_name)
+    except CycleError as error:
+        raise ImproperlyConfigured(f"Catalogue dependency cycle: {error.args[1]}") from error
+
+
+def available_addons() -> dict[str, tuple[Mapping[str, Any], metadata.EntryPoint]]:
+    """List installed addon facts without importing apps or loading entry points."""
+
+    index = installed_addons("angee.addons")
+    return {
+        app: (facts_from_distribution(index.distributions[provider], index=index), index.entry_points[provider])
+        for app, provider in sorted(index.providers.items())
+    }

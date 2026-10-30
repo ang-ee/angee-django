@@ -670,10 +670,10 @@ class Dashboard(
     OwnerMixin,
     HistoryMixin,
     AngeeDataModel,
+    concrete=True,
 ):
     """One installed baseline or actor-owned complete dashboard snapshot."""
 
-    runtime = True
     resource_class = DashboardResource
     immutable_fields = ("is_baseline",)
     sqid_prefix = "dsh_"
@@ -813,10 +813,9 @@ class DashboardWidgetQuerySet[WidgetT: DashboardWidget](ArchiveQuerySet[WidgetT]
 DashboardWidgetManager = AngeeHistoryManager.from_queryset(DashboardWidgetQuerySet)
 
 
-class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, HistoryMixin, AngeeDataModel):
+class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """One versioned widget specification inside a snapshot."""
 
-    runtime = True
     sqid_prefix = "dsw_"
 
     dashboard = models.ForeignKey("dashboards.Dashboard", on_delete=models.CASCADE, related_name="widgets")
@@ -872,7 +871,8 @@ class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, HistoryMixin,
 
         loaded = tuple(instances)
         dashboard_model = cls.dashboard.field.related_model
-        dashboard_ids = sorted({widget.dashboard_id for widget in loaded})
-        for dashboard in dashboard_model.objects.filter(pk__in=dashboard_ids, is_baseline=True):
-            dashboard.validate_installed_snapshot()
+        for using in dict.fromkeys(widget._state.db for widget in loaded):
+            dashboard_ids = sorted({widget.dashboard_id for widget in loaded if widget._state.db == using})
+            for dashboard in dashboard_model.objects.using(using).filter(pk__in=dashboard_ids, is_baseline=True):
+                dashboard.validate_installed_snapshot()
         super().after_resource_load(loaded, tier=tier, source=source)

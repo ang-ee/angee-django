@@ -7,15 +7,15 @@ from typing import Any
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import DatabaseError, models
+from django_compose.declarations import DeclarationValue, ModelDeclaration
+from django_compose.model_composition import ModelComposition
 from rebac import system_context
 
-from angee.compose.declarations import BuildIntegration, DeclarationValue, ModelDeclaration
-from angee.compose.model_composition import ModelComposition
 from angee.resources.mixins import ResourceLoadMixin
 from angee.resources.tiers import ResourceTier
 
 
-class CatalogueIntegration(BuildIntegration):
+class CatalogueIntegration:
     """Preserve explicit catalogue declarations when a source is materialized."""
 
     def model_declaration(self, composition: ModelComposition, source: type[models.Model]) -> ModelDeclaration:

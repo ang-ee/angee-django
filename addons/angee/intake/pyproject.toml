@@ -1,0 +1,27 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-intake"
+version = "3.0.0"
+description = "External-request evidence captured onto project tasks and projects."
+keywords = ["intake", "requests", "needs", "triage", "customers"]
+dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-decisions>=3,<4", "angee-messaging>=3,<4", "angee-parties>=3,<4", "angee-projects>=3,<4", "angee-resources>=3,<4", "angee-work>=3,<4", "angee-provenance>=3,<4", "angee-web>=3,<4", "django-compose==0.1.0.dev1"]
+
+[project.entry-points]
+"angee.addons" = {"angee.intake" = "angee.intake"}
+
+[tool.angee]
+
+[[tool.angee.resources.demo]]
+path = "demo/010_messaging.channel.yaml"
+depends_on = ["integrate:master/010_integrate.vendor.yaml", "iam:demo/010_iam.user.yaml", "work:demo/010_work.queue.yaml"]
+
+[[tool.angee.resources.demo]]
+path = "demo/020_intake.need.yaml"
+depends_on = ["work:demo/020_projects.task.yaml", "projects:demo/010_projects.project.yaml"]
+
+[tool.angee.platform]
+category = "Productivity"
+
+[tool.hatch.metadata]
+allow-direct-references = true

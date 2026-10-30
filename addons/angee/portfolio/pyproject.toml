@@ -1,0 +1,39 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-portfolio"
+version = "3.0.0"
+description = "Phasal products, strategic initiatives, health updates, and releases."
+keywords = ["portfolio", "products", "initiatives", "roadmaps", "releases"]
+dependencies = ["angee-base>=3,<4", "angee-projects>=3,<4", "angee-provenance>=3,<4", "angee-web>=3,<4", "django-compose==0.1.0.dev1"]
+
+[project.entry-points]
+"angee.addons" = {"angee.portfolio" = "angee.portfolio"}
+
+[tool.angee]
+
+[[tool.angee.resources.demo]]
+path = "demo/010_portfolio.product.yaml"
+depends_on = "projects:demo/010_projects.project.yaml"
+
+[[tool.angee.resources.demo]]
+path = "demo/020_portfolio.initiative.yaml"
+depends_on = ["demo/010_portfolio.product.yaml", "iam:demo/010_iam.user.yaml"]
+
+[[tool.angee.resources.demo]]
+path = "demo/030_projects.project.yaml"
+depends_on = ["demo/010_portfolio.product.yaml", "iam:demo/010_iam.user.yaml"]
+
+[[tool.angee.resources.demo]]
+path = "demo/040_portfolio.initiative_project.yaml"
+depends_on = ["demo/020_portfolio.initiative.yaml", "demo/030_projects.project.yaml"]
+
+[[tool.angee.resources.demo]]
+path = "demo/050_portfolio.release.yaml"
+depends_on = "demo/010_portfolio.product.yaml"
+
+[tool.angee.platform]
+category = "Productivity"
+
+[tool.hatch.metadata]
+allow-direct-references = true

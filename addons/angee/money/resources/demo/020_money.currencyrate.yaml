@@ -3,7 +3,7 @@
 # EUR/USD/GBP rows read naturally with USD as the reference (USD == 1.0), but the
 # data itself names no reference — the setting owns that. `currency` names the 010
 # catalogue row by `<app>.<xref>`; the (currency, date) pair is unique. depends_on
-# in addon.toml orders this after the currency catalogue so the FK resolves.
+# in pyproject.toml orders this after the currency catalogue so the FK resolves.
 _meta:
   model: money.CurrencyRate
 rows:

@@ -6,52 +6,50 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from django.core.exceptions import FieldError
 from django.db import models
 from django.test.utils import isolate_apps
 from mypy import api as mypy_api  # noqa: F401 -- initialize mypy's compiled import graph before its plugin API.
-from mypy.mro import calculate_mro
-from mypy.nodes import GDEF, Block, ClassDef, NameExpr, SymbolTable, SymbolTableNode, TypeInfo
-from mypy.plugin import ClassDefContext
-from mypy.types import Instance
 
-from angee.compose.typing import CompositionContext, CompositionPlugin
+# isort: split
+from django_compose.typing import CompositionContext
 
 
 @pytest.mark.parametrize("settings_module", ("tests.typing_settings", "tests.typing_app.settings"))
-def test_composition_context_discovers_native_registry_without_compiler_app(settings_module: str) -> None:
-    """Prebuilt and ordinary Django hosts need no installed compiler AppConfig."""
+def test_composition_context_reads_native_composed_and_ordinary_registries(settings_module: str) -> None:
+    """Native composed settings and ordinary Django settings retain their own registries."""
 
     root = Path(__file__).resolve().parents[1]
     env = {
         name: value for name, value in os.environ.items()
         if not name.startswith(("ANGEE_", "COMPOSE_")) and name not in {"DATABASE_URL", "DJANGO_SETTINGS_MODULE"}
     }
-    env["PYTHONPATH"] = str(root)
+    # A direct context probe supplies the same import roots as native mypy_path.
+    env["PYTHONPATH"] = os.pathsep.join((str(root / ".mypy_cache"), str(root)))
     result = subprocess.run(
         [sys.executable, "-c", "\n".join([
             # Initialize compiled mypy's import graph before importing its plugin API.
             "from mypy import api",
-            "from angee.compose.typing import CompositionContext",
+            "from django_compose.typing import CompositionContext",
             f"context = CompositionContext({settings_module!r})",
-            "assert not context.apps_registry.is_installed('angee.compose')",
             "if context.django_settings_module == 'tests.typing_app.settings':",
-            "    assert not hasattr(context.settings, 'COMPOSE_RUNTIME_DIR')",
+            "    assert not context.apps_registry.is_installed('django_compose')",
+            "    assert not hasattr(context.settings, 'COMPOSE_OUTPUT_DIR')",
             "    assert not context.composed",
             "    assert not context.static_names",
-            "    assert not context.extends",
-            "    assert not context.contributions",
-            "    assert not context.required_parents",
+            "    assert not context.parents",
+            "    assert not context.fields",
+            "    assert not context.required_ancestors",
             "else:",
+            "    assert context.apps_registry.is_installed('django_compose')",
             "    queue = context.apps_registry.get_model('work', 'Queue')",
             "    assert context.composed['angee.work.models.Queue'] is queue",
             "    assert context.get_model_class_by_fullname('angee.work.models.Queue') is queue",
             "    assert context.static_names[queue] == 'angee.work.models.Queue'",
-            "    assert context.extends['angee.work.models.Queue'] == 'angee.spaces.models.Group'",
-            "    assert context.extends['angee.integrate.models.Bridge'] == 'angee.integrate.models.Integration'",
+            "    assert context.parents['angee.work.models.Queue'] == 'angee.spaces.models.Group'",
+            "    assert context.parents['angee.integrate.models.Bridge'] == 'angee.integrate.models.Integration'",
         ])], cwd=root, env=env, capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -96,45 +94,6 @@ def test_concrete_self_fk_retains_native_relation_and_primary_key_metadata() -> 
 
 
 
-def test_composition_target_survives_semantic_reanalysis(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mypy restores source bases while the previous pass's MRO is still cached."""
-    def model_info(name: str) -> TypeInfo:
-        declaration = ClassDef(name, Block([]))
-        declaration.fullname = f"typing_contract.{name}"
-        info = TypeInfo(SymbolTable(), declaration, "typing_contract")
-        declaration.info = info
-        return info
-
-    root = model_info("object")
-    root.mro = [root]
-    target = model_info("Target")
-    target.bases = [Instance(root, [])]
-    calculate_mro(target)
-    donor = model_info("Donor")
-    donor.bases = [Instance(root, [])]
-    calculate_mro(donor)
-    context = object.__new__(CompositionContext)
-    context.extends = {donor.fullname: target.fullname}
-    context.contributions = {}
-    context.member_origins = {}
-    context.member_receivers = {}
-    context.member_modules = {}
-    plugin = CompositionPlugin.__new__(CompositionPlugin)
-    plugin.django_context = context
-    monkeypatch.setattr(plugin, "lookup_fully_qualified", lambda _name: SymbolTableNode(GDEF, target))
-    ctx = ClassDefContext(
-        donor.defn, NameExpr("source_base"),
-        SimpleNamespace(add_plugin_dependency=lambda *_args, **_kwargs: None),
-    )
-    native_calls: list[ClassDefContext] = []
-    plugin._composition_contract(ctx, native=native_calls.append)
-    assert donor.has_base(target.fullname)
-    donor.bases = [Instance(root, [])]
-    assert donor.has_base(target.fullname)  # The preceding MRO has not been rebuilt yet.
-    plugin._composition_contract(ctx, native=native_calls.append)
-    assert any(base.type is target for base in donor.bases)
-    assert donor.has_base(target.fullname)
-    assert native_calls == [ctx, ctx]
 
 
 

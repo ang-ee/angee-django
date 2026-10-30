@@ -24,7 +24,7 @@ from itertools import chain, combinations, groupby, islice
 from typing import TYPE_CHECKING, Any, NamedTuple, Self, TypedDict
 
 from django.apps import apps
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
 from django.db.models.functions import Coalesce, NullIf
@@ -34,16 +34,18 @@ from rebac import (
     PermissionDenied,
     actor_context,
     current_actor,
+    database_context,
     system_context,
 )
 from rebac.actors import is_sudo, to_subject_ref
 
+from angee.base.hooks import resolve_hooks
 from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.trash import ArchiveQuerySet
 from angee.base.permissions import actor_user_id
 from angee.base.querysets import MergeableQuerySet, by_key
-from angee.hooks import resolve_hooks
+from angee.base.serialization import canonical_json
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedContact, ParsedPhoto
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -54,14 +56,14 @@ from angee.provenance.statements import (
     StatementQuerySet,
     StatementSubjectQuerySet,
 )
-from angee.serialization import canonical_json
 from angee.storage.exceptions import UploadTooLarge, UploadTypeRefused
 
 if TYPE_CHECKING:
     from django_stubs_ext import WithAnnotations
 
+    from angee.integrate.models import RecordLink
     from angee.parties.mixins import PartyStatementMixin
-    from angee.parties.models import Circle, Handle, Party
+    from angee.parties.models import Circle, Handle, Party, Person
 
 logger = logging.getLogger(__name__)
 
@@ -370,7 +372,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
         if handle is None:
             try:
                 # A savepoint isolates the insert, so the caller's transaction stays usable.
-                with transaction.atomic():
+                with transaction.atomic(using=self.db):
                     return self.create(
                         platform=platform,
                         value=value,
@@ -509,9 +511,15 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
 
         evidence = tuple(evidence)
         person_model = apps.get_model("parties", "Person")
-        link_owner = apps.get_model("parties", "Party").objects
-        with system_context(reason="parties.handle.claim_control"), transaction.atomic():
-            handle = self.upsert(
+        handles_owner = self.db_manager(self._db or user._state.db, hints={"instance": user})
+        using = handles_owner.db
+        link_owner = apps.get_model("parties", "Party").objects.db_manager(using)
+        with (
+            database_context(using),
+            system_context(reason="parties.handle.claim_control"),
+            transaction.atomic(using=using),
+        ):
+            handle = handles_owner.upsert(
                 platform=platform,
                 value=value,
                 created_by_id=user.pk,
@@ -523,7 +531,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 handle_ids=(handle.pk,),
             )
             handle = handles[handle.pk]
-            person = person_model.objects.for_user(user)
+            person = person_model.objects.db_manager(using).for_user(user)
             if handle.controller_id is not None and handle.controller_id != user.pk:
                 link_owner.assert_handle(
                     person,
@@ -535,7 +543,7 @@ class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
                 return handle
             if handle.controller_id is None:
                 handle.controller = user
-                handle.save(update_fields=["controller", "updated_at"])
+                handle.save(using=using, update_fields=["controller", "updated_at"])
             link_owner.assert_handle(
                 person,
                 handle,
@@ -870,6 +878,9 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         statements = (
             statements.sudo(reason="parties.same_as_pairs") if unscoped else statements.with_actor(actor)
         )
+        endpoints = self.canonical()
+        if not unscoped:
+            endpoints = endpoints.with_display_avatars(actor)
         pairs = (
             self.model.same_as.model._base_manager.filter(
                 left_id__in=Subquery(visible),
@@ -879,12 +890,7 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
             .filter(Exists(statements.filter(subject_id=OuterRef("pk"))))
             .prefetch_related(
                 Prefetch("partysameaspairstatement_set", queryset=statements, to_attr="_resolved_statements"),
-                *(
-                    Prefetch(side, queryset=self.canonical().with_display_avatars(actor))
-                    for side in ("left", "right")
-                    if not unscoped
-                ),
-                *(Prefetch(side, queryset=self.canonical()) for side in ("left", "right") if unscoped),
+                *(Prefetch(side, queryset=endpoints) for side in ("left", "right")),
             )
             .order_by("left_id", "right_id")
         )[: max(0, min(int(limit), 101))]
@@ -992,7 +998,6 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         with system_context(reason="parties.rule"):
             return apps.get_model("provenance", "Rule").objects.get(key=f"parties.{key}")
 
-    @transaction.atomic
     def assert_handle(
         self,
         party: Any,
@@ -1004,23 +1009,28 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         link: Any = None,
     ) -> Any:
         """Assert normal handle facts from native supporting records, preserving person decisions."""
-        source = to_subject_ref(asserted_by)
-        subject = apps.get_model("parties", "Party")._base_manager.get(pk=party.pk)
-        refs = [EvidenceReference.of(row) for row in evidence]
-        existing = subject.statements.current().filter(aspect="handle", handle=handle, asserted_by=str(source)).first()
-        if existing is not None and existing.rank == existing.StatementRank.PREFERRED:
-            subject.statements.asserting_source(asserted_by)
-            subject.require_statement_write(source)
-            return existing
-        return subject.statements.set(
-            aspect="handle",
-            handle=handle,
-            values={},
-            asserted_by=asserted_by,
-            confidence=confidence,
-            evidence=refs,
-            link=link,
-        )
+        owner = self.db_manager(self._db or party._state.db, hints={"instance": party})
+        using = owner.db
+        with database_context(using), transaction.atomic(using=using):
+            source = to_subject_ref(asserted_by)
+            subject = apps.get_model("parties", "Party")._base_manager.using(using).get(pk=party.pk)
+            refs = [EvidenceReference.of(row) for row in evidence]
+            existing = (
+                subject.statements.current().filter(aspect="handle", handle=handle, asserted_by=str(source)).first()
+            )
+            if existing is not None and existing.rank == existing.StatementRank.PREFERRED:
+                subject.statements.asserting_source(asserted_by)
+                subject.require_statement_write(source)
+                return existing
+            return subject.statements.set(
+                aspect="handle",
+                handle=handle,
+                values={},
+                asserted_by=asserted_by,
+                confidence=confidence,
+                evidence=refs,
+                link=link,
+            )
 
     def lock_identity_rows(
         self,
@@ -1873,6 +1883,23 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
         return self.sudo(reason="parties.party.user_for").account_for_party(party.pk)
 
+    def contact_person(self, link: RecordLink) -> Person | None:
+        """Resolve a contact through its native generic target and Person relation."""
+
+        target = link.target
+        if target is None:
+            if link.target_content_type_id is not None or link.target_object_id:
+                raise ValidationError("The contact's linked target no longer exists.")
+            return None
+        if not isinstance(target, apps.get_model("parties", "Party")):
+            raise ValidationError("A contact target must be a Party with a Person child.")
+        if isinstance(target, apps.get_model("parties", "Person")):
+            return target
+        try:
+            return target.person
+        except ObjectDoesNotExist as error:
+            raise ValidationError("A contact target must have a Person child.") from error
+
     def lock_contact(
         self,
         person: Any | None,
@@ -2078,7 +2105,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         folder: Any,
         created_by_id: Any,
         link: Any,
-        target: Any = None,
+        target: Person | None = None,
     ) -> Any:
         """Assert one link's contact facts; preserve other sources and person preferences.
 
@@ -2101,7 +2128,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         relationships = apps.get_model("parties", "Relationship")
         source = folder.directory.integration_ptr
         with transaction.atomic():
-            target = target or link.target
+            linked_person = self.contact_person(link)
+            target = target or linked_person
             if target is not None:
                 self.lock_contact(target, parsed=parsed)
             person = target or people.create(

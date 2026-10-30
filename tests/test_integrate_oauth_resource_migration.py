@@ -7,7 +7,7 @@ from django.apps import apps
 from django.db import connection, transaction
 from rebac import system_context
 
-from angee.agents_integrate_anthropic.runtime_migrations.rehome_anthropic_oauth_resources import rehome
+from angee.agents_integrate_anthropic.compose_migrations.resources.rehome_anthropic_oauth_resources import rehome
 from angee.resources.testing.models import Resource
 
 

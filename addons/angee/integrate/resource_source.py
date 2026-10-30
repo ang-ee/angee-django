@@ -19,13 +19,13 @@ import httpx2
 from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django_compose.artifacts import atomic_write
 
 from angee.base.exceptions import exception_text
 from angee.integrate.errors import RequestNotSentError
 from angee.integrate.http import HttpClient
 from angee.resources import sources
 from angee.resources.exceptions import ResourceLoadError
-from angee.utils.files import write_atomic
 
 if TYPE_CHECKING:
     from angee.resources.entries import ResourceEntry
@@ -61,7 +61,7 @@ class UrlSource(sources.ResourceSource):
             raise ResourceLoadError(f"{url!r}: fetch failed: {error}") from error
         if not response.is_success:
             raise ResourceLoadError(f"{url!r}: fetch failed: HTTP {response.status_code}")
-        write_atomic(cache_path, response.content)
+        atomic_write(cache_path, response.content)
         return cache_path
 
 

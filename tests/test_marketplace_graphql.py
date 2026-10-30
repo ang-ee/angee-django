@@ -7,7 +7,7 @@ bridge/repo creation or the discovery walk):
 - ``addSource`` inventories a repository on an existing ``VcsBridge``
   (``import_repository``) and points an addon ``Source`` at it;
 - ``scan`` runs ``Source.refresh()`` (→ ``AddonCatalog.sync_from_source``), which
-  discovers ``addon.toml`` rows into the one ``platform.Addon`` marketplace registry.
+  discovers ``pyproject.toml`` rows into the one ``platform.Addon`` marketplace registry.
 
 Driven over the stub VCS backend (canned tree/blobs ride on the bridge config), the
 same path the ``marketplace sync`` command and integrate's ``refresh_source`` use.
@@ -51,12 +51,19 @@ _REPOS = [
     },
 ]
 _TREE = [
-    {"path": "addons/angee/demo/addon.toml", "type": "blob", "oid": "a"},
+    {"path": "addons/angee/demo/pyproject.toml", "type": "blob", "oid": "a"},
     {"path": "addons/angee/demo/README.md", "type": "blob", "oid": "b"},
 ]
 _BLOBS = {
-    "addons/angee/demo/addon.toml": '[addon]\nname = "angee.demo"\ndescription = "A demo addon."\n'
-    'depends_on = ["angee.platform"]\n',
+    "addons/angee/demo/pyproject.toml": (
+                                            '[project]\n'
+                                            'name = "angee-demo"\n'
+                                            'version = "1.0.0"\n'
+                                            'description = "A demo addon."\n'
+                                            'dependencies = ["angee-platform"]\n'
+                                            '[project.entry-points."angee.addons"]\n'
+                                            '"angee.demo" = "angee.demo"\n'
+                                        ),
 }
 
 _ADD_SOURCE = """

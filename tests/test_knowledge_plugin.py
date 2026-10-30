@@ -225,18 +225,16 @@ def test_manifest_wires_the_seams() -> None:
     """
 
     from django.apps import AppConfig
+    from django_compose.addons import enabled_apps
 
     import angee.knowledge_graph_pgvector as plugin_pkg
-    from angee.addons import addon_manifest
 
     config = AppConfig("angee.knowledge_graph_pgvector", plugin_pkg)
-    contract = addon_manifest(config)
-    assert contract is not None
-    assert contract.depends_on == ("angee.knowledge", "angee.mcp")
+    dependencies = enabled_apps((config.name,), group="angee.addons").dependencies[config.name]
+    assert dependencies == ("angee.knowledge", "angee.mcp")
     from angee.graphql.schema import schema_parts_for
     from angee.mcp.server import tool_registrar
 
-    assert contract.schemas is None
     assert "public" in schema_parts_for(config)
     assert tool_registrar(config) is plugin_mcp_tools.register
     # The dotted refs resolve to the contributions composed above.

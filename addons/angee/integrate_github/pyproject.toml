@@ -1,0 +1,20 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-integrate-github"
+version = "3.0.0"
+description = "GitHub backend for the VCS inventory — reads repositories over the GitHub REST API"
+keywords = ["github", "vcs"]
+dependencies = ["angee-integrate-vcs>=3,<4"]
+
+[project.entry-points]
+"angee.addons" = {"angee.integrate_github" = "angee.integrate_github"}
+
+[tool.angee]
+
+[[tool.angee.resources.install]]
+path = "install/010_integrate.oauthclient.yaml"
+adopt = ["slug", "environment"]
+
+[tool.angee.platform]
+category = "Integration"

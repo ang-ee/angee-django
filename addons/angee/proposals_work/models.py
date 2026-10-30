@@ -7,14 +7,14 @@ from typing import Any, ClassVar
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
+from django_compose.models import Composable
 from rebac import system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
 
 
-class RoundQuestionsQueue(models.Model):
+class RoundQuestionsQueue(Composable, extends="proposals.Round"):
     """Route new questions without moving questions already asked."""
 
-    extends: ClassVar[str | None] = "proposals.Round"
     clarification_queue = models.ForeignKey(
         "work.Queue", null=True, blank=True, on_delete=models.PROTECT, related_name="+"
     )
@@ -61,10 +61,9 @@ class RoundQuestionsQueue(models.Model):
             task.start()
 
 
-class TaskTrackQueue(models.Model):
+class TaskTrackQueue(Composable, extends="projects.Task"):
     """Keep unpublished track work in a responder's or round manager's queue."""
 
-    extends: ClassVar[str | None] = "projects.Task"
 
     class Meta:
         abstract = True

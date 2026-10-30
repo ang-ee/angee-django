@@ -73,11 +73,12 @@ def workflow_resource(tmp_path, monkeypatch):
             def declare(rows, *, name="tests.workflow_resource", tier="install", grants=(), extra_entries=()):
                 directory = tmp_path / name
                 directory.mkdir()
+                (directory / "resources").mkdir()
                 source = "100_workflows.workflow.yaml"
-                (directory / source).write_text(yaml.safe_dump({"rows": rows}))
+                (directory / "resources" / source).write_text(yaml.safe_dump({"rows": rows}))
                 entries = [{"path": source}, *extra_entries]
                 if grants:
-                    (directory / "200_grants.yaml").write_text(yaml.safe_dump(list(grants)))
+                    (directory / "resources" / "200_grants.yaml").write_text(yaml.safe_dump(list(grants)))
                     entries.append({"path": "200_grants.yaml", "kind": "grants"})
                 addon = make_addon(name=name, path=directory, resources={tier: entries})
                 addon.apps = apps
@@ -297,9 +298,11 @@ def test_xref_lookup_does_not_order_unrelated_external_dependencies(execution, w
     sibling = "200_workflows.workflow.yaml"
     addon = workflow_resource(
         [workflow_row()],
-        extra_entries=[{"path": sibling, "depends_on": ["external.addon:resources/prerequisite.yaml"]}],
+        extra_entries=[{"path": sibling, "depends_on": ["external.addon:prerequisite.yaml"]}],
     )
-    (Path(addon.path) / sibling).write_text(yaml.safe_dump({"rows": [workflow_row("other", key="unselected")]}))
+    (Path(addon.path) / "resources" / sibling).write_text(
+        yaml.safe_dump({"rows": [workflow_row("other", key="unselected")]}),
+    )
 
     workflow = drivers.load_workflow(f"{addon.name}.graph", actor=actor)
 

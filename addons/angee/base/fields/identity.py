@@ -47,7 +47,7 @@ class SqidField(SqidsField):
         self._angee_declared_prefix = prefix
         super().__init__(*args, prefix=_canonical_sqid_prefix(prefix), **kwargs)
 
-    def contribute_to_class(self, cls: type[models.Model], name: str) -> None:
+    def contribute_to_class(self, cls: type[models.Model], name: str, private_only: bool = False) -> None:
         """Resolve the prefix from the model's ``<field>_prefix`` when unset.
 
         Lets ``SqidMixin``'s one shared column serve every model: each model
@@ -56,6 +56,7 @@ class SqidField(SqidsField):
         it as a schema field. Authored migrations can still import its codec.
         """
 
+        # django-sqids always binds this virtual field as private.
         super().contribute_to_class(cls, name)
         if not self._angee_declared_prefix:
             declared = getattr(cls, f"{name}_prefix", "")

@@ -1,7 +1,7 @@
 """Admission and the single conditional verdict transition."""
 
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
@@ -25,6 +25,9 @@ from angee.decisions.signals import decision_answered
 from angee.graphql.publishing import mute_changes, publish_change
 from angee.provenance.evidence import readable_records
 
+if TYPE_CHECKING:
+    from angee.decisions.models import Decision
+
 
 def _user(actor: Any, *, active: bool = True) -> Any:
     identity = actor_user_id(to_subject_ref(actor if actor is not None else current_actor()))
@@ -37,7 +40,7 @@ def _user(actor: Any, *, active: bool = True) -> Any:
     return user
 
 
-class DecisionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
+class DecisionQuerySet[T: Decision](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
     def open_expression(self) -> ExpressionWrapper:
         return ExpressionWrapper(Q(verdict__isnull=True), output_field=BooleanField())
 
@@ -87,7 +90,7 @@ class DecisionQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
 _DecisionManagerBase = AngeeManager.from_queryset(DecisionQuerySet)
 
 
-class DecisionManager(_DecisionManagerBase):
+class DecisionManager[T: Decision](_DecisionManagerBase[T]):
     def withdraw(self, decision: Any, *, actor: Any) -> Any:
         """An authorized asking owner withdraws a question in a named system context."""
         if not is_sudo():

@@ -19,7 +19,7 @@ from django.core.cache import DEFAULT_CACHE_ALIAS, caches
 from django.core.exceptions import RequestDataTooBig
 from django.http import HttpRequest
 
-from angee.cache import increment_window
+from angee.base.cache import increment_window
 
 AnonymousIngressTokenHook = Callable[[HttpRequest, Mapping[str, Any]], bool | None]
 

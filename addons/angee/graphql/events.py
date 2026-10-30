@@ -16,7 +16,7 @@ from strawberry.scalars import JSON
 
 from angee.base.models.identity import public_id_of
 from angee.base.refs import RecordRef, record_view_refs
-from angee.serialization import json_safe
+from angee.base.serialization import json_safe
 
 ReadableFields = Iterable[str] | Callable[[], Iterable[str]]
 """Readable model fields, resolved lazily only when building a partial-update payload."""

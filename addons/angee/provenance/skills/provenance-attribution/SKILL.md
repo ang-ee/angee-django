@@ -21,7 +21,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 | File or module | Owns | Reference |
 |---|---|---|
 | `<addon>/models.py` | `HistoryMixin` composition, captured manager, `history_revert_permission`, `history_relations`, `statements` declaration | `addons/angee/tags/models.py:58-77`, `tests/statement_models.py:16` |
-| `<addon>/addon.toml` | `depends_on = [..., "angee.provenance"]` | `addons/angee/tags/addon.toml` |
+| `<addon>/pyproject.toml` | `[project].dependencies = [..., "angee-provenance>=3,<4"]` | `addons/angee/tags/pyproject.toml` |
 | `addons/angee/provenance/contrib/angee/history.py` | `HistoryMixin` (:346), `ModelHistory` (:97), `HistoryDocumentMixin` (:50), `record_history` (:86) | docstrings |
 | `addons/angee/provenance/contrib/angee/managers.py`, `querysets.py` | `AngeeHistoryManager` (:20), `AngeeHistoryUnscopedManager` (:24), `AngeeHistoryMergeableUnscopedManager` (:33); `AngeeHistoryQuerySet` (:16) | docstrings |
 | `addons/angee/provenance/history.py`, `querysets.py`, `context.py` | native capture without Angee policy: `ModelHistory` (:132), `HistoryMixin` (:438); `changeset()` (:334), `current_changeset` (:224), `ChangesetRequired` (:28) | [README](../../README.md) |
@@ -47,8 +47,8 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 
 ## Steps
 
-1. **Declare the dependency.** `addon.toml` `depends_on` adds `angee.provenance` (it brings `simple_history`).
-   **Owner rule:** only addons that opt in depend on provenance; `angee.base` and core never do, so a foundation or IAM fact
+1. **Declare the dependency.** `pyproject.toml` `[project].dependencies` adds `angee-provenance` (it brings `simple_history`).
+   **Owner rule:** only addons that opt in depend on provenance; `angee.base` and the generic compiler never do, so a foundation or IAM fact
    that provenance needs arrives as a provenance-owned donor (`contrib/iam/models.py:12`;
    [README](../../README.md), [Package layering](../../../../../docs/backend/guidelines.md#package-layering)).
 
@@ -60,8 +60,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 
    TagManager = AngeeHistoryManager.from_queryset(TagQuerySet)
 
-   class Tag(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel):
-       runtime = True
+   class Tag(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel, concrete=True):
        sqid_prefix = "tag_"
        _angee_base = AngeeHistoryMergeableUnscopedManager()   # AngeeHistoryUnscopedManager() without MergeableMixin
        objects = TagManager()
@@ -150,7 +149,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 ## Do not
 
 - `HistoricalRecords()` or `simple_history.register()` on an addon model that keeps history: `HistoryMixin`/`ModelHistory` own capture and its Angee policy ([Stack](../../../../../docs/stack.md#backend), django-simple-history row).
-- An `angee.provenance` import in `angee.base`, core, IAM or another foundation-level owner: a provenance-owned `extends` donor (`contrib/iam/models.py:12`; [Package layering](../../../../../docs/backend/guidelines.md#package-layering)).
+- An `angee.provenance` import in `angee.base`, the generic compiler, IAM or another foundation-level owner: a provenance-owned `extends` donor (`contrib/iam/models.py:12`; [Package layering](../../../../../docs/backend/guidelines.md#package-layering)).
 - `changeset(fresh=True)` in a resolver, model method or manager verb that is not a separate logical write: the entrypoint boundary ([Persistence primitives](../../../../../docs/backend/guidelines.md#persistence-primitives)).
 - A `changed_by`/`change_reason` column or a parallel audit-log table on the model: `Changeset` attribution plus `AuditMixin` stamps ([Glossary: Changeset](../../../../../docs/glossary.md#backend)).
 - `system_context` wrapped around a write to make it attributable or revertable: attribution never grants ([README](../../README.md), "No captured write grants an authorization bypass").
@@ -179,7 +178,7 @@ statement tables.
 
 - A queryset update writing only excluded columns records no version; an MTI child save records the child's history only ([Persistence primitives](../../../../../docs/backend/guidelines.md#persistence-primitives), "`HistoryMixin` excludes `GeneratedField`").
 - One changeset row per writing thread and actor: a pool thread needs `copy_context().run` or a `process=True` boundary ([README: Boundaries](../../README.md#boundaries)).
-- A `manage.py` rendered before `angee.management.main()` existed has no boundary; re-render it ([README: Boundaries](../../README.md#boundaries)).
+- Management commands need the native launcher and provenance's `COMPOSE_COMMAND_CONTEXT` contribution; re-render an obsolete entrypoint ([README: Boundaries](../../README.md#boundaries)).
 - `history_relations` are document parts with their own capture and read gates, not arbitrary references (`history.py:357-361`).
 - Revert refuses any later touch of a row and reuses trash for created subjects; without `TrashMixin` retained references block removal ([Persistence primitives](../../../../../docs/backend/guidelines.md#persistence-primitives)).
 - A seed load, merge, revert, MCP tool call or bridge session is a distinct logical write with its own `fresh=True` boundary nested inside the entrypoint's; a write that is not a distinct unit stays under the entrypoint boundary ([README: Boundaries](../../README.md#boundaries) "Separate logical writes").
@@ -187,15 +186,7 @@ statement tables.
 ## Read next
 
 - [Persistence primitives](../../../../../docs/backend/guidelines.md#persistence-primitives), [Migration history](../../../../../docs/backend/guidelines.md#migration-history), [GraphQL actor and write contracts](../../../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts)
-- [Foundation and provenance upgrade cutoff](../../../../../docs/composer.md#foundation-and-provenance-upgrade-cutoff), [Stack](../../../../../docs/stack.md#backend)
+- [Explicit migration retirement policy](../../../../../docs/backend/guidelines.md#migration-history), [Stack](../../../../../docs/stack.md#backend)
 - [Glossary: Backend](../../../../../docs/glossary.md#backend) (Principal, Actor, Changeset, Statement, Aspect, Survivorship)
 - [Provenance README](../../README.md), [Parties README](../../../parties/README.md)
 - Skills: `angee-models`, `angee-permissions`, `angee-resources`, `angee-tests`, `slice`
-
-## Sources
-
-<!--
-Docs: docs/backend/guidelines.md #package-layering, #composition-owners, #pitfalls, #environment-and-checks, #persistence-primitives, #integration-and-worker-contracts, #workflow-contracts; docs/stack.md #backend; docs/glossary.md #backend (Backend class entries), #decisions (Derived-from evidence); docs/checks.md #source-addon-test-models; docs/composer.md #addon-owned-runtime-migrations, #foundation-and-provenance-upgrade-cutoff.
-Code: addons/angee/provenance/{README.md, addon.toml, autoconfig.py, tasks.py, checks.py, context.py:1-50,224-372, evidence.py, models.py:61-230, managers.py:30,57,134, statements.py:1-60,664-840,1424-1500, contrib/angee/history.py:40-120,346-400, contrib/angee/managers.py, contrib/angee/querysets.py, contrib/angee/context.py, contrib/iam/models.py, testing/fixtures.py, testing/models.py}; addons/angee/base/models/derived.py; addons/angee/tags/models.py:58-77; addons/angee/parties/models.py:100-135; addons/angee/agents/{tasks.py,sessions.py:57-80}; tests/{statement_models.py, test_history.py:1-60, test_statement_records.py:1-40, test_provenance_context.py:1-40, test_provenance_native.py:1-30, settings.py:35-99, conftest.py:643}.
-Mismatches: README says Angee models "compose a captured manager when they declare a custom queryset" while HistoryMixin already binds objects/_angee_base defaults (addons/angee/provenance/contrib/angee/history.py:349-350) — consistent, but the README omits the Mergeable variant; no doc names `MACHINE_REASON` (addons/angee/provenance/models.py:61).
--->

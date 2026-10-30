@@ -15,9 +15,11 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connections, models, router, transaction
 from django.db.models import F, Q
 from django.utils import timezone
+from django_compose.models import Composable
 from rebac import (
     PermissionDenied,
     current_actor,
+    database_context,
     generic_target,
     system_context,
     to_object_ref,
@@ -42,6 +44,7 @@ from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
 from angee.base.permissions import actor_user_id, candidate_relationships
 from angee.base.querysets import MergeableQuerySet
+from angee.base.serialization import strip_null_bytes
 from angee.base.validators import validate_value
 from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.projects.access import require_binding_access, require_target_binding_access
@@ -57,7 +60,6 @@ from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryMergeableUnscopedQuerySet, AngeeHistoryQuerySet
 from angee.scheduling.fields import RecurrenceField
-from angee.serialization import strip_null_bytes
 from angee.tags.models import TaggedModel
 
 
@@ -359,7 +361,6 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
     ) -> TaskT:
         """Create an open record task, assigned to ``assignee`` or the actor and due today by default."""
 
-        self.model.validate_target(record)
         if isinstance(record, self.model) and record.subject_object_id is not None:
             # Its access is its record's: a task about it would answer to nobody's.
             raise ValidationError("A record task takes no record tasks of its own.")
@@ -370,7 +371,10 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
         if assignee_id is None:
             raise ValidationError({"assignee": "A record task needs an assignee."})
         kinds = self.model.activity_type.field.related_model
-        with transaction.atomic():
+        tasks = self.db_manager(self._db or record._state.db, hints={"instance": record})
+        using = tasks.db
+        with database_context(using), transaction.atomic(using=using):
+            self.model.validate_target(record)
             task = self.model(
                 title=title,
                 note=strip_null_bytes(note or ""),
@@ -379,8 +383,9 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
                 **generic_target(record).lookups(self.model, "subject"),
                 activity_type_id=strip_null_bytes(activity_type or kinds.DEFAULT_KEY),
             )
+            task._state.db = using
             task.full_clean(validate_unique=False, validate_constraints=False)
-            task.save()
+            task.save(using=using)
         return task
 
     def log(self, record: Any, *, activity_type: str, occurred_on: Any, note: str) -> TaskT:
@@ -401,8 +406,10 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
         assert length is not None
         if len(title) > length:
             title, rest = title[: length - 1] + "…", note
-        with transaction.atomic():
-            task = self.schedule(
+        tasks = self.db_manager(self._db or record._state.db, hints={"instance": record})
+        using = tasks.db
+        with database_context(using), transaction.atomic(using=using):
+            task = tasks.schedule(
                 record,
                 title=title,
                 note=note,
@@ -507,10 +514,10 @@ class Project(
     ThreadedModelMixin,
     HistoryMixin,
     AngeeDataModel,
+    concrete=True,
 ):
     """A bounded endeavor whose access is owned by direct ReBAC grants."""
 
-    runtime = True
     sqid_prefix = "prj_"
     history_relations = ("milestones",)
     rebac_grantable = {"reader": "share", "editor": "share"}
@@ -848,10 +855,9 @@ class _MilestoneManager[MilestoneT: Milestone](_MilestoneManagerBase[MilestoneT]
     """Preserve the native milestone scheduling queryset on manager reads."""
 
 
-class Milestone(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel):
+class Milestone(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
     """A named marker reached within one project."""
 
-    runtime = True
     sqid_prefix = "mls_"
     immutable_fields = ("reached_at", "reached_by_id")
 
@@ -960,13 +966,12 @@ class Milestone(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMi
             raise ValidationError("A reached milestone cannot be deleted.")
 
 
-class ActivityType(AuditMixin, AngeeDataModel):
+class ActivityType(AuditMixin, AngeeDataModel, concrete=True):
     """Resource-declared kinds of record task; tasks keep the stable key."""
 
     DEFAULT_KEY: ClassVar[str] = "todo"
     """The plain to-do projects seeds: a record task's kind when none is named."""
 
-    runtime = True
     sqid_prefix = "act_"
     key = models.SlugField(max_length=64, unique=True)
     name = models.CharField(max_length=160)
@@ -981,13 +986,12 @@ class ActivityType(AuditMixin, AngeeDataModel):
         return self.name
 
     @classmethod
-    def completion_line(cls, key: str | None, title: str) -> str:
-        """Return the record chatter line announcing a done record task of kind ``key``."""
+    def completion_line(cls, kind: Self | None, title: str) -> str:
+        """Return the record chatter line announcing a done record task of ``kind``."""
 
-        if key in (None, cls.DEFAULT_KEY):
+        if kind is None or kind.key == cls.DEFAULT_KEY:
             return f"Done: {title}"
-        kind = cls._base_manager.filter(key=key).only("name").first()
-        return f"{kind.name if kind is not None else key} done: {title}"
+        return f"{kind.name} done: {title}"
 
 
 class Task(
@@ -1002,12 +1006,12 @@ class Task(
     ThreadedModelMixin,
     HistoryMixin,
     AngeeDataModel,
+    concrete=True,
 ):
     """The platform's one table for a discrete human action."""
 
     _angee_base = TaskBaseManager()
 
-    runtime = True
     sqid_prefix = "tsk_"
     MERGED_PERMISSION = "write"
     retains_merged = True
@@ -1459,7 +1463,7 @@ class Task(
         """Refuse ``action`` with the first declared blocker the stored row matches."""
 
         for condition, error in self.action_blockers(action):
-            if type(self).system_queryset().filter(condition, pk=self.pk).exists():
+            if type(self).system_queryset().using(self._state.db).filter(condition, pk=self.pk).exists():
                 raise ValidationError(error)
 
     def complete(self, *, feedback: str = "") -> Task:
@@ -1468,7 +1472,7 @@ class Task(
         A record task announces the completion, with ``feedback``, on its record.
         """
 
-        with transaction.atomic():
+        with transaction.atomic(using=self._state.db):
             self._lock_lifecycle()
             if self.status == self.TaskStatus.DONE and self.done_at is not None and self.dropped_at is None:
                 return self
@@ -1477,7 +1481,10 @@ class Task(
             self.done_at = self.done_at or timezone.now()
             cast(Any, self).dropped_reason = None
             self.dropped_at = None
-            self.save(update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"))
+            self.save(
+                using=self._state.db,
+                update_fields=("status", "done_at", "dropped_reason", "dropped_at", "updated_at"),
+            )
             self.post_completion(feedback)
         return self
 
@@ -1488,7 +1495,7 @@ class Task(
             return
         stored = (
             type(self)
-            .system_queryset(lock=("self",))
+            .system_queryset(lock=("self",)).using(self._state.db)
             .values("status", "done_at", "dropped_at", "dropped_reason")
             .get(pk=self.pk)
         )
@@ -1510,7 +1517,7 @@ class Task(
         if not isinstance(record, ThreadedModelMixin):
             return
         kinds = type(self).activity_type.field.related_model
-        body = kinds.completion_line(self.activity_type_id, self.title)
+        body = kinds.completion_line(self.activity_type, self.title)
         feedback = strip_null_bytes(feedback or "").strip()
         record.message_system_post(
             body=f"{body}\n\n{feedback}" if feedback else body,
@@ -1695,10 +1702,9 @@ class Task(
                     raise ValidationError({"milestone": "Milestone must belong to the task's project."})
 
 
-class TaskRelation(HistoryMixin, AuditMixin, AngeeDataModel):
+class TaskRelation(HistoryMixin, AuditMixin, AngeeDataModel, concrete=True):
     """One canonical directed relation between two tasks."""
 
-    runtime = True
     sqid_prefix = "trl_"
 
     class TaskRelationKind(models.TextChoices):
@@ -1785,10 +1791,9 @@ class TaskRelation(HistoryMixin, AuditMixin, AngeeDataModel):
         return f"{self.task_id} {self.kind} {self.related_task_id}"
 
 
-class Participant(HistoryMixin, AuditMixin, AngeeDataModel):
+class Participant(HistoryMixin, AuditMixin, AngeeDataModel, concrete=True):
     """A party's involvement in a project, never an access grant."""
 
-    runtime = True
     sqid_prefix = "ppt_"
 
     class ParticipantKind(models.TextChoices):
@@ -1829,7 +1834,7 @@ class Participant(HistoryMixin, AuditMixin, AngeeDataModel):
         return f"{self.party_id} in {self.project_id}"
 
 
-class ProjectBinding(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
+class ProjectBinding(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=True):
     """One explicit projects-owned statement that a resource belongs to a project.
 
     The resource is stored at :func:`rebac.generic_target`. ``permissions.zed``
@@ -1843,7 +1848,6 @@ class ProjectBinding(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
     history_revert_permission = "delete"
     merge_policy = MergePolicy.MOVE
     merge_identity = (("project", "content_type", "object_id"),)
-    runtime = True
     sqid_prefix = "pbd_"
 
     project = models.ForeignKey(
@@ -1897,12 +1901,11 @@ class ProjectBinding(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
         return f"{self.project_id} -> {self.content_type_id}:{self.object_id}"
 
 
-class Link(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
+class Link(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=True):
     """A URL-keyed external reference attached to a project or task."""
 
     merge_policy = MergePolicy.MOVE
     merge_identity = (("content_type", "object_id", "url"),)
-    runtime = True
     sqid_prefix = "plk_"
 
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
@@ -1955,46 +1958,41 @@ class ProjectBindingsMixin(models.Model):
         abstract = True
 
 
-class FolderProjects(ProjectBindingsMixin):
+class FolderProjects(ProjectBindingsMixin, Composable, extends="storage.Folder"):
     """Compose project binding collection onto storage folders."""
 
-    extends: ClassVar[str | None] = "storage.Folder"
 
     class Meta:
         abstract = True
 
 
-class DriveProjects(ProjectBindingsMixin):
+class DriveProjects(ProjectBindingsMixin, Composable, extends="storage.Drive"):
     """Projects-owned reverse collection for storage-drive bindings."""
 
-    extends: ClassVar[str | None] = "storage.Drive"
 
     class Meta:
         abstract = True
 
 
-class IntegrationProjects(ProjectBindingsMixin):
+class IntegrationProjects(ProjectBindingsMixin, Composable, extends="integrate.Integration"):
     """Projects-owned reverse collection for canonical messaging-channel bindings."""
 
-    extends: ClassVar[str | None] = "integrate.Integration"
 
     class Meta:
         abstract = True
 
 
-class ThreadProjects(ProjectBindingsMixin):
+class ThreadProjects(ProjectBindingsMixin, Composable, extends="messaging.Thread"):
     """Projects-owned reverse collection for messaging-thread bindings."""
 
-    extends: ClassVar[str | None] = "messaging.Thread"
 
     class Meta:
         abstract = True
 
 
-class VaultProjects(ProjectBindingsMixin):
+class VaultProjects(ProjectBindingsMixin, Composable, extends="knowledge.Vault"):
     """Projects-owned reverse collection for knowledge-vault bindings."""
 
-    extends: ClassVar[str | None] = "knowledge.Vault"
 
     class Meta:
         abstract = True

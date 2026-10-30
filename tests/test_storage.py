@@ -81,7 +81,7 @@ def test_file_source_model_owns_the_upload_protocol() -> None:
     from angee.storage.models import File as AbstractFile
 
     assert AbstractFile._meta.abstract is True
-    assert AbstractFile.__dict__["runtime"] is True
+    assert AbstractFile.compose_concrete is True
     assert isinstance(File.objects, FileManager)
     assert hasattr(File.objects, "draft")
     assert all(hasattr(AbstractFile, verb) for verb in ("receive_bytes", "finalize", "issue_upload_token"))

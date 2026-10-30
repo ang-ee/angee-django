@@ -29,6 +29,7 @@ from pydantic import ConfigDict, JsonValue, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import system_context
 
+from angee.base.serialization import canonical_json, canonical_json_sha256
 from angee.integrate.errors import IntegrationError, safe_integration_failure
 from angee.integrate.impl import AdapterContractError, BridgeImpl
 from angee.integrate.states import (
@@ -45,7 +46,6 @@ from angee.integrate.states import (
 from angee.integrate.sync import bridge_progress_context, current_bridge_progress
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.context import changeset, current_changeset
-from angee.serialization import canonical_json, canonical_json_sha256
 
 logger = logging.getLogger(__name__)
 

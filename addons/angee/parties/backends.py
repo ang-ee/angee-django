@@ -14,15 +14,16 @@ from datetime import date, timedelta
 from typing import Any
 
 from django.apps import apps
-from django.db.models import CharField
+from django.contrib.contenttypes.prefetch import GenericPrefetch
+from django.db.models import CharField, prefetch_related_objects
 from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Coalesce
 
+from angee.base.serialization import canonical_json_sha256
 from angee.integrate.http import HttpClientMixin
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
 from angee.integrate.streams import ApplyResult, LocalChange, RecordChange, SemanticError
-from angee.serialization import canonical_json_sha256
 
 
 @dataclass(frozen=True)
@@ -272,20 +273,30 @@ class DirectoryBackend(BridgeImpl, HttpClientMixin):
         if not keys:
             return {}
         linked = {link.external_key: link for link in links if link.external_key in keys}
+        parties = apps.get_model("parties", "Party").objects.db_manager(
+            stream._state.db, hints={"instance": stream},
+        )
+        prefetch_related_objects(
+            list(linked.values()),
+            GenericPrefetch("target", [
+                parties.model._base_manager.db_manager(stream._state.db, hints={"instance": stream})
+                .select_related("person"),
+            ]),
+        )
+        targets = {key: parties.contact_person(link) for key, link in linked.items()}
         people = tuple(
             apps.get_model("parties", "Person")
-            .objects.untrashed()
-            .filter(
-                pk__in=[link.target_object_id for link in linked.values() if link.target_object_id],
-            )
+            .objects.db_manager(stream._state.db, hints={"instance": stream})
+            .untrashed()
+            .filter(pk__in=[person.pk for person in targets.values() if person is not None])
         )
         by_id = {str(person.pk): person for person in people}
-        parsed = apps.get_model("parties", "Party").objects.project_contacts(people)
+        parsed = parties.project_contacts(people)
         projections = {pk: contact_projection(contact) for pk, contact in parsed.items()}
         states = {}
         for key in keys:
-            link = linked.get(key)
-            person = by_id.get(str(link.target_object_id)) if link is not None else None
+            target = targets.get(key)
+            person = by_id.get(str(target.pk)) if target is not None else None
             projection = projections.get(person.pk) if person is not None else None
             states[key] = person, projection
         return states

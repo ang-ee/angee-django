@@ -30,7 +30,7 @@ SECRET_KEY: dev-key
 INSTALLED_APPS:
   - angee.platform  # the console host
   - example.notes
-COMPOSE_RUNTIME_DIR: "{BASE_DIR}/runtime"
+COMPOSE_OUTPUT_DIR: "{BASE_DIR}/runtime"
 """
 
 
@@ -57,7 +57,7 @@ def test_local_install_appends_and_preserves_comments(tmp_path: Path, settings: 
     text = (tmp_path / "settings.yaml").read_text(encoding="utf-8")
     assert "# Project composition facts" in text  # top comment survived
     assert "# the console host" in text  # inline comment survived
-    assert 'COMPOSE_RUNTIME_DIR: "{BASE_DIR}/runtime"' in text  # other keys untouched
+    assert 'COMPOSE_OUTPUT_DIR: "{BASE_DIR}/runtime"' in text  # other keys untouched
     assert text.index("angee.platform") < text.index("example.notes") < text.index("example.demo")  # author order
 
 
@@ -84,7 +84,7 @@ def test_local_install_preserves_sequence_indentation(tmp_path: Path, settings: 
     assert "- example.demo" not in lines  # i.e. not de-indented to column 0
     # Untouched mapping keys are byte-identical.
     assert "SECRET_KEY: dev-key" in lines
-    assert 'COMPOSE_RUNTIME_DIR: "{BASE_DIR}/runtime"' in lines
+    assert 'COMPOSE_OUTPUT_DIR: "{BASE_DIR}/runtime"' in lines
 
 
 def test_local_install_is_idempotent(tmp_path: Path, settings: Any) -> None:

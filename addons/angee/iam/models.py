@@ -87,10 +87,9 @@ def _require_confirmed(confirmed: bool, message: str) -> None:
         raise ValidationError({"confirmed": message})
 
 
-class Group(AngeeDataModel):
+class Group(AngeeDataModel, concrete=True):
     """Named IAM principal set materialized into composed runtimes."""
 
-    runtime = True
     sqid_prefix = "igr_"
 
     name = models.CharField(max_length=150, unique=True)
@@ -626,7 +625,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
             return None
 
 
-class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDataModel):
+class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDataModel, concrete=True):
     """Abstract swappable user model composed into Angee runtimes.
 
     ``kind=service`` rows are non-login principals for agents and automation:
@@ -636,7 +635,6 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
     expected revision.
     """
 
-    runtime = True
 
     sqid_prefix = "usr_"
 

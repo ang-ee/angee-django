@@ -1,7 +1,7 @@
 """Web runtime manifest projected from the composed addon graph.
 
 The optional web addon's build projector. It is deliberately offline and pure: it reads
-native addon manifests bound to ``AppConfig`` and renders two files under ``runtime/web/`` —
+native ``web/package.json`` documents for enabled apps and renders two files under ``runtime/web/`` —
 ``manifest.json`` (the package graph, each package's addon ancestry, codegen
 contributions and the deployment's ``ANGEE_UI`` layer) and
 ``tailwind.sources.css`` (the Tailwind ``@source`` include). It holds **no**
@@ -18,20 +18,20 @@ import json
 import os
 import re
 from collections.abc import Iterable, Mapping
+from graphlib import TopologicalSorter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from django.apps import AppConfig
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-
-from angee.addons import addon_manifest
-from angee.compose.declarations import BuildIntegration
-from angee.compose.runtime import GENERATED_SENTINEL
+from django_compose.addons import installed_addons
+from django_compose.serving import GENERATED_SENTINEL
 
 if TYPE_CHECKING:
-    from angee.compose.runtime import Runtime
-
+    from django.apps.registry import Apps
+    from django_compose.declarations import ModelsView
+    from django_compose.model_composition import ModelComposition
 CORE_WEB_PACKAGES: tuple[str, ...] = ("@angee/app", "@angee/ui")
 """Framework packages whose rendered sources and documents every host consumes."""
 
@@ -41,37 +41,22 @@ UI_LAYER_KEYS = frozenset({"menus", "containers", "shell"})
 """Manifest keys the deployment's ``ANGEE_UI`` setting may declare; ``@angee/app`` validates their values."""
 
 
-def addon_ancestors(app_configs: Iterable[AppConfig]) -> dict[str, tuple[str, ...]]:
-    """Return each supplied app's transitive ``depends_on`` closure, sorted by name.
+def addon_ancestors(
+    app_configs: Iterable[AppConfig], dependencies: Mapping[str, Iterable[str]],
+) -> dict[str, tuple[str, ...]]:
+    """Project transitive ancestry from the compiler's already-resolved graph."""
 
-    A dependency resolves by app name or label among the supplied configs, the
-    same aliases :class:`~angee.compose.appgraph.AppGraph` registers; plain Django
-    apps carry no manifest and therefore no dependencies. Consumers that project
-    the graph (the web runtime) read this instead of re-walking manifests.
-    """
-
-    configs = tuple(app_configs)
-    aliases = {alias: config.name for config in configs for alias in (config.label, config.name)}
-    direct: dict[str, tuple[str, ...]] = {}
-    for config in configs:
-        manifest = addon_manifest(config)
-        declared = manifest.depends_on if manifest is not None else ()
-        direct[config.name] = tuple(aliases[name] for name in declared if name in aliases)
-    closures: dict[str, tuple[str, ...]] = {}
-
-    def closure(name: str) -> tuple[str, ...]:
-        if name not in closures:
-            reached = set(direct[name])
-            for dependency in direct[name]:
-                reached.update(closure(dependency))
-            closures[name] = tuple(sorted(reached))
-        return closures[name]
-
-    return {config.name: closure(config.name) for config in configs}
+    ancestors: dict[str, set[str]] = {}
+    for name in TopologicalSorter(dependencies).static_order():
+        ancestors[name] = {
+            ancestor for dependency in dependencies.get(name, ())
+            for ancestor in (dependency, *ancestors[dependency])
+        }
+    return {config.name: tuple(sorted(ancestors[config.name])) for config in app_configs}
 
 
 class WebRuntime:
-    """Project native addon manifests into the web transport document and CSS."""
+    """Project enabled addon packages into the web transport document and CSS."""
 
     def __init__(
         self,
@@ -80,25 +65,32 @@ class WebRuntime:
         runtime_dir: Path | None = None,
         web_root: str = DEFAULT_WEB_ROOT,
         ui: Mapping[str, Any] | None = None,
+        dependencies: Mapping[str, Iterable[str]] | None = None,
     ) -> None:
         addons = tuple(addons)
         self.runtime_dir = runtime_dir
         self.web_root = web_root
-        ancestors = addon_ancestors(addons)
+        graph = settings.COMPOSE_SNAPSHOT.dependencies if dependencies is None else dependencies
+        ancestors = addon_ancestors(addons, graph)
         core_packages = [{"package": name, "sourceRoot": "src"} for name in CORE_WEB_PACKAGES]
         addon_packages: list[dict[str, Any]] = []
         codegen_entries: list[dict[str, Any]] = []
         packages_seen: dict[str, str] = {}
         schemas_seen: dict[str, str] = {}
+        providers = installed_addons("angee.addons").providers
         for addon in addons:
-            manifest = addon_manifest(addon)
-            if manifest is None:
+            if addon.name not in providers:
                 continue
-            package = self._package_name(addon, manifest.web)
+            document = self._package_document(addon)
+            if document is None:
+                continue
+            package = document.get("name")
+            if not isinstance(package, str) or not WEB_PACKAGE_RE.fullmatch(package):
+                raise ImproperlyConfigured(f"{addon.name} web/package.json name must be a valid npm package name")
             if package is not None:
                 if package in packages_seen:
                     raise ImproperlyConfigured(
-                        f"Duplicate [web].package {package!r}: {packages_seen[package]} and {addon.name}"
+                        f"Duplicate web/package.json name {package!r}: {packages_seen[package]} and {addon.name}"
                     )
                 packages_seen[package] = addon.name
                 entry: dict[str, Any] = {
@@ -108,12 +100,16 @@ class WebRuntime:
                     package_root = Path(addon.path).resolve() / "web"
                     entry["root"] = Path(os.path.relpath(package_root, self.runtime_dir.resolve() / "web")).as_posix()
                 addon_packages.append(entry)
-            if "codegen" in manifest.web:
-                codegen = self._codegen_entry(addon, manifest.web["codegen"], package)
+            web = document.get("angee", {})
+            if not isinstance(web, Mapping):
+                raise ImproperlyConfigured(f"{addon.name} web/package.json angee must be an object")
+            if "codegen" in web:
+                codegen = self._codegen_entry(addon, web["codegen"], package)
                 schema = codegen["schema"]
                 if schema in schemas_seen:
                     raise ImproperlyConfigured(
-                        f"Duplicate [web].codegen.schema {schema!r}: {schemas_seen[schema]} and {addon.name}"
+                        f"Duplicate web/package.json angee.codegen.schema {schema!r}: "
+                        f"{schemas_seen[schema]} and {addon.name}"
                     )
                 schemas_seen[schema] = addon.name
                 codegen_entries.append(codegen)
@@ -184,43 +180,39 @@ class WebRuntime:
             raise ImproperlyConfigured("ANGEE_UI must contain only JSON values") from error
 
     @staticmethod
-    def _package_name(addon: AppConfig, web: Mapping[str, Any]) -> str | None:
-        """Use an explicit package declaration before conventional package.json."""
+    def _package_document(addon: AppConfig) -> Mapping[str, Any] | None:
+        """Read the native npm owner of fragment identity and codegen intent once."""
 
-        if "package" in web:
-            package = web["package"]
-        else:
-            package_json = Path(addon.path) / "web" / "package.json"
-            if not package_json.is_file():
-                return None
-            try:
-                document = json.loads(package_json.read_text(encoding="utf-8"))
-            except (OSError, ValueError) as error:
-                raise ImproperlyConfigured(f"{addon.name}: cannot read {package_json}") from error
-            package = document.get("name") if isinstance(document, Mapping) else None
-        if not isinstance(package, str) or not WEB_PACKAGE_RE.fullmatch(package):
-            raise ImproperlyConfigured(f"{addon.name} addon.toml [web].package must be a valid npm package name")
-        return package
+        package_json = Path(addon.path) / "web" / "package.json"
+        if not package_json.is_file():
+            return None
+        try:
+            document = json.loads(package_json.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise ImproperlyConfigured(f"{addon.name}: cannot read {package_json}") from error
+        if not isinstance(document, Mapping):
+            raise ImproperlyConfigured(f"{addon.name} web/package.json must be an object")
+        return document
 
     @staticmethod
-    def _codegen_entry(addon: AppConfig, raw: object, package: str | None) -> dict[str, Any]:
+    def _codegen_entry(addon: AppConfig, raw: object, package: str) -> dict[str, Any]:
         """Validate the external schema declaration at its transport owner."""
 
         if not isinstance(raw, Mapping) or not {"schema", "sdl", "documents"} <= raw.keys():
             raise ImproperlyConfigured(
-                f"{addon.name} addon.toml [web].codegen must declare 'schema', 'sdl', and 'documents'"
+                f"{addon.name} web/package.json angee.codegen must declare 'schema', 'sdl', and 'documents'"
             )
         schema = raw["schema"]
         if not isinstance(schema, str) or not schema.isidentifier():
-            raise ImproperlyConfigured(f"{addon.name} [web].codegen.schema must be a model-safe name")
-        if package is None:
-            raise ImproperlyConfigured(f"{addon.name} [web].codegen requires [web].package")
+            raise ImproperlyConfigured(f"{addon.name} web/package.json angee.codegen.schema must be a model-safe name")
         for key in ("sdl", "documents"):
             if not isinstance(raw[key], str) or not raw[key]:
-                raise ImproperlyConfigured(f"{addon.name} [web].codegen.{key} must be a non-empty string")
+                raise ImproperlyConfigured(
+                    f"{addon.name} web/package.json angee.codegen.{key} must be a non-empty string"
+                )
         types = raw.get("types", False)
         if not isinstance(types, bool):
-            raise ImproperlyConfigured(f"{addon.name} [web].codegen.types must be a boolean")
+            raise ImproperlyConfigured(f"{addon.name} web/package.json angee.codegen.types must be a boolean")
         return {
             "schema": schema,
             "package": package,
@@ -231,12 +223,18 @@ class WebRuntime:
         }
 
 
-class WebIntegration(BuildIntegration):
-    """Contribute Angee's web projections to the shared generated-file lifecycle."""
+class WebIntegration:
+    """Publish package/codegen transport inputs during the native ready phase."""
 
-    def render_sources(self, runtime: Runtime) -> Mapping[Path, str]:
-        """Render the existing web owner with the host's declared UI settings."""
+    external_root = "web"
+    phase = "ready"
 
-        return WebRuntime(
-            runtime.addons, runtime_dir=runtime.runtime_dir, ui=getattr(settings, "ANGEE_UI", None),
-        ).render_sources()
+    def render(self, composition: ModelComposition, models: ModelsView | Apps) -> Mapping[Path, bytes]:
+        del composition, models
+        return {
+            path: source.encode('utf-8')
+            for path, source in WebRuntime(
+                settings.COMPOSE_CLOSURE.app_configs, runtime_dir=Path(settings.COMPOSE_OUTPUT_DIR),
+                ui=getattr(settings, 'ANGEE_UI', None),
+            ).render_sources().items()
+        }

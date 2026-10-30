@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from functools import lru_cache
+from os import PathLike
+from pathlib import Path
 from typing import Any
 
 from django.apps import AppConfig, apps
@@ -13,6 +14,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from rebac import SubjectRef, check_new, current_actor, proposed_forward_relationships, to_subject_ref
 from rebac import user_subject_type as _user_subject_type
+from rebac.backends import backend
 from rebac.managers import RebacQuerySet
 from rebac.resources import model_resource_type
 from rebac.schema import Definition, Schema, resolve_schema_path
@@ -47,39 +49,72 @@ def require_rebac_queryset[M: models.Model](model: type[M]) -> RebacQuerySet[M]:
     return queryset
 
 
-def effective_rebac_definition(model: type[models.Model]) -> Definition | None:
-    """Return ``model``'s effective Zed definition parsed from its disk source.
+@dataclass(frozen=True, slots=True)
+class _RebacSchemaBinding:
+    source: Path | None
+    declaration: str | PathLike[str] | None
+    effective: str | PathLike[str] | None
 
-    The composer points an extended definition's owning ``AppConfig.rebac_schema``
-    at the emitted base-plus-extensions source.  Resolving that declaration rather
-    than assuming ``permissions.zed`` therefore covers both ordinary addons and
-    composed ``permissions.extends.zed`` contributions without consulting the
-    runtime backend or its database-backed schema.
-    """
+
+_SCHEMA_BINDING = "_angee_rebac_schema_binding"
+
+
+def declared_schema_path(app_config: AppConfig) -> Path | None:
+    """Retain the native authored declaration before binding generated output."""
+
+    binding = app_config.__dict__.get(_SCHEMA_BINDING)
+    effective = binding.effective if isinstance(binding, _RebacSchemaBinding) else None
+    if not isinstance(binding, _RebacSchemaBinding) or getattr(app_config, "rebac_schema", None) != effective:
+        binding = _RebacSchemaBinding(
+            resolve_schema_path(app_config), getattr(app_config, "rebac_schema", None), effective,
+        )
+        app_config.__dict__[_SCHEMA_BINDING] = binding
+    return binding.source
+
+
+def bind_rebac_schema(app_config: AppConfig, path: Path | None) -> None:
+    """Bind generated input; ``None`` restores the original native declaration."""
+
+    source = declared_schema_path(app_config)
+    binding = app_config.__dict__[_SCHEMA_BINDING]
+    assert isinstance(binding, _RebacSchemaBinding)
+    effective = path if path is not None else binding.declaration
+    setattr(app_config, "rebac_schema", effective)
+    app_config.__dict__[_SCHEMA_BINDING] = _RebacSchemaBinding(source, binding.declaration, effective)
+
+
+def merged_schema_relpath(package: str) -> Path:
+    """Return the permission artifact address relative to compiler output."""
+
+    return Path('permissions') / f'{package}.zed'
+
+
+def effective_rebac_definition(model: type[models.Model]) -> Definition | None:
+    """Read request policy through the native synced, scope-pinned backend."""
+
+    resource_type = model_resource_type(model)
+    return backend().schema().get_definition(resource_type) if resource_type else None
+
+
+def effective_rebac_schema(app_config: AppConfig) -> Schema | None:
+    """Read the bound compose snapshot for startup and declaration checks only."""
+
+    schema_path = resolve_schema_path(app_config)
+    return parse_zed(schema_path.read_text(encoding='utf-8')) if schema_path is not None else None
+
+
+def declared_rebac_definition(model: type[models.Model]) -> Definition | None:
+    """Read one model declaration without consulting database-backed policy."""
 
     resource_type = model_resource_type(model)
     if not resource_type:
         return None
     try:
-        app_config = apps.get_app_config(model._meta.app_label)
+        config = apps.get_app_config(model._meta.app_label)
     except LookupError:
         return None
-    schema = effective_rebac_schema(app_config)
+    schema = effective_rebac_schema(config)
     return schema.get_definition(resource_type) if schema is not None else None
-
-
-def effective_rebac_schema(app_config: AppConfig) -> Schema | None:
-    """Read the effective app schema through the content-keyed parser cache."""
-
-    schema_path = resolve_schema_path(app_config)
-    return _parse_schema(schema_path.read_text(encoding="utf-8")) if schema_path is not None else None
-
-
-@lru_cache(maxsize=128)
-def _parse_schema(source: str) -> Schema:
-    """Cache parsed content, so rewritten effective sources cannot leave stale gates."""
-
-    return parse_zed(source)
 
 
 def instance_actor(instance: models.Model) -> SubjectRef | None:
@@ -138,9 +173,6 @@ def subject_reaches_user(subject: models.Model | SubjectRef, user_id: Any) -> bo
         return True
     if not reference.optional_relation:
         return False
-    # Permission declarations import before app population; the native auth
-    # backend loads Django models and belongs to this runtime decision only.
-    from rebac.backends import backend
 
     return backend().check_access(subject=user, action=reference.optional_relation, resource=reference.object).allowed
 
@@ -183,8 +215,6 @@ def candidate_relationships(instance: models.Model, action: str) -> CandidateRel
     resource_type = model_resource_type(type(instance))
     if resource_type is None:
         return None
-    # This runtime candidate check needs the model-bound native backend.
-    from rebac.backends import backend
 
     schema = backend().schema()
     definition = schema.get_definition(resource_type)

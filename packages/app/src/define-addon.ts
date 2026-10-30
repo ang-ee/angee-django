@@ -140,7 +140,7 @@ export interface AddonManifest {
   id: string;
   /**
    * Ids of the manifests this one depends on, transitively. The composed runtime
-   * supplies them from `addon.toml`; menus and containers layer along them.
+   * supplies them from installed distribution requirements; menus and containers layer along them.
    */
   dependsOn?: readonly string[];
   /**

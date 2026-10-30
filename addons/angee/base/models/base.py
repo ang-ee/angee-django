@@ -9,6 +9,7 @@ from typing import Any, ClassVar, Self, TypeVar
 from django.core import checks
 from django.core.exceptions import ValidationError
 from django.db import models, router, transaction
+from django_compose.models import Composable
 from rebac import (
     RebacMixin,
     RelationshipTuple,
@@ -30,7 +31,7 @@ from angee.base.models.inputs import InputExtensionsMixin
 from angee.base.models.merge_references import MergeContractMixin, named_in_relationships, references
 from angee.base.models.timestamps import TimestampMixin
 from angee.base.models.transitions import StateTransitionsMixin
-from angee.base.permissions import DirectRecordAccess, declared_grants, effective_rebac_definition, instance_actor
+from angee.base.permissions import DirectRecordAccess, declared_grants, declared_rebac_definition, instance_actor
 from angee.base.querysets import row_lock_paths
 from angee.base.signals import record_access_revoked
 
@@ -38,7 +39,13 @@ _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
 class AngeeModel(
-    InputExtensionsMixin, StateTransitionsMixin, MergeContractMixin, PublicIdentity, TimestampMixin, RebacMixin
+    InputExtensionsMixin,
+    StateTransitionsMixin,
+    MergeContractMixin,
+    PublicIdentity,
+    TimestampMixin,
+    RebacMixin,
+    Composable,
 ):
     """Abstract base model for Angee source and runtime models."""
 
@@ -74,17 +81,6 @@ class AngeeModel(
         ):
             raise ValidationError(f"{self._meta.label} {self.pk}: live references or grants prevent removal.")
         self.delete()
-
-    extends: ClassVar[str | None] = None
-    """Optional ``app_label.ModelName`` target this source model extends."""
-
-    runtime: bool = False
-    """Whether this abstract source model materializes into the generated runtime.
-
-    The read is non-inherited: an abstract base can stay ``runtime = False`` and
-    a concrete source subclass opts in by declaring ``runtime = True`` itself.
-    Extensions use ``extends`` instead of this flag.
-    """
 
     rebac_grantable: Mapping[str, str] = {}
     """Direct relations clients may manage, mapped to their required permission.
@@ -388,7 +384,7 @@ class AngeeModel(
             return []
 
         resource_type = model_resource_type(cls)
-        definition = effective_rebac_definition(cls)
+        definition = declared_rebac_definition(cls)
         if definition is None:
             return [
                 checks.Error(

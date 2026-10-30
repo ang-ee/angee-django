@@ -17,15 +17,6 @@ from django.db import connection
 from django.db.models.fields import NOT_PROVIDED
 from import_export.results import RowResult
 from rebac import system_context
-
-from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceModel, InferenceProvider
-from angee.base.models.transitions import StateTransitions
-from angee.resources.entries import ResourceEntry
-from angee.resources.exceptions import ResourceLoadError
-from angee.resources.loader import AngeeResource, build_resource
-from angee.resources.testing.models import Resource
-from angee.resources.tests.test_resources import addon
-from angee.resources.widgets import split_xref
 from tests.chatterdemo.models import TrackedRecordChild
 from tests.conftest import (  # noqa: F401 -- share fake-addon lifetime
     Repository,
@@ -35,6 +26,15 @@ from tests.conftest import (  # noqa: F401 -- share fake-addon lifetime
     addon_fixture_resources,
     make_integration,
 )
+
+from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceModel, InferenceProvider
+from angee.base.models.transitions import StateTransitions
+from angee.resources.entries import ResourceEntry
+from angee.resources.exceptions import ResourceLoadError
+from angee.resources.loader import AngeeResource, build_resource
+from angee.resources.testing.models import Resource
+from angee.resources.tests.test_resources import addon
+from angee.resources.widgets import split_xref
 
 
 def _write_rows(path: Path, model: str, rows: list[dict[str, Any]]) -> None:
@@ -65,7 +65,8 @@ def test_transition_field_names_include_inheritance_without_companion_fields() -
 def test_seed_state_is_initial_and_does_not_drive_reimports(tmp_path: Path, suffix: str, tier: str) -> None:
     """All formats and tiers initialize state, then preserve transition writes."""
 
-    path = tmp_path / f"rows.{suffix}"
+    (tmp_path / "resources").mkdir(exist_ok=True)
+    path = tmp_path / "resources" / f"rows.{suffix}"
     model = TrackedRecordChild._meta.label
     rows = [
         {"_xref": "initial", "title": "Initial", "note": "First", "status": "closed"},
@@ -111,7 +112,8 @@ def test_seed_state_is_initial_and_does_not_drive_reimports(tmp_path: Path, suff
 def test_seed_update_does_not_write_state_read_before_a_concurrent_transition(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    path = tmp_path / "rows.yaml"
+    (tmp_path / "resources").mkdir(exist_ok=True)
+    path = tmp_path / "resources" / "rows.yaml"
     model = TrackedRecordChild._meta.label
     row = {"_xref": "live", "title": "Original", "note": "Original note", "status": "open"}
     _write_rows(path, model, [row])
@@ -137,7 +139,7 @@ def test_seed_update_does_not_write_state_read_before_a_concurrent_transition(
             before_save(resource, instance, row, **kwargs)
 
         monkeypatch.setattr(AngeeResource, "before_save_instance", close_after_read)
-        entry = ResourceEntry.from_declaration(owner, "master", {"path": path.name, "model": model})
+        entry = ResourceEntry.from_declaration(owner, "master", {"path": f"resources/{path.name}", "model": model})
         (group,) = entry.read_groups()
         resource = build_resource(TrackedRecordChild, entry, ledger_model=Resource, addon_aliases={})
         # Keep this deterministic SQLite simulation outside the batch transaction
@@ -155,7 +157,8 @@ def test_seed_update_does_not_write_state_read_before_a_concurrent_transition(
 def test_invalid_seed_state_is_rejected_for_existing_targets(
     tmp_path: Path, operation: str, change_title: bool,
 ) -> None:
-    path = tmp_path / "rows.yaml"
+    (tmp_path / "resources").mkdir(exist_ok=True)
+    path = tmp_path / "resources" / "rows.yaml"
     model = TrackedRecordChild._meta.label
     row = {"_xref": "live", "title": "Original", "status": "open"}
     _write_rows(path, model, [row])
@@ -179,7 +182,8 @@ def test_invalid_seed_state_is_rejected_for_existing_targets(
 @pytest.mark.django_db
 @pytest.mark.parametrize("suffix", ["csv", "tsv"])
 def test_blank_tabular_state_uses_default_on_create_and_is_dropped_on_update(tmp_path: Path, suffix: str) -> None:
-    path = tmp_path / f"rows.{suffix}"
+    (tmp_path / "resources").mkdir(exist_ok=True)
+    path = tmp_path / "resources" / f"rows.{suffix}"
     model = TrackedRecordChild._meta.label
     row = {"_xref": "live", "title": "Original", "status": ""}
     _write_rows(path, model, [row])
@@ -205,7 +209,8 @@ def test_blank_tabular_state_uses_default_on_create_and_is_dropped_on_update(tmp
 def test_stale_content_hash_imports_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str,
 ) -> None:
-    path = tmp_path / "rows.yaml"
+    (tmp_path / "resources").mkdir(exist_ok=True)
+    path = tmp_path / "resources" / "rows.yaml"
     model = TrackedRecordChild._meta.label
     row = {"_xref": "live", "title": "Seed title", "note": "Seed note", "status": "open"}
     _write_rows(path, model, [row])
@@ -243,7 +248,8 @@ def test_stale_content_hash_imports_once(
 
 @pytest.mark.django_db
 def test_adopted_target_preserves_state_and_updates_other_fields(tmp_path: Path) -> None:
-    path = tmp_path / "turns.json"
+    (tmp_path / "resources").mkdir(exist_ok=True)
+    path = tmp_path / "resources" / "turns.json"
     model = AgentTurn._meta.label
     owner = addon(tmp_path, manifest={"master": ({
         "path": path.name, "model": model, "adopt": ("session", "index"),

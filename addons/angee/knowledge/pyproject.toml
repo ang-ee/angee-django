@@ -1,0 +1,34 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-knowledge"
+version = "3.0.0"
+description = "A markdown-first knowledge base — vaults of pages with versioned markdown bodies"
+keywords = ["knowledge", "rag", "embeddings"]
+dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-messaging>=3,<4", "angee-tags>=3,<4", "angee-provenance>=3,<4", "angee-resources>=3,<4", "angee-web>=3,<4", "markdown-it-py>=4.2", "django-compose==0.1.0.dev1"]
+
+[project.entry-points]
+"angee.addons" = {"angee.knowledge" = "angee.knowledge"}
+
+[tool.angee]
+
+[[tool.angee.resources.demo]]
+path = "demo/010_knowledge.vault.yaml"
+depends_on = "iam:demo/010_iam.user.yaml"
+adopt = ["owner", "name"]
+
+[[tool.angee.resources.demo]]
+path = "demo/020_knowledge.page.yaml"
+depends_on = "demo/010_knowledge.vault.yaml"
+adopt = ["vault", "title"]
+
+[[tool.angee.resources.demo]]
+path = "demo/030_knowledge.markdown_page.yaml"
+depends_on = "demo/020_knowledge.page.yaml"
+adopt = ["vault", "title"]
+
+[tool.angee.platform]
+category = "Data"
+
+[tool.hatch.metadata]
+allow-direct-references = true

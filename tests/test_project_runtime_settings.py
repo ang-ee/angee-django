@@ -1,102 +1,215 @@
-"""Project runtime declarations and environment overlays have one canonical setting surface."""
+"""Authored settings and deployment overlays retain native compiler ownership."""
 
 from __future__ import annotations
 
-import sys
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+from django.core.exceptions import ImproperlyConfigured
 
-from angee.build import ProjectBuildContract
-from angee.project import PROJECT_DIR_ENV, PROJECT_SETTINGS_ENV
-
-MODULE = "runtime_settings_project"
+from angee.base.conf import configure
 
 
 @pytest.fixture
-def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
-    monkeypatch.setenv(PROJECT_DIR_ENV, str(tmp_path))
-    monkeypatch.setenv(PROJECT_SETTINGS_ENV, MODULE)
-    monkeypatch.setattr(sys, "path", list(sys.path))
-    monkeypatch.delitem(sys.modules, MODULE, raising=False)
+def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv("DJANGO_COMPOSE_MODE", "write")
+    monkeypatch.setenv("ANGEE_PROJECT_DIR", str(tmp_path))
     monkeypatch.delenv("YAMLCONF_CONFFILE", raising=False)
-    for suffix in ("DIR", "MODULE"):
-        monkeypatch.delenv(f"YAMLCONF_COMPOSE_RUNTIME_{suffix}", raising=False)
-    (tmp_path / "manage.py").write_text("# isolated project entrypoint\n")
-    yield tmp_path
-    sys.modules.pop(MODULE, None)
+    return tmp_path
+
+
+def _namespace(project: Path, **values: Any) -> dict[str, Any]:
+    return {
+        "__name__": "project_settings",
+        "__file__": str(project / "settings.py"),
+        "SECRET_KEY": "runtime-settings-test",
+        "INSTALLED_APPS": [],
+        "COMPOSE_OUTPUT_DIR": project / "runtime",
+        "COMPOSE_OUTPUT_MODULE": "generated_runtime",
+        **values,
+    }
 
 
 @pytest.mark.parametrize("source", ["python", "yaml"])
 def test_host_publishes_one_canonical_runtime_contract(project: Path, source: str) -> None:
-    values = {
-        "SECRET_KEY": "runtime-settings-test",
-        "INSTALLED_APPS": [],
-        "COMPOSE_RUNTIME_DIR": str(project / "runtime"),
-        "COMPOSE_RUNTIME_MODULE": "generated_runtime",
-    }
+    values = {"COMPOSE_OUTPUT_DIR": str(project / "runtime"), "COMPOSE_OUTPUT_MODULE": "generated_runtime"}
+    namespace = _namespace(project)
     if source == "python":
-        (project / f"{MODULE}.py").write_text("\n".join(f"{name} = {value!r}" for name, value in values.items()))
+        namespace.update(values)
     else:
         (project / "settings.yaml").write_text(yaml.safe_dump(values))
-    namespace: dict[str, Any] = {}
-    ProjectBuildContract(namespace).compose()
-    assert namespace["COMPOSE_RUNTIME_DIR"] == project / "runtime"
-    assert namespace["COMPOSE_RUNTIME_MODULE"] == "generated_runtime"
+    configure(namespace)
+    assert Path(namespace["COMPOSE_OUTPUT_DIR"]) == project / "runtime"
+    assert namespace["COMPOSE_OUTPUT_MODULE"] == "generated_runtime"
+    assert "COMPOSE_RUNTIME_DIR" not in namespace
+    assert "COMPOSE_RUNTIME_MODULE" not in namespace
 
 
 def test_yaml_references_keep_native_expansion_after_addon_defaults(project: Path) -> None:
     (project / "settings.yaml").write_text(
-        'SECRET_KEY: runtime-settings-test\nINSTALLED_APPS: []\n'
-        'COMPOSE_RUNTIME_DIR: "{BASE_DIR}/runtime"\n'
-        'ARCHIVE_DIRECTORY: "{COMPOSE_RUNTIME_DIR}/archive"\n'
+        'COMPOSE_OUTPUT_DIR: "{BASE_DIR}/runtime"\nARCHIVE_DIRECTORY: "{COMPOSE_OUTPUT_DIR}/archive"\n',
     )
-    namespace: dict[str, Any] = {}
-    ProjectBuildContract(namespace).compose()
-    assert namespace["COMPOSE_RUNTIME_DIR"] == project / "runtime"
+    namespace = _namespace(project)
+    configure(namespace)
+    assert Path(namespace["COMPOSE_OUTPUT_DIR"]) == project / "runtime"
     assert namespace["ARCHIVE_DIRECTORY"] == str(project / "runtime/archive")
 
 
-def test_environment_override_does_not_leak_into_cached_python_declarations(
-    project: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    (project / f"{MODULE}.py").write_text(
-        "SECRET_KEY = 'runtime-settings-test'\nINSTALLED_APPS = []\n"
-        f"COMPOSE_RUNTIME_DIR = {str(project / 'runtime')!r}\n"
-        "COMPOSE_RUNTIME_MODULE = 'declared_runtime'\n"
-    )
-    monkeypatch.setenv("YAMLCONF_COMPOSE_RUNTIME_DIR", str(project / "overridden"))
-    monkeypatch.setenv("YAMLCONF_COMPOSE_RUNTIME_MODULE", "environment_runtime")
-    namespace: dict[str, Any] = {}
-    contract = ProjectBuildContract(namespace)
-    contract.compose()
-    assert namespace["COMPOSE_RUNTIME_DIR"] == project / "overridden"
-    assert namespace["COMPOSE_RUNTIME_MODULE"] == "environment_runtime"
-    monkeypatch.delenv("YAMLCONF_COMPOSE_RUNTIME_DIR")
-    monkeypatch.delenv("YAMLCONF_COMPOSE_RUNTIME_MODULE")
-    contract.compose()
-    assert namespace["COMPOSE_RUNTIME_DIR"] == project / "runtime"
-    assert namespace["COMPOSE_RUNTIME_MODULE"] == "declared_runtime"
-    assert getattr(sys.modules[MODULE], "COMPOSE_RUNTIME_MODULE") == "declared_runtime"
+def test_environment_cannot_replace_authored_compiler_structure(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Native protected-input validation replaces the retired environment override."""
+    declarations = {"COMPOSE_OUTPUT_DIR": project / "runtime", "COMPOSE_OUTPUT_MODULE": "generated_runtime"}
+    monkeypatch.setenv("YAMLCONF_COMPOSE_OUTPUT_DIR", str(project / "overridden"))
+    namespace = _namespace(project, **declarations)
+    with pytest.raises(ImproperlyConfigured, match="environment"):
+        configure(namespace)
+    assert declarations == {"COMPOSE_OUTPUT_DIR": project / "runtime", "COMPOSE_OUTPUT_MODULE": "generated_runtime"}
+    monkeypatch.delenv("YAMLCONF_COMPOSE_OUTPUT_DIR")
+    namespace = _namespace(project, **declarations)
+    configure(namespace)
+    assert Path(namespace["COMPOSE_OUTPUT_DIR"]) == project / "runtime"
 
 
 def test_nested_environment_override_does_not_mutate_python_declarations(
+    project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    options = {"cache": {"ttl": 10, "enabled": True}}
+    monkeypatch.setenv("YAMLCONF_OPTIONS.cache.ttl", "20")
+    namespace = _namespace(project, OPTIONS=options)
+    configure(namespace)
+    assert namespace["OPTIONS"] == {"cache": {"ttl": "20", "enabled": True}}
+    assert options == {"cache": {"ttl": 10, "enabled": True}}
+    monkeypatch.delenv("YAMLCONF_OPTIONS.cache.ttl")
+    namespace = _namespace(project, OPTIONS=options)
+    configure(namespace)
+    assert namespace["OPTIONS"] == options
+
+
+def test_source_yaml_overlays_authored_python_values(project: Path) -> None:
+    (project / "settings.yaml").write_text("SECRET_KEY: yaml-secret\nDEBUG: true\n")
+    namespace = _namespace(project, SECRET_KEY="python-secret", DEBUG=False)
+    configure(namespace)
+    assert namespace["SECRET_KEY"] == "yaml-secret"
+    assert namespace["DEBUG"] is True
+
+
+def test_explicit_final_yaml_preserves_project_root_provenance(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (project / "settings.yaml").write_text("SECRET_KEY: project-secret\nINSTALLED_APPS: []\n")
+    final = project / "local.yaml"
+    final.write_text("SECRET_KEY: final-secret\n")
+    monkeypatch.setenv("YAMLCONF_CONFFILE", str(final))
+    namespace = _namespace(project)
+    configure(namespace)
+    assert namespace["SECRET_KEY"] == "final-secret"
+    assert "SECRET_KEY" not in namespace["ANGEE_PROJECT_YAML_SETTINGS"]
+    assert "INSTALLED_APPS" in namespace["ANGEE_PROJECT_YAML_SETTINGS"]
+    assert namespace["COMPOSE_ROOTS"] == ()
+
+
+def test_yamlconf_environment_keeps_native_jsonenv_types(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (project / "settings.yaml").write_text(
+        "SECRET_KEY: yaml-secret\nDEBUG:jsonenv: true\nALLOWED_HOSTS:jsonenv: true\n"
+    )
+    monkeypatch.setenv("YAMLCONF_SECRET_KEY", "env-secret")
+    monkeypatch.setenv("YAMLCONF_DEBUG", "false")
+    monkeypatch.setenv("YAMLCONF_ALLOWED_HOSTS", '["example.test"]')
+    namespace = _namespace(project)
+    configure(namespace)
+    assert namespace["SECRET_KEY"] == "env-secret"
+    assert namespace["DEBUG"] is False
+    assert namespace["ALLOWED_HOSTS"] == ["example.test"]
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ('COMPOSE_OUTPUT_DIR: "{BASE_DR}/runtime"\n', "Undefined attribute"),
+        ("SECRET_KEY: [\n", "Failed to load"),
+    ],
+)
+def test_native_yaml_errors_propagate_before_composition(project: Path, text: str, message: str) -> None:
+    (project / "settings.yaml").write_text(text)
+    with pytest.raises(ImproperlyConfigured, match=message):
+        configure(_namespace(project))
+
+
+def test_ancestor_yaml_never_replaces_explicit_project_inputs(project: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    nested = project / "nested"
+    nested.mkdir()
+    (project / "settings.yaml").write_text("SECRET_KEY: ancestor-secret\n")
+    (nested / "settings.yaml").write_text("SECRET_KEY: nested-secret\n")
+    monkeypatch.setenv("ANGEE_PROJECT_DIR", str(nested))
+    namespace = _namespace(nested)
+    configure(namespace)
+    assert namespace["SECRET_KEY"] == "nested-secret"
+    assert Path(namespace["BASE_DIR"]) == nested
+
+
+def test_source_and_deployment_overlays_preserve_native_source_dir(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = project / "artifact"
+    deployment = project / "deployment"
+    source.mkdir()
+    deployment.mkdir()
+    (source / "settings.yaml").write_text(
+        "CUSTOM_CONFIG: {path: '{SOURCE_DIR}/assets', value: authored}\nSECRET_KEY: placeholder\n",
+    )
+    (deployment / "settings.yaml").write_text(
+        "SECRET_KEY: deployment-secret\n'CUSTOM_CONFIG:append': {value: deployed}\n"
+    )
+    monkeypatch.setenv("ANGEE_PROJECT_DIR", str(deployment))
+    namespace = _namespace(source)
+    configure(namespace)
+    assert namespace["SECRET_KEY"] == "deployment-secret"
+    assert Path(namespace["BASE_DIR"]) == deployment
+    assert namespace["CUSTOM_CONFIG"] == {"path": str(source / "assets"), "value": "deployed"}
+    assert "SOURCE_DIR" not in namespace
+
+
+def test_live_yaml_applies_once_without_reading_runtime_snapshots(project: Path) -> None:
+    (project / "settings.yaml").write_text("'CUSTOM_LIST:append': [live]\n")
+    runtime = project / "runtime"
+    runtime.mkdir()
+    (runtime / "settings.yaml").write_text("'CUSTOM_LIST:append': [stale-snapshot]\n")
+    namespace = _namespace(project, CUSTOM_LIST=["base"])
+    configure(namespace)
+    assert namespace["CUSTOM_LIST"] == ["base", "live"]
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_native_mailers_ignore_retired_email_inputs(
+    project: Path, monkeypatch: pytest.MonkeyPatch, configured: bool
+) -> None:
+    monkeypatch.setenv("EMAIL_URL", "retired-input-is-not-a-url")
+    monkeypatch.setenv("EMAIL_BACKEND", "retired.backend.DoesNotExist")
+    if configured:
+        (project / "settings.yaml").write_text(
+            "MAILERS:\n  default:\n    BACKEND: django.core.mail.backends.locmem.EmailBackend\n"
+        )
+    namespace = _namespace(project)
+    configure(namespace)
+    expected = {"default": {"BACKEND": "django.core.mail.backends.locmem.EmailBackend"}} if configured else None
+    assert namespace.get("MAILERS") == expected
+    assert not any(name.startswith("EMAIL_") for name in namespace)
+
+def test_loader_bootstrap_inputs_expand_without_becoming_django_settings(
     project: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    (project / f"{MODULE}.py").write_text(
-        "import pathlib\nSECRET_KEY = 'runtime-settings-test'\nINSTALLED_APPS = []\n"
-        f"COMPOSE_RUNTIME_DIR = {str(project / 'runtime')!r}\n"
-        "OPTIONS = {'cache': {'ttl': 10, 'enabled': True}}\n"
-    )
-    monkeypatch.setenv("YAMLCONF_OPTIONS.cache.ttl", "20")
-    namespace: dict[str, Any] = {}
-    contract = ProjectBuildContract(namespace)
-    contract.compose()
-    assert namespace["OPTIONS"] == {"cache": {"ttl": "20", "enabled": True}}
-    assert sys.modules[MODULE].OPTIONS == {"cache": {"ttl": 10, "enabled": True}}
-    monkeypatch.delenv("YAMLCONF_OPTIONS.cache.ttl")
-    contract.compose()
-    assert namespace["OPTIONS"] == {"cache": {"ttl": 10, "enabled": True}}
+    import django_yamlconf
+
+    native = django_yamlconf.bootstrap_attributes
+
+    def bootstrap(base_dir: str) -> dict[str, Any]:
+        attributes = native(base_dir)
+        django_yamlconf.add_attr_info(attributes, "LIBRARY_BOOTSTRAP_ONLY", "native-value")
+        return attributes
+
+    monkeypatch.setattr(django_yamlconf, "bootstrap_attributes", bootstrap)
+    (project / "settings.yaml").write_text('SECRET_KEY: "{LIBRARY_BOOTSTRAP_ONLY}"\n')
+    namespace = _namespace(project)
+    configure(namespace)
+    assert namespace["SECRET_KEY"] == "native-value"
+    assert "LIBRARY_BOOTSTRAP_ONLY" not in namespace

@@ -208,7 +208,7 @@ def relation_grouping_case(transactional_db: None):
     with (
         model_tables(models_in_order),
         patch(
-            "angee.graphql.capabilities.effective_rebac_definition",
+            "angee.graphql.capabilities.declared_rebac_definition",
             side_effect=lambda model: definition.get_definition(cast(str, model_resource_type(model))),
         ),
     ):
@@ -742,7 +742,7 @@ def test_declared_sort_alias_rejects_field_gated_paths(monkeypatch: pytest.Monke
         }
     """)
     monkeypatch.setattr(
-        "angee.graphql.access.effective_rebac_definition",
+        "angee.graphql.data.hasura.declared_rebac_definition",
         lambda model: definition.get_definition(cast(str, model_resource_type(model))),
     )
     with pytest.raises(ImproperlyConfigured, match="field-gated reads"):

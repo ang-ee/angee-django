@@ -54,6 +54,7 @@ from angee.base.models.merge_references import MergePolicy
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.roles import role_anchor
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
+from angee.base.permissions import declared_rebac_definition
 from angee.base.querysets import MergeableQuerySet
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
@@ -71,12 +72,11 @@ class TagQuerySet[TagT: Tag](
 TagManager = AngeeHistoryManager.from_queryset(TagQuerySet)
 
 
-class Tag(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel):
+class Tag(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel, concrete=True):
     """One label in a vocabulary shared by every non-anonymous actor."""
 
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
-    runtime = True
     sqid_prefix = "tag_"
 
     name = models.CharField(max_length=128)
@@ -210,7 +210,7 @@ class TagAssignmentManager[AssignmentT: TagAssignment](_TagAssignmentManagerBase
         return tag_row.canonical()
 
 
-class TagAssignment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
+class TagAssignment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=True):
     """Polymorphic edge attaching one :class:`Tag` to a record of a taggable type.
 
     The ``target`` generic foreign key stores :func:`rebac.generic_target`. Each
@@ -222,7 +222,6 @@ class TagAssignment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
     history_revert_permission = "delete"
     merge_policy = MergePolicy.MOVE
     merge_identity = (("tag", "content_type", "object_id"),)
-    runtime = True
     sqid_prefix = "tga_"
 
     tag = models.ForeignKey(
@@ -263,7 +262,8 @@ class TagAssignment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
         the topmost REBAC-typed MTI ancestor its edges key on. Each needs a
         ``target``-backed relation on this edge's definition, or no actor can tag
         it; each declared target needs :class:`TaggedModel`, or its edges escape
-        the record's ``tags`` field and its delete cascade.
+        the record's ``tags`` field and its delete cascade. Read compiled schema
+        declarations so the check also runs before database provisioning.
         """
 
         errors = super().check(**kwargs)
@@ -284,7 +284,7 @@ class TagAssignment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel):
                     id="tags.E001",
                 )
             )
-        declared = set(cls.declared_target_models().values())
+        declared = set(cls.declared_target_models(definition_for=declared_rebac_definition).values())
         for owner in sorted(owners - declared, key=attrgetter("_meta.label")):
             errors.append(
                 checks.Error(

@@ -1,6 +1,6 @@
 ---
 name: angee-resources
-description: "Declares and loads an addon's master, install and demo data: addon.toml [resources] tiers, resources/<tier>/NNN_<label>.<model>.yaml rows, adopt keys, cross-addon depends_on, grants files, catalogue tiers, resource_class adapters, retired_models. Use for seed, fixture, catalogue, demo data."
+description: "Declares and loads an addon's master, install and demo data: pyproject.toml [tool.angee.resources] tiers, tiered resource YAML rows, adopt keys, cross-addon depends_on, grants files, catalogue tiers, resource_class adapters, retired_models. Use for seed, fixture, catalogue, demo data."
 ---
 
 # Angee Resources
@@ -17,14 +17,14 @@ description: "Declares and loads an addon's master, install and demo data: addon
 
 | File or module | Owns | Reference |
 |---|---|---|
-| `<addon>/addon.toml` `[resources]` | which files load, their tier, `adopt`, `depends_on`, `kind`, `model`; `retired_models` | `addons/angee/money/addon.toml:8-12`, `examples/addons/example/notes/addon.toml:27-42` |
+| `<addon>/pyproject.toml` `[tool.angee.resources]` | which files load, their tier, `adopt`, `depends_on`, `kind`, `model`; `retired_models` | `addons/angee/money/pyproject.toml:8-12`, `examples/addons/example/notes/pyproject.toml:27-42` |
 | `<addon>/resources/<tier>/NNN_<label>.<model>.yaml` | the rows; the filename names the target model | `addons/angee/tags/resources/demo/010_tags.tag.yaml` |
 | `addons/angee/resources/entries.py`, `tiers.py` | manifest parsing, filename inference, dependency order, grant rows; the three tiers and their prerequisite order | `resource_manifest_for:97`, `retired_models_for:111`, `ResourceEntry:221`, `infer_model_label:406`, `EntryGraph.ordered:558`, `GrantRow:632`; `ResourceTier:11`, `with_prerequisites:32` |
 | `addons/angee/resources/loader.py` | xref identity, header validation, adoption, catalogue-tier check, seeded transition state, ledger hash | `AngeeResource:56`, `after_init_instance:174`, `after_save_instance:205`, `_row_content_hash:398`, `_adoption_fields:522`, `_unique_adoption_field:666`, `_validate_headers:753`, `_validate_catalogue_tier:772`, `build_resource:827` |
 | `addons/angee/resources/mixins.py` | `resource_class`, `catalogue`/`catalogue_tier(s)`, cooperative `after_resource_load`, check `angee.E014` | `ResourceLoadMixin:17`, `is_catalogue_model:48`, `check:67`, `after_resource_load:97` |
 | `addons/angee/resources/models.py`, `managers.py` | the ledger `(source_addon, xref)`; validate/load/diff/`load_xref`/`resolve`; demo guard, exclusions, xref collisions, merge guard | `Resource:16`; `retired_seed_keys:106`, `seeded_record_merge_guard:121`, `ResourceManager:137`, `load_addons:221`, `load_xref:248`, `_check_load_tiers:318`, `_excluded_entry_keys:536`, `_check_xref_collisions:562` |
 | `addons/angee/resources/grants.py`, `management/commands/resources.py` | `kind = "grants"` rows into REBAC tuples, idempotent by tuple key; the `resources validate\|load\|diff` command and tier selection | `materialize_grant_groups:61`, docstring `:1-12`; `Command:17` |
-| `addons/angee/resources/build.py`, `angee/compose/migrations.py` | catalogue projection onto runtime models; the populated-table drop guard and its retirement exemption | `CatalogueIntegration:18`, `retired_primary_keys:38`; `DropGuardAutodetector:624` |
+| `addons/angee/resources/build.py`, `django_compose.migrations` | catalogue projection onto runtime models; the populated-table drop guard and its retirement exemption | `CatalogueIntegration:18`, `retired_primary_keys:38`; `DropGuardAutodetector:624` |
 
 ## Reuse first
 
@@ -48,14 +48,13 @@ description: "Declares and loads an addon's master, install and demo data: addon
    A model several addons seed declares its tier once (`money/models.py:80-106`):
 
    ```python
-   class Currency(ResourceLoadMixin, ArchiveMixin, AngeeDataModel):
-       runtime = True
+   class Currency(ResourceLoadMixin, ArchiveMixin, AngeeDataModel, concrete=True):
        catalogue = True
        catalogue_tier = "master"          # or catalogue_tiers = ("master", "install")
        code = models.CharField(max_length=3, unique=True)
 
        class Meta:
-           abstract = True                # a runtime source must be abstract (model_composition.py:178-181)
+           abstract = True                # a composition source must be abstract (model_composition.py:178-181)
            rebac_resource_type = "money/currency"
    ```
    **Owner rule:** the model owns its tier, read without inheritance (`mixins.py:48`); a
@@ -84,26 +83,26 @@ description: "Declares and loads an addon's master, install and demo data: addon
    unknown headers are refused (`loader.py:753`), entry and file labels must agree
    (`entries.py:498`) ([keep policy above detail](../../../docs/guidelines.md#keep-policy-above-detail)).
 
-3. **Declare the entry in `addon.toml`.** A bare path suffices for an independent file.
+3. **Declare the entry in `pyproject.toml`.** A bare path suffices for an independent file.
 
    ```toml
-   [resources]                                          # money/addon.toml:8-12
-   master = [{ path = "resources/master/010_money.currency.yaml", adopt = "code" }]
+   [tool.angee.resources]                                          # money/pyproject.toml:8-12
+   master = [{ path = "master/010_money.currency.yaml", adopt = "code" }]
    demo = [
-     { path = "resources/demo/020_money.currencyrate.yaml", depends_on = "resources/master/010_money.currency.yaml" },
+     { path = "demo/020_money.currencyrate.yaml", depends_on = "master/010_money.currency.yaml" },
    ]
    ```
    If a row's natural key may already exist (shared catalogue, operator-created row) →
    `adopt = "<unique field>"` or `adopt = ["f1", "f2"]`, the exact field set of a model-owned
    `unique`, `unique_together` or non-expression `UniqueConstraint` (`loader.py:666`;
-   `notes/addon.toml:34` adopts `["user", "name"]` through `Credential`'s conditional
+   `notes/pyproject.toml:34` adopts `["user", "name"]` through `Credential`'s conditional
    constraint). If a relation names another addon's seed → `depends_on = "<label>:resources/…"`
    in a tier at or below yours (`entries.py:566`). **Owner rule:** the manifest selects files
    and keys; the model owns uniqueness, so no field is adoptable without it
    ([addon declarations](../../../docs/composer.md#addon-declarations)).
 
 4. **Grant relations with `kind = "grants"`.** Declare the entry as
-   `{ path = "resources/demo/030_iam.admin_grant.yaml", kind = "grants" }` (`iam/addon.toml:24`),
+   `{ path = "demo/030_iam.admin_grant.yaml", kind = "grants" }` (`iam/pyproject.toml:24`),
    ordered after the rows it names. A row xref resolves through the ledger, a literal is
    `<ns>/type:<id>[#relation]`, `*` is the anonymous subject.
 
@@ -140,7 +139,7 @@ description: "Declares and loads an addon's master, install and demo data: addon
    no importer or ledger of its own ([composition owners](../../../docs/backend/guidelines.md#composition-owners)).
 
 6. **Retire a seeded model.** If the table holds only rows this addon's files seeded →
-   `retired_models = ["messaging.ActivityType"]` under `[resources]` (`addons/angee/messaging/addon.toml:39`);
+   `retired_models = ["messaging.ActivityType"]` under `[tool.angee.resources]` (`addons/angee/messaging/pyproject.toml:39`);
    otherwise → a data migration ([migration history](../../../docs/backend/guidelines.md#migration-history)).
    **Owner rule:** the drop guard exempts only this addon's ledgered keys (`build.py:38`, `managers.py:106`);
    removing a manifest entry retires nothing ([addon declarations](../../../docs/composer.md#addon-declarations)).
@@ -156,7 +155,7 @@ description: "Declares and loads an addon's master, install and demo data: addon
 
 - A row that carries `id`, a pk or a public sqid: the ledger's xref owns identity, so the header check refuses them (`loader.py:753`).
 - A `loaddata` fixture, seeding command or `post_migrate` hook for rows the loader can import: the native import lifecycle already owns them ([stack](../../../docs/stack.md#backend), `django-import-export` row).
-- A resource file without a `[resources]` entry: the manifest selects files, so an unlisted file loads nothing ([resource pitfalls](references/pitfalls.md)).
+- A resource file without a `[tool.angee.resources]` entry: the manifest selects files, so an unlisted file loads nothing ([resource pitfalls](references/pitfalls.md)).
 - Promoting a demo row to `install`, or editing another addon's seed, to remove a permissive row: tiers are additive per addon, so the deployment excludes the entry instead ([demo tiers are additive](../../../docs/backend/guidelines.md#resource-loading)).
 - Selecting a seeded row by display name when it has an xref or stable key: the ledger owns the lookup ([seeded rows carry a stable key](references/pitfalls.md)).
 - Seeding fields that `StateTransitions` writes (`workspace`, `runtime_status`, `last_error`): the transition owns them and the loader does not protect them ([seeded transition state](../../../docs/backend/guidelines.md#seeded-transition-state)).
@@ -178,10 +177,7 @@ new file and rows; `resources load` creates the rows and a second run reports 0 
 - Loop: `.agents/skills/slice/SKILL.md`. False greens: `validate` is a rolled-back dry run that
   skips `after_resource_load` (`managers.py:406-407`), omits `demo` without `--include-demo`, and counts zero rows for an unlisted file.
 
-<details><summary>Changes under the build/host plan</summary>
-`provision` runs resources loading after `rebac sync` in one plain Django process; the
-manifest, file shapes and ledger contract above do not change.
-</details>
+
 
 ## Pitfalls
 
@@ -198,12 +194,3 @@ manifest, file shapes and ledger contract above do not change.
 - [Resource loading](../../../docs/backend/guidelines.md#resource-loading), [Composition owners](../../../docs/backend/guidelines.md#composition-owners), [Migration history](../../../docs/backend/guidelines.md#migration-history)
 - [Addon declarations](../../../docs/composer.md#addon-declarations), [Addon-owned runtime migrations](../../../docs/composer.md#addon-owned-runtime-migrations)
 - [Composition and schema](../../../docs/checks.md#composition-and-schema), [Glossary: Resource file](../../../docs/glossary.md#backend); skills `angee-addon`, `angee-models`, `angee-permissions`, `angee-tests`, `slice`
-
-## Sources
-
-<!--
-Docs: AGENTS.md; docs/guidelines.md; docs/backend/guidelines.md #package-layering, #composition-owners, #rules, #persistence-primitives, #resource-loading; docs/glossary.md #backend (Resource entries); docs/composer.md #addon-owned-runtime-migrations, #addon-declarations, #serving; docs/checks.md #python-and-composition-contracts, #agent-methodology-and-documentation, #composition-and-schema; docs/stack.md #backend (cryptography row); docs/features.md #what-you-get--framework-primitives.
-Code (grep -n on the working tree): addons/angee/resources/{addon.toml,entries.py,tiers.py,kinds.py,mixins.py,models.py,managers.py:55-130,191-440,500-579,grants.py,widgets.py:206-302,build.py,loader.py:1-260,520-875,management/commands/resources.py,testing/*}; tests/test_catalogue_trait.py:36-224; angee/compose/migrations.py:624; angee/compose/model_composition.py:178-181; angee/management/provision.py:49-68; addons/angee/base/checks.py:16-37; addons/angee/tags/{addon.toml,resources/**}; addons/angee/money/{addon.toml,models.py:80-106,388-400,resources/**}; examples/addons/example/notes/{addon.toml,resources/**,models.py:22-53}; addons/angee/iam/{addon.toml:15-25,resources/demo/030_iam.admin_grant.yaml}; addons/angee/parties/addon.toml:28 + resources/install/020_statement_source_grants.yaml; addons/angee/messaging/addon.toml:39; addons/angee/integrate/models.py:1134-1225,1464-1500; addons/angee/workflows/{models.py:145-155,881,resources.py:1-135}; addons/angee/dashboards/models.py:786-812.
-Doc gaps: no [resources] key reference and no row-shape reference in docs/. Filename pattern is `[NNN_]<label>.<model>.<ext>` (entries.py:406).
-Mismatches: angee/management/provision.py:49-68 does not run `resources`; docs/checks.md#composition-and-schema lists it as a separate lifecycle step.
--->

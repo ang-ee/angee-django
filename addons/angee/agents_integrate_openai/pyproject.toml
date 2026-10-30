@@ -1,0 +1,30 @@
+build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-agents-integrate-openai"
+version = "3.0.0"
+description = "OpenAI (GPT) inference backend — adds the OpenAI client to the agents catalogue"
+keywords = ["openai", "gpt", "inference"]
+dependencies = ["angee-agents>=3,<4", "angee-integrate>=3,<4", "openai>=2.43.0", "pydantic-ai-slim[openai]>=2.13"]
+
+[project.entry-points]
+"angee.addons" = {"angee.agents_integrate_openai" = "angee.agents_integrate_openai"}
+
+[tool.angee]
+
+[[tool.angee.resources.demo]]
+path = "demo/010_integrate.credential.yaml"
+depends_on = "iam:demo/010_iam.user.yaml"
+adopt = ["user", "name"]
+
+[[tool.angee.resources.demo]]
+path = "demo/030_agents.inferenceprovider.yaml"
+depends_on = ["demo/010_integrate.credential.yaml", "integrate:master/010_integrate.vendor.yaml"]
+
+[[tool.angee.resources.demo]]
+path = "demo/040_agents.inferencemodel.yaml"
+depends_on = "demo/030_agents.inferenceprovider.yaml"
+adopt = ["provider", "name"]
+
+[tool.angee.platform]
+category = "Integration"

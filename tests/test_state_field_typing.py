@@ -42,7 +42,7 @@ def test_state_field_constructor_and_descriptor_typing(tmp_path: Path) -> None:
     )
     config = tmp_path / "mypy.ini"
     config.write_text(
-        "[mypy]\nplugins = angee.compose.typing\n"
+        "[mypy]\nplugins = angee.base.typing\n"
         f"mypy_path = {tmp_path},{root},{root / 'addons'}\ncache_dir = {tmp_path / 'cache'}\n"
         "[mypy.plugins.django-stubs]\ndjango_settings_module = state_typing_settings\n"
     )

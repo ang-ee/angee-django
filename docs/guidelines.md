@@ -114,7 +114,7 @@ This applies [Find the owner](../AGENTS.md#constitution) at class scope:
 
 - A record owns the fact: use a model method, property, or field behavior.
 - A collection owns it: use its queryset or manager.
-- An addon declaration owns it: use `addon.toml` and its native parsed manifest.
+- An addon declaration owns it: use `pyproject.toml` and its native package metadata.
 - Django app identity or lifecycle owns it: use `AppConfig` and native app hooks.
 - No participant owns a cross-owner rule: use the smallest addon-local service
   or use case to orchestrate those owners.

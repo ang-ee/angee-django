@@ -19,12 +19,13 @@ from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
-from django.db import IntegrityError, models, transaction
+from django.db import IntegrityError, models, router, transaction
 from django.db.models import F, Q
 from django.db.models.expressions import Combinable
 from django.utils import timezone
 from django_choices_field import IntegerChoicesField
-from rebac import PermissionDenied, current_actor, system_context
+from django_compose.models import Composable
+from rebac import PermissionDenied, current_actor, database_context, system_context
 from rebac.actors import is_sudo
 from rebac.mixins import RebacModelBase
 
@@ -80,21 +81,28 @@ class QueueManager[QueueT: Queue](GroupManager[QueueT]):
     def personal_for(self, user: User, *, provision: bool = False) -> QueueT | None:
         """Return ``user``'s personal queue, optionally provisioning it."""
 
+        queues = self.db_manager(self._db or user._state.db, hints={"instance": user})
         slug = self.personal_slug(user)
-        queue = self.sudo(reason="work.queue.personal.lookup").filter(slug=slug).first()
+        queue = queues.sudo(reason="work.queue.personal.lookup").filter(slug=slug).first()
         if queue is not None and not queue.is_personal:
             raise ValidationError("The personal queue's canonical slug is occupied by an unrelated queue.")
         if queue is not None or not provision:
             return queue
-        return self.provision_personal(user)
+        return queues.provision_personal(user)
 
     def provision_personal(self, user: User) -> QueueT:
         """Idempotently create one private owner-rostered queue for ``user``."""
 
         slug = self.personal_slug(user)
         key = self.personal_key(user)
-        with system_context(reason="work.queue.personal.provision"), transaction.atomic():
-            queue = self.personal_for(user)
+        queues = self.db_manager(self._db or user._state.db, hints={"instance": user})
+        using = queues.db
+        with (
+            database_context(using),
+            system_context(reason="work.queue.personal.provision"),
+            transaction.atomic(using=using),
+        ):
+            queue = queues.personal_for(user)
             if queue is None:
                 label = str(user.get_full_name() or user.username)
                 queue = self.model(
@@ -110,13 +118,13 @@ class QueueManager[QueueT: Queue](GroupManager[QueueT]):
                 )
                 queue.sudo(reason="work.queue.personal.provision.create")
                 try:
-                    with transaction.atomic():
-                        queue.save()
+                    with transaction.atomic(using=using):
+                        queue.save(using=using)
                 except IntegrityError:
-                    queue = self.personal_for(user)
+                    queue = queues.personal_for(user)
                     if queue is None:
                         raise
-            self._ensure_personal_membership(queue, user)
+            queues._ensure_personal_membership(queue, user)
             return queue
 
     def _ensure_personal_membership(self, queue: models.Model, user: models.Model) -> None:
@@ -124,8 +132,8 @@ class QueueManager[QueueT: Queue](GroupManager[QueueT]):
 
         party_model = apps.get_model("parties", "Party")
         membership_model = apps.get_model("spaces", "Membership")
-        person = party_model.objects.for_user(user)
-        membership = membership_model._base_manager.filter(
+        person = party_model.objects.db_manager(queue._state.db).for_user(user)
+        membership = membership_model._base_manager.using(queue._state.db).filter(
             group_id=queue.pk,
             party_id=person.pk,
         ).first()
@@ -140,7 +148,7 @@ class QueueManager[QueueT: Queue](GroupManager[QueueT]):
                 created_by_id=user.pk,
                 updated_by_id=user.pk,
             )
-            membership.save()
+            membership.save(using=queue._state.db)
             return
         changed = False
         desired = {
@@ -154,14 +162,12 @@ class QueueManager[QueueT: Queue](GroupManager[QueueT]):
                 setattr(membership, name, value)
                 changed = True
         if changed:
-            membership.save(update_fields=(*desired, "updated_at"))
+            membership.save(using=queue._state.db, update_fields=(*desired, "updated_at"))
 
 
-class Queue(ImmutableFieldsMixin, metaclass=RebacModelBase):
+class Queue(ImmutableFieldsMixin, Composable, metaclass=RebacModelBase, inherits="spaces.Group"):
     """An ongoing operational context, materialized as a ``spaces.Group`` child."""
 
-    runtime = True
-    extends: ClassVar[str | None] = "spaces.Group"
     immutable_fields = ("provision_stages",)
 
     class EstimateScale(models.TextChoices):
@@ -269,13 +275,21 @@ class Queue(ImmutableFieldsMixin, metaclass=RebacModelBase):
         """Persist the queue and atomically provision its stage/numbering substrate."""
 
         adding = self._state.adding
-        self.key = self.key.strip().upper()
-        self._validate_default_stage()
-        self._validate_estimate_settings()
-        with transaction.atomic():
-            super().save(*args, **kwargs)
-            if adding:
-                self._provision_workflow()
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        previous_database = self._state.db
+        self._state.db = using
+        kwargs["using"] = using
+        try:
+            self.key = self.key.strip().upper()
+            with database_context(using), transaction.atomic(using=using):
+                self._validate_default_stage()
+                self._validate_estimate_settings()
+                super().save(*args, **kwargs)
+                if adding:
+                    self._provision_workflow()
+        except BaseException:
+            self._state.db = previous_database
+            raise
 
     def task_sequence_key(self) -> str:
         """Return the stable sequence lookup key for this queue's task numbers."""
@@ -287,7 +301,7 @@ class Queue(ImmutableFieldsMixin, metaclass=RebacModelBase):
 
         sequence_model = apps.get_model("sequence", "Sequence")
         with system_context(reason="work.queue.ensure_task_sequence"):
-            sequence, _created = sequence_model.objects.get_or_create(
+            sequence, _created = sequence_model.objects.db_manager(self._state.db).get_or_create(
                 key=self.task_sequence_key(),
                 defaults={
                     "name": f"{self.key} task numbers",
@@ -304,7 +318,7 @@ class Queue(ImmutableFieldsMixin, metaclass=RebacModelBase):
 
         self.ensure_task_sequence()
         sequence_model = apps.get_model("sequence", "Sequence")
-        return int(sequence_model.objects.next_value(self.task_sequence_key()))
+        return int(sequence_model.objects.db_manager(self._state.db).next_value(self.task_sequence_key()))
 
     def _provision_workflow(self) -> None:
         """Provision numbering and, when requested, the default stage set once."""
@@ -316,7 +330,7 @@ class Queue(ImmutableFieldsMixin, metaclass=RebacModelBase):
         stages: dict[str, Stage] = {}
         with system_context(reason="work.queue.provision_workflow"):
             for name, tone, position, category in self.PROVISIONED_STAGES:
-                stage, _created = stage_model.objects.get_or_create(
+                stage, _created = stage_model.objects.db_manager(self._state.db).get_or_create(
                     queue=self,
                     category=category,
                     defaults={"name": name, "tone": tone, "position": position},
@@ -324,7 +338,7 @@ class Queue(ImmutableFieldsMixin, metaclass=RebacModelBase):
                 stages[category] = stage
             if self.default_stage_id is None:
                 self.default_stage = stages[stage_model.StageCategory.UNSTARTED]
-                super().save(update_fields=("default_stage", "updated_at"))
+                super().save(using=self._state.db, update_fields=("default_stage", "updated_at"))
 
     def _validate_default_stage(self) -> None:
         """Require a same-queue default that can be entered without a verb or rule."""
@@ -332,7 +346,7 @@ class Queue(ImmutableFieldsMixin, metaclass=RebacModelBase):
         if self.default_stage_id is None:
             return
         stage_model = type(self).default_stage.field.related_model
-        stage = stage_model._base_manager.get(pk=self.default_stage_id)
+        stage = stage_model._base_manager.using(self._state.db).get(pk=self.default_stage_id)
         if self.pk is None or stage.queue_id != self.pk:
             raise ValidationError({"default_stage": "Default stage must belong to this queue."})
         if stage.entry_reserved or not stage.ordinary_entry_available:
@@ -352,7 +366,7 @@ class StageQuerySet[StageT: Stage](RowLockQuerySet[StageT], AngeeQuerySet[StageT
 StageManager = AngeeManager.from_queryset(StageQuerySet)
 
 
-class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
+class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=True):
     """One ordered, user-named pipeline stage owned by a queue.
 
     Triage and duplicate stages are system rows: provisioning and resource loads
@@ -363,7 +377,6 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel):
     row_lock_cascade_parent = "queue"
     objects = StageManager()
 
-    runtime = True
     sqid_prefix = "wst_"
     container_field_name = "queue"
     category_field_name = "category"
@@ -662,10 +675,9 @@ class CycleManager[CycleT: Cycle](AngeeManager[CycleT]):
             )
 
 
-class Cycle(AuditMixin, AngeeDataModel):
+class Cycle(AuditMixin, AngeeDataModel, concrete=True):
     """One generated, queue-scoped planning window with immutable close evidence."""
 
-    runtime = True
     sqid_prefix = "cyc_"
 
     queue = models.ForeignKey(
@@ -816,10 +828,9 @@ fires a nested partial refresh whose reload re-enters ``__init__`` with the
 """
 
 
-class ProjectWork(models.Model):
+class ProjectWork(Composable, extends="projects.Project"):
     """Bind a project's access to the roster of an optional team."""
 
-    extends: ClassVar[str | None] = "projects.Project"
 
     hasura_readable_fields: ClassVar[tuple[str, ...]] = ("team",)
     hasura_filterable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
@@ -907,10 +918,9 @@ class ProjectWork(models.Model):
                 task.save(update_fields=("stage", "updated_at"))
 
 
-class MilestoneWork(models.Model):
+class MilestoneWork(Composable, extends="projects.Milestone"):
     """Map a project's current phase to its source task's rule-owned stage."""
 
-    extends: ClassVar[str | None] = "projects.Milestone"
 
     hasura_readable_fields: ClassVar[tuple[str, ...]] = ("active_stage",)
     hasura_filterable_fields: ClassVar[tuple[str, ...]] = hasura_readable_fields
@@ -968,10 +978,9 @@ class MilestoneWork(models.Model):
         stage_model._base_manager.get(pk=self.active_stage_id).validate_rule_stage(queue_id)
 
 
-class TaskWork(StagedModelMixin[Stage]):
+class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
     """Same-row work contribution folded into ``projects.Task``."""
 
-    extends: ClassVar[str | None] = "projects.Task"
     stage_container_field_name = "queue"
     thread_team_field: ClassVar[str | None] = "queue"
 
@@ -1177,29 +1186,43 @@ class TaskWork(StagedModelMixin[Stage]):
         self._reject_direct_status_write()
         update_fields = set(kwargs["update_fields"]) if kwargs.get("update_fields") is not None else None
         stage_written = self._state.adding or update_fields is None or bool({"stage", "stage_id"} & update_fields)
-        with transaction.atomic():
-            defaulted = self._apply_queue_and_stage_defaults(provision=True)
-            defaulted.update(self._validate_estimate(update_fields=update_fields))
-            if not stage_written:
-                defaulted.discard("stage")
-            previous, following = self._reject_reserved_stage_transition(lock=True, stage_written=stage_written)
-            self.validate_stage_scope()
-            self.validate_cycle_scope()
-            projected = self._project_stage_lifecycle(previous, following) if stage_written else set()
-            allocated = False
-            if self._state.adding and self.queue_id is not None and self.number is None:
-                queue = self.queue
-                assert queue is not None
-                self.number = queue.next_task_number()
-                allocated = True
-            if update_fields is not None:
-                update_fields.update(projected)
-                update_fields.update(defaulted)
-                if allocated:
-                    update_fields.add("number")
-                kwargs["update_fields"] = update_fields
-            super().save(*args, **kwargs)
-            object.__setattr__(self, "_work_status_assigned", False)
+        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        previous_database = self._state.db
+        queue_field = type(self).queue.field
+        previous_queue = queue_field.get_cached_value(self, default=None)
+        self._state.db = using
+        kwargs["using"] = using
+        try:
+            with database_context(using), transaction.atomic(using=using):
+                defaulted = self._apply_queue_and_stage_defaults(provision=True)
+                defaulted.update(self._validate_estimate(update_fields=update_fields))
+                if not stage_written:
+                    defaulted.discard("stage")
+                previous, following = self._reject_reserved_stage_transition(lock=True, stage_written=stage_written)
+                self.validate_stage_scope()
+                self.validate_cycle_scope()
+                projected = self._project_stage_lifecycle(previous, following) if stage_written else set()
+                allocated = False
+                if self._state.adding and self.queue_id is not None and self.number is None:
+                    queue = self.queue
+                    assert queue is not None
+                    self.number = queue.next_task_number()
+                    allocated = True
+                if update_fields is not None:
+                    update_fields.update(projected)
+                    update_fields.update(defaulted)
+                    if allocated:
+                        update_fields.add("number")
+                    kwargs["update_fields"] = update_fields
+                super().save(*args, **kwargs)
+                object.__setattr__(self, "_work_status_assigned", False)
+        except BaseException:
+            self._state.db = previous_database
+            if previous_queue is not None and previous_queue.pk == self.queue_id:
+                queue_field.set_cached_value(self, previous_queue)
+            elif queue_field.is_cached(self):
+                queue_field.delete_cached_value(self)
+            raise
         self._work_snapshot_loaded_values(fields=update_fields)
 
     @transaction.atomic
@@ -1219,22 +1242,23 @@ class TaskWork(StagedModelMixin[Stage]):
         self.save(update_fields=("stage", "updated_at"))
         return self
 
-    @transaction.atomic
     def complete(self, *, feedback: str = "") -> Any:
         """Move to the first completed stage, or use the base verb without a queue."""
 
-        if self.queue_id is None:
-            return self._base_verb("complete", feedback=feedback)
-        previous, _following = self._reject_reserved_stage_transition(manual=True, lock=True)
-        if previous is not None and previous.category == "completed":
+        using = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
+        with database_context(using), transaction.atomic(using=using):
+            if self.queue_id is None:
+                return self._base_verb("complete", feedback=feedback)
+            previous, _following = self._reject_reserved_stage_transition(manual=True, lock=True)
+            if previous is not None and previous.category == "completed":
+                return self
+            self.validate_action("complete")
+            stage = self._stage_for_category("completed")
+            self._reject_reserved_stage_transition(target=stage, manual=True, lock=True)
+            self.stage = stage
+            self.save(update_fields=("stage", "updated_at"))
+            self.post_completion(feedback)
             return self
-        self.validate_action("complete")
-        stage = self._stage_for_category("completed")
-        self._reject_reserved_stage_transition(target=stage, manual=True, lock=True)
-        self.stage = stage
-        self.save(update_fields=("stage", "updated_at"))
-        self.post_completion(feedback)
-        return self
 
     @transaction.atomic
     def drop(self, reason: Any) -> Any:
@@ -1597,7 +1621,7 @@ class TaskWork(StagedModelMixin[Stage]):
             return
         cycle_model = type(self).cycle.field.related_model
         cycle_queue_id = (
-            cycle_model._base_manager.values_list("queue_id", flat=True).get(pk=self.cycle_id)
+            cycle_model._base_manager.using(self._state.db).values_list("queue_id", flat=True).get(pk=self.cycle_id)
             if self.queue_id is not None
             else None
         )
@@ -1633,7 +1657,7 @@ class TaskWork(StagedModelMixin[Stage]):
 
         previous_id = None
         if not self._state.adding:
-            rows = type(self).objects.sudo(reason="work.task.stage_transition")
+            rows = type(self).objects.db_manager(self._state.db).sudo(reason="work.task.stage_transition")
             if lock:
                 rows = rows.lock_if_supported()
             previous_id = rows.values_list("stage_id", flat=True).get(pk=self.pk)
@@ -1641,7 +1665,10 @@ class TaskWork(StagedModelMixin[Stage]):
         if not stage_written:
             target_id = previous_id
         stage_ids = tuple(pk for pk in (previous_id, target_id) if pk is not None)
-        stages = {stage.pk: stage for stage in self.stage_model()._base_manager.filter(pk__in=stage_ids)}
+        stages = {
+            stage.pk: stage
+            for stage in self.stage_model()._base_manager.using(self._state.db).filter(pk__in=stage_ids)
+        }
         previous = stages.get(previous_id) if previous_id is not None else None
         following = stages.get(target_id) if target_id is not None else None
         changed = previous_id != target_id
@@ -1663,23 +1690,33 @@ class TaskWork(StagedModelMixin[Stage]):
             raise ValidationError("stage and cycle imply their queue — clear queue, stage, and cycle together")
         if self.queue_id is None and self.cycle_id is not None:
             cycle_model = type(self).cycle.field.related_model
-            self.queue_id = cycle_model._base_manager.values_list("queue_id", flat=True).get(pk=self.cycle_id)
+            self.queue_id = (
+                cycle_model._base_manager.using(self._state.db).values_list("queue_id", flat=True).get(pk=self.cycle_id)
+            )
             changed.add("queue")
         if self.queue_id is None and self.stage_id is not None:
-            self.queue_id = self.stage_model()._base_manager.values_list("queue_id", flat=True).get(pk=self.stage_id)
+            self.queue_id = (
+                self.stage_model()._base_manager.using(self._state.db)
+                .values_list("queue_id", flat=True).get(pk=self.stage_id)
+            )
             changed.add("queue")
         if self.queue_id is None and self._state.adding:
             user_id = actor_user_id(current_actor()) or getattr(self, "created_by_id", None)
             if user_id is not None:
                 user_model = apps.get_model(settings.AUTH_USER_MODEL)
                 with system_context(reason="work.task.personal_queue_user"):
-                    user = user_model._base_manager.filter(pk=user_id).first()
+                    user = user_model._base_manager.using(self._state.db).filter(pk=user_id).first()
                 if user is not None:
                     queue_model = apps.get_model("work", "Queue")
-                    queue = queue_model.objects.personal_for(user, provision=provision)
+                    queue = queue_model.objects.db_manager(self._state.db).personal_for(user, provision=provision)
                     if queue is not None:
                         self.queue = queue
                         changed.add("queue")
+        if self.queue_id is not None:
+            # A save(using=...) owns the row-relative FK read even when a caller
+            # supplied a cached queue or a read router prefers another replica.
+            queue_model = type(self).queue.field.related_model
+            self.queue = queue_model._base_manager.using(self._state.db).get(pk=self.queue_id)
         if self.stage_id is None and self.queue_id is not None:
             stage = self.resolve_default_stage()
             if stage is not None:
@@ -1711,7 +1748,7 @@ class TaskWork(StagedModelMixin[Stage]):
         with system_context(reason="work.task.estimate_policy"):
             queue = self.queue
             assert queue is not None
-            queue.refresh_from_db(fields=fields)
+            queue.refresh_from_db(using=self._state.db, fields=fields)
         changed = set()
         if needs_default and queue.estimate_scale != Queue.EstimateScale.NONE:
             self.estimate = queue.default_estimate
@@ -1823,10 +1860,9 @@ class TaskWork(StagedModelMixin[Stage]):
             return getattr(super(), name)(*args, **kwargs)
 
 
-class UserWork(ResourceLoadMixin):
+class UserWork(ResourceLoadMixin, Composable, extends="iam.User"):
     """Provision personal queues after IAM user resources load."""
 
-    extends: ClassVar[str | None] = "iam.User"
 
     class Meta:
         """Abstract same-row provisioning donor for IAM users."""

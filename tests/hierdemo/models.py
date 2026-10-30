@@ -7,7 +7,7 @@ pattern-ops index — read without external scope or actor scaffolding. ``Scoped
 adds a local ``scopedemo.Scope`` FK so the cross-scope parent rejection has a
 real field to test against. Both are concrete
 (``abstract = False``) so pytest-django builds their tables on demand; the app
-carries no ``addon.toml``, so the composer never sees them.
+carries no addon entry point, so the composer never sees them.
 """
 
 from __future__ import annotations

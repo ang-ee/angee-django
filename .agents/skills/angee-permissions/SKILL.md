@@ -22,13 +22,13 @@ description: "Declares and wires REBAC permissions for an Angee addon: permissio
 | `Model.Meta.rebac_resource_type` | Binds a model to its definition | `examples/addons/example/notes/models.py:22` (class), `:67` (option) |
 | `angee.base.models.roles.role_anchor` | Table-less anchor model for a `<ns>/role` namespace | `addons/angee/base/models/roles.py:14`, `addons/angee/tags/models.py:341` |
 | `Model.rebac_grantable` + `AngeeModel.grant_record_access` | The direct-share surface and its permission policy | `addons/angee/base/models/base.py:88`, `:160`, `:312` (`require_access`) |
-| `addons/angee/base/build.py` | Fragment merge, field-gate ownership, emitted `runtime/permissions/<package>.zed`, `AppConfig.rebac_schema` repointing | `merged_schemas` `:202`, `_merge_definition` `:267`, `schema_path_wiring` `:394`, `composed_grants` `:494`, `field_gate_owners` `:509` |
+| `addons/angee/base/build.py` | Fragment merge, field-gate ownership, emitted `runtime/permissions/<package>.zed`, effective schema artifact projection; AppConfig owns the schema declaration | `merged_schemas` `:202`, `_merge_definition` `:267`, `schema_path_wiring` `:394`, `composed_grants` `:494`, `field_gate_owners` `:509` |
 | `addons/angee/base/permissions.py` | `declared_grants` `:23`, `effective_rebac_definition` `:50`, `subject_reaches_user` `:120`, `candidate_relationships` `:180` | whole file |
 | `addons/angee/base/checks.py` | `angee.E024` (no caveats) `:37`, `angee.E045` (`owner` relation needs `OwnerMixin`) `:71` | whole file |
 | `addons/angee/base/models/ownership.py` | `angee.E022` `:134` and `angee.E027` `:171`: the `transfer` + `write__owner` gate every `OwnerMixin` model's definition carries | `OwnerMixin.check` `:91` |
 | `addons/angee/iam/permissions.zed` | `auth/user` `:6`, `iam/kind` `:104`, `auth/group` `:110`, `angee/role` `:120` — the subjects every addon targets | whole file |
 | `addons/angee/graphql/actions.py` | `authorized_action_target` `:240`, `authorized_permission_target` `:276` resolver preflight | `addons/angee/graphql/trash.py:57` (`trash_target`) |
-| `angee/management/provision.py` | The provision sync step and its force flag | `plan` `:49`, `:58-60`; `--force-rebac` `angee/management/commands/angee.py:40` |
+| `addons/angee/base/provision.py` | Native provision hook and readiness lifecycle | `AppConfig.compose_provision`; explicit `ANGEE_REBAC_FORCE_OVERWRITE` setting |
 
 Parsing, sync, point checks, actor-scoped querysets and gated-field projection are
 `django-zed-rebac` (`docs/stack.md#backend`, line 76); `composed_tables`
@@ -60,7 +60,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
    If the addon needs a named role → declare `definition notes/role { relation member: auth/user | angee/role:admin#member }` in the zed and, beside the models, `NotesRole = role_anchor("notes/role")` (module-level, direct call; the bound name must match `name`, `roles.py:14-45`).
    **Owner rule:** `rebac_resource_type` is a library `Meta` option (`REBAC_META_OPTIONS`, `build.py:468`) that the composer carries onto the runtime class; a registry, AppConfig attribute or string table naming the same binding is the duplicate `docs/guidelines.md#dont-repeat-yourself-dry` tells you to delete.
 
-2. **Write `permissions.zed`** beside `models.py` (one per app; `addon.toml` `permissions = "<path>"` only when the file is elsewhere). This is the complete `notes/note` definition; a model composing `OwnerMixin` needs the `transfer` + `write__owner` pair or `angee.E022`/`angee.E027` fire (`ownership.py:134`, `:171`).
+2. **Write `permissions.zed`** beside `models.py` (one per app; `AppConfig.rebac_schema` declares the native schema path). This is the complete `notes/note` definition; a model composing `OwnerMixin` needs the `transfer` + `write__owner` pair or `angee.E022`/`angee.E027` fire (`ownership.py:134`, `:171`).
    ```zed
    // @rebac_package: notes
    // @rebac_package_version: 0.1.0
@@ -144,11 +144,9 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
 7. **Sync the stored schema.** `rebac sync` parses every effective `permissions.zed` (the merged file for extended packages) and persists it into the `Schema*` tables; the system checks compare models with *that stored* schema, so they gate every `rebac` subcommand (`docs/backend/guidelines.md#rebac`, line 813). Three distinct operations:
    - Ordinary sync after a zed edit on a running stack: `rebac sync` (`docs/checks.md#composition-and-schema`), then restart Django through the operator (`docs/howto/getstarted.md#restart-the-running-stack`). `rebac sync --check` is the drift gate; `rebac check` validates without writing.
    - Retirement of removed definitions, packages or backings: provision's sync step runs `--skip-checks sync --prune-stale --yes` after `migrate` and before `check` (`provision.py:58`, `docs/backend/guidelines.md#rebac`, line 825). Run the same shape, in that order, when a type was renamed or removed.
-   - Deliberate overwrite: `--force-overwrite` (`angee provision --force-rebac`, `angee.py:40`) replaces locally managed live policy. Use it only when that replacement is the decision (`docs/backend/guidelines.md#rebac`, line 829); it is not part of an ordinary sync.
+   - Deliberate overwrite: `--force-overwrite` (explicit `ANGEE_REBAC_FORCE_OVERWRITE` setting) replaces locally managed live policy. Use it only when that replacement is the decision (`docs/backend/guidelines.md#rebac`, line 829); it is not part of an ordinary sync.
    If `rebac.E009` names a backing you just renamed, removed or added → the stored schema, not the source, is stale, and the check blocks the very sync that would fix it: run the retirement shape above with `--skip-checks` (`migrate --skip-checks` first when migrations are pending), then `check`. `rebac.E009` is the library's backing check (`rebac/checks.py:321-331`); a role or anchor type it cannot resolve needs its `role_anchor` (`roles.py:25`).
-   <details><summary>Changes under the build/host plan</summary>
-   The fragment merge and `render_zed` move from `angee build` to provision time; the build emits only the list of schema paths. The sync operations and the `rebac.E009` recovery above stay the same; the emitted merged-file location may change.
-   </details>
+   
    **Owner rule:** sync, prune and overwrite are the library's command options; Angee adds only the merged-file emission and path wiring (`build.py:20-24`) and provision's step order (`provision.py:49`).
 
 8. **Write permission tests that assert visibility per actor.** Use a non-admin reader and a non-reader; assert through the actor-scoped manager and the point check, not through `sudo()`.
@@ -201,11 +199,3 @@ Validator: the addon's focused test module plus the system checks; the loop is `
 - `docs/stack.md#backend` (django-zed-rebac row), `docs/glossary.md` (REBAC, Actor, Role, Relation, Binding, Kind)
 - `docs/checks.md#composition-and-schema`, `docs/composer.md#flow`, `docs/howto/getstarted.md#restart-the-running-stack`
 - Skills: `slice`, `angee-workspace`
-
-## Sources
-
-<!--
-Docs: AGENTS.md (whole); docs/guidelines.md (whole); docs/backend/guidelines.md #composition-owners, #rules, #rebac, #graphql-and-authorization, #graphql-actor-and-write-contracts, #naming; docs/stack.md #backend (django-zed-rebac row); docs/glossary.md #backend (Permissions, Principal, Role anchor, System context entries); docs/checks.md #python-and-composition-contracts, #source-addon-test-models, #composition-and-schema, #frontend-packages-and-addon-fragments; docs/howto/getstarted.md #restart-the-running-stack.
-Code: addons/angee/base/permissions.py; addons/angee/base/checks.py; addons/angee/base/build.py 1-100, 202-320, 456-520; addons/angee/base/models/base.py 80-320, 355-411; addons/angee/base/models/ownership.py 60-175, 260-310; addons/angee/base/models/roles.py; addons/angee/base/autoconfig.py 25-60; addons/angee/base/testing/fixtures.py, permissions.py; addons/angee/graphql/trash.py 1-80; addons/angee/graphql/actions.py 240-318; addons/angee/iam/permissions.zed; addons/angee/tags/permissions.zed; addons/angee/tags/models.py 275-300, 341; addons/angee/money/permissions.zed; angee/management/provision.py 1-62; angee/management/commands/angee.py 40-60; examples/addons/example/notes/{permissions.zed,permissions.extends.zed,models.py,addon.toml,tests/test_rebac.py}; tests/extcontrib/{permissions.zed,permissions.extends.zed,models.py,apps.py}; tests/scopedemo/permissions.zed 1-25; tests/test_scopedemo.py 1-45; .venv rebac/managers.py 719-858, rebac/mixins.py 1079, rebac/preflight.py 147, rebac/checks.py 295-332; .venv hatch_angee/manifest.py 54, 246.
-Outstanding discrepancies and gaps: docs/glossary.md#backend (Permissions entry) says permissions.zed is "discovered by convention", while hatch_angee/manifest.py:54 accepts an addon.toml `permissions` path that addons/angee/base/build.py:119 (`declared_schema_path`) honours; no doc names that key. No doc owns the field read modes: `REBAC_FIELD_READ_MODE="redact"` (addons/angee/base/autoconfig.py:31), `for_write()` and `readable(field)` (rebac/managers.py:756,768) are derived from code; docs/backend/guidelines.md#rebac mentions only `readable(field)`.
--->

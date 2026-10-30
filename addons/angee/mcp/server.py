@@ -1,14 +1,10 @@
-"""The process-wide MCP server: one FastMCP instance, tools from addon manifests.
+"""The process-wide MCP server: one FastMCP instance, tools from addon packages.
 
-Each installed addon contributes tools through the ``mcp_tools`` seam — an
-``mcp_tools.py`` module exposing a ``register(server: FastMCP) -> None`` callable,
-inferred by convention (an ``addon.toml`` ``[mcp].tools`` entry overrides the dotted
-reference). It resolves the same way the GraphQL ``schemas`` seam does, through the
-shared :func:`angee.addons.resolve_addon_reference`. The server authenticates the inbound
-bearer with :class:`~angee.mcp.verifier.RebacTokenVerifier` and brackets every tool
-call in the authenticated REBAC actor with :class:`~angee.mcp.middleware.ActorMiddleware`.
-It is mounted as a StreamableHTTP ASGI app by :mod:`angee.mcp.asgi`; :mod:`angee.asgi`
-owns its lifespan, so the server holds no per-request lifecycle of its own.
+Enabled addons contribute a conventional ``mcp_tools.register(server)`` callable.
+The server authenticates inbound bearers through RebacTokenVerifier and carries
+the actor through ActorMiddleware. MCPConfig supplies the HTTP mount and native
+FastMCP lifespan to django-compose's ASGI contribution owner. The inner HTTP
+application serves its root; the native mount owns the external ``/mcp`` prefix.
 
 ``stateless_http`` keeps each call independent and ``json_response`` returns a
 buffered JSON body the agent's HTTP client folds without an SSE reader (both passed
@@ -30,7 +26,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from fastmcp import FastMCP
 
-from angee.addons import addon_manifest, optional_addon_module, resolve_addon_reference
+from angee.base.addons import optional_addon_module
 from angee.mcp.middleware import ActorMiddleware
 from angee.mcp.verifier import RebacTokenVerifier
 
@@ -49,7 +45,7 @@ when it advertises a granted tool.
 """
 
 MOUNT_PATH = "/mcp"
-"""The external StreamableHTTP path the server mounts at (see :mod:`angee.mcp.asgi`)."""
+"""The external StreamableHTTP path contributed by MCPConfig.compose_asgi."""
 
 
 @cache
@@ -79,7 +75,7 @@ def mcp_app() -> StarletteWithLifespan:
         for pattern in ((host[1:], f"*{host}") if host.startswith(".") else (host,))
     ]
     return mcp_server().http_app(
-        path=MOUNT_PATH, stateless_http=True, json_response=True,
+        path="/", stateless_http=True, json_response=True,
         host_origin_protection=True, allowed_hosts=hosts,
         allowed_origins=list(settings.CSRF_TRUSTED_ORIGINS),
     )
@@ -103,18 +99,12 @@ def _registrars() -> tuple[ToolRegistrar, ...]:
 
 
 def tool_registrar(app_config: AppConfig) -> ToolRegistrar | None:
-    """Load an addon's explicit MCP declaration or its conventional registrar."""
+    """Load the conventional registrar only from an enabled addon."""
 
-    manifest = addon_manifest(app_config)
-    if manifest is None:
+    module = optional_addon_module(app_config, 'mcp_tools')
+    if module is None or not hasattr(module, 'register'):
         return None
-    if "tools" in manifest.mcp:
-        registrar = resolve_addon_reference(app_config, manifest.mcp["tools"], attr="mcp.tools")
-    else:
-        module = optional_addon_module(app_config, "mcp_tools")
-        if module is None or not hasattr(module, "register"):
-            return None
-        registrar = module.register
+    registrar = module.register
     if not callable(registrar):
-        raise ImproperlyConfigured(f"{app_config.name}.mcp.tools must reference a callable")
+        raise ImproperlyConfigured(f'{app_config.name}.mcp_tools.register must be callable')
     return registrar

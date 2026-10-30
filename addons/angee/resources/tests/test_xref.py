@@ -5,12 +5,6 @@ import yaml
 from django.apps import apps
 from django.core.exceptions import PermissionDenied
 from rebac import actor_context, system_context
-
-from angee.base.models.identity import public_id_of
-from angee.resources.exceptions import ResourceLoadError
-from angee.resources.loader import AngeeResource, ResourceResolution
-from angee.resources.testing.models import Resource
-from angee.spaces.testing.models import Group
 from tests.conftest import (
     Page,
     create_platform_admin,
@@ -21,6 +15,12 @@ from tests.conftest import (
 from tests.conftest import (
     addon_fixture_resources as addon_fixture_resources,
 )
+
+from angee.base.models.identity import public_id_of
+from angee.resources.exceptions import ResourceLoadError
+from angee.resources.loader import AngeeResource, ResourceResolution
+from angee.resources.testing.models import Resource
+from angee.spaces.testing.models import Group
 
 
 @pytest.mark.usefixtures("composed_tables")
@@ -39,7 +39,8 @@ def test_load_xref_authorizes_before_moving_existing_ownership(tmp_path, monkeyp
     if existing_target == "adopted":
         declaration["adopt"] = ["slug"]
     model = type(target)
-    (tmp_path / "target.yaml").write_text(
+    (tmp_path / "resources").mkdir(exist_ok=True)
+    (tmp_path / "resources" / "target.yaml").write_text(
         yaml.safe_dump({"_meta": {"model": model._meta.label}, "rows": [{"xref": "target", "fields": fields}]}),
         encoding="utf-8",
     )
@@ -92,7 +93,8 @@ def test_load_xref_requires_vault_create_access_for_new_pages(tmp_path, monkeypa
     caller = create_user("resource-new-caller")
     previous_owner = create_user("resource-new-owner")
     vault = vault_for(previous_owner)
-    (tmp_path / "target.yaml").write_text(yaml.safe_dump({
+    (tmp_path / "resources").mkdir(exist_ok=True)
+    (tmp_path / "resources" / "target.yaml").write_text(yaml.safe_dump({
         "_meta": {"model": Page._meta.label},
         "rows": [{"xref": "target", "fields": {
             "title": "New page", "vault": "resource_create.vault", "created_by": "resource_create.caller",
@@ -127,7 +129,8 @@ def test_load_xref_requires_vault_create_access_for_new_pages(tmp_path, monkeypa
 def test_load_xref_rejects_wrong_model_from_adapter_before_authorization(tmp_path, monkeypatch):
     """An adapter cannot redirect authorization or import to an unrelated row."""
 
-    (tmp_path / "target.yaml").write_text(yaml.safe_dump({
+    (tmp_path / "resources").mkdir(exist_ok=True)
+    (tmp_path / "resources" / "target.yaml").write_text(yaml.safe_dump({
         "_meta": {"model": Page._meta.label},
         "rows": [{"xref": "target", "fields": {"title": "Requested page"}}],
     }), encoding="utf-8")

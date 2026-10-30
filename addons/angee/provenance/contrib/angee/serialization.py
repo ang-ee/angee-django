@@ -8,7 +8,7 @@ from typing import Any
 
 from django.db import models
 
-from angee.serialization import canonical_json_sha256, json_safe
+from angee.base.serialization import canonical_json_sha256, json_safe
 
 
 def creation_fingerprint(values: Any) -> str:

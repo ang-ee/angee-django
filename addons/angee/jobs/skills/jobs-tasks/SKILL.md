@@ -46,7 +46,7 @@ that owns the state change. Reference examples are `addons/angee/parties/tasks.p
 
 ## Steps
 
-1. **Depend on jobs and name the task.** `addon.toml` `depends_on` includes `"angee.jobs"` (transitively
+1. **Depend on jobs and name the task.** `pyproject.toml` `[project].dependencies` includes `"angee-jobs>=3,<4"` (transitively
    through `angee.integrate` for most capability addons). The task name is `"<label>.<verb>"`; keep it a
    constant when another module enqueues it (`addons/angee/messaging/constants.py` → `DELIVER_MESSAGE_TASK`).
    **Owner rule:** the name is a wire contract; one constant, read by the task, the enqueue call and the beat
@@ -109,10 +109,6 @@ that owns the state change. Reference examples are `addons/angee/parties/tasks.p
    declares (`addons/angee/jobs/scheduler.py:32-41`); rows hold run state and the enabled flag only.
    **Owner rule:** code owns the schedule, the database owns run state; user-authored cadence is a workflow
    Trigger ([Autoconfig](../../../../../docs/composer.md#autoconfig), `addons/angee/jobs/scheduler.py:17-23`).
-
-   <details><summary>Changes under the build/host plan</summary>Static `SETTINGS` dicts (including
-   `CELERY_BEAT_SCHEDULE:append`) become hatch-angee build input; `settings(namespace)` callables such as
-   `angee.jobs.autoconfig.settings` become settings-module code.</details>
 
 5. **Budget time, choose the queue.** Worker limits are `CELERY_TASK_SOFT_TIME_LIMIT=840` / `CELERY_TASK_TIME_LIMIT=900`
    (`addons/angee/jobs/autoconfig.py:16-17`). A bounded body stops at `task_time_budget()` and a persisted claim
@@ -191,7 +187,7 @@ the dispatch test proves on-commit send with the expected `queue`/`expires`, the
 
 <!--
 Docs: docs/stack.md #backend (Celery, channels, django-environ rows), #stack-serve-mode; docs/backend/guidelines.md sections Django-Native Rule, Composition owners, Integrations and workers, Persistence primitives, Naming (cited by anchor and bullet title); docs/composer.md #autoconfig; docs/checks.md #python-and-composition-contracts, #composition-and-schema, #browser-verification, #what-ci-actually-runs; docs/guidelines.md #put-behavior-on-the-owning-object; AGENTS.md (Run From The Root, Architecture Gate).
-Code: addons/angee/jobs/{__init__.py,addon.toml,autoconfig.py,celery.py,enqueue.py,locks.py,scheduler.py,timeouts.py,management/commands/celery.py};
+Code: addons/angee/jobs/{__init__.py,pyproject.toml,autoconfig.py,celery.py,enqueue.py,locks.py,scheduler.py,timeouts.py,management/commands/celery.py};
 addons/angee/provenance/{tasks.py,autoconfig.py:25}; addons/angee/parties/{tasks.py,autoconfig.py}; addons/angee/work/{tasks.py,autoconfig.py}; addons/angee/messaging/{tasks.py,delivery.py:36-90,autoconfig.py:1-35};
 addons/angee/workflows/tasks.py; addons/angee/integrate/{tasks.py:1-120,scheduler.py:1-80,queue.py,constants.py,impl.py:206-224,session_runner.py:27-50};
 tests/test_jobs.py; tests/test_changesets.py:238-262; tests/settings.py:140-149; templates/stacks/_shared/stack-body.yaml.jinja:425-450.

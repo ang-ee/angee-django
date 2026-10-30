@@ -1,4 +1,4 @@
-"""Minimal Django settings for framework-core and source-addon tests."""
+"""Bare Django source-model host with native addon settings contributions."""
 
 from __future__ import annotations
 
@@ -7,14 +7,8 @@ from pathlib import Path
 
 import environ
 from django.apps import AppConfig
-
-from angee.utils.autoconfig import AutoConfig
-
-
-class BareAngeeConfig(AppConfig):
-    """Register source-only tests without importing a prebuilt application."""
-
-    name = "angee"
+from django_compose.addons import enabled_apps
+from django_compose.conf import apply_app_settings
 
 
 class BareGraphQLConfig(AppConfig):
@@ -32,7 +26,6 @@ INSTALLED_APPS = [
     "axes",
     "rebac",
     "simple_history",
-    "tests.settings.BareAngeeConfig",
     "angee.base",
     "angee.web",
     "angee.provenance",
@@ -44,7 +37,6 @@ INSTALLED_APPS = [
     "tests.iam_app.TestIAMConfig",
     "angee.integrate",
     "angee.integrate_vcs",
-    "angee.integrate_iphone",
     "angee.iam_integrate_oidc",
     "angee.agents",
     "angee.agents_integrate_anthropic",
@@ -130,18 +122,27 @@ else:
             "TEST": {"NAME": _TEST_DB_FILE},
         }
     }
-DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-USE_TZ = True
-COMPOSE_RUNTIME_MODULE = "tests.runtime"
-ANGEE_ADDON_DIRS = (Path(__file__).resolve().parent.parent / "addons",)
 # Bare tests run Django's per-process LocMem cache. Production OAuth redirects
 # must use a shared cache; tests opt in explicitly so the state guard remains loud.
 ANGEE_INTEGRATE_ALLOW_LOCAL_OAUTH_STATE_CACHE = True
 ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER = True
+CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
 
-AutoConfig.apply_installed(globals(), environment=False)
+# These are ordinary Django source-fixture inputs. Composed-host tests exercise
+# native emission and generated receipts in fresh interpreters.
+BASE_DIR = Path(__file__).resolve().parent.parent
+AUTH_USER_MODEL = "iam.User"
+AUTHENTICATION_BACKENDS = ["angee.iam.auth.ModelBackend"]
+ANGEE_CHANGESET_MODEL = "provenance.Changeset"
+REBAC_BACKEND = "local"
+REBAC_LOCAL_BACKEND_STORAGE = "registry"
+REBAC_STRICT_MODE = True
+REBAC_FIELD_READ_MODE = "redact"
+REBAC_ALLOW_SUDO = True
+REBAC_SUPERUSER_BYPASS = False
+REBAC_UNIVERSAL_ADMIN_ROLE = "angee/role:admin"
+REBAC_LINT_BARE_PREFETCH = False
 CELERY_BROKER_URL = "memory://"
-ANGEE_TEST_CONNECTION_CLASSES = {
-    "connection": "tests.integrate_fixtures.ConnectionAdapter",
-    "live": "tests.integrate_fixtures.LiveConnectionAdapter",
-}
+
+# Apply source app declarations without emitting models or replacing this registry.
+apply_app_settings(globals(), enabled_apps(INSTALLED_APPS, group="angee.addons"))

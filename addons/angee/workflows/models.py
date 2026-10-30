@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, ClassVar, cast
+from typing import Any, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -16,6 +16,7 @@ from django.db.models.fields.json import KeyTextTransform, KeyTransform
 from django.db.models.functions import Coalesce, Concat, Length, Now, Substr
 from django.db.models.lookups import IsNull
 from django.utils.functional import cached_property
+from django_compose.models import Composable
 from rebac import system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
@@ -142,7 +143,7 @@ class _NodeFailureRoute(models.Func):
         )
 
 
-class Workflow(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
+class Workflow(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """Editable identity and draft, pointing to one immutable published version.
 
     A workflow is a grant root with transferable ownership
@@ -151,7 +152,6 @@ class Workflow(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel):
     administrators to manage or transfer.
     """
 
-    runtime = True
     resource_class = WorkflowDefinitionResource
     rebac_grantable = {"editor": "write", "viewer": "write", "starter": "write", "operator": "write"}
     sqid_prefix = "wfl_"
@@ -217,10 +217,9 @@ class WorkflowVersionQuerySet(AppendOnlyQuerySet[Any], AngeeHistoryQuerySet[Any]
 WorkflowVersionManager = AngeeHistoryManager.from_queryset(WorkflowVersionQuerySet)
 
 
-class WorkflowVersion(AppendOnlyModel, AngeeDataModel):
+class WorkflowVersion(AppendOnlyModel, AngeeDataModel, concrete=True):
     """Immutable normalized graph document selected when a run starts."""
 
-    runtime = True
     sqid_prefix = "wfv_"
 
     workflow = models.ForeignKey("workflows.Workflow", on_delete=models.PROTECT, related_name="versions")
@@ -256,11 +255,10 @@ class WorkflowVersion(AppendOnlyModel, AngeeDataModel):
             for target in targets:
                 target.require_publisher_access(self.published_by, self)
 
-class WorkflowRun(RecordRefMixin, AngeeDataModel):
+class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
     """One actor's execution of one immutable graph against an optional record."""
 
     merge_policy = MergePolicy.KEEP
-    runtime = True
     rebac_grantable = {"reader": "write", "operator": "write"}
     sqid_prefix = "wfr_"
 
@@ -455,10 +453,9 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel):
         ]
 
 
-class WorkflowDecision(models.Model):
+class WorkflowDecision(Composable, extends="decisions.Decision"):
     """Contribute retained requesting runs to the decision owner's reference seam."""
 
-    extends: ClassVar[str | None] = "decisions.Decision"
 
     class Meta:
         abstract = True
@@ -476,13 +473,12 @@ class WorkflowDecision(models.Model):
         return (*cast(Any, super()).requester_querysets(), runs, retained)
 
 
-class StepRun(AngeeDataModel):
+class StepRun(AngeeDataModel, concrete=True):
     """One graph node's state and input, with its claim counter as the fence.
 
     ``rank`` stores graph order for query sorting without reparsing the version.
     """
 
-    runtime = True
     awaited_run = models.ForeignKey(
         "workflows.WorkflowRun", on_delete=models.PROTECT, null=True, blank=True, related_name="waiters",
     )
@@ -761,10 +757,9 @@ class StepRun(AngeeDataModel):
 _StepAttemptManager = AngeeHistoryManager.from_queryset(StepAttemptQuerySet)
 
 
-class StepAttempt(AngeeDataModel):
+class StepAttempt(AngeeDataModel, concrete=True):
     """One committed claim, closed once the attempt finishes."""
 
-    runtime = True
     sqid_prefix = "wsa_"
 
     step_run = models.ForeignKey("workflows.StepRun", on_delete=models.CASCADE, related_name="attempts")
@@ -801,11 +796,10 @@ class StepAttempt(AngeeDataModel):
         ]
 
 
-class StepRecord(RecordRefMixin, AngeeDataModel):
+class StepRecord(RecordRefMixin, AngeeDataModel, concrete=True):
     """One record used by a step, or supplied by its run's trigger."""
 
     merge_policy = MergePolicy.KEEP
-    runtime = True
     sqid_prefix = "wsrec_"
 
     run = models.ForeignKey("workflows.WorkflowRun", on_delete=models.CASCADE, related_name="records")
@@ -835,12 +829,11 @@ class StepRecord(RecordRefMixin, AngeeDataModel):
         )]
 
 
-class StepWatch(RecordRefMixin, HistoryMixin, AngeeDataModel):
+class StepWatch(RecordRefMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """One transactional observation and its durable, coalesced wake obligation."""
 
     merge_policy = MergePolicy.MOVE
     merge_identity = (("step_run", "content_type", "object_id"),)
-    runtime = True
     sqid_prefix = "wsw_"
     step_run = models.ForeignKey("workflows.StepRun", on_delete=models.CASCADE, related_name="watches")
     content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)
@@ -869,7 +862,7 @@ class StepWatch(RecordRefMixin, HistoryMixin, AngeeDataModel):
         indexes = [models.Index(fields=("content_type", "object_id"), name="workflows_watch_record")]
 
 
-class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel):
+class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, concrete=True):
     """Disabled-by-default admission policy with source-scoped domain hooks.
 
     An ``extends`` donor implementing ``trigger_input`` or ``check_admission``
@@ -877,7 +870,6 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel):
     matching guards and accepts at most one matching input builder.
     """
 
-    runtime = True
     resource_class = TriggerResource
     sqid_prefix = "wft_"
     workflow = models.ForeignKey("workflows.Workflow", on_delete=models.CASCADE, related_name="triggers")
@@ -1053,11 +1045,10 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel):
         rebac_resource_type = "workflows/trigger"
 
 
-class TriggerEvent(RecordRefMixin, AngeeDataModel):
+class TriggerEvent(RecordRefMixin, AngeeDataModel, concrete=True):
     """One retained admission fact per trigger and concrete record reference."""
 
     merge_policy = MergePolicy.KEEP
-    runtime = True
     sqid_prefix = "wfe_"
     trigger = models.ForeignKey("workflows.Trigger", on_delete=models.PROTECT, related_name="events")
     record_content_type = models.ForeignKey(ContentType, on_delete=models.PROTECT)

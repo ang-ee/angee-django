@@ -1,25 +1,23 @@
-"""Project native addon declarations into the marketplace catalog descriptor.
-
-``VcsBridge.discover`` supplies the bearing directory as ``path``. Manifest
-validation belongs to hatch-angee; this projection owns only catalog presentation.
-"""
+"""Project package metadata into the marketplace catalogue descriptor."""
 
 from __future__ import annotations
 
+import tomllib
+from collections.abc import Mapping
 from typing import Any
 
-from hatch_angee import parse_manifest_content
+from angee.platform.discovery import facts_from_toml
 
 
-def parse_addon_meta(blob: bytes) -> dict[str, Any]:
-    """Return catalog metadata from one validated ``addon.toml`` blob."""
+def parse_addon_meta(blob: bytes, *, dependencies: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """Project an addon pyproject; ordinary projects contribute no catalogue row."""
 
-    manifest = parse_manifest_content(blob)
+    facts = facts_from_toml(tomllib.loads(blob.decode("utf-8")), dependencies=dependencies)
+    if not facts:
+        return {}
     return {
-        "name": manifest.name,
-        "namespace": manifest.name.split(".", 1)[0],
-        "description": manifest.description,
-        "keywords": list(manifest.keywords),
-        "category": manifest.category or "",
-        "depends_on": list(manifest.depends_on),
+        **facts,
+        "namespace": facts["name"].split(".", 1)[0],
+        "keywords": list(facts["keywords"]),
+        "depends_on": list(facts["depends_on"]),
     }

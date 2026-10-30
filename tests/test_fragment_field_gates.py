@@ -7,12 +7,15 @@ from django.apps import apps
 from django.core.management import call_command
 from django.db import models
 from django.test.utils import isolate_apps
+from django_compose.model_composition import ModelComposition
+from django_compose.models import Composable
 from rebac import RebacMixin
 from rebac.models import SchemaDefinition
 from rebac.schema import parse_zed
 from rebac.schema.parser import validate_schema
 
 from angee.base.build import (
+    PermissionIntegration,
     SchemaExtensionError,
     extension_source_map,
     field_gate_owners,
@@ -21,8 +24,6 @@ from angee.base.build import (
     render_zed,
 )
 from angee.base.testing.permissions import emit_permissions, installed_field_owners
-from angee.compose.model_composition import ModelComposition
-from angee.compose.runtime import Runtime
 from tests.conftest import make_addon
 from tests.test_model_composition import modules as modules
 from tests.test_model_composition import source
@@ -109,7 +110,9 @@ def test_gate_rendering_is_byte_identical_for_both_input_orders(tmp_path):
 
 @pytest.mark.parametrize("prefix", ["", "tenant/"])
 @isolate_apps()
-def test_composer_maps_only_canonical_donor_columns_and_runtime_emits_the_gate(modules, tmp_path, settings, prefix):
+def test_composer_maps_only_canonical_donor_columns_and_runtime_emits_the_gate(
+    modules, tmp_path, settings, prefix, monkeypatch,
+):
     settings.REBAC_TYPE_PREFIX = prefix
     create, _emit = modules
     base, base_module = create("gate_base")
@@ -117,10 +120,10 @@ def test_composer_maps_only_canonical_donor_columns_and_runtime_emits_the_gate(m
     for config in (base, donor):
         Path(config.path).mkdir(parents=True, exist_ok=True)
     source(
-        base_module, "Root", base.label, bases=(RebacMixin,), runtime=True,
+        base_module, "Root", base.label, bases=(RebacMixin, Composable), concrete=True,
         meta={"rebac_resource_type": "demo/thing"},
     )
-    source(base_module, "Plain", base.label, runtime=True)
+    source(base_module, "Plain", base.label, concrete=True)
     source(
         donor_module, "RootExtension", donor.label, extends=f"{base.label}.Root",
         receipt=models.CharField(max_length=40),
@@ -139,9 +142,9 @@ def test_composer_maps_only_canonical_donor_columns_and_runtime_emits_the_gate(m
     )
     composition = ModelComposition.discover((donor, base))
     assert field_gate_owners(composition) == {target: {"receipt": donor.name, "recipient": donor.name}}
-    runtime = Runtime((base, donor), composition, runtime_dir=tmp_path / "runtime")
-    sources = runtime.render_sources()
-    assert "permission read__receipt = read" in sources[merged_schema_relpath(base.name)]
+    monkeypatch.setattr(apps, "get_app_configs", lambda: (base, donor))
+    sources = PermissionIntegration().render(composition, apps)
+    assert b"permission read__receipt = read" in sources[merged_schema_relpath(base.name)]
 
 
 @pytest.mark.django_db
