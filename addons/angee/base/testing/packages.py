@@ -23,7 +23,13 @@ def write_addon_distribution(
     """Write real package data and dist-info discoverable on the fixture source root."""
 
     entries = {entry.name: entry for entry in metadata.entry_points(group="angee.addons")}
-    requirements = [entries[app].dist.metadata["Name"] for app in depends_on if app in entries]
+    requirements = []
+    for app in depends_on:
+        if app in entries:
+            provider = entries[app].dist
+            if provider is None:
+                raise ValueError(f"Addon entry point {app!r} has no owning distribution")
+            requirements.append(provider.metadata["Name"])
     foreign = tuple(app for app in depends_on if app not in entries)
     distribution = canonicalize_name(name)
     project = {
