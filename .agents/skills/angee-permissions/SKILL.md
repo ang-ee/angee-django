@@ -146,7 +146,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
    - Retirement of removed definitions, packages or backings: provision's sync step runs `--skip-checks sync --prune-stale --yes` after `migrate` and before `check` (`provision.py:58`, `docs/backend/guidelines.md#rebac`, line 825). Run the same shape, in that order, when a type was renamed or removed.
    - Deliberate overwrite: `--force-overwrite` (explicit `ANGEE_REBAC_FORCE_OVERWRITE` setting) replaces locally managed live policy. Use it only when that replacement is the decision (`docs/backend/guidelines.md#rebac`, line 829); it is not part of an ordinary sync.
    If `rebac.E009` names a backing you just renamed, removed or added → the stored schema, not the source, is stale, and the check blocks the very sync that would fix it: run the retirement shape above with `--skip-checks` (`migrate --skip-checks` first when migrations are pending), then `check`. `rebac.E009` is the library's backing check (`rebac/checks.py:321-331`); a role or anchor type it cannot resolve needs its `role_anchor` (`roles.py:25`).
-   
+
    **Owner rule:** sync, prune and overwrite are the library's command options; Angee adds only the merged-file emission and path wiring (`build.py:20-24`) and provision's step order (`provision.py:49`).
 
 8. **Write permission tests that assert visibility per actor.** Use a non-admin reader and a non-reader; assert through the actor-scoped manager and the point check, not through `sudo()`.

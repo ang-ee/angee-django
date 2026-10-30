@@ -2,20 +2,21 @@
 
 The VCS marketplace tier contributes two admin-gated source controls onto the
 platform console, composing integrate's existing owners (it never re-implements
-bridge/repo creation or the discovery walk):
+bridge/repo creation or metadata projection):
 
 - ``addSource`` inventories a repository on an existing ``VcsBridge``
   (``import_repository``) and points an addon ``Source`` at it;
 - ``scan`` runs ``Source.refresh()`` (→ ``AddonCatalog.sync_from_source``), which
-  discovers ``pyproject.toml`` rows into the one ``platform.Addon`` marketplace registry.
+  projects built wheel metadata into the one ``platform.Addon`` marketplace registry.
 
-Driven over the stub VCS backend (canned tree/blobs ride on the bridge config), the
+Driven over the native local VCS backend with already-built wheel fixtures, the
 same path the ``marketplace sync`` command and integrate's ``refresh_source`` use.
 """
 
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 from typing import Any
 
 from django.apps import apps
@@ -34,39 +35,13 @@ from tests.conftest import (
 )
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data
+from tests.wheel_fixtures import write_wheel
 
 User = get_user_model()
 platform_schema = importlib.import_module("angee.platform.schema")
 vcs_schema = importlib.import_module("angee.platform_integrate_vcs.schema")
 Addon = apps.get_model("platform", "Addon")
 VcsBridge = apps.get_model("integrate_vcs", "VcsBridge")
-
-_REPOS = [
-    {
-        "name": "acme/addons",
-        "org": "acme",
-        "remote": "https://github.com/acme/addons.git",
-        "default_branch": "main",
-        "visibility": "public",
-    },
-]
-_TREE = [
-    {"path": "src/angee/demo/pyproject.toml", "type": "blob", "oid": "a"},
-    {"path": "src/angee/demo/README.md", "type": "blob", "oid": "b"},
-]
-_BLOBS = {
-    "src/angee/demo/pyproject.toml": (
-                                            '[build-system]\nrequires=["hatchling>=1.27"]\nbuild-backend="hatchling.build"\n'
-                                            '[tool.hatch.build.targets.wheel]\nbypass-selection=true\n'
-                                            '[project]\n'
-                                            'name = "angee-demo"\n'
-                                            'version = "1.0.0"\n'
-                                            'description = "A demo addon."\n'
-                                            'dependencies = ["angee-platform"]\n'
-                                            '[project.entry-points."angee.addons"]\n'
-                                            '"angee.demo" = "angee.demo"\n'
-                                        ),
-}
 
 _ADD_SOURCE = """
 mutation AddSource($data: AddonSourceInput!) {
@@ -76,24 +51,24 @@ mutation AddSource($data: AddonSourceInput!) {
 _SCAN = "mutation($id: ID!){ scan(source_id: $id){ ok message } }"
 
 
-def _bridge() -> Any:
-    """Create a stub-backed VCS bridge serving one repo + one discoverable addon."""
+def _bridge(root: Path) -> Any:
+    """Create a native local VCS bridge for the fixture repository."""
 
     return make_integration(
         "mkt",
         model=VcsBridge,
-        backend_class="stub",
-        config={"stub_repos": _REPOS, "stub_tree": _TREE, "stub_blobs": _BLOBS},
+        backend_class="local",
+        config={"local_root": str(root), "local_name": "acme/addons", "local_org": "acme"},
     )
 
 
 def test_add_source_inventories_the_repo_and_points_an_addon_source_at_it(
-    composed_tables: None,
+    composed_tables: None, tmp_path: Path,
 ) -> None:
     """``addSource`` imports the repo and creates one ``Source(kind="addon")``."""
 
     del composed_tables
-    bridge = _bridge()
+    bridge = _bridge(tmp_path)
     admin = _platform_admin("add-source-admin")
 
     result = _data(
@@ -114,12 +89,16 @@ def test_add_source_inventories_the_repo_and_points_an_addon_source_at_it(
 
 
 def test_scan_prepares_native_package_metadata_into_the_registry(
-    composed_tables: None,
+    composed_tables: None, tmp_path: Path,
 ) -> None:
-    """``scan`` runs the discovery walk and writes a REMOTE ``platform.Addon`` row."""
+    """``scan`` projects an already-built wheel into a REMOTE ``platform.Addon`` row."""
 
     del composed_tables
-    bridge = _bridge()
+    write_wheel(
+        tmp_path / "src/angee_demo.whl", "angee.demo", "angee-demo",
+        requirements=("angee-platform",), description="A demo addon.",
+    )
+    bridge = _bridge(tmp_path)
     admin = _platform_admin("scan-admin")
     _data(
         _execute(
@@ -139,16 +118,19 @@ def test_scan_prepares_native_package_metadata_into_the_registry(
     with system_context(reason="test.marketplace.scan.verify"):
         row = Addon.objects.get(name="angee.demo")
     assert str(row.source) == Addon.AddonSource.REMOTE
-    assert row.vcs_path == "src/angee/demo"
+    assert row.vcs_path == "src/angee_demo.whl"
+    assert row.distribution == "angee-demo"
+    assert row.description == "A demo addon."
+    assert row.depends_on == ["angee.platform"]
 
 
 def test_scan_refuses_a_non_addon_source(
-    composed_tables: None,
+    composed_tables: None, tmp_path: Path,
 ) -> None:
     """``scan`` of a non-addon source kind is reported, never dispatched."""
 
     del composed_tables
-    bridge = _bridge()
+    bridge = _bridge(tmp_path)
     admin = _platform_admin("scan-wrong-kind-admin")
     with system_context(reason="test.marketplace.scan.template_seed"):
         repository = Repository.objects.create(vcs_bridge=bridge, org="acme", name="acme/addons", remote="r")
@@ -161,12 +143,12 @@ def test_scan_refuses_a_non_addon_source(
 
 
 def test_add_source_denies_a_non_admin(
-    composed_tables: None,
+    composed_tables: None, tmp_path: Path,
 ) -> None:
     """The REBAC admin gate denies a non-admin actor."""
 
     del composed_tables
-    bridge = _bridge()
+    bridge = _bridge(tmp_path)
     plain = User.objects.create_user(username="mkt-plain", password="mkt-plain")
 
     result = _execute(

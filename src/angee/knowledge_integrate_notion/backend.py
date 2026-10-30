@@ -264,8 +264,8 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
                     raise CursorInvalid() from error
                 if source is None or error.status not in {403, 404}:
                     raise
-                previous = NotionSnapshot.model_validate(source.source_payload)
-                snapshots.append(NotionSnapshot(node=previous.node, unavailable=True))
+                source_snapshot = NotionSnapshot.model_validate(source.source_payload)
+                snapshots.append(NotionSnapshot(node=source_snapshot.node, unavailable=True))
                 listing = NotionListing(results=[], has_more=False, next_cursor=None)
             if listing.has_more and (not listing.next_cursor or listing.next_cursor == cursor.start_cursor):
                 raise IntegrationError("Notion did not advance its listing cursor.")
