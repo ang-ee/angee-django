@@ -20,10 +20,9 @@ def test_composed_webform_validation(tmp_path: Path) -> None:
     (addon / "models.py").write_text(
         "from datetime import date\n"
         "from django.core.exceptions import ValidationError\n"
-        "from django.db import models\n"
+        "from django_compose.models import Composable\n"
         "\n"
-        "class ChannelSemanticValidation(models.Model):\n"
-        "    extends = 'messaging.Channel'\n"
+        "class ChannelSemanticValidation(Composable, extends='messaging.Channel'):\n"
         "\n"
         "    class Meta:\n"
         "        abstract = True\n"

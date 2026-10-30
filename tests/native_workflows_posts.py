@@ -1,4 +1,5 @@
 """Real eligibility, ACP, workflow and reply owners; fake inference and dispatch."""
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from datetime import datetime, timedelta
@@ -283,10 +284,16 @@ class CommentReplyTests(TransactionTestCase):
             )
         document = self.document()
         document["nodes"]["converse"]["config"]["agent"] = "agents.installed_reply_agent"
-        with TemporaryDirectory() as directory:
+        with TemporaryDirectory() as directory, patch.object(sys, "path", [directory, *sys.path]):
             root = Path(directory)
-            write_addon_distribution(root , 'tests.reply_install', depends_on=())
-            (root / "workflow.yaml").write_text(
+            write_addon_distribution(
+                root, "tests.reply_install", metadata_root=root,
+                capabilities={"resources": {"install": [{"path": "workflow.yaml"}]}},
+            )
+            (root / "__init__.py").write_text("")
+            resources = root / "resources"
+            resources.mkdir()
+            (resources / "workflow.yaml").write_text(
                 yaml.safe_dump(
                     {
                         "_meta": {"model": "workflows.Workflow"},
