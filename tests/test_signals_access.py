@@ -29,6 +29,7 @@ from strawberry_django.fields.types import field_type_map
 from angee.base.models.audit import AuditMixin
 from angee.base.models.timestamps import TimestampMixin
 from angee.base.serialization import json_safe
+from angee.base.signals import send_created_batch
 from angee.base.testing.packages import write_addon_distribution
 from angee.graphql import access, publishing
 from angee.graphql.access import ChangeReadGate
@@ -133,7 +134,10 @@ def test_connect_publishers_is_idempotent() -> None:
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("include_parents", [True, False])
-def test_publisher_parent_views_are_explicit(monkeypatch: pytest.MonkeyPatch, include_parents: bool) -> None:
+@pytest.mark.parametrize("size", [1, 25])
+def test_publisher_parent_views_are_explicit(
+    monkeypatch: pytest.MonkeyPatch, include_parents: bool, size: int,
+) -> None:
     """Child views mirror parent writes; native observers publish only the saved class."""
     with isolate_apps():
         class Parent(models.Model):
@@ -168,8 +172,28 @@ def test_publisher_parent_views_are_explicit(monkeypatch: pytest.MonkeyPatch, in
                 else:
                     assert sent == []
                 sent.clear()
-                Parent.objects.create(name="No child")
+                missing = Parent.objects.create(name="No child")
                 assert sent == []
+                children = [Child.objects.create(name=f"Batched {index}") for index in range(size)]
+                parents = [Parent.objects.get(pk=row.pk) for row in children] + [missing]
+                sent.clear()
+                with CaptureQueriesContext(connection) as captured:
+                    send_created_batch(sender=Parent, instances=parents, using=connection.alias)
+                assert len(captured) == int(include_parents)
+                assert [(model, event.id, event.action, event.changed_values) for model, event in sent] == (
+                    [(Child, str(row.pk), "update", None) for row in children]
+                    if include_parents else []
+                )
+                assert [event.instance.name for _model, event in sent] == (
+                    [row.name for row in children] if include_parents else []
+                )
+                sent.clear()
+                with CaptureQueriesContext(connection) as captured:
+                    send_created_batch(sender=Child, instances=children, using=connection.alias)
+                assert len(captured) == 0
+                assert [(model, event.id, event.action) for model, event in sent] == [
+                    (Child, str(row.pk), "create") for row in children
+                ]
             finally:
                 publishing.disconnect_publishers(Child)
 

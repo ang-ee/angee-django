@@ -237,26 +237,30 @@ def _on_save(
     readable_fields: ReadableFields = (),
     published_model: type[models.Model] | None = None,
     broadcast: bool = True,
+    created_batch: tuple[models.Model, ...] | None = None,
     **kwargs: Any,
 ) -> None:
-    """Publish a local create or update; observers defer effects until commit."""
+    """Publish each row; inherited views read a creation batch on its final send."""
 
     del sender, kwargs
     if raw:
         return
+    instances: Iterable[models.Model] = (instance,)
     if published_model is not None and type(instance) is not published_model:
-        published_instance = published_model._base_manager.filter(pk=instance.pk).first()
-        if published_instance is None:
+        sources = created_batch if created_batch is not None else (instance,)
+        if not sources or instance is not sources[-1]:
             return
-        instance = published_instance
+        rows = published_model._base_manager.db_manager(instance._state.db).in_bulk(row.pk for row in sources)
+        instances = (rows[row.pk] for row in sources if row.pk in rows)
         created = False
-    publish_change(
-        instance,
-        action="create" if created else "update",
-        update_fields=update_fields,
-        readable_fields=readable_fields,
-        broadcast=broadcast,
-    )
+    for row in instances:
+        publish_change(
+            row,
+            action="create" if created else "update",
+            update_fields=update_fields,
+            readable_fields=readable_fields,
+            broadcast=broadcast,
+        )
 
 
 def _on_delete(

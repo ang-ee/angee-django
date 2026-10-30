@@ -26,7 +26,11 @@ from angee.base.permissions import actor_user_id
 
 
 class InboxCoverage(BaseModel):
-    """Shared coverage; independent values intersect and values within a list unite."""
+    """Independent dimensions intersect; values within a dimension unite.
+
+    Empty kinds mean conversations (excluding status feeds). ``updates`` opts
+    into one-way statuses, alone or alongside explicit conversation kinds.
+    """
 
     model_config = ConfigDict(frozen=True)
     platforms: list[str] = Field(default_factory=list)
@@ -189,13 +193,17 @@ class MessageInbox:
             accounts = self.collection("integrate", "Integration")
             rows = rows.filter(channel_id__in=Subquery(accounts.filter(sqid__in=coverage.accounts).values("pk")))
         if coverage.kinds:
-            allowed = {"mail": "email_thread", "direct": "direct", "group": "group"}
+            allowed = {"mail": "email_thread", "direct": "direct", "group": "group", "updates": "status"}
             if any(kind not in {*allowed, "other"} for kind in coverage.kinds):
                 raise ValueError("Unknown conversation kind.")
             predicate = Q(thread__modality__in=[allowed[kind] for kind in coverage.kinds if kind in allowed])
             if "other" in coverage.kinds:
                 predicate |= Q(thread__isnull=True) | ~Q(thread__modality__in=list(allowed.values()))
             rows = rows.filter(predicate)
+        else:
+            # A normal conversation view excludes one-way status feeds. Explicit
+            # update coverage uses the same actor/source/date scope in both panes.
+            rows = rows.exclude(thread__modality="status")
         if coverage.after is not None:
             rows = rows.filter(_order_at__gte=coverage.after)
         if coverage.before is not None:

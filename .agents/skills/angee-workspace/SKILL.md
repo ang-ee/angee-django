@@ -17,9 +17,9 @@ names unless the CLI cannot answer.
 - Source-slot operations: `angee --root "$angee_root" ws source ...`.
 - Raw Git is for committing reviewed changes, inspecting worktrees, and the
   narrow source-cache fast-forward described below when Angee cannot expose it.
-- Jujutsu workspaces: `jj`, as described in
-  [Jujutsu Source Stores](#jujutsu-source-stores). The operator does not manage
-  them yet.
+- Jujutsu workspaces made by hand: `jj`, as described in
+  [Jujutsu Source Stores](#jujutsu-source-stores). Slots the operator cut as jj
+  workspaces follow the "jj slots" section of their workspace's `AGENTS.md`.
 
 Resolve the controlling stack root before any workspace or GitOps command. Run
 those commands with the resolved root explicitly, even while inside a source
@@ -34,12 +34,16 @@ Angee development uses Jujutsu (jj). A source store is a colocated jj
 repository: the path GitOps topology reports for the source contains `.jj`.
 New workspaces are jj workspaces of that store, created and driven with `jj`.
 
-The operator does not manage jj yet. Do not create workspaces with
-`angee ws create`: it materializes git worktrees, which new work no longer
-uses. The `angee ws ...` verbs address only workspaces the operator created,
-so a jj workspace is unknown to `ws list`, `ws git`, `ws status`, `sync-base`,
-and `ws source`; inspect and operate it with `jj`. Existing operator
-workspaces, including the stack's `src`, keep the operator verbs below.
+Unless the stack's `workspace_defaults` sets `slot_mode: jj` for
+`workspaces/src`, `angee ws create` materializes git worktrees, which new work
+no longer uses, so do not create workspaces with it; on a stack that sets it,
+`angee ws create` cuts jj slots the operator drives, and the workspace's
+`AGENTS.md` owns their workflow. The rest of this skill's jj sections cover jj
+workspaces made by hand. The `angee ws ...` verbs address only workspaces the
+operator created, so a jj workspace made by hand is unknown to `ws list`,
+`ws git`, `ws status`, `sync-base`, and `ws source`; inspect and operate it
+with `jj`. Existing operator workspaces, including the stack's `src`, keep the
+operator verbs below.
 
 A slot is a jj workspace when `<slot>/.jj` exists. In such a slot:
 
@@ -154,9 +158,12 @@ pushed.
 
 ## Create Workspace
 
-A new workspace is a jj workspace of the framework source's store. Resolve the
-store path from GitOps topology. If that store has no `.jj`, stop and ask the
-user; do not fall back to `angee ws create`.
+A new workspace is a jj workspace of the framework source's store. On a stack
+whose `workspace_defaults` sets `slot_mode: jj`, create it with
+`angee --root "$angee_root" ws create <name> --template src` and stop here; the
+rest of this section adds one by hand. Resolve the store path from GitOps
+topology. If that store has no `.jj`, stop and ask the user; do not fall back to
+`angee ws create`.
 
 Choose the framework's `<parent-ref>` in this order:
 
@@ -246,7 +253,9 @@ angee --root "$angee_root" ws sync-base <current-workspace> --merge
 ```
 
 Use `--rebase` only when the user explicitly asks for rebase. Merge is the
-default because `/pull` is branch-style integration, not history rewriting.
+default because `/pull` is branch-style integration, not history rewriting. A
+workspace with jj slots refuses `--merge`: run `sync-base` without it, which
+rebases them, as their workspace's `AGENTS.md` describes.
 
 ### Pull From Another Workspace Or Ref
 

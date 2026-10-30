@@ -13,18 +13,30 @@ export interface MessageSummaryData {
   created_at: string;
   sender?: SenderIdentity | null;
   channel?: { display_name: string } | null;
+  platform?: string | null;
+  thread?: { modality?: string | null } | null;
 }
 
 const MESSAGE_MODEL = "messaging.Message";
 
+/** A source-owned one-way status, never a conversation with the other authors. */
+export function isStatusUpdate(message: Pick<MessageSummaryData, "thread">): boolean {
+  return message.thread?.modality === "STATUS";
+}
+
 /** Where a message came from: its channel's name, else its platform's authored label. */
-export function useMessageChannelLabel(): (message: { channel?: { display_name: string } | null; platform?: string | null }) => string | undefined {
+export function useMessageChannelLabel(): (message: Pick<MessageSummaryData, "channel" | "platform" | "thread">) => string | undefined {
+  const t = useMessagingT();
   const platforms = useEnumOptions(MESSAGE_MODEL, "platform", { casing: "upper" });
   return React.useCallback((message) => {
+    const option = message.platform ? optionLabel(platforms, message.platform) : undefined;
+    const label = typeof option === "string" ? option : undefined;
+    if (isStatusUpdate(message)) return message.channel?.display_name
+      ? t("message.updateSource", { platform: label ?? "", account: message.channel.display_name })
+      : t("message.statusUpdate");
     if (message.channel?.display_name) return message.channel.display_name;
-    const label = message.platform ? optionLabel(platforms, message.platform) : undefined;
     return typeof label === "string" ? label : undefined;
-  }, [platforms]);
+  }, [platforms, t]);
 }
 
 /** Messaging's compact pointer for a pane; the caller owns its destination. */
@@ -34,15 +46,18 @@ export function MessagePaneRow({ message, onOpenConversation, ...props }: {
 } & Pick<PaneRowProps, "onOpen" | "href" | "selected" | "detail" | "sub" | "meta" | "icon" | "verb">): React.ReactElement {
   const t = useMessagingT();
   const channelLabel = useMessageChannelLabel();
+  const update = isStatusUpdate(message);
+  const source = channelLabel(message);
   const sender = senderDisplayName(message.sender, t("message.unknownSender"));
-  return <PaneRow icon="channel" title={message.title || sender}
+  return <PaneRow icon="channel" title={update ? sender : message.title || sender}
     avatar={props.icon ? undefined : { src: senderAvatarUrl(message.sender), initials: avatarInitials(sender) }}
-    detail={channelLabel(message)}
+    detail={source}
     meta={<AbsoluteTime value={message.sent_at || message.created_at} display="date" />}
-    sub={[message.title ? sender : undefined, message.preview].filter(Boolean).join(" · ")}
-    verb={onOpenConversation ? <Button size="iconSm" variant="ghost" onClick={onOpenConversation}
+    sub={[message.title && !update ? sender : undefined, message.preview].filter(Boolean).join(" · ")}
+    verb={onOpenConversation && !update ? <Button size="iconSm" variant="ghost" onClick={onOpenConversation}
       aria-label={t("conversations.open")} title={t("conversations.open")}><Glyph name="channel" /></Button> : t("message.read")}
-    {...props} />;
+    {...props}
+    {...(update ? { detail: props.detail ? <>{source} · {props.detail}</> : source } : {})} />;
 }
 
 /** The leaf paths a resource list selects so its rows can render as `MessageSummary`. */
@@ -62,11 +77,14 @@ export const MESSAGE_SUMMARY_FIELDS = [
   "sender.party.display_avatar.url",
   "channel.id",
   "channel.display_name",
+  "platform",
+  "thread.modality",
 ] as const;
 
 /** One message as an email-style row: avatar, sender, star, subject, a two-line preview and the date. */
 export function MessageSummary({ message }: { message: MessageSummaryData }): React.ReactElement {
   const t = useMessagingT();
+  const channelLabel = useMessageChannelLabel();
   const sender = senderDisplayName(message.sender, t("message.unknownSender"));
   return (
     <div className="flex min-w-0 items-start gap-3 whitespace-normal py-3">
@@ -81,10 +99,10 @@ export function MessageSummary({ message }: { message: MessageSummaryData }): Re
             <AbsoluteTime value={message.sent_at ?? message.created_at} display="date" />
           </span>
         </div>
-        {message.title ? <p className="truncate text-13 font-medium">{message.title}</p> : null}
+        {message.title && !isStatusUpdate(message) ? <p className="truncate text-13 font-medium">{message.title}</p> : null}
         <p className="line-clamp-2 text-13 text-fg-muted">{message.preview}</p>
-        {message.channel ? (
-          <p className="truncate text-12 text-fg-muted">{message.channel.display_name}</p>
+        {channelLabel(message) ? (
+          <p className="truncate text-12 text-fg-muted">{channelLabel(message)}</p>
         ) : null}
       </div>
     </div>

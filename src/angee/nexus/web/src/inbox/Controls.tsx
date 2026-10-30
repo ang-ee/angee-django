@@ -14,7 +14,10 @@ import {
 import { InboxAccounts } from "./documents";
 import { INBOX_SOURCE_MODELS } from "./state";
 import {
+  ALL_ACTIVITY_PRESET,
   COVERAGE_KINDS,
+  coverageKindFilter,
+  statusCoverage,
   DIRECT_MAIL_PRESET,
   InboxFilter,
   resultLenses,
@@ -45,13 +48,16 @@ export function useCoverageKind(
   const value =
     kinds.length === 0
       ? "any"
-      : Filter.from(coverage).hasPreset(DIRECT_MAIL_PRESET)
+      : Filter.from(coverage).hasPreset(ALL_ACTIVITY_PRESET)
+        ? "all"
+        : Filter.from(coverage).hasPreset(DIRECT_MAIL_PRESET)
         ? "direct-mail"
         : only && (COVERAGE_KINDS as readonly string[]).includes(only)
           ? only
           : "custom";
   const options = [
     { value: "any", label: t("inbox.anyKind") },
+    { value: "all", label: t("inbox.allActivity") },
     ...COVERAGE_KINDS.flatMap((kind) =>
       kind === "direct"
         ? [
@@ -66,14 +72,7 @@ export function useCoverageKind(
   ];
   const setValue = (next: string): void => {
     if (next === "custom") return;
-    const base = Filter.from(coverage).withoutFields(["kind"]);
-    onCoverage(
-      next === "any"
-        ? base
-        : next === "direct-mail"
-          ? Filter.from(base).and(DIRECT_MAIL_PRESET)
-          : Filter.from(base).and({ kind: { exact: next } }),
-    );
+    onCoverage(coverageKindFilter(coverage, next));
   };
   return { value, label: options.find((option) => option.value === value)?.label ?? value, options, setValue };
 }
@@ -213,7 +212,7 @@ export function useResultControls(lens: ResultLens) {
     customFilterFields,
     groupOptions: resultLenses[lens].axes.map((axis) => ({
       id: axis,
-      label: t(`inbox.axis.${axis}`),
+      label: axis === "conversation" && statusCoverage(view.state.filter).includes ? t("inbox.axis.source") : t(`inbox.axis.${axis}`),
       group: { field: `by_${axis}` },
     })),
   };

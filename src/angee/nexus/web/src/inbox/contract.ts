@@ -45,7 +45,20 @@ export const COVERAGE_FIELDS = [
  * editor of the coverage `kind` fact (results toolbar facets + navigator select) so
  * the inventory and the direct+mail predicate never fork. Mirrors the backend
  * coverage map in `messaging/inbox.py`. */
-export const COVERAGE_KINDS = ["direct", "mail", "group", "other"] as const;
+export const COVERAGE_KINDS = ["direct", "mail", "group", "other", "updates"] as const;
+export const ALL_ACTIVITY_PRESET = { kind: { inList: [...COVERAGE_KINDS] } };
+
+/** One coverage edit shared by the kind picker and status-message deep links. */
+export function coverageKindFilter(filter: ResourceViewFilter, kind: string): ResourceViewFilter {
+  const base = Filter.from(filter).withoutFields(["kind"]);
+  return kind === "any" ? base : Filter.from(base).and(kind === "all" ? ALL_ACTIVITY_PRESET
+    : kind === "direct-mail" ? DIRECT_MAIL_PRESET : { kind: { exact: kind } });
+}
+
+export function statusCoverage(filter: ResourceViewFilter) {
+  const kinds = new InboxFilter(filter).values("kind");
+  return { includes: kinds.includes("updates"), only: kinds.length === 1 && kinds[0] === "updates" };
+}
 export const DIRECT_MAIL_PRESET = { kind: { inList: ["direct", "mail"] } };
 
 /** The row unit and compatible axes are one declaration, shared by controls and transport. */

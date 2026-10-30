@@ -62,4 +62,3 @@ def public_subject_ref(subject: SubjectRef) -> SubjectRef:
         field.public_id_from_value(subject.subject_id),
         subject.optional_relation,
     )
-

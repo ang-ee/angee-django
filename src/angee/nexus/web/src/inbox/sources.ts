@@ -21,6 +21,7 @@ import {
   navigatorAxes,
   navigatorOrder,
   resultLenses,
+  statusCoverage,
   type NavigatorLens,
   type ResultLens,
 } from "./contract";
@@ -46,6 +47,11 @@ export function navigatorSource({
   t: Translate;
 }): CollectionSource<InboxNavigatorRow> {
   const models = fading ? FADING_NAVIGATOR_MODELS : INBOX_MODELS;
+  const updates = statusCoverage(coverage);
+  const summary = (count: number, messages: number) => t(updates.only ? "inbox.navigatorUpdatesSummary"
+    : updates.includes ? "inbox.navigatorActivitySummary" : "inbox.unitSummary", {
+    count, messages, unit: t(`inbox.${lens}`),
+  });
   const options = (request: CollectionPageRequest) => {
     const filter = new InboxFilter(request.filter);
     return {
@@ -75,11 +81,7 @@ export function navigatorSource({
       select: (data) => ({
         rows: data.inbox_navigator.rows,
         total: data.inbox_navigator.count,
-        summary: t("inbox.unitSummary", {
-          count: data.inbox_navigator.count,
-          unit: t(`inbox.${lens}`),
-          messages: data.inbox_navigator.message_count,
-        }),
+        summary: summary(data.inbox_navigator.count, data.inbox_navigator.message_count),
       }),
     }),
     groups: collectionQuery({
@@ -99,23 +101,21 @@ export function navigatorSource({
           key: { [groupField]: row.value, label: row.label },
           count: row.count,
         })),
-        summary: t("inbox.unitSummary", {
-          count: data.inbox_navigator_groups.record_count,
-          unit: t(`inbox.${lens}`),
-          messages: data.inbox_navigator_groups.message_count,
-        }),
+        summary: summary(data.inbox_navigator_groups.record_count, data.inbox_navigator_groups.message_count),
       }),
     }),
   };
 }
 
 export function resultSource({
+  coverage,
   navigation,
   timezone,
   lens,
   groupField,
   t,
 }: {
+  coverage: ResourceViewFilter;
   navigation: InboxNavigation;
   timezone: string;
   lens: ResultLens;
@@ -139,6 +139,11 @@ export function resultSource({
       size: request.pageSize,
     };
   };
+  const updates = statusCoverage(coverage);
+  const summary = (count: number, messages: number) => updates.only && (lens === "conversations" || lens === "timeline")
+    ? t("inbox.updatesSummary", { count: messages })
+    : updates.includes && lens === "conversations" ? t("inbox.sourcesSummary", { count, messages })
+      : t("inbox.unitSummary", { count, unit: t(`inbox.unit.${lens}`), messages });
   return {
     query: inboxCollectionQuery(resultLenses[lens].axes),
     leafPageSize: lens === "conversations" ? 3 : 25,
@@ -152,11 +157,7 @@ export function resultSource({
       select: (data) => ({
         rows: data.inbox_results.rows,
         total: data.inbox_results.count,
-        summary: t("inbox.unitSummary", {
-          count: data.inbox_results.count,
-          unit: t(`inbox.unit.${lens}`),
-          messages: data.inbox_results.message_count,
-        }),
+        summary: summary(data.inbox_results.count, data.inbox_results.message_count),
       }),
     }),
     groups: collectionQuery({
@@ -173,18 +174,12 @@ export function resultSource({
         ),
         totalCount: data.inbox_result_groups.count,
         buckets: data.inbox_result_groups.rows.map((row) => ({
-          key: { [groupField]: row.value, label: row.label, platform: row.platform, account: row.account },
+          key: { [groupField]: row.value, label: row.label, platform: row.platform, account: row.account, modality: row.modality },
           count: row.count,
           max: { latest: row.latest },
         })),
-        summary: t("inbox.unitSummary", {
-          count:
-            lens === "conversations"
-              ? data.inbox_result_groups.count
-              : data.inbox_result_groups.record_count,
-          unit: t(`inbox.unit.${lens}`),
-          messages: data.inbox_result_groups.message_count,
-        }),
+        summary: summary(lens === "conversations" ? data.inbox_result_groups.count : data.inbox_result_groups.record_count,
+          data.inbox_result_groups.message_count),
       }),
     }),
   };

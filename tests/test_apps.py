@@ -43,7 +43,7 @@ def test_base_addon_keeps_its_label_and_foreign_django_app_has_no_addon_contract
     """Foundation owns its capability facts while ordinary Django apps keep native identity."""
 
     base = apps.get_app_config("base")
-    
+
     assert base.name == "angee.base"
     assert is_angee_addon(base)
     assert not is_angee_addon(apps.get_app_config("auth"))

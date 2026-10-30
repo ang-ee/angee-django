@@ -108,7 +108,7 @@ describe("ThreadTranscript", () => {
   test("shows the reply author and opens the quoted parent through the host", () => {
     const parent = {
       id: "msg_parent", preview: "Meet at Casa Cosecha.", message_type: "COMMENT" as const,
-      sender: { ...message().sender!, display_name: "Dane" }, thread: { id: "thr_1" },
+      sender: { ...message().sender!, display_name: "Dane" }, thread: { id: "thr_1", modality: "GROUP" as const },
     };
     mocks.transcriptRows = [message({ parent })];
     const openReply = vi.fn();
@@ -127,7 +127,7 @@ describe("ThreadTranscript", () => {
 
   test("a quoted parent in the same thread uses the native transcript anchor", () => {
     mocks.transcriptRows = [message({ parent: {
-      id: "msg_parent", preview: "Earlier message", message_type: "COMMENT", sender: null, thread: { id: "thr_1" },
+      id: "msg_parent", preview: "Earlier message", message_type: "COMMENT", sender: null, thread: { id: "thr_1", modality: "GROUP" as const },
     } })];
     const changeAnchor = vi.fn();
     render(<ThreadTranscript threadId="thr_1" onAnchorChange={changeAnchor} />);

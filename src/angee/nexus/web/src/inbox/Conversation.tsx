@@ -23,6 +23,7 @@ export function InboxConversation({
   // The visible window reports membership; the header names the complete conversation.
   const [matches, setMatches] = useState<TranscriptMatches | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const statusFeed = matches?.thread.modality === "STATUS";
   useInboxBreadcrumbs(navigation, { conversation: { id: navigation.thread,
     label: matches?.thread.conversation_label || t("inbox.conversation") } });
   return (
@@ -33,9 +34,9 @@ export function InboxConversation({
       <RecordHeader
         density="compact"
         headingLevel={1}
-        crumbs={t("inbox.conversation")}
+        crumbs={t(statusFeed ? "inbox.updates" : "inbox.conversation")}
         title={matches?.thread.conversation_label || t("inbox.conversation")}
-        meta={matches ? t(matches.count === matches.total ? "inbox.conversationCount" : "inbox.transcriptCount",
+        meta={matches ? t(statusFeed ? "inbox.statusFeedCount" : matches.count === matches.total ? "inbox.conversationCount" : "inbox.transcriptCount",
           { count: matches.count, total: matches.total }) : t("inbox.loading")}
       />
       <ErrorBanner description={error} />

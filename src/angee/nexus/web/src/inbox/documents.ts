@@ -15,6 +15,7 @@ export const InboxMessageFields = graphql(`
     }
     thread {
       id
+      modality
       title {
         text
       }
@@ -197,6 +198,7 @@ export const InboxResultGroups = graphql(`
         message_count
         latest
         platform
+        modality
         account
       }
     }
@@ -365,6 +367,7 @@ export const InboxTranscriptMatches = graphql(`
       thread {
         id
         conversation_label
+        modality
       }
       count
       total

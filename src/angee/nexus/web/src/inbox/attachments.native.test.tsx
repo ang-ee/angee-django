@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { ShellPageTestProviders } from "@angee/app/testing";
-import { ToastProvider, createRouteHref, type ChatterViewContext } from "@angee/ui";
+import { ResourceViewProvider, ToastProvider, createRouteHref, type ChatterViewContext } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from "@tanstack/react-router";
@@ -37,7 +37,7 @@ const pdf = (n: number) => ({
   id: `part-${n}`, name: `renewal-${n}.pdf`, type: "application/pdf", position: n, role: "BODY",
   disposition: "ATTACHMENT", cid: "", parent: null, fragment: null,
   file: {
-    id: `file-${n}`, filename: `renewal-${n}.pdf`, title: "", size_bytes: 2048, url: `/storage/download/token-${n}/renewal-${n}.pdf`,
+    id: `file-${n}`, filename: `renewal-${n}.pdf`, title: "", size_bytes: "2048", url: `/storage/download/token-${n}/renewal-${n}.pdf`,
     mime_type: { mime_type: "application/pdf", label: "PDF" },
   },
 });
@@ -54,7 +54,10 @@ const message = {
   participants: [], parts: [pdf(1), pdf(2)], reaction_groups: [], parent,
 };
 
-function fixture(uses: { part_id: string; target: string; count: number }[] = [], fileUses = false) {
+function fixture(uses: { part_id: string; target: string; count: number }[] = [], fileUses = false, status = false) {
+  const source = status ? { ...message, title: "", platform: "WHATSAPP",
+    thread: { ...message.thread, modality: "STATUS", conversation_label: "Status updates" },
+    channel: { id: "acc-one", display_name: "Connected account" } } : message;
   const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   const dataProvider = { custom: vi.fn(async ({ meta }) => {
     if (meta?.gqlQuery === InboxTranscriptMatches) {
@@ -63,17 +66,17 @@ function fixture(uses: { part_id: string; target: string; count: number }[] = []
       } } };
     }
     if (meta?.gqlQuery === InboxMessage) {
-      return { data: { inbox_message: { matches: true, uses, message } } };
+      return { data: { inbox_message: { matches: !status, uses, message: source } } };
     }
     if (meta?.gqlQuery === InboxRelatedTarget) {
       const part = pdf(2);
       return { data: { inbox_related_target: {
         id: "file:file-2", kind: "file", label: part.name, count: 1, unit: "messages",
-        source: message, part, file: part.file, fragment: null,
+        source, part, file: part.file, fragment: null,
       } } };
     }
     if (meta?.gqlQuery === InboxConnections) {
-      return { data: { inbox_connections: { rows: fileUses ? [{ id: "use-1", message, part: pdf(2) }] : [], count: fileUses ? 1 : 0, message_count: fileUses ? 1 : 0 } } };
+      return { data: { inbox_connections: { rows: fileUses ? [{ id: "use-1", message: source, part: pdf(2) }] : [], count: fileUses ? 1 : 0, message_count: fileUses ? 1 : 0 } } };
     }
     return { data: { thread_message_feed: {
       messages: [message], count: 1, older_cursor: null, has_older: false, has_more_in_window: false,
@@ -83,10 +86,11 @@ function fixture(uses: { part_id: string; target: string; count: number }[] = []
   function Providers({ children }: { children: ReactNode }) {
     return <Provider dataProvider={dataProvider} queryClient={client} liveProvider={{ subscribe: vi.fn(() => "inbox-files"), unsubscribe: vi.fn() }}
       authProvider={{ login: async () => ({ success: true }), logout: async () => ({ success: true }), check: async () => ({ authenticated: true }), onError: async () => ({}) }}
-    >{children}</Provider>;
+    ><ResourceViewProvider scope="local">{children}</ResourceViewProvider></Provider>;
   }
   const navigation = {
     thread: "thread-1", at: "", message: "message-1", part: "", related: "file:file-2", relatedFrom: "message-1",
+    showUpdates: vi.fn(), updatesHref: vi.fn(() => "/nexus/inbox?kind=updates"),
     patch: vi.fn(), previewFile: vi.fn(), read: vi.fn(), results: vi.fn(), conversation: vi.fn(), connect: vi.fn(), openInContext: vi.fn(),
     href: (values: Record<string, string | undefined>) => createRouteHref([{ name: "inbox", path: "/nexus/inbox" }])("inbox", {}, values),
   };
@@ -181,4 +185,25 @@ test("Files backlinks count readable message uses and link to their exact part w
   expect(Object.fromEntries(target.searchParams)).toEqual({ message: "message-1", part: "part-2", related: "file:file-2", relatedFrom: "message-1" });
   expect(inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxConnections)
     .every(([request]) => request.meta?.gqlVariables?.target === "file:file-2")).toBe(true);
+});
+
+
+test("a status reader names the author and connected account without an unrelated conversation", async () => {
+  const inbox = fixture([], false, true);
+  render(<InboxMessageReader {...inbox.props} />, { wrapper: inbox.wrapper });
+  expect(await screen.findByRole("heading", { name: "Status update by Ada" })).toBeTruthy();
+  expect(screen.queryByText("Renewals")).toBeNull();
+  expect(screen.getAllByText(/status update.*Account: Connected account/).length).toBeGreaterThan(0);
+  fireEvent.click(screen.getByRole("button", { name: "View status updates" }));
+  expect(inbox.navigation.showUpdates).toHaveBeenCalled();
+});
+
+
+test("status backlinks retain provenance and never offer to open the shared feed as a conversation", async () => {
+  const inbox = fixture([], true, true);
+  render(<ShellPageTestProviders><ToastProvider><InboxRelatedPane navigation={inbox.props.navigation} /></ToastProvider></ShellPageTestProviders>, { wrapper: inbox.wrapper });
+  const source = await screen.findByRole("button", { name: /Ada.*status update.*Original source/ });
+  expect(screen.queryByRole("button", { name: "Open conversation" })).toBeNull();
+  fireEvent.click(source);
+  expect(inbox.navigation.read).toHaveBeenCalledWith("message-1", "part-2");
 });

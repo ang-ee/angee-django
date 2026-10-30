@@ -5,7 +5,7 @@ import {
   AbsoluteTime, Select, avatarInitials, useResourceView,
   type ResourceViewFilter,
 } from "@angee/ui";
-import { InboxFilter, NAVIGATOR_LENSES, navigatorAxes } from "./contract";
+import { InboxFilter, NAVIGATOR_LENSES, navigatorAxes, statusCoverage } from "./contract";
 import { useCoverageKind, useNavigatorControls } from "./Controls";
 import { navigatorSource } from "./sources";
 import type { InboxNavigatorRow } from "./documents";
@@ -23,6 +23,7 @@ export function InboxNavigatorPane({ coverage, onCoverage, timezone, navigation 
   const lens = navigation.finder;
   const controls = useNavigatorControls(lens);
   const kind = useCoverageKind(coverage, onCoverage);
+  const updates = statusCoverage(coverage);
   const groupField = view.state.groupStack[0]?.field ?? "";
   const fading = new InboxFilter(view.state.filter).one("fading") === "yes";
   const source = useMemo(
@@ -63,8 +64,8 @@ export function InboxNavigatorPane({ coverage, onCoverage, timezone, navigation 
   return (
     <PaneToolbarHost role="region" aria-label={t("inbox.navigator")}>
       <PaneRows className="shrink-0 px-2 py-1">
-        <li><PaneRow icon="channel" title={t("inbox.anyKind")}
-          sub={kind.value !== "any" ? kind.label : undefined}
+        <li><PaneRow icon="channel" title={t(updates.only ? "inbox.allUpdates" : updates.includes ? "inbox.allActivity" : "inbox.anyKind")}
+          sub={kind.value !== "any" && !updates.includes ? kind.label : undefined}
           selected={!navigation.sender && !navigation.circle && !navigation.message && !navigation.thread}
           onOpen={() => navigation.select()} /></li>
       </PaneRows>

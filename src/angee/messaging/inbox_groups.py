@@ -47,6 +47,7 @@ class InboxGroup:
     latest: datetime | None = None
     platform: str = ""
     account: str = ""
+    modality: str = ""
 
 
 @dataclass(frozen=True)

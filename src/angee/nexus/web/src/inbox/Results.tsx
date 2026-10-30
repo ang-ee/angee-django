@@ -1,12 +1,12 @@
 import { useMemo, useState } from "react";
 import { senderDisplayName } from "@angee/parties";
-import { MessagePaneRow, useMessageChannelLabel } from "@angee/messaging";
+import { isStatusUpdate, MessagePaneRow, useMessageChannelLabel } from "@angee/messaging";
 import {
   AbsoluteTime, Button, Dialog, Glyph, ListView, PaneRow, PreviewPane, RecordHeader, Select,
   optionLabel, useEnumOptions, useResourceView,
 } from "@angee/ui";
 import type { GroupLabelContext } from "@angee/ui/views/resource-view-types";
-import { RESULT_LENSES, resultLensForGroup } from "./contract";
+import { RESULT_LENSES, resultLensForGroup, statusCoverage } from "./contract";
 import { useResultControls } from "./Controls";
 import { resultSource } from "./sources";
 import type { InboxResultRow } from "./documents";
@@ -19,19 +19,20 @@ export function InboxResultsPane({ navigation, timezone }: { navigation: InboxNa
   const t = useNexusT();
   const view = useResourceView();
   const selected = Boolean(navigation.sender || navigation.circle);
+  const updates = statusCoverage(view.state.filter);
   const selectionLabel = useInboxBreadcrumbs(navigation);
   const group = view.state.groupStack[0];
   const lens = resultLensForGroup(navigation.lens, group);
   const groupField = group?.field ?? "";
   const controls = useResultControls(lens);
-  const source = useMemo(() => resultSource({ navigation, timezone, lens, groupField, t }), [navigation, timezone, lens, groupField, t]);
+  const source = useMemo(() => resultSource({ coverage: view.state.filter, navigation, timezone, lens, groupField, t }), [view.state.filter, navigation, timezone, lens, groupField, t]);
   const columns = useMemo(() => [{ field: "latest", header: t("inbox.latest") }], [t]);
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col" aria-label={t("inbox.results")}>
       <RecordHeader density="compact" title={selected
         ? selectionLabel
-        : t("inbox.anyKind")}
-        meta={selected ? t("inbox.selectionHint") : t("inbox.coverageHint", { timezone })}
+        : t(updates.only ? "inbox.allUpdates" : updates.includes ? "inbox.allActivity" : "inbox.anyKind")}
+        meta={updates.only ? t("inbox.updatesHint") : selected ? t("inbox.selectionHint") : t("inbox.coverageHint", { timezone })}
         actions={selected ? <Button size="iconSm" variant="ghost" aria-label={t("inbox.clearSelection")}
           title={t("inbox.clearSelection")} onClick={() => navigation.select()}><Glyph name="x" /></Button> : undefined} />
       <ListView presentation="workspace" selectable={false} resource="nexus.InboxResults" source={source}
@@ -39,7 +40,7 @@ export function InboxResultsPane({ navigation, timezone }: { navigation: InboxNa
         defaultExpandedGroups="all" {...controls} search={{ box: true }}
         toolbarActions={<>
           <Select size="sm" aria-label={t("inbox.resultLens")} className="w-36" value={lens}
-            options={RESULT_LENSES.map((value) => ({ value, label: t("inbox." + value) }))}
+            options={RESULT_LENSES.map((value) => ({ value, label: t(value === "conversations" && updates.includes ? "inbox.bySource" : "inbox." + value) }))}
             onValueChange={(value) => {
               const next = RESULT_LENSES.find((item) => item === value);
               if (next) navigation.changeResult(next, view.state);
@@ -60,17 +61,19 @@ export function InboxResultsPane({ navigation, timezone }: { navigation: InboxNa
 function ConversationLabel({ bucket, label, timezone, navigation }: GroupLabelContext & { timezone: string; navigation: InboxNavigation }) {
   const t = useNexusT();
   const platforms = useEnumOptions("messaging.Message", "platform", { casing: "upper" });
+  const view = useResourceView();
   const target = bucket.key?.by_conversation;
   if (typeof target !== "string") return label;
   const platform = bucket.key?.platform;
   const account = bucket.key?.account;
+  const statusFeed = bucket.key?.modality === "status";
   const latest = bucket.max?.latest;
   return <PaneRow icon="channel" title={label || t("inbox.conversation")}
     sub={[typeof platform === "string" && platform ? optionLabel(platforms, platform) : undefined,
       typeof account === "string" ? account : undefined].filter(Boolean).join(" · ")}
     meta={typeof latest === "string" ? <AbsoluteTime value={latest} timeZone={timezone} display="date" /> : undefined}
-    label={t("inbox.openConversation")}
-    onOpen={() => target.startsWith("thread:") ? navigation.conversation(target.slice(7)) : navigation.read(target.slice(8))} />;
+    label={t(statusFeed ? "inbox.viewUpdates" : "inbox.openConversation")}
+    onOpen={() => statusFeed ? navigation.showUpdates(view.state) : target.startsWith("thread:") ? navigation.conversation(target.slice(7)) : navigation.read(target.slice(8))} />;
 }
 
 function ResultRow({ row, navigation, inConversationGroup }: { row: InboxResultRow; navigation: InboxNavigation; inConversationGroup: boolean }) {
@@ -81,7 +84,7 @@ function ResultRow({ row, navigation, inConversationGroup }: { row: InboxResultR
   const message = row.message;
   const sender = senderDisplayName(message.sender);
   if (!row.part) return <MessagePaneRow message={message}
-    {...(inConversationGroup ? { detail: undefined } : {})}
+    {...(inConversationGroup && !isStatusUpdate(message) ? { detail: undefined } : {})}
     selected={navigation.message === message.id} onOpen={() => navigation.openInContext(message)}
     verb={message.thread ? <Button size="iconSm" variant="ghost" onClick={() => navigation.read(message.id)}
       aria-label={t("inbox.details")} title={t("inbox.details")}><Glyph name="file" /></Button> : t("inbox.read")} />;

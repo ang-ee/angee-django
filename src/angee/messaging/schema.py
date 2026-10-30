@@ -666,8 +666,7 @@ class ThreadType(TaggedNode, AngeeNode):
         """Resolve one thread's label through :meth:`ThreadQuerySet.conversation_labels`."""
 
         thread = cast(Any, self)
-        title = thread.title.text.strip() if thread.title_id else ""
-        return title or Thread.objects.filter(pk=thread.pk).conversation_labels().get(thread.pk, "")
+        return thread.display_title or Thread.objects.filter(pk=thread.pk).conversation_labels().get(thread.pk, "")
 
     platform: auto
     modality: auto

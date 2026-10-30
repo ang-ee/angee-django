@@ -123,7 +123,7 @@ export const MessageReplyFields = graphql(`
     preview
     message_type
     sender { ...MessageSenderFields }
-    thread { id }
+    thread { id modality }
   }
 `);
 
@@ -131,6 +131,8 @@ export const MessageReplyFields = graphql(`
 export const MessageReaderFields = graphql(`
   fragment MessageReaderFields on MessageType {
     id
+    platform
+    thread { id modality }
     channel { id display_name }
     title
     preview
