@@ -51,7 +51,7 @@ addon_namespace:
 
 # Path to the project's web package, relative to the project root — the directory
 # this template renders the web package into. Mirrors the `web_path` input the dev
-# stack passes to `pnpm --dir <web_path> codegen`, so codegen ownership is one place.
+# stack passes to Vite, which awaits generation through `@angee/app/vite`.
 web_path:
   type: str
   default: "web"

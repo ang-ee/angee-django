@@ -469,6 +469,16 @@ describe("React architecture guardrails", () => {
     });
   });
 
+  test("frontend generation has one callable native ESM export for Vite and the CLI", () => {
+    const manifest = JSON.parse(readFileSync(resolve(MONOREPO_ROOT, "packages/app/package.json"), "utf8"));
+    expect(manifest.exports["./web-codegen"]).toEqual({
+      types: "./src/web-codegen.d.mts", import: "./src/web-codegen.mjs",
+    });
+    expect(manifest.publishConfig.exports["./web-codegen"]).toEqual({
+      types: "./dist/web-codegen.d.mts", default: "./dist/web-codegen.mjs",
+    });
+  });
+
   test("framework critical exports exist in their declared owners", () => {
     expect(invalidCriticalExports(FRAMEWORK_CRITICAL_EXPORTS)).toEqual([]);
   });

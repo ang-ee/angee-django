@@ -4,7 +4,8 @@ Traps moved from the frontend guide's Pitfalls section. The layering, manifest a
 
 - **Generated documents are an explicit prerequisite for addon checks.** Neither
   root nor package typecheck/test scripts regenerate them automatically. After a
-  schema change, refresh the host's SDL and codegen before checking consumers;
+  schema change, refresh the host's SDL and invoke the shared framework CLI before
+  standalone consumer checks. Vite dev/build await that same generation automatically;
   [Composition and schema](../../../../docs/checks.md#composition-and-schema) owns the
   command order and working directories. Addon fragments resolve the composed
   stack's generated documents first. Select the controlling host's declared output rather than a stale repository-local runtime fallback.

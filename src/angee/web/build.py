@@ -7,9 +7,9 @@ contributions and the deployment's ``ANGEE_UI`` layer) and
 ``tailwind.sources.css`` (the Tailwind ``@source`` include). It holds **no**
 GraphQL-schema knowledge: which schemas exist, whether each is live, and the
 shape of their operation documents are owned by the SDL on disk and the
-``@angee/app`` ``angee-web-codegen`` CLI that reads this manifest. Generating
-``runtime/web/app.ts`` is the CLI's job, not the composer's, so that no
-schema-shaped TypeScript is ever authored in Python.
+``@angee/app`` shared generator. Vite dev/build awaits it; ``angee-web-codegen``
+exposes the same generation for standalone checks. It generates
+``runtime/web/app.ts`` so no schema-shaped TypeScript is authored in Python.
 """
 
 from __future__ import annotations

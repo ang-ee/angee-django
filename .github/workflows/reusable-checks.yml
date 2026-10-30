@@ -509,8 +509,11 @@ jobs:
         if: ${{ matrix.group == 1 }}
         working-directory: stack
         run: |
-          pnpm install --no-frozen-lockfile
-          pnpm --dir web codegen
+          if [ ! -f pnpm-lock.yaml ]; then
+            pnpm install --lockfile-only --no-frozen-lockfile
+          fi
+          pnpm install --frozen-lockfile
+          pnpm --config.verify-deps-before-run=false --dir web exec angee-web-codegen --runtime ../runtime --web-root .
       - name: Typecheck and test all fragments against the composition
         if: ${{ matrix.group == 1 }}
         working-directory: stack

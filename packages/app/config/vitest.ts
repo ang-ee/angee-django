@@ -31,7 +31,7 @@ export function gqlAliasFor(runtimeGqlDir: string) {
   if (!existsSync(runtimeGqlDir)) {
     throw new Error(
       `Generated GraphQL runtime not found at "${runtimeGqlDir}". `
-      + "Compose the stack first, then run pnpm codegen from the stack web host.",
+      + "Compose the stack first, then run pnpm --config.verify-deps-before-run=false exec angee-web-codegen --runtime ../runtime --web-root . from the stack web host.",
     );
   }
   return [

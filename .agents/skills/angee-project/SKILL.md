@@ -20,7 +20,7 @@ package or stack profile. Addon-local declarations belong to `angee-addon`.
 | Database hooks and readiness | `django_compose.provision` |
 | Dependency chain and service holds | Controlling stack `angee.yaml` |
 | Fragment install membership | Stack `pnpm-workspace.yaml` |
-| Codegen and generated app entry | Host `web/package.json` and `@angee/app` CLI |
+| Codegen and generated app entry | `@angee/app` generator through Vite dev/build or its explicit CLI for checks |
 
 ## Work
 
@@ -43,7 +43,9 @@ package or stack profile. Addon-local declarations belong to `angee-addon`.
    YAML overlay. Native yamlconf provenance must survive expansion. Do not move
    structural app/output identity into environment-derived values.
 6. Use native workspace/package membership for web fragments. The web projector
-   emits the manifest; the host's `angee-web-codegen` pass consumes emitted SDL.
+   emits the manifest; Vite awaits the shared `@angee/app` generation before
+   dev/build. Standalone fragment checks invoke its explicit CLI after SDL refresh
+   ([Composition and schema](../../../docs/checks.md#composition-and-schema)).
    Add a pnpm member for an external fragment rather than copying it into the host.
 7. On a running stack, invoke its whole chained dependency job through the
    operator. Current framework templates use `deps`; instance templates use

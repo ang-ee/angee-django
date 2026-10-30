@@ -1,7 +1,7 @@
 # This project's JS workspace for the process-compose dev stack: the web package's
 # `@angee/*: workspace:*` deps resolve against the framework packages in the local
 # `workspaces/src/angee` slot and the addon fragments in source, so
-# Vite serves live framework JS. The dev stack's `deps` job runs `pnpm install`
+# Vite serves live framework JS. The `deps` job runs `pnpm install --frozen-lockfile`
 # here (source://app). Never `pnpm install` inside a slot — a private install forks
 # dependency identities for every linked framework package.
 packages:
