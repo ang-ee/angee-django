@@ -378,6 +378,9 @@ angee --root "$ANGEE_ROOT" job run deps --chained-restart
 # Instance stacks start their dependency chain at native Python sync.
 angee --root "$ANGEE_ROOT" job run py-sync --chained-restart
 
+# Recompose after source changes when native packages are already synchronized.
+angee --root "$ANGEE_ROOT" job run compose --chained-restart
+
 # One or more services by name; also `start` and `stop`
 angee --root "$ANGEE_ROOT" restart django celery-worker
 ```
@@ -388,15 +391,20 @@ angee --root "$ANGEE_ROOT" restart django celery-worker
   waits on them restarts. On a dev stack that sequence is:
   - `deps` runs `pnpm install`;
   - `py-sync` stops its declared held Django/workers and installs native packages;
-  - `compose` emits verified model and capability artifacts;
+  - `compose` holds the same Python consumers and emits verified model and capability artifacts;
   - `provision` performs native history checks, migrations and idempotent hooks;
   - schema/codegen jobs consume those artifacts;
   - successful chained recovery reapplies held and dependent services once.
 
+  A direct `compose` run holds Django and the workers so their serving leases
+  cannot block publication. With `--chained-restart` it selects downstream jobs,
+  not its `py-sync` prerequisite; dependency changes still require the
+  whole-application restart.
+
   The operator keeps held services stopped across the entire selected job graph.
-  Failure or cancellation leaves them stopped. Running `py-sync` without
-  `--chained-restart` intentionally leaves holds stopped; it does not bypass compose
-  or provision by automatically resuming services. Plain service restarts remain
+  Failure or cancellation leaves them stopped. Running `py-sync` or `compose`
+  without `--chained-restart` intentionally leaves holds stopped; it never
+  resumes consumers before required compose and provision steps. Plain service restarts remain
   separate operations.
 
   Postgres, Redis and the operator keep running, so the operator stays
