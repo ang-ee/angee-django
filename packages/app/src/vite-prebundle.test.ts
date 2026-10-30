@@ -118,7 +118,6 @@ test("linked UI requests the CodeMirror graph as one unoptimized copy on first u
     const server = await createServer({
       ...config,
       configFile: false,
-      plugins: [],
       logLevel: "silent",
       appType: "custom",
       cacheDir: join(webRoot, "cache"),
@@ -170,7 +169,7 @@ test.each([false, true])("discovers linked UI dependencies across lazy boundarie
     const reference = await optimizeDeps(await resolveConfig({
       ...scanConfig,
       cacheDir: join(webRoot, "reference-cache"),
-      optimizeDeps: { ...config.optimizeDeps, entries: [fileURLToPath(new URL("../../ui/src/index.ts", import.meta.url))] },
+      optimizeDeps: { ...resolved.optimizeDeps, entries: [fileURLToPath(new URL("../../ui/src/index.ts", import.meta.url))] },
     }, "serve"));
     const actual = await optimizeDeps(await resolveConfig({
       ...scanConfig,
