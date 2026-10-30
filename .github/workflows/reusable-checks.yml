@@ -391,7 +391,7 @@ jobs:
       - name: Export the framework's locked check tools
         if: ${{ inputs.consumer-path != '' || inputs.addons-profile == 'full' }}
         working-directory: stack/workspaces/src/angee
-        run: uv export --locked --only-group dev --no-hashes --no-emit-project --output-file "$GITHUB_WORKSPACE/check-tools.txt"
+        run: uv export --locked --only-group dev --no-hashes --no-emit-workspace --output-file "$GITHUB_WORKSPACE/check-tools.txt"
       - name: Lint the consumer with the framework policy
         if: ${{ inputs.consumer-path != '' && matrix.group == 1 }}
         working-directory: stack

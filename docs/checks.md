@@ -349,7 +349,8 @@ pushes to `main`. The current tiers are:
   and addon fragments, and run the bridges repository's pytest suite with its
   native source-test settings and collection policy. Bridge tests use the
   composed stack's runtime dependencies plus the framework's locked check tools,
-  as the consumer lane does. Bridge packages declare dependencies in their own
+  as the consumer lane does. The tools export omits workspace members already
+  supplied by the composed host. Bridge packages declare dependencies in their own
   `pyproject.toml`; native lockfiles own resolved versions. The suite's package
   metadata guard checks that the collection requirements match its workspace
   member distributions.
