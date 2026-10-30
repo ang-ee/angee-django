@@ -14,13 +14,13 @@ from django.db import models, transaction
 from django.db.models.fields import NOT_PROVIDED
 from rebac import system_context
 from rebac.models import active_relationship_model
+from tests.tables import model_tables
 
 from angee.base.models.base import AngeeModel
 from angee.resources.entries import ResourceEntry
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.models import Resource
 from angee.resources.tests.test_resources import addon, entry
-from tests.tables import model_tables
 
 
 @pytest.mark.parametrize(("suffix", "separator"), [("csv", ","), ("tsv", "\t")])

@@ -41,7 +41,6 @@ from collections.abc import Iterable, Sequence
 from contextlib import ExitStack
 from typing import Any, ClassVar, Self, cast
 
-from angee.base.hooks import resolve_hooks
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.db.models import ProtectedError, Q, RestrictedError

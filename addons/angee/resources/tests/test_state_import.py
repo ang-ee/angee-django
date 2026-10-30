@@ -17,15 +17,6 @@ from django.db import connection
 from django.db.models.fields import NOT_PROVIDED
 from import_export.results import RowResult
 from rebac import system_context
-
-from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceModel, InferenceProvider
-from angee.base.models.transitions import StateTransitions
-from angee.resources.entries import ResourceEntry
-from angee.resources.exceptions import ResourceLoadError
-from angee.resources.loader import AngeeResource, build_resource
-from angee.resources.testing.models import Resource
-from angee.resources.tests.test_resources import addon
-from angee.resources.widgets import split_xref
 from tests.chatterdemo.models import TrackedRecordChild
 from tests.conftest import (  # noqa: F401 -- share fake-addon lifetime
     Repository,
@@ -35,6 +26,15 @@ from tests.conftest import (  # noqa: F401 -- share fake-addon lifetime
     addon_fixture_resources,
     make_integration,
 )
+
+from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceModel, InferenceProvider
+from angee.base.models.transitions import StateTransitions
+from angee.resources.entries import ResourceEntry
+from angee.resources.exceptions import ResourceLoadError
+from angee.resources.loader import AngeeResource, build_resource
+from angee.resources.testing.models import Resource
+from angee.resources.tests.test_resources import addon
+from angee.resources.widgets import split_xref
 
 
 def _write_rows(path: Path, model: str, rows: list[dict[str, Any]]) -> None:

@@ -15,7 +15,6 @@ from datetime import date
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, Self, TypedDict, cast
 
-from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError

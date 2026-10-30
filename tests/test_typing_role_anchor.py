@@ -22,11 +22,12 @@ def test_generated_role_anchor_alias_survives_cold_and_warm_analysis(tmp_path: P
     (tmp_path / "role_settings.py").write_text(
         "from pathlib import Path\nSECRET_KEY = 'role-types'\n"
         "INSTALLED_APPS = ['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', "
-        "'angee.base', 'role_probe', 'angee.build.ProjectBuildConfig']\n"
+        "'angee.base', 'role_probe']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
-        f"COMPOSE_RUNTIME_DIR = Path({str(tmp_path / 'role_runtime')!r})\n"
-        "COMPOSE_RUNTIME_MODULE = 'role_runtime'\n"
+        f"COMPOSE_OUTPUT_DIR = Path({str(tmp_path / 'role_runtime')!r})\n"
+        "COMPOSE_OUTPUT_MODULE = 'role_runtime'\n"
+        "from angee.base.conf import configure\nconfigure(globals())\n"
     )
     config = tmp_path / "mypy.ini"
     config.write_text(
@@ -40,12 +41,13 @@ def test_generated_role_anchor_alias_survives_cold_and_warm_analysis(tmp_path: P
     )
     env["DJANGO_SETTINGS_MODULE"] = "role_settings"
     bootstrap = subprocess.run(
-        [sys.executable, "-c", "import django; django.setup()"],
+        [sys.executable, "-c", "from django_compose.management import execute; execute(['manage.py','compose'])"],
         cwd=root, env=env, capture_output=True, text=True, check=False,
     )
     assert bootstrap.returncode == 0, bootstrap.stdout + bootstrap.stderr
     generated = tmp_path / "role_runtime/role_probe/models.py"
-    assert "class ProbeRole(AbstractProbeRole):" in generated.read_text()
+    assert "class ProbeRole(" in generated.read_text()
+    assert "_SourceProbeRole" in generated.read_text()
     command = [sys.executable, "-m", "mypy", "--show-traceback", "--config-file", str(config)]
 
     def check(*paths: Path) -> subprocess.CompletedProcess[str]:

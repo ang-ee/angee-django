@@ -26,6 +26,7 @@ from rebac.roles import grant as grant_role
 
 from angee.agents.backends import InferenceBackend, InferenceModelSpec
 from angee.agents.testing import models as agents_models  # noqa: F401 -- register shared FK targets
+from angee.base.testing.packages import write_addon_distribution
 from angee.decisions.testing import models as decisions_models  # noqa: F401 -- register shared FK targets
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam_integrate_oidc.models import CredentialOidc as AbstractCredentialOidc
@@ -81,7 +82,6 @@ from tests import (
     integrate_fixtures,  # noqa: F401 -- register discovery targets before database setup
 )
 from tests.extcontrib.models import Role
-from angee.base.testing.packages import write_addon_distribution
 from tests.workflow_steps import workflow_step_classes as workflow_step_classes
 
 # Settings reloads in the suite compose through ProjectContract, which starts

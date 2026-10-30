@@ -29,7 +29,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx2
-from angee.base.serialization import canonical_json
 from deepdiff import DeepDiff
 from django.apps import apps
 from django.conf import settings

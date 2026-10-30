@@ -1891,8 +1891,9 @@ def test_process_render_is_development_even_when_serve_validator_is_bypassed() -
 def test_production_serve_workers_use_configured_app_cpu_count_and_reject_one(
     monkeypatch: pytest.MonkeyPatch, settings: Any, application: str,
 ) -> None:
-    from angee.server.management.commands import serve
     from django.core.management.base import CommandError
+
+    from angee.server.management.commands import serve
 
     settings.ASGI_APPLICATION = application
     started: list[dict[str, Any]] = []

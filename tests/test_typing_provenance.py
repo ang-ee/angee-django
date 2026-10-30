@@ -18,14 +18,12 @@ def test_provenance_plugin_types_concrete_storage_without_angee_host(tmp_path: P
     app.mkdir()
     (app / "__init__.py").write_text("")
     (app / "models.py").write_text(
-        "from django.db import models\n"
-        "class Changeset(models.Model):\n"
-        "    runtime = True\n"
+        "from django.db import models\nfrom django_compose.models import Composable\n"
+        "class Changeset(Composable, concrete=True):\n"
         "    note = models.CharField(max_length=40)\n"
         "    class Meta:\n"
         "        abstract = True\n"
-        "class OtherChangeset(models.Model):\n"
-        "    runtime = True\n"
+        "class OtherChangeset(Composable, concrete=True):\n"
         "    note = models.IntegerField()\n"
         "    class Meta:\n"
         "        abstract = True\n"
@@ -33,16 +31,17 @@ def test_provenance_plugin_types_concrete_storage_without_angee_host(tmp_path: P
     (tmp_path / "storage_settings.py").write_text(
         "import os\nfrom pathlib import Path\n"
         "SECRET_KEY = 'optional-provenance-typing'\n"
-        "INSTALLED_APPS = ['django.contrib.contenttypes', 'storage_probe', 'angee.compose.apps.BuildComposeConfig']\n"
+        "INSTALLED_APPS = ['django.contrib.contenttypes', 'storage_probe']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
-        f"COMPOSE_RUNTIME_DIR = Path({str(tmp_path / 'storage_runtime')!r})\n"
-        "COMPOSE_RUNTIME_MODULE = 'storage_runtime'\n"
+        f"COMPOSE_OUTPUT_DIR = Path({str(tmp_path / 'storage_runtime')!r})\n"
+        "COMPOSE_OUTPUT_MODULE = 'storage_runtime'\n"
         "ANGEE_CHANGESET_MODEL = os.environ.get('PROVENANCE_TYPING_STORAGE', 'storage_probe.Changeset')\n"
+        "from django_compose.conf import configure\nconfigure(globals())\n"
     )
     config = tmp_path / "mypy.ini"
     config.write_text(
-        "[mypy]\nplugins = angee.compose.typing, angee.provenance.typing\n"
+        "[mypy]\nplugins = django_compose.typing, angee.provenance.typing\n"
         f"mypy_path = {tmp_path},{root},{root / 'addons'}\n"
         f"cache_dir = {tmp_path / 'cache'}\nignore_missing_imports = True\n"
         "[mypy.plugins.django-stubs]\ndjango_settings_module = storage_settings\n"
@@ -100,7 +99,7 @@ def test_provenance_plugin_keeps_protocol_without_an_installed_storage_app(tmp_p
     )
     config = tmp_path / "mypy.ini"
     config.write_text(
-        "[mypy]\nplugins = angee.compose.typing, angee.provenance.typing\n"
+        "[mypy]\nplugins = django_compose.typing, angee.provenance.typing\n"
         f"mypy_path = {tmp_path},{root},{root / 'addons'}\n"
         f"cache_dir = {tmp_path / 'cache'}\nignore_missing_imports = True\n"
         "[mypy.plugins.django-stubs]\ndjango_settings_module = absent_storage_settings\n",
@@ -139,7 +138,7 @@ def test_installed_provenance_settings_keep_their_declared_types(tmp_path: Path)
     source.write_text(
         "from typing import assert_type\nfrom django.conf import settings\n"
         "assert_type(settings.ANGEE_CHANGESET_MODEL, str)\n"
-        "assert_type(settings.ANGEE_MANAGEMENT_CONTEXT, str)\n"
+        "assert_type(settings.COMPOSE_COMMAND_CONTEXT, list[str])\n"
         "assert_type(settings.SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD, bool)\n",
     )
     env = dict(

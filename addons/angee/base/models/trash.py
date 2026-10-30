@@ -7,7 +7,6 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Any, ClassVar, Self, TypeVar, cast
 
-from angee.base.serialization import strip_null_bytes
 from django.conf import settings
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError

@@ -1,8 +1,8 @@
 """Collect integration joins in native composed SQLite and PostgreSQL hosts."""
 from django.db import connection
 
-from tests.composed_host import run_composed_tests
 from angee.base.testing.packages import write_addon_distribution
+from tests.composed_host import run_composed_tests
 
 
 def test_framework_integration(tmp_path):

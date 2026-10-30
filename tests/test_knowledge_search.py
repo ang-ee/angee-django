@@ -7,8 +7,8 @@ from pathlib import Path
 
 from django.db import connection
 
-from tests.composed_host import COMPOSED_TEST_TIMEOUT
 from angee.base.testing.packages import write_addon_distribution
+from tests.composed_host import COMPOSED_TEST_TIMEOUT
 
 
 def test_composed_knowledge_search(tmp_path: Path) -> None:

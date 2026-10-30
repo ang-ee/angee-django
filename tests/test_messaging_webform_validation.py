@@ -8,8 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tests.composed_host import COMPOSED_TEST_TIMEOUT
 from angee.base.testing.packages import write_addon_distribution
+from tests.composed_host import COMPOSED_TEST_TIMEOUT
 
 
 def test_composed_webform_validation(tmp_path: Path) -> None:

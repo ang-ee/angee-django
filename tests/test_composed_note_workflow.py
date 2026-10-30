@@ -9,8 +9,8 @@ import sys
 from pathlib import Path
 
 from django.db import connection
-from hatch_angee import discover
 
+from hatch_angee import discover
 from tests.composed_host import COMPOSED_TEST_TIMEOUT
 
 

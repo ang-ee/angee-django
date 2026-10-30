@@ -29,6 +29,7 @@ from strawberry_django.fields.types import field_type_map
 from angee.base.models.audit import AuditMixin
 from angee.base.models.timestamps import TimestampMixin
 from angee.base.serialization import json_safe
+from angee.base.testing.packages import write_addon_distribution
 from angee.graphql import access, publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.data.hasura import hasura_model_resource
@@ -39,7 +40,6 @@ from angee.graphql.publishing import publication_ingestion_context
 from angee.graphql.schema import DEFAULT_SCHEMA_NAME, GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from tests.conftest import SchemaAddon
-from angee.base.testing.packages import write_addon_distribution
 from tests.tables import model_tables
 
 

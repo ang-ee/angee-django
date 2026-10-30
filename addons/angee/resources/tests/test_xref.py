@@ -5,12 +5,6 @@ import yaml
 from django.apps import apps
 from django.core.exceptions import PermissionDenied
 from rebac import actor_context, system_context
-
-from angee.base.models.identity import public_id_of
-from angee.resources.exceptions import ResourceLoadError
-from angee.resources.loader import AngeeResource, ResourceResolution
-from angee.resources.testing.models import Resource
-from angee.spaces.testing.models import Group
 from tests.conftest import (
     Page,
     create_platform_admin,
@@ -21,6 +15,12 @@ from tests.conftest import (
 from tests.conftest import (
     addon_fixture_resources as addon_fixture_resources,
 )
+
+from angee.base.models.identity import public_id_of
+from angee.resources.exceptions import ResourceLoadError
+from angee.resources.loader import AngeeResource, ResourceResolution
+from angee.resources.testing.models import Resource
+from angee.spaces.testing.models import Group
 
 
 @pytest.mark.usefixtures("composed_tables")

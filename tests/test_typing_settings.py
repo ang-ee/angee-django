@@ -105,22 +105,28 @@ def test_declared_settings_types_preserve_native_errors_and_warm_dependencies(tm
     assert restored.returncode == 0, restored.stdout + restored.stderr
 
 
-def _typing_host_probe(root: Path, project: Path | None) -> subprocess.CompletedProcess[str]:
+def _typing_host_probe(
+    root: Path, project: Path | None, *, module: str = "tests.typing_settings", import_paths: tuple[Path, ...] = (),
+) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env.pop("ANGEE_PROJECT_DIR", None)
     if project is not None:
         env["ANGEE_PROJECT_DIR"] = str(project)
-    env["PYTHONPATH"] = str(root)
+    env["PYTHONPATH"] = os.pathsep.join(str(path) for path in (*import_paths, root / ".mypy_cache", root))
     return subprocess.run([
         sys.executable, "-c", "\n".join([
             "import json",
-            "from pathlib import Path",
-            "from tests import typing_settings as host",
+            "from mypy import api",
+            "from django_compose.typing import CompositionContext",
+            f"context=CompositionContext({module!r})",
+            "host=context.settings",
+            "from django.db import connections",
             "print(json.dumps({",
-            "'apps': [getattr(app, 'name', app) for app in host.INSTALLED_APPS],",
-            "'addon_dirs': [str(path) for path in host.ANGEE_ADDON_DIRS],",
-            "'runtime': str(host.COMPOSE_RUNTIME_DIR),",
+            "'apps': [app.name for app in host.COMPOSE_CLOSURE.app_configs],",
+            "'runtime': str(host.COMPOSE_OUTPUT_DIR),",
             "'database': host.DATABASES['default'], 'secret': host.SECRET_KEY,",
+            "'opened_connections': [c.alias for c in connections.all(initialized_only=True) "
+            "if c.connection is not None],",
             "}))",
         ]),
     ], cwd=root, env=env, capture_output=True, text=True, check=False)
@@ -130,16 +136,18 @@ def test_typing_host_keeps_default_framework_composition() -> None:
     root = Path(__file__).resolve().parents[1]
     result = _typing_host_probe(root, None)
     assert result.returncode == 0, result.stdout + result.stderr
-    host = json.loads(result.stdout)
+    host = json.loads(result.stdout.strip().splitlines()[-1])
     assert "angee.money" in host["apps"]
     assert "angee.workflows" in host["apps"]
-    assert "tests.typing_host" in host["apps"]
-    assert host["addon_dirs"] == [str(root / "addons")]
+    assert "tests.typing_host" not in host["apps"]
     assert host["runtime"] == str(root / ".mypy_cache/typing_runtime")
-    assert host["database"] == {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
+    assert host["database"]["ENGINE"] == "django.db.backends.sqlite3"
+    assert host["database"]["NAME"] == ":memory:"
+    assert host["opened_connections"] == []
 
 
-def test_typing_host_uses_declared_project_paths_without_live_database_or_runtime(tmp_path: Path) -> None:
+def test_authored_project_typing_settings_never_read_live_database_or_runtime(tmp_path: Path) -> None:
+    """Projects select their isolated authored module through native django-stubs."""
     root = Path(__file__).resolve().parents[1]
     project = tmp_path / "project"
     project.mkdir()
@@ -147,38 +155,46 @@ def test_typing_host_uses_declared_project_paths_without_live_database_or_runtim
     addon = addon_dir / "typing_consumer"
     addon.mkdir(parents=True)
     (addon / "__init__.py").write_text("")
-    (addon / "apps.py").write_text(
-        "from django.apps import AppConfig\n"
-        "class ConsumerConfig(AppConfig):\n    name = 'typing_consumer'\n    default = True\n"
+    write_addon_distribution(addon, "typing_consumer", depends_on=("angee.money",))
+    live = project / "settings.py"
+    live.write_text(
+        "INSTALLED_APPS = ['typing_consumer']\nSECRET_KEY = 'project-secret-must-not-survive'\n"
+        "DATABASES = {'default': {'ENGINE': 'django.db.backends.postgresql', 'NAME': 'do-not-connect'}}\n",
     )
-    write_addon_distribution(addon , 'typing_consumer', depends_on=('angee.money',))
-    (project / "settings.py").write_text(
-        "from pathlib import Path\n"
-        "BASE_DIR = Path(__file__).parent\n"
-        "INSTALLED_APPS = ['typing_consumer']\n"
-        f"ANGEE_ADDON_DIRS = [Path({str(addon_dir)!r}), Path({str(root / 'addons')!r})]\n"
-        "SECRET_KEY = 'project-secret-must-not-survive'\n"
-        "COMPOSE_RUNTIME_DIR = BASE_DIR / 'live_runtime'\n"
-        "DATABASES = {'default': {'ENGINE': 'django.db.backends.postgresql', 'NAME': 'do-not-connect'}}\n"
+    original = live.read_bytes()
+    cache = project / ".mypy_cache"
+    cache.mkdir()
+    output = cache / "project_typing_runtime"
+    (tmp_path / "project_typing_settings.py").write_text(
+        "from pathlib import Path\nfrom django_compose.conf import configure\n"
+        f"BASE_DIR=Path({str(project)!r})\nCOMPOSE_OUTPUT_DIR=Path({str(output)!r})\n"
+        "COMPOSE_OUTPUT_MODULE='project_typing_runtime'\nCOMPOSE_ADDON_GROUP='angee.addons'\n"
+        "INSTALLED_APPS=['typing_consumer']\nSECRET_KEY='isolated-project-type-checking'\n"
+        "DATABASES={'default':{'ENGINE':'django.db.backends.sqlite3','NAME':':memory:'}}\nconfigure(globals())\n",
     )
-    result = _typing_host_probe(root, project)
+    result = _typing_host_probe(
+        root, None, module="project_typing_settings", import_paths=(tmp_path, addon_dir, cache),
+    )
     assert result.returncode == 0, result.stdout + result.stderr
-    host = json.loads(result.stdout)
+    host = json.loads(result.stdout.strip().splitlines()[-1])
     assert "angee.money" in host["apps"]
     assert "typing_consumer" in host["apps"]
     assert "angee.workflows" not in host["apps"]
-    assert "tests.typing_host" in host["apps"]
-    assert host["addon_dirs"] == [str(addon_dir), str(root / "addons")]
-    assert host["runtime"] == str(project / ".mypy_cache/typing_runtime")
-    assert host["database"] == {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
-    assert host["secret"] == "framework-type-checking"
+    assert "tests.typing_host" not in host["apps"]
+    assert host["runtime"] == str(output)
+    assert host["database"]["ENGINE"] == "django.db.backends.sqlite3"
+    assert host["database"]["NAME"] == ":memory:"
+    assert host["opened_connections"] == []
+    assert host["secret"] == "isolated-project-type-checking"
+    assert live.read_bytes() == original
     assert not (project / "live_runtime").exists()
 
 
 def test_explicit_typing_project_never_silently_falls_back_to_framework(tmp_path: Path) -> None:
     result = _typing_host_probe(Path(__file__).resolve().parents[1], tmp_path)
     assert result.returncode != 0
-    assert "needs settings.py or settings.yaml" in result.stderr
+    assert "Projects select an authored isolated Django settings module" in result.stderr
+    assert not (tmp_path / ".mypy_cache").exists()
 
 
 def test_immutable_migration_imports_retain_typed_caller_errors(tmp_path: Path) -> None:

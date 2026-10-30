@@ -7,7 +7,6 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 
-from angee.base.serialization import canonical_json
 from django.core.exceptions import ValidationError
 from django.db import models
 

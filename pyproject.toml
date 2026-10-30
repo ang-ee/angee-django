@@ -247,8 +247,8 @@ warn_unused_ignores = true
 exclude = ["(^|/)(runtime_migrations|compose_migrations)/"]
 
 [[tool.mypy.overrides]]
-module = ["simple_history.*"]
-# Historical runtime classes inherit native bases from this unmarked package.
+module = ["simple_history.*", "django_sqids.*"]
+# Historical runtime classes inherit native bases from these unmarked packages.
 follow_untyped_imports = true
 
 [[tool.mypy.overrides]]
