@@ -173,9 +173,6 @@ def subject_reaches_user(subject: models.Model | SubjectRef, user_id: Any) -> bo
         return True
     if not reference.optional_relation:
         return False
-    # Permission declarations import before app population; the native auth
-    # backend loads Django models and belongs to this runtime decision only.
-    from rebac.backends import backend
 
     return backend().check_access(subject=user, action=reference.optional_relation, resource=reference.object).allowed
 
