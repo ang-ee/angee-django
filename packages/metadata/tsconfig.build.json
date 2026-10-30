@@ -4,6 +4,8 @@
     "allowImportingTsExtensions": false,
     "declaration": true,
     "declarationMap": false,
+    "incremental": true,
+    "tsBuildInfoFile": "./dist/.tsbuildinfo",
     "noEmit": false,
     "outDir": "./dist",
     "rootDir": "./src"
