@@ -13,7 +13,7 @@ from angee.base.testing.packages import write_addon_distribution
 from angee.platform import discovery
 
 
-def distribution(tmp_path, monkeypatch, name, *, requirements=(), editable=False):
+def distribution(tmp_path, monkeypatch, name, *, requirements=(), editable=False, dynamic=False):
     """Extend canonical fixture metadata only with the catalogue facts under test."""
 
     app = name.replace("-", ".")
@@ -27,6 +27,9 @@ def distribution(tmp_path, monkeypatch, name, *, requirements=(), editable=False
     document = tomlkit.parse((package / "pyproject.toml").read_text())
     document["project"]["description"] = "Package data description"
     document["project"]["dependencies"] = list(requirements)
+    if dynamic:
+        del document["project"]["entry-points"]
+        document["project"]["dynamic"] = ["entry-points"]
     (package / "pyproject.toml").write_text(tomlkit.dumps(document))
     info, = root.glob("*.dist-info")
     with (info / "METADATA").open("a") as stream:
@@ -41,8 +44,9 @@ def distribution(tmp_path, monkeypatch, name, *, requirements=(), editable=False
 
 
 @pytest.mark.parametrize("editable", (False, True))
-def test_disabled_catalogue_uses_distribution_paths_without_imports(tmp_path, monkeypatch, editable):
-    dist, _ = distribution(tmp_path, monkeypatch, "probe-poison", editable=editable)
+@pytest.mark.parametrize("dynamic", (False, True))
+def test_disabled_catalogue_uses_distribution_paths_without_imports(tmp_path, monkeypatch, editable, dynamic):
+    dist, _ = distribution(tmp_path, monkeypatch, "probe-poison", editable=editable, dynamic=dynamic)
     facts = discovery.facts_from_distribution(dist)
     assert facts == {
         "name": "probe.poison", "distribution": "probe-poison", "requirements": (),

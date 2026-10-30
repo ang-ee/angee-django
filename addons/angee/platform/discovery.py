@@ -109,7 +109,7 @@ def _category(document: Mapping[str, Any]) -> str:
 def facts_from_toml(
     document: Mapping[str, Any], *, dependencies: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Project a VCS project's native metadata into retained catalogue facts."""
+    """Project static source metadata; dynamic entry points require a built distribution."""
 
     identity = _project_identity(document)
     if identity is None:
@@ -141,10 +141,6 @@ def facts_from_distribution(
         return {}
     point = index.entry_points[provider]
     document = package_document(distribution, point.name)
-    if _project_identity(document) != (point.name, point.value):
-        raise ImproperlyConfigured(f"{point.name}: package and installed entry-point identities disagree")
-    if canonicalize_name(document["project"]["name"]) != provider:
-        raise ImproperlyConfigured(f"{point.name}: package and installed distribution identities disagree")
     return {
         "name": point.name, "distribution": provider,
         "requirements": tuple(distribution.requires or ()),

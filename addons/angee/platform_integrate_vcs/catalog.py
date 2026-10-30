@@ -10,7 +10,7 @@ from angee.platform.discovery import facts_from_toml
 
 
 def parse_addon_meta(blob: bytes, *, dependencies: Mapping[str, str] | None = None) -> dict[str, Any]:
-    """Project an addon pyproject; ordinary projects contribute no catalogue row."""
+    """Project a source blob with static addon identity; other projects contribute no row."""
 
     facts = facts_from_toml(tomllib.loads(blob.decode("utf-8")), dependencies=dependencies)
     if not facts:
