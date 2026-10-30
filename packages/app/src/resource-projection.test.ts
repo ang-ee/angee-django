@@ -201,7 +201,10 @@ describe("app resource projection", () => {
 
   test("the app trail lists every app a page sits in, flattened ones too (G-8)", () => {
     const compiled = compileMenus([
-      { id: "projects", menus: [{ id: "projects", children: [{ id: "projects.tasks", route: "projects.tasks" }] }] },
+      { id: "projects", menus: {
+        "projects": {},
+        "projects.tasks": { route: "projects.tasks", parent: "projects" },
+      } },
       { id: "messaging", menus: { messaging: { route: "messaging.messages" } } },
       { id: "pm", dependsOn: ["projects", "messaging"], menus: { pm: { include: [{ id: "projects", flatten: true }, "messaging"] } } },
       { id: "look", menus: { look: { route: "look.page", group: "platform" } } },
@@ -286,15 +289,21 @@ describe("menu alterations in the route projection", () => {
     { name: "desk.cycle", path: "$cycleId", parent: "desk.cycles" },
   ];
   const layers: MenuLayer[] = [
-    { id: "records", menus: [{ id: "records", route: "records.all" }] },
-    { id: "teams", menus: [{ id: "teams", route: "teams.all" }] },
-    { id: "desk", dependsOn: ["records", "teams"], menus: [{ id: "desk", children: [
-      { id: "desk.home", route: "desk.home" },
-      { id: "desk.incoming", route: "desk.incoming" },
-      { id: "desk.review", route: "desk.review" },
-      { id: "desk.cycles-hub", route: "desk.cycles-hub" },
-      { id: "desk.settings", group: "platform", children: [{ id: "desk.team", route: "teams.all.record", params: { id: "team-1" } }] },
-    ] }] },
+    { id: "records", menus: {
+      "records": { route: "records.all" },
+    } },
+    { id: "teams", menus: {
+      "teams": { route: "teams.all" },
+    } },
+    { id: "desk", dependsOn: ["records", "teams"], menus: {
+      "desk": {},
+      "desk.home": { route: "desk.home", parent: "desk" },
+      "desk.incoming": { route: "desk.incoming", parent: "desk" },
+      "desk.review": { route: "desk.review", parent: "desk" },
+      "desk.cycles-hub": { route: "desk.cycles-hub", parent: "desk" },
+      "desk.settings": { group: "platform", parent: "desk" },
+      "desk.team": { route: "teams.all.record", params: { id: "team-1" }, parent: "desk.settings" },
+    } },
     { id: "suite", dependsOn: ["desk", "records", "teams"], menus: {
       suite: { label: "Suite", include: [{ id: "desk", flatten: true }, "records"] },
       "desk.review": { remove: true },
@@ -339,7 +348,11 @@ describe("menu alterations in the route projection", () => {
 describe("composition explanation", () => {
   test("collects the selection, menu removals, hidden nodes and unavailable routes with reasons", () => {
     const layers: MenuLayer[] = [
-      { id: "desk", menus: [{ id: "desk", children: [{ id: "desk.home", route: "desk.home" }, { id: "desk.review", route: "desk.review" }] }] },
+      { id: "desk", menus: {
+        "desk": {},
+        "desk.home": { route: "desk.home", parent: "desk" },
+        "desk.review": { route: "desk.review", parent: "desk" },
+      } },
       { id: "suite", dependsOn: ["desk"], menus: { "desk.review": { remove: true }, "desk.home": { hide: true } } },
     ];
     const compiled = compileMenus(layers);

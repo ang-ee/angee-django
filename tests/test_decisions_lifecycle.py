@@ -7,10 +7,10 @@ from pydantic import ValidationError as ContractError
 from rebac import RelationshipTuple, current_actor, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.actors import is_sudo
 
+from angee.base.models.locks import StaleRevisionError
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.signals import decision_answered
 from angee.decisions.testing.models import Decision
-from angee.models import StaleRevisionError
 from tests.conftest import create_platform_admin, create_user, vault_for
 
 
@@ -242,3 +242,15 @@ def test_choose_requires_the_answerers_record_write_permission(people):
         question.decide(actor=reviewer, chosen=["complete"], values={subject.sqid: {"name": "Chosen"}})
     question.refresh_from_db()
     assert question.is_open and question.verdict_values is None
+
+
+def test_system_withdrawal_retains_time_without_inventing_a_user(people):
+    requester, *_ = people
+    question = Decision.objects.ask(request_for(people), actor=requester)
+    with system_context(reason="tests.decisions.system_withdrawal"):
+        withdrawn = Decision.objects.withdraw(question, actor=None)
+    assert withdrawn.verdict == []
+    assert withdrawn.answered_by_id is None
+    assert withdrawn.answered_at is not None
+    with pytest.raises(IntegrityError), transaction.atomic():
+        Decision.system_queryset().filter(pk=withdrawn.pk).owner_update(verdict=["complete"])

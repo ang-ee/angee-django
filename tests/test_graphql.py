@@ -20,6 +20,7 @@ from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, Val
 from django.db import models
 from django.db.models.functions import Upper
 from django.test import RequestFactory
+from django.test.utils import isolate_apps
 from django_choices_field import IntegerChoicesField
 from graphql import GraphQLEnumType, GraphQLError, GraphQLObjectType, get_named_type
 from rebac import (
@@ -40,8 +41,11 @@ from rebac.middleware import ActorMiddleware
 from strawberry.django.views import GraphQLView
 from strawberry.extensions import SchemaExtension
 
-from angee.fields import StateField
-from angee.graphql import schema as schema_module
+from angee.base.exceptions import TransitionNotAllowed
+from angee.base.fields.state import StateField
+from angee.base.models.base import AngeeModel
+from angee.base.permissions import require_rebac_queryset
+from angee.graphql.actions import session_user
 from angee.graphql.data import hasura as hasura_data
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.node import AngeeNode
@@ -52,9 +56,6 @@ from angee.graphql.schema import (
     GraphQLSchemas,
 )
 from angee.graphql.view_as import ViewAsReadOnlyExtension
-from angee.iam.permissions import session_user
-from angee.models import AngeeModel, TransitionNotAllowed
-from angee.permissions import require_rebac_queryset
 from tests.conftest import make_addon
 from tests.core_persistence import OwnedRow
 from tests.hierdemo.models import HierNode
@@ -166,19 +167,6 @@ class GatedWriteThing(AngeeModel):
 
         app_label = "tests"
         rebac_resource_type = "tests/gated-write"
-
-
-class UnmanagedThing(RebacMixin):
-    """Concrete REBAC model with an unsafe default manager."""
-
-    objects = models.Manager()
-    name = models.CharField(max_length=32)
-
-    class Meta:
-        """Django model options for the unmanaged test model."""
-
-        app_label = "tests"
-        rebac_resource_type = "tests/unmanaged"
 
 
 class WorkflowItem(models.Model):
@@ -366,18 +354,6 @@ class ManagedThingType:
         "DjangoDefinition",
         (),
         {"model": ManagedThing},
-    )()
-
-
-@strawberry.type
-class UnmanagedThingType:
-    """GraphQL type exposing an unsafely managed REBAC model."""
-
-    name: str
-    __strawberry_django_definition__ = type(
-        "DjangoDefinition",
-        (),
-        {"model": UnmanagedThing},
     )()
 
 
@@ -795,6 +771,10 @@ def test_validation_errors_surface_per_field_extensions(composed: bool) -> None:
         names[2]: ["A client ID is required."],
     }
     assert extensions["formErrors"] == ["Provider is misconfigured."]
+    assert field_result.errors[0].message == (
+        "This field cannot be blank. This field cannot be blank. "
+        "A client ID is required. Provider is misconfigured."
+    )
 
     # A non-dict ValidationError carries only a form-level message.
     assert plain_result.errors is not None
@@ -802,6 +782,7 @@ def test_validation_errors_surface_per_field_extensions(composed: bool) -> None:
     assert plain_extensions is not None
     assert plain_extensions["validationErrors"] == {}
     assert plain_extensions["formErrors"] == ["Something went wrong."]
+    assert plain_result.errors[0].message == "Something went wrong."
 
 
 def test_unexpected_graphql_errors_hide_exception_details(caplog: pytest.LogCaptureFixture) -> None:
@@ -845,7 +826,7 @@ def test_variable_coercion_errors_preserve_client_details_without_logging(caplog
     assert result.errors is not None
     assert result.errors[0].formatted == {
         "message": (
-            "Variable '$value' got invalid value 'not-an-int-secret'; "
+            "Variable '$value' has invalid value: "
             "Int cannot represent non-integer value: 'not-an-int-secret'"
         ),
         "locations": [{"line": 1, "column": 9}],
@@ -936,8 +917,26 @@ def test_graphql_identity_exports_public_node() -> None:
     assert definition.name == "Node"
 
 
+@isolate_apps()
 def test_rebac_graphql_types_require_rebac_default_manager() -> None:
     """GraphQL-exposed REBAC models fail fast without the native query contract."""
+
+    class UnmanagedThing(RebacMixin):
+        """Invalid model confined to this test's native app registry."""
+
+        objects = models.Manager()
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "tests"
+            rebac_resource_type = "tests/unmanaged"
+
+    @strawberry.type
+    class UnmanagedThingType:
+        """GraphQL type exposing the deliberately unsafe model."""
+
+        name: str
+        __strawberry_django_definition__ = type("DjangoDefinition", (), {"model": UnmanagedThing})()
 
     assert isinstance(ManagedThing._default_manager, RebacManager)
     GraphQLSchemas(
@@ -1149,56 +1148,37 @@ def test_failed_build_is_retryable(monkeypatch: pytest.MonkeyPatch) -> None:
     assert attempts == 2
 
 
-def test_readable_model_fields_union_named_schemas_once(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The schema owner memoizes the readable model/attname union across schemas."""
+def test_publisher_projection_unions_finalized_named_resources() -> None:
+    """Server metadata keeps aliases/FK attnames, even from a non-publishing bucket."""
 
     schemas = GraphQLSchemas([addon(public={"query": [HelloQuery]}, console={"query": [WorldQuery]})])
     public_resource = SimpleNamespace(
         model=GatedWriteThing,
+        capabilities=("changes",),
         fields=(SimpleNamespace(readable=True, model_field_name="owner"),),
     )
     console_resource = SimpleNamespace(
         model=GatedWriteThing,
-        fields=(SimpleNamespace(readable=True, model_field_name="name"),),
+        capabilities=(),
+        fields=(SimpleNamespace(readable=True, model_field_name="name"),
+                SimpleNamespace(readable=False, model_field_name="secret")),
     )
-    schemas._builds.update(
-        {
-            "public": cast(strawberry.Schema, SimpleNamespace(angee_resources=(public_resource,))),
-            "console": cast(strawberry.Schema, SimpleNamespace(angee_resources=(console_resource,))),
-        }
-    )
-    calls = 0
-    callers = Barrier(6)
-    original_readable = schema_module.readable_model_field_names
-
-    def counted_readable(resource: Any) -> frozenset[str]:
-        nonlocal calls
-        calls += 1
-        time.sleep(0.02)
-        return original_readable(resource)
-
-    monkeypatch.setattr(schema_module, "readable_model_field_names", counted_readable)
-
-    def concurrent_readable(model: type[models.Model]) -> frozenset[str]:
-        callers.wait()
-        return schemas.model_readable_fields(model)
-
-    with ThreadPoolExecutor(max_workers=6) as executor:
-        results = list(executor.map(concurrent_readable, [GatedWriteThing] * 6))
-
-    assert results == [frozenset({"owner", "owner_id", "name"})] * 6
-    assert calls == 2
+    schemas._builds.update({
+        "public": cast(strawberry.Schema, SimpleNamespace(angee_resources=(public_resource,))),
+        "console": cast(strawberry.Schema, SimpleNamespace(angee_resources=(console_resource,))),
+    })
+    assert schemas.render_publishers() == {
+        GatedWriteThing._meta.label_lower: ["name", "owner", "owner_id"],
+    }
+    assert schemas.render_publishers() == schemas.render_publishers()
 
 
-def test_warm_schema_and_model_projection_reads_do_not_wait_for_build_lock() -> None:
-    """Successful warm owner reads return while another thread holds the cold-path lock."""
+def test_warm_schema_reads_do_not_wait_for_build_lock() -> None:
+    """The live schema's existing warm-cache fast path stays independent of cold builds."""
 
     schemas = GraphQLSchemas([addon(public={"query": [HelloQuery]})])
     cached_schema = cast(strawberry.Schema, SimpleNamespace())
     schemas._builds["public"] = cached_schema
-    schemas._model_readable_fields[GatedWriteThing] = frozenset()
     lock_acquired = Event()
     release_lock = Event()
 
@@ -1207,21 +1187,15 @@ def test_warm_schema_and_model_projection_reads_do_not_wait_for_build_lock() -> 
             lock_acquired.set()
             release_lock.wait()
 
-    def read_warm_values() -> tuple[strawberry.Schema, frozenset[str]]:
-        return schemas.build("public"), schemas.model_readable_fields(GatedWriteThing)
-
     with ThreadPoolExecutor(max_workers=2) as executor:
-        lock_holder = executor.submit(hold_build_lock)
+        holder = executor.submit(hold_build_lock)
         assert lock_acquired.wait(timeout=1)
-        warm_read = executor.submit(read_warm_values)
+        warm = executor.submit(schemas.build, "public")
         try:
-            built, readable = warm_read.result(timeout=1)
+            assert warm.result(timeout=1) is cached_schema
         finally:
             release_lock.set()
-        lock_holder.result(timeout=1)
-
-    assert built is cached_schema
-    assert readable == frozenset()
+        holder.result(timeout=1)
 
 
 def test_merge_root_field_collision() -> None:

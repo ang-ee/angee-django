@@ -15,7 +15,7 @@ const mutationMock = vi.hoisted(() => ({
     errorNotification?: unknown;
   }>,
   data: undefined as unknown,
-  generation: 0,
+  generation: { ordinary: 0, transient: 0 },
 }));
 
 const invalidationMock = vi.hoisted(() => ({
@@ -28,11 +28,13 @@ vi.mock("@refinedev/core", () => ({
   useCustom: vi.fn(),
   useDataProvider: vi.fn(),
   useCustomMutation: ({ mutationOptions }: { mutationOptions: {
+    gcTime?: number;
     onMutate: () => unknown;
     onSuccess: (response: { data: { data: unknown } }, variables: { values: Record<string, unknown> }, context: unknown) => Promise<void>;
   } }) => {
-    mutationMock.generation += 1;
-    const generation = mutationMock.generation;
+    const policy = mutationOptions.gcTime === 0 ? "transient" : "ordinary";
+    mutationMock.generation[policy] += 1;
+    const generation = mutationMock.generation[policy];
     return {
       mutateAsync: vi.fn(
         async (payload: {
@@ -88,7 +90,7 @@ vi.mock("@tanstack/react-query", () => ({
 beforeEach(() => {
   mutationMock.calls = [];
   mutationMock.data = undefined;
-  mutationMock.generation = 0;
+  mutationMock.generation = { ordinary: 0, transient: 0 };
   invalidationMock.authoredPredicateMatches = [];
   invalidationMock.queryInvalidations = 0;
   invalidationMock.resourceInvalidations = [];

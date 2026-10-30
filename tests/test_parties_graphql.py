@@ -10,8 +10,8 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
+from angee.base.identity import public_subject_ref
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.identity import public_subject_ref
 from angee.messaging.testing import models as messaging_models
 from tests.conftest import (
     SchemaAddon,
@@ -518,7 +518,9 @@ def test_a_confirmed_handle_reads_as_the_persons_statement_beside_its_producer(c
 def test_statement_reads_never_widen_what_the_party_reader_sees(composed_tables: None) -> None:
     """``asserted_by`` names a principal only when the reader may read it; evidence keeps its own gates."""
 
-    from angee.models import SourceKind
+    from angee.provenance.statements import (
+        SourceKind,
+    )
     from tests.conftest import make_integration
 
     admin = _platform_admin("statement-visibility-admin")
@@ -554,16 +556,26 @@ def test_statement_reads_never_widen_what_the_party_reader_sees(composed_tables:
 
     query = """
         query Statements {
-          party_statements(order_by: [{created_at: asc}]) { id asserted_by evidence { model id pointer } }
+          party_statements(order_by: [{created_at: asc}]) {
+            id asserted_by evidence { model id pointer } subject { id } handle { id }
+          }
         }
     """
     as_reader = _data(execute_schema(_schema("public"), query, user=reader))["party_statements"]
     assert as_reader == [
-        {"id": card.sqid, "asserted_by": "directory", "evidence": []},
+        {
+            "id": card.sqid,
+            "asserted_by": "directory",
+            "evidence": [],
+            "subject": {"id": party.sqid},
+            "handle": {"id": card_handle.sqid},
+        },
         {
             "id": own.sqid,
             "asserted_by": str(public_subject_ref(to_subject_ref(reader))),
             "evidence": [{"model": "parties.Party", "id": party.public_id, "pointer": "/display_name"}],
+            "subject": {"id": party.sqid},
+            "handle": {"id": own_handle.sqid},
         },
     ]
     as_admin = _data(execute_schema(_schema("public"), query, user=admin))["party_statements"]

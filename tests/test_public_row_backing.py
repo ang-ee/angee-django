@@ -15,10 +15,10 @@ from rebac.backends import LocalBackend, backend, reset_backend
 from rebac.models import Relationship, RelationshipRegistry
 from rebac.preflight import _check_new_model
 from rebac.schema import parse_zed
+from rebac.testing import install_schema
 
 from angee.projects.testing.models import Queue
 from angee.spaces.testing.models import Group
-from angee.testing.permissions import install_permission_schema
 from tests.conftest import create_platform_admin, create_user
 from tests.money_models import Currency, CurrencyRate
 from tests.test_dashboards import DashboardTarget
@@ -34,11 +34,11 @@ def public_policy(request, db, settings):
     reset_backend()
     active = backend()
     assert isinstance(active, LocalBackend)
-    root = Path(__file__).parents[1] / "addons/angee"
-    install_permission_schema(parse_zed("\n".join(
+    root = Path(__file__).parents[1] / "src/angee"
+    install_schema(parse_zed("\n".join(
         (root / addon / "permissions.zed").read_text()
         for addon in ("iam", "dashboards", "money", "spaces", "work")
-    )), active=active)
+    )), backend=active)
     try:
         yield active
     finally:
@@ -157,9 +157,9 @@ def test_create_preflight_matches_persisted_policy(public_policy, candidates, ac
             if permission.name == "create" else permission
             for permission in definition.permissions
         ))
-        install_permission_schema(replace(schema, definitions=[
+        install_schema(replace(schema, definitions=[
             updated if item.resource_type == resource_type else item for item in schema.definitions
-        ]), active=public_policy)
+        ]), backend=public_policy)
     before = _relationship_counts()
     inserted = []
     with patch.object(public_policy, "accessible", side_effect=AssertionError("enumerated resource IDs")):

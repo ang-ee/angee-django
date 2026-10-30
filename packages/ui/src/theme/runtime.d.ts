@@ -29,7 +29,7 @@ export type TokenLayer = Partial<Record<ThemeTokenName, string>>;
 export interface ThemeTokenLayers { shared: TokenLayer; light: TokenLayer; dark: TokenLayer }
 export interface ThemeOptionsEnvelope { version: number; value: unknown }
 export type ThemeOptionsCapability = "palette-customization";
-export interface ThemeOptionsDefinition<TOptions> { version: number; defaults: TOptions; capability?: ThemeOptionsCapability; parse(value: unknown): TOptions; migrate?(value: unknown, fromVersion: number): TOptions; resolve(value: TOptions): Partial<ThemeTokenLayers> }
+export interface ThemeOptionsDefinition<TOptions> { version: number; defaults: TOptions; capability?: ThemeOptionsCapability; parse(value: unknown): TOptions; resolve(value: TOptions): Partial<ThemeTokenLayers> }
 export type ThemeCustomizationFont = "theme" | "system" | "inter" | "humanist" | "industrial" | "editorial" | "mono";
 export type ThemeCustomizationRadius = "theme" | "square" | "compact" | "standard" | "soft" | "round";
 export type ThemeCustomizationDensity = "theme" | "compact" | "balanced" | "comfortable" | "spacious";
@@ -54,11 +54,10 @@ export interface ThemeCustomization {
 }
 export interface ThemeCustomizationConfiguration {
   version?: number;
-  migrate?(value: unknown, fromVersion: number, defaults: ThemeCustomization): ThemeCustomization;
 }
-export interface ThemeDefinition<TOptions = Record<string, never>> { contractVersion: 1; id: string; legacyIds?: readonly string[]; labelKey: string; descriptionKey: string; revision: number; tokens: ThemeTokenLayers; stylesheets?: readonly string[]; options?: ThemeOptionsDefinition<TOptions> }
+export interface ThemeDefinition<TOptions = Record<string, never>> { contractVersion: 1; id: string; labelKey: string; descriptionKey: string; revision: number; tokens: ThemeTokenLayers; stylesheets?: readonly string[]; options?: ThemeOptionsDefinition<TOptions> }
 export interface ResolvedThemeOptions<TOptions = unknown> { version: number; value: TOptions; tokens: ThemeTokenLayers }
-export interface SerializableThemeMetadata { contractVersion: 1; id: string; legacyIds: readonly string[]; labelKey: string; descriptionKey: string; revision: number; optionsVersion: number | null; optionDefaults: unknown; optionsCapability: ThemeOptionsCapability | null }
+export interface SerializableThemeMetadata { contractVersion: 1; id: string; labelKey: string; descriptionKey: string; revision: number; optionsVersion: number | null; optionDefaults: unknown; optionsCapability: ThemeOptionsCapability | null }
 /**
  * @kind null
  * @reason Schema infrastructure: validates serialized runtime contracts.
@@ -104,16 +103,6 @@ export function createThemeCustomizationOptions(defaults: ThemeCustomization, co
 export function isThemeCustomizationOptions(options: ThemeOptionsDefinition<unknown> | undefined): options is ThemeOptionsDefinition<ThemeCustomization> & { capability: "palette-customization" };
 /**
  * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
-export function migrateThemeCustomization(value: unknown, defaults: ThemeCustomization): ThemeCustomization;
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
-export function migrateThemeCustomizationFromV1(value: unknown, fromVersion: number, defaults: ThemeCustomization): ThemeCustomization;
-/**
- * @kind null
  * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function parseThemeCustomization(value: unknown): ThemeCustomization;
@@ -127,3 +116,45 @@ export function compileThemeCss(definitions: readonly ThemeDefinition<unknown>[]
  * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export function serializableThemeMetadata(definition: ThemeDefinition<unknown>): SerializableThemeMetadata;
+
+/** Data projected by app composition for the headless first-paint owner. */
+export interface AppearanceBootstrapPayload {
+  fingerprint: string;
+  host: {
+    themeId: string | null;
+    colorScheme: ColorSchemePreference;
+    options?: ThemeOptionsEnvelope;
+    fingerprint: string;
+    tokenLayers: ThemeTokenLayers;
+  };
+  catalogue: {
+    schema: number;
+    fingerprint: string;
+    themes: Array<{ id: string; defaultTokens?: ThemeTokenLayers }>;
+  };
+}
+/**
+ * @kind null
+ * @reason Shared disposable appearance cache protocol.
+ */
+export const APPEARANCE_CACHE_KEY: "angee:appearance:3";
+/**
+ * @kind null
+ * @reason Shared disposable appearance cache protocol.
+ */
+export const APPEARANCE_CACHE_SCHEMA: 3;
+/**
+ * @kind null
+ * @reason Shared disposable appearance cache protocol.
+ */
+export const APPEARANCE_CACHE_LIMIT: number;
+/**
+ * @kind null
+ * @reason Headless appearance DOM lifecycle shared by bootstrap and React.
+ */
+export function applyAppearanceRoot(options: { themeId: string | null; colorScheme: ColorScheme; tokens?: TokenLayer; target?: Document }): void;
+/**
+ * @kind null
+ * @reason Headless first-paint lifecycle bundled by app composition.
+ */
+export function bootstrapAppearance(payload: AppearanceBootstrapPayload, target?: Pick<Window, "document" | "localStorage" | "matchMedia">): void;

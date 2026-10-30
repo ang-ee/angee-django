@@ -5,6 +5,7 @@ import yaml
 from django.apps import apps
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
+from graphql import GraphQLEnumType, GraphQLEnumValue
 from rebac import (
     RelationshipTuple,
     delete_relationship,
@@ -14,6 +15,8 @@ from rebac import (
     write_relationships,
 )
 
+from angee.graphql.data.resource_fields import _field_enum_values
+from angee.graphql.impl import impl_choices as graphql_impl_choices
 from angee.integrate.schema import ConsoleImplChoicesQuery
 from angee.integrate.testing.integration import Integration
 from angee.resources.testing.models import Resource
@@ -35,6 +38,34 @@ class FixedVaultSource(TriggerSource):
     key = "record_changed"
     label = "Vault event"
     model_label = "knowledge.vault"
+
+
+class WatchOnlyVaultSource(FixedVaultSource):
+    """Observation-only sources must not be offered for admission selection."""
+
+    key = "watch_only_vault"
+    watch_only = True
+
+
+@pytest.mark.parametrize("enum_transport", [True, False])
+def test_trigger_picker_policy_filters_graphql_choices_and_resource_options(settings, monkeypatch, enum_transport):
+    settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES = {
+        **settings.ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES,
+        "watch_only_vault": f"{__name__}.WatchOnlyVaultSource",
+    }
+    field = Trigger._meta.get_field("source")
+    monkeypatch.setattr(field, "choices", [("record_changed", "Record changed"), ("watch_only_vault", "Watch")])
+    value = GraphQLEnumType("TriggerSourceProbe", {
+        "RECORD_CHANGED": GraphQLEnumValue("record_changed"),
+        "WATCH_ONLY_VAULT": GraphQLEnumValue("watch_only_vault"),
+    }) if enum_transport else None
+
+    choices = graphql_impl_choices("workflows.Trigger", "source")
+    options = _field_enum_values(field, value)
+
+    assert "record_changed" in {choice.key for choice in choices}
+    assert "watch_only_vault" not in {choice.key for choice in choices}
+    assert [option.value for option in options] == ["RECORD_CHANGED" if enum_transport else "record_changed"]
 
 
 @pytest.fixture
@@ -240,6 +271,7 @@ def test_integration_grant_uses_record_label_in_preview_and_listing(trigger_surf
         assert listed == [{"relation": "reader", "relation_label": "Reader", "target_label": label}]
 
 
+@pytest.mark.django_db
 def test_relation_label_humanizes_an_undeclared_display_name() -> None:
     """A relation without a native label still has a readable grant caption."""
 
@@ -440,14 +472,15 @@ def test_resource_installs_trigger_disabled(trigger_surface, tmp_path, execution
     source = "100_workflows.trigger.yaml"
     workflow_source = "000_workflows.workflow.yaml"
     owner = make_addon(path=tmp_path, resources={"demo": [{"path": workflow_source}, {"path": source}]})
-    (tmp_path / workflow_source).write_text(yaml.safe_dump({"rows": [{"xref": "graph", "fields": {
+    (tmp_path / "resources").mkdir()
+    (tmp_path / "resources" / workflow_source).write_text(yaml.safe_dump({"rows": [{"xref": "graph", "fields": {
         "key": "installed-trigger-workflow", "name": workflow.name, "draft": document("entry"),
     }}]}))
     fields = {
         "workflow": f"{owner.name}.graph", "source": "record_changed", "model_label": "knowledge.vault",
         "condition": {}, "enabled": True,
     }
-    (tmp_path / source).write_text(yaml.safe_dump({"rows": [{"xref": "trigger", "fields": fields}]}))
+    (tmp_path / "resources" / source).write_text(yaml.safe_dump({"rows": [{"xref": "trigger", "fields": fields}]}))
     result = Resource.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
     assert result.created == 2
     trigger = Trigger.system_queryset().get()
@@ -457,7 +490,7 @@ def test_resource_installs_trigger_disabled(trigger_surface, tmp_path, execution
     assert unchanged.skipped == 2
     assert Trigger.system_queryset().get(pk=trigger.pk).enabled
     fields["condition"] = {"name": {"_eq": "Ready"}}
-    (tmp_path / source).write_text(yaml.safe_dump({"rows": [{"xref": "trigger", "fields": fields}]}))
+    (tmp_path / "resources" / source).write_text(yaml.safe_dump({"rows": [{"xref": "trigger", "fields": fields}]}))
     replaced = Resource.objects.load_addons((owner,), tiers=[Resource.Tier.DEMO], allow_non_dev=True)
     assert replaced.updated == 1
     trigger = Trigger.system_queryset().get(pk=trigger.pk)

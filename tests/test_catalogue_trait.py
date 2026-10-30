@@ -10,9 +10,9 @@ from django.apps import AppConfig
 from django.db import models
 from django.test.utils import isolate_apps
 
-from angee.addons import addon_manifest
-from angee.models import AngeeModel
+from angee.base.models.base import AngeeModel
 from angee.resources.exceptions import ResourceLoadError
+from angee.resources.mixins import ResourceLoadMixin
 from angee.resources.models import Resource
 from tests.conftest import make_addon
 from tests.tables import model_tables
@@ -28,7 +28,6 @@ def _addon(
     config = make_addon(
         name="tests.catalogue_addon", label="catalogue_addon", path=tmp_path, resources=dict(manifest or {})
     )
-    addon_manifest(config)
     return config
 
 
@@ -37,7 +36,7 @@ def test_catalogue_marker_and_tier_are_declared_per_class() -> None:
 
     with isolate_apps():
 
-        class DeclaredCatalogue(AngeeModel):
+        class DeclaredCatalogue(ResourceLoadMixin, AngeeModel):
             """Concrete model that declares the catalogue trait."""
 
             catalogue = True
@@ -48,7 +47,7 @@ def test_catalogue_marker_and_tier_are_declared_per_class() -> None:
 
                 app_label = "base"
 
-        class ParentCatalogue(AngeeModel):
+        class ParentCatalogue(ResourceLoadMixin, AngeeModel):
             """Parent whose catalogue declaration must not leak to subclasses."""
 
             catalogue = True
@@ -70,7 +69,7 @@ def test_catalogue_marker_and_tier_are_declared_per_class() -> None:
 
                 app_label = "base"
 
-        class InstallCatalogue(AngeeModel):
+        class InstallCatalogue(ResourceLoadMixin, AngeeModel):
             """Concrete model that declares a non-default catalogue tier."""
 
             catalogue = True
@@ -82,7 +81,7 @@ def test_catalogue_marker_and_tier_are_declared_per_class() -> None:
 
                 app_label = "base"
 
-        class MultiTierCatalogue(AngeeModel):
+        class MultiTierCatalogue(ResourceLoadMixin, AngeeModel):
             """Catalogue with one default authoring tier and an additional load tier."""
 
             catalogue = True
@@ -111,7 +110,7 @@ def test_invalid_catalogue_tier_is_a_system_check_error() -> None:
 
     with isolate_apps():
 
-        class InvalidCatalogue(AngeeModel):
+        class InvalidCatalogue(ResourceLoadMixin, AngeeModel):
             """Concrete model with an invalid catalogue tier."""
 
             catalogue = True
@@ -148,7 +147,7 @@ def test_invalid_multi_tier_catalogue_contract_is_a_system_check_error(
 
     with isolate_apps():
 
-        class InvalidMultiTierCatalogue(AngeeModel):
+        class InvalidMultiTierCatalogue(ResourceLoadMixin, AngeeModel):
             catalogue = True
             catalogue_tier = default_tier
             catalogue_tiers = allowed_tiers
@@ -166,7 +165,7 @@ def test_invalid_multi_tier_catalogue_contract_is_a_system_check_error(
 def test_resource_loader_rejects_catalogue_tier_mismatch(tmp_path: Path) -> None:
     """Catalogue resource manifests must use the tier declared by the target model."""
 
-    class AbstractCatalogueLoadThing(AngeeModel):
+    class AbstractCatalogueLoadThing(ResourceLoadMixin, AngeeModel):
         """Abstract catalogue source model used to exercise loader-tier validation."""
 
         catalogue = True

@@ -18,7 +18,7 @@ actually unique to your product.
 - **Addon-based** — every capability is one addon: Django source (abstract models
   + GraphQL + REBAC + resources) plus, when it has UI, a co-located `web/`
   fragment (routes, views, widgets, menus, i18n).
-- **Composed, not patched** — `angee build` merges every addon by Python MRO into
+- **Composed, not patched** — explicit runtime builds merge addons by Python MRO into
   a generated `runtime/`. Deterministic (byte-identical, CI-checked); no
   monkey-patching, no runtime registration.
 - **Headless backend, React frontend** — Python owns data, permissions, and the
@@ -36,7 +36,7 @@ actually unique to your product.
 
 ## What you get — framework primitives
 
-- **Compose** — the addon system and the `angee build` pipeline that turns
+- **Compose** — the addon system and the explicit runtime build pipeline that turns
   abstract addons into one running app: concrete Django models, one GraphQL
   schema, one permission schema, typed TS.
 - **Data modeling** — abstract models with opaque `sqid` IDs and a `StateField`,
@@ -60,7 +60,7 @@ actually unique to your product.
   default; signed-in users select an installed theme and color scheme without
   installing packages or rebuilding the app.
 - **Resources** — tiered, idempotent reference and seed data
-  (`master` / `install` / `demo`) declared in `addon.toml` `[resources]`
+  (`master` / `install` / `demo`) declared in `pyproject.toml` `[tool.angee.resources]`
   and applied by `manage.py resources load`.
 - **Admin** — a Django admin auto-emitted for every model from the same `Meta`,
   REBAC-scoped like everything else.
@@ -78,7 +78,7 @@ actually unique to your product.
 - **Knowledge** — a server-backed, permissioned, Obsidian-shape knowledge base:
   pages, typed properties, wikilink/embed edges, canvases. "Index, don't grep" —
   every change becomes queryable rows. Knowledge provides a retrieval seam;
-  [`knowledge_graph_pgvector`](../addons/angee/knowledge_graph_pgvector/README.md)
+  [`knowledge_graph_pgvector`](../src/angee/knowledge_graph_pgvector/README.md)
   is a skeleton plugin using lexical search, with no embeddings. Vector and
   graph retrieval remain future work.
 - **Integrate** — third-party systems: a vendor catalogue, accounts, stateless
@@ -102,9 +102,9 @@ actually unique to your product.
   rechecks the version's publisher against those grants. Trigger enablement
   discloses prospective grants and run readers; retained run-input evidence is
   projected as record references with per-reader redaction.
-- **MCP** — [generated, bounded read tools per resource](../addons/angee/mcp/resource_tools.py)
+- **MCP** — [generated, bounded read tools per resource](../src/angee/mcp/resource_tools.py)
   plus addon-curated `mcp_tools.py` tools, all scoped to the calling actor.
-  The [compiler](../addons/angee/mcp/graphql.py) builds tool documents from the
+  The [compiler](../src/angee/mcp/graphql.py) builds tool documents from the
   composed GraphQL schema when the server starts; the documents are not persisted.
 - **Agentic resource planning** *(Planned)* — consumer-owned capabilities composed
   over shared primitives such as `money`, `sequence`, and `uom`.
@@ -119,14 +119,14 @@ fragment from an install resource declared with kind
 fragments by composed addon order and then `sequence`, publishes the composed
 version, and leaves the base draft unchanged. The base resource fingerprint
 includes the contributions, so changing either side republishes. Unknown points
-and duplicate node keys stop the load. [`Definition`](../addons/angee/workflows/definition.py) owns
-the graph splice and [`WorkflowExtensionResourceKind`](../addons/angee/workflows/resources.py)
+and duplicate node keys stop the load. [`Definition`](../src/angee/workflows/definition.py) owns
+the graph splice and [`WorkflowExtensionResourceKind`](../src/angee/workflows/resources.py)
 owns the composer-time declaration seam; serving code has no extension registry.
 
 ## How you build & ship
 
 - **Opinionated dev cycle** — build a slice frontend-first in Storybook against
-  mocked data → author the backend slice → `angee build` → e2e. GraphQL
+  mocked data → author the backend slice → rebuild with `angee dev` → e2e. GraphQL
   operation names are the throughline across every stage.
 - **Tested end to end** — pytest (including a YAML scenario runner that drives
   operations *as* a given user), Vitest, and Playwright; e2e asserts that
@@ -136,6 +136,9 @@ owns the composer-time declaration seam; serving code has no extension registry.
   agent work; agents can drive the whole lifecycle.
 - **Deterministic builds** — same inputs → byte-identical `runtime/`, gated in CI;
   generated output is never hand-edited.
+- **Native project releases** — `uv build` packages the composed runtime and
+  reviewed, version-controlled Django migration history in a project-specific
+  wheel. Provisioning applies that history without generating new migrations.
 
 ---
 

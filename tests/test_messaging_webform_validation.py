@@ -8,6 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from angee.base.testing.packages import write_addon_distribution
 from tests.composed_host import COMPOSED_TEST_TIMEOUT
 
 
@@ -15,18 +16,13 @@ def test_composed_webform_validation(tmp_path: Path) -> None:
     addon = tmp_path / "addons" / "example" / "webform_semantics"
     addon.mkdir(parents=True)
     (addon / "__init__.py").write_text("")
-    (addon / "addon.toml").write_text(
-        '[addon]\nname = "example.webform_semantics"\n'
-        'description = "Webform semantic validation test donor"\n'
-        'depends_on = ["angee.messaging"]\n'
-    )
+    write_addon_distribution(addon , 'example.webform_semantics', depends_on=('angee.messaging',))
     (addon / "models.py").write_text(
         "from datetime import date\n"
         "from django.core.exceptions import ValidationError\n"
-        "from django.db import models\n"
+        "from django_compose.models import Composable\n"
         "\n"
-        "class ChannelSemanticValidation(models.Model):\n"
-        "    extends = 'messaging.Channel'\n"
+        "class ChannelSemanticValidation(Composable, extends='messaging.Channel'):\n"
         "\n"
         "    class Meta:\n"
         "        abstract = True\n"

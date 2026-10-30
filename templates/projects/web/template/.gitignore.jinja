@@ -1,5 +1,9 @@
-# Generated composer output — emitted by `manage.py angee build`, never edited.
-/runtime/
+# Generated composer output — emitted by the native Hatch runtime hook, never edited.
+/runtime/*
+!/runtime/*/
+/runtime/*/*
+!/runtime/*/migrations/
+/dist/
 
 # Chained-stack overlay files at the project root: a stack template renders its
 # manifest + its own answers file beside the project, and secrets live in .env.
@@ -24,3 +28,6 @@ node_modules/
 /.playwright-mcp/
 /test-results/
 /playwright-report/
+
+# Native dependency edits serialize metadata publication through this lock.
+/.angee-dependencies.lock

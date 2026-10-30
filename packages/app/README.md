@@ -61,8 +61,8 @@ command palette; `hide: false` shows it again. `only: [ids]` narrows the visible
 children per layer, ignoring items the narrowing addon's dependents add.
 `sequence`, `before` and `after` order siblings; included apps follow the
 including node's own children in include order. Two unrelated addons setting
-one field of a node fail composition. The legacy array form remains a list of
-declarations; ids outside the addon's namespace are reported, not refused.
+one field of a node fail composition. Menus are keyed declarations; entries
+outside the addon's namespace alter declared dependency nodes.
 
 Menu entries are checked: unknown keys and malformed values fail composition,
 and the deployment layer must be a mapping.
@@ -157,7 +157,7 @@ URL state, including namespaced collection state. The fixed filter stays on the
 declaration when the query is reset; toolbar Clear restores the route default.
 Shipped views and user favorites appear
 together in the view switcher. Saved favorites retain their selected preset and
-native column visibility; legacy favorites retain the currently selected preset.
+native column visibility. A favorite without a preset leaves the selected preset unchanged.
 
 ## Containers
 

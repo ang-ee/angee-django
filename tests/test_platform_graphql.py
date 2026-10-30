@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib
 from collections import Counter
+from importlib import metadata
+from pathlib import Path
 from typing import Any, NoReturn
 
 import pytest
@@ -13,8 +15,9 @@ from rebac import system_context
 from strawberry.schema.config import StrawberryConfig
 
 import tests.test_platform_install  # noqa: F401 -- register the fixture model graph before database setup
+from angee.graphql.ids import require_instance_for_id
 from angee.platform import composed
-from tests.conftest import addon_schema, execute_schema
+from tests.conftest import addon_schema, execute_schema, make_addon
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data
 
@@ -108,6 +111,29 @@ def test_denied_explorer_is_null_while_computed_collections_are_empty(monkeypatc
     }
 
 
+@pytest.mark.parametrize("allowed", [False, True])
+def test_platform_owns_ledger_listing_and_its_read_gate(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch, allowed: bool,
+) -> None:
+    """The console retains the ledger wire contract and uses one platform gate."""
+
+    resource = apps.get_model("resources", "Resource")
+    with system_context(reason="test.platform.ledger.seed"):
+        row = resource.objects.create(
+            source_addon="test.ledger", source_path="rows.yaml", tier="install", xref="example",
+            content_hash="hash", target_model="iam.User", target_id="user",
+        )
+    monkeypatch.setattr(platform_schema, "platform_can_read", lambda: allowed)
+    schema = _schema()
+    data = _data(execute_schema(
+        schema, '{ resources(where: {source_addon: {_eq: "test.ledger"}}) { id source_addon xref } }',
+    ))
+    assert data == {"resources": [{"id": str(row.pk), "source_addon": "test.ledger", "xref": "example"}]
+                    if allowed else []}
+    [metadata] = [item for item in schema.angee_resources if item.model_label == "resources.Resource"]
+    assert metadata.roots.list_name == "resources"
+
+
 def test_explorer_reads_persisted_addons_and_shared_computed_rows(composed_tables: None, monkeypatch: Any) -> None:
     """Addon facts come from the catalogue while model and field bindings share rows."""
 
@@ -122,7 +148,7 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(composed_table
     addon = apps.get_model("platform", "Addon")
     with system_context(reason="test.platform.explorer.seed"):
         addon.objects.all().delete()
-        addon.objects.create(
+        local_addon = addon.objects.create(
             name=config.name,
             label=config.label,
             namespace="tests",
@@ -134,7 +160,7 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(composed_table
             depends_on=["example.dependency"],
             model_labels=[line_row.label, tag_row.label],
         )
-        addon.objects.create(name="example.remote", source=addon.AddonSource.REMOTE)
+        remote_addon = addon.objects.create(name="example.remote", source=addon.AddonSource.REMOTE)
     with monkeypatch.context() as patch:
         patch.setattr(platform_schema, "platform_can_read", lambda: True)
         patch.setattr(composed, "model_rows", lambda: [line_row, tag_row])
@@ -147,7 +173,7 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(composed_table
                 """
                 query {
                   platform_explorer {
-                    addons { id label model_labels resource_count depends_on }
+                    addons { id name label model_labels resource_count depends_on }
                     models { label fields { name relation_target } }
                     edges { id source target kind field_name }
                   }
@@ -173,14 +199,16 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(composed_table
     explorer = data["platform_explorer"]
     assert explorer["addons"] == [
         {
-            "id": "example.remote",
+            "id": remote_addon.public_id,
+            "name": "example.remote",
             "label": "example.remote",
             "model_labels": [],
             "resource_count": 0,
             "depends_on": [],
         },
         {
-            "id": config.name,
+            "id": local_addon.public_id,
+            "name": config.name,
             "label": config.label,
             "model_labels": [line_row.label, tag_row.label],
             "resource_count": 7,
@@ -201,7 +229,7 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(composed_table
         "id": tag_field.id,
         "name": "tags",
         "model": line_row.label,
-        "addon": line._meta.app_label,
+        "addon": config.name,
         "relation_target": tag_row.label,
     }
     assert {
@@ -218,16 +246,17 @@ def test_addon_names_support_text_search_sort_and_labels_with_unknown_identity(c
     del composed_tables
     admin = _platform_admin("catalogue-search-admin")
     addon = apps.get_model("platform", "Addon")
+    rows = {}
     with system_context(reason="test.platform.catalogue.search"):
-        for name, label in (("example.zebra", ""), ("example.alpha", "Zulu"), ("other.hidden", "")):
-            addon.objects.create(name=name, label=label, source=addon.AddonSource.REMOTE)
+        for name, label in (("catalogue_probe.zebra", ""), ("catalogue_probe.alpha", "Zulu"), ("other.hidden", "")):
+            rows[name] = addon.objects.create(name=name, label=label, source=addon.AddonSource.REMOTE)
 
     data = _data(
         execute_schema(
             _schema(),
             """
             query {
-              platform_addons(where: {name: {_ilike: "example.%"}}, order_by: [{name: asc}]) {
+              platform_addons(where: {name: {_ilike: "catalogue_probe.%"}}, order_by: [{name: asc}]) {
                 id name label
               }
             }
@@ -237,9 +266,40 @@ def test_addon_names_support_text_search_sort_and_labels_with_unknown_identity(c
     )
 
     assert data["platform_addons"] == [
-        {"id": "example.alpha", "name": "example.alpha", "label": "Zulu"},
-        {"id": "example.zebra", "name": "example.zebra", "label": "example.zebra"},
+        {"id": rows["catalogue_probe.alpha"].public_id, "name": "catalogue_probe.alpha", "label": "Zulu"},
+        {
+            "id": rows["catalogue_probe.zebra"].public_id,
+            "name": "catalogue_probe.zebra",
+            "label": "catalogue_probe.zebra",
+        },
     ]
+
+
+def test_addon_detail_and_record_services_share_canonical_public_identity(composed_tables: None) -> None:
+    """Catalogue names remain filter vocabulary; record navigation uses the model ID."""
+
+    del composed_tables
+    admin = _platform_admin("catalogue-identity-admin")
+    addon = apps.get_model("platform", "Addon")
+    with system_context(reason="test.platform.catalogue.identity"):
+        row = addon.objects.create(name="catalogue_probe.identity", label="Identity")
+    assert row.public_id != row.name
+    data = _data(execute_schema(
+        _schema(),
+        """query($id: String!) {
+          platform_addons_by_pk(id: $id) { id name label }
+          platform_addons(where: {name: {_eq: "catalogue_probe.identity"}}) { id name }
+        }""",
+        {"id": row.public_id},
+        user=admin,
+    ))
+    assert data == {
+        "platform_addons_by_pk": {"id": row.public_id, "name": row.name, "label": "Identity"},
+        "platform_addons": [{"id": row.public_id, "name": row.name}],
+    }
+    assert require_instance_for_id(
+        addon, data["platform_addons_by_pk"]["id"], queryset=addon.objects.with_actor(admin),
+    ) == row
 
 
 def test_field_collection_groups_rows_by_model_and_kind(monkeypatch: Any) -> None:
@@ -320,3 +380,42 @@ def test_model_only_explorer_selection_skips_catalogue_and_edges(monkeypatch: An
     )
 
     assert data == {"platform_explorer": {"models": [{"label": row.label}]}}
+
+
+@pytest.mark.parametrize("state", ["enabled", "disabled"])
+def test_installed_versions_use_native_metadata_for_catalogue_and_explorer(
+    composed_tables: None, state: str,
+) -> None:
+    """Installed metadata wins over source version; unavailable packages have no version."""
+
+    del composed_tables
+    config = make_addon(name="version_probe.installed")
+    distribution = metadata.distribution("version-probe-installed")
+    source = Path(config.path) / "pyproject.toml"
+    source.write_text(source.read_text().replace('version = "0.0.0"', 'version = "99.0.0"'))
+    assert '99.0.0' in source.read_text()
+    admin = _platform_admin("catalogue-version-admin")
+    addon = apps.get_model("platform", "Addon")
+    with system_context(reason="test.platform.catalogue.versions"):
+        addon.objects.create(name=config.name, distribution=distribution.metadata["Name"], state=state)
+        addon.objects.create(name="version_probe.missing", distribution="version-probe-missing", source="remote")
+        addon.objects.create(name="version_probe.unknown", source="remote")
+    data = _data(execute_schema(
+        _schema(),
+        """{
+          platform_addons(where: {name: {_ilike: "version_probe.%"}}, order_by: [{name: asc}]) {
+            name installed_version
+          }
+          platform_explorer { addons { name installed_version } }
+        }""",
+        user=admin,
+    ))
+    expected = [
+        {"name": "version_probe.installed", "installed_version": "0.0.0"},
+        {"name": "version_probe.missing", "installed_version": None},
+        {"name": "version_probe.unknown", "installed_version": None},
+    ]
+    assert data["platform_addons"] == expected
+    assert [
+        row for row in data["platform_explorer"]["addons"] if row["name"].startswith("version_probe.")
+    ] == expected

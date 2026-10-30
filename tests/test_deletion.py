@@ -17,6 +17,7 @@ from rebac import PermissionDenied, RebacMixin, SubjectRef, actor_context, syste
 from rebac.models import active_relationship_model
 
 import angee.graphql.deletion as deletion_module
+from angee.base.models.base import AngeeModel
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.deletion import (
     DeletePreview,
@@ -26,7 +27,6 @@ from angee.graphql.deletion import (
 )
 from angee.graphql.ids import RECORD_NOT_FOUND_MESSAGE
 from angee.iam import signals as iam_signals
-from angee.models import AngeeModel
 from tests.tables import model_tables
 
 

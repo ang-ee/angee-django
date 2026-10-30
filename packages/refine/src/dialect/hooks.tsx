@@ -1,7 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { useQueries, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import {
-  useCustom,
   useCustomMutation,
   useDataProvider,
   useInvalidate,
@@ -43,8 +42,8 @@ import {
 } from "../operation-documents";
 import { useActiveDataProviderName } from "./data-provider-context";
 import { invalidateAuthoredQueries } from "../query-invalidation";
-import { requestAuthoredData, sharedAuthoredMeta, useAuthoredErrorPolicy } from "./authored-query-options";
-import { useAuthoredLiveInterest } from "./authored-hooks";
+import { useAuthoredQueryBatch, type AuthoredQueryOptions } from "./authored-hooks";
+import type { TypedDocumentNode } from "../typed-document";
 import { graphqlDocumentIdentity } from "./wire";
 import { stableKey, useStableArray } from "../stable-deps";
 
@@ -61,10 +60,13 @@ export interface DialectDocumentOptions {
   document: unknown;
 }
 
+type DialectQueryOptions = DialectDocumentOptions
+  & Pick<AuthoredQueryOptions, "enabled" | "refetchInterval">;
+
 export interface UseAngeeAggregateResult {
   aggregate: AggregateBucket | null;
   fetching: boolean;
-  error: HttpError | null;
+  error: Error | null;
   /** Timestamp of the most recent successful native query read. */
   updatedAt: number | null;
   refetch: () => void;
@@ -116,7 +118,7 @@ export interface AngeeListBatchEntry {
 interface GroupByRequestBatchEntry {
   data: unknown;
   fetching: boolean;
-  error: HttpError | null;
+  error: Error | null;
   updatedAt: number | null;
   refetch: () => void;
 }
@@ -124,7 +126,7 @@ interface GroupByRequestBatchEntry {
 export interface UseAngeeFacetsResult {
   facets: Readonly<Record<string, ResourceFacetResult>>;
   fetching: boolean;
-  error: HttpError | null;
+  error: Error | null;
   refetch: () => void;
 }
 
@@ -148,7 +150,7 @@ export interface UseAngeeResourceSaveResult {
  * and resolve its in-band `ActionOutcome` (`undefined` when the transport
  * returned no payload). A domain failure resolves as
  * `ok=false` rather than throwing — project through `runActionResult` where the
- * caller wants the legacy throw-on-failure/success-message contract.
+ * caller wants the rendered action's throw-on-failure/success-message contract.
  */
 export type ActionArguments = Readonly<Record<string, unknown>>;
 
@@ -186,47 +188,45 @@ const EMPTY_LIST_SCOPES: readonly AngeeListBatchScope[] = [];
 
 export function useAngeeAggregate(
   target: CustomGraphQLOperationTarget | null,
-  options: AggregateRequestOptions & DialectDocumentOptions & { enabled?: boolean },
+  options: AggregateRequestOptions & DialectQueryOptions,
 ): UseAngeeAggregateResult {
-  const { document, enabled = true, ...query } = options;
+  const { document, enabled = true, refetchInterval, ...query } = options;
   const queryKey = stableKey(query);
-  const canQuery = enabled && target !== null;
-  const models = useStableArray(target?.modelLabel ? [target.modelLabel] : []);
-  useAuthoredLiveInterest(canQuery, models);
   const request = useMemo(
     () => (target ? aggregateRequest(target, query, { document }) : null),
     [document, target, queryKey],
   );
-  const run = useCustom<BaseRecord, HttpError>({
-    url: "",
-    method: "post",
+  const scopes = useMemo(() => request ? [{
+    key: "single",
+    document: graphqlDocumentIdentity(request.meta.gqlQuery).document as TypedDocumentNode<unknown, Record<string, unknown>>,
+    variables: request.meta.gqlVariables as Record<string, unknown>,
+    models: target?.modelLabel ? [target.modelLabel] : [],
+  }] : [], [request, target?.modelLabel]);
+  const run = useAuthoredQueryBatch(scopes, {
+    enabled: enabled && target !== null,
     dataProviderName: request?.dataProviderName,
-    meta: request?.meta,
-    queryOptions: { enabled: canQuery },
-  });
-  const data = run.query.data?.data ?? run.result.data;
+    refetchInterval,
+  }).get("single");
   return {
-    aggregate: request ? extractAggregate(data, request.root) : null,
-    fetching: run.query.isFetching,
-    error: run.query.error,
-    updatedAt: run.query.dataUpdatedAt || null,
-    refetch: () => {
-      void run.query.refetch();
-    },
+    aggregate: request ? extractAggregate(run?.data, request.root) : null,
+    fetching: run?.isFetching ?? false,
+    error: run?.error ?? null,
+    updatedAt: run?.dataUpdatedAt || null,
+    refetch: () => { void run?.refetch(); },
   };
 }
 
 export function useAngeeGroupBy(
   target: CustomGraphQLOperationTarget | null,
-  options: GroupByRequestOptions & DialectDocumentOptions & { enabled?: boolean },
+  options: GroupByRequestOptions & DialectQueryOptions,
 ): UseAngeeGroupByResult {
-  const { document, enabled = true, ...query } = options;
+  const { document, enabled = true, refetchInterval, ...query } = options;
   const queryKey = stableKey(query);
   const scopes = useMemo<readonly GroupByBatchScope[]>(
     () => [{ key: "single", query }],
     [queryKey],
   );
-  const run = useGroupByRequestBatch(target, scopes, { document, enabled });
+  const run = useGroupByRequestBatch(target, scopes, { document, enabled, refetchInterval });
   const entry = run.get("single");
   let result = EMPTY_GROUP_BY_RESULT;
   let decodeError: Error | null = null;
@@ -289,77 +289,46 @@ export function useAngeeFacets(
 function useGroupByRequestBatch(
   target: CustomGraphQLOperationTarget | null,
   scopes: readonly GroupByBatchScope[],
-  options: DialectDocumentOptions & { enabled?: boolean },
+  options: DialectQueryOptions,
 ): ReadonlyMap<string, GroupByRequestBatchEntry> {
-  const { document, enabled = true } = options;
+  const { document, enabled = true, refetchInterval } = options;
   const canQuery = enabled && target !== null;
   const activeScopes = canQuery ? scopes : EMPTY_GROUP_BY_SCOPES;
-  const models = useStableArray(target?.modelLabel ? [target.modelLabel] : []);
-  // Group discovery remains live even when every lane is collapsed or summary-only.
-  useAuthoredLiveInterest(canQuery && activeScopes.length > 0, models);
   const scopesKey = stableKey(activeScopes);
-  const dataProvider = useDataProvider();
-  const client = useQueryClient();
   const requests = useMemo(() => {
-    if (!canQuery || !target) return [];
+    if (!target) return [];
     return activeScopes.map((scope) => {
       const request = groupByRequest(target, scope.query, { document });
-      const { document: documentNode, identity } = graphqlDocumentIdentity(request.meta.gqlQuery);
-      const queryKey = [
-        "angee",
-        "group-by",
-        request.dataProviderName,
-        identity,
-        request.meta.gqlVariables,
-      ];
-      return { key: scope.key, request, documentNode, queryKey, queryHash: stableKey(queryKey) };
+      return {
+        key: scope.key,
+        document: graphqlDocumentIdentity(request.meta.gqlQuery).document as TypedDocumentNode<unknown, Record<string, unknown>>,
+        variables: request.meta.gqlVariables as Record<string, unknown>,
+        models: target.modelLabel ? [target.modelLabel] : [],
+      };
     });
-  }, [activeScopes, canQuery, document, target, scopesKey]);
-  // useQueries expects unique keys within one batch. Labels only project the
-  // resulting native query back to each caller; they never own a request.
-  const { uniqueRequests, indexByHash } = useMemo(() => {
-    const uniqueRequests = [...new Map(requests.map((item) => [item.queryHash, item])).values()];
-    const indexByHash = new Map(uniqueRequests.map((item, index) => [item.queryHash, index]));
-    return { uniqueRequests, indexByHash };
-  }, [requests]);
-  const queries = useQueries({
-    queries: uniqueRequests.map(({ queryKey, request, documentNode }) => ({
-      queryKey,
-      queryFn: (context) => requestAuthoredData<unknown>(
-        dataProvider, request.dataProviderName, documentNode,
-        request.meta.gqlVariables as Record<string, unknown>, context,
-      ),
-      enabled: canQuery,
-      meta: sharedAuthoredMeta(client, queryKey, models, [], []),
-    })),
+  }, [activeScopes, document, target, scopesKey]);
+  // The authored owner deduplicates requests and unions invalidation interests;
+  // the dialect owns only group variables and the caller's result labels.
+  const batch = useAuthoredQueryBatch(requests, {
+    enabled: canQuery, dataProviderName: target?.dataProviderName, refetchInterval,
   });
-  useAuthoredErrorPolicy(uniqueRequests.map(({ queryKey }) => queryKey));
-  return useMemo(
-    () => {
-      const entries = new Map<string, GroupByRequestBatchEntry>();
-      return new Map(
-        requests.map(({ key, queryHash }) => {
-          const query = queries[indexByHash.get(queryHash)!];
-          let entry = entries.get(queryHash);
-          if (!entry) {
-            entry = {
-              data: query?.data,
-              fetching: query?.isFetching ?? false,
-              error: (query?.error ?? null) as HttpError | null,
-              updatedAt: query?.dataUpdatedAt || null,
-              refetch: () => { void query?.refetch(); },
-            };
-            entries.set(queryHash, entry);
-          }
-          return [
-            key,
-            entry,
-          ] as const;
-        }),
-      );
-    },
-    [requests, queries, indexByHash],
-  );
+  return useMemo(() => {
+    const entries = new Map<UseQueryResult<unknown, Error>, GroupByRequestBatchEntry>();
+    return new Map([...batch].map(([key, query]) => {
+      let entry = entries.get(query);
+      if (!entry) {
+        entry = {
+          data: query.data,
+          fetching: query.isFetching,
+          error: query.error,
+          updatedAt: query.dataUpdatedAt || null,
+          refetch: () => { void query.refetch(); },
+        };
+        entries.set(query, entry);
+      }
+      return [key, entry] as const;
+    }));
+  }, [batch]);
 }
 
 /**
@@ -370,7 +339,7 @@ function useGroupByRequestBatch(
 export function useAngeeGroupByBatch(
   target: CustomGraphQLOperationTarget | null,
   scopes: readonly GroupByBatchScope[],
-  options: DialectDocumentOptions & { enabled?: boolean },
+  options: DialectQueryOptions,
 ): ReadonlyMap<string, UseAngeeGroupByResult> {
   const batch = useGroupByRequestBatch(target, scopes, options);
   const root = target?.root ?? "";

@@ -1,0 +1,61 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "example-notes"
+version = "3.0.0"
+description = "A notes example — the minimal consumer addon the example project composes"
+keywords = ["notes", "example"]
+dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-integrate>=3,<4", "angee-iam-integrate-oidc>=3,<4", "angee-agents>=3,<4", "angee-agents-integrate-anthropic>=3,<4", "angee-mcp>=3,<4", "angee-messaging>=3,<4", "angee-storage>=3,<4", "angee-knowledge>=3,<4", "angee-projects>=3,<4", "angee-decisions>=3,<4", "angee-workflows>=3,<4", "angee-provenance>=3,<4", "angee-web>=3,<4", "faker>=30.0"]
+dynamic = ["entry-points"]
+
+[tool.angee]
+
+[[tool.angee.resources.master]]
+path = "master/010_integrate.vendor.yaml"
+adopt = "slug"
+
+[[tool.angee.resources.master]]
+path = "master/081_integrate.vendor.yaml"
+adopt = "slug"
+
+[[tool.angee.resources.demo]]
+path = "demo/020_notes.note.yaml"
+depends_on = "iam:demo/010_iam.user.yaml"
+
+[[tool.angee.resources.demo]]
+path = "demo/080_integrate.credential.yaml"
+depends_on = "iam:demo/010_iam.user.yaml"
+adopt = ["user", "name"]
+
+[[tool.angee.resources.demo]]
+path = "demo/083_integrate_vcs.vcsbridge.yaml"
+depends_on = ["demo/080_integrate.credential.yaml", "master/081_integrate.vendor.yaml"]
+
+[[tool.angee.resources.demo]]
+path = "demo/084_integrate_vcs.repository.yaml"
+depends_on = "demo/083_integrate_vcs.vcsbridge.yaml"
+adopt = ["vcs_bridge", "name"]
+
+[[tool.angee.resources.demo]]
+path = "demo/085_integrate_vcs.source.yaml"
+depends_on = "demo/084_integrate_vcs.repository.yaml"
+
+[[tool.angee.resources.demo]]
+path = "demo/094_integrate_vcs.template.yaml"
+depends_on = "demo/085_integrate_vcs.source.yaml"
+adopt = ["source", "path"]
+
+[[tool.angee.resources.demo]]
+path = "demo/095_agents.agent.yaml"
+depends_on = ["demo/094_integrate_vcs.template.yaml", "agents:demo/020_agents.mcpserver.yaml", "agents_integrate_anthropic:demo/040_agents.inferencemodel.yaml"]
+
+[[tool.angee.resources.demo]]
+path = "demo/100_workflows.workflow.yaml"
+adopt = "key"
+
+[[tool.angee.resources.demo]]
+path = "demo/110_workflows.trigger.yaml"
+depends_on = "demo/100_workflows.workflow.yaml"
+
+[tool.angee.platform]
+category = "Example"

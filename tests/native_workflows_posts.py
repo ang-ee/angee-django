@@ -1,5 +1,5 @@
 """Real eligibility, ACP, workflow and reply owners; fake inference and dispatch."""
-
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
 from datetime import datetime, timedelta
@@ -46,16 +46,17 @@ from angee.agents.sessions import run_next_turn
 from angee.agents.testing.drivers import FakeRunner, update_chunk
 from angee.agents_runtime_pydantic.runtime import PydanticAIRuntime
 from angee.agents_runtime_pydantic.toolsets import AngeeToolset, ToolGrantAccess
-from angee.changesets import changeset_model
-from angee.identity import instance_from_public_id
+from angee.base.models.identity import instance_from_public_id
+from angee.base.testing.packages import write_addon_distribution
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from angee.posts.backends import ParsedPost
 from angee.posts.ingest import land_posts
+from angee.provenance.context import changeset_model
 from angee.resources.entries import ResourceEntry
 from angee.resources.loader import build_resource
+from angee.resources.tiers import ResourceTier
 from angee.resources.widgets import resolve_ledger_xref
-from angee.tiers import ResourceTier
 from angee.workflows.runner import runner
 from angee.workflows.tasks import cancel as cancel_workflow
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
@@ -283,12 +284,16 @@ class CommentReplyTests(TransactionTestCase):
             )
         document = self.document()
         document["nodes"]["converse"]["config"]["agent"] = "agents.installed_reply_agent"
-        with TemporaryDirectory() as directory:
+        with TemporaryDirectory() as directory, patch.object(sys, "path", [directory, *sys.path]):
             root = Path(directory)
-            (root / "addon.toml").write_text(
-                '[addon]\nname = "tests.reply_install"\n[resources]\ninstall = [{path = "workflow.yaml"}]\n',
+            write_addon_distribution(
+                root, "tests.reply_install", metadata_root=root,
+                capabilities={"resources": {"install": [{"path": "workflow.yaml"}]}},
             )
-            (root / "workflow.yaml").write_text(
+            (root / "__init__.py").write_text("")
+            resources = root / "resources"
+            resources.mkdir()
+            (resources / "workflow.yaml").write_text(
                 yaml.safe_dump(
                     {
                         "_meta": {"model": "workflows.Workflow"},

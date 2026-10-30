@@ -35,7 +35,7 @@ from rebac import (
 from rebac.models import active_relationship_model
 from rebac.roles import grant as grant_role
 
-from angee.identity import public_id_for
+from angee.base.models.identity import public_id_for
 from angee.messaging.testing.models import Handle, Message, Party, Person, Thread
 from angee.projects.testing.models import Project, Task
 from angee.tags import schema as tags_schema
@@ -606,7 +606,11 @@ def test_the_check_accepts_matching_taggable_models_and_relations(composed_permi
 def test_the_check_reports_a_taggable_model_without_a_relation() -> None:
     """Without their owners' fragments, the base schema names no taggable type."""
 
-    errors = _tag_errors(TagAssignment.check())
+    def forbid_query(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("Django model checks must read schema declarations without SQL")
+
+    with connection.execute_wrapper(forbid_query):
+        errors = _tag_errors(TagAssignment.check())
     assert {error.id for error in errors} == {"tags.E002"}
     assert {error.obj for error in errors} == _taggable_test_models()
 

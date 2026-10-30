@@ -35,7 +35,7 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout, ReadTimeout
 from urllib3.exceptions import MaxRetryError, NameResolutionError, NewConnectionError, ProtocolError
 
-from angee.changesets import changeset_model
+from angee.base.models.locks import StaleRevisionError
 from angee.graphql.actions import MAX_ACTION_SELECTION, ActionSelectionInput
 from angee.graphql.ids import PublicID
 from angee.graphql.schema import GraphQLSchemas
@@ -50,11 +50,11 @@ from angee.messaging.backends import DeliveryOutcome, DeliveryUncertain, ParsedH
 from angee.messaging.email import AnymailEmailChannelBackend
 from angee.messaging.events import message_ingested
 from angee.messaging.managers import DeliveryReconciliationBusy
-from angee.models import StaleRevisionError
 from angee.posts import mcp_tools
 from angee.posts.backends import RECONCILIATION_SKEW_MARGIN, FeedBackend, FeedChannelBackend, ParsedPost, RecordRefusal
 from angee.posts.ingest import land_posts
 from angee.posts.models import validate_reply_hold
+from angee.provenance.context import changeset_model
 
 Message = apps.get_model("messaging", "Message")
 Channel = apps.get_model("messaging", "Channel")
@@ -603,7 +603,7 @@ class DeliveryContracts(DeliveryFixtures):
         comment = self.comment()
         row = self.outbound(thread_id=comment.thread_id)
         with system_context(reason="one-statement insert counter"), CaptureQueriesContext(connection) as queries:
-            Message.objects._bump_thread(row)
+            Message.objects.advance_thread(row)
         statements = [query["sql"] for query in queries if Message._meta.db_table in query["sql"]]
         self.assertEqual(len(statements), 1, statements)
         self.assertIn("UPDATE", statements[0])
@@ -791,11 +791,12 @@ class DeliveryContracts(DeliveryFixtures):
                  (AnymailRecipientsRefused("private refusal"), "failed"),
                  (AnymailUnsupportedFeature("private config"), "failed"))
         for index, (error, expected) in enumerate(cases):
-            envelope = SimpleNamespace(from_email="sender@example.test", to=["reader@example.test"], cc=[], bcc=[],
-                                       send=Mock(side_effect=error))
+            envelope = SimpleNamespace(from_email="sender@example.test", to=["reader@example.test"], cc=[], bcc=[])
+            connection_ = Mock()
+            connection_.send_messages.side_effect = error
             with self.subTest(error=type(error).__name__), system_context(reason="email refusal fixture"), patch.object(
                 transport, "email_message", return_value=envelope,
-            ), patch("angee.messaging.email.get_connection", return_value=Mock()):
+            ), patch("angee.messaging.email.mailers", SimpleNamespace(default=connection_)):
                 row = self.outbound(external_id=f"email-{index}")
                 self.backend.deliver.side_effect = transport.deliver
                 row.deliver()
@@ -823,17 +824,16 @@ class DeliveryContracts(DeliveryFixtures):
         transport = AnymailEmailChannelBackend(self.channel)
         self.addCleanup(transport.close)
         for error in (gaierror("DNS"), SSLError("TLS"), TimeoutError("connect"), SMTPServerDisconnected("greeting")):
-            envelope = SimpleNamespace(from_email="sender@example.test", to=["reader@example.test"], cc=[], bcc=[],
-                                       send=Mock(return_value=1))
+            envelope = SimpleNamespace(from_email="sender@example.test", to=["reader@example.test"], cc=[], bcc=[])
             connection_ = Mock()
             connection_.open.side_effect = error
             with self.subTest(error=type(error).__name__), patch.object(
                 transport, "email_message", return_value=envelope,
-            ), patch("angee.messaging.email.get_connection", return_value=connection_):
+            ), patch("angee.messaging.email.mailers", SimpleNamespace(default=connection_)):
                 with self.assertRaises(IntegrationError) as failure:
                     transport.deliver(self.outbound(external_id=type(error).__name__))
                 self.assertTrue(failure.exception.transient)
-            envelope.send.assert_not_called()
+            connection_.send_messages.assert_not_called()
             connection_.close.assert_called_once()
 
     @override_settings(ANGEE_EMAIL_DELIVERY_CONFIGURED=True)
@@ -843,7 +843,7 @@ class DeliveryContracts(DeliveryFixtures):
         class RequestsEmailBackend(AnymailRequestsBackend):
             esp_name = "Test"
 
-        api = RequestsEmailBackend(api_url="https://mail.example.test/")
+        api = RequestsEmailBackend(alias="default", api_url="https://mail.example.test/")
         api.open()
         self.addCleanup(api.close)
         url = "https://mail.example.test/send"
@@ -861,12 +861,13 @@ class DeliveryContracts(DeliveryFixtures):
         for index, (request_error, expected) in enumerate(cases):
             api.open()
             envelope = SimpleNamespace(from_email="sender@example.test", to=["reader@example.test"], cc=[], bcc=[])
-            envelope.send = lambda: api.post_to_esp(payload, envelope)
             with self.subTest(error=type(request_error).__name__), patch.object(
                 api.session, "request", side_effect=request_error,
-            ), patch.object(transport, "email_message", return_value=envelope), patch(
-                "angee.messaging.email.get_connection", return_value=api,
-            ), system_context(reason="real Anymail request exception settlement"):
+            ), patch.object(transport, "email_message", return_value=envelope), patch.object(
+                api, "send_messages", side_effect=lambda messages: api.post_to_esp(payload, messages[0]),
+            ), patch("angee.messaging.email.mailers", SimpleNamespace(default=api)), system_context(
+                reason="real Anymail request exception settlement",
+            ):
                 # post_to_esp, rather than a fabricated wrapper, raises Anymail's
                 # real dynamically mixed exception with the requests cause.
                 api.open()

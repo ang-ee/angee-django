@@ -35,7 +35,7 @@ def test_task_visibility_projects_its_audience_label() -> None:
     assert task.visibility_audience_label() == "Question participants"
 
 
-def test_record_readers_use_effective_index_and_following_subjects(
+def test_record_readers_use_effective_people_index(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A derived reader remains visible; direct shares come from record_access."""
@@ -65,14 +65,11 @@ def test_record_readers_use_effective_index_and_following_subjects(
         calls.append(args)
         return target, ["reader"]
     monkeypatch.setattr(schema, "authorized_record_access", authorized)
-    monkeypatch.setattr(schema.apps, "get_model", lambda *_args: SimpleNamespace(objects=SimpleNamespace(
-        subjects_for_record=lambda _target: (direct,),
-    )))
     monkeypatch.setattr(schema, "rebac_backend", lambda: SimpleNamespace(
         lookup_subjects=lambda **_kwargs: (direct, derived, service),
     ))
     monkeypatch.setattr(schema, "to_object_ref", lambda value: value)
-    monkeypatch.setattr(schema, "resolve_subjects", lambda _refs: users)
+    monkeypatch.setattr(schema, "resolve_subjects", lambda _refs, **_kwargs: users)
     monkeypatch.setattr(schema, "session_user", lambda _info: viewer)
     monkeypatch.setattr(schema, "to_subject_ref", lambda value: value)
     monkeypatch.setattr(schema, "public_subject_ref", lambda ref: ref)
@@ -80,8 +77,8 @@ def test_record_readers_use_effective_index_and_following_subjects(
     resolver = next(field for field in cast(Any, schema.IAMConsoleQuery).__strawberry_definition__.fields
                     if field.python_name == "record_readers").base_resolver.wrapped_func
     rows = resolver(object(), object(), "projects/project", "project-1")
-    assert [(row.label, row.following) for row in rows] == [
-        ("Direct", True), ("Derived", False),
+    assert [(row.subject, row.label) for row in rows] == [
+        (str(direct), "Direct"), (str(derived), "Derived"),
     ]
     assert calls and calls[0][2:] == ("project-1",)
 

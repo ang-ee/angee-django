@@ -9,8 +9,9 @@ from django.db import IntegrityError, close_old_connections, connection, transac
 from django.db.models.expressions import CombinedExpression
 from django.db.models.signals import post_save, pre_save
 from django.test.utils import CaptureQueriesContext
+from django.utils.connection import ConnectionDoesNotExist
 
-from angee.models import StaleRevisionError, require_revision
+from angee.base.models.locks import StaleRevisionError, require_revision
 from tests.core_persistence import RenamedRevisionRow, RevisionChild, RevisionRow
 
 pytestmark = pytest.mark.django_db
@@ -223,3 +224,10 @@ def test_two_writers_with_the_same_revision_commit_exactly_once(model):
     [winner] = [result for result in results if result[0] == "saved"]
     row.refresh_from_db()
     assert (row.title, row.revision) == (winner[1], 2)
+
+
+def test_explicit_save_database_is_not_replaced_by_the_default_router() -> None:
+    row = RevisionRow(title="explicit-database")
+    with pytest.raises(ConnectionDoesNotExist):
+        row.save(using="unconfigured-explicit-database")
+    assert not RevisionRow.objects.filter(title="explicit-database").exists()

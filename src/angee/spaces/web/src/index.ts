@@ -1,0 +1,23 @@
+import { defineBaseAddon, resourcePageRoutes } from "@angee/app";
+import { lazyRouteComponent } from "@tanstack/react-router";
+import { UsersRound } from "lucide-react";
+
+import { enSpacesMessages } from "./i18n";
+
+const spaces = defineBaseAddon({
+  id: "spaces",
+  routes: resourcePageRoutes(
+    "spaces.groups",
+    "/spaces/groups",
+    lazyRouteComponent(() => import("./SpacesPage"), "SpacesPage"),
+    "spaces.Group",
+  ),
+  menus: {
+    "spaces": { label: "Spaces", icon: "spaces", route: "spaces.groups" },
+  },
+  icons: { spaces: UsersRound },
+  i18n: { spaces: enSpacesMessages },
+});
+
+export { useGroupRecordTabs } from "./group-record-tabs";
+export default spaces;

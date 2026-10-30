@@ -8,6 +8,84 @@ resolution-markers = [
     "(python_full_version < '3.15' and platform_python_implementation != 'PyPy') or (python_full_version < '3.15' and sys_platform != 'win32')",
 ]
 
+[manifest]
+members = [
+    "angee",
+    "angee-agents",
+    "angee-agents-integrate-anthropic",
+    "angee-agents-integrate-ollama",
+    "angee-agents-integrate-openai",
+    "angee-agents-runtime-pydantic",
+    "angee-appearance",
+    "angee-appearance-integrate",
+    "angee-base",
+    "angee-dashboards",
+    "angee-decisions",
+    "angee-extraction",
+    "angee-graphql",
+    "angee-iam",
+    "angee-iam-integrate-oidc",
+    "angee-intake",
+    "angee-integrate",
+    "angee-integrate-github",
+    "angee-integrate-iphone",
+    "angee-integrate-vcs",
+    "angee-jobs",
+    "angee-knowledge",
+    "angee-knowledge-graph-pgvector",
+    "angee-knowledge-integrate-notion",
+    "angee-mcp",
+    "angee-messaging",
+    "angee-messaging-integrate-imap",
+    "angee-messaging-integrate-slack",
+    "angee-money",
+    "angee-nexus",
+    "angee-operator",
+    "angee-parties",
+    "angee-parties-integrate-carddav",
+    "angee-platform",
+    "angee-platform-integrate-operator",
+    "angee-platform-integrate-vcs",
+    "angee-pm",
+    "angee-portfolio",
+    "angee-posts",
+    "angee-projects",
+    "angee-proposals",
+    "angee-proposals-work",
+    "angee-provenance",
+    "angee-resources",
+    "angee-scheduling",
+    "angee-sequence",
+    "angee-server",
+    "angee-spaces",
+    "angee-storage",
+    "angee-storage-integrate",
+    "angee-storage-integrate-iphone",
+    "angee-tags",
+    "angee-theme-angee",
+    "angee-theme-aurora",
+    "angee-theme-carbon",
+    "angee-theme-fyltr",
+    "angee-theme-ledger",
+    "angee-theme-midnight",
+    "angee-theme-stock",
+    "angee-theme-warm-red",
+    "angee-timeline",
+    "angee-uom",
+    "angee-web",
+    "angee-work",
+    "angee-workflows",
+    "angee-workflows-agents",
+    "angee-workflows-extraction",
+    "angee-workflows-integrate",
+    "angee-workflows-messaging",
+    "angee-workflows-parties",
+    "angee-workflows-posts",
+    "example-notes",
+    "example-theme",
+    "tests-blankchoices",
+]
+
 [[package]]
 name = "agent-client-protocol"
 version = "1.0.0rc2"
@@ -43,6 +121,1798 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/79/fc/ec94a357dfc6683d8c86f8b4cfa5416a4c36b28052ec8260c77aca96a443/amqp-5.3.1.tar.gz", hash = "sha256:cddc00c725449522023bad949f70fff7b48f0b1ade74d170a6f10ab044739432", size = 129013, upload-time = "2024-11-12T19:55:44.051Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/26/99/fc813cd978842c26c82534010ea849eee9ab3a13ea2b74e95cb9c99e747b/amqp-5.3.1-py3-none-any.whl", hash = "sha256:43b3319e1b4e7d1251833a93d672b4af1e40f3d632d479b98661a95f117880a2", size = 50944, upload-time = "2024-11-12T19:55:41.782Z" },
+]
+
+[[package]]
+name = "angee"
+version = "3.0.0"
+source = { editable = "." }
+dependencies = [
+    { name = "angee-agents" },
+    { name = "angee-agents-integrate-anthropic" },
+    { name = "angee-agents-integrate-ollama" },
+    { name = "angee-agents-integrate-openai" },
+    { name = "angee-agents-runtime-pydantic" },
+    { name = "angee-appearance" },
+    { name = "angee-appearance-integrate" },
+    { name = "angee-base" },
+    { name = "angee-dashboards" },
+    { name = "angee-decisions" },
+    { name = "angee-extraction" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-iam-integrate-oidc" },
+    { name = "angee-intake" },
+    { name = "angee-integrate" },
+    { name = "angee-integrate-github" },
+    { name = "angee-integrate-iphone" },
+    { name = "angee-integrate-vcs" },
+    { name = "angee-jobs" },
+    { name = "angee-knowledge" },
+    { name = "angee-knowledge-graph-pgvector" },
+    { name = "angee-knowledge-integrate-notion" },
+    { name = "angee-mcp" },
+    { name = "angee-messaging" },
+    { name = "angee-messaging-integrate-imap" },
+    { name = "angee-messaging-integrate-slack" },
+    { name = "angee-money" },
+    { name = "angee-nexus" },
+    { name = "angee-operator" },
+    { name = "angee-parties" },
+    { name = "angee-parties-integrate-carddav" },
+    { name = "angee-platform" },
+    { name = "angee-platform-integrate-operator" },
+    { name = "angee-platform-integrate-vcs" },
+    { name = "angee-pm" },
+    { name = "angee-portfolio" },
+    { name = "angee-posts" },
+    { name = "angee-projects" },
+    { name = "angee-proposals" },
+    { name = "angee-proposals-work" },
+    { name = "angee-provenance" },
+    { name = "angee-resources" },
+    { name = "angee-scheduling" },
+    { name = "angee-sequence" },
+    { name = "angee-server" },
+    { name = "angee-spaces" },
+    { name = "angee-storage" },
+    { name = "angee-storage-integrate" },
+    { name = "angee-storage-integrate-iphone" },
+    { name = "angee-tags" },
+    { name = "angee-theme-angee" },
+    { name = "angee-theme-aurora" },
+    { name = "angee-theme-carbon" },
+    { name = "angee-theme-fyltr" },
+    { name = "angee-theme-ledger" },
+    { name = "angee-theme-midnight" },
+    { name = "angee-theme-stock" },
+    { name = "angee-theme-warm-red" },
+    { name = "angee-timeline" },
+    { name = "angee-uom" },
+    { name = "angee-web" },
+    { name = "angee-work" },
+    { name = "angee-workflows" },
+    { name = "angee-workflows-agents" },
+    { name = "angee-workflows-extraction" },
+    { name = "angee-workflows-integrate" },
+    { name = "angee-workflows-messaging" },
+    { name = "angee-workflows-parties" },
+    { name = "angee-workflows-posts" },
+]
+
+[package.optional-dependencies]
+postgres = [
+    { name = "psycopg", extra = ["binary", "pool"] },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "angee-django-stubs", extra = ["compatible-mypy"] },
+    { name = "angee-mypy" },
+    { name = "daphne" },
+    { name = "django-zed-rebac", extra = ["caveats"] },
+    { name = "example-notes" },
+    { name = "example-theme" },
+    { name = "faker" },
+    { name = "psycopg", extra = ["binary", "pool"] },
+    { name = "pytest" },
+    { name = "pytest-django" },
+    { name = "pytest-randomly" },
+    { name = "pytest-split" },
+    { name = "pytest-xdist" },
+    { name = "ruff" },
+    { name = "tests-blankchoices" },
+    { name = "tomlkit" },
+    { name = "vulture" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-agents", editable = "src/angee/agents" },
+    { name = "angee-agents-integrate-anthropic", editable = "src/angee/agents_integrate_anthropic" },
+    { name = "angee-agents-integrate-ollama", editable = "src/angee/agents_integrate_ollama" },
+    { name = "angee-agents-integrate-openai", editable = "src/angee/agents_integrate_openai" },
+    { name = "angee-agents-runtime-pydantic", editable = "src/angee/agents_runtime_pydantic" },
+    { name = "angee-appearance", editable = "src/angee/appearance" },
+    { name = "angee-appearance-integrate", editable = "src/angee/appearance_integrate" },
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-dashboards", editable = "src/angee/dashboards" },
+    { name = "angee-decisions", editable = "src/angee/decisions" },
+    { name = "angee-extraction", editable = "src/angee/extraction" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-iam-integrate-oidc", editable = "src/angee/iam_integrate_oidc" },
+    { name = "angee-intake", editable = "src/angee/intake" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-integrate-github", editable = "src/angee/integrate_github" },
+    { name = "angee-integrate-iphone", editable = "src/angee/integrate_iphone" },
+    { name = "angee-integrate-vcs", editable = "src/angee/integrate_vcs" },
+    { name = "angee-jobs", editable = "src/angee/jobs" },
+    { name = "angee-knowledge", editable = "src/angee/knowledge" },
+    { name = "angee-knowledge-graph-pgvector", editable = "src/angee/knowledge_graph_pgvector" },
+    { name = "angee-knowledge-integrate-notion", editable = "src/angee/knowledge_integrate_notion" },
+    { name = "angee-mcp", editable = "src/angee/mcp" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-messaging-integrate-imap", editable = "src/angee/messaging_integrate_imap" },
+    { name = "angee-messaging-integrate-slack", editable = "src/angee/messaging_integrate_slack" },
+    { name = "angee-money", editable = "src/angee/money" },
+    { name = "angee-nexus", editable = "src/angee/nexus" },
+    { name = "angee-operator", editable = "src/angee/operator" },
+    { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-parties-integrate-carddav", editable = "src/angee/parties_integrate_carddav" },
+    { name = "angee-platform", editable = "src/angee/platform" },
+    { name = "angee-platform-integrate-operator", editable = "src/angee/platform_integrate_operator" },
+    { name = "angee-platform-integrate-vcs", editable = "src/angee/platform_integrate_vcs" },
+    { name = "angee-pm", editable = "src/angee/pm" },
+    { name = "angee-portfolio", editable = "src/angee/portfolio" },
+    { name = "angee-posts", editable = "src/angee/posts" },
+    { name = "angee-projects", editable = "src/angee/projects" },
+    { name = "angee-proposals", editable = "src/angee/proposals" },
+    { name = "angee-proposals-work", editable = "src/angee/proposals_work" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-scheduling", editable = "src/angee/scheduling" },
+    { name = "angee-sequence", editable = "src/angee/sequence" },
+    { name = "angee-server", editable = "src/angee/server" },
+    { name = "angee-spaces", editable = "src/angee/spaces" },
+    { name = "angee-storage", editable = "src/angee/storage" },
+    { name = "angee-storage-integrate", editable = "src/angee/storage_integrate" },
+    { name = "angee-storage-integrate-iphone", editable = "src/angee/storage_integrate_iphone" },
+    { name = "angee-tags", editable = "src/angee/tags" },
+    { name = "angee-theme-angee", editable = "src/angee/theme_angee" },
+    { name = "angee-theme-aurora", editable = "src/angee/theme_aurora" },
+    { name = "angee-theme-carbon", editable = "src/angee/theme_carbon" },
+    { name = "angee-theme-fyltr", editable = "src/angee/theme_fyltr" },
+    { name = "angee-theme-ledger", editable = "src/angee/theme_ledger" },
+    { name = "angee-theme-midnight", editable = "src/angee/theme_midnight" },
+    { name = "angee-theme-stock", editable = "src/angee/theme_stock" },
+    { name = "angee-theme-warm-red", editable = "src/angee/theme_warm_red" },
+    { name = "angee-timeline", editable = "src/angee/timeline" },
+    { name = "angee-uom", editable = "src/angee/uom" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "angee-work", editable = "src/angee/work" },
+    { name = "angee-workflows", editable = "src/angee/workflows" },
+    { name = "angee-workflows-agents", editable = "src/angee/workflows_agents" },
+    { name = "angee-workflows-extraction", editable = "src/angee/workflows_extraction" },
+    { name = "angee-workflows-integrate", editable = "src/angee/workflows_integrate" },
+    { name = "angee-workflows-messaging", editable = "src/angee/workflows_messaging" },
+    { name = "angee-workflows-parties", editable = "src/angee/workflows_parties" },
+    { name = "angee-workflows-posts", editable = "src/angee/workflows_posts" },
+    { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'postgres'", specifier = ">=3.2" },
+]
+provides-extras = ["postgres"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "angee-django-stubs", extras = ["compatible-mypy"], specifier = "==6.1.2.post3" },
+    { name = "angee-mypy", specifier = "==2.1.0" },
+    { name = "daphne", specifier = ">=4.0" },
+    { name = "django-zed-rebac", extras = ["caveats"], git = "https://github.com/ang-ee/django-zed-rebac.git?rev=f43f0773f2c2a86a6882aeb1b46b34b8c19a0d13" },
+    { name = "example-notes", editable = "examples/src/example/notes" },
+    { name = "example-theme", editable = "examples/src/example/theme" },
+    { name = "faker", specifier = ">=30.0" },
+    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-django", specifier = ">=4.8" },
+    { name = "pytest-randomly", specifier = ">=3.16" },
+    { name = "pytest-split", specifier = ">=0.11" },
+    { name = "pytest-xdist", specifier = ">=3.6" },
+    { name = "ruff", specifier = ">=0.15.12" },
+    { name = "tests-blankchoices", editable = "tests/blankchoices" },
+    { name = "tomlkit", specifier = ">=0.13" },
+    { name = "vulture", specifier = ">=2.16" },
+]
+
+[[package]]
+name = "angee-agents"
+version = "3.0.0"
+source = { editable = "src/angee/agents" }
+dependencies = [
+    { name = "agent-client-protocol" },
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-integrate" },
+    { name = "angee-integrate-vcs" },
+    { name = "angee-jobs" },
+    { name = "angee-mcp" },
+    { name = "angee-operator" },
+    { name = "angee-provenance" },
+    { name = "angee-resources" },
+    { name = "angee-web" },
+    { name = "django-compose" },
+    { name = "httpx" },
+    { name = "pydantic-ai-slim" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "agent-client-protocol", specifier = "==1.0.0rc2" },
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-integrate-vcs", editable = "src/angee/integrate_vcs" },
+    { name = "angee-jobs", editable = "src/angee/jobs" },
+    { name = "angee-mcp", editable = "src/angee/mcp" },
+    { name = "angee-operator", editable = "src/angee/operator" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+    { name = "httpx", specifier = ">=0.28.1,<0.29" },
+    { name = "pydantic-ai-slim", specifier = ">=2.13" },
+]
+
+[[package]]
+name = "angee-agents-integrate-anthropic"
+version = "3.0.0"
+source = { editable = "src/angee/agents_integrate_anthropic" }
+dependencies = [
+    { name = "angee-agents" },
+    { name = "angee-integrate" },
+    { name = "anthropic" },
+    { name = "pydantic-ai-slim", extra = ["anthropic"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-agents", editable = "src/angee/agents" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "anthropic", specifier = ">=0.109.2" },
+    { name = "pydantic-ai-slim", extras = ["anthropic"], specifier = ">=2.13" },
+]
+
+[[package]]
+name = "angee-agents-integrate-ollama"
+version = "3.0.0"
+source = { editable = "src/angee/agents_integrate_ollama" }
+dependencies = [
+    { name = "angee-agents" },
+    { name = "angee-agents-integrate-openai" },
+    { name = "angee-integrate" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-agents", editable = "src/angee/agents" },
+    { name = "angee-agents-integrate-openai", editable = "src/angee/agents_integrate_openai" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+]
+
+[[package]]
+name = "angee-agents-integrate-openai"
+version = "3.0.0"
+source = { editable = "src/angee/agents_integrate_openai" }
+dependencies = [
+    { name = "angee-agents" },
+    { name = "angee-integrate" },
+    { name = "openai" },
+    { name = "pydantic-ai-slim", extra = ["openai"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-agents", editable = "src/angee/agents" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "openai", specifier = ">=2.43.0" },
+    { name = "pydantic-ai-slim", extras = ["openai"], specifier = ">=2.13" },
+]
+
+[[package]]
+name = "angee-agents-runtime-pydantic"
+version = "3.0.0"
+source = { editable = "src/angee/agents_runtime_pydantic" }
+dependencies = [
+    { name = "angee-agents" },
+    { name = "angee-base" },
+    { name = "angee-integrate" },
+    { name = "angee-mcp" },
+    { name = "pydantic-ai-slim", extra = ["mcp"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-agents", editable = "src/angee/agents" },
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-mcp", editable = "src/angee/mcp" },
+    { name = "pydantic-ai-slim", extras = ["mcp"], specifier = ">=2.13" },
+]
+
+[[package]]
+name = "angee-appearance"
+version = "3.0.0"
+source = { editable = "src/angee/appearance" }
+dependencies = [
+    { name = "angee-iam" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
+name = "angee-appearance-integrate"
+version = "3.0.0"
+source = { editable = "src/angee/appearance_integrate" }
+dependencies = [
+    { name = "angee-appearance" },
+    { name = "angee-base" },
+    { name = "angee-integrate" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-appearance", editable = "src/angee/appearance" },
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
+name = "angee-base"
+version = "3.0.0"
+source = { editable = "src/angee/base" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "django" },
+    { name = "django-choices-field" },
+    { name = "django-compose" },
+    { name = "django-environ" },
+    { name = "django-sqids" },
+    { name = "django-yamlconf" },
+    { name = "django-zed-rebac" },
+    { name = "jsonschema", extra = ["format-nongpl"] },
+    { name = "psycopg", extra = ["binary", "pool"] },
+    { name = "pydantic" },
+    { name = "referencing" },
+    { name = "sentry-sdk" },
+    { name = "sqids" },
+]
+
+[package.optional-dependencies]
+testing = [
+    { name = "packaging" },
+    { name = "pytest" },
+    { name = "pytest-django" },
+    { name = "tomlkit" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cryptography", specifier = ">=44" },
+    { name = "django", specifier = ">=6.1.2,<6.2" },
+    { name = "django-choices-field", git = "https://github.com/ang-ee/django-choices-field.git?rev=b02c1488660d0bf1f4483d2e73bc842b41b70632" },
+    { name = "django-compose", specifier = "==0.1.0.dev8" },
+    { name = "django-environ", specifier = ">=0.12" },
+    { name = "django-sqids", specifier = ">=0.1" },
+    { name = "django-yamlconf", specifier = ">=1.5.0" },
+    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=f43f0773f2c2a86a6882aeb1b46b34b8c19a0d13" },
+    { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
+    { name = "packaging", marker = "extra == 'testing'", specifier = ">=24" },
+    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
+    { name = "pydantic", specifier = ">=2.13" },
+    { name = "pytest", marker = "extra == 'testing'", specifier = ">=8" },
+    { name = "pytest-django", marker = "extra == 'testing'", specifier = ">=4.8" },
+    { name = "referencing", specifier = ">=0.37" },
+    { name = "sentry-sdk", specifier = ">=2.71.0" },
+    { name = "sqids", specifier = ">=0.4.1" },
+    { name = "tomlkit", marker = "extra == 'testing'", specifier = ">=0.13" },
+]
+provides-extras = ["testing"]
+
+[[package]]
+name = "angee-dashboards"
+version = "3.0.0"
+source = { editable = "src/angee/dashboards" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-provenance" },
+    { name = "angee-resources" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
+name = "angee-decisions"
+version = "3.0.0"
+source = { editable = "src/angee/decisions" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-provenance" },
+    { name = "angee-timeline" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-timeline", editable = "src/angee/timeline" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
+name = "angee-django-stubs"
+version = "6.1.2.post3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "angee-django-stubs-ext" },
+    { name = "django" },
+    { name = "types-pyyaml" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a3/88/8f25131f810264434f64714d521385fbd65f1c9b7468986551e8f5ff8333/angee_django_stubs-6.1.2.post3.tar.gz", hash = "sha256:554ab487d2f26470392e3e55595899855dc9b84a6b78c759eff79c16c59cfe68", size = 303403, upload-time = "2026-10-30T12:22:41.093Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/fa/0d36c9f73268f0df90cbad2006f3c8a4e518ca0ae0fcea3ffc5ce2c66cf9/angee_django_stubs-6.1.2.post3-py3-none-any.whl", hash = "sha256:23585f5a63ca63177b1c7fcdb501ca4f14f44fc60965f7485e6ef803700c40e5", size = 567116, upload-time = "2026-10-30T12:22:39.516Z" },
+]
+
+[package.optional-dependencies]
+compatible-mypy = [
+    { name = "angee-mypy" },
+]
+
+[[package]]
+name = "angee-django-stubs-ext"
+version = "6.1.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "django" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7a/d1/3841735ba1ed533a40073001bb613195c8bbd450c8ff3725d6b7248312cf/angee_django_stubs_ext-6.1.2.tar.gz", hash = "sha256:d3a3c9ff3f7e3fe5d2b368a4456ff0d2577db10b30c675903eacdd38d60d7eca", size = 7211, upload-time = "2026-10-30T00:59:45.644Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c3/69/53e15444ab23c001481dcb259e1027e4315e0fddd4d6721840f87fab6d87/angee_django_stubs_ext-6.1.2-py3-none-any.whl", hash = "sha256:48bf76ede0a9df61a09f2a0831b3669c7ce81f68437e54545f8027153a1e9932", size = 10976, upload-time = "2026-10-30T00:59:41.561Z" },
+]
+
+[[package]]
+name = "angee-extraction"
+version = "3.0.0"
+source = { editable = "src/angee/extraction" }
+dependencies = [
+    { name = "angee-agents" },
+    { name = "angee-base" },
+    { name = "angee-decisions" },
+    { name = "angee-graphql" },
+    { name = "angee-messaging" },
+    { name = "angee-provenance" },
+    { name = "angee-storage" },
+    { name = "jsonpointer" },
+    { name = "pillow" },
+    { name = "pypdfium2" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-agents", editable = "src/angee/agents" },
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-decisions", editable = "src/angee/decisions" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-storage", editable = "src/angee/storage" },
+    { name = "jsonpointer", specifier = ">=3.1" },
+    { name = "pillow", specifier = ">=11.0" },
+    { name = "pypdfium2", specifier = ">=4.30" },
+]
+
+[[package]]
+name = "angee-graphql"
+version = "3.0.0"
+source = { editable = "src/angee/graphql" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-server" },
+    { name = "channels" },
+    { name = "channels-redis" },
+    { name = "django-compose" },
+    { name = "django-zed-rebac", extra = ["strawberry-django"] },
+    { name = "graphql-core" },
+    { name = "pydantic" },
+    { name = "sentry-sdk" },
+    { name = "strawberry-django-aggregates" },
+    { name = "strawberry-django-hasura" },
+    { name = "strawberry-graphql" },
+    { name = "strawberry-graphql-django" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-server", editable = "src/angee/server" },
+    { name = "channels", specifier = ">=4.0" },
+    { name = "channels-redis", specifier = ">=4.2" },
+    { name = "django-compose", specifier = ">=0.1.0.dev2,<0.2" },
+    { name = "django-zed-rebac", extras = ["strawberry-django"], git = "https://github.com/ang-ee/django-zed-rebac.git?rev=f43f0773f2c2a86a6882aeb1b46b34b8c19a0d13" },
+    { name = "graphql-core", specifier = ">=3.3.1,<3.4" },
+    { name = "pydantic", specifier = ">=2.13" },
+    { name = "sentry-sdk", specifier = ">=2.71.0" },
+    { name = "strawberry-django-aggregates", git = "https://github.com/ang-ee/strawberry-django-aggregates.git?rev=0f374854d19b2709b6d77ae872090ab2a751f1dc" },
+    { name = "strawberry-django-hasura", git = "https://github.com/ang-ee/strawberry-django-hasura.git?rev=4e1c2da2bcbbc90cc586fef3db8d70f5cd6ccfc0" },
+    { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?rev=273bf0456d914d4df535222c4cbae73dff46a376" },
+    { name = "strawberry-graphql-django", git = "https://github.com/ang-ee/strawberry-django.git?rev=091238ecd4ae07798ef12e9eb24281540da41ced" },
+]
+
+[[package]]
+name = "angee-iam"
+version = "3.0.0"
+source = { editable = "src/angee/iam" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-resources" },
+    { name = "angee-web" },
+    { name = "django-axes" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-axes", specifier = ">=8.0" },
+]
+
+[[package]]
+name = "angee-iam-integrate-oidc"
+version = "3.0.0"
+source = { editable = "src/angee/iam_integrate_oidc" }
+dependencies = [
+    { name = "angee-iam" },
+    { name = "angee-integrate" },
+    { name = "angee-parties" },
+    { name = "angee-web" },
+    { name = "django-compose" },
+    { name = "pyjwt", extra = ["crypto"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12" },
+]
+
+[[package]]
+name = "angee-intake"
+version = "3.0.0"
+source = { editable = "src/angee/intake" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-decisions" },
+    { name = "angee-iam" },
+    { name = "angee-messaging" },
+    { name = "angee-parties" },
+    { name = "angee-projects" },
+    { name = "angee-provenance" },
+    { name = "angee-resources" },
+    { name = "angee-web" },
+    { name = "angee-work" },
+    { name = "django-compose" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-decisions", editable = "src/angee/decisions" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-projects", editable = "src/angee/projects" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "angee-work", editable = "src/angee/work" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+]
+
+[[package]]
+name = "angee-integrate"
+version = "3.0.0"
+source = { editable = "src/angee/integrate" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-jobs" },
+    { name = "angee-provenance" },
+    { name = "angee-resources" },
+    { name = "angee-web" },
+    { name = "authlib" },
+    { name = "deepdiff" },
+    { name = "django-compose" },
+    { name = "httpcore2" },
+    { name = "httpx2" },
+    { name = "qrcode", extra = ["pil"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-jobs", editable = "src/angee/jobs" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "authlib", specifier = ">=1.8.0" },
+    { name = "deepdiff", specifier = ">=9.1.0" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+    { name = "httpcore2", specifier = ">=2.10,<3" },
+    { name = "httpx2", specifier = ">=2.10,<3" },
+    { name = "qrcode", extras = ["pil"], specifier = ">=8.2" },
+]
+
+[[package]]
+name = "angee-integrate-github"
+version = "3.0.0"
+source = { editable = "src/angee/integrate_github" }
+dependencies = [
+    { name = "angee-integrate-vcs" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "angee-integrate-vcs", editable = "src/angee/integrate_vcs" }]
+
+[[package]]
+name = "angee-integrate-iphone"
+version = "3.0.0"
+source = { editable = "src/angee/integrate_iphone" }
+
+[[package]]
+name = "angee-integrate-vcs"
+version = "3.0.0"
+source = { editable = "src/angee/integrate_vcs" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-integrate" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
+name = "angee-jobs"
+version = "3.0.0"
+source = { editable = "src/angee/jobs" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "billiard" },
+    { name = "celery", extra = ["redis"] },
+    { name = "django-celery-beat" },
+    { name = "django-compose" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "billiard", specifier = ">=4.2.1,<4.3" },
+    { name = "celery", extras = ["redis"], specifier = ">=5.5" },
+    { name = "django-celery-beat", git = "https://github.com/celery/django-celery-beat.git?rev=b5e3443d647baf910c0168f25b512dd388ba669e" },
+    { name = "django-compose", specifier = ">=0.1.0.dev2,<0.2" },
+]
+
+[[package]]
+name = "angee-knowledge"
+version = "3.0.0"
+source = { editable = "src/angee/knowledge" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-iam" },
+    { name = "angee-messaging" },
+    { name = "angee-provenance" },
+    { name = "angee-resources" },
+    { name = "angee-tags" },
+    { name = "angee-web" },
+    { name = "django-compose" },
+    { name = "markdown-it-py" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-tags", editable = "src/angee/tags" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+    { name = "markdown-it-py", specifier = ">=4.2" },
+]
+
+[[package]]
+name = "angee-knowledge-graph-pgvector"
+version = "3.0.0"
+source = { editable = "src/angee/knowledge_graph_pgvector" }
+dependencies = [
+    { name = "angee-knowledge" },
+    { name = "angee-mcp" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-knowledge", editable = "src/angee/knowledge" },
+    { name = "angee-mcp", editable = "src/angee/mcp" },
+]
+
+[[package]]
+name = "angee-knowledge-integrate-notion"
+version = "3.0.0"
+source = { editable = "src/angee/knowledge_integrate_notion" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-integrate" },
+    { name = "angee-knowledge" },
+    { name = "angee-web" },
+    { name = "markdown-it-py" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-knowledge", editable = "src/angee/knowledge" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "markdown-it-py", specifier = ">=4.2" },
+]
+
+[[package]]
+name = "angee-mcp"
+version = "3.0.0"
+source = { editable = "src/angee/mcp" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-iam" },
+    { name = "angee-server" },
+    { name = "django-compose" },
+    { name = "fastmcp" },
+    { name = "mcp" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-server", editable = "src/angee/server" },
+    { name = "django-compose", specifier = ">=0.1.0.dev2,<0.2" },
+    { name = "fastmcp", specifier = ">=3.4.7,<4" },
+    { name = "mcp", specifier = ">=1.2" },
+]
+
+[[package]]
+name = "angee-messaging"
+version = "3.0.0"
+source = { editable = "src/angee/messaging" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-iam" },
+    { name = "angee-integrate" },
+    { name = "angee-jobs" },
+    { name = "angee-parties" },
+    { name = "angee-provenance" },
+    { name = "angee-resources" },
+    { name = "angee-storage" },
+    { name = "angee-tags" },
+    { name = "angee-timeline" },
+    { name = "angee-web" },
+    { name = "django-anymail" },
+    { name = "django-compose" },
+    { name = "requests" },
+    { name = "urllib3" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-jobs", editable = "src/angee/jobs" },
+    { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-storage", editable = "src/angee/storage" },
+    { name = "angee-tags", editable = "src/angee/tags" },
+    { name = "angee-timeline", editable = "src/angee/timeline" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-anymail", specifier = ">=15.1" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+    { name = "requests", specifier = ">=2.32" },
+    { name = "urllib3", specifier = ">=2.2" },
+]
+
+[[package]]
+name = "angee-messaging-integrate-imap"
+version = "3.0.0"
+source = { editable = "src/angee/messaging_integrate_imap" }
+dependencies = [
+    { name = "angee-integrate" },
+    { name = "angee-messaging" },
+    { name = "angee-parties" },
+    { name = "angee-web" },
+    { name = "django-compose" },
+    { name = "imapclient" },
+    { name = "mail-parser-reply" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+    { name = "imapclient", specifier = ">=3.1.0" },
+    { name = "mail-parser-reply", specifier = ">=1.36" },
+]
+
+[[package]]
+name = "angee-messaging-integrate-slack"
+version = "3.0.0"
+source = { editable = "src/angee/messaging_integrate_slack" }
+dependencies = [
+    { name = "angee-integrate" },
+    { name = "angee-messaging" },
+    { name = "angee-parties" },
+    { name = "angee-web" },
+    { name = "slack-sdk" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "slack-sdk", specifier = ">=3.43.0" },
+]
+
+[[package]]
+name = "angee-money"
+version = "3.0.0"
+source = { editable = "src/angee/money" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-provenance" },
+    { name = "angee-resources" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
+name = "angee-mypy"
+version = "2.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ast-serialize" },
+    { name = "librt", marker = "platform_python_implementation != 'PyPy'" },
+    { name = "mypy-extensions" },
+    { name = "pathspec" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9f/63/038c8faab70bf8db1081be943be3724b39fc38756a5d66916b8301a86607/angee_mypy-2.1.0.tar.gz", hash = "sha256:8f667f6fefe3ade098a99bd3e1508dff0ee02ab4c6556564e9a8974d78961943", size = 3903078, upload-time = "2026-10-30T00:59:46.402Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8a/20/94475338f70992da331ae37f074c7c41b86fff84d09e572466bffba44338/angee_mypy-2.1.0-py3-none-any.whl", hash = "sha256:c197e6a379b1e9cf14cce5414ecd2857d85771f5c060ec8061b7b098ca0be5a2", size = 2694029, upload-time = "2026-10-30T00:59:42.659Z" },
+]
+
+[[package]]
+name = "angee-nexus"
+version = "3.0.0"
+source = { editable = "src/angee/nexus" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-jobs" },
+    { name = "angee-messaging" },
+    { name = "angee-parties" },
+    { name = "angee-posts" },
+    { name = "angee-spaces" },
+    { name = "angee-timeline" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-jobs", editable = "src/angee/jobs" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-posts", editable = "src/angee/posts" },
+    { name = "angee-spaces", editable = "src/angee/spaces" },
+    { name = "angee-timeline", editable = "src/angee/timeline" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
+name = "angee-operator"
+version = "3.0.0"
+source = { editable = "src/angee/operator" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-iam" },
+    { name = "angee-integrate" },
+    { name = "angee-web" },
+    { name = "httpx2" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "httpx2", specifier = ">=2.10,<3" },
+]
+
+[[package]]
+name = "angee-parties"
+version = "3.0.0"
+source = { editable = "src/angee/parties" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-integrate" },
+    { name = "angee-jobs" },
+    { name = "angee-provenance" },
+    { name = "angee-storage" },
+    { name = "angee-tags" },
+    { name = "angee-web" },
+    { name = "django-compose" },
+    { name = "django-countries" },
+    { name = "phonenumbers" },
+    { name = "pycountry" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-jobs", editable = "src/angee/jobs" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-storage", editable = "src/angee/storage" },
+    { name = "angee-tags", editable = "src/angee/tags" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+    { name = "django-countries", specifier = ">=9,<10" },
+    { name = "phonenumbers", specifier = ">=9.0" },
+    { name = "pycountry", specifier = ">=26,<27" },
+]
+
+[[package]]
+name = "angee-parties-integrate-carddav"
+version = "3.0.0"
+source = { editable = "src/angee/parties_integrate_carddav" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-integrate" },
+    { name = "angee-parties" },
+    { name = "angee-web" },
+    { name = "vobject" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "vobject", specifier = ">=0.9.9" },
+]
+
+[[package]]
+name = "angee-platform"
+version = "3.0.0"
+source = { editable = "src/angee/platform" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-iam" },
+    { name = "angee-resources" },
+    { name = "angee-web" },
+    { name = "django-compose" },
+    { name = "ruamel-yaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-compose", specifier = ">=0.1.0.dev2,<0.2" },
+    { name = "ruamel-yaml", specifier = ">=0.18" },
+]
+
+[[package]]
+name = "angee-platform-integrate-operator"
+version = "3.0.0"
+source = { editable = "src/angee/platform_integrate_operator" }
+dependencies = [
+    { name = "angee-operator" },
+    { name = "angee-platform" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-operator", editable = "src/angee/operator" },
+    { name = "angee-platform", editable = "src/angee/platform" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
+name = "angee-platform-integrate-vcs"
+version = "3.0.0"
+source = { editable = "src/angee/platform_integrate_vcs" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-integrate-vcs" },
+    { name = "angee-platform" },
+    { name = "angee-web" },
+    { name = "django-compose" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-integrate-vcs", editable = "src/angee/integrate_vcs" },
+    { name = "angee-platform", editable = "src/angee/platform" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-compose", specifier = ">=0.1.0.dev3,<0.2" },
+]
+
+[[package]]
+name = "angee-pm"
+version = "3.0.0"
+source = { editable = "src/angee/pm" }
+dependencies = [
+    { name = "angee-intake" },
+    { name = "angee-portfolio" },
+    { name = "angee-projects" },
+    { name = "angee-proposals" },
+    { name = "angee-proposals-work" },
+    { name = "angee-web" },
+    { name = "angee-work" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-intake", editable = "src/angee/intake" },
+    { name = "angee-portfolio", editable = "src/angee/portfolio" },
+    { name = "angee-projects", editable = "src/angee/projects" },
+    { name = "angee-proposals", editable = "src/angee/proposals" },
+    { name = "angee-proposals-work", editable = "src/angee/proposals_work" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "angee-work", editable = "src/angee/work" },
+]
+
+[[package]]
+name = "angee-portfolio"
+version = "3.0.0"
+source = { editable = "src/angee/portfolio" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-projects" },
+    { name = "angee-provenance" },
+    { name = "angee-web" },
+    { name = "django-compose" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-projects", editable = "src/angee/projects" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+]
+
+[[package]]
+name = "angee-posts"
+version = "3.0.0"
+source = { editable = "src/angee/posts" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-integrate" },
+    { name = "angee-messaging" },
+    { name = "angee-parties" },
+    { name = "angee-provenance" },
+    { name = "angee-web" },
+    { name = "django-compose" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+]
+
+[[package]]
+name = "angee-projects"
+version = "3.0.0"
+source = { editable = "src/angee/projects" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-iam" },
+    { name = "angee-integrate" },
+    { name = "angee-knowledge" },
+    { name = "angee-messaging" },
+    { name = "angee-parties" },
+    { name = "angee-provenance" },
+    { name = "angee-scheduling" },
+    { name = "angee-storage" },
+    { name = "angee-tags" },
+    { name = "angee-timeline" },
+    { name = "angee-web" },
+    { name = "django-compose" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-knowledge", editable = "src/angee/knowledge" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-scheduling", editable = "src/angee/scheduling" },
+    { name = "angee-storage", editable = "src/angee/storage" },
+    { name = "angee-tags", editable = "src/angee/tags" },
+    { name = "angee-timeline", editable = "src/angee/timeline" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+]
+
+[[package]]
+name = "angee-proposals"
+version = "3.0.0"
+source = { editable = "src/angee/proposals" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-messaging" },
+    { name = "angee-money" },
+    { name = "angee-parties" },
+    { name = "angee-projects" },
+    { name = "angee-provenance" },
+    { name = "angee-spaces" },
+    { name = "angee-storage" },
+    { name = "angee-web" },
+    { name = "django-compose" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-money", editable = "src/angee/money" },
+    { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-projects", editable = "src/angee/projects" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-spaces", editable = "src/angee/spaces" },
+    { name = "angee-storage", editable = "src/angee/storage" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+]
+
+[[package]]
+name = "angee-proposals-work"
+version = "3.0.0"
+source = { editable = "src/angee/proposals_work" }
+dependencies = [
+    { name = "angee-proposals" },
+    { name = "angee-web" },
+    { name = "angee-work" },
+    { name = "django-compose" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-proposals", editable = "src/angee/proposals" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "angee-work", editable = "src/angee/work" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+]
+
+[[package]]
+name = "angee-provenance"
+version = "3.0.0"
+source = { editable = "src/angee/provenance" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-timeline" },
+    { name = "angee-web" },
+    { name = "django-compose" },
+    { name = "django-simple-history" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-timeline", editable = "src/angee/timeline" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+    { name = "django-simple-history", git = "https://github.com/ang-ee/django-simple-history.git?rev=014c0a56b6e80080b56483120172d417d5c7920b" },
+]
+
+[[package]]
+name = "angee-resources"
+version = "3.0.0"
+source = { editable = "src/angee/resources" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "django-compose" },
+    { name = "django-import-export" },
+    { name = "pyyaml" },
+    { name = "tablib" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "django-compose", specifier = ">=0.1.0.dev2,<0.2" },
+    { name = "django-import-export", specifier = ">=4.4" },
+    { name = "pyyaml", specifier = ">=6" },
+    { name = "tablib", specifier = ">=3" },
+]
+
+[[package]]
+name = "angee-scheduling"
+version = "3.0.0"
+source = { editable = "src/angee/scheduling" }
+dependencies = [
+    { name = "angee-graphql" },
+    { name = "python-dateutil" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "python-dateutil", specifier = ">=2.9" },
+]
+
+[[package]]
+name = "angee-sequence"
+version = "3.0.0"
+source = { editable = "src/angee/sequence" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+]
+
+[[package]]
+name = "angee-server"
+version = "3.0.0"
+source = { editable = "src/angee/server" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "django-compose" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "django-compose", specifier = ">=0.1.0.dev2,<0.2" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
+]
+
+[[package]]
+name = "angee-spaces"
+version = "3.0.0"
+source = { editable = "src/angee/spaces" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-iam" },
+    { name = "angee-knowledge" },
+    { name = "angee-messaging" },
+    { name = "angee-parties" },
+    { name = "angee-web" },
+    { name = "django-compose" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-knowledge", editable = "src/angee/knowledge" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+]
+
+[[package]]
+name = "angee-storage"
+version = "3.0.0"
+source = { editable = "src/angee/storage" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-provenance" },
+    { name = "angee-resources" },
+    { name = "angee-tags" },
+    { name = "angee-web" },
+    { name = "python-magic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-tags", editable = "src/angee/tags" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "python-magic", specifier = ">=0.4.27" },
+]
+
+[[package]]
+name = "angee-storage-integrate"
+version = "3.0.0"
+source = { editable = "src/angee/storage_integrate" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-integrate" },
+    { name = "angee-storage" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-storage", editable = "src/angee/storage" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
+name = "angee-storage-integrate-iphone"
+version = "3.0.0"
+source = { editable = "src/angee/storage_integrate_iphone" }
+dependencies = [
+    { name = "angee-integrate" },
+    { name = "angee-integrate-iphone" },
+    { name = "angee-storage" },
+    { name = "angee-storage-integrate" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-integrate-iphone", editable = "src/angee/integrate_iphone" },
+    { name = "angee-storage", editable = "src/angee/storage" },
+    { name = "angee-storage-integrate", editable = "src/angee/storage_integrate" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
+name = "angee-tags"
+version = "3.0.0"
+source = { editable = "src/angee/tags" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-provenance" },
+    { name = "angee-resources" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
+name = "angee-theme-angee"
+version = "3.0.0"
+source = { editable = "src/angee/theme_angee" }
+dependencies = [
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "angee-web", editable = "src/angee/web" }]
+
+[[package]]
+name = "angee-theme-aurora"
+version = "3.0.0"
+source = { editable = "src/angee/theme_aurora" }
+dependencies = [
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "angee-web", editable = "src/angee/web" }]
+
+[[package]]
+name = "angee-theme-carbon"
+version = "3.0.0"
+source = { editable = "src/angee/theme_carbon" }
+dependencies = [
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "angee-web", editable = "src/angee/web" }]
+
+[[package]]
+name = "angee-theme-fyltr"
+version = "3.0.0"
+source = { editable = "src/angee/theme_fyltr" }
+dependencies = [
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "angee-web", editable = "src/angee/web" }]
+
+[[package]]
+name = "angee-theme-ledger"
+version = "3.0.0"
+source = { editable = "src/angee/theme_ledger" }
+dependencies = [
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "angee-web", editable = "src/angee/web" }]
+
+[[package]]
+name = "angee-theme-midnight"
+version = "3.0.0"
+source = { editable = "src/angee/theme_midnight" }
+dependencies = [
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "angee-web", editable = "src/angee/web" }]
+
+[[package]]
+name = "angee-theme-stock"
+version = "3.0.0"
+source = { editable = "src/angee/theme_stock" }
+dependencies = [
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "angee-web", editable = "src/angee/web" }]
+
+[[package]]
+name = "angee-theme-warm-red"
+version = "3.0.0"
+source = { editable = "src/angee/theme_warm_red" }
+dependencies = [
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "angee-web", editable = "src/angee/web" }]
+
+[[package]]
+name = "angee-timeline"
+version = "3.0.0"
+source = { editable = "src/angee/timeline" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-web", editable = "src/angee/web" },
+]
+
+[[package]]
+name = "angee-uom"
+version = "3.0.0"
+source = { editable = "src/angee/uom" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-resources" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+]
+
+[[package]]
+name = "angee-web"
+version = "3.0.0"
+source = { editable = "src/angee/web" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-server" },
+    { name = "django-compose" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-server", editable = "src/angee/server" },
+    { name = "django-compose", specifier = ">=0.1.0.dev2,<0.2" },
+]
+
+[[package]]
+name = "angee-work"
+version = "3.0.0"
+source = { editable = "src/angee/work" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-iam" },
+    { name = "angee-jobs" },
+    { name = "angee-messaging" },
+    { name = "angee-projects" },
+    { name = "angee-sequence" },
+    { name = "angee-spaces" },
+    { name = "angee-web" },
+    { name = "django-compose" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-jobs", editable = "src/angee/jobs" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-projects", editable = "src/angee/projects" },
+    { name = "angee-sequence", editable = "src/angee/sequence" },
+    { name = "angee-spaces", editable = "src/angee/spaces" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+]
+
+[[package]]
+name = "angee-workflows"
+version = "3.0.0"
+source = { editable = "src/angee/workflows" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-decisions" },
+    { name = "angee-graphql" },
+    { name = "angee-iam" },
+    { name = "angee-jobs" },
+    { name = "angee-provenance" },
+    { name = "angee-resources" },
+    { name = "angee-timeline" },
+    { name = "angee-web" },
+    { name = "django-compose" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-decisions", editable = "src/angee/decisions" },
+    { name = "angee-graphql", editable = "src/angee/graphql" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-jobs", editable = "src/angee/jobs" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-resources", editable = "src/angee/resources" },
+    { name = "angee-timeline", editable = "src/angee/timeline" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+]
+
+[[package]]
+name = "angee-workflows-agents"
+version = "3.0.0"
+source = { editable = "src/angee/workflows_agents" }
+dependencies = [
+    { name = "angee-agents" },
+    { name = "angee-base" },
+    { name = "angee-jobs" },
+    { name = "angee-workflows" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-agents", editable = "src/angee/agents" },
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-jobs", editable = "src/angee/jobs" },
+    { name = "angee-workflows", editable = "src/angee/workflows" },
+]
+
+[[package]]
+name = "angee-workflows-extraction"
+version = "3.0.0"
+source = { editable = "src/angee/workflows_extraction" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-extraction" },
+    { name = "angee-workflows" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-extraction", editable = "src/angee/extraction" },
+    { name = "angee-workflows", editable = "src/angee/workflows" },
+]
+
+[[package]]
+name = "angee-workflows-integrate"
+version = "3.0.0"
+source = { editable = "src/angee/workflows_integrate" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-decisions" },
+    { name = "angee-integrate" },
+    { name = "angee-jobs" },
+    { name = "angee-provenance" },
+    { name = "angee-storage" },
+    { name = "angee-workflows" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-decisions", editable = "src/angee/decisions" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-jobs", editable = "src/angee/jobs" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-storage", editable = "src/angee/storage" },
+    { name = "angee-workflows", editable = "src/angee/workflows" },
+]
+
+[[package]]
+name = "angee-workflows-messaging"
+version = "3.0.0"
+source = { editable = "src/angee/workflows_messaging" }
+dependencies = [
+    { name = "angee-messaging" },
+    { name = "angee-web" },
+    { name = "angee-workflows" },
+    { name = "django-compose" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "angee-workflows", editable = "src/angee/workflows" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+]
+
+[[package]]
+name = "angee-workflows-parties"
+version = "3.0.0"
+source = { editable = "src/angee/workflows_parties" }
+dependencies = [
+    { name = "angee-base" },
+    { name = "angee-decisions" },
+    { name = "angee-parties" },
+    { name = "angee-provenance" },
+    { name = "angee-workflows" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-decisions", editable = "src/angee/decisions" },
+    { name = "angee-parties", editable = "src/angee/parties" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-workflows", editable = "src/angee/workflows" },
+]
+
+[[package]]
+name = "angee-workflows-posts"
+version = "3.0.0"
+source = { editable = "src/angee/workflows_posts" }
+dependencies = [
+    { name = "angee-agents" },
+    { name = "angee-base" },
+    { name = "angee-posts" },
+    { name = "angee-workflows-agents" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-agents", editable = "src/angee/agents" },
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-posts", editable = "src/angee/posts" },
+    { name = "angee-workflows-agents", editable = "src/angee/workflows_agents" },
 ]
 
 [[package]]
@@ -600,11 +2470,14 @@ wheels = [
 
 [[package]]
 name = "cron-descriptor"
-version = "1.4.5"
+version = "2.2.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/02/83/70bd410dc6965e33a5460b7da84cf0c5a7330a68d6d5d4c3dfdb72ca117e/cron_descriptor-1.4.5.tar.gz", hash = "sha256:f51ce4ffc1d1f2816939add8524f206c376a42c87a5fca3091ce26725b3b1bca", size = 30666, upload-time = "2024-08-24T18:16:48.654Z" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/41/6b/9ebac1857c0e90d5ba487090f4f9b23e8bf9adead62922550621de21cbf2/cron_descriptor-2.2.1.tar.gz", hash = "sha256:6759056f43b3cabca274b5df182bb63571f2f383bdd4d9d3ff4662c527430a65", size = 53562, upload-time = "2026-10-13T12:39:33.386Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/88/20/2cfe598ead23a715a00beb716477cfddd3e5948cf203c372d02221e5b0c6/cron_descriptor-1.4.5-py3-none-any.whl", hash = "sha256:736b3ae9d1a99bc3dbfc5b55b5e6e7c12031e7ba5de716625772f8b02dcd6013", size = 50370, upload-time = "2024-08-24T18:16:46.783Z" },
+    { url = "https://files.pythonhosted.org/packages/87/f8/c9c61b0fd465aaa2b2ac2f51c77dfe49e09dc6c907a8d476c4870b738f2a/cron_descriptor-2.2.1-py3-none-any.whl", hash = "sha256:23b42aca983841333aaf28095024e0457f005621d03e658edbd7316a5f2bbd42", size = 76628, upload-time = "2026-10-13T12:39:31.663Z" },
 ]
 
 [[package]]
@@ -731,193 +2604,16 @@ wheels = [
 
 [[package]]
 name = "django"
-version = "6.0.6"
+version = "6.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "asgiref" },
     { name = "sqlparse" },
     { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/78/29/ac41e16097af67066d97a7d5775c5d8e7efc5d0284f6b0a159e07b9adb92/django-6.0.6.tar.gz", hash = "sha256:ad03916ba59523d781ae5c3f631960c23d69a9d9c43cecda52fc23b47e953713", size = 10905525, upload-time = "2026-06-03T13:02:46.503Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/89/24/20d187a22ac821288b53c53b8f696019dcb0c7b4f973f052ade19392c74d/django-6.1.2.tar.gz", hash = "sha256:a1e92451ccb8b514e91bbb3b6d186d20b4030558f116b5d9de6535455ff210b7", size = 11251425, upload-time = "2026-10-06T12:53:29.622Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/eb/50/23f9dc45483419a3cc2085b498b25adfbf10642b2941c73e6d2dfaffc9ab/django-6.0.6-py3-none-any.whl", hash = "sha256:25148b1194c47c2e685e5f5e9c5d59c78b075dfd282cb9618861ba6c1708f4d2", size = 8373354, upload-time = "2026-06-03T13:02:41.72Z" },
-]
-
-[[package]]
-name = "django-angee"
-version = "0.2.0"
-source = { editable = "." }
-dependencies = [
-    { name = "billiard" },
-    { name = "celery", extra = ["redis"] },
-    { name = "channels" },
-    { name = "cryptography" },
-    { name = "django" },
-    { name = "django-celery-beat" },
-    { name = "django-choices-field" },
-    { name = "django-environ" },
-    { name = "django-simple-history" },
-    { name = "django-sqids" },
-    { name = "django-yamlconf" },
-    { name = "django-zed-rebac" },
-    { name = "hatch-angee" },
-    { name = "jsonschema", extra = ["format-nongpl"] },
-    { name = "pydantic" },
-    { name = "referencing" },
-    { name = "sentry-sdk" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.optional-dependencies]
-postgres = [
-    { name = "psycopg", extra = ["binary", "pool"] },
-]
-
-[package.dev-dependencies]
-addons = [
-    { name = "agent-client-protocol" },
-    { name = "anthropic" },
-    { name = "authlib" },
-    { name = "channels" },
-    { name = "channels-redis" },
-    { name = "deepdiff" },
-    { name = "django-anymail" },
-    { name = "django-axes" },
-    { name = "django-countries" },
-    { name = "django-import-export" },
-    { name = "django-zed-rebac", extra = ["strawberry-django"] },
-    { name = "fastmcp" },
-    { name = "httpcore2" },
-    { name = "httpx" },
-    { name = "httpx2" },
-    { name = "imapclient" },
-    { name = "jsonpointer" },
-    { name = "mail-parser-reply" },
-    { name = "markdown-it-py" },
-    { name = "mcp" },
-    { name = "openai" },
-    { name = "phonenumbers" },
-    { name = "pillow" },
-    { name = "pycountry" },
-    { name = "pydantic-ai-slim", extra = ["anthropic", "mcp", "openai"] },
-    { name = "pyjwt", extra = ["crypto"] },
-    { name = "pypdfium2" },
-    { name = "python-dateutil" },
-    { name = "python-magic" },
-    { name = "pyyaml" },
-    { name = "qrcode", extra = ["pil"] },
-    { name = "requests" },
-    { name = "ruamel-yaml" },
-    { name = "slack-sdk" },
-    { name = "strawberry-django-aggregates" },
-    { name = "strawberry-django-hasura" },
-    { name = "strawberry-graphql" },
-    { name = "strawberry-graphql-django" },
-    { name = "tablib" },
-    { name = "urllib3" },
-    { name = "vobject" },
-]
-dev = [
-    { name = "daphne" },
-    { name = "django-stubs", extra = ["compatible-mypy"] },
-    { name = "django-zed-rebac", extra = ["caveats"] },
-    { name = "faker" },
-    { name = "mypy" },
-    { name = "psycopg", extra = ["binary", "pool"] },
-    { name = "pytest" },
-    { name = "pytest-django" },
-    { name = "pytest-randomly" },
-    { name = "pytest-split" },
-    { name = "pytest-xdist" },
-    { name = "ruff" },
-    { name = "vulture" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "billiard", specifier = ">=4.2.1,<4.3" },
-    { name = "celery", extras = ["redis"], specifier = ">=5.5" },
-    { name = "channels", specifier = ">=4.0" },
-    { name = "cryptography", specifier = ">=44" },
-    { name = "django", specifier = ">=6.0,<6.1" },
-    { name = "django-celery-beat", specifier = ">=2.9" },
-    { name = "django-choices-field", git = "https://github.com/ang-ee/django-choices-field.git?rev=b02c1488660d0bf1f4483d2e73bc842b41b70632" },
-    { name = "django-environ", specifier = ">=0.12" },
-    { name = "django-simple-history", specifier = ">=3.13" },
-    { name = "django-sqids", specifier = ">=0.1" },
-    { name = "django-yamlconf", specifier = ">=1.5.0" },
-    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=bf5989e6247fdf9c2c240b961a71cddc174c4216" },
-    { name = "hatch-angee", specifier = ">=0.2.4" },
-    { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.26" },
-    { name = "psycopg", extras = ["binary", "pool"], marker = "extra == 'postgres'", specifier = ">=3.2" },
-    { name = "pydantic", specifier = ">=2.13" },
-    { name = "referencing", specifier = ">=0.37" },
-    { name = "sentry-sdk", specifier = ">=2.71.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
-]
-provides-extras = ["postgres"]
-
-[package.metadata.requires-dev]
-addons = [
-    { name = "agent-client-protocol", specifier = "==1.0.0rc2" },
-    { name = "anthropic", specifier = ">=0.109.2" },
-    { name = "authlib", specifier = ">=1.8.0" },
-    { name = "channels", specifier = ">=4.0" },
-    { name = "channels-redis", specifier = ">=4.2" },
-    { name = "deepdiff", specifier = ">=9.1.0" },
-    { name = "django-anymail", specifier = ">=15.1" },
-    { name = "django-axes", specifier = ">=8.0" },
-    { name = "django-countries", specifier = ">=9,<10" },
-    { name = "django-import-export", specifier = ">=4.4" },
-    { name = "django-zed-rebac", extras = ["strawberry-django"], specifier = ">=0.27.0" },
-    { name = "fastmcp", specifier = ">=3.4.2,<4" },
-    { name = "httpcore2", specifier = ">=2.10,<3" },
-    { name = "httpx", specifier = ">=0.28.1,<0.29" },
-    { name = "httpx2", specifier = ">=2.10,<3" },
-    { name = "imapclient", specifier = ">=3.1.0" },
-    { name = "jsonpointer", specifier = ">=3.1" },
-    { name = "mail-parser-reply", specifier = ">=1.36" },
-    { name = "markdown-it-py", specifier = ">=4.2" },
-    { name = "mcp", specifier = ">=1.2" },
-    { name = "openai", specifier = ">=2.43.0" },
-    { name = "phonenumbers", specifier = ">=9.0" },
-    { name = "pillow", specifier = ">=11.0" },
-    { name = "pycountry", specifier = ">=26,<27" },
-    { name = "pydantic-ai-slim", specifier = ">=2.13" },
-    { name = "pydantic-ai-slim", extras = ["anthropic"], specifier = ">=2.13" },
-    { name = "pydantic-ai-slim", extras = ["mcp"], specifier = ">=2.13" },
-    { name = "pydantic-ai-slim", extras = ["openai"], specifier = ">=2.13" },
-    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.12" },
-    { name = "pypdfium2", specifier = ">=4.30" },
-    { name = "python-dateutil", specifier = ">=2.9" },
-    { name = "python-magic", specifier = ">=0.4.27" },
-    { name = "pyyaml", specifier = ">=6" },
-    { name = "qrcode", extras = ["pil"], specifier = ">=8.2" },
-    { name = "requests", specifier = ">=2.32" },
-    { name = "ruamel-yaml", specifier = ">=0.18" },
-    { name = "slack-sdk", specifier = ">=3.43.0" },
-    { name = "strawberry-django-aggregates", git = "https://github.com/ang-ee/strawberry-django-aggregates.git?rev=0f374854d19b2709b6d77ae872090ab2a751f1dc" },
-    { name = "strawberry-django-hasura", git = "https://github.com/ang-ee/strawberry-django-hasura.git?rev=4e1c2da2bcbbc90cc586fef3db8d70f5cd6ccfc0" },
-    { name = "strawberry-graphql", git = "https://github.com/ang-ee/strawberry.git?rev=273bf0456d914d4df535222c4cbae73dff46a376" },
-    { name = "strawberry-graphql-django", git = "https://github.com/ang-ee/strawberry-django.git?rev=091238ecd4ae07798ef12e9eb24281540da41ced" },
-    { name = "tablib", specifier = ">=3" },
-    { name = "urllib3", specifier = ">=2.2" },
-    { name = "vobject", specifier = ">=0.9.9" },
-]
-dev = [
-    { name = "daphne", specifier = ">=4.0" },
-    { name = "django-stubs", extras = ["compatible-mypy"], git = "https://github.com/ang-ee/django-stubs.git?rev=c742042283a82c3248c68493c697f5f30e2fdc6a" },
-    { name = "django-zed-rebac", extras = ["caveats"], specifier = "==0.27.3" },
-    { name = "faker", specifier = ">=30.0" },
-    { name = "mypy", git = "https://github.com/ang-ee/mypy.git?rev=ac3de6e4c34b04728e768e07d4842f4309ff6c45" },
-    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-django", specifier = ">=4.8" },
-    { name = "pytest-randomly", specifier = ">=3.16" },
-    { name = "pytest-split", specifier = ">=0.11" },
-    { name = "pytest-xdist", specifier = ">=3.6" },
-    { name = "ruff", specifier = ">=0.15.12" },
-    { name = "vulture", specifier = ">=2.16" },
+    { url = "https://files.pythonhosted.org/packages/c9/83/90ff2dbfac7b519ed77620bdbb827cd2d1a83faf00d076bf95056428bce7/django-6.1.2-py3-none-any.whl", hash = "sha256:141efee6ec64d1db6db90683bf734c550102450f444fb099063b0be1bd27d991", size = 8420684, upload-time = "2026-10-06T12:53:17.381Z" },
 ]
 
 [[package]]
@@ -951,7 +2647,7 @@ wheels = [
 [[package]]
 name = "django-celery-beat"
 version = "2.9.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/celery/django-celery-beat.git?rev=b5e3443d647baf910c0168f25b512dd388ba669e#b5e3443d647baf910c0168f25b512dd388ba669e" }
 dependencies = [
     { name = "celery" },
     { name = "cron-descriptor" },
@@ -959,10 +2655,6 @@ dependencies = [
     { name = "django-timezone-field" },
     { name = "python-crontab" },
     { name = "tzdata" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/05/45/fc97bc1d9af8e7dc07f1e37044d9551a30e6793249864cef802341e2e3a8/django_celery_beat-2.9.0.tar.gz", hash = "sha256:92404650f52fcb44cf08e2b09635cb1558327c54b1a5d570f0e2d3a22130934c", size = 177667, upload-time = "2026-02-28T16:45:34.749Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/71/ae/9befa7ae37f5e5c41be636a254fcf47ff30dd5c88bd115070e252f6b9162/django_celery_beat-2.9.0-py3-none-any.whl", hash = "sha256:4a9e5ebe26d6f8d7215e1fc5c46e466016279dc102435a28141108649bdf2157", size = 105013, upload-time = "2026-02-28T16:45:32.822Z" },
 ]
 
 [[package]]
@@ -972,6 +2664,20 @@ source = { git = "https://github.com/ang-ee/django-choices-field.git?rev=b02c148
 dependencies = [
     { name = "django" },
     { name = "typing-extensions" },
+]
+
+[[package]]
+name = "django-compose"
+version = "0.1.0.dev8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "django" },
+    { name = "django-yamlconf" },
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b4/a2/5a0aec0d792d23ab906ff9d6f69b3c4b5a874905861502b66e8161b3e4e7/django_compose-0.1.0.dev8.tar.gz", hash = "sha256:0f50b245ace8d3bc38a3640512736ddfd0591a76a61b68927b7d851f52d74424", size = 269024, upload-time = "2026-10-30T21:40:10.362Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/51/ad/e2d20925a186299de225afee6338645195a60eb87e608262af647e6b1b45/django_compose-0.1.0.dev8-py3-none-any.whl", hash = "sha256:47a2055a0b1d75bd5709d37d5e64ebcb56e0147cd203fee718d99d73630249cb", size = 97917, upload-time = "2026-10-30T21:40:09.313Z" },
 ]
 
 [[package]]
@@ -1012,14 +2718,10 @@ wheels = [
 
 [[package]]
 name = "django-simple-history"
-version = "3.13.0"
-source = { registry = "https://pypi.org/simple" }
+version = "3.13.0.post1.dev3+g014c0a56b"
+source = { git = "https://github.com/ang-ee/django-simple-history.git?rev=014c0a56b6e80080b56483120172d417d5c7920b#014c0a56b6e80080b56483120172d417d5c7920b" }
 dependencies = [
     { name = "django" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/6b/1c/0689c13c0aa36df828947692f4e309f93c58e075219735c423edbbf6227d/django_simple_history-3.13.0.tar.gz", hash = "sha256:ca3c1e4ccd5f16f45fbbef6015ee2a246465fd9bd924100df8e9dfb368c4f26c", size = 236759, upload-time = "2026-07-22T13:41:29.588Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/65/60/41b2055db523b18a7ef67d0ce7c7c3204bf1b01e388628c8ce578daca7ec/django_simple_history-3.13.0-py3-none-any.whl", hash = "sha256:1cf1d83054479f64aee022023afc1671843aa0a99888799c5c4c3966b0252521", size = 82040, upload-time = "2026-07-22T13:41:28.083Z" },
 ]
 
 [[package]]
@@ -1032,31 +2734,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/cd/86/f0be1a2882fc55839b61245101a32a6a6600a925e4ea3821d446bbeb9a53/django_sqids-0.2.2.tar.gz", hash = "sha256:853af6efef57644867f2e46fc1f01e814fb7c9b297163f143724a280dca738dd", size = 5371, upload-time = "2025-07-09T14:58:18.02Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d4/c9/3520ed5bad42f45c8ce5b7c31a7a87666cf05346fc53d825826fd86caf8d/django_sqids-0.2.2-py3-none-any.whl", hash = "sha256:ddec508a29e9b51474e3ef78a148d906151b4863e830f59d3f13fadf94e90a79", size = 6306, upload-time = "2025-07-09T14:58:16.742Z" },
-]
-
-[[package]]
-name = "django-stubs"
-version = "6.0.9"
-source = { git = "https://github.com/ang-ee/django-stubs.git?rev=c742042283a82c3248c68493c697f5f30e2fdc6a#c742042283a82c3248c68493c697f5f30e2fdc6a" }
-dependencies = [
-    { name = "django" },
-    { name = "django-stubs-ext" },
-    { name = "types-pyyaml" },
-    { name = "typing-extensions" },
-]
-
-[package.optional-dependencies]
-compatible-mypy = [
-    { name = "mypy" },
-]
-
-[[package]]
-name = "django-stubs-ext"
-version = "6.0.9"
-source = { git = "https://github.com/ang-ee/django-stubs.git?subdirectory=ext&rev=c742042283a82c3248c68493c697f5f30e2fdc6a#c742042283a82c3248c68493c697f5f30e2fdc6a" }
-dependencies = [
-    { name = "django" },
-    { name = "typing-extensions" },
 ]
 
 [[package]]
@@ -1084,8 +2761,8 @@ wheels = [
 
 [[package]]
 name = "django-zed-rebac"
-version = "0.27.3"
-source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=bf5989e6247fdf9c2c240b961a71cddc174c4216#bf5989e6247fdf9c2c240b961a71cddc174c4216" }
+version = "0.30.0"
+source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=f43f0773f2c2a86a6882aeb1b46b34b8c19a0d13#f43f0773f2c2a86a6882aeb1b46b34b8c19a0d13" }
 dependencies = [
     { name = "django" },
 ]
@@ -1130,6 +2807,60 @@ wheels = [
 ]
 
 [[package]]
+name = "example-notes"
+version = "3.0.0"
+source = { editable = "examples/src/example/notes" }
+dependencies = [
+    { name = "angee-agents" },
+    { name = "angee-agents-integrate-anthropic" },
+    { name = "angee-base" },
+    { name = "angee-decisions" },
+    { name = "angee-iam" },
+    { name = "angee-iam-integrate-oidc" },
+    { name = "angee-integrate" },
+    { name = "angee-knowledge" },
+    { name = "angee-mcp" },
+    { name = "angee-messaging" },
+    { name = "angee-projects" },
+    { name = "angee-provenance" },
+    { name = "angee-storage" },
+    { name = "angee-web" },
+    { name = "angee-workflows" },
+    { name = "faker" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-agents", editable = "src/angee/agents" },
+    { name = "angee-agents-integrate-anthropic", editable = "src/angee/agents_integrate_anthropic" },
+    { name = "angee-base", editable = "src/angee/base" },
+    { name = "angee-decisions", editable = "src/angee/decisions" },
+    { name = "angee-iam", editable = "src/angee/iam" },
+    { name = "angee-iam-integrate-oidc", editable = "src/angee/iam_integrate_oidc" },
+    { name = "angee-integrate", editable = "src/angee/integrate" },
+    { name = "angee-knowledge", editable = "src/angee/knowledge" },
+    { name = "angee-mcp", editable = "src/angee/mcp" },
+    { name = "angee-messaging", editable = "src/angee/messaging" },
+    { name = "angee-projects", editable = "src/angee/projects" },
+    { name = "angee-provenance", editable = "src/angee/provenance" },
+    { name = "angee-storage", editable = "src/angee/storage" },
+    { name = "angee-web", editable = "src/angee/web" },
+    { name = "angee-workflows", editable = "src/angee/workflows" },
+    { name = "faker", specifier = ">=30.0" },
+]
+
+[[package]]
+name = "example-theme"
+version = "3.0.0"
+source = { editable = "examples/src/example/theme" }
+dependencies = [
+    { name = "angee-web" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "angee-web", editable = "src/angee/web" }]
+
+[[package]]
 name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1161,19 +2892,19 @@ wheels = [
 
 [[package]]
 name = "fastmcp"
-version = "3.4.2"
+version = "3.4.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastmcp-slim", extra = ["client", "server"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/29/18/46beaec18c9f86a599ae3f9cdf6677dd6b50240cfd844d18233710b47f13/fastmcp-3.4.2.tar.gz", hash = "sha256:b468722946fc467c3796a6572f7a14d93d48c014cf8fea12910245220cbbe4e1", size = 28756849, upload-time = "2026-06-06T01:30:35.694Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/62/dd/fd444d94ae7afdaf5b6dd168799d34023f576b405872d6a27d5686a9d1f4/fastmcp-3.4.7.tar.gz", hash = "sha256:43117aca886f5ee2f6a569bba91cef02b59c339aad04ba29950ff18d251c822a", size = 28808982, upload-time = "2026-08-10T21:17:55.045Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/58/4d/8b1ba42251160e11ca34686344572121432c23a082d56ef6bbdec5888fc1/fastmcp-3.4.2-py3-none-any.whl", hash = "sha256:c87a62b029f0c5400ada85f683629345d2466c39169f0cb853e487b2f7308c08", size = 8018, upload-time = "2026-06-06T01:30:38.118Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/14/6d950459cc831fa17fe2d1797926b6eb2d2f2af50f830e62d0c098cc1ec8/fastmcp-3.4.7-py3-none-any.whl", hash = "sha256:e4e7698cb4af5bc667b1901685261fa2f3526dc73d243a461fca42500c8dbe56", size = 8016, upload-time = "2026-08-10T21:17:51.391Z" },
 ]
 
 [[package]]
 name = "fastmcp-slim"
-version = "3.4.2"
+version = "3.4.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "platformdirs" },
@@ -1183,9 +2914,9 @@ dependencies = [
     { name = "rich" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a3/2e/d627b28b7403ecc526991ef732921b08bde010006e6148635f053fd29f4c/fastmcp_slim-3.4.2.tar.gz", hash = "sha256:290646e0955a516235a317151034559aa48336cb843d3f006131aedad8759bb4", size = 576291, upload-time = "2026-06-06T01:30:12.553Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/12/ac/7924e803368d0758ee4d6b1259066550df78f58f0f9f8bfebd5a123e957d/fastmcp_slim-3.4.7.tar.gz", hash = "sha256:06b32a358320a7dc2b2ee040ba89ea55ddc20763dff2949f384f7974b13b5d8f", size = 594357, upload-time = "2026-08-10T21:17:28.723Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f7/58/22afebf18df7260b09148199cbeb90cdcc4b3a4e1b5d7460e3591c3a7add/fastmcp_slim-3.4.2-py3-none-any.whl", hash = "sha256:bdc72492212681ca502755fa8acc0457f559295da1fc3dfc0599adc1c04b82f3", size = 749195, upload-time = "2026-06-06T01:30:11.22Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/97/e0e53642cd029a9a7635ae9c548f9f2cc995af5914e487b3df795664e4be/fastmcp_slim-3.4.7-py3-none-any.whl", hash = "sha256:6c931a0089705f3f2935428ef9b2bc74ad94140adc64aab84d116d103e694b3a", size = 769370, upload-time = "2026-08-10T21:17:27.227Z" },
 ]
 
 [package.optional-dependencies]
@@ -1265,11 +2996,11 @@ wheels = [
 
 [[package]]
 name = "graphql-core"
-version = "3.2.11"
+version = "3.3.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/4d/90/f2aff026ab4aebd80eb71905106a0885f4cfde85dcf965543f45bed0d9ee/graphql_core-3.2.11.tar.gz", hash = "sha256:e7e156d10beb127cab5c89ff0da71416fc73d27c484a4757d3b2d35633774802", size = 528407, upload-time = "2026-06-05T13:45:22.915Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a4/91/223fbace7c8648690d7fb77855e29bd248c9ed1e0833ed3002ab29bc1441/graphql_core-3.3.1.tar.gz", hash = "sha256:8d9b6f95fb66b58b260904cf9e191f422782620533ec8fa0c96ab941b6659a2a", size = 751402, upload-time = "2026-10-25T09:34:09.764Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/00/15/b92b4e1d88d02c6eff9733c9eea21846ab435cc4d813d84ccc5d335955df/graphql_core-3.2.11-py3-none-any.whl", hash = "sha256:0b3e35ff41e9adba53021ab0cef475eb18f57c7f53f0f2ca55567fbf3c537ea0", size = 214879, upload-time = "2026-06-05T13:45:21.245Z" },
+    { url = "https://files.pythonhosted.org/packages/57/0e/e51b006267e7fa785abf5d1f86a7d60b84f7f893e3ba4fe23df9be2000cf/graphql_core-3.3.1-py3-none-any.whl", hash = "sha256:43ebcd0d9a0662a71b1a2f6562ba863d253057ec11cbc45835b2e2683a0a3770", size = 349047, upload-time = "2026-10-25T09:34:07.725Z" },
 ]
 
 [[package]]
@@ -1288,36 +3019,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/01/ee/02a2c011bdab74c6fb3c75474d40b3052059d95df7e73351460c8588d963/h11-0.16.0.tar.gz", hash = "sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1", size = 101250, upload-time = "2025-04-24T03:35:25.427Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl", hash = "sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86", size = 37515, upload-time = "2025-04-24T03:35:24.344Z" },
-]
-
-[[package]]
-name = "hatch-angee"
-version = "0.2.4"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "hatchling" },
-    { name = "packaging" },
-    { name = "tomlkit" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/31/93/fa464284dc19b9c422741b8bd3d12468333d91308ef49a1928e685e75603/hatch_angee-0.2.4.tar.gz", hash = "sha256:55aa21e2cac8367cdf6073a70082f40733571770c093470fd5e985cb33422e6d", size = 54653, upload-time = "2026-09-18T09:25:39.413Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d4/1a/07695b75f8e02912c0688758b290e6e1b7d68d81f622e56bb6e8a9bf935f/hatch_angee-0.2.4-py3-none-any.whl", hash = "sha256:a4367361e6ce4878dbe45777a4b70640e450a6096c0f7683483d306a7c0f10df", size = 26934, upload-time = "2026-09-18T09:25:38.408Z" },
-]
-
-[[package]]
-name = "hatchling"
-version = "1.32.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "packaging" },
-    { name = "pathspec" },
-    { name = "pluggy" },
-    { name = "tomlkit" },
-    { name = "trove-classifiers" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/69/08/33331757185504aae48b8d9bd78cec03a76e3aecfb52e549d05a2347c0dd/hatchling-1.32.0.tar.gz", hash = "sha256:0bdbde4a52b06c37e3eca395f85a762bf0ef06fe374fd8ae429dc6be10230f5f", size = 57783, upload-time = "2026-08-11T05:03:44.114Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a9/84/1798b6d85ecde0e31546004efd25c5de1b1f49250644a60cce460e12593a/hatchling-1.32.0-py3-none-any.whl", hash = "sha256:0e17c9c3b9aa7c625acc8d0f5b622f107d5049af9ecf5ada4de1aada5be7cdbc", size = 78435, upload-time = "2026-08-11T05:03:42.644Z" },
 ]
 
 [[package]]
@@ -1833,18 +3534,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/2f/e1/aab6c946570496b78e67804721f3d5e2d62a93081b9b37df77764ef56347/msgpack-1.2.1-cp314-cp314t-win32.whl", hash = "sha256:c1c79a604a2969a868a78b6ebd27a887e00c624f14f66b3038e0590cb23332d1", size = 70914, upload-time = "2026-06-18T16:13:49.385Z" },
     { url = "https://files.pythonhosted.org/packages/13/0a/e608956488a2af014cfe6e3d665e090b8ee42aa14b07f8f95b8880d66b09/msgpack-1.2.1-cp314-cp314t-win_amd64.whl", hash = "sha256:f12038a35fabd52e56a3547bab42401af49a45caa6dd00b34c44de235bc93ee2", size = 77999, upload-time = "2026-06-18T16:13:50.467Z" },
     { url = "https://files.pythonhosted.org/packages/d2/8a/27e2e57055176e366a46b85d02d68e7a5bcfbdd8474c9706375d965f24d3/msgpack-1.2.1-cp314-cp314t-win_arm64.whl", hash = "sha256:0adcf06ffde0777c0e1a9b771a2b1c4226ba1bbf748c8efcc02fcdeca3299107", size = 71160, upload-time = "2026-06-18T16:13:51.498Z" },
-]
-
-[[package]]
-name = "mypy"
-version = "2.1.0"
-source = { git = "https://github.com/ang-ee/mypy.git?rev=ac3de6e4c34b04728e768e07d4842f4309ff6c45#ac3de6e4c34b04728e768e07d4842f4309ff6c45" }
-dependencies = [
-    { name = "ast-serialize" },
-    { name = "librt", marker = "platform_python_implementation != 'PyPy'" },
-    { name = "mypy-extensions" },
-    { name = "pathspec" },
-    { name = "typing-extensions" },
 ]
 
 [[package]]
@@ -2918,6 +4607,17 @@ wheels = [
 ]
 
 [[package]]
+name = "tests-blankchoices"
+version = "3.0.0"
+source = { editable = "tests/blankchoices" }
+dependencies = [
+    { name = "angee-parties" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "angee-parties", editable = "src/angee/parties" }]
+
+[[package]]
 name = "tiktoken"
 version = "0.13.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2962,15 +4662,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/21/3b/6c24bec5be5e743ffd99576daa5cc077722fc7d5bbc00bd133fa0c698dc6/tqdm-4.70.0.tar.gz", hash = "sha256:55b0b0dbd97462d06ebee91e4dac24ed4d4702be82b24f07e6c1d27e08cea220", size = 795438, upload-time = "2026-07-27T11:33:15.271Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f9/1c/01bfd571a64e7f270e6bab5e33777debe0edc56759233ce84f27dec92d14/tqdm-4.70.0-py3-none-any.whl", hash = "sha256:7f585706bfddbdebf89daac705b2dfcc16890130727d3197ca62c732b4310953", size = 80184, upload-time = "2026-07-27T11:33:13.167Z" },
-]
-
-[[package]]
-name = "trove-classifiers"
-version = "2026.6.1.19"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/c2/e3/7ca82ee24c82d344584abd5b8637b3bd056f2900226e8d82fc22f1184b92/trove_classifiers-2026.6.1.19.tar.gz", hash = "sha256:c5132b4b61a829d11cfbd2d72e97f20a45ed6edb95e45c5efdeb5e00836b2745", size = 17059, upload-time = "2026-06-01T19:41:34.649Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/7c/a4/81502f486f01db95bc8320646a8a12511f5e556cb63d5e224d91816605c4/trove_classifiers-2026.6.1.19-py3-none-any.whl", hash = "sha256:ab4c4ec93cc4a4e7815fa759906e05e6bb3f2fbd92ea0f897288c6a43efd15b3", size = 14211, upload-time = "2026-06-01T19:41:33.434Z" },
 ]
 
 [[package]]

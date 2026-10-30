@@ -6,19 +6,53 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from django.core.exceptions import FieldError
 from django.db import models
 from django.test.utils import isolate_apps
 from mypy import api as mypy_api  # noqa: F401 -- initialize mypy's compiled import graph before its plugin API.
-from mypy.mro import calculate_mro
-from mypy.nodes import GDEF, Block, ClassDef, NameExpr, SymbolTable, SymbolTableNode, TypeInfo
-from mypy.plugin import ClassDefContext
-from mypy.types import Instance
 
-from angee.compose.typing import CompositionContext, CompositionPlugin
+# isort: split
+from django_compose.typing import CompositionContext
+
+
+@pytest.mark.parametrize("settings_module", ("tests.typing_settings", "tests.typing_app.settings"))
+def test_composition_context_reads_native_composed_and_ordinary_registries(settings_module: str) -> None:
+    """Native composed settings and ordinary Django settings retain their own registries."""
+
+    root = Path(__file__).resolve().parents[1]
+    env = {
+        name: value for name, value in os.environ.items()
+        if not name.startswith(("ANGEE_", "COMPOSE_")) and name not in {"DATABASE_URL", "DJANGO_SETTINGS_MODULE"}
+    }
+    # A direct context probe supplies the same import roots as native mypy_path.
+    env["PYTHONPATH"] = os.pathsep.join((str(root / ".mypy_cache"), str(root)))
+    result = subprocess.run(
+        [sys.executable, "-c", "\n".join([
+            # Initialize compiled mypy's import graph before importing its plugin API.
+            "from mypy import api",
+            "from django_compose.typing import CompositionContext",
+            f"context = CompositionContext({settings_module!r})",
+            "if context.django_settings_module == 'tests.typing_app.settings':",
+            "    assert not context.apps_registry.is_installed('django_compose')",
+            "    assert not hasattr(context.settings, 'COMPOSE_OUTPUT_DIR')",
+            "    assert not context.composed",
+            "    assert not context.static_names",
+            "    assert not context.parents",
+            "    assert not context.fields",
+            "    assert not context.required_ancestors",
+            "else:",
+            "    assert context.apps_registry.is_installed('django_compose')",
+            "    queue = context.apps_registry.get_model('work', 'Queue')",
+            "    assert context.composed['angee.work.models.Queue'] is queue",
+            "    assert context.get_model_class_by_fullname('angee.work.models.Queue') is queue",
+            "    assert context.static_names[queue] == 'angee.work.models.Queue'",
+            "    assert context.parents['angee.work.models.Queue'] == 'angee.spaces.models.Group'",
+            "    assert context.parents['angee.integrate.models.Bridge'] == 'angee.integrate.models.Integration'",
+        ])], cwd=root, env=env, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_abstract_self_fk_projection_has_the_same_unknown_pk_as_native_pk() -> None:
@@ -60,45 +94,6 @@ def test_concrete_self_fk_retains_native_relation_and_primary_key_metadata() -> 
 
 
 
-def test_composition_target_survives_semantic_reanalysis(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mypy restores source bases while the previous pass's MRO is still cached."""
-    def model_info(name: str) -> TypeInfo:
-        declaration = ClassDef(name, Block([]))
-        declaration.fullname = f"typing_contract.{name}"
-        info = TypeInfo(SymbolTable(), declaration, "typing_contract")
-        declaration.info = info
-        return info
-
-    root = model_info("object")
-    root.mro = [root]
-    target = model_info("Target")
-    target.bases = [Instance(root, [])]
-    calculate_mro(target)
-    donor = model_info("Donor")
-    donor.bases = [Instance(root, [])]
-    calculate_mro(donor)
-    context = object.__new__(CompositionContext)
-    context.extends = {donor.fullname: target.fullname}
-    context.contributions = {}
-    context.member_origins = {}
-    context.member_receivers = {}
-    context.member_modules = {}
-    plugin = CompositionPlugin.__new__(CompositionPlugin)
-    plugin.django_context = context
-    monkeypatch.setattr(plugin, "lookup_fully_qualified", lambda _name: SymbolTableNode(GDEF, target))
-    ctx = ClassDefContext(
-        donor.defn, NameExpr("source_base"),
-        SimpleNamespace(add_plugin_dependency=lambda *_args, **_kwargs: None),
-    )
-    native_calls: list[ClassDefContext] = []
-    plugin._composition_contract(ctx, native=native_calls.append)
-    assert donor.has_base(target.fullname)
-    donor.bases = [Instance(root, [])]
-    assert donor.has_base(target.fullname)  # The preceding MRO has not been rebuilt yet.
-    plugin._composition_contract(ctx, native=native_calls.append)
-    assert any(base.type is target for base in donor.bases)
-    assert donor.has_base(target.fullname)
-    assert native_calls == [ctx, ctx]
 
 
 
@@ -142,11 +137,15 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "assert_type(FrameworkRecord.objects.get().title, str)\n"
         "assert_type(FrameworkRecord.objects.get_queryset().get(), FrameworkRecord)\n"
         "assert_type(FrameworkRecord.objects.get_queryset().lock_if_supported().get(), FrameworkRecord)\n"
-        "from angee.impl import ImplBase, ImplClassField\n"
+        "from angee.base.implementations import ImplBase\nfrom angee.base.fields import ImplClassField\n"
         "class Implementation(ImplBase):\n"
         "    registry_setting = 'ANGEE_TYPING_IMPL_CLASSES'\n"
         "    known = True\n"
         "ImplClassField(Implementation).resolve_class('impl').known\n"
+        "from tests.typing_app.models import ImplementationRecord\n"
+        "from tests.typing_app.models import TypingImplementation\n"
+        "assert_type(ImplementationRecord().get_backend_class_impl(), type[TypingImplementation])\n"
+        "assert_type(ImplementationRecord().get_backend_class_impl(default='local'), type[TypingImplementation])\n"
         "from tests.typing_app.factory import OtherFactory\n"
         "assert_type(OtherFactory.from_queryset(1), str)\n"
         "from angee.iam.models import User, UserKind, UserQuerySet\n"
@@ -176,7 +175,7 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "assert_type(PartyManager[ChildParty]().get_queryset().with_circle_names().get(), ChildParty)\n"
         "async def credentials() -> None:\n"
         "    assert_type(await User.objects.aget_by_natural_key('name'), User)\n"
-        "from angee.changesets import changeset_model, current_changeset, require_changeset\n"
+        "from angee.provenance.context import changeset_model, current_changeset, require_changeset\n"
         "from tests.typing_app.models import TypingChangeset\n"
         "assert_type(changeset_model(), type[TypingChangeset])\n"
         "assert_type(current_changeset(), TypingChangeset | None)\n"
@@ -202,7 +201,7 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "def system_row[RecordT: SystemRecord](model: type[RecordT]) -> RecordT:\n"
         "    assert_type(model.system_queryset(), SystemRecordQuerySet[RecordT])\n"
         "    return model.system_queryset().selected().get()\n"
-        "from angee.models.history import HistoryMixin\n"
+        "from angee.provenance.history import HistoryMixin\n"
         "def history_write(record: HistoryMixin) -> None:\n"
         "    record.save_without_historical_record(force_update=False, using='default', update_fields=['name'])\n"
         "from angee.integrate.models import Bridge\n"
@@ -217,10 +216,13 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "row.parent = Other(name='wrong relation')\n"
         "Tree.objects.missing_method()\n"
         "Tree.objects.values_list('missing_field', flat=True)\n"
-        "from angee.impl import ImplBase, ImplClassField\n"
+        "from angee.base.implementations import ImplBase\nfrom angee.base.fields import ImplClassField\n"
         "class Implementation(ImplBase):\n"
         "    registry_setting = 'ANGEE_TYPING_IMPL_CLASSES'\n"
         "ImplClassField(Implementation).resolve_class('impl').missing\n"
+        "from tests.typing_app.models import ImplementationRecord\n"
+        "ImplementationRecord().get_backend_class_impl().missing\n"
+        "ImplementationRecord().get_backend_class_impl(default=1)\n"
         "FrameworkRecord.objects.missing_method()\n"
         "FrameworkRecord.objects.get().count = {}\n"
         "FrameworkRecord.objects.create(title='invalid', count={})\n"
@@ -232,7 +234,7 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "Party.objects.get_queryset().canonical().with_circle_names().missing_method()\n"
         "Party.objects.get_queryset().with_circle_names().get().missing_field\n"
         "Party.objects.get_queryset().canonical().get().display_name = {}\n"
-        "from angee.changesets import changeset_model, current_changeset, require_changeset\n"
+        "from angee.provenance.context import changeset_model, current_changeset, require_changeset\n"
         "require_changeset().note = {}\n"
         "current_changeset(required=True).note\n"
         "changeset_model().objects.missing_method()\n"
@@ -242,20 +244,21 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         "SystemRecord.system_queryset().selected().missing_method()\n"
         "SystemRecord.system_queryset().get().count = {}\n"
         "PlainSystemRecord.system_queryset().selected()\n"
-        "from angee.models.history import HistoryMixin\n"
+        "from angee.provenance.history import HistoryMixin\n"
         "def bad_history(record: HistoryMixin) -> None:\n"
         "    record.save_without_historical_record(unknown=True)\n"
         "    record.save_without_historical_record(force_update='bad')\n"
     )
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "src")))}
     command = [sys.executable, "-m", "mypy", "--config-file", str(config)]
     positive = subprocess.run(
-        [*command, str(valid), str(root / "angee/models/manager.py")],
-        cwd=root, capture_output=True, text=True, check=False,
+        [*command, str(valid), str(root / "src/angee/base/managers.py")],
+        cwd=root, env=env, capture_output=True, text=True, check=False,
     )
     assert positive.returncode == 0, positive.stdout + positive.stderr
-    negative = subprocess.run([*command, str(invalid)], cwd=root, capture_output=True, text=True, check=False)
+    negative = subprocess.run([*command, str(invalid)], cwd=root, env=env, capture_output=True, text=True, check=False)
     assert negative.returncode == 1, negative.stdout + negative.stderr
-    for line in (2, 3, 4, 5, 6, 10, 11, 12, 13, 15, 16, 17, 19, 20, 21, 23, 24, 25, 27, 29, 30, 31, 34, 35):
+    for line in (2, 3, 4, 5, 6, 11, 13, 14, 15, 16, 17, 19, 20, 21, 23, 24, 25, 27, 28, 29, 31, 33, 34, 35, 38, 39):
         assert f"invalid.py:{line}: error:" in negative.stdout, negative.stdout
 
     (tmp_path / "disabled_storage_settings.py").write_text(
@@ -267,13 +270,15 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
     disabled_source.write_text(
         "from typing import assert_type\n"
         "from django.db.models import Model\n"
-        "from angee.changesets import ChangesetLike, changeset_model, current_changeset, require_changeset\n"
+        "from angee.provenance.context import ChangesetLike, changeset_model, current_changeset, require_changeset\n"
         "assert_type(changeset_model(), type[Model])\n"
         "assert_type(current_changeset(required=True), ChangesetLike | None)\n"
         "assert_type(require_changeset(), ChangesetLike)\n"
     )
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(tmp_path), env.get("PYTHONPATH"))))
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (str(tmp_path), str(root), str(root / "src"), env.get("PYTHONPATH")))
+    )
     disabled = subprocess.run(
         [sys.executable, "-m", "mypy", "--config-file", str(disabled_config), str(disabled_source)],
         cwd=root, env=env, capture_output=True, text=True, check=False,

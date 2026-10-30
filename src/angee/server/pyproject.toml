@@ -1,0 +1,12 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-server"
+version = "3.0.0"
+description = "Angee HTTP serving, readiness and process commands"
+keywords = ["server", "asgi", "http"]
+dependencies = ["angee-base>=3,<4", "django-compose>=0.1.0.dev2,<0.2", "uvicorn[standard]>=0.30"]
+dynamic = ["entry-points"]
+
+[tool.angee.platform]
+category = "Foundation"

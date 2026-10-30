@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from django.apps import apps
+from django_compose.model_composition import ModelComposition
 
-from angee.compose.model_composition import ModelComposition
 from angee.money.models import Currency
 from angee.parties.models import Party
 from angee.uom.models import Uom, UomCategory

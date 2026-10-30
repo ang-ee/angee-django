@@ -13,9 +13,10 @@ from django.db import models
 from django.test.utils import isolate_apps
 from mypy import api as mypy_api  # noqa: F401 -- initialize the compiled plugin import graph.
 from mypy.nodes import GDEF, Block, ClassDef, SymbolTable, SymbolTableNode, TypeInfo
-from rebac.mixins import RebacModelBase
+from rebac.managers import TrackedManager
+from rebac.mixins import INJECTED_BASE_MANAGER, RebacModelBase
 
-from angee.compose.typing import CompositionContext
+from angee.base.typing import BaseCompositionContext
 
 
 @pytest.mark.parametrize("name", ("_default_manager", "_base_manager"))
@@ -63,10 +64,11 @@ def test_required_parent_manager_preserves_explicit_native_selection(
                 base_manager_name = "alternate"
                 default_manager_name = "alternate"
 
-        assert Fallback._meta.base_manager.auto_created
+        assert isinstance(Fallback._meta.base_manager, TrackedManager)
+        assert Fallback._meta.base_manager.name == INJECTED_BASE_MANAGER
         assert Fallback._meta.default_manager.auto_created
-        context = object.__new__(CompositionContext)
-        context.required_parents = {Fallback: Parent, Explicit: Parent, ExplicitMeta: Parent}
+        context = object.__new__(BaseCompositionContext)
+        context.required_ancestors = {Fallback: Parent, Explicit: Parent, ExplicitMeta: Parent}
         context.composed = {f"{Parent.__module__}.{Parent.__qualname__}": Parent}
 
         def lookup(_api: object, model: type[models.Model]) -> TypeInfo:
@@ -85,7 +87,7 @@ def test_required_parent_manager_preserves_explicit_native_selection(
         assert context.get_model_manager(api, Fallback, name) is getattr(Parent._meta, name[1:])
         assert context.get_model_manager(api, Explicit, name) is getattr(Explicit._meta, name[1:])
         assert context.get_model_manager(api, ExplicitMeta, name) is getattr(ExplicitMeta._meta, name[1:])
-        context.required_parents.clear()
+        context.required_ancestors.clear()
         assert context.get_model_manager(api, Fallback, name) is getattr(Fallback._meta, name[1:])
 
 
@@ -95,37 +97,30 @@ def test_checked_parent_keeps_manager_methods_and_model_rows(tmp_path: Path) -> 
     app = tmp_path / "manager_contract"
     app.mkdir()
     (app / "__init__.py").write_text("")
-    (app / "models.py").write_text("""\
-from typing import ClassVar
-from django.db import models
-from rebac.mixins import RebacModelBase
-from angee.models import AngeeModel
-from angee.models.manager import AngeeManager
-class ParentManager[T: models.Model](AngeeManager[T]):
+    (app / "models.py").write_text("""from django.db import models
+from django_compose.models import Composable
+from rebac.mixins import INJECTED_BASE_MANAGER, RebacModelBase
+from angee.base.models.base import AngeeModel
+from angee.base.managers import AngeeUnscopedManager
+class ParentManager[T: models.Model](AngeeUnscopedManager[T]):
     def parent_method(self) -> str:
         return 'parent'
-class OtherManager[T: models.Model](AngeeManager[T]):
+class OtherManager[T: models.Model](AngeeUnscopedManager[T]):
     def other_method(self) -> int:
         return 1
-class Parent(AngeeModel):
-    runtime = True
+class Parent(AngeeModel, concrete=True):
     title = models.CharField(max_length=30)
     objects = ParentManager()
     class Meta(AngeeModel.Meta):
         abstract = True
         base_manager_name = 'objects'
-class Capability(models.Model, metaclass=RebacModelBase):
-    requires_parent: ClassVar[str] = 'manager_contract.Parent'
+class Capability(Composable, metaclass=RebacModelBase, demands='manager_contract.Parent'):
     class Meta:
         abstract = True
-class Child(Capability):
-    runtime = True
-    extends: ClassVar[str] = 'manager_contract.Parent'
+class Child(Capability, inherits='manager_contract.Parent'):
     class Meta:
         abstract = True
-class Explicit(Capability):
-    runtime = True
-    extends: ClassVar[str] = 'manager_contract.Parent'
+class Explicit(Capability, inherits='manager_contract.Parent'):
     objects = OtherManager()
     class Meta:
         abstract = True
@@ -135,16 +130,17 @@ class Explicit(Capability):
         "from pathlib import Path\n"
         "SECRET_KEY = 'manager-typing'\n"
         "INSTALLED_APPS = ['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', "
-        "'angee', 'manager_contract', 'angee.compose']\n"
+        "'angee.base', 'manager_contract']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
-        f"ANGEE_RUNTIME_DIR = Path({str(tmp_path / 'manager_runtime')!r})\n"
-        "ANGEE_RUNTIME_MODULE = 'manager_runtime'\n"
+        f"COMPOSE_OUTPUT_DIR = Path({str(tmp_path / 'manager_runtime')!r})\n"
+        "COMPOSE_OUTPUT_MODULE = 'manager_runtime'\n"
+        "from angee.base.conf import configure\nconfigure(globals())\n"
     )
     config = tmp_path / "mypy.ini"
     config.write_text(
-        "[mypy]\nplugins = angee.compose.typing\n"
-        f"mypy_path = {tmp_path},{root},{root / 'addons'}\n"
+        "[mypy]\nplugins = angee.base.typing\n"
+        f"mypy_path = {tmp_path},{root},{root / 'src'}\n"
         f"cache_dir = {tmp_path / 'cache'}\n"
         "ignore_missing_imports = True\n"
         "[mypy.plugins.django-stubs]\ndjango_settings_module = manager_settings\n"
@@ -166,7 +162,9 @@ assert_type(Explicit.system_queryset().lock_if_supported().get(), Explicit)
 """
     source.write_text(valid)
     env = dict(os.environ, DJANGO_SETTINGS_MODULE="manager_settings")
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(tmp_path), str(root), env.get("PYTHONPATH"))))
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (str(tmp_path), str(root), str(root / "src"), env.get("PYTHONPATH")))
+    )
     command = [sys.executable, "-m", "mypy", "--config-file", str(config), str(source)]
     positive = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, check=False)
     assert positive.returncode == 0, positive.stdout + positive.stderr

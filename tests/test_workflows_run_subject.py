@@ -7,7 +7,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from rebac import system_context
 
-from angee.models import row_lock_paths
+from angee.base.querysets import row_lock_paths
 from angee.workflows import subjects
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.testing.drivers import load_workflow, run_until

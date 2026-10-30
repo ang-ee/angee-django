@@ -11,7 +11,7 @@ import pytest
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from angee.fields import StateField
+from angee.base.fields.state import StateField
 
 
 @pytest.mark.parametrize("nullable", [False, True])
@@ -42,15 +42,15 @@ def test_state_field_constructor_and_descriptor_typing(tmp_path: Path) -> None:
     )
     config = tmp_path / "mypy.ini"
     config.write_text(
-        "[mypy]\nplugins = angee.compose.typing\n"
-        f"mypy_path = {tmp_path},{root},{root / 'addons'}\ncache_dir = {tmp_path / 'cache'}\n"
+        "[mypy]\nplugins = angee.base.typing\n"
+        f"mypy_path = {tmp_path},{root},{root / 'src'}\ncache_dir = {tmp_path / 'cache'}\n"
         "[mypy.plugins.django-stubs]\ndjango_settings_module = state_typing_settings\n"
     )
     declarations = '''\
 from typing import assert_type
 from django.db import models
 from django.utils.translation import gettext_lazy
-from angee.fields import StateField
+from angee.base.fields import StateField
 
 class Status(models.TextChoices):
     ENABLED = 'enabled', 'Enabled'
@@ -97,7 +97,9 @@ def rejected(row: Row) -> None:
     StateField(choices=[('enabled', 'Enabled')], null='yes')
 ''')
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, (str(tmp_path), str(root), env.get("PYTHONPATH"))))
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (str(tmp_path), str(root), str(root / "src"), env.get("PYTHONPATH")))
+    )
     env["DJANGO_SETTINGS_MODULE"] = "state_typing_settings"
     command = [sys.executable, "-m", "mypy", "--config-file", str(config)]
 

@@ -16,8 +16,11 @@ from typing import Any
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from angee.fields import StateField
-from angee.models import AngeeDataModel, RowLockMixin
+from angee.base.fields.state import StateField
+from angee.base.managers import AngeeManager
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.locks import RowLockMixin, RowLockQuerySet
+from angee.base.querysets import AngeeQuerySet
 
 
 class InputStampMixin(models.Model):
@@ -161,6 +164,13 @@ class LineReceipt(AngeeDataModel):
         db_table = "test_linesdemo_line_receipt"
 
 
+class _PinnedLineQuerySet(RowLockQuerySet, AngeeQuerySet):
+    """Use the same lock contract for instance and collection writes."""
+
+
+_PinnedLineManager = AngeeManager.from_queryset(_PinnedLineQuerySet)
+
+
 class PinnedLine(RowLockMixin, AngeeDataModel):
     """A document part whose pinned rows are system rows (the row-lock handle).
 
@@ -172,6 +182,7 @@ class PinnedLine(RowLockMixin, AngeeDataModel):
 
     sqid_prefix = "pln_"
     locked_rows_label = "Pinned lines"
+    objects = _PinnedLineManager()
 
     document = models.ForeignKey(
         Document,

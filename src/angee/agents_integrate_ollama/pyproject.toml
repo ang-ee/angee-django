@@ -1,0 +1,32 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-agents-integrate-ollama"
+version = "3.0.0"
+description = "Ollama local inference backend — adds OpenAI-compatible local models to the agents catalogue"
+keywords = ["ollama", "local", "inference"]
+dependencies = ["angee-agents>=3,<4", "angee-agents-integrate-openai>=3,<4", "angee-integrate>=3,<4"]
+dynamic = ["entry-points"]
+
+[tool.angee]
+
+[[tool.angee.resources.master]]
+path = "master/010_integrate.vendor.yaml"
+adopt = "slug"
+
+[[tool.angee.resources.install]]
+path = "install/030_agents.inferenceprovider.yaml"
+depends_on = "master/010_integrate.vendor.yaml"
+
+[[tool.angee.resources.install]]
+path = "install/040_agents.inferencemodel.yaml"
+depends_on = "install/030_agents.inferenceprovider.yaml"
+adopt = ["provider", "name"]
+
+[[tool.angee.resources.demo]]
+path = "demo/040_agents.inferencemodel.yaml"
+depends_on = "install/030_agents.inferenceprovider.yaml"
+adopt = ["provider", "name"]
+
+[tool.angee.platform]
+category = "Integration"

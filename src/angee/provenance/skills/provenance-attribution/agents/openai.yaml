@@ -1,0 +1,6 @@
+interface:
+  display_name: "Provenance Attribution"
+  short_description: "Opt a model into history, changeset attribution and statements."
+  default_prompt: "Use $provenance-attribution to keep history, attribute writes or declare statements for a model in this addon."
+policy:
+  allow_implicit_invocation: false

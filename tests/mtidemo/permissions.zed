@@ -25,3 +25,13 @@ definition mtidemo/child {
     permission write  = admin->member
     permission delete = admin->member
 }
+
+
+// Typed source with an untyped concrete ancestor for native table-lock proofs.
+definition mtidemo/capture_child {
+    relation admin: angee/role // rebac:const=admin
+
+    permission read = admin->member
+    permission write = admin->member
+    permission delete = admin->member
+}

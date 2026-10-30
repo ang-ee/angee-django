@@ -1,6 +1,6 @@
 import type { CoreContainer } from "@angee/ui/runtime";
 import { FORM_CONTAINERS } from "@angee/ui/views/FormView";
-import { RESOURCE_CONTAINERS } from "@angee/ui/views/index";
+import { REFERENCE_CONTAINERS, RESOURCE_CONTAINERS } from "@angee/ui/views/index";
 import { SHELL_CONTAINERS } from "@angee/ui/chrome/index";
 import { CHATTER_CONTAINERS } from "@angee/ui/communication/index";
 
@@ -14,6 +14,7 @@ export const CORE_CONTAINERS: readonly CoreContainer[] = [
   ...SHELL_CONTAINERS,
   ...FORM_CONTAINERS,
   ...RESOURCE_CONTAINERS,
+  ...REFERENCE_CONTAINERS,
   ...CHATTER_CONTAINERS,
   ...LOGIN_CONTAINERS,
 ];

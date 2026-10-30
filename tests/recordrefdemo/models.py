@@ -1,4 +1,4 @@
-"""Concrete probes for :class:`~angee.refs.RecordRefMixin` targets and edges, and for merge moves."""
+"""Concrete probes for :class:`~angee.base.models.refs.RecordRefMixin` targets and edges, and for merge moves."""
 
 from __future__ import annotations
 
@@ -7,8 +7,10 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.db.models.functions import Lower
 
-from angee.models import AngeeModel, SqidMixin
-from angee.refs import RecordRefMixin
+from angee.base.models.base import AngeeModel
+from angee.base.models.identity import SqidMixin
+from angee.base.models.merge import MergeableMixin
+from angee.base.models.refs import RecordRefMixin
 
 
 class RecordRefTypedTarget(SqidMixin, AngeeModel):
@@ -102,6 +104,17 @@ class CustomColumnEdge(RecordRefMixin, models.Model):
         """Django model options for the string-keyed edge."""
 
         db_table = "test_record_ref_custom_columns"
+
+
+class MergeReferenceNode(MergeableMixin):
+    """A native merge owner with a self-reference that must never become a loop."""
+
+    title = models.CharField(max_length=80)
+    parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.CASCADE)
+
+    class Meta(MergeableMixin.Meta):
+        abstract = False
+        db_table = "test_merge_reference_node"
 
 
 class SelfLinkedNode(models.Model):

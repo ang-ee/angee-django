@@ -15,11 +15,17 @@ from rebac import actor_context, system_context
 from strawberry import Schema
 from strawberry.types import ExecutionResult
 
+from angee.base.exceptions import RecordAccessSubjectRefused
+from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Project, Task
 from tests.proposals_campaign import ProposalCampaign, as_actor
+from tests.proposals_campaign import campaign as campaign
+from tests.proposals_campaign import campaign_schema as campaign_schema
+from tests.proposals_campaign import campaign_store as campaign_store
+from tests.proposals_campaign import proposal_delete_schema as proposal_delete_schema
 from tests.proposals_models import Proposal, Round
+from tests.test_project_access import project_access_schema as project_access_schema
 
-pytest_plugins = ("tests.proposals_campaign",)
 pytestmark = [
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),
@@ -146,3 +152,25 @@ def test_hasura_proposal_delete_waits_for_round_without_blocking_concurrent_subm
     assert retained.submitted_at == submitted.submitted_at == campaign.now
     assert retained.submitted_by_id == responder.pk
     assert Round._base_manager.filter(pk=round.pk).exists()
+
+
+def test_direct_grant_waits_for_requester_change_and_revalidates_the_fresh_round(campaign: ProposalCampaign) -> None:
+    round = campaign.round()
+    proposal = campaign.admit(round, "responder", track=True)
+    manager, requester = campaign.person("facilitator"), campaign.person("requester")
+    with system_context(reason="tests.proposals.concurrent_requester.party"):
+        party = Person.objects.for_user(requester)
+
+    def grant() -> None:
+        with actor_context(manager):
+            as_actor(proposal, manager).grant_record_access("reader", requester)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with transaction.atomic(), system_context(reason="tests.proposals.concurrent_requester.change"):
+            locked = Round.system_queryset(lock=("self",)).get(pk=round.pk)
+            operation, pid = _submit_operation(pool, grant)
+            _wait_for_lock(pid, operation)
+            locked.requester_party = party
+            locked.save(update_fields=("requester_party",))
+        with pytest.raises(RecordAccessSubjectRefused):
+            operation.result(timeout=10)

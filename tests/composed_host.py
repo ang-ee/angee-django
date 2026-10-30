@@ -2,7 +2,7 @@
 
 Run this file directly so Django constructs the real generated models without
 sharing pytest's hand-built source-addon models or global app registry. Only the
-temporary runtime directory is written. Native addon tests use Django's test
+temporary host (authored config/history and generated runtime) is written. Native addon tests use Django's test
 runner with SQLite by default; ``--test-postgresql`` accepts the runner's
 PostgreSQL DATABASE_URL and creates a separate native test database.
 """
@@ -13,10 +13,8 @@ import argparse
 import importlib
 import json
 import os
-import runpy
 import subprocess
 import sys
-from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 from unittest import TestSuite
@@ -90,6 +88,10 @@ def boot(
 ) -> None:
     """Compose selected app roots and their native dependency closure."""
 
+    # Native namespace identity follows one physical source, including symlinked slots.
+    source_root = source_root.resolve()
+    runtime_dir = runtime_dir.resolve()
+    extra_addon_dirs = [path.resolve() for path in extra_addon_dirs]
     database: dict[str, Any] = {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
     if test_postgresql:
         database_url = os.environ.get("DATABASE_URL", "")
@@ -102,41 +104,49 @@ def boot(
         worker = os.environ.get("PYTEST_XDIST_WORKER")
         suffix = f"_{worker}" if worker else ""
         database["TEST"] = {"NAME": f"test_composed_{database['NAME']}{suffix}"}
-    addon_dirs = [source_root / "addons"]
-    if include_examples:
-        addon_dirs.append(source_root / "examples" / "addons")
-    addon_dirs.extend(extra_addon_dirs)
-    sys.path[:0] = [str(source_root), *(str(path) for path in addon_dirs)]
+    # Every framework package is installed in this interpreter. Extra test packages
+    # carry their own real dist-info on the explicitly supplied source roots.
+    host_root = runtime_dir.parent
+    host_root.mkdir(parents=True, exist_ok=True)
+    python_paths = [str(host_root), str(source_root), *(str(path) for path in extra_addon_dirs)]
+    sys.path[:0] = python_paths
     for name in tuple(os.environ):
-        if name.startswith("ANGEE_") or name in {"DJANGO_SETTINGS_MODULE", "DATABASE_URL"}:
+        if name.startswith(("ANGEE_", "YAMLCONF_")) or name in {
+            "DJANGO_SETTINGS_MODULE", "DJANGO_COMPOSE_MODE", "DATABASE_URL", "SENTRY_DSN",
+        }:
             os.environ.pop(name)
 
     import django
-    from django.conf import settings
-    from hatch_angee import discover
+    import yaml
+    from django_compose.components import installed_components
 
-    from angee.compose.composer import Composer
-
-    installed_apps = (
-        list(root_apps) if root_apps is not None else [manifest.name for _, manifest in discover(addon_dirs)]
+    index = installed_components("angee.addons")
+    installed_apps = list(root_apps) if root_apps is not None else sorted(
+        name for name in index.providers if include_examples or name.startswith("angee.")
     )
-    namespace = runpy.run_module(
-        "angee.compose.defaults",
-        init_globals={
-            "BASE_DIR": runtime_dir.parent,
-            "SECRET_KEY": "isolated-composition-check",
-            "ANGEE_RUNTIME_DIR": runtime_dir,
-            "ANGEE_ADDON_DIRS": tuple(addon_dirs),
-            "INSTALLED_APPS": installed_apps,
-            "DATABASES": {"default": database},
-            "ANGEE_MONEY_REFERENCE_CURRENCY": "USD",
-        },
+    settings_module = "composed_test_settings"
+    (host_root / f"{settings_module}.py").write_text(
+        "from angee.base.conf import configure\nconfigure(globals())\n", encoding="utf-8",
     )
-    namespace = {name: value for name, value in namespace.items() if name.isupper() and not name.startswith("_")}
-    settings.configure(**namespace)
-    Composer(namespace).compose_settings()
-    for name, value in namespace.items():
-        setattr(settings, name, value)
+    (host_root / "settings.yaml").write_text(yaml.safe_dump({
+        "SECRET_KEY": "isolated-composition-check",
+        "COMPOSE_OUTPUT_DIR": str(runtime_dir),
+        "COMPOSE_OUTPUT_MODULE": runtime_dir.name,
+        "INSTALLED_APPS": installed_apps,
+        "DATABASES": {"default": database},
+        "ANGEE_MONEY_REFERENCE_CURRENCY": "USD",
+    }, sort_keys=True), encoding="utf-8")
+    if os.environ.get("PYTHONPATH"):
+        python_paths.append(os.environ["PYTHONPATH"])
+    os.environ["PYTHONPATH"] = os.pathsep.join(python_paths)
+    os.environ["DJANGO_SETTINGS_MODULE"] = settings_module
+    result = subprocess.run(
+        [sys.executable, "-m", "django_compose", "compose"], cwd=host_root,
+        env=dict(os.environ), capture_output=True, text=True, check=False,
+        timeout=COMPOSED_TEST_TIMEOUT,
+    )
+    if result.returncode:
+        raise RuntimeError(f"Native compose failed:\n{result.stdout}\n{result.stderr}")
     django.setup()
     if root_apps is None:
         importlib.import_module("tests.statement_models")
@@ -148,16 +158,18 @@ def resource_values() -> dict[str, Any]:
     from django.apps import apps
     from django.core.exceptions import FieldDoesNotExist, ValidationError
     from django.db.models.fields import NOT_PROVIDED
+    from django_compose.components import installed_components
 
-    from angee.addons import is_angee_addon
+    from angee.base.addons import is_angee_addon
     from angee.resources.entries import GRANT_KIND, ResourceEntry, resource_manifest_for
 
     failures: list[str] = []
     checked_values = 0
+    index = installed_components("angee.addons")
     for addon in apps.get_app_configs():
         if not is_angee_addon(addon):
             continue
-        for tier, declarations in sorted(resource_manifest_for(addon).items()):
+        for tier, declarations in sorted(resource_manifest_for(addon, index=index).items()):
             for declaration in declarations:
                 entry = ResourceEntry.from_declaration(addon, tier, declaration)
                 if entry.kind == GRANT_KIND:
@@ -212,7 +224,7 @@ def model_snapshot() -> dict[str, Any]:
     from django.db.migrations.state import ModelState
     from django.db.migrations.writer import MigrationWriter
 
-    from angee.addons import is_angee_addon
+    from angee.base.addons import is_angee_addon
 
     snapshot: dict[str, Any] = {}
     for addon in apps.get_app_configs():
@@ -248,22 +260,30 @@ def reset_migration_history_report() -> dict[str, Any]:
     from unittest.mock import patch
 
     from django.apps import apps
+    from django.conf import settings
     from django.core.management import call_command
     from django.core.management.base import CommandError
     from django.db import connection
     from django.db.migrations.autodetector import MigrationAutodetector
     from django.db.migrations.executor import MigrationExecutor
+    from django.db.migrations.loader import MigrationLoader
     from django.db.migrations.recorder import MigrationRecorder
     from django.db.migrations.state import ProjectState
+    from django.utils.module_loading import module_dir
+    from django_compose.migrations import reset_migration_history
+    from django_compose.serving import read_receipt, verify
 
-    from angee.compose.runtime import Runtime
-
-    runtime = Runtime.from_django()
-    labels = tuple(sorted(runtime.labels))
+    receipt = read_receipt(settings.COMPOSE_OUTPUT_DIR)
+    assert receipt is not None
+    labels = receipt.MODEL_LABELS
     call_command("makemigrations", *labels, interactive=False, include_header=False, verbosity=0)
+    history_dirs = {
+        label: Path(module_dir(importlib.import_module(MigrationLoader.migrations_module(label)[0])))
+        for label in labels
+    }
     # A fresh initial need not have the same key as the stack's applied one.
     for label in labels:
-        initial = runtime.runtime_dir / label / "migrations" / "0001_initial.py"
+        initial = history_dirs[label] / "0001_initial.py"
         source = initial.read_text().replace("'0001_initial'", "'0001_previous'")
         initial.rename(initial.with_name("0001_previous.py"))
         initial.with_name("0001_previous.py").write_text(source)
@@ -307,7 +327,7 @@ def reset_migration_history_report() -> dict[str, Any]:
         return {
             path: path.read_bytes()
             for label in labels
-            for path in (runtime.runtime_dir / label / "migrations").glob("*.py")
+            for path in history_dirs[label].glob("*.py")
         }
 
     original_sources = migration_sources()
@@ -320,12 +340,12 @@ def reset_migration_history_report() -> dict[str, Any]:
             original(*args, **kwargs)
             raise RuntimeError("injected reset failure")
 
-        target = "angee.compose.runtime.call_command" if phase == "generation" else (
+        target = "django_compose.migrations.call_command" if phase == "generation" else (
             "django.db.migrations.recorder.MigrationRecorder.record_unapplied"
         )
         with patch(target, autospec=True, side_effect=fail_after_write):
             try:
-                runtime.reset_migration_history()
+                reset_migration_history(labels)
             except RuntimeError as error:
                 if str(error) != "injected reset failure":
                     raise
@@ -350,7 +370,7 @@ def reset_migration_history_report() -> dict[str, Any]:
     files = {
         label: sorted(
             path.name
-            for path in (runtime.runtime_dir / label / "migrations").glob("*.py")
+            for path in history_dirs[label].glob("*.py")
             if path.name != "__init__.py"
         )
         for label in labels
@@ -366,13 +386,10 @@ def reset_migration_history_report() -> dict[str, Any]:
         trim_to_apps=set(labels),
         convert_apps=set(labels),
     )
-    # This temporary host has no dependency-group document; isolate the migration
-    # check from the source checkout's unrelated project contract.
-    runtime.project_dir = runtime.runtime_dir.parent
-    runtime.check()
+    verify(settings.COMPOSE_SNAPSHOT, settings.COMPOSE_OUTPUT_MODULE)
     reset_sources = migration_sources()
     reset_records = list(recorder.migration_qs.order_by("pk").values())
-    runtime.reset_migration_history()
+    reset_migration_history(labels)
     replay_unchanged = (
         migration_sources() == reset_sources
         and list(recorder.migration_qs.order_by("pk").values()) == reset_records
@@ -392,7 +409,6 @@ def reset_migration_history_report() -> dict[str, Any]:
         "plan_empty": executor.migration_plan(targets) == [],
         "changes_empty": changes == {},
         "runtime_check": True,
-        "declarations": len(runtime.runtime_migrations().plan()),
         "alpha_dependencies": alpha.dependencies,
         "command_output": output.getvalue().splitlines(),
     }
@@ -409,7 +425,7 @@ def main() -> None:
         "--app",
         action="append",
         default=None,
-        help="Root app to compose (repeatable); dependencies are resolved from addon manifests.",
+        help="Root app to compose (repeatable); dependencies are resolved from installed package metadata.",
     )
     parser.add_argument(
         "--no-examples",
@@ -427,20 +443,6 @@ def main() -> None:
     args = parser.parse_args()
     if args.test_postgresql and args.action != "tests":
         parser.error("--test-postgresql is available only for native test runs")
-    from angee.changesets import changeset
-
-    boundary = (
-        nullcontext()
-        if args.action in {"tests", "reset-migrations"}
-        else changeset(fresh=True, activity="system", change_reason=f"manage.{args.action}")
-    )
-    with boundary:
-        run(args)
-
-
-def run(args: argparse.Namespace) -> None:
-    """Dispatch one composed-host action without a process-wide test boundary."""
-
     boot(
         args.source_root.resolve(),
         args.runtime_dir.resolve(),
@@ -449,6 +451,12 @@ def run(args: argparse.Namespace) -> None:
         root_apps=args.app,
         test_postgresql=args.test_postgresql,
     )
+    run(args)
+
+
+def run(args: argparse.Namespace) -> None:
+    """Dispatch one bootstrapped host action without a process-wide test boundary."""
+
     if args.action == "tests":
         from django.apps import apps
         from django.conf import settings
@@ -456,9 +464,6 @@ def run(args: argparse.Namespace) -> None:
         from django.db import connection
         from django.test import TransactionTestCase
         from django.test.runner import DiscoverRunner
-
-        from angee.changesets import changeset
-        from angee.provenance.testing import load_statement_sources
 
         class ComposedTestRunner(DiscoverRunner):
             """Prepare the generated host's schema before Django checks its models."""
@@ -471,6 +476,11 @@ def run(args: argparse.Namespace) -> None:
 
             def build_suite(self, *test_labels: Any, **kwargs: Any) -> TestSuite:
                 suite = super().build_suite(*test_labels, **kwargs)
+                if not apps.is_installed("angee.provenance"):
+                    return suite
+
+                from angee.provenance.context import changeset
+                from angee.provenance.testing import load_statement_sources
 
                 def fixture_boundaries(tests: TestSuite) -> None:
                     for test in tests:

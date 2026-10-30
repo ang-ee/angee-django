@@ -8,28 +8,34 @@ the vault-scoped gate, the ``scopedemo`` probe row carries a field-gated
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.db import connection
-from django.test.utils import CaptureQueriesContext
+from django.db import connection, models
+from django.test.utils import CaptureQueriesContext, isolate_apps
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
+from rebac.testing import install_schema
 
-from angee.changesets import changeset
-from angee.evidence import EvidenceReference
-from angee.identity import public_id_of, public_subject_ref
+from angee.base.identity import public_subject_ref
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.identity import public_id_of
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.knowledge import schema as knowledge_schema
 from angee.messaging.testing.models import Channel
-from angee.models import SourceKind
 from angee.parties import schema as parties_schema
 from angee.provenance import schema as provenance_schema
-from angee.testing.permissions import install_permission_schema
+from angee.provenance.context import changeset
+from angee.provenance.evidence import EvidenceReference
+from angee.provenance.statements import (
+    SourceKind,
+    StatementLinkMixin,
+)
 from tests.conftest import (
     Page,
     addon_schema,
@@ -280,7 +286,7 @@ def test_revert_refuses_a_changeset_that_did_not_touch_the_record() -> None:
 def gated_title() -> Any:
     """The persistence probe with a ``title`` only a ``title_reader`` may read."""
 
-    install_permission_schema(
+    install_schema(
         parse_zed(
             """
             definition auth/user {}
@@ -459,7 +465,7 @@ def test_history_names_a_statements_related_row_by_its_public_id() -> None:
 def test_metadata_marks_a_resource_that_keeps_history() -> None:
     """A gated, tracked record is flagged; a statement shadow table, read through its subject, is not."""
 
-    schema = addon_schema(knowledge_schema.schemas, "console", parties_schema.schemas)
+    schema = addon_schema(knowledge_schema.schemas, "console", parties_schema.schemas, provenance_schema.schemas)
     resources = {item.model_label: item for item in schema.angee_resources}
     assert resources["knowledge.Page"].history is True
     assert resources["parties.Party"].history is True
@@ -513,3 +519,23 @@ def test_record_history_refuses_reverting_a_boundary_that_also_changes_another_r
     page.refresh_from_db()
     other.refresh_from_db()
     assert page.title == other.title == "Joint edit"
+
+
+@isolate_apps()
+def test_generic_statement_source_uses_its_link_owner_without_an_integrate_stream() -> None:
+    class LocalLink(StatementLinkMixin, AngeeDataModel):
+        sqid_prefix = "lnk_"
+        name = models.CharField(max_length=80)
+
+        class Meta(AngeeDataModel.Meta):
+            abstract = False
+            app_label = "base"
+
+        def __str__(self) -> str:
+            return self.name
+
+    link = LocalLink(pk=7, name="Local source")
+    reference = provenance_schema._statement_source_reference(SimpleNamespace(_readable_statement_link=link))
+    assert reference is not None
+    assert (reference.model, str(reference.id), reference.label) == ("base.LocalLink", link.public_id, "Local source")
+    assert LocalLink.presentation_related == ()

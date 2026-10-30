@@ -1,0 +1,124 @@
+import * as React from "react";
+import { Button, DialogForm, ErrorBanner, Glyph, RelationField, errorMessage, useAuthoredResourceMutation, useRelationOptions } from "@angee/ui";
+
+import { useIntegrateVcsT } from "../i18n";
+import { VCS_BRIDGE_RELATION } from "../data/vcs-bridge";
+import {
+  INTEGRATE_ADD_REPOSITORY_INVALIDATES,
+  IntegrateAddRepository,
+  type RepoCandidate,
+} from "../documents";
+import { RepositoryPicker } from "./RepositoryPicker";
+
+/**
+ * The "Add repository" affordance: a button (for the list toolbar slot) opening a
+ * dialog that picks a VCS bridge and searches its host through the shared
+ * {@link RepositoryPicker}. A picked candidate is inventoried via `add_repository`,
+ * refreshing the repository list. The dialog stays open so several repositories can
+ * be added in one sitting.
+ */
+export function AddRepositoryControl(): React.ReactElement {
+  const t = useIntegrateVcsT();
+  const [open, setOpen] = React.useState(false);
+  return (
+    <>
+      <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
+        <Glyph decorative name="plus" />
+        {t("addRepo.title")}
+      </Button>
+      <AddRepositoryDialog open={open} onOpenChange={setOpen} />
+    </>
+  );
+}
+
+function AddRepositoryDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}): React.ReactElement {
+  const t = useIntegrateVcsT();
+  const { options: bridgeOptions } = useRelationOptions(VCS_BRIDGE_RELATION, {
+    enabled: open,
+    sort: true,
+  });
+
+  const [pickedId, setPickedId] = React.useState<string | null>(null);
+  // Auto-select when the account is unambiguous, so a single-bridge host
+  // skips straight to typing.
+  const soleBridge = bridgeOptions.length === 1 ? bridgeOptions[0] : undefined;
+  const vcsBridgeId = pickedId ?? soleBridge?.value ?? "";
+
+  const [addRepository] = useAuthoredResourceMutation(IntegrateAddRepository, {
+    invalidateModels: INTEGRATE_ADD_REPOSITORY_INVALIDATES,
+  });
+
+  // The repo currently being inventoried, the set already added this session, and
+  // the last error — so a slow host or a denied add reads clearly in the dialog.
+  const [adding, setAdding] = React.useState<string | null>(null);
+  const [added, setAdded] = React.useState<ReadonlySet<string>>(new Set());
+  const [error, setError] = React.useState<string | null>(null);
+
+  // Completion belongs to the bridge and dialog session that started the write.
+  const session = React.useRef(0);
+  React.useEffect(() => {
+    session.current += 1;
+    setAdded(new Set());
+    setError(null);
+    setAdding(null);
+    return () => { session.current += 1; };
+  }, [open, vcsBridgeId]);
+
+  const add = React.useCallback(
+    async (candidate: RepoCandidate) => {
+      if (!open || adding !== null || vcsBridgeId === "") return;
+      const started = session.current;
+      setAdding(candidate.name);
+      setError(null);
+      try {
+        await addRepository({ vcsBridgeId, name: candidate.name });
+        if (started !== session.current) return;
+        setAdded((prev) => new Set(prev).add(candidate.name));
+      } catch (cause) {
+        if (started !== session.current) return;
+        setError(errorMessage(cause, t("addRepo.addFailed")));
+      } finally {
+        if (started === session.current) setAdding(null);
+      }
+    },
+    [addRepository, adding, open, t, vcsBridgeId],
+  );
+
+  return (
+    <DialogForm
+      open={open}
+      onOpenChange={onOpenChange}
+      title={t("addRepo.title")}
+      description={t("addRepo.description")}
+      size="lg"
+      // A picker, not a form: Enter in the bridge field submits nothing.
+      onSubmit={(event) => event.preventDefault()}
+    >
+      <div className="flex flex-col gap-3">
+        <RelationField
+          aria-label={t("addRepo.integrationLabel")}
+          value={vcsBridgeId}
+          options={bridgeOptions}
+          placeholder={t("addRepo.integrationPlaceholder")}
+          searchPlaceholder={t("addRepo.integrationSearch")}
+          onChange={setPickedId}
+        />
+        <ErrorBanner description={error} />
+        <RepositoryPicker
+          vcsBridgeId={vcsBridgeId}
+          onPick={(candidate) => void add(candidate)}
+          pickedNames={added}
+          pickedLabel={t("addRepo.added")}
+          busyName={adding}
+          readOnly={adding !== null}
+        />
+      </div>
+    </DialogForm>
+  );
+}

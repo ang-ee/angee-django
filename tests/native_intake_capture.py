@@ -1,8 +1,11 @@
 """Intake contracts executed only by the isolated composed Django host."""
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
+from unittest import skipUnless
 from unittest.mock import patch
 
 from django.apps import apps
@@ -10,7 +13,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import connection, models, transaction
+from django.db import connection, connections, models, transaction
 from django.test import RequestFactory, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from graphql import GraphQLInputObjectType, get_named_type, parse, validate
@@ -18,10 +21,10 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
-from angee.errors import RecordAccessSubjectRefused
+from angee.base.exceptions import RecordAccessSubjectRefused
+from angee.base.models.locks import StaleRevisionError
 from angee.graphql.schema import GraphQLSchemas
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
-from angee.models import StaleRevisionError
 
 
 def grant_rows(store):
@@ -170,6 +173,7 @@ class ChannelIntakeCaptureTests(TransactionTestCase):
         self.assertEqual(len(needs), 2)
         self.assertIsNotNone(needs[0].party_id)
         self.assertEqual(needs[0].party_id, needs[1].party_id)
+        self.assertEqual(apps.get_model("decisions", "Decision")._base_manager.count(), len(needs))
 
     def test_domain_capture_skips_requester_follow_without_record_read(self):
         channel = self.webform(domains=("example.com",))
@@ -451,6 +455,62 @@ class NeedAccessDecisionTests(IntakeAccessCase):
                     need.decide_access("intake.approve")
                 need.refresh_from_db()
                 self.assertEqual(need.access_verdict, None)
+
+    @skipUnless(connection.vendor == "postgresql", "Requires real PostgreSQL row locks.")
+    def test_assignment_and_conversion_lock_question_before_need(self):
+        for operation in ("assignment", "conversion", "merge"):
+            with self.subTest(operation=operation):
+                need = self.need(email="", party=self.party(self.reader))
+                question_id, need_id = need.access_decision_id, need.pk
+                entered = Event()
+                Decision = apps.get_model("decisions", "Decision")
+                Task = apps.get_model("projects", "Task")
+                queue_id = self.queue.pk
+                with system_context(reason="tests.intake.lock_survivor"):
+                    survivor = Task.objects.create(title="Survivor", owner=self.owner)
+                def write():
+                    try:
+                        def observe(execute, sql, params, many, context):
+                            if "FOR UPDATE" in sql and Decision._meta.db_table in sql:
+                                entered.set()
+                            return execute(sql, params, many, context)
+                        with connection.cursor() as cursor:
+                            cursor.execute("SET lock_timeout = '5s'")
+                        with connection.execute_wrapper(observe), system_context(reason="tests.intake.lock_writer"):
+                            row = self.Need.system_queryset().get(pk=need_id)
+                            if operation == "assignment":
+                                row.party = None
+                                row.save(update_fields=("party",))
+                            elif operation == "conversion":
+                                row.convert_to_task(apps.get_model("work", "Queue").objects.get(pk=queue_id))
+                            else:
+                                survivor.fold([row.task])
+                    finally:
+                        connections.close_all()
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    with transaction.atomic(), system_context(reason="tests.intake.answer_lock"):
+                        Decision.system_queryset().select_for_update().get(pk=question_id)
+                        future = pool.submit(write)
+                        try:
+                            self.assertTrue(entered.wait(10), "writer did not try its question lock")
+                            # A decision owner can still acquire the Need while the
+                            # competing assignment waits for that decision.
+                            self.Need.system_queryset().select_for_update(nowait=True).get(pk=need_id)
+                        except BaseException:
+                            # Leave atomic before waiting for a worker blocked on it.
+                            raise
+                    future.result(timeout=15)
+
+    def test_system_assignment_can_withdraw_an_open_question_without_a_user(self):
+        need = self.need(email="", party=self.party(self.reader))
+        old = need.access_decision
+        with system_context(reason="tests.intake.system_assignment"):
+            need = self.Need.system_queryset().get(pk=need.pk)
+            need.party = None
+            need.save(update_fields=("party",))
+        old.refresh_from_db()
+        self.assertEqual(old.verdict, [])
+        self.assertIsNone(old.answered_by_id)
 
     def test_party_change_or_clear_resets_decision_in_the_same_save(self):
         for replacement in (self.party(self.writer), None):
@@ -1086,6 +1146,6 @@ class DecisionRecordTests(IntakeAccessCase):
         schema = GraphQLSchemas.from_discovery().build("console")._schema
         root = Path(__file__).resolve().parents[1]
         for addon in ("intake", "iam"):
-            path = root / "addons" / "angee" / addon / "web" / "src" / "documents.ts"
+            path = root / "src" / "angee" / addon / "web" / "src" / "documents.ts"
             document = parse("\n".join(re.findall(r"graphql\(`(.*?)`\)", path.read_text(), flags=re.S)))
             self.assertEqual(validate(schema, document), [], addon)

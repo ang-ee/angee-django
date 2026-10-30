@@ -12,16 +12,18 @@ import {
 import { stableKey } from "@angee/refine";
 import {
   resolveThemeOptions,
+  applyAppearanceRoot,
+  APPEARANCE_CACHE_KEY,
+  APPEARANCE_CACHE_SCHEMA,
+  APPEARANCE_CACHE_LIMIT,
   type ColorScheme,
   type ColorSchemePreference,
   type ThemeOptionsEnvelope,
-  type ThemeTokenName,
-  THEME_TOKEN_NAMES,
+  type ThemeTokenLayers,
 } from "./runtime.mjs";
 import type { ThemeContribution } from "./index";
 import {
   COLOR_SCHEME_CHANGE_EVENT,
-  LEGACY_THEME_STORAGE_KEY,
   normaliseColorSchemePreference,
 } from "../lib/color-scheme";
 import {
@@ -36,21 +38,13 @@ import {
  * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
 export const APPEARANCE_PREFERENCE_KEY = "appearance";
-/**
- * @kind null
- * @reason Codec and transport infrastructure: translates runtime data and addresses.
- */
-export const APPEARANCE_CACHE_KEY = "angee:appearance";
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
-export const APPEARANCE_CACHE_SCHEMA = 1;
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
-export const APPEARANCE_CACHE_LIMIT = 128 * 1024;
+// Preserve the existing provider import surface through the headless owner.
+export {
+  applyAppearanceRoot,
+  APPEARANCE_CACHE_KEY,
+  APPEARANCE_CACHE_SCHEMA,
+  APPEARANCE_CACHE_LIMIT,
+} from "./runtime.mjs";
 
 export interface AppearancePreferences {
   version: 1;
@@ -101,11 +95,6 @@ const DEFAULT_HOST: Required<Pick<HostAppearanceDefaults, "themeId" | "colorSche
 };
 const AppearanceContext = createContext<AppearanceState | null>(null);
 
-interface PendingLegacyColorScheme {
-  actorId: string | null;
-  preference: ColorSchemePreference;
-}
-
 export interface AppearancePreferenceRead {
   value: AppearancePreferences;
   notice: AppearanceState["notice"];
@@ -126,13 +115,11 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
     const entries = new Map<string, ThemeContribution>();
     for (const theme of runtime.themes) {
       entries.set(theme.definition.id, theme);
-      for (const legacyId of theme.definition.legacyIds ?? []) entries.set(legacyId, theme);
     }
     return entries;
   }, [runtime.themes]);
   const saved = readAppearancePreferences(userPreferences.preferences);
-  const savedTheme = saved.value.themeId ? catalogue.get(saved.value.themeId) : undefined;
-  const preferences = savedTheme ? { ...saved.value, themeId: savedTheme.definition.id } : saved.value;
+  const preferences = saved.value;
   const [draft, setDraftState] = useState<AppearancePreferences | null>(null);
   // Commands share the latest draft even when React batches several edits.
   const draftRef = useRef(draft);
@@ -144,7 +131,6 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
   const dirty = draft !== null && stableKey(draft) !== stableKey(preferences);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<Error | null>(null);
-  const [pendingLegacy, setPendingLegacy] = useState<PendingLegacyColorScheme | null>(readPendingLegacyColorScheme);
   const system = useSystemColorScheme();
   const hostThemeId = host.themeId ?? null;
   const hostTheme = hostThemeId ? catalogue.get(hostThemeId) ?? null : null;
@@ -176,12 +162,9 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
       actorId: auth.user?.id ?? "anonymous",
       themeId: savedAppearance.effectiveThemeId,
       colorSchemePreference: savedAppearance.colorSchemePreference,
-      colorScheme: savedAppearance.colorScheme,
-      options: savedAppearance.effectiveOptions,
-      tokens: savedAppearance.effectiveTokens,
-      ...(pendingLegacy ? { pendingLegacy } : {}),
+      tokenLayers: savedAppearance.tokenLayers,
     });
-  }, [auth.user?.id, savedAppearance, host.fingerprint, pendingLegacy, resolvingIdentity]);
+  }, [auth.user?.id, savedAppearance, host.fingerprint, resolvingIdentity]);
 
   const update = useCallback(async (
     apply: (current: AppearancePreferences) => AppearancePreferences | undefined,
@@ -287,28 +270,6 @@ export function AppearanceProvider({ children, host = DEFAULT_HOST }: { children
     return () => window.removeEventListener(COLOR_SCHEME_CHANGE_EVENT, onCommand);
   }, [setColorScheme]);
 
-  useEffect(() => {
-    if (draft || !pendingLegacy || resolvingIdentity || auth.status !== "authenticated" || !auth.user?.id || !userPreferences.available) return;
-    const actorId = auth.user.id;
-    if (pendingLegacy.actorId === null) {
-      setPendingLegacy({ ...pendingLegacy, actorId });
-      return;
-    }
-    if (pendingLegacy.actorId !== actorId) return;
-    if (!saved.writable || saved.value.colorScheme !== undefined) {
-      clearLegacyColorScheme();
-      setPendingLegacy(null);
-      return;
-    }
-    let active = true;
-    void setColorScheme(pendingLegacy.preference).then(() => {
-      if (!active) return;
-      clearLegacyColorScheme();
-      setPendingLegacy(null);
-    }).catch(() => undefined);
-    return () => { active = false; };
-  }, [auth.status, auth.user?.id, draft, pendingLegacy, resolvingIdentity, saved.value.colorScheme, saved.writable, setColorScheme, userPreferences.available]);
-
   const value = useMemo<AppearanceState>(() => ({
     preferences,
     currentPreferences,
@@ -348,7 +309,7 @@ function resolveAppearance(preferences: AppearancePreferences, notice: Appearanc
   const colorSchemePreference = preferences.colorScheme ?? host.colorScheme ?? "system";
   const colorScheme = colorSchemePreference === "system" ? system : colorSchemePreference;
   const requestedOptions = preferences.themeId === undefined ? host.options : preferences.options;
-  let effectiveTokens: Partial<Record<ThemeTokenName, string>> = {};
+  let tokenLayers: ThemeTokenLayers = { shared: {}, light: {}, dark: {} };
   let effectiveOptions: ThemeOptionsEnvelope | undefined;
   if (effectiveTheme) {
     let resolved;
@@ -358,10 +319,11 @@ function resolveAppearance(preferences: AppearancePreferences, notice: Appearanc
       notice ??= "options-invalid";
       resolved = resolveThemeOptions(effectiveTheme.definition);
     }
-    effectiveTokens = { ...resolved.tokens.shared, ...resolved.tokens[colorScheme] };
+    tokenLayers = resolved.tokens;
     if (effectiveTheme.definition.options) effectiveOptions = { version: resolved.version, value: resolved.value };
   }
-  return { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, effectiveTokens, effectiveOptions, notice };
+  const effectiveTokens = { ...tokenLayers.shared, ...tokenLayers[colorScheme] };
+  return { effectiveThemeId, effectiveTheme, colorSchemePreference, colorScheme, tokenLayers, effectiveTokens, effectiveOptions, notice };
 }
 
 /**
@@ -418,21 +380,6 @@ export function writeAppearancePreferences(preferences: RuntimeUserPreferences, 
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
-export function applyAppearanceRoot({ themeId, colorScheme, tokens, target }: { themeId: string | null; colorScheme: ColorScheme; tokens?: Partial<Record<ThemeTokenName, string>>; target?: Document }): void {
-  if (typeof document === "undefined" && !target) return;
-  const root = (target ?? document).documentElement;
-  if (themeId) root.dataset.themeId = themeId; else delete root.dataset.themeId;
-  root.dataset.colorScheme = colorScheme;
-  root.dataset.theme = colorScheme;
-  root.style.colorScheme = colorScheme;
-  for (const name of THEME_TOKEN_NAMES) root.style.removeProperty(name);
-  for (const [name, value] of Object.entries(tokens ?? {})) if (value !== undefined) root.style.setProperty(name, value);
-}
-
-/**
- * @kind null
- * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
- */
 export function clearAppearanceCache(): void {
   if (typeof window === "undefined") return;
   try { window.localStorage.removeItem(APPEARANCE_CACHE_KEY); } catch { /* storage is disposable */ }
@@ -465,32 +412,6 @@ function writeAppearanceCache(value: unknown): void {
       && window.localStorage.getItem(APPEARANCE_CACHE_KEY) !== encoded
     ) window.localStorage.setItem(APPEARANCE_CACHE_KEY, encoded);
   } catch { /* storage is disposable */ }
-}
-
-function readPendingLegacyColorScheme(): PendingLegacyColorScheme | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const current = window.localStorage.getItem(APPEARANCE_CACHE_KEY);
-    if (current !== null) {
-      if (current.length > APPEARANCE_CACHE_LIMIT) return null;
-      const parsed = JSON.parse(current) as { pendingLegacy?: unknown };
-      const pending = parsed?.pendingLegacy;
-      if (!pending || typeof pending !== "object" || Array.isArray(pending)) return null;
-      const source = pending as Record<string, unknown>;
-      const preference = normaliseColorSchemePreference(typeof source.preference === "string" ? source.preference : null);
-      const actorId = source.actorId === null || typeof source.actorId === "string" ? source.actorId : undefined;
-      return preference && actorId !== undefined ? { preference, actorId } : null;
-    }
-    const preference = normaliseColorSchemePreference(window.localStorage.getItem(LEGACY_THEME_STORAGE_KEY));
-    return preference ? { preference, actorId: null } : null;
-  } catch {
-    return null;
-  }
-}
-
-function clearLegacyColorScheme(): void {
-  if (typeof window === "undefined") return;
-  try { window.localStorage.removeItem(LEGACY_THEME_STORAGE_KEY); } catch { /* storage is disposable */ }
 }
 
 function readOptionsEnvelope(value: unknown): ThemeOptionsEnvelope | undefined {

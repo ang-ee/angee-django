@@ -61,7 +61,10 @@ def test_graphql_insert_rejects_authority_fields(iam_admin, field, value):
         user=iam_admin,
     )
     assert result.errors
-    assert f"Field '{field}' is not defined by type 'users_insert_input'" in result.errors[0].message
+    assert (
+        f"Expected value of type 'users_insert_input' not to include unknown field '{field}'"
+        in result.errors[0].message
+    )
     assert not User._base_manager.filter(username="override").exists()
 
 

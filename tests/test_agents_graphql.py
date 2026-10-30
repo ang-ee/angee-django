@@ -46,11 +46,11 @@ from angee.agents.testing.models import (
     MCPServer,
     Skill,
 )
+from angee.base.exceptions import TransitionNotAllowed
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.integrate.credentials import CredentialKind
 from angee.jobs.locks import task_lock
-from angee.models import TransitionNotAllowed
 from angee.operator.daemon import OperatorDaemonConflict, OperatorDaemonNotFound, OperatorInstanceKind, WorkspaceStatus
 from tests.conftest import (
     Credential,
@@ -3403,6 +3403,41 @@ def test_resolve_session_for_view_resolves_the_actors_running_agent(
     viewer = User.objects.create_user(username="agt-session-viewer", email="viewer@example.com")
     viewer_session = _data(_execute(console, query, {"view": view}, user=viewer))["resolve_session_for_view"]
     assert viewer_session is None
+
+
+def test_chat_selection_breaks_timestamp_ties_and_keeps_actor_sessions(composed_tables: None) -> None:
+    """Equal update times select one stable agent and the actor's latest open session."""
+
+    owner = User.objects.create_user(username="chat-selection-owner")
+    other = User.objects.create_user(username="chat-selection-other")
+    with system_context(reason="test.agents.chat_selection.seed"):
+        first = Agent.objects.create(name="First", owner=owner, runtime_class="pydantic", runtime_status="running")
+        selected = Agent.objects.create(
+            name="Selected", owner=owner, runtime_class="pydantic", runtime_status="running",
+        )
+        template = Agent.objects.create(
+            name="Template", owner=owner, runtime_class="pydantic", runtime_status="running", is_template=True,
+        )
+        Agent.objects.filter(pk__in=[first.pk, selected.pk, template.pk]).update(updated_at=first.updated_at)
+    with actor_context(owner):
+        older = AgentSession.objects.start(selected, user=owner, context={})
+        current = AgentSession.objects.start(selected, user=owner, context={})
+        closed = AgentSession.objects.start(selected, user=owner, context={})
+        closed.close()
+    with system_context(reason="test.agents.chat_selection.sessions"):
+        foreign = AgentSession.objects.create(agent=selected, user=other, context={})
+        AgentSession.objects.filter(pk__in=[older.pk, current.pk, closed.pk, foreign.pk]).update(
+            updated_at=older.updated_at,
+        )
+    result = _data(_execute(
+        _schema(),
+        "{ resolve_session_for_view(view: {}) { agent_id session_id } }",
+        user=owner,
+    ))["resolve_session_for_view"]
+    assert result == {"agent_id": str(selected.sqid), "session_id": str(current.sqid)}
+    assert Agent.objects.chat_for_actor() is None
+    with actor_context(other):
+        assert Agent.objects.chat_for_actor() is None
 
 
 def test_agent_session_reads_and_view_resolution(composed_tables: None, capture_tasks: list[Any]) -> None:

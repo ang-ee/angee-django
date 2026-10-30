@@ -9,46 +9,48 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-BASE_SPEC = importlib.util.find_spec("angee")
-assert BASE_SPEC is not None and BASE_SPEC.origin is not None
-ANGEE = Path(BASE_SPEC.origin).resolve().parent
-MODEL_TOOLKIT = (
-    *(ANGEE / name for name in (
-        "actors.py", "apps.py", "autoconfig.py", "changesets.py", "checks.py",
-        "errors.py", "evidence.py", "fields.py", "identity.py", "impl.py",
-        "indexes.py", "jsonschema.py", "lineage.py", "middleware.py", "numeric.py",
-        "pagination.py", "permissions.py", "refs.py", "serialization.py", "signals.py",
-        "tiers.py", "validation.py",
-    )),
-    ANGEE / "management",
-    ANGEE / "models",
-)
-GRAPHQL = ROOT / "addons" / "angee" / "graphql"
-COMPOSE = ANGEE / "compose"
-RESOURCES = ROOT / "addons" / "angee" / "resources"  # resources is a base addon
-# Resolve the nested addon import root before its enclosing repository root.
-SOURCE_ROOTS = (ROOT / "addons", ANGEE.parent)
-ADDON_ROOTS = (ROOT / "addons" / "angee",)
+ANGEE = ROOT / "src/angee"
+BASE = ANGEE / "base"
+SERVER = ANGEE / "server"
+SERVING_MANAGEMENT = tuple(SERVER / "management/commands" / name for name in ("runserver.py", "serve.py"))
+GRAPHQL = ANGEE / "graphql"
+RESOURCES = ANGEE / "resources"
+SOURCE_ROOTS = (ROOT / "src",)
+ADDON_ROOTS = (ANGEE,)
 
 # Derived from the source tree so a new base addon is guarded automatically.
 _ADDON_PACKAGES = tuple(
     f"angee.{path.name}"
     for addon_root in ADDON_ROOTS
-    for path in sorted(addon_root.iterdir())
-    if path.is_dir()
+    for metadata in sorted(addon_root.glob("*/pyproject.toml"))
+    if (path := metadata.parent).is_dir()
 )
 
 
-def _module_imports(path: Path) -> set[str]:
-    """Return every dotted module name imported by one source file."""
+def _module_imports(path: Path, *, runtime_only: bool = False) -> set[str]:
+    """Resolve source imports; runtime guards exclude native TYPE_CHECKING branches."""
 
     tree = ast.parse(path.read_text(encoding="utf-8"))
     module = _module_name(path)
     names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
+
+    class Imports(ast.NodeVisitor):
+        def visit_If(self, node: ast.If) -> None:
+            condition = node.test
+            type_only = (
+                isinstance(condition, ast.Name) and condition.id == "TYPE_CHECKING"
+                or isinstance(condition, ast.Attribute) and condition.attr == "TYPE_CHECKING"
+            )
+            if runtime_only and type_only:
+                for child in node.orelse:
+                    self.visit(child)
+            else:
+                self.generic_visit(node)
+
+        def visit_Import(self, node: ast.Import) -> None:
             names.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
             if node.level:
                 package = module if path.name == "__init__.py" else module.rpartition(".")[0]
                 imported = importlib.util.resolve_name("." * node.level + (node.module or ""), package)
@@ -57,6 +59,8 @@ def _module_imports(path: Path) -> set[str]:
             if imported:
                 names.add(imported)
                 names.update(f"{imported}.{alias.name}" for alias in node.names if alias.name != "*")
+
+    Imports().visit(tree)
     return names
 
 
@@ -73,14 +77,14 @@ def _module_name(path: Path) -> str:
     raise ValueError(f"{path} is outside the repository's Python source roots")
 
 
-def _tree_imports(root: Path) -> set[str]:
+def _tree_imports(root: Path, *, runtime_only: bool = False) -> set[str]:
     """Return the union of imports across a package subtree."""
 
     paths = (root,) if root.is_file() else tuple(root.rglob("*.py"))
     assert paths, f"no Python sources found under {root}"
     names: set[str] = set()
     for path in paths:
-        names |= _module_imports(path)
+        names |= _module_imports(path, runtime_only=runtime_only)
     return names
 
 
@@ -88,21 +92,21 @@ def _tree_imports(root: Path) -> set[str]:
     ("source_path", "source", "expected"),
     [
         (
-            "angee/models/base.py",
+            "src/angee/base/models/base.py",
             "from . import merge",
-            {"angee.models", "angee.models.merge"},
+            {"angee.base.models", "angee.base.models.merge"},
         ),
         (
-            "addons/angee/example/models.py",
-            "from angee import models as base_models",
-            {"angee", "angee.models"},
+            "src/angee/example/models.py",
+            "from angee.base import models as base_models",
+            {"angee.base", "angee.base.models"},
         ),
         (
-            "addons/angee/example/__init__.py",
-            "from angee.models import retained_set_null",
+            "src/angee/example/__init__.py",
+            "from angee.base.models.audit import retained_set_null",
             {
-                "angee.models",
-                "angee.models.retained_set_null",
+                "angee.base.models.audit",
+                "angee.base.models.audit.retained_set_null",
             },
         ),
     ],
@@ -116,37 +120,34 @@ def test_relative_imports_resolve_against_the_source_import_root(
     assert _module_imports(ROOT / source_path) == expected
 
 
-def test_root_model_toolkit_is_below_all_subsystems() -> None:
-    """The root model toolkit imports no sibling subsystem or addon."""
+def test_foundation_runtime_is_below_all_capability_addons() -> None:
+    """Foundation serving code has no composer or product-addon dependency."""
 
-    imports = set().union(*(_tree_imports(path) for path in MODEL_TOOLKIT))
-    forbidden = ("angee.compose", "angee.graphql", *_ADDON_PACKAGES)
-    assert not any(name.startswith(prefix) for name in imports for prefix in forbidden)
+    imports = set().union(*(
+        _module_imports(path, runtime_only=True) for path in BASE.rglob("*.py")
+        if path.name not in {"build.py", "typing.py"} and "testing" not in path.relative_to(BASE).parts
+    ))
+    forbidden = (
+        "angee.compose", "django_compose.build", "django_compose.model_composition", "django_compose.rendering",
+        *(name for name in _ADDON_PACKAGES if name != "angee.base"),
+    )
+    assert not any(name == prefix or name.startswith(prefix + ".") for name in imports for prefix in forbidden)
 
 
-def test_core_does_not_import_folder_addons() -> None:
-    """The core wheel remains importable without folder-addon sources."""
+def test_framework_has_no_private_host_or_composer_tree() -> None:
+    """The namespace is distributed by addons; generic composition has one upstream owner."""
 
-    violations = {
-        str(path.relative_to(ROOT)): forbidden
-        for path in sorted(ANGEE.rglob("*.py"))
-        if (
-            forbidden := sorted(
-                name
-                for name in _module_imports(path)
-                if any(name == addon or name.startswith(f"{addon}.") for addon in _ADDON_PACKAGES)
-            )
-        )
-    }
-    assert not violations
+    assert not (ROOT / "angee").exists()
+    assert not list((ROOT / "core").rglob("*.py"))
+    assert not (ANGEE / "compose").exists()
 
 
 def test_production_sources_do_not_import_test_support() -> None:
     """Addon test compositions and generic fixtures stay test-only."""
 
-    testing_packages = ("tests", "angee.testing", *(f"{addon}.testing" for addon in _ADDON_PACKAGES))
+    testing_packages = ("tests", "angee.base.testing", *(f"{addon}.testing" for addon in _ADDON_PACKAGES))
     violations = {}
-    for root in (ANGEE, ROOT / "addons"):
+    for root in ADDON_ROOTS:
         for path in sorted(root.rglob("*.py")):
             if (
                 {"testing", "tests"}.intersection(path.relative_to(ROOT).parts)
@@ -167,42 +168,57 @@ def test_production_sources_do_not_import_test_support() -> None:
 def test_addons_do_not_use_a_shared_app_config_subclass() -> None:
     """Addons use plain Django AppConfig attributes, not the foundation config."""
 
+    forbidden = ("angee.apps", "angee.base.apps.BaseConfig")
     violations = {
-        str(path.relative_to(ROOT)): sorted(
-            name for name in _module_imports(path) if name.startswith("angee.apps")
-        )
+        str(path.relative_to(ROOT)): imports
         for addon_root in ADDON_ROOTS
         for path in sorted(addon_root.rglob("apps.py"))
-        if any(name.startswith("angee.apps") for name in _module_imports(path))
+        if (imports := sorted(name for name in _module_imports(path)
+                              if any(name.startswith(prefix) for prefix in forbidden)))
     }
     assert not violations
 
 
-def test_resources_does_not_import_compose() -> None:
-    """The resource subsystem does not import build-time compose code."""
+def test_resources_serving_does_not_import_compose() -> None:
+    """Resources contributes through build.py; serving never imports that adapter."""
 
-    imports = _tree_imports(RESOURCES)
-    assert not any(name.startswith("angee.compose") for name in imports)
+    imports = set().union(*(
+        _module_imports(path, runtime_only=True) for path in RESOURCES.rglob("*.py") if path.name != "build.py"
+    ))
+    assert not any(name.startswith((
+        "angee.compose", "angee.resources.build", "django_compose.build",
+        "django_compose.model_composition", "django_compose.rendering",
+    )) for name in imports)
 
 
 def test_graphql_does_not_import_compose() -> None:
     """The GraphQL runtime does not import build-time compose code."""
 
-    imports = _tree_imports(GRAPHQL)
-    assert not any(name.startswith("angee.compose") for name in imports)
+    imports = _tree_imports(GRAPHQL, runtime_only=True)
+    assert not any(name.startswith((
+        "angee.compose", "django_compose.build", "django_compose.model_composition", "django_compose.rendering",
+    )) for name in imports)
 
 
 def test_stable_serving_entrypoints_do_not_import_compose() -> None:
     """Serving entrypoints use Django's populated registry, not compose."""
 
-    imports = _module_imports(ANGEE / "urls.py") | _module_imports(ANGEE / "asgi.py")
-    forbidden = ("angee.compose",)
+    imports = set().union(*(
+        _module_imports(path) for path in (SERVER / "urls.py", SERVER / "asgi.py", *SERVING_MANAGEMENT)
+    ))
+    forbidden = (
+        "angee.compose", "django_compose.build", "django_compose.model_composition", "django_compose.rendering",
+    )
     assert not any(name.startswith(prefix) for name in imports for prefix in forbidden)
 
 
-def test_compose_has_no_rebac_permission_renderer() -> None:
-    """Per-addon REBAC schemas stay with their owning apps."""
-
-    assert not (COMPOSE / "rebac.py").exists()
-# Pre-consolidation base-addon side of pre-90bdd58b tests/test_layering.py;
-# kept separate because it guards addon dependency direction.
+@pytest.mark.parametrize("runtime_only", [False, True])
+def test_import_guard_distinguishes_type_only_dependencies(monkeypatch, runtime_only):
+    monkeypatch.setattr(Path, "read_text", lambda self, **kwargs: (
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n    from django_compose.model_composition import ModelComposition\n"
+        "else:\n    from angee.base.paths import resolve_path\n"
+    ))
+    imports = _module_imports(BASE / "typing.py", runtime_only=runtime_only)
+    assert ("django_compose.model_composition" in imports) is not runtime_only
+    assert "angee.base.paths.resolve_path" in imports

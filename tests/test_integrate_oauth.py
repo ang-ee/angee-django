@@ -17,7 +17,8 @@ from django.utils import timezone
 from rebac import actor_context, system_context
 from rebac.graphql.strawberry_django import RebacDjangoOptimizerExtension
 
-from angee.impl import ImplClassField
+from angee.base.fields.implementation import ImplClassField
+from angee.base.implementations import impl_choices
 from angee.integrate import connect
 from angee.integrate.errors import IntegrationError, RequestNotSentError
 from angee.integrate.oauth import state
@@ -298,7 +299,7 @@ def test_provider_choices_are_contributed_through_the_native_impl_registry():
     }):
         field = ImplClassField(OAuthProviderType)
         assert field.registered_keys() == ("contributed", "generic_oauth2")
-        assert {choice.key for choice in field.impl_choices()} == {"contributed", "generic_oauth2"}
+        assert {choice.key for choice in impl_choices(OAuthProviderType)} == {"contributed", "generic_oauth2"}
         assert field.resolve_class("contributed").key == "contributed"
 
 
@@ -378,3 +379,21 @@ def test_signing_secret_refuses_public_clients_without_reading_storage():
 def test_signing_secret_refuses_a_confidential_client_without_a_secret():
     with pytest.raises(IntegrationError, match="has no client secret"):
         OAuthClientProtocol(OAuthClient(manual_redirect_uri="", client_secret="")).confidential_client_secret()
+
+
+@pytest.mark.parametrize("request_format", ["form", "json"])
+@pytest.mark.parametrize("provider_type, expected", [("generic_oauth2", True), ("anthropic", False)])
+def test_refresh_grant_parameters_are_selected_by_provider(monkeypatch, request_format, provider_type, expected):
+    client = OAuthClient(slug="grant-policy", client_id="client", token_endpoint="https://provider.example/token",
+                         token_request_format=request_format, provider_type=provider_type,
+                         token_params={"expires_in": 3600, "audience": "inference"})
+    protocol = OAuthClientProtocol(client)
+    seen = {}
+    def exchange(endpoint, grant_type, grant, extra):
+        seen.update(extra)
+        return {"access_token": "accepted"}
+    monkeypatch.setattr(protocol, "_json_token_request", exchange)
+    monkeypatch.setattr(protocol, "_authlib_token_request", exchange)
+    assert protocol.exchange_grant("refresh_token", refresh_token="refresh") == {"access_token": "accepted"}
+    assert ("expires_in" in seen) is expected
+    assert seen["audience"] == "inference"

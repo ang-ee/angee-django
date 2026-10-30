@@ -31,7 +31,7 @@ import {
   type CreateAppInput,
   type RefineLayoutChromeProps,
 } from "./create-app";
-import { MenuTree, type ChromeMenuItem } from "@angee/ui/chrome/menu-tree";
+import { MenuTree } from "@angee/ui/chrome/menu-tree";
 import { ChromePlaceProvider, useChromeMenuTree, useChromePlace } from "@angee/ui/chrome/refine-menu";
 import {
   captureChrome,
@@ -91,19 +91,20 @@ describe("route-owned chrome", () => {
       { id: "dashboards", routes: [
         { name: "dashboards.index", path: "/dashboards", component: EmptyPage },
         { name: "dashboards.addon", path: "/dashboards/addon/$key", component: EmptyPage, menu: "dashboards" },
-      ], menus: [{ id: "dashboards", label: "Dashboards", route: "dashboards.index" }] },
-      { id: "accounting", menus: [{ id: "accounting", label: "Accounting", children: [
-        { id: "accounting.vendors", label: "Vendors", children: [
-          { id: "accounting.payable", label: "Accounts Payable", route: "dashboards.addon", params: { key: "accounts-payable" } },
-        ] },
-      ] }] },
+      ], menus: {
+        "dashboards": { label: "Dashboards", route: "dashboards.index" },
+      } },
+      { id: "accounting", menus: {
+        "accounting": { label: "Accounting" },
+        "accounting.vendors": { label: "Vendors", parent: "accounting" },
+        "accounting.payable": { label: "Accounts Payable", route: "dashboards.addon", params: { key: "accounts-payable" }, parent: "accounting.vendors" },
+      } },
     ], { console: { requireAuth: false, chrome: () => createElement(ChromePlaceProvider, { children: createElement(CapturePlace) }) } }));
     const root = app.mount(host);
     try {
       await waitFor(() => expect(captured?.item).toBe("accounting.payable"));
       expect(captured).toMatchObject({ app: "accounting", activeApp: "accounting" });
       expect(captured?.breadcrumbs).toEqual(["Accounting", "Vendors", "Accounts Payable"]);
-      expect(app.explain.menus.diagnostics).toEqual([]);
     } finally {
       root.unmount();
       host.remove();
@@ -120,14 +121,15 @@ describe("route-owned chrome", () => {
   ])("$label keeps list and record chrome when a deeper foreign item targets its route", async (fixture) => {
     const addons: BaseAddon[] = [
       { id: fixture.owner, routes: resourcePageRoutes(fixture.route, fixture.path, EmptyPage, fixture.model, { menu: fixture.menu }),
-        menus: [{ id: fixture.owner, label: fixture.label, children: [
-          { id: fixture.menu, label: fixture.itemLabel, route: fixture.route },
-        ] }] },
-      { id: fixture.foreign, menus: [{ id: fixture.foreign, label: fixture.foreignLabel, children: [
-        { id: `${fixture.foreign}.group`, label: fixture.groupLabel, children: [
-          { id: `${fixture.foreign}.link`, label: "Foreign link", route: fixture.route },
-        ] },
-      ] }] },
+        menus: {
+          [fixture.owner]: { label: fixture.label },
+          [fixture.menu]: { label: fixture.itemLabel, route: fixture.route, parent: fixture.owner },
+        } },
+      { id: fixture.foreign, menus: {
+        [fixture.foreign]: { label: fixture.foreignLabel },
+        [`${fixture.foreign}.group`]: { label: fixture.groupLabel, parent: fixture.foreign },
+        [`${fixture.foreign}.link`]: { label: "Foreign link", route: fixture.route, parent: `${fixture.foreign}.group` },
+      } },
     ].reverse();
     for (const path of [fixture.path, `${fixture.path}/record-1`]) {
       let captured: { item?: string; app?: string; activeApp?: string | null; breadcrumbs: ReactNode[] } | undefined;
@@ -155,7 +157,6 @@ describe("route-owned chrome", () => {
         expect(captured?.breadcrumbs).toContain(path === fixture.path ? fixture.label : fixture.itemLabel);
         expect(captured?.breadcrumbs).not.toContain(fixture.foreignLabel);
         expect(captured?.breadcrumbs).not.toContain(fixture.groupLabel);
-        expect(app.explain.menus.diagnostics).toEqual([]);
       } finally {
         root.unmount();
         host.remove();
@@ -175,26 +176,27 @@ describe("createApp selection", () => {
       { name: "account", path: "/account", component: EmptyPage },
       { name: "public.page", path: "/public-page", layout: "public", component: EmptyPage },
     ],
-    menus: [
-      { id: "requests", home: "requests.all", children: [{ id: "requests.all", route: "requests.all" }] },
-      { id: "files", route: "files.all" },
-    ],
+    menus: {
+      "requests": { home: "requests.all" },
+      "requests.all": { route: "requests.all", parent: "requests" },
+      "requests.files": { label: "Files", icon: "files", route: "files.all" },
+    },
   }];
   const layouts = { console: { requireAuth: false }, public: { requireAuth: false } } as const;
   const deployment = (shell: ShellSettings): BaseAddon => ({ id: "deployment", dependsOn: ["requests"], shell });
 
   test("?app= wins over the hostname, which wins over nothing; an unknown ?app= falls back and says why", () => {
-    const shell = deployment({ apps: { both: { rail: ["files", "requests"] } }, hosts: { "files.localhost": "files" } });
+    const shell = deployment({ apps: { both: { rail: ["requests.files", "requests"] } }, hosts: { "files.localhost": "requests.files" } });
     const input = { ...testAppInput([...addons, shell], layouts) };
     const select = (location: CreateAppInput["location"]) => createApp({ ...input, location }).explain.selection;
     expect(select({ search: "?app=both", hostname: "files.localhost" })).toMatchObject({
-      app: "both", rail: ["files", "requests"], sources: { app: "?app=both", rail: "ANGEE_UI.shell.apps.both" },
+      app: "both", rail: ["requests.files", "requests"], sources: { app: "?app=both", rail: "ANGEE_UI.shell.apps.both" },
     });
     expect(select({ search: "", hostname: "files.localhost" })).toMatchObject({
-      app: "files", rail: ["files"], sources: { app: 'ANGEE_UI.shell.hosts["files.localhost"]' },
+      app: "requests.files", rail: ["requests.files"], sources: { app: 'ANGEE_UI.shell.hosts["files.localhost"]' },
     });
     expect(select({ search: "?app=nowhere", hostname: "files.localhost" })).toMatchObject({
-      app: "files", diagnostics: ["?app=nowhere names no menu root and no ANGEE_UI.shell.apps entry, so it selects nothing."],
+      app: "requests.files", diagnostics: ["?app=nowhere names no menu root and no ANGEE_UI.shell.apps entry, so it selects nothing."],
     });
     expect(select({ search: "?app=nowhere", hostname: "elsewhere.localhost" })).toMatchObject({ app: null, rail: null, brand: null });
     expect(select({ search: "" })).toMatchObject({ app: null, rail: null, diagnostics: [] });
@@ -211,23 +213,24 @@ describe("createApp selection", () => {
   test("checks every root, app and host at boot, selected or not", () => {
     const input = (menus: BaseAddon["menus"], shell?: ShellSettings): CreateAppInput => testAppInput(
       [{ ...addons[0]!, menus }, ...(shell ? [deployment(shell)] : [])], layouts);
-    const files = { id: "files", route: "files.all" };
-    const requests = (home: string) => ({ id: "requests", home, children: [{ id: "requests.all", route: "requests.all" }] });
-    expect(() => createApp(input([requests("files.all"), files]))).toThrow(
-      'Menu root "requests" home "files.all" lies outside its rail (requests), in menu root "files".',
+    const requests = (home: string): NonNullable<BaseAddon["menus"]> => ({
+      requests: { home }, "requests.all": { route: "requests.all", parent: "requests" }, "requests.files": { label: "Files", icon: "files", route: "files.all" },
+    });
+    expect(() => createApp(input(requests("files.all")))).toThrow(
+      'Menu root "requests" home "files.all" lies outside its rail (requests), in menu root "requests.files".',
     );
-    expect(() => createApp(input([requests("account"), files]))).toThrow(
+    expect(() => createApp(input(requests("account")))).toThrow(
       'Menu root "requests" home "account" lies outside its rail (requests), in no single menu root; anchor the route with route.menu.',
     );
-    const valid = [requests("requests.all"), files];
+    const valid = requests("requests.all");
     expect(() => createApp(input(valid, { apps: { focus: { rail: ["requests"], home: "files.all" } } }))).toThrow(
-      'ANGEE_UI.shell.apps.focus home "files.all" lies outside its rail (requests), in menu root "files".',
+      'ANGEE_UI.shell.apps.focus home "files.all" lies outside its rail (requests), in menu root "requests.files".',
     );
     expect(() => createApp(input(valid, { apps: { focus: { rail: ["requests", "requests.all"] } } }))).toThrow(
       'ANGEE_UI.shell.apps.focus rail names "requests.all", which is not a top-level menu root.',
     );
-    expect(() => createApp(input(valid, { apps: { files: { rail: ["requests"] } } }))).toThrow(
-      'ANGEE_UI.shell.apps names "files", a menu root id; name the app apart from the roots.',
+    expect(() => createApp(input(valid, { apps: { "requests.files": { rail: ["requests"] } } }))).toThrow(
+      'ANGEE_UI.shell.apps names "requests.files", a menu root id; name the app apart from the roots.',
     );
     expect(() => createApp(input(valid, { hosts: { "requests.localhost": "nothing" } }))).toThrow(
       'ANGEE_UI.shell.hosts["requests.localhost"] selects "nothing", which is neither a menu root id nor an ANGEE_UI.shell.apps name.',
@@ -251,9 +254,9 @@ describe("createApp selection", () => {
     const select = (shell: ShellSettings, search: string) => createApp({
       ...testAppInput([withMark, deployment(shell)], layouts), location: { search },
     }).explain.selection;
-    expect(select({ apps: { focus: { rail: ["requests", "files"] } } }, "?app=focus")).toEqual({
+    expect(select({ apps: { focus: { rail: ["requests", "requests.files"] } } }, "?app=focus")).toEqual({
       app: "focus",
-      rail: ["requests", "files"],
+      rail: ["requests", "requests.files"],
       brand: { name: "Requests", mark: "requests" },
       home: "requests.all",
       sources: {
@@ -264,14 +267,14 @@ describe("createApp selection", () => {
       },
       diagnostics: [],
     });
-    expect(select({ apps: { focus: { rail: ["files", "requests"], brand: { name: "Focus", mark: "mark" }, home: "requests.all" } } }, "?app=focus"))
+    expect(select({ apps: { focus: { rail: ["requests.files", "requests"], brand: { name: "Focus", mark: "mark" }, home: "requests.all" } } }, "?app=focus"))
       .toMatchObject({
         brand: { name: "Focus", mark: "mark" }, home: "requests.all",
         sources: { brand: "ANGEE_UI.shell.apps.focus", home: "ANGEE_UI.shell.apps.focus" },
       });
     // A bare root selects itself; the deployment's brand is only for nothing selected.
-    expect(select({ brand: { name: "Desk", mark: "mark" } }, "?app=files")).toMatchObject({
-      app: "files", rail: ["files"], brand: { name: "Files", mark: "files" },
+    expect(select({ brand: { name: "Desk", mark: "mark" } }, "?app=requests.files")).toMatchObject({
+      app: "requests.files", rail: ["requests.files"], brand: { name: "Files", mark: "files" },
     });
     expect(select({ brand: { name: "Desk", mark: "mark" } }, "")).toMatchObject({
       app: null, rail: null, brand: { name: "Desk", mark: "mark" }, sources: { brand: "ANGEE_UI.shell.brand" },
@@ -282,11 +285,10 @@ describe("createApp selection", () => {
     const shared: BaseAddon = {
       id: "requests",
       routes: [{ name: "requests.all", path: "/requests", resource: "requests.Request", component: EmptyPage }],
-      menus: [{
-        id: "requests",
-        route: "requests.all",
-        children: [{ id: "requests.all", route: "requests.all" }],
-      }],
+      menus: {
+        "requests": { route: "requests.all" },
+        "requests.all": { route: "requests.all", parent: "requests" },
+      },
     };
     const input = {
       ...testAppInput([shared], { console: { requireAuth: false } }),
@@ -300,13 +302,18 @@ describe("createApp selection", () => {
     const tasks: BaseAddon = {
       id: "tasks",
       routes: resourcePageRoutes("tasks.all", "/tasks", EmptyPage, "tasks.Task"),
-      menus: [{ id: "tasks", route: "tasks.all" }],
+      menus: {
+        "tasks": { route: "tasks.all" },
+      },
     };
     const desk: BaseAddon = {
       id: "desk",
       dependsOn: ["tasks"],
       routes: resourcePageRoutes("desk.tasks", "/desk/tasks", EmptyPage, "tasks.Task"),
-      menus: [{ id: "desk", children: [{ id: "desk.tasks", route: "desk.tasks" }] }],
+      menus: {
+        "desk": {},
+        "desk.tasks": { route: "desk.tasks", parent: "desk" },
+      },
     };
     const input = (addons: readonly BaseAddon[]): CreateAppInput => ({
       ...testAppInput(addons, { console: { requireAuth: false } }),
@@ -323,10 +330,10 @@ describe("createApp selection", () => {
     const shared: BaseAddon = {
       id: "requests",
       routes: [{ name: "requests.all", path: "/requests", resource: "requests.Request", component: EmptyPage }],
-      menus: [
-        { id: "requests", route: "requests.all", home: "requests.all" },
-        { id: "files", route: "requests.all" },
-      ],
+      menus: {
+        "requests": { route: "requests.all", home: "requests.all" },
+        "requests.files": { route: "requests.all" },
+      },
     };
     const input = {
       ...testAppInput([shared], { console: { requireAuth: false } }),
@@ -338,7 +345,7 @@ describe("createApp selection", () => {
       routes: shared.routes?.map((route) => ({ ...route, menu: "requests" })),
     };
     expect(() => createApp({ ...input, addons: [explicit] })).not.toThrow();
-    expect(() => createApp({ ...input, addons: [explicit], location: { search: "?app=files" } })).not.toThrow();
+    expect(() => createApp({ ...input, addons: [explicit], location: { search: "?app=requests.files" } })).not.toThrow();
   });
 
   test("projects only the selected rail into both navigation sources", async () => {
@@ -357,12 +364,12 @@ describe("createApp selection", () => {
   });
 
   test("a page only a removed menu item reached still redirects home, with an app selected or not", async () => {
-    const trimmed: readonly BaseAddon[] = [...addons, { id: "trim", dependsOn: ["requests"], menus: { files: { remove: true } } }];
+    const trimmed: readonly BaseAddon[] = [...addons, { id: "trim", dependsOn: ["requests"], menus: { "requests.files": { remove: true } } }];
     for (const search of ["", "?app=requests"]) {
       history.replaceState(null, "", "/files/item-1");
       const app = createApp({ ...testAppInput(trimmed, layouts), location: { search } });
       expect(app.explain.menus.unavailable).toEqual({
-        "files.all": 'menu item "files" was removed',
+        "files.all": 'menu item "requests.files" was removed',
         "files.record": 'its parent route "files.all" is unavailable',
       });
       const host = document.createElement("div");
@@ -563,7 +570,9 @@ describe("createApp developer mode", () => {
       return null;
     }
     const app = createApp(
-      testAppInput([{ id: "desk", routes: [{ name: "desk.home", path: "/desk", component: Probe }], menus: [{ id: "desk", route: "desk.home" }] }]),
+      testAppInput([{ id: "desk", routes: [{ name: "desk.home", path: "/desk", component: Probe }], menus: {
+        "desk": { route: "desk.home" },
+      } }]),
     );
     const host = document.createElement("div");
     document.body.append(host);
@@ -943,9 +952,15 @@ describe("createApp auth routing", () => {
     const app = createApp({
       ...testAppInput([
         { id: "platform", routes: [{ name: "platform.graph", path: "/platform/graph", component: EmptyPage }],
-          menus: [{ id: "platform", route: "platform.graph", group: "platform" }] },
-        { id: "notes", routes: [{ name: "notes.home", path: "/notes", component: EmptyPage }], menus: [{ id: "notes", route: "notes.home" }] },
-        { id: "ops", routes: [{ name: "ops.home", path: "/ops", component: EmptyPage }], menus: [{ id: "ops", route: "ops.home" }] },
+          menus: {
+            "platform": { route: "platform.graph", group: "platform" },
+          } },
+        { id: "notes", routes: [{ name: "notes.home", path: "/notes", component: EmptyPage }], menus: {
+          "notes": { route: "notes.home" },
+        } },
+        { id: "ops", routes: [{ name: "ops.home", path: "/ops", component: EmptyPage }], menus: {
+          "ops": { route: "ops.home" },
+        } },
       ], { console: { chrome: TestChrome, requireAuth: true } }),
       schemas: {
         public: { url: "https://example.test/graphql/public/", fetch },
@@ -969,22 +984,10 @@ describe("createApp auth routing", () => {
 
 describe("createApp route menu refs", () => {
   test("resolves menu route refs and exposes refine breadcrumbs", async () => {
-    const menus: readonly ChromeMenuItem[] = [
-      {
-        id: "admin",
-        label: "Admin",
-        icon: "auth",
-        route: "admin.home",
-        children: [
-          {
-            id: "admin.users",
-            label: "Users",
-            route: "admin.users",
-            icon: "users",
-          },
-        ],
-      },
-    ];
+    const menus: NonNullable<BaseAddon["menus"]> = {
+      "admin": { label: "Admin", icon: "auth", route: "admin.home" },
+      "admin.users": { label: "Users", route: "admin.users", icon: "users", parent: "admin" },
+    };
 
     const captured = await captureChrome({
       path: "/admin/users",
@@ -1045,14 +1048,9 @@ describe("createApp route menu refs", () => {
               parent: "files.home",
             },
           ],
-          menus: [
-            {
-              id: "files",
-              label: "Files",
-              route: "files.home",
-              icon: "files",
-            },
-          ],
+          menus: {
+            "files": { label: "Files", route: "files.home", icon: "files" },
+          },
         },
       ],
     });
@@ -1070,28 +1068,11 @@ describe("createApp route menu refs", () => {
   });
 
   test("collapses route-less menu groups that duplicate their leaf crumb", async () => {
-    const menus: readonly ChromeMenuItem[] = [
-      {
-        id: "admin",
-        label: "Admin",
-        icon: "auth",
-        route: "admin.home",
-        children: [
-          {
-            id: "admin.users.group",
-            label: "Users",
-            children: [
-              {
-                id: "admin.users",
-                label: "Users",
-                route: "admin.users",
-                icon: "users",
-              },
-            ],
-          },
-        ],
-      },
-    ];
+    const menus: NonNullable<BaseAddon["menus"]> = {
+      "admin": { label: "Admin", icon: "auth", route: "admin.home" },
+      "admin.users.group": { label: "Users", parent: "admin" },
+      "admin.users": { label: "Users", route: "admin.users", icon: "users", parent: "admin.users.group" },
+    };
 
     const captured = await captureChrome({
       path: "/admin/users",
@@ -1143,25 +1124,11 @@ describe("createApp route menu refs", () => {
               component: EmptyPage,
             },
           ],
-          menus: [
-            {
-              id: "agents",
-              label: "Agents",
-              children: [
-                {
-                  id: "agents.group",
-                  label: "Agents",
-                  children: [
-                    {
-                      id: "agents.home",
-                      label: "Agents",
-                      route: "agents.home",
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
+          menus: {
+            "agents": { label: "Agents" },
+            "agents.group": { label: "Agents", parent: "agents" },
+            "agents.home": { label: "Agents", route: "agents.home", parent: "agents.group" },
+          },
         },
       ],
     });
@@ -1209,41 +1176,14 @@ describe("createApp route menu refs", () => {
               component: EmptyPage,
             },
           ],
-          menus: [
-            {
-              id: "agents",
-              label: "Agents",
-              children: [
-                {
-                  id: "agents.group",
-                  label: "Agents",
-                  children: [
-                    {
-                      id: "agents.home",
-                      label: "Agents",
-                      route: "agents.home",
-                    },
-                  ],
-                },
-                {
-                  id: "agents.skills.group",
-                  label: "Skills",
-                  children: [
-                    {
-                      id: "agents.skills",
-                      label: "Skills",
-                      route: "agents.skills",
-                    },
-                    {
-                      id: "agents.sources",
-                      label: "Sources",
-                      route: "agents.sources",
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
+          menus: {
+            "agents": { label: "Agents" },
+            "agents.group": { label: "Agents", parent: "agents" },
+            "agents.home": { label: "Agents", route: "agents.home", parent: "agents.group" },
+            "agents.skills.group": { label: "Skills", parent: "agents" },
+            "agents.skills": { label: "Skills", route: "agents.skills", parent: "agents.skills.group" },
+            "agents.sources": { label: "Sources", route: "agents.sources", parent: "agents.skills.group" },
+          },
         },
       ],
     });
@@ -1314,58 +1254,17 @@ describe("createApp route menu refs", () => {
               resource: "agents.InferenceProvider",
             },
           ],
-          menus: [
-            {
-              id: "agents",
-              label: "Agents",
-              children: [
-                {
-                  id: "agents.menu.agents",
-                  label: "Agents",
-                  children: [
-                    {
-                      id: "agents.agents",
-                      label: "Agents",
-                      route: "agents.agents",
-                    },
-                  ],
-                },
-                {
-                  id: "agents.menu.skills",
-                  label: "Skills",
-                  children: [
-                    {
-                      id: "agents.skills",
-                      label: "Skills",
-                      route: "agents.skills",
-                    },
-                  ],
-                },
-                {
-                  id: "agents.menu.mcp",
-                  label: "MCP",
-                  children: [
-                    {
-                      id: "agents.mcp",
-                      label: "MCP",
-                      route: "agents.mcp",
-                    },
-                  ],
-                },
-                {
-                  id: "agents.menu.inference",
-                  label: "Inference",
-                  children: [
-                    {
-                      id: "agents.inference",
-                      label: "Inference",
-                      route: "agents.inference",
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
+          menus: {
+            "agents": { label: "Agents" },
+            "agents.menu.agents": { label: "Agents", parent: "agents" },
+            "agents.agents": { label: "Agents", route: "agents.agents", parent: "agents.menu.agents" },
+            "agents.menu.skills": { label: "Skills", parent: "agents" },
+            "agents.skills": { label: "Skills", route: "agents.skills", parent: "agents.menu.skills" },
+            "agents.menu.mcp": { label: "MCP", parent: "agents" },
+            "agents.mcp": { label: "MCP", route: "agents.mcp", parent: "agents.menu.mcp" },
+            "agents.menu.inference": { label: "Inference", parent: "agents" },
+            "agents.inference": { label: "Inference", route: "agents.inference", parent: "agents.menu.inference" },
+          },
         },
       ],
     });
@@ -1397,7 +1296,9 @@ describe("createApp route menu refs", () => {
               component: EmptyPage,
             },
           ],
-          menus: [{ id: "bad", route: "bad.home", to: "/bad" }],
+          menus: {
+            "bad-menu.bad": { route: "bad.home", to: "/bad" },
+          },
         },
       ])),
     ).toThrow(/declares both route and to/);
@@ -1416,10 +1317,10 @@ describe("createApp route menu refs", () => {
               component: EmptyPage,
             },
           ],
-          menus: [
-            { id: "explicit.a", label: "Explicit A", route: "explicit.home" },
-            { id: "explicit.b", label: "Explicit B", route: "explicit.home" },
-          ],
+          menus: {
+            "explicit.a": { label: "Explicit A", route: "explicit.home" },
+            "explicit.b": { label: "Explicit B", route: "explicit.home" },
+          },
         },
       ])),
     ).not.toThrow();
@@ -1432,18 +1333,18 @@ describe("createApp route menu refs", () => {
           id: "wrong-menu",
           routes: [
             {
-              name: "wrong.home",
+              name: "wrong-menu.wrong.home",
               path: "/wrong",
               layout: "console",
-              menu: "wrong.other",
+              menu: "wrong-menu.wrong.other",
               resource: "Wrong",
               component: EmptyPage,
             },
           ],
-          menus: [
-            { id: "wrong.home", label: "Wrong", route: "wrong.home" },
-            { id: "wrong.other", label: "Other" },
-          ],
+          menus: {
+            "wrong-menu.wrong.home": { label: "Wrong", route: "wrong-menu.wrong.home" },
+            "wrong-menu.wrong.other": { label: "Other" },
+          },
         },
       ], [testDataResource("example.Wrong")]),
     ).toThrow(/does not reference the route/);
@@ -1462,7 +1363,9 @@ describe("createApp route menu refs", () => {
               component: EmptyPage,
             },
           ],
-          menus: [{ id: "missing", route: "missing.home" }],
+          menus: {
+            "unknown-route.missing": { route: "missing.home" },
+          },
         },
       ])),
     ).toThrow(/references unknown route "missing.home"/);
@@ -1481,10 +1384,12 @@ describe("createApp route menu refs", () => {
               component: EmptyPage,
             },
           ],
-          menus: [{ id: "records.open", route: "records.record" }],
+          menus: {
+            "record-menu.records.open": { route: "records.record" },
+          },
         },
       ])),
-    ).toThrow(/Menu item "records\.open" cannot resolve its route.*missing params: id/);
+    ).toThrow(/Menu item "record-menu\.records\.open" cannot resolve its route.*missing params: id/);
   });
 
   test("resolves a menu route with its declared params", async () => {
@@ -1501,13 +1406,9 @@ describe("createApp route menu refs", () => {
               component: EmptyPage,
             },
           ],
-          menus: [
-            {
-              id: "review-queue",
-              route: "dashboards.addon",
-              params: { key: "example.document_review.overview" },
-            },
-          ],
+          menus: {
+            "dashboard-menu.review-queue": { route: "dashboards.addon", params: { key: "example.document_review.overview" } },
+          },
         },
       ],
     });
@@ -1537,18 +1438,14 @@ describe("createApp route menu refs", () => {
               name: "dashboards.addon",
               path: "/dashboards/addon/$key",
               layout: "console",
-              menu: "dashboards",
+              menu: "dashboard-placement.dashboards",
               component: EmptyPage,
             },
           ],
-          menus: [
-            { id: "dashboards", route: "dashboards.index" },
-            {
-              id: "review-queue",
-              route: "dashboards.addon",
-              params: { key: "example.document_review.overview" },
-            },
-          ],
+          menus: {
+            "dashboard-placement.dashboards": { route: "dashboards.index" },
+            "dashboard-placement.review-queue": { route: "dashboards.addon", params: { key: "example.document_review.overview" } },
+          },
         },
       ])),
     ).not.toThrow();
@@ -1559,7 +1456,9 @@ describe("createApp route menu refs", () => {
       createApp(testAppInput([
         {
           id: "literal-menu",
-          menus: [{ id: "literal", to: "/dashboards/addon/literal" }],
+          menus: {
+            "literal-menu.literal": { to: "/dashboards/addon/literal" },
+          },
         },
       ])),
     ).toThrow(/declares internal target.*use route and params/);
@@ -1721,7 +1620,9 @@ describe("createApp resource route index", () => {
     const input = testAppInput([
       {
         id: "notes",
-        menus: [{ id: "notes", route: "notes.home" }],
+        menus: {
+          "notes": { route: "notes.home" },
+        },
         containers: { "record#aside": [{ "notes.comments": { content: { label: "Comments", render: () => null } } }, { only: ["notes.comments"], when: { route: "notes.home" } }] },
         routes: [
           {
@@ -1860,8 +1761,10 @@ describe("createApp route tree", () => {
     const loadHome = vi.fn(async () => ({ HomePage: () => createElement("p", null, "Home page") }));
     const app = createApp(testAppInput([{ id: "pages", routes: [
       { name: "first", path: "/first", component: () => createElement("p", null, "First page") },
-      { name: "home", path: "/home", component: lazyRouteComponent(loadHome, "HomePage") },
-    ], menus: [{ id: "home", route: "home" }] }]));
+      { name: "pages.home", path: "/home", component: lazyRouteComponent(loadHome, "HomePage") },
+    ], menus: {
+      "pages.home": { route: "pages.home" },
+    } }]));
     const root = app.mount(host);
     try {
       await waitFor(() => expect(host.textContent).toContain("First page"));
@@ -1884,7 +1787,7 @@ describe("createApp route tree", () => {
   test.each([
     { label: "fallback", preferences: {}, target: "/first" },
     { label: "homePath", preferences: { [HOME_PATH_PREFERENCE_KEY]: "/second?tab=activity#details" }, target: "/second?tab=activity#details" },
-    { label: "default app", preferences: { "chrome.rail": { defaultItemId: "second" } }, target: "/second" },
+    { label: "default app", preferences: { "chrome.rail": { defaultItemId: "pages.second" } }, target: "/second" },
     { label: "fallback past a stale default app", preferences: { "chrome.rail": { defaultItemId: "removed" } }, target: "/first" },
   ])("redirects / to the $label without remounting the layout or leaving / in history", async ({ preferences, target }) => {
     const host = document.createElement("div");
@@ -1904,11 +1807,14 @@ describe("createApp route tree", () => {
         id: "pages",
         layoutProviders: [{ id: "session", layout: "console", component: Provider }],
         routes: [
-          { name: "first", path: "/first", component: () => createElement("p", null, "First page") },
-          { name: "second", path: "/second", component: () => createElement("p", null, "Second page") },
+          { name: "pages.first", path: "/first", component: () => createElement("p", null, "First page") },
+          { name: "pages.second", path: "/second", component: () => createElement("p", null, "Second page") },
           { name: "settings", path: "/settings", component: () => createElement("p", null, "Settings page") },
         ],
-        menus: [{ id: "first", route: "first" }, { id: "second", route: "second" }],
+        menus: {
+          "pages.first": { route: "pages.first" },
+          "pages.second": { route: "pages.second" },
+        },
       }], { console: { chrome: TestChrome, requireAuth: true } }),
       schemas: {
         public: { ...TEST_SCHEMAS.public, fetch: identityFetch },
@@ -1937,7 +1843,7 @@ describe("createApp route tree", () => {
 
   test.each([
     { label: "homePath", preferences: { [HOME_PATH_PREFERENCE_KEY]: "/third" } },
-    { label: "default app", preferences: { "chrome.rail": { defaultItemId: "desk" } } },
+    { label: "default app", preferences: { "chrome.rail": { defaultItemId: "pages.desk" } } },
   ])("a selected app sends / to its own home and ignores the $label preference", async ({ preferences }) => {
     const host = document.createElement("div");
     document.body.append(host);
@@ -1946,14 +1852,19 @@ describe("createApp route tree", () => {
       current_user: { id: "user-1", username: "user", firstName: "", lastName: "", roleRefs: [], preferences },
       real_user: null, viewable_people: [],
     } });
-    const page = (name: string) => ({ name, path: `/${name}`, component: () => createElement("p", null, `${name} page`) });
+    const page = (name: string, path: string) => ({ name, path, component: () => createElement("p", null, `${name} page`) });
     const app = createApp({
       ...testAppInput([{
         id: "pages",
-        routes: [page("first"), page("second"), page("third")],
-        menus: [{ id: "desk", home: "second", children: [{ id: "first", route: "first" }, { id: "second", route: "second" }, { id: "third", route: "third" }] }],
+        routes: [page("pages.first", "/first"), page("pages.second", "/second"), page("pages.third", "/third")],
+        menus: {
+          "pages.desk": { home: "pages.second" },
+          "pages.first": { route: "pages.first", parent: "pages.desk" },
+          "pages.second": { route: "pages.second", parent: "pages.desk" },
+          "pages.third": { route: "pages.third", parent: "pages.desk" },
+        },
       }]),
-      location: { search: "?app=desk" },
+      location: { search: "?app=pages.desk" },
       schemas: {
         public: { ...TEST_SCHEMAS.public, fetch: identityFetch },
         console: { ...TEST_SCHEMAS.console, fetch: identityFetch },
@@ -2408,7 +2319,9 @@ test("unknown and incompatible default views fail at composition", () => {
       id: "desk", resourceViews: [preset],
       routes: resourcePageRoutes("desk.all", "/desk", EmptyPage, resource,
         menu ? {} : { defaultResourceView: id }),
-      menus: [{ id: "desk", route: "desk.all", ...(menu ? { defaultResourceView: id } : {}) }],
+      menus: {
+        "desk": { route: "desk.all", ...(menu ? { defaultResourceView: id } : {}) },
+      },
     }]),
     schemas: testSchemasWithConsoleResources(resources),
   });
@@ -2432,7 +2345,9 @@ test("a menu preset is admitted on its target route beside the route default", a
         { id: "desk.archived", label: "Archived", resource: "notes.Note" },
       ],
       routes: resourcePageRoutes("desk.all", "/desk", Probe, "notes.Note", { defaultResourceView: "desk.open" }),
-      menus: [{ id: "desk", route: "desk.all", defaultResourceView: "desk.archived" }],
+      menus: {
+        "desk": { route: "desk.all", defaultResourceView: "desk.archived" },
+      },
     }], { console: { requireAuth: false } }),
     schemas: testSchemasWithConsoleResources([testDataResource("notes.Note")]),
   });
@@ -2475,10 +2390,10 @@ test("a selected app's links, vocabulary and Settings follow one projection; pag
       ...resourcePageRoutes("records.all", "/records", Probe, "records.Record"),
       ...resourcePageRoutes("teams.all", "/teams", Probe, "teams.Team"),
     ],
-    menus: [
-      { id: "records", route: "records.all" },
-      { id: "teams", route: "teams.all" },
-    ],
+    menus: {
+      "records": { route: "records.all" },
+      "records.teams": { route: "teams.all" },
+    },
   };
   const addon: BaseAddon = {
     id: "desk",
@@ -2487,15 +2402,13 @@ test("a selected app's links, vocabulary and Settings follow one projection; pag
       ...resourcePageRoutes("desk.incoming", "/desk/incoming", Probe, "records.Record", { defaultResourceView: "desk.open" }),
       ...resourcePageRoutes("desk.review", "/desk/review", Probe, undefined, { recordModel: "records.Record" }),
     ],
-    menus: [
-      { id: "desk", home: "desk.incoming", children: [
-        { id: "desk.incoming", route: "desk.incoming" },
-        { id: "desk.review", route: "desk.review" },
-        { id: "desk.settings", group: "platform", children: [
-          { id: "desk.team", route: "teams.all.record", params: { id: "team-1" } },
-        ] },
-      ] },
-    ],
+    menus: {
+      "desk": { home: "desk.incoming" },
+      "desk.incoming": { route: "desk.incoming", parent: "desk" },
+      "desk.review": { route: "desk.review", parent: "desk" },
+      "desk.settings": { group: "platform", parent: "desk" },
+      "desk.team": { route: "teams.all.record", params: { id: "team-1" }, parent: "desk.settings" },
+    },
     vocabulary: [
       { app: "desk", messages: { records: { title: "Incoming" } }, resources: { "records.Record": { label: "Request", fields: { title: "Subject" } } }, menus: { "desk.review": "Review queue" } },
       { app: "desk", route: "desk.review", messages: { records: { title: "Reviews" } }, resources: { "records.Record": { label: "Review", fields: { title: "Question" } } }, menus: { "desk.review": "Questions" } },
@@ -2532,7 +2445,9 @@ test("a container condition naming an unknown route or app fails at boot; perspe
   const input = (when: Record<string, string>): CreateAppInput => testAppInput([{
     id: "desk",
     routes: [{ name: "desk.home", path: "/desk", component: EmptyPage }],
-    menus: [{ id: "desk", route: "desk.home" }],
+    menus: {
+      "desk": { route: "desk.home" },
+    },
     containers: { "form#chrome": [
       { "desk.share": { content: createElement("span", null, "Share") } },
       { only: [], when },
@@ -2551,9 +2466,12 @@ test("a container's when.app matches every app on the page's trail, flattened on
     seen.apps = useAppRuntime().containerScope?.apps;
     return null;
   }
-  const addons = (when: Record<string, string>) => [
+  const addons = (when: Record<string, string>): readonly BaseAddon[] => [
     { id: "projects", routes: [{ name: "projects.tasks", path: "/projects/tasks", component: Probe }],
-      menus: [{ id: "projects", children: [{ id: "projects.tasks", route: "projects.tasks" }] }] },
+      menus: {
+        "projects": {},
+        "projects.tasks": { route: "projects.tasks", parent: "projects" },
+      } },
     { id: "pm", dependsOn: ["projects"], menus: { pm: { include: [{ id: "projects", flatten: true }] } },
       containers: { "form#chrome": [{ only: [], when }] } },
   ];
@@ -2657,7 +2575,9 @@ test("a preset opening on a contributed view kind needs a resource#views child o
     ...testAppInput([{
       id: "desk", resourceViews: [preset],
       routes: resourcePageRoutes("desk.all", "/desk", EmptyPage, "notes.Note"),
-      menus: [{ id: "desk", route: "desk.all" }],
+      menus: {
+        "desk": { route: "desk.all" },
+      },
     }, { id: "nexus", containers }]),
     schemas: testSchemasWithConsoleResources([testDataResource("notes.Note"), testDataResource("tasks.Task")]),
   });

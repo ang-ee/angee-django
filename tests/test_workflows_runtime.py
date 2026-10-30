@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, field_serializer, field_validator
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.roles import grant as grant_role
 
-from angee.models import StaleRevisionError
+from angee.base.models.locks import StaleRevisionError
 from angee.workflows import managers as managers_module
 from angee.workflows import runner as runner_module
 from angee.workflows.definition import Definition, DefinitionInvalid

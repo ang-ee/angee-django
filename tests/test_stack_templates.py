@@ -25,10 +25,7 @@ from typing import Any
 
 import pytest
 import yaml
-from django.apps import AppConfig
 from uvicorn._types import ASGIReceiveCallable, ASGISendCallable, ASGISendEvent, HTTPRequestEvent, HTTPScope, Scope
-
-from angee.addons import addon_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_GITIGNORE = ROOT / ".gitignore"
@@ -49,6 +46,10 @@ DEV_TEMPLATES_SYMLINK = DEV_TEMPLATE.with_name("templates")
 SHARED_BODY = ROOT / "templates" / "stacks" / "_shared" / "stack-body.yaml.jinja"
 SRC_WORKSPACE_COPIER = ROOT / "templates" / "workspaces" / "src" / "copier.yml"
 SHARED_AGENTS = ROOT / "templates" / "stacks" / "_shared" / "AGENTS.md.jinja"
+PROJECT_COPIER = ROOT / "templates" / "projects" / "web" / "copier.yml"
+PROJECT_AGENTS_TEMPLATE = ROOT / "templates" / "projects" / "web" / "template" / "AGENTS.md.jinja"
+PROJECT_CLAUDE_TEMPLATE = PROJECT_AGENTS_TEMPLATE.with_name("CLAUDE.md")
+PROJECT_SHARED_AGENTS = ROOT / "templates" / "projects" / "_shared" / "AGENTS.md.jinja"
 PNPM_LOCK = ROOT / "pnpm-lock.yaml"
 PROJECT_GITIGNORE = ROOT / "templates" / "projects" / "web" / "template" / ".gitignore.jinja"
 PROJECT_PYPROJECT_TEMPLATE = ROOT / "templates" / "projects" / "web" / "template" / "pyproject.toml.jinja"
@@ -58,9 +59,8 @@ PROJECT_SETTINGS_TEMPLATE = ROOT / "templates" / "projects" / "web" / "template"
 SHARED_SERVICES = {"operator", "postgres", "redis", "django", "celery-worker"}
 DJANGO_READY = {
     "cmd": [
-        "python",
-        "-c",
-        "import socket; socket.create_connection(('127.0.0.1', 8000), 1).close()",
+        "uv", "run", "--no-sync", "python", "-c",
+        "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/ready', timeout=2).close()",
     ],
     "interval": "5s",
     "timeout": "3s",
@@ -380,6 +380,7 @@ def _render_local_stack(
     *,
     framework: str = "source",
     celery_queues: str = "",
+    enable_celery: bool = True,
     serve_mode: str = "development",
     serve_workers: int = 0,
     db_pool_max_size: int = 2,
@@ -394,6 +395,7 @@ def _render_local_stack(
         "_src_path": "https://github.com/ang-ee/angee-django/tree/main/templates/stacks/local",
         "caddy_image": "caddy:2.9-alpine",
         "celery_queues": celery_queues,
+        "enable_celery": "true" if enable_celery else "",
         "django_image": "ghcr.io/ang-ee/django-angee-base:latest",
         "django_port": "8000",
         "framework": framework,
@@ -419,6 +421,7 @@ def _render_local_stack(
 def _render_dev_stack(
     *,
     project_path: str = ".",
+    django_port: int = 8000,
     framework_path: str = "workspaces/src/angee",
     addons_profile: str = "base",
     include_arp: bool = False,
@@ -430,6 +433,7 @@ def _render_dev_stack(
     vcs: str = "git",
     slot_mode: str = "worktree",
     celery_queues: str = "",
+    enable_celery: bool = True,
     enable_ollama: bool = False,
     ollama_port: str = "11434",
     ingress_domain: str = "localhost",
@@ -468,9 +472,10 @@ def _render_dev_stack(
         "include_arp": "true" if include_arp else "",
         "arp_repo": arp_repo,
         "celery_queues": celery_queues,
+        "enable_celery": "true" if enable_celery else "",
         "caddy_image": "caddy:2.9-alpine",
         "django_image": "ghcr.io/ang-ee/django-angee-base:latest",
-        "django_port": "8000",
+        "django_port": str(django_port),
         "edge_port": "80",
         "enable_ollama": "true" if enable_ollama else "",
         "framework_path": framework_path,
@@ -519,6 +524,7 @@ def _render_dev_stack(
 def _render_dev_docker_stack(
     *,
     celery_queues: str = "",
+    enable_celery: bool = True,
     ingress_domain: str = "localhost",
     ingress_aliases: str = "",
     operator_home: str = "",
@@ -529,6 +535,7 @@ def _render_dev_docker_stack(
 
     return _render_dev_stack(
         celery_queues=celery_queues,
+        enable_celery=enable_celery,
         ingress_domain=ingress_domain,
         ingress_aliases=ingress_aliases,
         operator_home=operator_home,
@@ -545,6 +552,8 @@ def _render_project_settings(
     addons_profile: str = "base",
     framework_workspace: bool = False,
     include_arp: bool = False,
+    framework_source_path: str = "",
+    framework: str = "source",
 ) -> dict[str, Any]:
     """Render project settings enough for stack-owned contract tests."""
 
@@ -557,9 +566,12 @@ def _render_project_settings(
             '{% if addons_profile == "full" %}': addons_profile == "full",
             "{% if framework_workspace %}": framework_workspace,
             "{% if include_arp %}": include_arp,
+            '{% if framework_source_path and not framework_workspace and framework != "baked" %}':
+                bool(framework_source_path) and not framework_workspace and framework != "baked",
         },
     )
     replacements = {
+        "framework_source_path": framework_source_path,
         "addon_installer_backend": addon_installer_backend,
         "addon_namespace": "angee_local",
         "project_name": "angee-local",
@@ -578,6 +590,9 @@ def _render_project_pyproject(
     *,
     addons_profile: str = "base",
     framework_source_path: str = "",
+    framework: str = "source",
+    framework_workspace: bool = False,
+    include_arp: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Render the project Python manifest enough for dependency contract tests."""
 
@@ -585,7 +600,11 @@ def _render_project_pyproject(
     text = _render_project_settings_conditionals(
         text,
         conditions={
-            "{% if framework_source_path %}": bool(framework_source_path),
+            '{% if framework_source_path and framework != "baked" %}':
+                bool(framework_source_path) and framework != "baked",
+            '{% if framework_workspace %}': framework_workspace,
+            '{% if addons_profile == "full" %}': addons_profile == "full",
+            '{% if include_arp %}': include_arp,
         },
     )
     replacements = {
@@ -669,7 +688,14 @@ def test_both_stacks_render_shared_root_agent_instructions() -> None:
     ):
         assert contract in instructions
 
-    for agents_template, restart_job in ((DEV_AGENTS_TEMPLATE, "deps"), (LOCAL_AGENTS_TEMPLATE, "provision")):
+    # The stack overlay overwrites the project's root AGENTS.md, so the stack contract
+    # ends by including the project host body the project template renders on its own.
+    assert SHARED_AGENTS.read_text(encoding="utf-8").rstrip().endswith(
+        '{% include "../../projects/_shared/AGENTS.md.jinja" %}'
+    )
+    assert _inline_includes(DEV_AGENTS_TEMPLATE).count("# Angee Project Host") == 1
+
+    for agents_template, restart_job in ((DEV_AGENTS_TEMPLATE, "deps"), (LOCAL_AGENTS_TEMPLATE, "py-sync")):
         include = f'{{% include "../_shared/AGENTS.md.jinja" with restart_job="{restart_job}" %}}'
         assert agents_template.read_text(encoding="utf-8").strip() == include
 
@@ -682,6 +708,36 @@ def test_both_stacks_render_shared_root_agent_instructions() -> None:
         assert copier["_preserve_symlinks"] is True
 
 
+def test_project_template_renders_root_agent_instructions() -> None:
+    """A project root teaches agents its roster owner, seams, lifecycle owner and skills."""
+
+    body = PROJECT_SHARED_AGENTS.read_text(encoding="utf-8")
+    assert len(body.splitlines()) <= 50
+    assert "{% include" not in body  # included from two template roots: no nested include
+    instructions = " ".join(body.split())
+    for contract in (
+        "# Angee Project Host",
+        "`INSTALLED_APPS` in `settings.yaml` is the roster and the only place it is declared",
+        "`{{ addon_namespace }}.<name>` under `src/{{ addon_namespace }}/<name>/`",
+        "the arpee slot's `arp.*` addons",
+        "`pyproject.toml` (native identity, requirements and capability tables)",
+        "`web/` fragment declared with `defineBaseAddon`",
+        "The stack owning this root provisions and restarts it",
+        "stop and ask the user how the stack should be set up",
+        "`angee-project`",
+        "`angee-runtime`",
+    ):
+        assert contract in instructions
+
+    assert PROJECT_AGENTS_TEMPLATE.read_text(encoding="utf-8").strip() == '{% include "../_shared/AGENTS.md.jinja" %}'
+    assert _inline_includes(PROJECT_AGENTS_TEMPLATE).strip() == body.strip()
+    assert PROJECT_CLAUDE_TEMPLATE.is_symlink()
+    assert PROJECT_CLAUDE_TEMPLATE.readlink() == Path("AGENTS.md")
+    copier = yaml.safe_load(PROJECT_COPIER.read_text(encoding="utf-8"))
+    assert copier["_preserve_symlinks"] is True
+    assert PROJECT_SHARED_AGENTS.is_relative_to((PROJECT_COPIER.parent / copier["_angee"]["include_root"]).resolve())
+
+
 # --- local (docker) contracts --------------------------------------------------
 
 
@@ -690,7 +746,8 @@ def test_local_stack_copier_contract() -> None:
 
     message = manifest["_message_after_copy"]
     assert "git clone https://github.com/ang-ee/angee-django sources/angee" in message
-    assert "sources/angee/examples/addons" in message
+    assert "declaring its distribution and native source override" in message
+    assert "enabling example.notes" in message
     assert "angee dev" in manifest["_message_after_copy"]
     # The CLI shell recipe reads the token through the secrets backend owner —
     # never by hand-parsing .env, whose values are quoted.
@@ -709,56 +766,57 @@ def test_local_stack_copier_contract() -> None:
     assert "operator support for readiness and chained jobs" in TEMPLATES_README.read_text(encoding="utf-8")
 
 
-def test_local_django_source_mode_bootstraps_fresh_host_dependencies() -> None:
-    """Source containers project and install addon deps before importing Django apps."""
-
+def test_local_django_source_mode_shares_one_held_environment() -> None:
+    """Services consume the environment prepared once by the held py-sync job."""
     stack = _render_local_stack(framework="source")
     django = stack["services"]["django"]
-    provision = stack["jobs"]["provision"]
-
     assert django["image"] == "ghcr.io/ang-ee/django-angee-base:latest"
-    command = django["command"][-1]
-    assert "uv sync --frozen --inexact --extra postgres --project sources/angee" in command
-    assert "uv sync --inexact" in command
-    assert "exec python manage.py serve --host 0.0.0.0 --port 8000" in command
-    provision_command = provision["command"][-1]
-    assert "python -m angee.compose.bootstrap" in provision_command
-    assert "python manage.py angee provision --bootstrap-admin" in provision_command
-    assert provision["depends_on"] == ["postgres", "operator"]
-    assert django["ready"] == DJANGO_READY
-    # The PYTHONPATH hack is deleted — the editable link owns the framework on sys.path.
-    assert "PYTHONPATH" not in django["env"]
-
-    assert stack["sources"]["framework"]["path"] == "sources/angee"
-    for service_name in ("celery-worker",):
-        service = stack["services"][service_name]
-        assert service["image"] == "ghcr.io/ang-ee/django-angee-base:latest"
-        assert "PYTHONPATH" not in service["env"]
-        celery_command = service["command"][-1]
-        source_sync = "uv sync --frozen --inexact --extra postgres --project sources/angee"
-        assert source_sync in celery_command
-        assert celery_command.index(source_sync) < celery_command.index("uv sync --inexact && exec celery")
-        assert service["after"] == ["provision", "redis"]
-
-
-def test_local_django_baked_mode_skips_uv_sync() -> None:
-    """Baked mode runs a code-baked image, so it never links a source checkout."""
-
-    stack = _render_local_stack(framework="baked")
-    django = stack["services"]["django"]
-
     assert "uv sync" not in django["command"][-1]
-    assert "python manage.py angee provision --bootstrap-admin" in stack["jobs"]["provision"]["command"][-1]
+    assert "exec uv run --no-sync python manage.py serve --host 0.0.0.0 --port 8000" in django["command"][-1]
+    assert stack["jobs"]["py-sync"]["holds"] == ["django", "celery-worker"]
+    assert stack["jobs"]["compose"]["holds"] == ["django", "celery-worker"]
+    assert "exec uv sync --locked" in stack["jobs"]["py-sync"]["command"][-1]
+    assert stack["jobs"]["provision"]["command"][-3:] == ["provision", "--wait-db", "60"]
+    assert stack["jobs"]["provision"]["depends_on"] == ["compose", "postgres"]
+    assert django["ready"] == DJANGO_READY
+    assert stack["sources"]["framework"]["path"] == "sources/angee"
+    for service_name in ("django", "celery-worker"):
+        service = stack["services"][service_name]
+        assert "PYTHONPATH" not in service["env"]
+        assert "uv sync" not in " ".join(service["command"])
+    assert stack["services"]["celery-worker"]["after"] == ["provision", "redis"]
+
+
+def test_local_django_baked_mode_uses_the_shared_environment() -> None:
+    stack = _render_local_stack(framework="baked")
     assert "framework" not in stack["sources"]
-    for service_name in ("celery-worker",):
-        assert "uv sync" not in stack["services"][service_name]["command"][-1]
+    assert "uv sync" not in " ".join(stack["services"]["django"]["command"])
+    assert stack["jobs"]["provision"]["command"][-3:] == ["provision", "--wait-db", "60"]
+    command = stack["jobs"]["frontend-build"]["command"][-1]
+    assert '\"packages/*\",\"src/angee/*/web\"' in command
+    assert "sources/angee" not in command
+
+
+def test_local_project_uses_installed_metadata_for_addon_discovery() -> None:
+    """Source checkouts become native distributions; settings contain only enabled roots."""
+    for framework in ("source", "baked"):
+        command = _render_local_stack(framework=framework)["jobs"]["frontend-build"]["command"][-1]
+        subprocess.run(["sh", "-n", "-c", command], check=True, timeout=10)
+        assert command.index("pnpm config set packages") < command.index("if [ ! -f /opt/angee-project/pnpm-lock.yaml ]")
+        assert "pnpm install --lockfile-only --no-frozen-lockfile --lockfile-dir /opt/angee-project" in command
+        assert "pnpm install --frozen-lockfile --lockfile-dir /opt/angee-project" in command
+        assert "codegen" not in command
+        settings = _render_project_settings(framework=framework, framework_source_path="sources/angee")
+        assert "ANGEE_ADDON_DIRS" not in settings
+        assert settings["COMPOSE_OUTPUT_DIR"] == "{BASE_DIR}/runtime"
+        assert settings["COMPOSE_OUTPUT_MODULE"] == "runtime"
 
 
 def test_local_stack_renders_single_caddy_frontend_ingress() -> None:
     stack = _render_local_stack()
 
     assert "vite" not in stack["services"]
-    assert set(stack["jobs"]) == {"provision", "operator-schema", "frontend-build"}
+    assert set(stack["jobs"]) == {"py-sync", "compose", "provision", "operator-schema", "frontend-build"}
     assert "frontend-build" not in stack["services"]
     assert "caddy" in stack["services"]
     assert stack["template"]["active"].endswith("/templates/stacks/local")
@@ -770,8 +828,8 @@ def test_local_stack_renders_single_caddy_frontend_ingress() -> None:
     assert "redis" in stack["services"]
     assert stack["services"]["django"]["env"]["REDIS_URL"] == "redis://redis:6379/0"
     assert stack["services"]["django"]["env"]["CELERY_BROKER_URL"] == "redis://redis:6379/1"
-    assert "celery -A angee.jobs.celery:app worker" in stack["services"]["celery-worker"]["command"][-1]
-    assert "celery -A angee.jobs.celery:app worker --beat" in stack["services"]["celery-worker"]["command"][-1]
+    assert "python manage.py celery worker" in stack["services"]["celery-worker"]["command"][-1]
+    assert "python manage.py celery worker --beat" in stack["services"]["celery-worker"]["command"][-1]
 
     caddy = stack["services"]["caddy"]
     assert caddy["ports"] == ["5173:80"]
@@ -789,16 +847,14 @@ def test_local_stack_renders_single_caddy_frontend_ingress() -> None:
 
     frontend_command = stack["jobs"]["frontend-build"]["command"][-1]
     frontend_build = stack["jobs"]["frontend-build"]
-    assert frontend_build["depends_on"] == ["provision", "operator-schema"]
-    # Source-mode graft: overlay each @angee package src from the monorepo and
-    # external bridge checkout, then symlink it into the mounted project.
-    assert "project/sources/angee/packages" in frontend_command
-    assert "project/sources/angee/addons/angee" in frontend_command
-    assert "project/sources/angee-messaging-bridges/addons/angee" in frontend_command
-    assert "fs.cpSync(srcDir,dstDir" in frontend_command
-    assert 'path.join(root,"project/web/node_modules/@angee")' in frontend_command
-    assert "fs.symlinkSync" in frontend_command
-    assert "pnpm build" in frontend_command
+    assert frontend_build["depends_on"] == ["compose", "operator-schema"]
+    assert "../angee-project/sources/angee/packages/*" in frontend_command
+    assert "../angee-project/sources/angee/src/angee/*/web" in frontend_command
+    assert "../angee-project/src/*/*/web" in frontend_command
+    assert frontend_build["mounts"] == ["source://app:/opt/angee-project"]
+    assert "fs.cpSync" not in frontend_command
+    assert "fs.symlinkSync" not in frontend_command
+    assert "--filter ./../angee-project/web --fail-if-no-match run build" in frontend_command
     assert "tail -f /dev/null" not in frontend_command
     assert "runtime/schemas" not in frontend_command
 
@@ -898,71 +954,50 @@ def test_project_web_host_leaves_home_and_confinement_to_the_composed_shell() ->
     assert "confineTo" not in template
 
 
-def test_project_python_dependencies_bootstrap_the_generated_addon_group() -> None:
-    """Fresh hosts document the pre-Django dependency bootstrap sequence."""
+def test_project_python_dependencies_use_native_package_metadata() -> None:
+    """Fresh hosts install static meta requirements; explicit jobs compose runtime."""
 
-    base_text, base = _render_project_pyproject()
-    full_text, full = _render_project_pyproject(
-        addons_profile="full",
-        framework_source_path="workspaces/src/angee",
-    )
-
-    for rendered, manifest in ((base_text, base), (full_text, full)):
-        assert manifest["project"]["dependencies"] == ["django-angee[postgres]"]
-        assert manifest["dependency-groups"]["addons"] == []
-        assert manifest["tool"]["uv"]["default-groups"] == ["addons"]
-        assert "uv run python -m angee.compose.bootstrap" in rendered
-        assert rendered.count("GENERATED by angee build from the enabled addons' manifests — do not edit") == 1
-
-    assert "extra-build-variables" not in base["tool"]["uv"]
-    # No addon needs build variables any more (the Matrix bridge's python-olm
-    # sdist chain is gone), so none renders for the full roster either.
-    assert "extra-build-variables" not in full["tool"]["uv"]
-    assert full["tool"]["uv"]["sources"]["django-angee"] == {
-        "path": "workspaces/src/angee",
-        "editable": True,
+    for overrides in ({}, {"addons_profile": "full", "framework_source_path": "workspaces/src/angee"}):
+        rendered, project = _render_project_pyproject(**overrides)
+        assert project["project"]["dependencies"]
+        assert "dynamic" not in project["project"]
+        assert "dependency-groups" not in project
+        assert "hatch" not in project.get("tool", {})
+        assert "cache-keys" not in project.get("tool", {}).get("uv", {})
+        assert "angee-runtime" not in rendered
+    _rendered, source = _render_project_pyproject(framework_source_path="workspaces/src/angee")
+    assert source["tool"]["uv"]["sources"]["angee"] == {
+        "path": "workspaces/src/angee", "editable": True,
     }
 
 
-def test_project_dependency_group_is_the_final_pyproject_table() -> None:
-    """Stable final placement remains belt-and-braces generated-file hygiene."""
-
-    for rendered, _manifest in (
-        _render_project_pyproject(),
-        _render_project_pyproject(
-            addons_profile="full",
-            framework_source_path="workspaces/src/angee",
-        ),
-    ):
-        table_headers = re.findall(r"^\[[^]]+\]$", rendered, flags=re.MULTILINE)
-        assert table_headers[-1] == "[dependency-groups]"
-
-
 def test_project_template_addon_profiles_and_workspace_dirs() -> None:
-    """`base` renders the consumer scaffold; `full` renders the whole platform
-    composition; `framework_workspace` points the addon dirs at the src slots."""
+    """Profiles select enabled roots; native package metadata supplies availability."""
 
     base = _render_project_settings()
     assert "example.notes" not in base["INSTALLED_APPS"]
     assert "angee.messaging_integrate_whatsapp" not in base["INSTALLED_APPS"]
-    assert base["ANGEE_ADDON_DIRS"] == ["{BASE_DIR}/addons"]
+    assert "angee.knowledge_integrate_notion" not in base["INSTALLED_APPS"]
+    assert "angee.proposals_work" not in base["INSTALLED_APPS"]
+    assert "angee.workflows_messaging" not in base["INSTALLED_APPS"]
+    assert "ANGEE_ADDON_DIRS" not in base
     assert base["ANGEE_DATA_DIR"] == "{BASE_DIR}/data"
 
     full = _render_project_settings(addons_profile="full", framework_workspace=True)
-    nexus = addon_manifest(AppConfig.create("angee.nexus"))
-    assert nexus is not None
-    assert set(nexus.depends_on) <= set(full["INSTALLED_APPS"])
     for app in (
         "angee.nexus",
         "angee.spaces",
         "angee.tags",
         "angee.agents",
         "angee.knowledge",
+        "angee.knowledge_integrate_notion",
         "angee.workflows",
+        "angee.workflows_messaging",
         "angee.work",
         "angee.intake",
         "angee.money",
         "angee.proposals",
+        "angee.proposals_work",
         "angee.portfolio",
         "angee.messaging_integrate_whatsapp",
         "angee.messaging_integrate_telegram",
@@ -970,23 +1005,11 @@ def test_project_template_addon_profiles_and_workspace_dirs() -> None:
         "example.notes",
     ):
         assert app in full["INSTALLED_APPS"]
-    assert full["ANGEE_ADDON_DIRS"] == [
-        "{BASE_DIR}/addons",
-        "{BASE_DIR}/workspaces/src/angee/addons",
-        "{BASE_DIR}/workspaces/src/angee-messaging-bridges/addons",
-        "{BASE_DIR}/workspaces/src/angee/examples/addons",
-    ]
-
-    # base profile in the framework-workspace layout still finds the base addons.
+    assert "ANGEE_ADDON_DIRS" not in full
     base_ws = _render_project_settings(framework_workspace=True)
-    assert base_ws["ANGEE_ADDON_DIRS"] == [
-        "{BASE_DIR}/addons",
-        "{BASE_DIR}/workspaces/src/angee/addons",
-    ]
-
-    # include_arp adds only the discovery dir — never roster entries.
+    assert "ANGEE_ADDON_DIRS" not in base_ws
     arp = _render_project_settings(framework_workspace=True, include_arp=True)
-    assert "{BASE_DIR}/workspaces/src/angee-arp/addons" in arp["ANGEE_ADDON_DIRS"]
+    assert "ANGEE_ADDON_DIRS" not in arp
     assert not any(app.startswith("arp.") for app in arp["INSTALLED_APPS"])
 
 
@@ -994,7 +1017,7 @@ STALE_MANAGE_PY = textwrap.dedent("""\
     import os
     import sys
 
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "angee.compose.settings")
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "angee.settings")
     from django.core.management import execute_from_command_line
 
     execute_from_command_line(sys.argv)
@@ -1006,7 +1029,7 @@ def _run_probe_command(tmp_path: Path, manage_source: str) -> subprocess.Complet
     """Run a one-shot command that captures a write through the given ``manage.py`` body."""
 
     (tmp_path / "manage.py").write_text(manage_source)
-    addon_dir = tmp_path / "addons"
+    addon_dir = tmp_path / "src"
     commands = addon_dir / "captureprobe" / "management" / "commands"
     commands.mkdir(parents=True)
     for package in (commands, commands.parent, commands.parent.parent):
@@ -1035,7 +1058,7 @@ def _run_probe_command(tmp_path: Path, manage_source: str) -> subprocess.Complet
         from tests.composed_host import boot
 
         root, target = map(Path, sys.argv[1:])
-        boot(root, target / "runtime", [target / "addons"], root_apps=["example.notes", "captureprobe"])
+        boot(root, target / "runtime", [target / "src"], root_apps=["example.notes", "captureprobe"])
         settings.MIGRATION_MODULES = {config.label: None for config in apps.get_app_configs()}
         call_command("migrate", run_syncdb=True, interactive=False, verbosity=0, skip_checks=True)
         call_command("rebac", "sync", verbosity=0)
@@ -1068,18 +1091,18 @@ def test_rendered_management_command_closes_its_changeset(tmp_path: Path) -> Non
     """A real one-shot command attributes its captured write through rendered manage.py."""
 
     rendered = (PROJECT_SETTINGS_TEMPLATE.parent / "manage.py.jinja").read_text().replace("{{ project_name }}", "probe")
-    assert "from angee.compose.manage import main" in rendered
+    assert "from django_compose.management import execute" in rendered
     result = _run_probe_command(tmp_path, rendered)
     assert result.returncode == 0, f"rendered management command failed:\n{result.stdout}\n{result.stderr}"
 
 
-def test_stale_manage_py_fails_loudly_with_the_remedy(tmp_path: Path) -> None:
-    """A manage.py without the framework entrypoint refuses the captured write and names the fix."""
+def test_unwrapped_management_command_refuses_unattributed_write(tmp_path: Path) -> None:
+    """A command bypassing the native context boundary cannot capture an unattributed write."""
 
     result = _run_probe_command(tmp_path, STALE_MANAGE_PY)
     assert result.returncode != 0
     assert "ChangesetRequired" in result.stderr
-    assert "manage.py must call angee.compose.manage.main()" in result.stderr
+    assert "A captured write requires an open changeset." in result.stderr
 
 
 # --- dev (process) contracts ---------------------------------------------------
@@ -1099,25 +1122,33 @@ def test_dev_stack_declares_generated_graphql_type_dependencies() -> None:
 
 
 def test_dev_stack_has_explicit_lifecycle_job_graph() -> None:
-    """Framework dependency, provision, schema, and codegen jobs declare their order."""
-
-    stack = _render_dev_stack()
-
-    assert set(stack["jobs"]) == {"deps", "provision", "operator-schema", "codegen"}
-    assert stack["jobs"]["provision"]["command"] == [
-        "sh",
-        "-c",
-        "uv run python -m angee.compose.bootstrap && uv sync "
-        "&& exec uv run python manage.py angee provision --demo --force-rebac",
-    ]
-    assert stack["jobs"]["provision"]["workdir"] == "source://app"
-    assert stack["jobs"]["provision"]["env"]["ANGEE_PROJECT_DIR"] == "."
-    assert stack["jobs"]["provision"]["depends_on"] == ["deps", "operator"]
-    assert stack["jobs"]["operator-schema"]["depends_on"] == ["operator", "provision"]
-    assert stack["jobs"]["codegen"]["depends_on"] == ["deps", "provision", "operator-schema"]
-    # The serving processes now hang off provision, not the old resources/schema jobs.
-    assert stack["services"]["django"]["after"] == ["provision"]
-    assert stack["services"]["celery-worker"]["after"] == ["provision"]
+    """SDL producers precede Vite; only provision waits for the database."""
+    for render in (_render_dev_stack, _render_dev_docker_stack):
+        stack = render(celery_queues="reports")
+        jobs = stack["jobs"]
+        assert set(jobs) == {"deps", "py-sync", "compose", "provision", "operator-schema"}
+        assert jobs["py-sync"]["holds"] == ["django", "celery-worker", "celery-queues"]
+        assert jobs["compose"]["holds"] == ["django", "celery-worker", "celery-queues"]
+        assert jobs["py-sync"]["depends_on"] == ["deps"]
+        assert jobs["compose"]["command"] == ["uv", "run", "--no-sync", "python", "manage.py", "compose"]
+        assert jobs["compose"]["depends_on"] == ["py-sync"]
+        assert jobs["provision"]["command"] == [
+            "uv", "run", "--no-sync", "python", "manage.py", "provision", "--wait-db", "60",
+        ]
+        assert jobs["provision"]["depends_on"] == (
+            ["compose", "postgres"] if jobs["provision"]["runtime"] == "container" else ["compose"]
+        )
+        assert jobs["operator-schema"]["depends_on"] == ["operator", "compose"]
+        assert "--frozen-lockfile" in " ".join(jobs["deps"]["command"])
+        assert {"deps", "compose", "operator-schema"} <= set(stack["services"]["frontend"]["after"])
+        assert stack["services"]["django"]["after"] == ["provision"]
+        assert stack["services"]["celery-worker"]["after"][0] == "provision"
+        sync = jobs["py-sync"]
+        assert sync["env"]["ANGEE_DEPENDENCY_ACTION"] == "${inputs.action | default('sync')}"
+        assert sync["env"]["ANGEE_DEPENDENCY_REQUIREMENT"] == "${inputs.requirement | default('')}"
+        command = sync["command"][-1]
+        assert command.index("exec uv sync --locked") < command.index("angee.platform_integrate_operator.preflight")
+        subprocess.run(["sh", "-n", "-c", command], check=True)
 
 
 def test_dev_stack_mounts_postgres_data_from_stack_root() -> None:
@@ -1153,7 +1184,7 @@ def test_dev_stack_external_postgres_uses_server_without_stack_resources(
     assert stack["secrets"]["db-password"] == {"required": True}
     assert "${ports.postgres}" not in json.dumps(stack)
     assert stack["jobs"]["provision"]["depends_on"] == (
-        ["deps", "operator"] if runtime_mode == "process" else ["operator", "deps"]
+        ["compose"]
     )
     assert stack["services"]["redis"] == bundled["services"]["redis"]
     assert stack["ports"].get("redis") == bundled["ports"].get("redis")
@@ -1326,7 +1357,7 @@ def test_dev_stack_keeps_the_process_only_frontend_services() -> None:
     assert "storybook" in stack["services"]
     assert "caddy" not in stack["services"]
     assert stack["services"]["frontend"]["command"] == ["pnpm", "--dir", "web", "dev"]
-    assert stack["services"]["frontend"]["after"] == ["django", "operator", "codegen"]
+    assert stack["services"]["frontend"]["after"] == ["django", "operator", "deps", "compose", "operator-schema"]
 
     # Storybook runs in the STACK workspace (deps installed the monorepo
     # storybook package as a member) — a private install inside a slot would fork
@@ -1340,11 +1371,11 @@ def test_dev_stack_keeps_the_process_only_frontend_services() -> None:
 def test_dev_stack_runs_bare_uv_against_the_project_root_pyproject() -> None:
     """The project host IS the stack root; its pyproject owns framework resolution.
 
-    The chained projects/web pyproject resolves django-angee editable from the
-    framework slot (postgres extra baked into the dep) and pins uv's cache to the
+    The chained projects/web pyproject resolves the editable angee meta-distribution
+    from the framework slot (postgres extra baked into the dep) and pins uv's cache to the
     stack-owned caches/uv — so every uv invocation is bare: no ``--project``, no
     ``--extra``, no UV_CACHE_DIR override, in any layout. Provision uses a shell
-    only to sequence the manifest bootstrap and its follow-up sync.
+    only to dispatch the one-process prebuilt provision command.
     """
 
     stack = _render_dev_stack()  # operator-rewritten defaults
@@ -1353,7 +1384,7 @@ def test_dev_stack_runs_bare_uv_against_the_project_root_pyproject() -> None:
     assert stack["sources"]["framework"]["path"] == "workspaces/src/angee"
     provision = stack["jobs"]["provision"]
     assert provision["workdir"] == "source://app"
-    assert provision["command"][:2] == ["sh", "-c"]
+    assert provision["command"][:2] == ["uv", "run"]
     assert "--project" not in provision["command"][-1]
     assert "--extra" not in provision["command"][-1]
     assert "UV_CACHE_DIR" not in provision.get("env", {})
@@ -1593,7 +1624,7 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
     assert stack["sources"]["framework"]["path"] == "workspaces/src/angee"
     assert stack["workspaces"]["src"] == {"template": "workspaces/src"}
 
-    assert set(stack["jobs"]) == {"deps", "provision", "operator-schema", "codegen"}
+    assert set(stack["jobs"]) == {"deps", "py-sync", "compose", "provision", "operator-schema"}
     operator_svc = stack["services"]["operator"]
     assert operator_svc["runtime"] == "container"
     assert operator_svc["image"] == "ghcr.io/ang-ee/angee-operator:latest"
@@ -1608,16 +1639,16 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
     assert "python manage.py runserver 0.0.0.0:8000" in django_command
     assert "angee provision" not in django_command
     assert "operator_schema" not in django_command
-    assert stack["jobs"]["provision"]["depends_on"] == ["postgres", "operator", "deps"]
-    assert stack["jobs"]["operator-schema"]["depends_on"] == ["operator", "provision"]
-    assert stack["jobs"]["codegen"]["depends_on"] == ["deps", "provision", "operator-schema"]
+    assert stack["jobs"]["provision"]["depends_on"] == ["compose", "postgres"]
+    assert stack["jobs"]["operator-schema"]["depends_on"] == ["operator", "compose"]
+    assert "codegen" not in stack["jobs"]
     assert django["env"]["DATABASE_URL"] == "postgres://angee:${secret.db-password}@postgres:5432/angee"
     assert django["env"]["ANGEE_OPERATOR_URL"] == "http://operator:9000"
     assert django["ready"] == DJANGO_READY
     assert django["after"] == ["provision"]
     for name in ("celery-worker",):
         celery_command = stack["services"][name]["command"][-1]
-        assert "uv sync --inexact && exec celery" in celery_command
+        assert "exec uv run --no-sync python manage.py celery" in celery_command
         assert stack["services"][name]["after"] == ["provision", "redis"]
 
     frontend = stack["services"]["frontend"]
@@ -1630,7 +1661,7 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
     assert "runtime/schemas" not in frontend_command
     assert "codegen" not in frontend_command
     assert frontend["ready"] == FRONTEND_READY
-    assert frontend["after"] == ["django", "codegen"]
+    assert frontend["after"] == ["django", "deps", "compose", "operator-schema"]
     assert frontend["ports"] == ["${ports.ui}:5173"]
     assert "ANGEE_UI_ALLOWED_HOSTS" not in frontend["env"]
 
@@ -1674,7 +1705,13 @@ def test_readiness_is_owned_by_long_running_http_and_django_services() -> None:
             command_text = command if isinstance(command, str) else " ".join(map(str, command))
             assert "django_migrations" not in command_text
 
-    assert process["services"]["django"]["ready"]["tcp"] == {"port": 8000}
+    assert process["services"]["django"]["ready"] == {
+        "http": {"port": 8000, "path": "/health/ready"},
+        **{key: value for key, value in DJANGO_READY.items() if key != "cmd"},
+    }
+    assert _render_dev_stack(django_port=9321)["services"]["django"]["ready"]["http"]["port"] == 9321
+    for stack in (framework, instance):
+        assert "manage.py" not in " ".join(stack["services"]["django"]["ready"]["cmd"])
     assert {name for name, service in framework["services"].items() if "ready" in service} == {
         "django",
         "frontend",
@@ -1691,11 +1728,11 @@ def test_readiness_is_owned_by_long_running_http_and_django_services() -> None:
     for name in ("celery-worker", "celery-queues"):
         assert framework["services"][name]["after"] == ["provision", "redis"]
         assert instance["services"][name]["after"] == ["provision", "redis"]
-    assert framework["services"]["frontend"]["after"] == ["django", "codegen"]
+    assert framework["services"]["frontend"]["after"] == ["django", "deps", "compose", "operator-schema"]
     assert framework["services"]["storybook"]["after"] == ["deps"]
     for name in ("playwright-server", "playwright-mcp"):
         assert framework["services"][name]["after"] == ["frontend"]
-    assert instance["jobs"]["frontend-build"]["depends_on"] == ["provision", "operator-schema"]
+    assert instance["jobs"]["frontend-build"]["depends_on"] == ["compose", "operator-schema"]
     assert instance["services"]["caddy"]["after"] == ["frontend-build"]
     assert instance["services"]["django"]["after"] == ["provision", "caddy"]
 
@@ -1785,10 +1822,10 @@ def test_dev_stack_docker_mode_playwright_services_are_edge_routed() -> None:
     workspace = DEV_PNPM_WORKSPACE.read_text(encoding="utf-8")
     framework_globs = (
         '  - "workspaces/src/angee/packages/*"',
-        '  - "workspaces/src/angee/addons/angee/*/web"',
+        '  - "workspaces/src/angee/src/angee/*/web"',
     )
     full_profile_globs = (
-        '  - "workspaces/src/angee/examples/addons/*/*/web"',
+        '  - "workspaces/src/angee/examples/src/*/*/web"',
         '  - "workspaces/src/angee/examples/e2e"',
     )
     guard_index = workspace.index('{% if addons_profile == "full" %}')
@@ -1857,9 +1894,9 @@ def test_uv_caches_are_stack_owned() -> None:
 
     dev_docker = _render_dev_docker_stack()
     local = _render_local_stack()
-    for stack in (dev_docker, local):
+    for stack, cache_path in ((dev_docker, "/app/caches/uv"), (local, "/opt/angee-project/caches/uv")):
         for name in ("django", "celery-worker"):
-            assert stack["services"][name]["env"]["UV_CACHE_DIR"] == "/app/caches/uv"
+            assert stack["services"][name]["env"]["UV_CACHE_DIR"] == cache_path
 
     for gitignore_path in (LOCAL_STACK_GITIGNORE, DEV_STACK_GITIGNORE):
         assert "/caches/" in gitignore_path.read_text(encoding="utf-8")
@@ -1918,6 +1955,10 @@ def test_serve_modes_cover_both_flavors_and_runtimes() -> None:
         django = stack["services"]["django"]
         command = " ".join(django["command"])
         assert "ANGEE_SERVE_MODE" not in django["env"]
+        sync_command = stack["jobs"]["py-sync"]["command"][-1]
+        assert "exec uv sync --locked" in sync_command
+        assert ("--no-editable" in sync_command) == (serve_mode == "production")
+        assert stack["jobs"]["compose"]["command"][-1] == "compose"
         if serve_mode == "production":
             assert "manage.py serve" in command
             assert "--workers 0" in command
@@ -1944,7 +1985,7 @@ def test_serve_modes_cover_both_flavors_and_runtimes() -> None:
             assert "--allowed-origin" in " ".join(stack["services"]["operator"]["command"])
             assert '--forwarded-allow-ips "$$TRUSTED_PROXY_CIDR"' in command
             if flavor == "framework":
-                assert stack["jobs"]["frontend-build"]["depends_on"] == ["codegen"]
+                assert stack["jobs"]["frontend-build"]["depends_on"] == ["deps", "compose", "operator-schema"]
                 assert "pnpm --dir web build" in " ".join(stack["jobs"]["frontend-build"]["command"])
         elif flavor == "framework":
             assert "runserver" in command
@@ -1958,18 +1999,27 @@ def test_process_render_is_development_even_when_serve_validator_is_bypassed() -
     )
 
 
-def test_production_serve_workers_use_cpu_count_and_reject_one(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("application", ("angee.server.application", "custom.asgi.application"))
+def test_production_serve_workers_use_configured_app_cpu_count_and_reject_one(
+    monkeypatch: pytest.MonkeyPatch, settings: Any, application: str,
 ) -> None:
     from django.core.management.base import CommandError
 
-    from angee.compose.management.commands import serve
+    from angee.server.management.commands import serve
 
+    settings.ASGI_APPLICATION = application
     started: list[dict[str, Any]] = []
     monkeypatch.setattr(serve.os, "cpu_count", lambda: 8)
-    monkeypatch.setattr(serve.uvicorn, "run", lambda _app, **kwargs: started.append(kwargs))
-    options = {"workers": 0, "production": True, "host": "0.0.0.0", "port": 8000, "forwarded_allow_ips": "10.0.0.2"}
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: started.append({"app": app, **kwargs}))
+    options = {
+        "require_provisioned": False, "workers": 0, "production": True, "host": "0.0.0.0",
+        "port": 8000, "forwarded_allow_ips": "10.0.0.2",
+    }
     serve.Command().handle(**options)
+    module, _, attribute = application.rpartition(".")
+    assert started[0]["app"] == f"{module}:{attribute}"
     assert started[0]["workers"] == 8
     assert started[0]["forwarded_allow_ips"] == "10.0.0.2"
     with pytest.raises(CommandError, match="at least two"):
@@ -2074,17 +2124,11 @@ def test_forwarded_headers_reach_django_without_client_spoofing() -> None:
     ]
 
 
-def test_production_provision_loads_no_demo_data() -> None:
-    """Production serving runs with DEBUG off, where demo data is refused; development loads it."""
-
-    production = _render_dev_stack(_runtime_mode="docker", serve_mode="production")["jobs"]["provision"]
-    assert production["command"][-1].endswith(
-        "python manage.py angee provision --force-rebac",
-    )
-    development = _render_dev_stack(_runtime_mode="docker")["jobs"]["provision"]
-    assert development["command"][-1].endswith(
-        "python manage.py angee provision --demo --force-rebac",
-    )
+def test_provision_delegates_capability_steps_to_native_hooks() -> None:
+    """The stack schedules provision; resources and IAM own their hook policies."""
+    for mode in ("development", "production"):
+        command = _render_dev_stack(_runtime_mode="docker", serve_mode=mode)["jobs"]["provision"]["command"]
+        assert command == ["uv", "run", "--no-sync", "python", "manage.py", "provision", "--wait-db", "60"]
 
 
 def test_localhost_production_frontend_needs_no_edge_lookup() -> None:
@@ -2144,7 +2188,7 @@ def test_python_nodes_share_runtime_environment_and_restart_entry() -> None:
     for stack, restart_job in (
         (_render_dev_stack(), "deps"),
         (_render_dev_docker_stack(), "deps"),
-        (_render_local_stack(), "provision"),
+        (_render_local_stack(), "py-sync"),
     ):
         nodes = [
             stack["jobs"]["provision"],
@@ -2181,7 +2225,7 @@ def test_dev_stack_keeps_absolute_source_paths_verbatim() -> None:
     assert stack["sources"]["framework"]["path"] == "/opt/angee"
     # The rendered pyproject (whose framework_source_path follows framework_path)
     # owns resolution even for an external checkout — commands stay bare `uv run`.
-    assert stack["jobs"]["provision"]["command"][:2] == ["sh", "-c"]
+    assert stack["jobs"]["provision"]["command"][:2] == ["uv", "run"]
     assert "--project" not in stack["jobs"]["provision"]["command"][-1]
 
 
@@ -2254,7 +2298,7 @@ def test_celery_queues_share_one_queue_worker_in_both_modes() -> None:
     dev_docker = _render_dev_docker_stack(celery_queues="whatsapp")
     dev_docker_service = dev_docker["services"]["celery-queues"]
     assert dev_docker_service["runtime"] == "container"
-    assert "uv sync --inexact && exec celery" in dev_docker_service["command"][-1]
+    assert "exec uv run --no-sync python manage.py celery" in dev_docker_service["command"][-1]
     assert "worker -Q whatsapp --pool threads --concurrency 8" in dev_docker_service["command"][-1]
     assert dev_docker_service["env"] == dev_docker["services"]["celery-worker"]["env"]
 
@@ -2344,9 +2388,8 @@ def test_stack_install_roots_compose_the_shared_pnpm_policy() -> None:
     template = DEV_PNPM_WORKSPACE.read_text()
     assert "globalPnpmfile: workspaces/src/angee/packages/scripts/pnpm-policy.cjs" in template
     dockerfile = (ROOT / "Dockerfile").read_text()
-    assert "COPY packages/scripts/pnpm-policy.cjs ./framework-install/pnpm-policy.cjs" in dockerfile
-    assert "COPY packages/scripts/patches ./framework-install/patches" in dockerfile
-    assert "globalPnpmfile: framework-install/pnpm-policy.cjs" in dockerfile
+    assert "COPY packages ./packages" in dockerfile
+    assert "COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./" in dockerfile
     for surface in [workspace, yaml.safe_load(template[template.index("allowBuilds:"):])]:
         assert "overrides" not in surface
         assert "packageExtensions" not in surface
@@ -2357,3 +2400,99 @@ def test_stack_install_roots_compose_the_shared_pnpm_policy() -> None:
         assert "pnpm config set packages" in command
         assert "--json --location project" in command
         assert "> pnpm-workspace.yaml" not in command
+
+
+@pytest.mark.parametrize("render", [_render_dev_stack, _render_dev_docker_stack])
+@pytest.mark.parametrize("state", ["cold", "warm", "author-fails", "drift"])
+def test_js_dependencies_author_only_an_absent_lock_and_fail_closed(tmp_path: Path, render, state: str) -> None:
+    command = render()["jobs"]["deps"]["command"][-1]
+    output = tmp_path / "calls"
+    pnpm = tmp_path / "pnpm"
+    pnpm.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >>"$PROBE_OUTPUT"\n'
+        'if [ "$2" = --lockfile-only ]; then\n'
+        '  [ "$PROBE_STATE" != author-fails ] || exit 7\n'
+        '  : >pnpm-lock.yaml\n'
+        'fi\n'
+        '[ "$PROBE_STATE" != drift ] || exit 9\n'
+    )
+    pnpm.chmod(0o755)
+    corepack = tmp_path / "corepack"
+    corepack.write_text("#!/bin/sh\nexit 0\n")
+    corepack.chmod(0o755)
+    retained = state in {"warm", "drift"}
+    lockfile = tmp_path / "pnpm-lock.yaml"
+    if retained:
+        lockfile.write_text("existing lock")
+    result = subprocess.run(
+        ["/bin/sh", "-c", command], cwd=tmp_path,
+        env={"PATH": str(tmp_path), "PROBE_OUTPUT": str(output), "PROBE_STATE": state},
+        capture_output=True, text=True, check=False,
+    )
+    expected = [] if retained else ["install --lockfile-only --no-frozen-lockfile"]
+    if state != "author-fails":
+        expected.append("install --frozen-lockfile")
+    assert output.read_text().splitlines() == expected
+    assert result.returncode == {"author-fails": 7, "drift": 9}.get(state, 0), result.stderr
+    if retained:
+        assert lockfile.read_text() == "existing lock"
+
+
+def test_py_sync_cold_bootstrap_needs_only_native_uv(tmp_path: Path) -> None:
+    """The sync branch works before any Angee or Django package is importable."""
+    command = _render_dev_stack()["jobs"]["py-sync"]["command"]
+    uv = tmp_path / "uv"
+    uv.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$PROBE_OUTPUT\"\n")
+    uv.chmod(0o755)
+    output = tmp_path / "argv"
+    result = subprocess.run(command, cwd=tmp_path, executable="/bin/sh",
+        env={"PATH": str(tmp_path), "ANGEE_DEPENDENCY_ACTION": "sync", "PROBE_OUTPUT": str(output)},
+        capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert output.read_text().splitlines() == ["sync", "--locked"]
+
+
+def test_project_template_delegates_native_bootstrap() -> None:
+    directory = PROJECT_SETTINGS_TEMPLATE.parent
+    launcher = (directory / "manage.py.jinja").read_text()
+    assert "from django_compose.management import execute" in launcher
+    assert 'os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")' in launcher
+    assert 'angee.management' not in launcher
+    assert (directory / "settings.py").read_text() == "from angee.base.conf import configure\n\nconfigure(globals())\n"
+
+
+def test_python_jobs_and_services_share_the_selected_platform_environment() -> None:
+    """Docker reuses one writable Linux env; process mode retains its host env."""
+    for render in (_render_dev_stack, _render_dev_docker_stack, _render_local_stack):
+        stack = render(celery_queues="reports")
+        jobs = stack["jobs"]
+        nodes = [jobs[name] for name in ("py-sync", "compose", "provision", "operator-schema")]
+        nodes += [stack["services"][name] for name in ("django", "celery-worker", "celery-queues")]
+        docker = nodes[0]["runtime"] == "container"
+        project = Path(nodes[0]["workdir"])
+        expected = str(project / "data" / ".venv-linux") if docker else ".venv"
+        for node in nodes:
+            assert node["env"]["UV_PROJECT_ENVIRONMENT"] == expected
+            if docker:
+                assert f"bind://./data:{project}/data" in node["mounts"]
+                assert Path(expected).relative_to(project / "data") == Path(".venv-linux")
+                assert Path(expected) != project / ".venv"
+            else:
+                assert node["workdir"] == "source://app"
+                assert "mounts" not in node
+        command = jobs["py-sync"]["command"][-1]
+        dollar = "$$" if docker else "$"
+        assert (
+            f'exec "{dollar}UV_PROJECT_ENVIRONMENT/bin/python" -m angee.platform_integrate_operator.preflight'
+            in command
+        )
+        assert "exec .venv/bin/python" not in command
+        assert "exec uv sync --locked" in command
+
+
+@pytest.mark.parametrize("render", [_render_dev_stack, _render_dev_docker_stack, _render_local_stack])
+def test_worker_free_hosts_have_no_celery_services_or_dependency_holds(render) -> None:
+    stack = render(enable_celery=False, celery_queues="reports")
+    assert not any(name.startswith("celery-") for name in stack["services"])
+    assert stack["jobs"]["py-sync"]["holds"] == ["django"]
+    assert stack["jobs"]["compose"]["holds"] == ["django"]

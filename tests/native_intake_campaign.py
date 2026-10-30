@@ -9,8 +9,8 @@ from django.test import TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 
-from angee.errors import RecordAccessSubjectRefused
-from angee.identity import public_id_of
+from angee.base.exceptions import RecordAccessSubjectRefused
+from angee.base.models.identity import public_id_of
 from angee.messaging.backends import ParsedHandle, ParsedMessage, ParsedPart
 from tests.native_intake_capture import ChannelIntakeCaptureTests, IntakeAccessCase, grant_rows
 
@@ -77,7 +77,8 @@ class IntakeCampaign(IntakeAccessCase):
             previous.refresh_from_db()
             self.assertEqual(need.access_verdict, None)
             if was_pending:
-                self.assertTrue(previous.is_open)
+                self.assertFalse(previous.is_open)
+                self.assertEqual(previous.verdict, [])
             else:
                 self.assertEqual(previous.verdict, resolution)
             self.assertIsNone(need.access_answered_at)
@@ -294,6 +295,7 @@ class CaptureCampaign(TransactionTestCase):
         needs = list(self.Need._base_manager.order_by("pk"))
         self.assertEqual(len(needs), 2)
         self.assertEqual(needs[0].party_id, needs[1].party_id)
+        self.assertEqual(apps.get_model("decisions", "Decision")._base_manager.count(), len(needs))
         user = apps.get_model("iam", "User")._base_manager.get(email=email)
         self.assertFalse(user.has_usable_password())
         self.assertFalse(
@@ -307,7 +309,9 @@ class CaptureCampaign(TransactionTestCase):
             self.assertEqual(need.access_verdict, None)
         # The claimed address is unverified: its link waits for review and decides nothing.
         handle = apps.get_model("parties", "Handle")._base_manager.get(platform="email", value=email)
-        link = apps.get_model("parties", "Party").statements.get(handle=handle, subject_id=needs[0].party_id)
+        link = apps.get_model("parties", "Party").statements.with_actor(self.actor).get(
+            handle=handle, subject_id=needs[0].party_id,
+        )
         self.assertEqual((link.confidence, link.is_confirmed, handle.party_id), (0.4, False, None))
         self.assertEqual(
             link.evidence,

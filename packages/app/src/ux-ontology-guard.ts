@@ -36,7 +36,7 @@ export interface UxGuardAllowance {
 /** Files the guard tolerates, each with the owner-level reason; keep this list short. */
 export const UX_GUARD_ALLOWANCES: readonly UxGuardAllowance[] = [
   {
-    file: "addons/angee/money/web/src/widgets/money.tsx",
+    file: "src/angee/money/web/src/widgets/money.tsx",
     rule: "locale-bypass",
     reason: "formatMoney is the money owner: it composes Intl.NumberFormat once for every consumer.",
   },

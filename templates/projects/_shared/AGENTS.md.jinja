@@ -1,0 +1,49 @@
+# Angee Project Host
+
+This root is an Angee project host: `manage.py`, `settings.py`, `settings.yaml`,
+`pyproject.toml`, the consumer addons under `src/{{ addon_namespace }}/`, and
+the web package `{{ web_path }}/`. Edit compiler declarations, never emitted
+files; preserve authored native migrations.
+
+## Selected Addons
+
+`INSTALLED_APPS` in `settings.yaml` is the roster and the only place it is
+declared. Native Python requirements install addon distributions; workspace/path
+overrides select source checkouts. This host selects:
+
+- the `{% if addons_profile == "full" %}full{% else %}base{% endif %}` framework profile — {% if addons_profile == "full" %}every framework addon, the messaging bridges and the framework examples{% else %}the foundation and the selected framework capabilities{% endif %};
+{% if include_arp %}- the arpee slot's `arp.*` addons, installed from the native arpee workspace and enabled by name;
+{% endif %}- its own consumer addons, `{{ addon_namespace }}.<name>` under
+  `src/{{ addon_namespace }}/<name>/`, enabled by name as they are built.
+
+Enable, disable or relocate an addon with the `angee-project` skill: it owns
+`settings.yaml`, `pyproject.toml` and the host web package's dependencies.
+
+## Consumer Addon Seams
+
+An addon under `src/{{ addon_namespace }}/` composes the framework only through
+its declared seams: `pyproject.toml` (native identity, requirements and capability tables), models
+on `angee.base` bases, `permissions.zed` and `permissions.extends.zed`,
+`schema.py` buckets, `resources/<tier>/` rows, `autoconfig.py` fragments, and a
+`web/` fragment declared with `defineBaseAddon`. It never edits framework addons,
+generated output, or another addon's composed models.
+
+## Lifecycle
+
+The stack owning this root provisions and restarts it. Before any lifecycle
+command, resolve that stack with the `angee-workspace` skill's *Resolve The
+Controlling Stack Root* walk: the nearest current-or-ancestor `angee.yaml` is
+the controlling stack, and the `AGENTS.md` beside it owns lifecycle and
+workspaces. A missing `angee.yaml` beside this file is not permission to
+initialize one: stop and ask the user how the stack should be set up, and never
+initialize a stack under a source checkout. Never start Django, Vite or workers
+by hand. The `angee-runtime` skill owns build, migrations, provision,
+`rebac sync` and operator restarts.
+
+## Skills
+
+`angee-project`, `angee-runtime` and `angee-workspace` live in the framework
+checkout's `.agents/skills/`, normally the stack's `workspaces/src/angee`
+source slot. If `[tool.uv.sources]` resolves a different framework checkout,
+read its repository root. Addon work follows that checkout's `AGENTS.md` and its
+`angee-addon` route.

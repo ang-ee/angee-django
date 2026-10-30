@@ -7,22 +7,23 @@ from django.apps import apps
 from django.core.management import call_command
 from django.db import models
 from django.test.utils import isolate_apps
+from django_compose.model_composition import ModelComposition
+from django_compose.models import Composable
 from rebac import RebacMixin
 from rebac.models import SchemaDefinition
 from rebac.schema import parse_zed
 from rebac.schema.parser import validate_schema
 
-from angee.compose.model_composition import ModelComposition
-from angee.compose.permissions import (
+from angee.base.build import (
+    PermissionIntegration,
     SchemaExtensionError,
-    apply_schema_paths,
     extension_source_map,
+    field_gate_owners,
     merged_schema_relpath,
     merged_schemas,
     render_zed,
 )
-from angee.compose.runtime import Runtime
-from angee.testing.permissions import installed_field_owners
+from angee.base.testing.permissions import emit_permissions, installed_field_owners
 from tests.conftest import make_addon
 from tests.test_model_composition import modules as modules
 from tests.test_model_composition import source
@@ -71,13 +72,6 @@ def test_missing_field_ownership_fails_closed(tmp_path, owners):
         merged_schemas([base, fragment], field_owners=owners)
 
 
-def test_new_non_gate_permission_remains_forbidden(tmp_path):
-    base = _base_addon(tmp_path)
-    fragment = _contrib_addon(tmp_path, "definition demo/thing { permission approve = owner }")
-    with pytest.raises(SchemaExtensionError, match="approve"):
-        merged_schemas([base, fragment], field_owners=FIELD_OWNERS)
-
-
 def test_gate_already_declared_by_base_remains_an_additive_arm(tmp_path):
     base = _base_addon(tmp_path, """
 definition demo/thing {
@@ -116,7 +110,9 @@ def test_gate_rendering_is_byte_identical_for_both_input_orders(tmp_path):
 
 @pytest.mark.parametrize("prefix", ["", "tenant/"])
 @isolate_apps()
-def test_composer_maps_only_canonical_donor_columns_and_runtime_emits_the_gate(modules, tmp_path, settings, prefix):
+def test_composer_maps_only_canonical_donor_columns_and_runtime_emits_the_gate(
+    modules, tmp_path, settings, prefix, monkeypatch,
+):
     settings.REBAC_TYPE_PREFIX = prefix
     create, _emit = modules
     base, base_module = create("gate_base")
@@ -124,10 +120,10 @@ def test_composer_maps_only_canonical_donor_columns_and_runtime_emits_the_gate(m
     for config in (base, donor):
         Path(config.path).mkdir(parents=True, exist_ok=True)
     source(
-        base_module, "Root", base.label, bases=(RebacMixin,), runtime=True,
+        base_module, "Root", base.label, bases=(RebacMixin, Composable), concrete=True,
         meta={"rebac_resource_type": "demo/thing"},
     )
-    source(base_module, "Plain", base.label, runtime=True)
+    source(base_module, "Plain", base.label, concrete=True)
     source(
         donor_module, "RootExtension", donor.label, extends=f"{base.label}.Root",
         receipt=models.CharField(max_length=40),
@@ -135,16 +131,20 @@ def test_composer_maps_only_canonical_donor_columns_and_runtime_emits_the_gate(m
         members=models.ManyToManyField("auth.User"),
     )
     source(donor_module, "PlainExtension", donor.label, extends=f"{base.label}.Plain", code=models.IntegerField())
+    settings.MIGRATION_MODULES = {
+        **settings.MIGRATION_MODULES,
+        **{config.label: f"{config.name}.migrations" for config in (base, donor)},
+    }
     target = f"{prefix}demo/thing"
     (Path(base.path) / "permissions.zed").write_text(f"definition {target} {{ permission read = authenticated }}")
     (Path(donor.path) / "permissions.extends.zed").write_text(
         f"definition {target} {{ permission read__receipt = read }}",
     )
     composition = ModelComposition.discover((donor, base))
-    assert composition.field_gate_owners() == {target: {"receipt": donor.name, "recipient": donor.name}}
-    runtime = Runtime((base, donor), composition, runtime_dir=tmp_path / "runtime")
-    sources = runtime.render_sources()
-    assert "permission read__receipt = read" in sources[merged_schema_relpath(base.name)]
+    assert field_gate_owners(composition) == {target: {"receipt": donor.name, "recipient": donor.name}}
+    monkeypatch.setattr(apps, "get_app_configs", lambda: (base, donor))
+    sources = PermissionIntegration().render(composition, apps)
+    assert b"permission read__receipt = read" in sources[merged_schema_relpath(base.name)]
 
 
 @pytest.mark.django_db
@@ -159,11 +159,7 @@ def test_emitted_gate_is_stored_after_native_permission_sync(tmp_path):
     owners.setdefault("scopedemo/doc", {})["receipt"] = donor.name
     sources = extension_source_map(configs, field_owners=owners)
     runtime = tmp_path / "runtime"
-    for relative, text in sources.items():
-        path = runtime / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text)
-    apply_schema_paths(configs, runtime, sources=sources)
+    emit_permissions(configs, runtime, sources=sources)
     call_command("rebac", "sync", verbosity=0)
     definition = SchemaDefinition.objects.get(resource_type="scopedemo/doc")
     assert definition.permissions.filter(name="read__receipt").exists()

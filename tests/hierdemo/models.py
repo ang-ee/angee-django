@@ -1,4 +1,4 @@
-"""Concrete demo models exercising :class:`~angee.models.HierarchyMixin`.
+"""Concrete demo models exercising :class:`~angee.base.models.hierarchy.HierarchyMixin`.
 
 ``HierNode`` is a plain (REBAC-untyped) tree so the pure hierarchy behaviours —
 inclusive ``subtree_of`` / exclusive ``ancestors_of``, padded-segment prefix
@@ -7,14 +7,17 @@ pattern-ops index — read without external scope or actor scaffolding. ``Scoped
 adds a local ``scopedemo.Scope`` FK so the cross-scope parent rejection has a
 real field to test against. Both are concrete
 (``abstract = False``) so pytest-django builds their tables on demand; the app
-carries no ``addon.toml``, so the composer never sees them.
+carries no addon entry point, so the composer never sees them.
 """
 
 from __future__ import annotations
 
 from django.db import models
 
-from angee.models import AngeeDataModel, AngeeManager, AngeeQuerySet, HierarchyMixin, HierarchyQuerySet
+from angee.base.managers import AngeeManager
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
+from angee.base.querysets import AngeeQuerySet
 
 
 class HierNodeQuerySet(HierarchyQuerySet["HierNode"], AngeeQuerySet["HierNode"]):

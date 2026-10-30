@@ -1,140 +1,105 @@
-"""Tests for IAM's first-admin bootstrap command."""
+"""Initial-admin persistence belongs to IAM's manager; the command dispatches."""
 
 from __future__ import annotations
 
-from contextlib import nullcontext
-from typing import Any
+from io import StringIO
 
+import pytest
+from django.contrib.auth import get_user_model
+from django.core.management.base import CommandError
+from rebac import ObjectRef
+from rebac.memberships import members_of
+
+from angee.iam import models
+from angee.iam.autoconfig import bootstrap_admin_settings
 from angee.iam.management.commands import bootstrap_admin
 
 
-def test_bootstrap_admin_creates_platform_admin(monkeypatch: Any) -> None:
-    """A fresh local stack gets one loginable platform admin."""
+def test_bootstrap_admin_creates_platform_admin(composed_tables) -> None:
+    """The manager itself creates a loginable account and its role membership."""
 
-    manager = _Manager()
-    _patch_command_owners(monkeypatch, manager)
-
-    bootstrap_admin.Command().handle(username="root", email="root@example.com", password="first-secret")
-
-    user = manager.user
-    assert user is not None
-    assert manager.system_reason == "iam.bootstrap_admin"
-    assert user.username == "root"
-    assert user.email == "root@example.com"
-    assert user.is_active is True
-    assert user.is_staff is True
-    assert user.is_superuser is True
-    assert user.password == "first-secret"
-    assert manager.granted_user is user
-
-
-def test_bootstrap_admin_promotes_existing_user_without_resetting_password(monkeypatch: Any) -> None:
-    """Stack restarts promote the admin account without clobbering its password."""
-
-    existing = _User(username="admin", email="", password="kept-secret")
-    existing.is_active = False
-    manager = _Manager(existing)
-    _patch_command_owners(monkeypatch, manager)
-
-    bootstrap_admin.Command().handle(username=None, email=None, password="generated-secret")
-
-    assert existing.email == "admin@example.com"
-    assert existing.is_active is True
-    assert existing.is_staff is True
-    assert existing.is_superuser is True
-    assert existing.password == "kept-secret"
-    assert existing.saved_update_fields == ["email", "is_active", "is_staff", "is_superuser"]
-    assert manager.granted_user is existing
-
-
-def _patch_command_owners(monkeypatch: Any, manager: "_Manager") -> None:
-    """Patch framework owners so the command can be tested without a database."""
-
-    _User._default_manager = manager
-    monkeypatch.setattr(bootstrap_admin, "get_user_model", lambda: _User)
-    monkeypatch.setattr(bootstrap_admin.transaction, "atomic", lambda: nullcontext())
-    monkeypatch.setattr(bootstrap_admin, "system_context", lambda *, reason: nullcontext())
-    monkeypatch.setattr(
-        bootstrap_admin,
-        "grant_membership",
-        lambda *, subject, container: setattr(manager, "granted_user", subject),
+    user, created = get_user_model().objects.ensure_bootstrap_admin(
+        "root", email="ROOT@EXAMPLE.COM", password="first-secret",
     )
 
-
-class _MissingUser(Exception):
-    """Fake user lookup miss."""
-
-
-class _Manager:
-    """Tiny stand-in for IAM's REBAC-aware user manager."""
-
-    def __init__(self, user: "_User | None" = None) -> None:
-        self.user = user
-        self.system_reason: str | None = None
-        self.granted_user: _User | None = None
-
-    def system_context(self, *, reason: str) -> "_QuerySet":
-        """Record the system-scope reason and return this manager."""
-
-        self.system_reason = reason
-        return _QuerySet(self)
-
-    def get(self, **lookup: Any) -> "_User":
-        """Return the existing user or raise the model's lookup miss."""
-
-        if self.user is None:
-            raise _User.DoesNotExist
-        assert lookup == {"username": self.user.username}
-        return self.user
-
-    def create_superuser(self, *, username: str, email: str | None, password: str) -> "_User":
-        """Create a fake superuser."""
-
-        self.user = _User(username=username, email=email or "", password=password)
-        self.user.is_staff = True
-        self.user.is_superuser = True
-        return self.user
+    assert created
+    assert user.username == "root"
+    assert user.email == "root@example.com"
+    assert user.is_active and user.is_staff and user.is_superuser
+    assert user.password != "first-secret" and user.check_password("first-secret")
+    assert [member.subject_id for member in members_of(ObjectRef("angee/role", "admin"))] == [str(user.pk)]
 
 
-class _QuerySet:
-    """Tiny stand-in for the system-scoped REBAC queryset."""
+@pytest.mark.parametrize("existing_password", ["kept-secret", None])
+def test_bootstrap_admin_promotes_existing_user_without_resetting_password(composed_tables, existing_password) -> None:
+    """The command promotes an account and only fills an unusable password."""
 
-    def __init__(self, manager: _Manager) -> None:
-        self.manager = manager
+    User = get_user_model()
+    existing = User.objects.create_user("admin", is_active=False, password=existing_password)
+    original_hash = existing.password
+    output = StringIO()
+    command = bootstrap_admin.Command(stdout=output)
+    command.handle(database="default", username="admin", email="admin@example.com", password="generated-secret")
 
-    def get(self, **lookup: Any) -> "_User":
-        """Return via the owning manager."""
+    stored = User._base_manager.get(pk=existing.pk)
+    assert stored.email == "admin@example.com"
+    assert stored.is_active and stored.is_staff and stored.is_superuser
+    assert stored.check_password(existing_password or "generated-secret")
+    if existing_password:
+        assert stored.password == original_hash
+    assert "ensured 'admin'" in output.getvalue()
+    assert "generated-secret" not in output.getvalue()
 
-        return self.manager.get(**lookup)
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_bootstrap_admin_membership_failure_rolls_back_account_changes(composed_tables, monkeypatch, existing) -> None:
+    """A failed role grant cannot leave a newly created or promoted admin behind."""
+
+    User = get_user_model()
+    if existing:
+        User.objects.create_user("rollback", is_active=False)
+
+    def fail(**kwargs):
+        raise RuntimeError("membership failed")
+
+    monkeypatch.setattr(models, "grant_membership", fail)
+    with pytest.raises(RuntimeError, match="membership failed"):
+        User.objects.ensure_bootstrap_admin("rollback", email="rollback@example.com", password="secret")
+    if existing:
+        user = User._base_manager.get(username="rollback")
+        assert not user.is_active and not user.is_staff and not user.is_superuser
+        assert not user.has_usable_password() and not user.email
+    else:
+        assert not User._base_manager.filter(username="rollback").exists()
 
 
-class _User:
-    """Tiny stand-in for the composed IAM user model."""
+def test_bootstrap_admin_requires_password_for_new_user(composed_tables, monkeypatch) -> None:
+    """A manager refusal becomes a command error without creating an account."""
 
-    USERNAME_FIELD = "username"
-    DoesNotExist = _MissingUser
-    _default_manager = _Manager()
+    monkeypatch.setattr(
+        bootstrap_admin, "bootstrap_admin_settings", lambda: dict.fromkeys(("username", "email", "password")),
+    )
+    with pytest.raises(CommandError, match="needs ANGEE_BOOTSTRAP_ADMIN_PASSWORD"):
+        bootstrap_admin.Command().handle(database="default", username="missing", email=None, password=None)
+    assert not get_user_model()._base_manager.filter(username="missing").exists()
 
-    def __init__(self, *, username: str, email: str, password: str | None) -> None:
-        self.username = username
-        self.email = email
-        self.password = password
-        self.is_active = True
-        self.is_staff = False
-        self.is_superuser = False
-        self.saved_update_fields: list[str] = []
 
-    def has_usable_password(self) -> bool:
-        """Return whether this fake has a usable password."""
+@pytest.mark.parametrize("field", ["username", "email", "password"])
+def test_bootstrap_admin_settings_precedence_and_literal_values(settings, monkeypatch, field) -> None:
+    """Both callers read the same explicit values without altering a secret."""
 
-        return self.password is not None
-
-    def set_password(self, password: str) -> None:
-        """Set the fake password."""
-
-        self.password = password
-
-    def save(self, *, update_fields: list[str]) -> None:
-        """Record the updated fields."""
-
-        self.saved_update_fields = update_fields
+    name = f"ANGEE_BOOTSTRAP_ADMIN_{field.upper()}"
+    fallback = f"DJANGO_SUPERUSER_{field.upper()}"
+    setattr(settings, name, None)
+    monkeypatch.setenv(fallback, "django-value")
+    monkeypatch.setenv(name, "angee-value")
+    assert bootstrap_admin_settings()[field] == "angee-value"
+    setattr(settings, name, "settings-value")
+    assert bootstrap_admin_settings()[field] == "settings-value"
+    setattr(settings, name, "")
+    monkeypatch.setenv(name, "")
+    assert bootstrap_admin_settings()[field] == "django-value"
+    monkeypatch.setenv(fallback, "$literal-value")
+    assert bootstrap_admin_settings()[field] == "$literal-value"
+    monkeypatch.delenv(fallback)
+    assert bootstrap_admin_settings()[field] is None

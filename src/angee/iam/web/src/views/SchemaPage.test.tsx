@@ -1,0 +1,148 @@
+// @vitest-environment happy-dom
+
+import { cleanup, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import {
+  ChatterTabsTestHost,
+  PrimaryPaneTestHost,
+  ShellPageTestProviders,
+} from "@angee/app/testing";
+
+import { SchemaPage } from "./SchemaPage";
+
+// One mocked `rebac_schema` payload routed through `useAuthoredQuery`. Sorted by
+// the page to `iam/user` first, so that resource is the default selection.
+const SCHEMA = {
+  rebac_schema: [
+    {
+      resource_type: "notes/note",
+      relations: [
+        { name: "owner", allowed_subject_types: ["auth/user"] },
+      ],
+      permissions: [{ name: "edit", conditions: [{ name: "owner" }] }],
+    },
+    {
+      resource_type: "iam/user",
+      relations: [{ name: "self", allowed_subject_types: ["auth/user"] }],
+      permissions: [{ name: "view", conditions: [{ name: "self" }] }],
+    },
+  ],
+};
+
+const sdkMocks = vi.hoisted(() => ({
+  schema: {
+    data: undefined as unknown,
+    isFetching: false,
+    error: null as Error | null,
+    refetch: vi.fn(),
+  },
+}));
+
+vi.mock("@angee/refine", async (importOriginal) => {
+  const { IamRebacSchema } = await import("../documents");
+  return {
+    ...(await importOriginal<typeof import("@angee/refine")>()),
+    useAuthoredQuery: (document: unknown) =>
+      document === IamRebacSchema
+        ? sdkMocks.schema
+        : { data: undefined, isFetching: false, error: null, refetch: vi.fn() },
+  };
+});
+
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => vi.fn(),
+  useSearch: () => ({}),
+}));
+
+describe("IAM schema page", () => {
+  beforeAll(() => {
+    Object.defineProperty(Element.prototype, "getAnimations", {
+      configurable: true,
+      value: () => [],
+    });
+    Object.defineProperty(globalThis, "ResizeObserver", {
+      configurable: true,
+      value: class ResizeObserver {
+        observe(): void {}
+        unobserve(): void {}
+        disconnect(): void {}
+      },
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    sdkMocks.schema.data = undefined;
+    sdkMocks.schema.isFetching = false;
+    sdkMocks.schema.error = null;
+    sdkMocks.schema.refetch.mockReset();
+  });
+
+  test("publishes the resource-type navigator into the shell primary pane", () => {
+    sdkMocks.schema.data = SCHEMA;
+    renderPage();
+
+    // The navigator is published into the shell primary pane, not the page's
+    // own DOM. The graph canvas (the page's content) stays on the page.
+    const primary = screen.getByTestId("shell-primary");
+    const tree = within(primary).getByRole("tree");
+    expect(within(tree).getByRole("treeitem", { name: /Note/ })).toBeTruthy();
+    expect(within(tree).getByRole("treeitem", { name: /User/ })).toBeTruthy();
+    // The graph canvas (content) renders on the page itself.
+    expect(screen.getByText("Permission graph")).toBeTruthy();
+    expect(document.querySelector(".react-flow__handle-bottom")).toBeTruthy();
+    expect(document.querySelector(".react-flow__handle-right")).toBeNull();
+  });
+
+  test("lays out only the selected resource type's relations and permissions", () => {
+    sdkMocks.schema.data = SCHEMA;
+    renderPage();
+
+    // Schema edges never cross resource types, so the default selection
+    // (`iam/user`) is the whole graph; `notes/note` stays in the navigator.
+    const graph = document.querySelector<HTMLElement>(".react-flow")!;
+    expect(within(graph).getByText("Self")).toBeTruthy();
+    expect(within(graph).getByText("View")).toBeTruthy();
+    expect(within(graph).queryByText("Owner")).toBeNull();
+    expect(within(graph).queryByText("Edit")).toBeNull();
+    expect(screen.getByText("3 nodes")).toBeTruthy();
+  });
+
+  test("publishes an additive inspector chatter tab for the selected resource", () => {
+    sdkMocks.schema.data = SCHEMA;
+    renderPage();
+
+    // The inspector is an additive secondary tab; the page publishes only it,
+    // leaving the shell's default agent/comments/activity tabs in place.
+    const inspector = screen.getByTestId("tab-inspector");
+    expect(within(inspector).getAllByText("Inspector")).toHaveLength(1);
+    // The default selection (`iam/user`, first after the alpha sort) drives the
+    // inspector body.
+    expect(within(inspector).getByText("User")).toBeTruthy();
+    expect(within(inspector).getByText("Relations")).toBeTruthy();
+    expect(within(inspector).getByText("Permissions")).toBeTruthy();
+  });
+
+  test("publishes nothing while the first load is in flight", () => {
+    sdkMocks.schema.isFetching = true;
+    renderPage();
+
+    const status = screen.getByRole("status");
+    expect(within(status).getAllByText("Loading schema…")).toHaveLength(2);
+    // No explorer/inspector is published, so the shell falls back to its own
+    // primary/secondary content.
+    expect(screen.getByTestId("shell-primary").childNodes).toHaveLength(0);
+    expect(screen.queryByTestId("tab-inspector")).toBeNull();
+  });
+});
+
+function renderPage(): ReturnType<typeof render> {
+  return render(
+    <ShellPageTestProviders>
+      <SchemaPage />
+      <PrimaryPaneTestHost />
+      <ChatterTabsTestHost />
+    </ShellPageTestProviders>
+  );
+}

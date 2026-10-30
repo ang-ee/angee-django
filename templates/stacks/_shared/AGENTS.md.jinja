@@ -42,10 +42,17 @@ angee --root "$ANGEE_ROOT" restart <service>...                       # single s
 The whole-application restart is the same as Settings > Operator > Restart
 application: it re-runs the `{{ restart_job }}` job and its downstream jobs, then
 restarts every service that waits on them. Apply dependency changes with it, and
-never run `uv sync` on the stack's venv while the stack runs. The operator API, a
-dry-run preview and the rest are in
+never run `uv sync` on the stack's venv while the stack runs. `py-sync` holds
+Django and Celery stopped while dependencies change; `compose` emits artifacts,
+and `provision` prepares the database. Frontend dev/build waits for composition
+and operator SDL, then Vite awaits shared generation before serving or bundling.
+Failed jobs leave held services stopped; retry through the operator's chained restart. Package changes use the same `py-sync`
+job with explicit intent inputs and its native operation record.
+The operator API, a dry-run preview and the rest are in
 [Restart the running stack](https://github.com/ang-ee/angee-django/blob/main/docs/howto/getstarted.md#restart-the-running-stack).
 
 When entering a source checkout, read and follow its nested `AGENTS.md` for code,
 testing, and repository workflow. This file remains authoritative for which
 stack owns workspace lifecycle.
+
+{% include "../../projects/_shared/AGENTS.md.jinja" %}

@@ -1,0 +1,72 @@
+// @vitest-environment happy-dom
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeAll, expect, test } from "vitest";
+import { DecisionStory } from "./InboxPage.stories";
+
+beforeAll(() => { Element.prototype.getAnimations ??= () => []; });
+afterEach(cleanup);
+
+test("the inbox card links concerned records and lists proposed field and record actions", async () => {
+  render(<DecisionStory />);
+  // Two reads, two waits: the card renders once the decision loads, and its concerned
+  // record's label is a read of its own. One wait for both outran a loaded CI runner.
+  const card = await screen.findByRole("region", { name: "Review" });
+  expect((await within(card).findAllByRole("link", { name: /Review notes/ })).map((link) => link.getAttribute("href"))).toContain("/notes/nte_7");
+  expect(within(card).getByText("Display Name")).toBeTruthy();
+  expect(within(card).getByText("Proposed name")).toBeTruthy();
+  expect(screen.queryByText("archive")).toBeNull();
+  expect(await screen.findByRole("radio", { name: /Accept and archive/ })).toBeTruthy();
+});
+
+test("records an answer using the shared generated mutation and renders its retained values", async () => {
+  render(<DecisionStory inbox />);
+  fireEvent.click(await screen.findByRole("link", { name: "Open Review" }));
+  fireEvent.click(await screen.findByRole("radio", { name: /Accept/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull());
+  expect(screen.getByText("Chose: Accept and archive")).toBeTruthy();
+  expect(screen.queryByRole("radio")).toBeNull();
+});
+
+test("a closed card shows its chosen answer without an editing path", async () => {
+  render(<DecisionStory closed />);
+  expect(await screen.findByText("Chose: Accept and archive")).toBeTruthy();
+  expect(screen.getAllByText("Reviewer").length).toBeGreaterThan(0);
+  expect(screen.queryByRole("radio")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+  expect(screen.queryByRole("textbox", { name: "Note" })).toBeNull();
+});
+
+test("a reader sees alternatives with no submitting path", async () => {
+  render(<DecisionStory readOnly />);
+  expect(await screen.findByText("Accept and archive")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+});
+
+test("a stale snapshot reports the native conflict", async () => {
+  render(<DecisionStory conflict />);
+  fireEvent.click(await screen.findByRole("radio", { name: /Accept/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  expect(await screen.findByText("This decision has changed. Reload the page to review the current question.")).toBeTruthy();
+});
+
+test("invalid answers retain their field errors and leave the card answerable", async () => {
+  render(<DecisionStory invalidAttempt />);
+  fireEvent.click(await screen.findByRole("radio", { name: /Accept/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  expect(await screen.findByText(/Choose an offered alternative/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Confirm" })).toBeTruthy();
+});
+
+
+test("multiple alternatives use checkboxes and retain both chosen keys", async () => {
+  render(<DecisionStory multiple />);
+  fireEvent.click(await screen.findByRole("checkbox", { name: /Accept/ }));
+  fireEvent.click(screen.getByRole("checkbox", { name: "Keep what is on the record" }));
+  expect(screen.getByRole("checkbox", { name: /Accept/ }).getAttribute("aria-checked")).toBe("true");
+  expect(screen.getByRole("checkbox", { name: "Keep what is on the record" }).getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull());
+  expect(screen.getByText("Chose: Accept and archive; Keep what is on the record")).toBeTruthy();
+  expect(screen.queryByRole("checkbox")).toBeNull();
+});

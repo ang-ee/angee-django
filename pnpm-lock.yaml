@@ -5,6 +5,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
+  nuqs: 2.10.1
   '@assistant-ui/react': 0.14.26
   '@assistant-ui/core': 0.2.20
   '@assistant-ui/store': 0.2.19
@@ -16,2090 +17,48 @@ pnpmfileChecksum: sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=
 
 patchedDependencies:
   '@refinedev/core@5.0.12': 68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8
+  nuqs@2.10.1: 2148684edec6dc099ae9f4aaef272464500bb73467292d51851a7da70ccb1db4
 
 importers:
 
   .: {}
 
-  addons/angee/agents/web:
+  examples/e2e:
     dependencies:
-      '@agentclientprotocol/sdk':
-        specifier: 1.5.1
-        version: 1.5.1(zod@4.4.3)
-      '@angee/app':
+      '@angee/e2e':
         specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/iam':
-        specifier: workspace:*
-        version: link:../../iam/web
-      '@angee/integrate':
-        specifier: workspace:*
-        version: link:../../integrate/web
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/operator':
-        specifier: workspace:*
-        version: link:../../operator/web
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      '@assistant-ui/react':
-        specifier: 0.14.26
-        version: 0.14.26(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(use-sync-external-store@1.7.0(react@19.2.7))
-      '@refinedev/core':
-        specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@streamdown/code':
-        specifier: ^1.1.1
-        version: 1.1.1(react@19.2.7)
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-      streamdown:
-        specifier: ^2.5.0
-        version: 2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      valibot:
-        specifier: ^1.4.0
-        version: 1.4.2(typescript@6.0.3)
+        version: link:../../packages/e2e
     devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/appearance/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.3.2
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.10
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/appearance_integrate/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/appearance':
-        specifier: workspace:*
-        version: link:../../appearance/web
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.3.2
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.10
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/dashboards/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/decisions/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      '@refinedev/core':
-        specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      react-hook-form:
-        specifier: ^7.81.0
-        version: 7.81.0(react@19.2.7)
-      valibot:
-        specifier: ^1.4.2
-        version: 1.4.2(typescript@6.0.3)
-    devDependencies:
-      '@angee/storybook':
-        specifier: workspace:*
-        version: link:../../../../packages/storybook
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/iam/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/iam_integrate_oidc/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/intake/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/decisions':
-        specifier: workspace:*
-        version: link:../../decisions/web
-      '@angee/iam':
-        specifier: workspace:*
-        version: link:../../iam/web
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/projects':
-        specifier: workspace:*
-        version: link:../../projects/web
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/integrate/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/provenance':
-        specifier: workspace:*
-        version: link:../../provenance/web
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/integrate_vcs/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/integrate':
-        specifier: workspace:*
-        version: link:../../integrate/web
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-      use-debounce:
-        specifier: ^10.1.1
-        version: 10.1.1(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/knowledge/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/messaging':
-        specifier: workspace:*
-        version: link:../../messaging/web
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      '@refinedev/core':
-        specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-      use-debounce:
-        specifier: ^10.1.1
-        version: 10.1.1(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/messaging/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/iam':
-        specifier: workspace:*
-        version: link:../../iam/web
-      '@angee/integrate':
-        specifier: workspace:*
-        version: link:../../integrate/web
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/parties':
-        specifier: workspace:*
-        version: link:../../parties/web
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/storage':
-        specifier: workspace:*
-        version: link:../../storage/web
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      '@refinedev/core':
-        specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@tanstack/react-query':
-        specifier: ^5.101.2
-        version: 5.101.2(react@19.2.7)
-      '@tanstack/react-virtual':
-        specifier: ^3.14.3
-        version: 3.14.5(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-      use-debounce:
-        specifier: ^10.1.1
-        version: 10.1.1(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/messaging_integrate_imap/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/integrate':
-        specifier: workspace:*
-        version: link:../../integrate/web
-      '@angee/messaging':
-        specifier: workspace:*
-        version: link:../../messaging/web
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      react-hook-form:
-        specifier: ^7.81.0
-        version: 7.81.0(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/messaging_integrate_slack/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/messaging':
-        specifier: workspace:*
-        version: link:../../messaging/web
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/money/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-    devDependencies:
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/nexus/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/messaging':
-        specifier: workspace:*
-        version: link:../../messaging/web
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/parties':
-        specifier: workspace:*
-        version: link:../../parties/web
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/timeline':
-        specifier: workspace:*
-        version: link:../../timeline/web
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      '@refinedev/core':
-        specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@tanstack/react-query':
-        specifier: ^5.101.2
-        version: 5.101.2(react@19.2.7)
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/operator/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      graphql-ws:
-        specifier: ^5.16.2
-        version: 5.16.2(graphql@16.14.2)
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-    devDependencies:
-      '@graphql-codegen/cli':
-        specifier: ^7.1.3
-        version: 7.2.0(@types/node@26.1.1)(graphql@16.14.2)(typescript@6.0.3)
-      '@graphql-codegen/client-preset':
-        specifier: ^6.0.1
-        version: 6.1.0(graphql@16.14.2)
-      '@graphql-codegen/typescript':
-        specifier: ^6.0.2
-        version: 6.1.0(graphql@16.14.2)
-      '@graphql-typed-document-node/core':
-        specifier: ^3.2.0
-        version: 3.2.0(graphql@16.14.2)
-      '@tanstack/react-query':
-        specifier: ^5.101.1
-        version: 5.101.2(react@19.2.7)
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      graphql:
-        specifier: ^16.14.0
-        version: 16.14.2
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/parties/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/integrate':
-        specifier: workspace:*
-        version: link:../../integrate/web
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-    devDependencies:
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/platform/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      nuqs:
-        specifier: ^2.5.0
-        version: 2.9.0(@tanstack/react-router@1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-query':
-        specifier: ^5.101.1
-        version: 5.101.2(react@19.2.7)
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/platform_integrate_operator/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/operator':
-        specifier: workspace:*
-        version: link:../../operator/web
-      '@angee/platform':
-        specifier: workspace:*
-        version: link:../../platform/web
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/platform_integrate_vcs/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/integrate-vcs':
-        specifier: workspace:*
-        version: link:../../integrate_vcs/web
-      '@angee/platform':
-        specifier: workspace:*
-        version: link:../../platform/web
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/pm/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-    devDependencies:
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/portfolio/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/projects':
-        specifier: workspace:*
-        version: link:../../projects/web
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/posts/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/integrate':
-        specifier: workspace:*
-        version: link:../../integrate/web
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/parties':
-        specifier: workspace:*
-        version: link:../../parties/web
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/projects/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/messaging':
-        specifier: workspace:*
-        version: link:../../messaging/web
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      '@refinedev/core':
-        specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/proposals/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/iam':
-        specifier: workspace:*
-        version: link:../../iam/web
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/money':
-        specifier: workspace:*
-        version: link:../../money/web
-      '@angee/projects':
-        specifier: workspace:*
-        version: link:../../projects/web
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      '@refinedev/core':
-        specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/proposals_work/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-    devDependencies:
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/provenance/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/resources/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/spaces/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/messaging':
-        specifier: workspace:*
-        version: link:../../messaging/web
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/storage/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      '@noble/hashes':
-        specifier: ^2.0.1
-        version: 2.4.0
-      '@refinedev/core':
-        specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@vidstack/react':
-        specifier: ^1.12.13
-        version: 1.15.6(@types/react@19.2.17)(react@19.2.7)
-      heic-to:
-        specifier: ^1.2.1
-        version: 1.5.2
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-      pdfjs-dist:
-        specifier: 5.4.296
-        version: 5.4.296
-      react-pdf:
-        specifier: ^10.4.1
-        version: 10.4.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/storage_integrate/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/integrate':
-        specifier: workspace:*
-        version: link:../../integrate/web
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/storage_integrate_iphone/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/storage-integrate':
-        specifier: workspace:*
-        version: link:../../storage_integrate/web
-    devDependencies:
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/tags/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/theme_angee/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
+      '@playwright/test':
+        specifier: ^1.61.1
+        version: 1.62.1
+      '@types/node':
+        specifier: ^26.0.1
+        version: 26.1.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
 
-  addons/angee/theme_aurora/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-
-  addons/angee/theme_carbon/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-
-  addons/angee/theme_fyltr/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-
-  addons/angee/theme_ledger/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-
-  addons/angee/theme_midnight/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-
-  addons/angee/theme_stock/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-
-  addons/angee/theme_warm_red/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-
-  addons/angee/timeline/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/work/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/iam':
-        specifier: workspace:*
-        version: link:../../iam/web
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/projects':
-        specifier: workspace:*
-        version: link:../../projects/web
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-    devDependencies:
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/workflows/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/decisions':
-        specifier: workspace:*
-        version: link:../../decisions/web
-      '@angee/metadata':
-        specifier: workspace:*
-        version: link:../../../../packages/metadata
-      '@angee/refine':
-        specifier: workspace:*
-        version: link:../../../../packages/refine
-      '@angee/timeline':
-        specifier: workspace:*
-        version: link:../../timeline/web
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      lucide-react:
-        specifier: ^1.21.0
-        version: 1.24.0(react@19.2.7)
-      valibot:
-        specifier: ^1.4.2
-        version: 1.4.2(typescript@6.0.3)
-    devDependencies:
-      '@angee/storybook':
-        specifier: workspace:*
-        version: link:../../../../packages/storybook
-      '@refinedev/core':
-        specifier: ^5.0.12
-        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@tanstack/react-router':
-        specifier: ^1.170.41
-        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@testing-library/react':
-        specifier: ^16.1.0
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      happy-dom:
-        specifier: ^20.10.6
-        version: 20.10.6
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  addons/angee/workflows_messaging/web:
-    dependencies:
-      '@angee/app':
-        specifier: workspace:*
-        version: link:../../../../packages/app
-      '@angee/ui':
-        specifier: workspace:*
-        version: link:../../../../packages/ui
-      '@angee/workflows':
-        specifier: workspace:*
-        version: link:../../workflows/web
-    devDependencies:
-      '@types/react':
-        specifier: ^19.2.17
-        version: 19.2.17
-      '@types/react-dom':
-        specifier: ^19.2.3
-        version: 19.2.3(@types/react@19.2.17)
-      react:
-        specifier: ^19.2.7
-        version: 19.2.7
-      react-dom:
-        specifier: ^19.2.7
-        version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-
-  examples/addons/example/notes/web:
+  examples/src/example/notes/web:
     dependencies:
       '@angee/agents':
         specifier: workspace:*
-        version: link:../../../../../addons/angee/agents/web
+        version: link:../../../../../src/angee/agents/web
       '@angee/app':
         specifier: workspace:*
         version: link:../../../../../packages/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../../packages/metadata
       '@angee/provenance':
         specifier: workspace:*
-        version: link:../../../../../addons/angee/provenance/web
+        version: link:../../../../../src/angee/provenance/web
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../../packages/ui
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       date-fns:
         specifier: ^4.1.0
         version: 4.4.0
@@ -2123,7 +82,7 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
-  examples/addons/example/theme/web:
+  examples/src/example/theme/web:
     dependencies:
       '@angee/app':
         specifier: workspace:*
@@ -2147,22 +106,6 @@ importers:
       react-dom:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
-
-  examples/e2e:
-    dependencies:
-      '@angee/e2e':
-        specifier: workspace:*
-        version: link:../../packages/e2e
-    devDependencies:
-      '@playwright/test':
-        specifier: ^1.61.1
-        version: 1.62.1
-      '@types/node':
-        specifier: ^26.0.1
-        version: 26.1.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -2206,8 +149,8 @@ importers:
         specifier: ^26.3.2
         version: 26.3.6(typescript@6.0.3)
       nuqs:
-        specifier: ^2.5.0
-        version: 2.9.0(@tanstack/react-router@1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
+        specifier: 2.10.1
+        version: 2.10.1(patch_hash=2148684edec6dc099ae9f4aaef272464500bb73467292d51851a7da70ccb1db4)(@tanstack/react-router@1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
       vite:
         specifier: ^8.0.0
         version: 8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0)
@@ -2348,28 +291,28 @@ importers:
         version: link:../refine
       '@angee/theme-angee':
         specifier: workspace:*
-        version: link:../../addons/angee/theme_angee/web
+        version: link:../../src/angee/theme_angee/web
       '@angee/theme-aurora':
         specifier: workspace:*
-        version: link:../../addons/angee/theme_aurora/web
+        version: link:../../src/angee/theme_aurora/web
       '@angee/theme-carbon':
         specifier: workspace:*
-        version: link:../../addons/angee/theme_carbon/web
+        version: link:../../src/angee/theme_carbon/web
       '@angee/theme-fyltr':
         specifier: workspace:*
-        version: link:../../addons/angee/theme_fyltr/web
+        version: link:../../src/angee/theme_fyltr/web
       '@angee/theme-ledger':
         specifier: workspace:*
-        version: link:../../addons/angee/theme_ledger/web
+        version: link:../../src/angee/theme_ledger/web
       '@angee/theme-midnight':
         specifier: workspace:*
-        version: link:../../addons/angee/theme_midnight/web
+        version: link:../../src/angee/theme_midnight/web
       '@angee/theme-stock':
         specifier: workspace:*
-        version: link:../../addons/angee/theme_stock/web
+        version: link:../../src/angee/theme_stock/web
       '@angee/theme-warm-red':
         specifier: workspace:*
-        version: link:../../addons/angee/theme_warm_red/web
+        version: link:../../src/angee/theme_warm_red/web
       '@angee/ui':
         specifier: workspace:*
         version: link:../ui
@@ -2377,8 +320,8 @@ importers:
         specifier: ^5.0.12
         version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       nuqs:
-        specifier: ^2.5.0
-        version: 2.9.0(@tanstack/react-router@1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
+        specifier: 2.10.1
+        version: 2.10.1(patch_hash=2148684edec6dc099ae9f4aaef272464500bb73467292d51851a7da70ccb1db4)(@tanstack/react-router@1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -2391,7 +334,7 @@ importers:
     devDependencies:
       '@storybook/react-vite':
         specifier: ^10.4.6
-        version: 10.4.6(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(esbuild@0.28.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(react@19.2.7))(typescript@6.0.3)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+        version: 10.4.6(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(esbuild@0.28.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(prettier@3.9.10)(react@19.2.7))(typescript@6.0.3)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
       '@tailwindcss/vite':
         specifier: ^4.3.1
         version: 4.3.2(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
@@ -2409,7 +352,7 @@ importers:
         version: 19.2.3(@types/react@19.2.17)
       storybook:
         specifier: ^10.4.6
-        version: 10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(react@19.2.7)
+        version: 10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(prettier@3.9.10)(react@19.2.7)
       tailwindcss:
         specifier: ^4.3.1
         version: 4.3.2
@@ -2492,7 +435,7 @@ importers:
         specifier: ^12.11.1
         version: 12.11.2(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       ajv:
-        specifier: ^8.20.0
+        specifier: 8.20.0
         version: 8.20.0
       ajv-formats:
         specifier: ^3.0.1
@@ -2516,8 +459,8 @@ importers:
         specifier: ^1.21.0
         version: 1.24.0(react@19.2.7)
       nuqs:
-        specifier: ^2.5.0
-        version: 2.9.0(@tanstack/react-router@1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
+        specifier: 2.10.1
+        version: 2.10.1(patch_hash=2148684edec6dc099ae9f4aaef272464500bb73467292d51851a7da70ccb1db4)(@tanstack/react-router@1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
       react-day-picker:
         specifier: ^10.0.1
         version: 10.0.1(@types/react@19.2.17)(react@19.2.7)
@@ -2564,9 +507,2114 @@ importers:
       '@types/react-dom':
         specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.17)
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
       happy-dom:
         specifier: ^20.10.6
         version: 20.10.6
+      json-schema-to-typescript:
+        specifier: 16.0.0
+        version: 16.0.0
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/agents/web:
+    dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: 1.5.1
+        version: 1.5.1(zod@4.4.3)
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/iam':
+        specifier: workspace:*
+        version: link:../../iam/web
+      '@angee/integrate':
+        specifier: workspace:*
+        version: link:../../integrate/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/operator':
+        specifier: workspace:*
+        version: link:../../operator/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      '@assistant-ui/react':
+        specifier: 0.14.26
+        version: 0.14.26(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(use-sync-external-store@1.7.0(react@19.2.7))
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@streamdown/code':
+        specifier: ^1.1.1
+        version: 1.1.1(react@19.2.7)
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+      streamdown:
+        specifier: ^2.5.0
+        version: 2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      valibot:
+        specifier: ^1.4.0
+        version: 1.4.2(typescript@6.0.3)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/appearance/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.3.2
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/appearance_integrate/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/appearance':
+        specifier: workspace:*
+        version: link:../../appearance/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.3.2
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/dashboards/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/decisions/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      react-hook-form:
+        specifier: ^7.81.0
+        version: 7.81.0(react@19.2.7)
+      valibot:
+        specifier: ^1.4.2
+        version: 1.4.2(typescript@6.0.3)
+    devDependencies:
+      '@angee/storybook':
+        specifier: workspace:*
+        version: link:../../../../packages/storybook
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/iam/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/iam_integrate_oidc/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/intake/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/decisions':
+        specifier: workspace:*
+        version: link:../../decisions/web
+      '@angee/iam':
+        specifier: workspace:*
+        version: link:../../iam/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/projects':
+        specifier: workspace:*
+        version: link:../../projects/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/integrate/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/provenance':
+        specifier: workspace:*
+        version: link:../../provenance/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+    devDependencies:
+      '@angee/timeline':
+        specifier: workspace:*
+        version: link:../../timeline/web
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/integrate_vcs/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/integrate':
+        specifier: workspace:*
+        version: link:../../integrate/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+      use-debounce:
+        specifier: ^10.1.1
+        version: 10.1.1(react@19.2.7)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/knowledge/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/messaging':
+        specifier: workspace:*
+        version: link:../../messaging/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/knowledge_integrate_notion/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/integrate':
+        specifier: workspace:*
+        version: link:../../integrate/web
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  src/angee/messaging/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/iam':
+        specifier: workspace:*
+        version: link:../../iam/web
+      '@angee/integrate':
+        specifier: workspace:*
+        version: link:../../integrate/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/parties':
+        specifier: workspace:*
+        version: link:../../parties/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/storage':
+        specifier: workspace:*
+        version: link:../../storage/web
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@tanstack/react-query':
+        specifier: ^5.101.2
+        version: 5.101.2(react@19.2.7)
+      '@tanstack/react-virtual':
+        specifier: ^3.14.10
+        version: 3.14.23(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+      use-debounce:
+        specifier: ^10.1.1
+        version: 10.1.1(react@19.2.7)
+    devDependencies:
+      '@angee/provenance':
+        specifier: workspace:*
+        version: link:../../provenance/web
+      '@angee/timeline':
+        specifier: workspace:*
+        version: link:../../timeline/web
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/messaging_integrate_imap/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/integrate':
+        specifier: workspace:*
+        version: link:../../integrate/web
+      '@angee/messaging':
+        specifier: workspace:*
+        version: link:../../messaging/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      react-hook-form:
+        specifier: ^7.81.0
+        version: 7.81.0(react@19.2.7)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/messaging_integrate_slack/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/messaging':
+        specifier: workspace:*
+        version: link:../../messaging/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/money/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/nexus/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/messaging':
+        specifier: workspace:*
+        version: link:../../messaging/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/parties':
+        specifier: workspace:*
+        version: link:../../parties/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/timeline':
+        specifier: workspace:*
+        version: link:../../timeline/web
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@tanstack/react-query':
+        specifier: ^5.101.2
+        version: 5.101.2(react@19.2.7)
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+    devDependencies:
+      '@angee/iam':
+        specifier: workspace:*
+        version: link:../../iam/web
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/operator/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      graphql-ws:
+        specifier: ^5.16.2
+        version: 5.16.2(graphql@16.14.2)
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+    devDependencies:
+      '@graphql-codegen/cli':
+        specifier: ^7.1.3
+        version: 7.2.0(@types/node@26.1.1)(graphql@16.14.2)(typescript@6.0.3)
+      '@graphql-codegen/client-preset':
+        specifier: ^6.0.1
+        version: 6.1.0(graphql@16.14.2)
+      '@graphql-codegen/typescript':
+        specifier: ^6.0.2
+        version: 6.1.0(graphql@16.14.2)
+      '@graphql-typed-document-node/core':
+        specifier: ^3.2.0
+        version: 3.2.0(graphql@16.14.2)
+      '@tanstack/react-query':
+        specifier: ^5.101.1
+        version: 5.101.2(react@19.2.7)
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      graphql:
+        specifier: ^16.14.0
+        version: 16.14.2
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/parties/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/integrate':
+        specifier: workspace:*
+        version: link:../../integrate/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+    devDependencies:
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/parties_integrate_carddav/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  src/angee/platform/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      nuqs:
+        specifier: 2.10.1
+        version: 2.10.1(patch_hash=2148684edec6dc099ae9f4aaef272464500bb73467292d51851a7da70ccb1db4)(@tanstack/react-router@1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
+    devDependencies:
+      '@tanstack/react-query':
+        specifier: ^5.101.1
+        version: 5.101.2(react@19.2.7)
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/platform_integrate_operator/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/operator':
+        specifier: workspace:*
+        version: link:../../operator/web
+      '@angee/platform':
+        specifier: workspace:*
+        version: link:../../platform/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/platform_integrate_vcs/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/integrate-vcs':
+        specifier: workspace:*
+        version: link:../../integrate_vcs/web
+      '@angee/platform':
+        specifier: workspace:*
+        version: link:../../platform/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/pm/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+    devDependencies:
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/portfolio/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/projects':
+        specifier: workspace:*
+        version: link:../../projects/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/posts/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/integrate':
+        specifier: workspace:*
+        version: link:../../integrate/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/parties':
+        specifier: workspace:*
+        version: link:../../parties/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/projects/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/messaging':
+        specifier: workspace:*
+        version: link:../../messaging/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/proposals/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/iam':
+        specifier: workspace:*
+        version: link:../../iam/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/money':
+        specifier: workspace:*
+        version: link:../../money/web
+      '@angee/projects':
+        specifier: workspace:*
+        version: link:../../projects/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/proposals_work/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/provenance/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/spaces/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/messaging':
+        specifier: workspace:*
+        version: link:../../messaging/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/storage/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      '@noble/hashes':
+        specifier: ^2.0.1
+        version: 2.4.0
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@vidstack/react':
+        specifier: ^1.12.13
+        version: 1.15.6(@types/react@19.2.17)(react@19.2.7)
+      heic-to:
+        specifier: ^1.2.1
+        version: 1.5.2
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+      pdfjs-dist:
+        specifier: 5.4.296
+        version: 5.4.296
+      react-pdf:
+        specifier: ^10.4.1
+        version: 10.4.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/storage_integrate/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/integrate':
+        specifier: workspace:*
+        version: link:../../integrate/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/storage_integrate_iphone/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/storage-integrate':
+        specifier: workspace:*
+        version: link:../../storage_integrate/web
+    devDependencies:
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/tags/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/theme_angee/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  src/angee/theme_aurora/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  src/angee/theme_carbon/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  src/angee/theme_fyltr/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  src/angee/theme_ledger/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  src/angee/theme_midnight/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  src/angee/theme_stock/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  src/angee/theme_warm_red/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
+  src/angee/timeline/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/work/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/iam':
+        specifier: workspace:*
+        version: link:../../iam/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/projects':
+        specifier: workspace:*
+        version: link:../../projects/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+    devDependencies:
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/workflows/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/decisions':
+        specifier: workspace:*
+        version: link:../../decisions/web
+      '@angee/metadata':
+        specifier: workspace:*
+        version: link:../../../../packages/metadata
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../packages/refine
+      '@angee/timeline':
+        specifier: workspace:*
+        version: link:../../timeline/web
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      lucide-react:
+        specifier: ^1.21.0
+        version: 1.24.0(react@19.2.7)
+      valibot:
+        specifier: ^1.4.2
+        version: 1.4.2(typescript@6.0.3)
+    devDependencies:
+      '@angee/storybook':
+        specifier: workspace:*
+        version: link:../../../../packages/storybook
+      '@refinedev/core':
+        specifier: ^5.0.12
+        version: 5.0.12(patch_hash=68be3db1972f01e02d11a4e3e6580533f7a5525b5d3f30ba5d0c5c0f79c2c2e8)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@tanstack/react-router':
+        specifier: ^1.170.41
+        version: 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      happy-dom:
+        specifier: ^20.10.6
+        version: 20.10.6
+      react:
+        specifier: ^19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: ^19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@types/node@26.1.1)(happy-dom@20.10.6)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+
+  src/angee/workflows_messaging/web:
+    dependencies:
+      '@angee/app':
+        specifier: workspace:*
+        version: link:../../../../packages/app
+      '@angee/ui':
+        specifier: workspace:*
+        version: link:../../../../packages/ui
+      '@angee/workflows':
+        specifier: workspace:*
+        version: link:../../workflows/web
+    devDependencies:
+      '@types/react':
+        specifier: ^19.2.17
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.17)
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -2598,6 +2646,10 @@ packages:
 
   '@antfu/install-pkg@1.1.0':
     resolution: {integrity: sha512-MGQsmw10ZyI+EJo45CdSER4zEb+p31LpDAFp2Z3gkSd1yqVZGi0Ebx++YTEMonJy4oChEMLsxZ64j8FH6sSqtQ==}
+
+  '@apidevtools/json-schema-ref-parser@11.9.3':
+    resolution: {integrity: sha512-60vepv88RwcJtSHrD6MjIL6Ta3SOYbgfnkHb+ppAVK+o9mXprRtulx7VlRl3lN3bbvysAfCS7WMVfhUYemB0IQ==}
+    engines: {node: '>= 16'}
 
   '@ardatan/relay-compiler@13.0.1':
     resolution: {integrity: sha512-afG3YPwuSA0E5foouZusz5GlXKs74dObv4cuWyLyfKsYFj2r7oGRNB28v18HvwuLSQtQFCi+DpIe0TZkgQDYyg==}
@@ -3461,6 +3513,9 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@jsdevtools/ono@7.1.3':
+    resolution: {integrity: sha512-4JQNk+3mVzK3xh2rqd6RB4J46qUR19azEHBneZyTZM+c456qOrbbM/5xcR8huNCCcbVt7+UmizG6GuUvPvKUYg==}
 
   '@lezer/common@1.5.2':
     resolution: {integrity: sha512-sxQE460fPZyU3sdc8lafxiPwJHBzZRy/udNFynGQky1SePYBdhkBl1kOagA9uT3pxR8K09bOrmTUqA9wb/PjSQ==}
@@ -4732,9 +4787,6 @@ packages:
   '@shikijs/vscode-textmate@10.0.2':
     resolution: {integrity: sha512-83yeghZ2xxin3Nj8z1NMd/NCuca+gsYXswywDy5bHvwlWL8tpTQmzGeUuHd9FC3E/SBEMvzJRwWEOz5gGes9Qg==}
 
-  '@standard-schema/spec@1.0.0':
-    resolution: {integrity: sha512-m2bOd0f2RT9k8QJx1JN85cZYyH1RqFBdlwtkSlf4tBDYLCiiZnv1fIIwacK6cqwXavOydf0NPToMQgpKq+dVlA==}
-
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
@@ -4940,6 +4992,12 @@ packages:
       react: '>=16.8'
       react-dom: '>=16.8'
 
+  '@tanstack/react-virtual@3.14.23':
+    resolution: {integrity: sha512-Oyy58qQwdaQieA+A4WUDtnh9D1rv5FZvGdw8og9Xeyh88V6HH94vMSyV5i9ATIbYNe9t5Ix0WXRo9NOTpHDkYw==}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+      react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+
   '@tanstack/react-virtual@3.14.5':
     resolution: {integrity: sha512-4EKRXh7zBLkbKbFmG3AUVkircuHd+7OdT1pocJSepxtfBd3qnrJgJ5rtPkRYyo9fmyVb2+pI2xPy5oYvMLQy6A==}
     peerDependencies:
@@ -4959,6 +5017,9 @@ packages:
 
   '@tanstack/virtual-core@3.17.3':
     resolution: {integrity: sha512-8Np/TFELpI0ySuJoVmjvOrQYXH/8sTX0Biv9szhFhY39xOdAAY+smrMxjxOum/ux3eM8MUJQsEJ0/R0UpvC8dw==}
+
+  '@tanstack/virtual-core@3.19.8':
+    resolution: {integrity: sha512-Oz/SYBo/aVPyQkwtOw7Q23myITUgFIof2glQqydYJAPL6mH2SkJDkvDKZTklB+7gv5jGLZQhyTcd7SO1A1EODQ==}
 
   '@testing-library/dom@10.4.1':
     resolution: {integrity: sha512-o4PXJQidqJl82ckFaXUeoAW+XysPLauYI43Abki5hABd853iMhitooc6znOnczgbTYmEP6U6/y1ZyKAIsvMKGg==}
@@ -5123,6 +5184,12 @@ packages:
 
   '@types/hast@3.0.5':
     resolution: {integrity: sha512-rp/ezSWaD1m44dPKICGhiskI13nVr7qTloFwDa/IYkhhf5nzwP+zIQcIJh3WIFSBOy/H1PzB40jPjMDksN4F+g==}
+
+  '@types/json-schema@7.0.15':
+    resolution: {integrity: sha512-5+fP8P8MFNC+AyZCDxrB2pkZFPGzqQWUzpSeuuVLvm8VMcorNYavBqoFcxK8bQz4Qsbn4oUEEem4wDLfcysGHA==}
+
+  '@types/lodash@4.17.27':
+    resolution: {integrity: sha512-VenMRv/eKNrspX9v3H4dbmjsrnCOYdYBG3kxXKk3dG6X+urBGcj2Prww3xw1U5K4FV/mE4h5GbWd0szEKf+9ew==}
 
   '@types/mdast@4.0.4':
     resolution: {integrity: sha512-kGaNbPh1k7AFzgpud/gMdvIm5xuECykRR+JnWKQno9TAXVa6WIVCGTPvYGekIDL4uwCZQSYbUxNBSb1aUo79oA==}
@@ -5300,6 +5367,9 @@ packages:
 
   argparse@2.0.1:
     resolution: {integrity: sha512-8+9WqebbFzpX9OR+Wa6O29asIogeRMzcGtAINdpMHHyAg10f05aSFVBbcEqGf/PXw1EjAZ+q2/bEBg3DvurK3Q==}
+
+  argparse@3.0.4:
+    resolution: {integrity: sha512-fwWK3Zq22l4XJJjx5mcBHGikIk+hJqO+32dPm0Jur7+rtG5x1scOjSfdT9ZKeWHPpsya/l0HHK4tDImBkTrtvA==}
 
   aria-hidden@1.2.6:
     resolution: {integrity: sha512-ik3ZgC9dY/lYVVM++OISsaYDeg1tb0VtP5uL3ouh1koGOaUMDPpbFIei4JkFimWUFPn90sbMNMXQAIVOlnYKJA==}
@@ -6252,6 +6322,10 @@ packages:
     resolution: {integrity: sha512-1td788aAnnZ5qs7V2QIRl1owjtYpbKt749Y3xauqQgwIIGF/xXWz1wMTEBx5O3LK3lXLVuqXPdPxj2BoFHaW9Q==}
     hasBin: true
 
+  js-yaml@5.5.0:
+    resolution: {integrity: sha512-paNr4LFIFPjeeSmwNYdrb8FafLLG/Cr2Af3GjbsHJ5CxIjH4r0c2emlmRdAtpPAieP1gRVzk6buBbVP5gBMGAg==}
+    hasBin: true
+
   jsesc@3.1.0:
     resolution: {integrity: sha512-/sM3dO2FOzXjKQhJuo0Q173wf2KOo8t4I8vHy6lF9poUp7bKT0/NHE8fPX23PwfhnykfqnC2xRxOnVw5XuGIaA==}
     engines: {node: '>=6'}
@@ -6259,6 +6333,11 @@ packages:
 
   json-parse-even-better-errors@2.3.1:
     resolution: {integrity: sha512-xyFwyhro/JEof6Ghe2iz2NcXoj2sloNsWr/XsERDK/oiPCfaNhl5ONfp+jQdAZRQQ0IJWNzH9zIZF7li91kh2w==}
+
+  json-schema-to-typescript@16.0.0:
+    resolution: {integrity: sha512-Ah6kK4q6SjlMzWBH1eNOQkdRh5Qhr5T/RCFwfjQqWZA7UDW+N47A8wfyoiN0L884s4L4bAEI54IjIuN3/u0B/A==}
+    engines: {node: '>=16.0.0'}
+    hasBin: true
 
   json-schema-traverse@1.0.0:
     resolution: {integrity: sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug==}
@@ -6673,8 +6752,8 @@ packages:
   number-flow@0.6.2:
     resolution: {integrity: sha512-MCnImG4Q5vPwhSXnov56nOuyyKn6LC+Qd7II1UiKc+ACRtug5iAtn0+CwXNxM38AC5lSowEY+oYEtZX2qMnUyw==}
 
-  nuqs@2.9.0:
-    resolution: {integrity: sha512-1ckQBhVHaQYjLZ3kWhhH40A32lPJ7TNTQMa2T+SUvl5azyVt7swCQfUXt9xOXJV3YidWq8VHIHcMzVAJ0knRsw==}
+  nuqs@2.10.1:
+    resolution: {integrity: sha512-7lPZrPJVOsD0VvfQSKtodYBBPGPLsLzkFU8ueYIap9yMMJvSw6UC12p8luA5NW7aKe7AbPHKxcxb3OluH6iAJA==}
     peerDependencies:
       '@remix-run/react': '>=2'
       '@tanstack/react-router': ^1
@@ -6821,6 +6900,11 @@ packages:
 
   preact@10.12.1:
     resolution: {integrity: sha512-l8386ixSsBdbreOAkqtrwqHwdvR35ID8c3rKPa8lCWuO86dBi32QWHV4vfsZK1utLLFMvw+Z5Ad4XLkZzchscg==}
+
+  prettier@3.9.10:
+    resolution: {integrity: sha512-skGHTH1Yb9QvaTC4hWnRTzEYtCpApF0UMBPz+t/0ZPzP8ihefo/btKd+QA7pUE0fEwA1SbS/NmhyEcstdXOIdA==}
+    engines: {node: '>=14'}
+    hasBin: true
 
   pretty-format@27.5.1:
     resolution: {integrity: sha512-Qb1gy5OrP5+zDf2Bvnzdl3jsTf1qXVMazbvCoKhtKqVs4/YK4ozX4gKQJJVyNe+cajNPn0KoC0MC3FUmaHWEmQ==}
@@ -7671,6 +7755,12 @@ snapshots:
     dependencies:
       package-manager-detector: 1.7.0
       tinyexec: 1.2.4
+
+  '@apidevtools/json-schema-ref-parser@11.9.3':
+    dependencies:
+      '@jsdevtools/ono': 7.1.3
+      '@types/json-schema': 7.0.15
+      js-yaml: 4.3.0
 
   '@ardatan/relay-compiler@13.0.1(graphql@16.14.2)':
     dependencies:
@@ -8715,6 +8805,8 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  '@jsdevtools/ono@7.1.3': {}
 
   '@lezer/common@1.5.2': {}
 
@@ -9905,14 +9997,12 @@ snapshots:
 
   '@shikijs/vscode-textmate@10.0.2': {}
 
-  '@standard-schema/spec@1.0.0': {}
-
   '@standard-schema/spec@1.1.0': {}
 
-  '@storybook/builder-vite@10.4.6(esbuild@0.28.1)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(react@19.2.7))(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))':
+  '@storybook/builder-vite@10.4.6(esbuild@0.28.1)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(prettier@3.9.10)(react@19.2.7))(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))':
     dependencies:
-      '@storybook/csf-plugin': 10.4.6(esbuild@0.28.1)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(react@19.2.7))(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-      storybook: 10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(react@19.2.7)
+      '@storybook/csf-plugin': 10.4.6(esbuild@0.28.1)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(prettier@3.9.10)(react@19.2.7))(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+      storybook: 10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(prettier@3.9.10)(react@19.2.7)
       ts-dedent: 2.3.0
       vite: 8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0)
     transitivePeerDependencies:
@@ -9920,9 +10010,9 @@ snapshots:
       - rollup
       - webpack
 
-  '@storybook/csf-plugin@10.4.6(esbuild@0.28.1)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(react@19.2.7))(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))':
+  '@storybook/csf-plugin@10.4.6(esbuild@0.28.1)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(prettier@3.9.10)(react@19.2.7))(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))':
     dependencies:
-      storybook: 10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(react@19.2.7)
+      storybook: 10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(prettier@3.9.10)(react@19.2.7)
       unplugin: 2.3.11
     optionalDependencies:
       esbuild: 0.28.1
@@ -9934,28 +10024,28 @@ snapshots:
     dependencies:
       react: 19.2.7
 
-  '@storybook/react-dom-shim@10.4.6(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(react@19.2.7))':
+  '@storybook/react-dom-shim@10.4.6(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(prettier@3.9.10)(react@19.2.7))':
     dependencies:
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
-      storybook: 10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(react@19.2.7)
+      storybook: 10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(prettier@3.9.10)(react@19.2.7)
     optionalDependencies:
       '@types/react': 19.2.17
       '@types/react-dom': 19.2.3(@types/react@19.2.17)
 
-  '@storybook/react-vite@10.4.6(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(esbuild@0.28.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(react@19.2.7))(typescript@6.0.3)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))':
+  '@storybook/react-vite@10.4.6(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(esbuild@0.28.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(prettier@3.9.10)(react@19.2.7))(typescript@6.0.3)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))':
     dependencies:
       '@joshwooding/vite-plugin-react-docgen-typescript': 0.7.0(typescript@6.0.3)(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
       '@rollup/pluginutils': 5.4.0
-      '@storybook/builder-vite': 10.4.6(esbuild@0.28.1)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(react@19.2.7))(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
-      '@storybook/react': 10.4.6(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(react@19.2.7))(typescript@6.0.3)
+      '@storybook/builder-vite': 10.4.6(esbuild@0.28.1)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(prettier@3.9.10)(react@19.2.7))(vite@8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0))
+      '@storybook/react': 10.4.6(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(prettier@3.9.10)(react@19.2.7))(typescript@6.0.3)
       empathic: 2.0.1
       magic-string: 0.30.21
       react: 19.2.7
       react-docgen: 8.0.3
       react-dom: 19.2.7(react@19.2.7)
       resolve: 1.22.12
-      storybook: 10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(react@19.2.7)
+      storybook: 10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(prettier@3.9.10)(react@19.2.7)
       tsconfig-paths: 4.2.0
       vite: 8.1.4(@types/node@26.1.1)(esbuild@0.28.1)(jiti@2.7.0)(yaml@2.9.0)
     transitivePeerDependencies:
@@ -9967,15 +10057,15 @@ snapshots:
       - typescript
       - webpack
 
-  '@storybook/react@10.4.6(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(react@19.2.7))(typescript@6.0.3)':
+  '@storybook/react@10.4.6(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(prettier@3.9.10)(react@19.2.7))(typescript@6.0.3)':
     dependencies:
       '@storybook/global': 5.0.0
-      '@storybook/react-dom-shim': 10.4.6(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(react@19.2.7))
+      '@storybook/react-dom-shim': 10.4.6(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(prettier@3.9.10)(react@19.2.7))
       react: 19.2.7
       react-docgen: 8.0.3
       react-docgen-typescript: 2.4.0(typescript@6.0.3)
       react-dom: 19.2.7(react@19.2.7)
-      storybook: 10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(react@19.2.7)
+      storybook: 10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(prettier@3.9.10)(react@19.2.7)
     optionalDependencies:
       '@types/react': 19.2.17
       '@types/react-dom': 19.2.3(@types/react@19.2.17)
@@ -10087,6 +10177,12 @@ snapshots:
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
 
+  '@tanstack/react-virtual@3.14.23(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+    dependencies:
+      '@tanstack/virtual-core': 3.19.8
+      react: 19.2.7
+      react-dom: 19.2.7(react@19.2.7)
+
   '@tanstack/react-virtual@3.14.5(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
       '@tanstack/virtual-core': 3.17.3
@@ -10105,6 +10201,8 @@ snapshots:
   '@tanstack/table-core@8.21.3': {}
 
   '@tanstack/virtual-core@3.17.3': {}
+
+  '@tanstack/virtual-core@3.19.8': {}
 
   '@testing-library/dom@10.4.1':
     dependencies:
@@ -10310,6 +10408,10 @@ snapshots:
     dependencies:
       '@types/unist': 3.0.3
 
+  '@types/json-schema@7.0.15': {}
+
+  '@types/lodash@4.17.27': {}
+
   '@types/mdast@4.0.4':
     dependencies:
       '@types/unist': 3.0.3
@@ -10499,6 +10601,8 @@ snapshots:
   ansi-styles@6.2.3: {}
 
   argparse@2.0.1: {}
+
+  argparse@3.0.4: {}
 
   aria-hidden@1.2.6:
     dependencies:
@@ -11476,9 +11580,24 @@ snapshots:
     dependencies:
       argparse: 2.0.1
 
+  js-yaml@5.5.0:
+    dependencies:
+      argparse: 3.0.4
+
   jsesc@3.1.0: {}
 
   json-parse-even-better-errors@2.3.1: {}
+
+  json-schema-to-typescript@16.0.0:
+    dependencies:
+      '@apidevtools/json-schema-ref-parser': 11.9.3
+      '@types/json-schema': 7.0.15
+      '@types/lodash': 4.17.27
+      js-yaml: 5.5.0
+      lodash: 4.18.1
+      minimist: 1.2.8
+      prettier: 3.9.10
+      tinyglobby: 0.2.17
 
   json-schema-traverse@1.0.0: {}
 
@@ -12048,9 +12167,9 @@ snapshots:
     dependencies:
       esm-env: 1.2.2
 
-  nuqs@2.9.0(@tanstack/react-router@1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7):
+  nuqs@2.10.1(patch_hash=2148684edec6dc099ae9f4aaef272464500bb73467292d51851a7da70ccb1db4)(@tanstack/react-router@1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7):
     dependencies:
-      '@standard-schema/spec': 1.0.0
+      '@standard-schema/spec': 1.1.0
       react: 19.2.7
     optionalDependencies:
       '@tanstack/react-router': 1.170.41(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -12219,6 +12338,8 @@ snapshots:
       source-map-js: 1.2.1
 
   preact@10.12.1: {}
+
+  prettier@3.9.10: {}
 
   pretty-format@27.5.1:
     dependencies:
@@ -12643,7 +12764,7 @@ snapshots:
 
   std-env@4.2.0: {}
 
-  storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(react@19.2.7):
+  storybook@10.4.6(@testing-library/dom@10.4.1)(@types/react@19.2.17)(prettier@3.9.10)(react@19.2.7):
     dependencies:
       '@storybook/global': 5.0.0
       '@storybook/icons': 2.1.0(react@19.2.7)
@@ -12662,6 +12783,7 @@ snapshots:
       ws: 8.21.0
     optionalDependencies:
       '@types/react': 19.2.17
+      prettier: 3.9.10
     transitivePeerDependencies:
       - '@testing-library/dom'
       - bufferutil

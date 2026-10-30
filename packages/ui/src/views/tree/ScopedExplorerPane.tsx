@@ -2,20 +2,20 @@ import * as React from "react";
 
 import { EmptyState } from "../../fragments/EmptyState";
 import { useUiT } from "../../i18n";
-import { PaneToolbar, PaneToolbarHost, type PaneToolbarProps } from "../../layouts/PaneToolbar";
+import { PaneToolbarHost } from "../../layouts/PaneToolbar";
 import { PrimaryPanePublisher } from "../../layouts/primary-pane-context";
 import { Skeleton, SkeletonStatus, SkeletonText } from "../../ui/skeleton";
 import {
   RelationPicker,
   type RelationCreateConfig,
+  type RelationPickerProps,
 } from "../relation/RelationPicker";
 import {
-  useScopedTreeExplorer,
   type ScopedTreeExplorerController,
-  type UseScopedTreeExplorerOptions,
+  type ScopedTreeExplorerOption,
 } from "./useScopedTreeExplorer";
 
-export interface ScopedExplorerRootPicker {
+export interface ScopedExplorerRootPicker extends Pick<RelationPickerProps, "onSearchChange" | "searchState" | "onOpenChange"> {
   "aria-label": string;
   placeholder?: string;
   searchPlaceholder?: string;
@@ -23,15 +23,20 @@ export interface ScopedExplorerRootPicker {
   onCreated?: (id: string) => void;
 }
 
-export type ScopedExplorerController<
-  TRoot,
-  TTreeRow extends { id: string },
-> = ScopedTreeExplorerController<TRoot, TTreeRow>;
+export interface ScopedExplorerController<TRoot, TTreeRow extends { id: string }>
+  extends ScopedTreeExplorerController<TTreeRow> {
+  root: TRoot | undefined;
+  rootOptions: readonly ScopedTreeExplorerOption[];
+}
 
 export interface ScopedExplorerPaneProps<
   TRoot,
   TTreeRow extends { id: string },
-> extends UseScopedTreeExplorerOptions<TRoot, TTreeRow> {
+> {
+  controller: ScopedTreeExplorerController<TTreeRow>;
+  roots: readonly TRoot[];
+  getRootId: (root: TRoot) => string;
+  getRootLabel: (root: TRoot) => string;
   loading?: boolean;
   loadingContent?: React.ReactNode;
   emptyContent?: React.ReactNode;
@@ -40,16 +45,10 @@ export interface ScopedExplorerPaneProps<
   navigatorLabel: string;
   /** The toolbar's selector: the root (drive, vault) picker, created inline where allowed. */
   rootPicker: ScopedExplorerRootPicker;
-  /** The rest of the toolbar row: the pane's scope, search, create verbs and overflow. */
-  toolbar?: (
-    controller: ScopedExplorerController<TRoot, TTreeRow>,
-  ) => Omit<PaneToolbarProps, "selector" | "className">;
-  onRootChange?: (
-    rootId: string,
-    controller: ScopedExplorerController<TRoot, TTreeRow>,
-  ) => void;
+  /** Compose the tree's native toolbar with the supplied root selector. */
   renderTree: (
     controller: ScopedExplorerController<TRoot, TTreeRow>,
+    selector: React.ReactNode,
   ) => React.ReactNode;
   renderNavigatorFooter?: (
     controller: ScopedExplorerController<TRoot, TTreeRow>,
@@ -78,26 +77,30 @@ export function ScopedExplorerPane<
   renderContentWithoutRoots = false,
   navigatorLabel,
   rootPicker,
-  toolbar,
-  onRootChange,
   renderTree,
   renderNavigatorFooter,
   children,
-  ...options
+  controller: selection,
+  roots,
+  getRootId,
+  getRootLabel,
 }: ScopedExplorerPaneProps<TRoot, TTreeRow>): React.ReactElement {
   const t = useUiT();
-  const controller = useScopedTreeExplorer(options);
+  const controller = React.useMemo(() => ({
+    ...selection,
+    root: roots.find((candidate) => getRootId(candidate) === selection.rootId),
+    rootOptions: roots.map((root) => ({ value: getRootId(root), label: getRootLabel(root) })),
+  }), [selection, roots, getRootId, getRootLabel]);
   const { rootId, rootOptions, setRootId } = controller;
-  const hasRoots = rootOptions.length > 0;
+  const hasRoots = Boolean(rootId);
   const navigator = React.useMemo(
     () => (
       <PaneToolbarHost
         role="navigation"
         aria-label={navigatorLabel}
       >
-        <PaneToolbar
-          {...toolbar?.(controller)}
-          selector={
+        <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
+          {renderTree(controller, (
             <div className="min-w-0 max-w-56 flex-1">
               <RelationPicker
                 presentation="cell"
@@ -106,21 +109,18 @@ export function ScopedExplorerPane<
                 options={rootOptions}
                 placeholder={rootPicker.placeholder}
                 searchPlaceholder={rootPicker.searchPlaceholder}
+                onOpenChange={rootPicker.onOpenChange}
+                onSearchChange={rootPicker.onSearchChange}
+                searchState={rootPicker.searchState}
                 create={rootPicker.create}
-                onChange={(value) => {
-                  setRootId(value);
-                  onRootChange?.(value, controller);
-                }}
+                onChange={setRootId}
                 onCreated={(id) => {
                   setRootId(id);
                   rootPicker.onCreated?.(id);
                 }}
               />
             </div>
-          }
-        />
-        <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
-          {renderTree(controller)}
+          ))}
           {renderNavigatorFooter?.(controller)}
         </div>
       </PaneToolbarHost>
@@ -128,18 +128,18 @@ export function ScopedExplorerPane<
     [
       controller,
       navigatorLabel,
-      onRootChange,
       renderNavigatorFooter,
       renderTree,
       rootId,
       rootOptions,
       rootPicker,
       setRootId,
-      toolbar,
     ],
   );
   const loadingLabel = t("loading.default");
-  const primaryPane = hasRoots
+  // Search results are a transient option catalogue, so an empty or pending
+  // search must leave its control mounted for clearing and retrying.
+  const primaryPane = hasRoots || rootOptions.length > 0 || rootPicker.onSearchChange
     ? navigator
     : loading
       ? <ExplorerNavigatorSkeleton label={loadingLabel} />

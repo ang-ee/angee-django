@@ -16,13 +16,13 @@ from rebac import actor_context, system_context
 from rebac.backends import LocalBackend, backend, reset_backend
 from rebac.models import active_relationship_model
 from rebac.schema import parse_zed
+from rebac.testing import install_schema
 
 from angee.dashboards.models import Dashboard as AbstractDashboard
 from angee.dashboards.models import DashboardWidget as AbstractDashboardWidget
 from angee.graphql.schema import GraphQLSchemas
 from angee.resources.entries import ResourceEntry, ResourceGroup
 from angee.resources.models import Resource
-from angee.testing.permissions import install_permission_schema
 from tests.conftest import create_user
 
 
@@ -62,14 +62,14 @@ def dashboard_tables(transactional_db: Any) -> Iterator[None]:
     reset_backend()
     active = backend()
     assert isinstance(active, LocalBackend)
-    policy = Path(__file__).parents[1] / "addons/angee/dashboards/permissions.zed"
-    install_permission_schema(
+    policy = Path(__file__).parents[1] / "src/angee/dashboards/permissions.zed"
+    install_schema(
         parse_zed(
             "definition auth/user {}\n"
             "definition auth/group { relation member: auth/user }\n"
             "definition angee/role { relation member: auth/user }\n" + policy.read_text()
         ),
-        active=active,
+        backend=active,
     )
     try:
         yield

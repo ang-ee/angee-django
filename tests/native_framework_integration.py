@@ -22,10 +22,10 @@ from angee.integrate.impl import AdapterContractError
 from angee.integrate.locks import bridge_advisory_lock
 from angee.knowledge.mcp_tools import register
 from angee.messaging.backends import ParsedHandle
-from angee.models import CreationKeyConflict
 from angee.posts.backends import FeedBackend
 from angee.posts.ingest import land_posts
 from angee.posts.models import CommentAnswered
+from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.native_messaging_delivery import Channel, DeliveryFixtures, Feed, Message
 
 

@@ -12,11 +12,11 @@ from rebac.resources import model_for_resource_type
 from rebac.schema.parser import parse_zed
 
 from angee.agents.models import Agent as AbstractAgent
+from angee.base.models import base as base_models
+from angee.base.models.identity import public_id_for
 from angee.graphql import sharing
 from angee.graphql.data import metadata
 from angee.graphql.sharing import RecordAccessType
-from angee.identity import public_id_for
-from angee.models import base as base_models
 from angee.projects.models import Task
 from angee.projects.testing.models import Project
 from angee.storage.models import Drive
@@ -135,7 +135,7 @@ def test_subject_picker_resource_matches_the_declared_relation(
         "    permission share = viewer\n"
         "}\n"
     ).get_definition("storage/drive")
-    monkeypatch.setattr(metadata, "effective_rebac_definition", lambda model: definition)
+    monkeypatch.setattr(metadata, "declared_rebac_definition", lambda model: definition)
     resource = SimpleNamespace(model_label="iam.Group", subject_field="assignment_subject")
 
     grantable = metadata._grantable_relations(Drive, {group_model: cast(Any, resource)})
@@ -162,7 +162,7 @@ def test_backed_share_relation_reports_a_system_check_error(
         "}\n"
     ).get_definition("storage/drive")
     monkeypatch.setattr(Drive, "rebac_grantable", {"owner": "write"})
-    monkeypatch.setattr(base_models, "effective_rebac_definition", lambda model: definition)
+    monkeypatch.setattr(base_models, "declared_rebac_definition", lambda model: definition)
 
     errors = Drive._check_rebac_grantable()
 

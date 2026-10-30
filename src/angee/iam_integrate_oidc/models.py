@@ -1,0 +1,166 @@
+"""OIDC login policy contributed onto OAuth clients and credentials."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, ClassVar, cast
+
+from django.core.exceptions import ValidationError
+from django.db import models
+from django_compose.models import Composable
+from rebac import system_context
+
+from angee.iam_integrate_oidc.errors import ONLY_SIGN_IN_METHOD
+from angee.integrate.credentials import CredentialKind
+from angee.integrate.models import AccountStatus
+
+if TYPE_CHECKING:
+    from angee.integrate.models import Credential
+
+
+class CredentialOidc(Composable, extends="integrate.Credential"):
+    """Prevent explicit disconnect from removing the user's last sign-in method."""
+
+
+    class Meta:
+        """Abstract behavior contributed to the native credential model."""
+
+        abstract = True
+
+    def check_disconnect(self) -> None:
+        """Keep a passwordless user's final OIDC account linked under its user lock.
+
+        The disconnect owner holds the transaction through credential deletion.
+        Locking the common user serializes removals of different accounts before
+        either checks the remaining sign-in methods.
+        """
+
+        super().check_disconnect()
+        credential = cast("Credential", self)
+        if credential.kind != CredentialKind.OAUTH:
+            return
+        if credential.oauth_client_id is None:
+            return
+        using = credential._state.db
+        oauth_field = type(credential).oauth_client.field
+        # Disconnect must honor current login policy rather than a cached related row.
+        oauth_client = (
+            oauth_field.related_model._base_manager.using(using).filter(pk=credential.oauth_client_id).first()
+        )
+        if oauth_client is None or not type(oauth_client).login_picker_queryset(
+            type(oauth_client)._base_manager.using(using).filter(pk=oauth_client.pk),
+        ).exists():
+            return
+        user_field = type(credential).user.field
+        assert credential.user_id is not None
+        # A password may have changed since this credential cached its user.
+        user = (
+            user_field.related_model._base_manager.using(using)
+            .select_for_update()
+            .get(pk=credential.user_id)
+        )
+        if user.has_usable_password():
+            return
+        with system_context(reason="iam_integrate_oidc.unlink.guard"):
+            has_alternative = (
+                type(credential)
+                .objects.using(using).filter(
+                    user_id=credential.user_id,
+                    kind=CredentialKind.OAUTH,
+                    external_account_id__in=type(oauth_client).login_accounts(
+                        type(credential).external_account.field.related_model._base_manager.using(using).all(),
+                    ).values("pk"),
+                )
+                .exclude(pk=credential.pk)
+                .exists()
+            )
+        if not has_alternative:
+            raise ValidationError("This is your only sign-in method.", code=ONLY_SIGN_IN_METHOD)
+
+
+class OAuthClientOidc(Composable, extends="integrate.OAuthClient"):
+    """OpenID Connect login extension for ``integrate.OAuthClient``.
+
+    The composer folds these fields into the single OAuth client table when the
+    OIDC login addon is installed. Presence is no longer a separate 1:1 row:
+    ``login_enabled`` is the discriminator for public login/link flows.
+    """
+
+    hasura_insertable_fields: ClassVar[tuple[str, ...]] = (
+        "issuer",
+        "jwks_uri",
+        "login_enabled",
+        "link_on_email_match",
+        "create_on_login",
+        "allowed_email_domains",
+    )
+    hasura_readable_fields: ClassVar[tuple[str, ...]] = hasura_insertable_fields
+    hasura_updatable_fields: ClassVar[tuple[str, ...]] = hasura_insertable_fields
+
+    issuer = models.URLField(blank=True)
+    jwks_uri = models.URLField(blank=True)
+    login_enabled = models.BooleanField(default=False, db_index=True)
+    link_on_email_match = models.BooleanField(default=False)
+    create_on_login = models.BooleanField(default=False)
+    allowed_email_domains = models.JSONField(default=list, blank=True)
+
+    class Meta:
+        """Abstract extension base composed into ``integrate.OAuthClient``."""
+
+        abstract = True
+
+    @property
+    def allowed_email_domain_values(self) -> list[str]:
+        """Return the login domain allow-list as strings."""
+
+        value = self.allowed_email_domains
+        if not isinstance(value, (list, tuple)):
+            return []
+        return [str(item) for item in value]
+
+    def allows_email_domain(self, email: str | None) -> bool:
+        """Return whether ``email`` is allowed by this provider's login domain policy."""
+
+        allowed_domains = {domain.strip().lower() for domain in self.allowed_email_domain_values if domain.strip()}
+        if not allowed_domains:
+            return True
+        if not email or "@" not in email:
+            return False
+        return email.rsplit("@", 1)[1].lower() in allowed_domains
+
+    @classmethod
+    def login_picker_queryset(cls, queryset: Any) -> Any:
+        """Return enabled, configured, login-capable OAuth clients."""
+
+        return (
+            queryset.filter(is_enabled=True, login_enabled=True)
+            .exclude(client_id="")
+            .filter(models.Q(authorize_endpoint__gt="", token_endpoint__gt="") | models.Q(discovery_url__gt=""))
+        )
+
+    @classmethod
+    def login_accounts(cls, rows: Any) -> Any:
+        """Admit active linked identities whose provider can still start OIDC login."""
+
+        clients = cls.login_picker_queryset(cls._base_manager.using(rows.db).all())
+        return rows.filter(status=AccountStatus.ACTIVE, oauth_client_id__in=clients.values("pk"))
+
+    DISCOVERY_FIELDS = {
+        "issuer": "issuer",
+        "jwks_uri": "jwks_uri",
+    }
+    """Discovery-document keys projected onto OIDC login fields."""
+
+    def fill_extension_fields_from_discovery(self, discovery: Mapping[str, Any]) -> bool:
+        """Fill blank OIDC fields from a discovery document; return whether changed."""
+
+        changed = False
+        for field, key in self.DISCOVERY_FIELDS.items():
+            if getattr(self, field, ""):
+                continue
+            value = discovery.get(key)
+            if value:
+                setattr(self, field, str(value))
+                changed = True
+        parent = getattr(super(), "fill_extension_fields_from_discovery", None)
+        return (bool(parent(discovery)) if parent is not None else False) or changed

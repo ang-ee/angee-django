@@ -18,7 +18,8 @@ from django.db.models.deletion import PROTECT
 from django.test import override_settings
 from rebac import actor_context, generic_target, system_context
 
-from angee.evidence import FactAuthority
+from angee.base.fields.state import StateField
+from angee.base.models.derived import DerivedFrom
 from angee.extraction.acquisition import PageCarrier
 from angee.extraction.contracts import (
     DocumentPart,
@@ -28,8 +29,7 @@ from angee.extraction.contracts import (
 )
 from angee.extraction.managers import StaleExtraction
 from angee.extraction.profiles import EvidenceLayout, ExtractionProfile
-from angee.fields import StateField
-from angee.models import DerivedFrom
+from angee.provenance.evidence import FactAuthority
 from angee.storage.models import File as AbstractFile
 from angee.workflows_extraction.steps import InferEvidenceInput, InferEvidenceStep
 from tests.conftest import Drive, File, create_platform_admin

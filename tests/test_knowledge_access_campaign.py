@@ -2,15 +2,15 @@
 
 import pytest
 from django.contrib.contenttypes.models import ContentType
-from django.db import connection
+from django.db import connection, connections, router
 from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
-from angee.changesets import changeset_model
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.knowledge.schema import schemas
+from angee.provenance.context import changeset, changeset_model
 from tests.conftest import (
     MarkdownPage,
     Page,
@@ -33,6 +33,42 @@ mutation Clone($template: ID!, $name: String!, $owned: Boolean!, $key: String) {
   }
 }
 """
+
+
+def test_record_note_is_atomic_and_replays_the_original_binding(composed_permissions, monkeypatch):
+    owner = create_user("record-note-owner")
+    vault = vault_for(owner, name="Notes")
+    target = vault_for(owner, name="Target")
+    manager = RecordBinding.objects
+    upsert = type(manager).upsert
+    with actor_context(owner):
+        def fail_binding(*args, **kwargs):
+            raise RuntimeError("Binding unavailable")
+
+        monkeypatch.setattr(type(manager), "upsert", fail_binding)
+        with pytest.raises(RuntimeError, match="Binding unavailable"):
+            manager.create_note(target=target, vault=vault, body="A note\nDetails", idempotency_key="post-note")
+        assert not Page.objects.filter(vault=vault).exists()
+        assert not changeset_model().objects.filter(key="post-note").exists()
+        monkeypatch.setattr(type(manager), "upsert", upsert)
+        binding = manager.create_note(target=target, vault=vault, body="A note\nDetails", idempotency_key="post-note")
+        replay = manager.create_note(target=target, vault=vault, body="A note\nDetails", idempotency_key="post-note")
+        assert replay.pk == binding.pk
+        assert Page.objects.filter(vault=vault).count() == 1
+        assert MarkdownPage.objects.get(pk=binding.page_id).body == "A note\nDetails"
+
+
+@pytest.mark.parametrize("missing_end", ["vault", "target"])
+def test_record_note_denial_leaves_no_page_or_receipt(composed_permissions, missing_end):
+    owner, writer = create_user("note-owner"), create_user("note-writer")
+    vault = vault_for(owner, name="Notes")
+    target = vault_for(owner, name="Target")
+    _grant(target if missing_end == "vault" else vault, "editor", writer)
+    with actor_context(writer), pytest.raises(PermissionDenied):
+        RecordBinding.objects.create_note(target=target, vault=vault, body="Denied", idempotency_key="denied-note")
+    with system_context(reason="test.note.rollback"):
+        assert not Page.objects.filter(vault=vault).exists()
+        assert not changeset_model().objects.filter(key="denied-note").exists()
 
 
 def test_record_pages_projection_respects_role_and_both_write_ends(composed_permissions):
@@ -283,3 +319,74 @@ def test_graphql_clone_rejects_unauthorized_or_malformed_requests_without_creati
         assert not changeset_model()._base_manager.filter(
             scope=f"knowledge.vault.clone:{fixture.actor.pk}", key="denied",
         ).exists()
+
+
+@pytest.mark.parametrize("bound_manager", [False, True])
+def test_record_note_and_binding_keep_secondary_locks_and_rollback(
+    composed_permissions, monkeypatch, bound_manager, django_db_blocker,
+):
+    """Routed and explicitly bound admission lock, replay and roll back on the selected connection."""
+
+    owner = create_user("secondary-record-note-owner")
+    vault = vault_for(owner, name="Secondary notes")
+    target = vault_for(owner, name="Secondary target")
+    alias = "knowledge_secondary"
+    # A second connection to the native test DB exposes an atomic(default)
+    # mistake on PostgreSQL: the selected connection remains in autocommit.
+    connections.databases[alias] = {**connections.databases["default"]}
+    selected = connections[alias]
+    with django_db_blocker.unblock():
+        selected.ensure_connection()
+
+    class SelectedRouter:
+        def db_for_read(self, model, **hints):
+            return alias
+
+        db_for_write = db_for_read
+
+    try:
+        monkeypatch.setattr(router, "routers", [SelectedRouter()])
+        owner = type(owner)._base_manager.using(alias).get(pk=owner.pk)
+        vault = Vault._base_manager.using(alias).get(pk=vault.pk)
+        target = Vault._base_manager.using(alias).get(pk=target.pk)
+        manager = RecordBinding.objects.db_manager(alias) if bound_manager else RecordBinding.objects
+        upsert = type(manager).upsert
+        with (
+            actor_context(owner), changeset(fresh=True, using=alias),
+            CaptureQueriesContext(connection) as default_queries,
+        ):
+            with CaptureQueriesContext(selected) as selected_queries:
+                binding = manager.create_note(
+                    target=target, vault=vault, body="Secondary note", idempotency_key="secondary-note",
+                )
+            assert binding._state.db == alias
+            replay = manager.create_note(
+                target=target, vault=vault, body="Secondary note", idempotency_key="secondary-note",
+            )
+            assert replay.pk == binding.pk
+            page = Page.objects.using(alias).get(pk=binding.page_id)
+            assert manager.upsert(target=target, page=page).pk == binding.pk
+            if selected.vendor == "postgresql":
+                locks = [row["sql"] for row in selected_queries if "FOR NO KEY UPDATE" in row["sql"]]
+                assert any(Vault._meta.db_table in sql for sql in locks)
+                assert any(Page._meta.db_table in sql for sql in locks)
+
+            def fail_binding(*args, **kwargs):
+                raise RuntimeError("Secondary binding unavailable")
+
+            monkeypatch.setattr(type(manager), "upsert", fail_binding)
+            with pytest.raises(RuntimeError, match="Secondary binding unavailable"):
+                manager.create_note(
+                    target=target, vault=vault, body="Must roll back", idempotency_key="secondary-rollback",
+                )
+            monkeypatch.setattr(type(manager), "upsert", upsert)
+            assert Page.objects.using(alias).filter(vault=vault).count() == 1
+            assert not changeset_model().objects.using(alias).filter(key="secondary-rollback").exists()
+            assert not [row["sql"] for row in default_queries if row["sql"].split()[0] in {
+                "SELECT", "INSERT", "UPDATE", "DELETE",
+            }]
+    finally:
+        monkeypatch.undo()
+        selected.close()
+        del connections[alias]
+        del connections.databases[alias]

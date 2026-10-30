@@ -1,0 +1,37 @@
+"""Per-actor visibility of {{ model_name | lower }} rows under the ownership gate.
+
+Runs on the composed host: ``apps.get_model`` reads the runtime model the
+composer emitted for ``{{ addon_name }}``, so the host's ``INSTALLED_APPS`` lists
+the addon and its settings are initialised before collection. The addon
+registers no concrete test model of its own; ``rebac sync`` in ``setUp``
+installs ``permissions.zed`` for each transactional test. Consumer CI collects
+this package in place (``consumer-tests``).
+"""
+
+from __future__ import annotations
+
+from django.apps import apps
+from django.contrib.auth import get_user_model
+from django.core.management import call_command
+from django.test import TransactionTestCase
+from rebac import system_context
+
+{{ model_name }} = apps.get_model("{{ addon_id }}", "{{ model_name }}")
+User = get_user_model()
+
+
+class {{ model_name }}VisibilityTests(TransactionTestCase):
+    """Drive the composed {{ model_name | lower }} model through the permission schema."""
+
+    def setUp(self) -> None:
+        call_command("rebac", "sync", verbosity=0)
+        with system_context(reason="{{ addon_id }} test setup"):
+            self.owner = User.objects.create_user(username="owner", password="owner")
+            self.outsider = User.objects.create_user(username="outsider", password="outsider")
+            self.row = {{ model_name }}.objects.create(title="First", owner=self.owner)
+
+    def test_owner_reads_own_rows_and_an_outsider_reads_none(self) -> None:
+        """The field-backed owner relation scopes reads without storing a tuple."""
+
+        self.assertEqual([visible.pk for visible in {{ model_name }}.objects.as_user(self.owner)], [self.row.pk])
+        self.assertFalse({{ model_name }}.objects.as_user(self.outsider).exists())

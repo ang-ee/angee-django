@@ -140,7 +140,7 @@ export interface AddonManifest {
   id: string;
   /**
    * Ids of the manifests this one depends on, transitively. The composed runtime
-   * supplies them from `addon.toml`; menus and containers layer along them.
+   * supplies them from installed distribution requirements; menus and containers layer along them.
    */
   dependsOn?: readonly string[];
   /**
@@ -151,9 +151,9 @@ export interface AddonManifest {
   routes?: readonly AddonRoute[];
   /**
    * Menu nodes keyed by id: own-namespace keys declare, other keys alter a node of
-   * an addon this one depends on. The array form is the legacy declaration list.
+   * an addon this one depends on.
    */
-  menus?: readonly MenuItem[] | MenuDeclarations;
+  menus?: MenuDeclarations;
   widgets?: WidgetMap;
   /** Product status vocabulary; normalized keys cannot claim framework defaults or another addon's value. */
   statusTones?: StatusToneMap;
@@ -233,8 +233,6 @@ export interface ComposeAddonsOptions {
 /** Brand an object as an addon manifest, giving one greppable declaration site.
  * @kind contribution
  */
-export function defineAddon(manifest: Omit<AddonManifest, "menus"> & { menus?: readonly MenuItem[] }):
-  Omit<AddonManifest, "menus"> & { menus?: readonly MenuItem[] };
 export function defineAddon(manifest: Omit<AddonManifest, "menus"> & { menus: MenuDeclarations }):
   Omit<AddonManifest, "menus"> & { menus: MenuDeclarations };
 export function defineAddon(manifest: AddonManifest): AddonManifest;
@@ -383,17 +381,16 @@ export function composeAddons(
       for (const [model, form] of Object.entries(addon.forms)) {
         const canonicalModel = canonicalizeModel(model);
         assertUnclaimed(forms, canonicalModel, addon.id, "form override");
-        if (isRuntimeFormRegistration(form)) {
-          const registeredModel = canonicalizeModel(form.resource);
-          if (registeredModel !== canonicalModel) {
-            throw new Error(
-              `Addon "${addon.id}" registers form key "${canonicalModel}" for component resource "${registeredModel}".`,
-            );
-          }
-          forms[canonicalModel] = { ...form, resource: canonicalModel };
-        } else {
-          forms[canonicalModel] = form;
+        if (!isRuntimeFormRegistration(form)) {
+          throw new Error(`Addon "${addon.id}" form "${canonicalModel}" must be a complete form registration.`);
         }
+        const registeredModel = canonicalizeModel(form.resource);
+        if (registeredModel !== canonicalModel) {
+          throw new Error(
+            `Addon "${addon.id}" registers form key "${canonicalModel}" for component resource "${registeredModel}".`,
+          );
+        }
+        forms[canonicalModel] = { ...form, resource: canonicalModel };
       }
     }
     if (addon.dataProviders) {

@@ -10,4 +10,5 @@ class TypingHistoryConfig(AppConfig):
     def ready(self) -> None:
         from django.db.migrations.state import ProjectState
 
-        self.before_projection = ProjectState.from_apps(self.apps)
+        self.before_typing_state = ProjectState.from_apps(self.apps)
+        self.before_typing_models = {model.__name__: model for model in self.get_models()}

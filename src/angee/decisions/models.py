@@ -1,0 +1,108 @@
+"""One question, its immutable proposal, and its final verdict."""
+
+from collections.abc import Iterable
+from typing import Any
+
+from django.conf import settings
+from django.db import models
+from django.utils.text import capfirst
+from rebac import system_context
+
+from angee.base.models.append_only import AppendOnlyModel
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.derived import DerivedFrom
+from angee.base.models.locks import OptimisticLockMixin
+from angee.decisions.managers import DecisionManager, DecisionRecordManager
+from angee.graphql.events import ChangeRelatedRecord
+
+
+class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=True):
+    """An immutable question; answering records choices without applying them."""
+
+    sqid_prefix = "dcn_"
+    kind = models.CharField(max_length=200)
+    requester = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+",
+    )
+    assignees = models.ManyToManyField(settings.AUTH_USER_MODEL, related_name="+")
+    proposal = models.JSONField()
+    context = models.JSONField(default=dict)
+    verdict = models.JSONField(null=True, blank=True)
+    verdict_values = models.JSONField(null=True, blank=True)
+    answered_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+",
+    )
+    answered_at = models.DateTimeField(null=True, blank=True)
+    objects = DecisionManager()
+
+    @classmethod
+    def requester_querysets(cls) -> tuple[models.QuerySet, ...]:
+        """Owner records annotated with ``_decision_id``, in contribution order."""
+        return ()
+
+    def requesting_records(self) -> Iterable[models.Model]:
+        """Owner records retaining this question, contributed by asking capabilities."""
+        for rows in type(self).requester_querysets():
+            yield from rows.using(self._state.db).filter(_decision_id=self.pk).order_by("pk").distinct()
+
+    def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
+        """Publish the question's retained concern identities with its verdict."""
+        with system_context(reason="decisions.change_concerns"):
+            links = self.records.model.system_queryset().filter(decision_id=self.pk).select_related("content_type")
+            return ChangeRelatedRecord.for_records(*(link.record_ref for link in links))
+
+    class Meta:
+        abstract = True
+        rebac_resource_type = "decisions/decision"
+        constraints = [models.CheckConstraint(
+            condition=models.Q(verdict__isnull=True, verdict_values__isnull=True,
+                               answered_by__isnull=True, answered_at__isnull=True)
+            | (models.Q(verdict__isnull=False, answered_at__isnull=False)
+               & (models.Q(verdict=[]) | models.Q(answered_by__isnull=False))
+               & (~models.Q(verdict=[]) | models.Q(verdict_values__isnull=True))),
+            name="decisions_verdict_consistent",
+        )]
+
+    @property
+    def is_open(self) -> bool:
+        """No verdict means the question is still open."""
+        return self.verdict is None
+
+    @property
+    def kind_label(self) -> str:
+        return capfirst(self.kind.replace("_", " ").replace("-", " "))
+
+    @property
+    def verdict_label(self) -> str:
+        """Read the chosen labels from this question's frozen alternatives."""
+        if self.verdict is None:
+            return ""
+        if not self.verdict:
+            return "Withdrawn"
+        return "; ".join(alternative["label"] for alternative in self.proposal["alternatives"]
+                         if alternative["key"] in self.verdict)
+
+    def __str__(self) -> str:
+        return self.kind_label
+
+    def decide(self, *, actor: Any, chosen: list[str], revision: int | None = None, values: Any = None) -> Any:
+        return type(self).objects.decide(self, actor=actor, chosen=chosen, revision=revision, values=values)
+
+    def validate_verdict(self, chosen: tuple[Any, ...], *, actor: Any) -> None:
+        """Allow composed policy to refuse an answer before its verdict is retained."""
+
+
+class DecisionRecord(DerivedFrom, concrete=True):
+    """A concern link: decision, canonical content type and object id, with no payload."""
+
+    sqid_prefix = "dcr_"
+    decision = models.ForeignKey("decisions.Decision", on_delete=models.CASCADE, related_name="records")
+    objects = DecisionRecordManager()
+
+    class Meta:
+        abstract = True
+        rebac_resource_type = "decisions/record"
+        constraints = [
+            models.UniqueConstraint(fields=("decision", "content_type", "object_id"), name="decisions_record_unique")
+        ]
+        indexes = [models.Index(fields=("content_type", "object_id"), name="decisions_record_target")]

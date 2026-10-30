@@ -27,6 +27,7 @@ export const CODEMIRROR_THEME = EditorView.theme({
     padding: "0.5rem 0.75rem",
   },
   ".cm-line": { lineHeight: "1.5rem" },
+  ".cm-content[data-presentation=document], .cm-content[data-presentation=document] .cm-line": { padding: "0" },
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
     backgroundColor: "var(--brand-soft)",
   },
@@ -76,12 +77,14 @@ export function useCodeMirrorEditor(
   const labelledBy = controlProps?.["aria-labelledby"];
   const invalid = controlProps?.["aria-invalid"];
   const required = controlProps?.["aria-required"];
+  const presentation = controlProps?.presentation;
   const contentAttributes = useMemo(() => Object.fromEntries(Object.entries({
     id: controlId, "aria-label": labelledBy ? undefined : placeholderText,
     "aria-labelledby": labelledBy, "aria-describedby": describedBy,
     "aria-invalid": invalid, "aria-required": required,
+    "data-presentation": presentation,
   }).filter(([, entry]) => entry !== undefined).map(([key, entry]) => [key, String(entry)])),
-  [controlId, describedBy, labelledBy, invalid, required, placeholderText]);
+  [controlId, describedBy, labelledBy, invalid, required, placeholderText, presentation]);
   const viewRef = useRef<EditorView | null>(null);
   useImperativeHandle(controlRef, () => ({ focus: () => viewRef.current?.focus() }), []);
   const onChangeRef = useRef(onChange);

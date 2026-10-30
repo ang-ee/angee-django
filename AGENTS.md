@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Angee is a thin composition framework for Django + React applications. The
-framework owns the seams; addons own product capabilities. The composer turns
+framework owns the seams; addons own product capabilities. The upstream compiler turns
 addon contracts and project settings into a runnable project. Projects declare
 root apps through Django `INSTALLED_APPS`.
 
@@ -65,9 +65,10 @@ highest standard.
 - **Dependencies point toward stable owners.** Framework and base addons never
   depend on consumers or examples; serving code never imports the build-time
   composer. Commands, resolvers, routes, and adapters dispatch to policy owners.
-- **Compose through declared contracts.** Addon declaration facts belong to
-  `addon.toml`; Django `AppConfig` owns app identity and lifecycle. Use schema
-  buckets, model `extends`, input/type extensions, settings/autoconfig,
+- **Compose through declared contracts.** Addon identity and requirements belong to native package metadata in
+  `pyproject.toml`; capability facts belong to its `[tool.angee]` tables; Django `AppConfig` owns app identity and lifecycle. Use schema
+  buckets, native `Composable` class keywords (`concrete`, `extends`, `inherits`,
+  `demands`), input/type extensions, settings/autoconfig,
   `ImplClassField`, containers, registered forms/glyphs, generated SDL, and native
   dependency extension points. Never probe foreign object shapes or monkey-patch
   composed model classes. The [owner decision tree](docs/guidelines.md#put-behavior-on-the-owning-object)
@@ -80,9 +81,12 @@ highest standard.
   framework seam instead of editing a framework/base-addon file to name a product
   concept. `tests/extcontrib` is the living REBAC extension example.
 - **Docs teach intent; code explains concrete contracts.** Public APIs explain
-  their current behavior in names, types, and docstrings. A mismatch requires
-  [reconciliation](docs/guidelines.md#reconcile-code-docs-and-tests), not automatic
-  acceptance of either stale prose or defective code.
+  their current behavior in names, types, and docstrings. Operational and
+  contributor instructions describe current implemented contracts. Proposals and
+  private history stay in the [resolved work-state](#where-knowledge-lives);
+  delete superseded guidance when its replacement implementation lands. A mismatch
+  requires [reconciliation](docs/guidelines.md#reconcile-code-docs-and-tests), not
+  automatic acceptance of either stale prose or defective code.
 
 If no Angee pattern exists, follow the underlying framework. When a new
 architectural convention still has multiple plausible shapes after researching
@@ -93,6 +97,10 @@ the owners, ask the human architect to choose it.
 Before source edits for a structural change, refactor, new view, addon,
 integration, model, or shared primitive, make these checks explicit in a working
 note, plan, or user update:
+
+The gate's procedure is the `angee-design` skill
+(`.agents/skills/angee-design/SKILL.md`) and its owner index; the enforcement
+map is `.agents/CONSTITUTION.md`.
 
 - **Owner map:** name the owner of every fact being encoded. Reuse it or extend
   its missing behavior. Create an owner only when none exists at the right level.
@@ -137,6 +145,7 @@ rules for editing the template source.
 | [Checks](docs/checks.md) | Command context, prerequisites, verification, and actual CI coverage | Before running checks or handing off |
 | [Composer](docs/composer.md) | Composition flow and links to implementing owners | Changing composition or generated artifacts |
 | [Agent methodology](.agents/README.md) | Reusable workflows and their tool adapters | Using or changing an agent workflow |
+| [Constitution map](.agents/CONSTITUTION.md) | Which skill, check or reviewer enforces each constitution rule | Before structural work; when adding a skill or check |
 
 These links route reading; they do not imply every guide or tool definition has
 already been loaded. Read the relevant owner before acting.
@@ -145,10 +154,14 @@ already been loaded. Read the relevant owner before acting.
 
 The first question for any change is *what level does it belong to?*
 
-- **Framework core** — the composition language, model/data toolkit, serving
-  seams, and jobs seam inherited by every project. The core is not an addon.
-- **Framework addon** — a reusable product capability that ships with Angee;
-  also called a base addon. API protocols are capabilities too.
+- **Upstream compiler (`django-compose`)** — generic Django composition, artifact
+  verification, explicit database preparation/readiness and native lifecycle seams. Angee consumes its public contracts.
+- **Serving addon (`angee.server`)** — HTTP defaults, Uvicorn commands and connection
+  policy; model-only projects do not activate it.
+- **Foundation addon (`angee.base`)** — reusable Django models, fields, managers,
+  querysets, identity, validation and permission integration. Its app label is `base`.
+- **Framework addon** — a reusable capability that ships with Angee. Provenance,
+  jobs, web and API protocols have their own optional addon owners.
 - **Consumer addon** — product logic for a specific project.
 
 Never solve at the consumer level what the framework should own, and never push
@@ -158,36 +171,48 @@ product specifics down into the framework. Every fact lives at its owning level.
 
 ```text
 .                    # consolidated framework source slot
-├── angee/           # django-angee core: base/, data/, compose/, jobs/, serving seams
-├── addons/          # standard angee.* folder addons with co-located web fragments
+├── src/             # angee.base foundation and capability addons; co-located web fragments
 ├── packages/        # schema-independent @angee/* packages and workshop/test tooling
 ├── examples/        # consumer addons and reference browser suite
 ├── templates/       # Copier project, stack, workspace, service, and addon sources
-├── tests/           # core, addon, and template contract tests
+├── tests/           # shared-owner, addon, and template contract tests
 ├── docs/            # principles, operational guidance, and owner links
 ├── .agents/         # public shared agent methodology
 └── README.md        # human entry point; this file is the contributor entry point
 ```
 
-The `angee.*` namespace spans the core and folder addons. The core wheel is
-`django-angee`; each addon is a source folder with `addon.toml`, not a separately
-distributed Python package. Core dependencies belong to `pyproject.toml`, addon
-dependencies to their manifests, and resolved versions to lockfiles. In a
-materialized workspace the stack root owns the JS install; the repository's own
-pnpm manifest also supports standalone package CI. See [the stack](docs/stack.md).
+The `angee.*` namespace is a native PEP 420 namespace contributed by addon
+packages. Each addon is a component distribution with a `pyproject.toml` and one
+`angee.addons` entry point in its native distribution metadata. Ordinary addons
+author `dynamic = ["entry-points"]`; Hatch owns its generation. The current compiler component contract selects one
+Django app per distribution; models and provision hooks are optional. The root `angee` meta-distribution requires the
+framework cohort. Dependencies belong to the owning package's
+`[project].dependencies`, resolved versions to native lockfiles, and capability
+facts to `[tool.angee.<capability>]`. A library is explicitly packaged without an
+addon entry point; absence of `apps.py` never changes package identity.
+
+`angee.base` owns reusable models, settings/bootstrap and small shared primitives;
+`angee.server` owns HTTP policy. Generic composition belongs to `django-compose`.
+The published [hatch-angee](https://github.com/ang-ee/hatch-angee) backend owns
+addon layout and metadata defaults over Hatchling; its README owns the authoring
+contract. In a materialized workspace the stack root owns JS installation; the
+repository manifest also supports standalone package CI.
+See [the stack](docs/stack.md).
 
 Personal-messaging bridges remain in the optional external
-`angee-messaging-bridges` repository. The Go operator, `hatch-angee`, and
+`angee-messaging-bridges` repository. The Go operator and
 `strawberry-django-hasura` remain independently published. Private work-state is
 an optional **workspace sibling slot**, not a required directory in this tree;
 see [Where Knowledge Lives](#where-knowledge-lives).
 
 ## Area Rules
 
-- **Core:** do not absorb product capability or addon vocabulary. Core changes
-  require the full Python suite because every composed area can be affected.
-- **Addons:** keep the manifest, capability, resources, permissions, and web
-  fragment together. Generated SDL and `@angee/gql` belong to the composed host.
+- **Shared owners:** keep generic composition in the upstream compiler and Angee
+  primitives in base. Changes affecting every composed area require the full
+  relevant Python suite.
+- **Addons:** keep package metadata, capability declarations, resources,
+  permissions, and web fragments together. Generated SDL and `@angee/gql` belong
+  to the composed host.
 - **Packages:** all published framework packages, including `@angee/app`, remain
   schema-independent and never import project-generated `@angee/gql/*`.
   `refine` and `metadata` are independent leaves; `ui` uses both; `app` composes
@@ -201,6 +226,33 @@ see [Where Knowledge Lives](#where-knowledge-lives).
 
 Use [Checks](docs/checks.md) for area-specific commands and prerequisites.
 Meaningful UI changes require browser verification as well as relevant tests.
+
+## Common Errors
+
+- **Testing instead of building.** Finish the agreed owner changes and caller
+  migrations before a consolidated final verification pass. During implementation,
+  use a focused check only to resolve a concrete uncertainty or failure. Carry
+  forward valid evidence for unchanged code; repeat a suite only when a new change,
+  failure, or unresolved concern justifies it. Passing checks never replace
+  unfinished implementation, and required final checks remain delivery gates.
+- **Repeating settled research.** Keep one current ownership and completion
+  ledger. Reuse delegated findings and recorded evidence; reopen an audit only
+  when new code or conflicting evidence changes its conclusion. Turn findings
+  into owned changes and deletions instead of another overlapping checklist.
+- **Serializing independent work.** When parallel agent work is requested, assign
+  distinct owners and run implementation, dependency work, and independent review
+  concurrently where their dependencies permit. Integrate completed lanes as they
+  become ready; do not spend the run waiting on one lane or protecting an
+  unrequested credit budget.
+- **Letting one blocker stop everything.** Identify the exact action blocked by
+  missing information or authorization, surface it promptly, and continue useful
+  independent work. Prepare the concrete result before seeking publication or
+  release approval. Mark the whole task blocked only when no authorized useful
+  work remains; do not silently leave an expected ongoing run idle.
+- **Confusing activity with completion.** Report delivered behavior, remaining
+  checklist items, and concrete blockers. Test counts, audit volume, elapsed work,
+  and a partial green run do not establish that the agreed target is built. Keep
+  implementation, verification, integration, and publication status explicit.
 
 ## Mechanical Overrides
 
@@ -231,10 +283,12 @@ watchers by hand. The angee operator is the stack's monitoring and management
 service: it is not part of the frontend or backend and keeps running while it
 restarts them, so use it for every restart.
 `angee --root "$angee_root" job run deps --chained-restart` restarts the whole
-application (the restart job is `provision` on instance stacks), and
+application (instance templates start that chain at `py-sync`), and
 `angee --root "$angee_root" restart <service>...` restarts single services. Apply
 dependency changes with the whole-application restart; never `uv sync` the stack's
-venv while the stack runs.
+venv while the stack runs. Existing stacks retain their rendered job names until
+their templates are updated; inspect the controlling `angee.yaml` before choosing
+the dependency-chain entrypoint.
 [Restart the running stack](docs/howto/getstarted.md#restart-the-running-stack)
 has the details and the operator API. One-shot management commands use the stack
 host's `manage.py`.
@@ -246,8 +300,10 @@ Never `git checkout` or `git switch` inside a pinned workspace slot.
 
 Durable project knowledge is checked in, not held only in private agent memory.
 
-- **Principles and pitfalls:** extend the owning `docs/` guide with a terse rule
-  and an owner link. Exact API details belong beside the implementing code.
+- **Principles, pitfalls and procedures:** an invariant or contract extends the
+  owning `docs/` guide with a terse rule and an owner link; a pitfall or
+  procedure goes to the owning skill's `references/` file; a command goes to
+  `docs/checks.md`. Exact API details belong beside the implementing code.
 - **Shared methodology:** reviewer prompts, skills, commands, and workflows live
   in public `.agents/`; private task history does not.
 - **Private work-state:** resolve the current workspace through the workspace

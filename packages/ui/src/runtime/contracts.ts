@@ -4,7 +4,7 @@
 // addon-composition functions (`defineAddon` / `composeAddons`) in `@angee/app`
 // build manifests against them.
 
-import type { ReactElement, ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { I18nResources } from "@angee/refine";
 import type { ResourceVocabulary } from "@angee/metadata";
 
@@ -75,7 +75,6 @@ export interface RuntimeComposition {
     hidden: readonly HiddenMenuItem[];
     /** Console routes a removal made unavailable, with the reason. */
     unavailable: Readonly<Record<string, string>>;
-    diagnostics: readonly string[];
   };
   /**
    * Every `requires` the composition declares: menu ids, and container children
@@ -152,15 +151,14 @@ export interface ComposedMenuItem
 export type WidgetMap = Record<string, unknown>;
 
 /**
- * Per-resource form contribution. Direct elements retain create-only override
- * compatibility; complete registrations are interpreted by the rendered binding.
+ * Per-resource complete form registration interpreted by the rendered binding.
  */
 export interface RuntimeFormRegistration {
   resource: string;
   Component: unknown;
 }
 
-export type FormOverrideMap = Record<string, ReactElement | RuntimeFormRegistration>;
+export type FormOverrideMap = Record<string, RuntimeFormRegistration>;
 
 /** The generic view envelope passed to cross-page chatter surfaces. */
 export interface ChatterView {

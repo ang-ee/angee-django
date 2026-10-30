@@ -24,16 +24,17 @@ from rebac import (
 from rebac.actors import is_sudo
 from rebac.backends import LocalBackend, backend, reset_backend
 from rebac.schema import parse_zed
+from rebac.testing import install_schema
 
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.node import AngeeNode
 from angee.projects.models import Task as AbstractTask
-from angee.testing.permissions import install_permission_schema
 from tests.conftest import (
     create_platform_admin,
     create_user,
     execute_schema,
     result_data,
+    standalone_relation,
 )
 from tests.scopedemo.models import Scope
 
@@ -43,6 +44,9 @@ class ProjectAccessTask(AbstractTask):
 
     sqid_prefix = "pat_"
     owner_container = None
+    assignee = standalone_relation(AbstractTask, "assignee")
+    delegate = standalone_relation(AbstractTask, "delegate")
+    activity_type = standalone_relation(AbstractTask, "activity_type")
     project = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)
     milestone = None
     milestone_id = None
@@ -55,11 +59,6 @@ class ProjectAccessTask(AbstractTask):
         abstract = False
         app_label = "scopedemo"
         rebac_resource_type = "scopedemo/project_access_task"
-        constraints = [
-            constraint
-            for constraint in AbstractTask.Meta.constraints
-            if constraint.name != "uq_projects_task_converted_activity"
-        ]
 
 
 @strawberry_django.type(ProjectAccessTask)
@@ -123,7 +122,7 @@ def task_create_case(transactional_db: None) -> Iterator[tuple[Scope, Any, Any]]
         }
         """
     )
-    install_permission_schema(
+    install_schema(
         replace(active.schema(), definitions=[*active.schema().definitions, *extra.definitions]),
     )
     try:

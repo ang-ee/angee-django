@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join, matchesGlob, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig, mergeConfig, type Plugin, type UserConfig } from "vite";
+import { build, defineConfig, mergeConfig, type Plugin, type UserConfig, type ViteDevServer } from "vite";
+import { generateWebRuntime, type WebCodegenInputs } from "@angee/app/web-codegen";
 import {
-  assertThemeCatalogue,
   resolveThemeOptions,
-  THEME_TOKEN_NAMES,
+  type AppearanceBootstrapPayload,
   type ThemeDefinition,
 } from "@angee/ui/theme-runtime";
 
@@ -27,7 +27,7 @@ const ANGEE_WATCH_IGNORED: readonly string[] = ["**/.jj/**"];
 // `runtime/gql/` path), so the proxy map and plugin choices live once, here, and
 // never drift across the example and the downstream template. Shipping this in
 // `@angee/app` (not a repo-root file) is what lets a project reach it by package
-// name whether the framework is an editable checkout or an installed wheel.
+// name from either a source checkout or a published JavaScript package.
 //
 // This module is loaded by Node as a Vite config and therefore imports ONLY the
 // Node-side build plugins and node builtins — never `react`/`react-dom` or any
@@ -141,6 +141,7 @@ function angeePackagesAt(cwd: string): AngeePackageSets {
 const PREBUNDLE_SKIP_DIRS = new Set([
   "node_modules",
   ".git",
+  ".jj",
   ".vite",
   ".cache",
   ".turbo",
@@ -235,22 +236,19 @@ export function angeePrebundleForce(webRoot: string, packages: string[]): boolea
 export function angeePrebundleForcePlugin(webRoot: string, packages: string[]): Plugin {
   return {
     name: "angee:prebundle-force",
-    config(_config, { command }) {
-      if (command !== "serve") return undefined;
-      const source = consumeAngeePrebundleSource(webRoot, packages);
-      return {
-        optimizeDeps: {
-          force: source.changed,
-          // `force` is excluded from Vite's optimizer config hash. Vite does
-          // hash the names of native optimizer plugins separately, so this
-          // no-op plugin gives linked source a cache identity without changing
-          // resolution, transforms, or output.
-          rolldownOptions: {
-            plugins: [{ name: `angee:prebundle-source:${source.signature}` }],
-          },
-        },
-      };
+    config(_config, { command, isPreview }) {
+      if (command !== "serve" || isPreview) return undefined;
+      return { optimizeDeps: angeePrebundleOptimizerConfig(webRoot, packages) };
     },
+  };
+}
+
+function angeePrebundleOptimizerConfig(webRoot: string, packages: string[]) {
+  const source = consumeAngeePrebundleSource(webRoot, packages);
+  return {
+    force: source.changed,
+    // Vite excludes force from the optimizer hash but hashes plugin names.
+    rolldownOptions: { plugins: [{ name: `angee:prebundle-source:${source.signature}` }] },
   };
 }
 
@@ -289,20 +287,15 @@ export async function defineAngeeWebViteConfig({
   appearance,
   ...overrides
 }: AngeeWebViteConfig): Promise<UserConfig> {
-  const angeePackages = angeePackagesAt(webRoot);
-  const appearancePayload = await appearanceBuildPayload(gqlRuntimeDir, appearance);
+  const appearancePlugin = angeeAppearancePlugin();
   const base = defineConfig({
     root: webRoot,
     plugins: [
-      angeeAppearancePlugin(appearancePayload),
+      angeeWebCodegenPlugin({ webRoot, gqlRuntimeDir, appearance, appearancePlugin, prebundleAngeePackages }),
+      appearancePlugin,
       preloadSchemaMetadata(),
       react(),
       tailwindcss(),
-      // Only an actually included built package set needs an optimizer cache
-      // signature, consumed on `serve` by `angeePrebundleForcePlugin`.
-      ...(prebundleAngeePackages && angeePackages.built.length > 0
-        ? [angeePrebundleForcePlugin(webRoot, angeePackages.built)]
-        : []),
     ],
     // The alias for this project's generated typed operations, pointing at the
     // project's OWN `runtime/gql/<name>/` tree (the web package generates it via
@@ -325,18 +318,6 @@ export async function defineAngeeWebViteConfig({
         "@codemirror/view",
         "@codemirror/language",
       ],
-    },
-    // Built package outputs are dependency bundles. Linked TypeScript package
-    // entrypoints are application source: leave them in Vite's transform/HMR
-    // pipeline so addon asset imports such as `?url` keep their native meaning.
-    // Vite's startup scanner stops at excluded bare imports. Scan the installed
-    // package entries directly as well as the host HTML so their import() trees
-    // contribute npm dependencies before first use, without loading them in the
-    // browser or maintaining a second dependency inventory.
-    optimizeDeps: {
-      entries: angeePackages.entries.length > 0 ? ["**/*.html", ...angeePackages.entries] : undefined,
-      include: prebundleAngeePackages ? angeePackages.built : undefined,
-      exclude: [...(prebundleAngeePackages ? angeePackages.source : angeePackages.all), ...angeePackages.codemirror],
     },
     server: {
       host: true,
@@ -385,6 +366,124 @@ export async function defineAngeeWebViteConfig({
   return mergeConfig(base, overrides);
 }
 
+/** Vite owns generation scheduling, input watches, errors and module invalidation. */
+function angeeWebCodegenPlugin({
+  webRoot,
+  gqlRuntimeDir,
+  appearance,
+  appearancePlugin,
+  prebundleAngeePackages,
+}: Pick<AngeeWebViteConfig, "webRoot" | "gqlRuntimeDir" | "appearance" | "prebundleAngeePackages"> & {
+  webRoot: string;
+  appearancePlugin: ReturnType<typeof angeeAppearancePlugin>;
+}): Plugin {
+  const runtimeDir = dirname(gqlRuntimeDir);
+  let inputs: WebCodegenInputs = { files: [], globs: [], directories: [], excluded: [] };
+  let discovering = inputs;
+  let server: ViteDevServer | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let running: Promise<void> | undefined;
+  let dirty = false;
+  let closed = false;
+  const watched = new Set<string>();
+  const watchInputs = (next: WebCodegenInputs) => {
+    discovering = next;
+    if (!server) return;
+    const added = next.directories.filter((directory) => !watched.has(directory));
+    for (const directory of added) watched.add(directory);
+    // Vite deliberately ignores actual node_modules. Linked authored packages
+    // arrive as canonical source directories; installed dependency changes use
+    // the operator dependency restart and the next cold generation pass.
+    server.watcher.add(added);
+  };
+  const generate = async () => {
+    // Invalidation and relative-import loading belong to Vite's SSR module graph.
+    // Native import() is used only before a server exists (CLI/startup/build).
+    server?.environments.ssr?.moduleGraph.invalidateAll();
+    const generated = await generateWebRuntime({
+      webRoot,
+      runtimeDir,
+      onInputs: watchInputs,
+      ...(server ? { loadThemeModule: (entry: string) => server!.ssrLoadModule(entry) } : {}),
+    });
+    const payload = appearanceBuildPayload(gqlRuntimeDir, appearance, generated.themes);
+    inputs = generated.inputs;
+    discovering = inputs;
+    appearancePlugin.update(payload);
+    const module = server?.environments.client.moduleGraph.getModuleById(RESOLVED_VIRTUAL_APPEARANCE);
+    if (module) server!.environments.client.moduleGraph.invalidateModule(module);
+  };
+  const regenerate = () => {
+    if (closed || running) return;
+    running = (async () => {
+      do {
+        dirty = false;
+        try {
+          await generate();
+          if (!closed) server?.ws.send({ type: "full-reload" });
+        } catch (error) {
+          if (!closed && server) {
+            const failure = error instanceof Error ? error : new Error(String(error));
+            server.config.logger.error(`[angee:web-codegen] ${failure.stack ?? failure.message}`);
+            server.ws.send({ type: "error", err: {
+              message: failure.message, stack: failure.stack ?? "", plugin: "angee:web-codegen",
+            } });
+          }
+        }
+      } while (dirty && !closed);
+    })().finally(() => { running = undefined; });
+  };
+  const changed = (event: string, file: string) => {
+    if (closed || !["add", "change", "unlink"].includes(event)) return;
+    const absolute = resolve(file).replaceAll("\\", "/");
+    if (absolute.split("/").some((part) => part === ".jj" || part === ".git")) return;
+    const matches = (declared: WebCodegenInputs) => !declared.excluded.some((glob) => matchesGlob(absolute, glob))
+      && (declared.files.includes(absolute) || declared.globs.some((glob) => matchesGlob(absolute, glob)));
+    if (!matches(inputs) && !matches(discovering)) return;
+    dirty = true;
+    if (!running) {
+      clearTimeout(timer);
+      timer = setTimeout(regenerate, 25);
+    }
+  };
+  return {
+    name: "angee:web-codegen",
+    enforce: "pre",
+    async config(config, env) {
+      // Preview serves the completed distribution and must work without runtime
+      // manifests, source themes, schemas or even a source package.json.
+      if (env.isPreview) return;
+      await generate();
+      const packages = angeePackagesAt(webRoot);
+      const prebundle = prebundleAngeePackages && packages.built.length > 0 && env.command === "serve"
+        ? angeePrebundleOptimizerConfig(webRoot, packages.built)
+        : {};
+      const defaults = { optimizeDeps: {
+        // Linked source stays in Vite's native transform/HMR graph; scanning its
+        // entries discovers dependencies across lazy import boundaries.
+        entries: packages.entries.length > 0 ? ["**/*.html", ...packages.entries] : undefined,
+        include: prebundleAngeePackages ? packages.built : undefined,
+        exclude: [...(prebundleAngeePackages ? packages.source : packages.all), ...packages.codemirror],
+        ...prebundle,
+      } };
+      // Native config hooks may mutate the current config. Merge once in the
+      // same order as the public factory: defaults first, host overrides last.
+      config.optimizeDeps = mergeConfig(defaults, { optimizeDeps: config.optimizeDeps }).optimizeDeps;
+    },
+    configureServer(value) {
+      server = value;
+      watchInputs(inputs);
+      server.watcher.on("all", changed);
+    },
+    async closeBundle() {
+      closed = true;
+      clearTimeout(timer);
+      server?.watcher.off("all", changed);
+      await running;
+    },
+  };
+}
+
 // Generated metadata is fetched as data, so start its download with the entry
 // script. Match the source path, not Vite's configurable output asset name.
 function preloadSchemaMetadata(): Plugin {
@@ -420,39 +519,21 @@ function preloadSchemaMetadata(): Plugin {
 const VIRTUAL_APPEARANCE = "virtual:angee-appearance";
 const RESOLVED_VIRTUAL_APPEARANCE = `\0${VIRTUAL_APPEARANCE}`;
 
-interface AppearanceBuildPayload {
-  fingerprint: string;
-  host: {
-    themeId: string | null;
-    colorScheme: "light" | "dark" | "system";
-    options?: { version: number; value: unknown };
-    fingerprint: string;
-    tokenLayers: Record<"shared" | "light" | "dark", Record<string, string>>;
-  };
-  catalogue: {
-    schema: number;
-    fingerprint: string;
-    themes: Array<{ id: string; legacyIds?: readonly string[]; defaultTokens?: Record<string, Record<string, string>> }>;
-  };
-  tokenNames: readonly string[];
-}
-
 interface ThemeCatalogueFile {
   schema: number;
   fingerprint: string;
   themes: Array<{
     id: string;
-    legacyIds?: readonly string[];
     optionsVersion?: number | null;
-    headlessEntry?: string;
     defaultTokens?: Record<"shared" | "light" | "dark", Record<string, string>>;
   }>;
 }
 
-async function appearanceBuildPayload(
+function appearanceBuildPayload(
   gqlRuntimeDir: string,
   raw: AngeeWebViteConfig["appearance"],
-): Promise<AppearanceBuildPayload> {
+  definitions: readonly ThemeDefinition<unknown>[],
+): AppearanceBootstrapPayload {
   const colorScheme = raw?.colorScheme ?? "system";
   if (colorScheme !== "light" && colorScheme !== "dark" && colorScheme !== "system") {
     throw new Error(`Unsupported host appearance color scheme ${JSON.stringify(colorScheme)}.`);
@@ -465,7 +546,7 @@ async function appearanceBuildPayload(
   const requestedThemeId = raw?.themeId ?? null;
   const selectedTheme = requestedThemeId === null
     ? undefined
-    : sourceCatalogue.themes.find((theme) => theme.id === requestedThemeId || theme.legacyIds?.includes(requestedThemeId));
+    : sourceCatalogue.themes.find((theme) => theme.id === requestedThemeId);
   if (requestedThemeId !== null && !selectedTheme) {
     throw new Error(`Host appearance theme ${JSON.stringify(requestedThemeId)} is not installed.`);
   }
@@ -480,16 +561,8 @@ async function appearanceBuildPayload(
   let normalizedOptions = raw?.options;
   let tokenLayers = selectedTheme?.defaultTokens ?? { shared: {}, light: {}, dark: {} };
   if (raw?.options && selectedTheme) {
-    if (typeof selectedTheme.headlessEntry !== "string") {
-      throw new Error(`Theme ${JSON.stringify(themeId)} is missing its generated headless entry.`);
-    }
-    const entry = resolve(dirname(catalogPath), selectedTheme.headlessEntry);
-    const themeModule = await importNodeModule(pathToFileURL(entry).href);
-    const definitions = assertThemeCatalogue(themeModule.themes as readonly ThemeDefinition<unknown>[]);
     const definition = definitions.find((candidate) => candidate.id === themeId);
-    if (!definition) {
-      throw new Error(`Theme ${JSON.stringify(themeId)} is missing from ${selectedTheme.headlessEntry}.`);
-    }
+    if (!definition) throw new Error(`Theme ${JSON.stringify(themeId)} is missing its generated definition.`);
     const resolvedOptions = resolveThemeOptions(definition, raw.options);
     normalizedOptions = { version: resolvedOptions.version, value: resolvedOptions.value };
     tokenLayers = resolvedOptions.tokens;
@@ -505,10 +578,10 @@ async function appearanceBuildPayload(
     .update(sourceCatalogue.fingerprint)
     .update(JSON.stringify(normalizedHost))
     .digest("hex");
-  const catalogue: AppearanceBuildPayload["catalogue"] = {
+  const catalogue: AppearanceBootstrapPayload["catalogue"] = {
     schema: sourceCatalogue.schema,
     fingerprint: sourceCatalogue.fingerprint,
-    themes: sourceCatalogue.themes.map(({ id, legacyIds, defaultTokens }) => ({ id, legacyIds, defaultTokens })),
+    themes: sourceCatalogue.themes.map(({ id, defaultTokens }) => ({ id, defaultTokens })),
   };
   return {
     fingerprint,
@@ -517,38 +590,35 @@ async function appearanceBuildPayload(
       fingerprint,
     },
     catalogue,
-    tokenNames: THEME_TOKEN_NAMES,
   };
 }
 
-async function importNodeModule(specifier: string): Promise<{ themes?: unknown }> {
-  // Vite's config runner rewrites lexical import() calls through its module
-  // transport, which may close while an async user config is still resolving.
-  // Keep canonical generated file URLs on Node's native ESM loader.
-  const load = Function("specifier", "return import(specifier)") as (value: string) => Promise<{ themes?: unknown }>;
-  return load(specifier);
-}
-
-function angeeAppearancePlugin(payload: AppearanceBuildPayload): Plugin {
-  const serialized = JSON.stringify(payload).replaceAll("<", "\\u003c");
+function angeeAppearancePlugin(): Plugin & { update(payload: AppearanceBootstrapPayload): void } {
+  let payload: AppearanceBootstrapPayload | undefined;
+  let bootstrap: Promise<string> | undefined;
   return {
     name: "angee:appearance",
+    update(next) {
+      payload = next;
+      bootstrap = undefined;
+    },
     resolveId(id) {
       return id === VIRTUAL_APPEARANCE ? RESOLVED_VIRTUAL_APPEARANCE : undefined;
     },
     load(id) {
+      if (id !== RESOLVED_VIRTUAL_APPEARANCE || !payload) return;
       const { tokenLayers: _tokenLayers, ...appearance } = payload.host;
-      return id === RESOLVED_VIRTUAL_APPEARANCE
-        ? `export const appearance = ${JSON.stringify(appearance)}; export default appearance;`
-        : undefined;
+      return `export const appearance = ${JSON.stringify(appearance)}; export default appearance;`;
     },
     transformIndexHtml: {
       order: "pre",
-      handler() {
+      async handler() {
+        if (!payload) return;
+        bootstrap ??= appearanceBootstrapScript(payload);
         return [{
           tag: "script",
           attrs: { "data-angee-appearance-bootstrap": "" },
-          children: appearanceBootstrapScript(serialized),
+          children: await bootstrap,
           injectTo: "head-prepend",
         }];
       },
@@ -556,6 +626,37 @@ function angeeAppearancePlugin(payload: AppearanceBuildPayload): Plugin {
   };
 }
 
-function appearanceBootstrapScript(serializedPayload: string): string {
-  return `(()=>{const p=${serializedPayload},r=document.documentElement,n=new Set(p.tokenNames),themes=new Map(p.catalogue.themes.flatMap(t=>[[t.id,t],...(t.legacyIds||[]).map(a=>[a,t])])),safeValue=x=>typeof x==="string"&&x.length>0&&x.length<=256&&!/[;{}@]|url\\s*\\(|expression\\s*\\(|!important/i.test(x),safeTokens=t=>t&&typeof t==="object"&&!Array.isArray(t)&&Object.entries(t).length<=n.size&&Object.entries(t).every(([k,x])=>n.has(k)&&safeValue(x)),hostTokens=s=>({...p.host.tokenLayers.shared,...p.host.tokenLayers[s]});let v={themeId:p.host.themeId,colorSchemePreference:p.host.colorScheme,options:p.host.options,tokens:null};try{const s=localStorage.getItem("angee:appearance");if(s&&s.length<=131072){const c=JSON.parse(s),validTheme=c.themeId===null||typeof c.themeId==="string"&&themes.has(c.themeId),validScheme=c.colorSchemePreference==="light"||c.colorSchemePreference==="dark"||c.colorSchemePreference==="system";if(c.schema===1&&c.fingerprint===p.fingerprint&&validTheme&&validScheme&&(c.tokens==null||safeTokens(c.tokens))){v=c}}}catch{}v={...v,themeId:themes.get(v.themeId)?.id??v.themeId};const q=v.colorSchemePreference||"system",scheme=q==="system"?(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"):q,t=v.tokens||(v.themeId===p.host.themeId?hostTokens(scheme):(()=>{const d=themes.get(v.themeId)?.defaultTokens;return d?{...(d.shared||{}),...(d[scheme]||{})}:{}})());if(v.themeId)r.dataset.themeId=v.themeId;else delete r.dataset.themeId;r.dataset.colorScheme=scheme;r.dataset.theme=scheme;r.style.colorScheme=scheme;for(const [k,x] of Object.entries(t||{})){if(n.has(k)&&safeValue(x))r.style.setProperty(k,x)}})();`;
+async function appearanceBootstrapScript(payload: AppearanceBootstrapPayload): Promise<string> {
+  // Library entries are normalized to absolute paths before plugin resolution.
+  const entry = fileURLToPath(new URL("./appearance-bootstrap.virtual.js", import.meta.url));
+  const runtime = fileURLToPath(import.meta.resolve("@angee/ui/theme-runtime"));
+  // Vite owns dependency closure and minification; no second token validator or
+  // function-source serializer lives in app configuration. Write nothing to disk.
+  const result = await build({
+    configFile: false,
+    envFile: false,
+    publicDir: false,
+    logLevel: "silent",
+    plugins: [{
+      name: "angee:appearance-entry",
+      resolveId(id) { return id === entry ? entry : undefined; },
+      load(id) {
+        return id === entry
+          ? `import { bootstrapAppearance } from ${JSON.stringify(runtime)}; bootstrapAppearance(${JSON.stringify(payload)});`
+          : undefined;
+      },
+    }],
+    build: {
+      write: false,
+      minify: true,
+      lib: { entry, name: "AngeeAppearanceBootstrap", fileName: "appearance-bootstrap", formats: ["iife"] },
+    },
+  });
+  const outputs = Array.isArray(result) ? result : [result];
+  const chunks = outputs.flatMap((output) => "output" in output ? output.output : []);
+  if (chunks.length !== 1 || chunks[0]?.type !== "chunk") {
+    throw new Error("Appearance bootstrap must compile to one synchronous script.");
+  }
+  // Keep HTML's script parser from interpreting a closing tag inside a JS string.
+  return chunks[0].code.replace(/<\/script/gi, "<\\/script");
 }

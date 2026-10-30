@@ -29,8 +29,8 @@ from django.utils import timezone
 from openai import DefaultHttpxClient, OpenAI
 from rebac import system_context
 
+from angee.base.models.identity import public_id_for
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
-from angee.identity import public_id_for
 from angee.integrate import queue as integrate_queue
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.events import EventKind
@@ -841,7 +841,7 @@ def test_vcs_bridge_child_creation_creates_parent_identity(composed_tables: None
             {"api_key": "x"},
         )
         vendor = Vendor.objects.create(slug="vcs-child", display_name="VCS Child")
-        assert VcsBridge.impl_key_for("backend_class", "STUB", default="local") == "stub"
+        assert VcsBridge._meta.get_field("backend_class").key_for("STUB") == "stub"
         bridge = VcsBridge.objects.create(
             vendor=vendor,
             credential=credential,
@@ -1893,7 +1893,7 @@ def test_model_save_rejects_backend_switch_and_scopes_partial_config_validation(
 def test_non_create_only_impl_field_remains_editable(composed_tables: None) -> None:
     """The integration invariant does not freeze unrelated implementation selectors."""
 
-    provider_field = OAuthClient.impl_field("provider_type")
+    provider_field = OAuthClient._meta.get_field("provider_type")
     first, second, *_rest = provider_field.registered_keys()
     with system_context(reason="test.integrate.mutable_impl_field"):
         client = OAuthClient.objects.create(

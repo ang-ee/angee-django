@@ -14,24 +14,22 @@ from django.test import override_settings
 from django.test.utils import isolate_apps
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer, field_validator
 
-from angee.data.form_specs import model_config_form_spec
-from angee.impl import (
+from angee.base.fields.implementation import ImplClassField, impl_choices_enum
+from angee.base.hooks import resolve_hook, resolve_hooks
+from angee.base.implementations import (
     ImplBase,
     ImplChoice,
-    ImplClassField,
-    ImplDefaultsMixin,
     check_impl_registry,
     impl_choices,
-    impl_choices_enum,
     resolve_all_impl_classes,
-    resolve_hook,
-    resolve_hooks,
     resolve_impl_class,
 )
+from angee.base.models.implementations import ImplDefaultsMixin
+from angee.base.schemas.forms import config_form_spec
 from angee.integrate_github.backend import GitHubBackend
 from angee.integrate_vcs.backend import LocalVCSBackend
 from angee.storage.backends import LocalBackend, StorageBackend
-from tests.conftest import Integration, OAuthClient, VcsBridge
+from tests.conftest import OAuthClient, VcsBridge
 from tests.tables import model_tables
 
 
@@ -102,17 +100,17 @@ class _UnsupportedConfigImpl(_BaseImpl):
 
 
 def test_impl_owner_public_import_contract() -> None:
-    """The impl mechanism has one public owner and no split legacy modules."""
+    """Implementation fields, registry contracts and row defaults expose explicit owners."""
 
-    from angee.impl import (  # noqa: PLC0415
+    from angee.base.fields.implementation import ImplClassField
+    from angee.base.implementations import (
         ImplBase,
         ImplChoice,
-        ImplClassField,
-        ImplDefaultsMixin,
         impl_registry,
         resolve_all_impl_classes,
         resolve_impl_class,
     )
+    from angee.base.models.implementations import ImplDefaultsMixin
 
     assert ImplBase.__name__ == "ImplBase"
     assert ImplChoice.__name__ == "ImplChoice"
@@ -137,7 +135,6 @@ def test_hooks_resolve_optional_single_and_declared_list_order() -> None:
         assert resolve_hook("ANGEE_TEST_HOOK") is len
     with override_settings(ANGEE_TEST_HOOKS=["builtins.sorted", "builtins.len", "builtins.sorted"]):
         assert resolve_hooks("ANGEE_TEST_HOOKS") == (sorted, len, sorted)
-        assert resolve_hooks("ANGEE_TEST_HOOKS", sorted_unique=True) == (len, sorted)
 
 
 @pytest.mark.parametrize("path", ["builtins.MissingHook", "builtins.Ellipsis"])
@@ -198,8 +195,7 @@ def test_impl_registry_and_field_collect_every_registry_fault() -> None:
     assert isinstance(faults[2], ImproperlyConfigured)
 
     field = ImplClassField(_BaseImpl)
-    assert [error.id for error in field.check()] == ["angee.E032"]
-    errors = check_impl_registry(_BaseImpl, obj=field)
+    errors = field.check()
     assert [error.id for error in errors] == ["angee.E003", "angee.E004", "angee.E004"]
     assert all(error.obj is field for error in errors)
     assert "MissingImpl" in errors[0].msg
@@ -216,7 +212,7 @@ def test_rowless_registry_checks_config_form_declarations() -> None:
     assert [error.id for error in errors] == ["angee.E005"]
     assert "config.headers" in errors[0].msg
     field = ImplClassField(_BaseImpl)
-    assert [error.id for error in field.check()] == ["angee.E032"]
+    assert [error.id for error in field.check()] == ["angee.E005"]
 
 
 @override_settings(ANGEE_TEST_IMPLS=["not a registry"])
@@ -251,7 +247,8 @@ def test_rowless_choices_share_field_metadata_and_order() -> None:
     field = ImplClassField(_BaseImpl)
     choices = impl_choices(_BaseImpl)
 
-    assert choices == field.impl_choices() == [_BaseImpl.choice(), _TypedConfigImpl.choice()]
+    assert tuple(choice.key for choice in choices) == field.registered_keys()
+    assert choices == [_BaseImpl.choice(), _TypedConfigImpl.choice()]
 
 
 @override_settings(ANGEE_ENUM_TEST_CLASSES={"base": "tests.test_impl._EnumImpl"})
@@ -287,7 +284,6 @@ def test_native_impl_field_uses_its_registry_key() -> None:
     assert field.check() == []
     assert (
         impl_choices(StorageBackend)
-        == field.impl_choices()
         == [ImplChoice(key="local", label="local", icon="", category="", defaults={}, config_schema=None)]
     )
 
@@ -320,13 +316,6 @@ def test_historical_impl_field_loads_when_its_registry_was_renamed() -> None:
     assert "choices" not in reconstructed.deconstruct()[3]
     assert reconstructed.deconstruct()[3]["registry_setting"] == "ANGEE_RENAMED_IMPLS"
 
-
-def test_model_impl_field_is_the_public_declared_accessor() -> None:
-    """Models expose their impl field through the declared public seam."""
-
-    with pytest.raises(FieldDoesNotExist, match="Integration.lifecycle is not an ImplClassField"):
-        Integration.impl_field("lifecycle")
-    assert not hasattr(Integration, "_impl_field")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -552,9 +541,8 @@ def test_no_model_config_parser_rejects_values_without_changing_untyped_rows() -
 
     raw = {"arbitrary": ["retained"]}
     bridge = VcsBridge(backend_class="stub", config=raw)
-    impl = VcsBridge.impl_field("backend_class").resolve_class("stub")
+    impl = VcsBridge._meta.get_field("backend_class").resolve_class("stub")
     assert impl.config_model is None
-    assert impl.declared_config_keys() is None
     bridge.validate_impl_configs()
     assert bridge.config is raw
 
@@ -791,7 +779,7 @@ def test_typed_config_validates_relation_form_metadata_at_projection() -> None:
     class RelatedConfig(BaseModel):
         target_id: str = Field(json_schema_extra={"relation": relation})
 
-    spec = model_config_form_spec(RelatedConfig, owner="RelatedConfig")
+    spec = config_form_spec(RelatedConfig.model_json_schema(by_alias=True), owner="RelatedConfig")
     assert spec["properties"]["target_id"]["relation"] == relation
 
     class InvalidFilterConfig(BaseModel):
@@ -801,13 +789,13 @@ def test_typed_config_validates_relation_form_metadata_at_projection() -> None:
         }})
 
     with pytest.raises(ImproperlyConfigured, match="invalid relation"):
-        model_config_form_spec(InvalidFilterConfig, owner="InvalidFilterConfig")
+        config_form_spec(InvalidFilterConfig.model_json_schema(by_alias=True), owner="InvalidFilterConfig")
 
     class InvalidKindConfig(BaseModel):
         target_ids: list[str] = Field(json_schema_extra={"relation": {"resource": "demo.Target"}})
 
     with pytest.raises(ImproperlyConfigured, match="relation on a non-string field"):
-        model_config_form_spec(InvalidKindConfig, owner="InvalidKindConfig")
+        config_form_spec(InvalidKindConfig.model_json_schema(by_alias=True), owner="InvalidKindConfig")
 
     class InvalidWidgetConfig(BaseModel):
         target_id: str = Field(json_schema_extra={
@@ -815,7 +803,7 @@ def test_typed_config_validates_relation_form_metadata_at_projection() -> None:
         })
 
     with pytest.raises(ImproperlyConfigured, match="relation with a non-relation widget"):
-        model_config_form_spec(InvalidWidgetConfig, owner="InvalidWidgetConfig")
+        config_form_spec(InvalidWidgetConfig.model_json_schema(by_alias=True), owner="InvalidWidgetConfig")
 
 
 def test_typed_config_projects_nested_arrays_nullable_and_enum_contracts() -> None:
@@ -967,7 +955,7 @@ def test_config_form_spec_resolves_escaped_local_references(monkeypatch: pytest.
     schema["$defs"] = {"Text/~ value": {"type": "string", "minLength": 2}}
     schema["properties"]["value"] = {"$ref": "#/$defs/Text~1~0%20value", "title": "Value"}
     monkeypatch.setattr(ReferencedConfig, "model_json_schema", lambda **kwargs: schema)
-    spec = model_config_form_spec(ReferencedConfig, owner="ReferencedConfig")
+    spec = config_form_spec(ReferencedConfig.model_json_schema(by_alias=True), owner="ReferencedConfig")
 
     assert spec["properties"]["value"] == {
         "type": "string", "minLength": 2, "label": "Value", "presenceRequired": True,
@@ -985,7 +973,7 @@ def test_config_form_spec_rejects_unresolved_or_remote_references(
     schema["properties"]["value"] = {"$ref": reference}
     monkeypatch.setattr(ReferencedConfig, "model_json_schema", lambda **kwargs: schema)
     with pytest.raises(ImproperlyConfigured, match=r"ReferencedConfig.*config\.value.*reference"):
-        model_config_form_spec(ReferencedConfig, owner="ReferencedConfig")
+        config_form_spec(ReferencedConfig.model_json_schema(by_alias=True), owner="ReferencedConfig")
 
 
 def test_config_form_spec_rejects_pointers_into_scoped_resources(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -997,7 +985,7 @@ def test_config_form_spec_rejects_pointers_into_scoped_resources(monkeypatch: py
     schema["properties"]["value"] = {"$ref": "#/$defs/Scoped/$defs/Value"}
     monkeypatch.setattr(ReferencedConfig, "model_json_schema", lambda **kwargs: schema)
     with pytest.raises(ImproperlyConfigured, match=r"ReferencedConfig.*config\.value.*reference"):
-        model_config_form_spec(ReferencedConfig, owner="ReferencedConfig")
+        config_form_spec(ReferencedConfig.model_json_schema(by_alias=True), owner="ReferencedConfig")
 
 
 def test_typed_config_rejects_recursive_models_and_preserves_string_aliases() -> None:
@@ -1056,7 +1044,7 @@ def test_materialize_seeds_only_unprovided_fields() -> None:
     """Materialise fills fields the caller did not supply; a supplied field is kept."""
 
     client = OAuthClient(authorize_endpoint="https://kept/authorize")
-    changed = _RefinedImpl.materialize(client, provided=frozenset({"authorize_endpoint"}))
+    changed = client.materialize_impl_defaults(_RefinedImpl, provided=frozenset({"authorize_endpoint"}))
     assert client.authorize_endpoint == "https://kept/authorize"  # supplied → kept
     assert client.token_endpoint == "https://refined/token"  # unsupplied → seeded
     assert client.userinfo_endpoint == "https://refined/userinfo"  # unsupplied → seeded
@@ -1067,7 +1055,7 @@ def test_materialize_seeds_boolean_default_when_unprovided() -> None:
     """A boolean default lands when omitted (the create-path fix), not just blank scalars."""
 
     client = OAuthClient()  # login_enabled model default is False
-    _BoolImpl.materialize(client, provided=frozenset())
+    client.materialize_impl_defaults(_BoolImpl, provided=frozenset())
     assert client.login_enabled is True
 
 
@@ -1075,7 +1063,7 @@ def test_materialize_keeps_explicit_value_equal_to_default() -> None:
     """A supplied value is never overwritten, even when it equals the model default."""
 
     client = OAuthClient(login_enabled=False)
-    changed = _BoolImpl.materialize(client, provided=frozenset({"login_enabled"}))
+    changed = client.materialize_impl_defaults(_BoolImpl, provided=frozenset({"login_enabled"}))
     assert client.login_enabled is False  # caller's explicit False survives the impl's True
     assert changed == set()
 
@@ -1087,7 +1075,7 @@ def test_post_construction_ingress_can_mark_explicit_fields() -> None:
     client.login_enabled = False
     client.mark_impl_provided_fields({"login_enabled"})
 
-    changed = _BoolImpl.materialize(client, provided=client._impl_provided_fields)
+    changed = client.materialize_impl_defaults(_BoolImpl, provided=client._impl_provided_fields)
 
     assert client.login_enabled is False
     assert changed == set()
@@ -1098,8 +1086,8 @@ def test_materialize_deep_copies_mutable_defaults() -> None:
 
     first = OAuthClient()
     second = OAuthClient()
-    _ConfigBase.materialize(first, provided=frozenset())
-    _ConfigBase.materialize(second, provided=frozenset())
+    first.materialize_impl_defaults(_ConfigBase, provided=frozenset())
+    second.materialize_impl_defaults(_ConfigBase, provided=frozenset())
     assert first.authorize_params == second.authorize_params
     assert first.authorize_params is not second.authorize_params
     assert first.authorize_params is not _ConfigBase.defaults["authorize_params"]
@@ -1116,7 +1104,7 @@ def test_materialize_fk_default_requires_declared_slug() -> None:
         class Meta:
             app_label = "tests"
 
-    class NeedsNoSlug(models.Model):
+    class NeedsNoSlug(ImplDefaultsMixin):
         """Model receiving an FK impl default."""
 
         target = models.ForeignKey(NoSlug, on_delete=models.CASCADE)
@@ -1129,7 +1117,7 @@ def test_materialize_fk_default_requires_declared_slug() -> None:
         defaults = {"target": "missing"}
 
     with pytest.raises(FieldDoesNotExist):
-        _BrokenFkImpl.materialize(NeedsNoSlug(), provided=frozenset())
+        NeedsNoSlug().materialize_impl_defaults(_BrokenFkImpl, provided=frozenset())
 
 
 def test_form_spec_json_fields_preserve_structured_siblings_and_typed_validation():
@@ -1139,12 +1127,12 @@ def test_form_spec_json_fields_preserve_structured_siblings_and_typed_validation
         payload: dict[str, int] = Field(default_factory=dict)
         timeout: float = Field(default=10, gt=0)
 
-    spec = model_config_form_spec(OpenConfig, owner="OpenConfig", json_fields=True)
+    spec = config_form_spec(OpenConfig.model_json_schema(by_alias=True), owner="OpenConfig", json_fields=True)
     assert spec["properties"]["label"]["type"] == "string"
     assert spec["properties"]["payload"]["widget"] == "json"
     assert spec["properties"]["timeout"]["widget"] == "json"
     with pytest.raises(ImproperlyConfigured, match="mapping/additionalProperties"):
-        model_config_form_spec(OpenConfig, owner="OpenConfig")
+        config_form_spec(OpenConfig.model_json_schema(by_alias=True), owner="OpenConfig")
     class Configured(ImplBase):
         config_model = OpenConfig
     with pytest.raises(ValidationError) as refused:
@@ -1170,7 +1158,7 @@ def test_json_form_projection_uses_the_same_rejection_path_for_every_nonroot_sha
     with pytest.raises(ValidationError):
         JsonImpl.parse_config({"patterned": "INVALID"})
     with pytest.raises(ImproperlyConfigured, match="pattern"):
-        model_config_form_spec(Config, owner="Config")
+        config_form_spec(Config.model_json_schema(by_alias=True), owner="Config")
 
 
 def test_annotation_precheck_retains_nullable_and_referenced_relation_fields():
@@ -1181,7 +1169,7 @@ def test_annotation_precheck_retains_nullable_and_referenced_relation_fields():
         nullable: str | None = Field(default=None, json_schema_extra={"relation": {"resource": "demo.Target"}})
         referenced: Target = Field(json_schema_extra={"relation": {"resource": "demo.Target"}})
 
-    fields = model_config_form_spec(Config, owner="Config", json_fields=True)["properties"]
+    fields = config_form_spec(Config.model_json_schema(by_alias=True), owner="Config", json_fields=True)["properties"]
     assert fields["nullable"]["nullable"] and fields["nullable"]["relation"]["resource"] == "demo.Target"
     assert fields["referenced"]["enum"] == ["first"] and fields["referenced"]["relation"]["resource"] == "demo.Target"
 
@@ -1199,7 +1187,7 @@ def test_json_fallback_never_hides_nested_form_annotation_errors(annotation, mon
         mapping: dict[str, Nested]
 
     with pytest.raises(ImproperlyConfigured, match="form annotation"):
-        model_config_form_spec(Config, owner="Config", json_fields=True)
+        config_form_spec(Config.model_json_schema(by_alias=True), owner="Config", json_fields=True)
     class BadAnnotation(_BaseImpl):
         key = "bad_annotation"
         config_model = Config
@@ -1209,7 +1197,7 @@ def test_json_fallback_never_hides_nested_form_annotation_errors(annotation, mon
         assert [error.id for error in check_impl_registry(_BaseImpl)] == ["angee.E005"]
 
 def test_relation_annotation_errors_retain_the_native_location():
-    from angee.data.form_specs import check_form_annotations
+    from angee.base.schemas.forms import check_form_annotations
 
     relation = {"resource": "demo.Target", "create": {"resource": 0}}
     with pytest.raises(ValidationError, match="invalid relation at create.resource"):
@@ -1219,7 +1207,7 @@ def test_relation_annotation_errors_retain_the_native_location():
         target: str = Field(json_schema_extra={"relation": relation})
 
     with pytest.raises(ImproperlyConfigured, match="invalid relation at create.resource"):
-        model_config_form_spec(Config, owner="Config", json_fields=True)
+        config_form_spec(Config.model_json_schema(by_alias=True), owner="Config", json_fields=True)
 
 
 def test_namespaced_relation_widgets_survive_config_form_projection():
@@ -1228,6 +1216,6 @@ def test_namespaced_relation_widgets_survive_config_form_projection():
             "widget": "demo.target", "relation": {"resource": "demo.Target"},
         })
 
-    schema = model_config_form_spec(Config, owner="Config")
+    schema = config_form_spec(Config.model_json_schema(by_alias=True), owner="Config")
     assert schema["properties"]["target"]["widget"] == "demo.target"
     assert schema["properties"]["target"]["relation"] == {"resource": "demo.Target"}

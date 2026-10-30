@@ -1,4 +1,4 @@
-"""Sentry starts only for a configured DSN and never receives sanitized GraphQL data."""
+"""Configured Sentry clients receive only the GraphQL owner's safe diagnostic events."""
 
 from __future__ import annotations
 
@@ -19,7 +19,8 @@ from sentry_sdk.envelope import Envelope
 from sentry_sdk.transport import Transport
 from strawberry.django.views import GraphQLView
 
-from angee.compose.project import ProjectContract
+from angee.base.conf import _start_error_reporting
+from angee.graphql.autoconfig import SETTINGS as GRAPHQL_SETTINGS
 from angee.graphql.schema import GraphQLSchemas
 from tests.test_graphql import addon
 from tests.test_settings_composition_errors import _environment, _project
@@ -47,10 +48,12 @@ class _Query:
 _PROBE = """
 import json
 import sentry_sdk
-from angee.compose.project import ProjectContract
+from pathlib import Path
+from angee.base.conf import configure
 
 try:
-    ProjectContract({"__name__": "probe_settings"}).compose()
+    configure({"__name__": "probe_settings", "__file__": str(Path("settings.py").resolve()),
+               "COMPOSE_OUTPUT_DIR": Path("runtime").resolve()})
     failure = None
 except Exception as error:
     failure = type(error).__name__
@@ -79,21 +82,24 @@ class _RecordingTransport(Transport):
         self.events.extend(event for item in envelope.items if (event := item.get_event()) is not None)
 
 
-def _compose(tmp_path: Path, **environment: str) -> dict[str, Any]:
+def _compose(tmp_path: Path, *, installed_apps: tuple[str, ...] = (), **environment: str) -> dict[str, Any]:
     """Compose the project in tmp_path in a fresh interpreter and report Sentry's client."""
 
     if not (tmp_path / "settings.yaml").exists():
         (tmp_path / "settings.yaml").write_text(
-            'SECRET_KEY: isolated-error-reporting-test\nINSTALLED_APPS: []\nANGEE_RUNTIME_DIR: "{BASE_DIR}/runtime"\n',
+            "SECRET_KEY: isolated-error-reporting-test\n"
+            f"INSTALLED_APPS: {json.dumps(installed_apps)}\n"
+            'COMPOSE_OUTPUT_DIR: "{BASE_DIR}/runtime"\n',
             encoding="utf-8",
         )
     env = _environment(tmp_path)
     for name in ("SENTRY_DSN", "SENTRY_ENVIRONMENT", "SENTRY_RELEASE"):
         env.pop(name, None)
     env.update(environment)
+    env["DJANGO_COMPOSE_MODE"] = "write"
     result = subprocess.run(
         [sys.executable, "-c", _PROBE],
-        cwd=Path(__file__).resolve().parents[1],
+        cwd=tmp_path,
         env=env,
         capture_output=True,
         text=True,
@@ -121,7 +127,15 @@ def test_a_dsn_starts_sentry_with_privacy_preserving_options(tmp_path: Path, env
         "max_request_body_size": "never",
     }
     assert {"django", "celery", "logging"} <= set(client["integrations"])
+
+
+def test_graphql_declares_its_native_capture_exclusion(tmp_path: Path) -> None:
+    client = _compose(tmp_path, installed_apps=("angee.graphql",), SENTRY_DSN=DSN)
+
+    assert client["failure"] is None
+    assert client["active"] is True
     assert "strawberry" not in client["integrations"]
+    assert {"django", "celery", "logging"} <= set(client["integrations"])
 
 
 def test_a_composition_failure_is_reported(tmp_path: Path) -> None:
@@ -134,13 +148,17 @@ def test_a_composition_failure_is_reported(tmp_path: Path) -> None:
 
 @pytest.mark.django_db
 def test_graphql_failures_reach_sentry_once_without_sanitized_values(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replay ProjectContract's own Sentry options against the GraphQL view."""
+    """Replay base configure's own Sentry options against the GraphQL view."""
 
     start = sentry_sdk.init
     recorded: list[dict[str, Any]] = []
     monkeypatch.setattr(sentry_sdk, "init", lambda **options: recorded.append(options))
     monkeypatch.setenv("SENTRY_DSN", DSN)
-    ProjectContract({})._start_error_reporting()
+    import environ
+
+    _start_error_reporting(
+        {"SENTRY_DISABLED_INTEGRATIONS": GRAPHQL_SETTINGS["SENTRY_DISABLED_INTEGRATIONS:append"]}, environ.Env(),
+    )
     [options] = recorded
 
     schema = GraphQLSchemas([addon(public={"query": [_Query]})]).build("public")

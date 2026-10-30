@@ -54,6 +54,14 @@
     "./vitest": {
       "types": "./config/vitest.ts",
       "import": "./config/vitest.ts"
+    },
+    "./shell-runtime": {
+      "types": "./src/shell-settings.d.mts",
+      "import": "./src/shell-settings.mjs"
+    },
+    "./web-codegen": {
+      "types": "./src/web-codegen.d.mts",
+      "import": "./src/web-codegen.mjs"
     }
   },
   "publishConfig": {
@@ -99,13 +107,21 @@
       "./vitest": {
         "types": "./dist/config/vitest.d.ts",
         "default": "./dist/config/vitest.js"
+      },
+      "./shell-runtime": {
+        "types": "./dist/shell-settings.d.mts",
+        "default": "./dist/shell-settings.mjs"
+      },
+      "./web-codegen": {
+        "types": "./dist/web-codegen.d.mts",
+        "default": "./dist/web-codegen.mjs"
       }
     }
   },
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R dist/src/. dist && rm -rf dist/src && mkdir -p dist/bin && cp bin/angee-web-codegen.mjs dist/bin/angee-web-codegen.mjs"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R dist/src/. dist && rm -rf dist/src && mkdir -p dist/bin && cp bin/angee-web-codegen.mjs dist/bin/angee-web-codegen.mjs && cp src/shell-settings.mjs src/shell-settings.d.mts src/web-codegen.mjs src/web-codegen.d.mts dist/"
   },
   "dependencies": {
     "@angee/logo-react": "^0.2.1",
@@ -118,7 +134,7 @@
     "@sentry/react": "^11.4.0",
     "graphql": "^16.14.0",
     "i18next": "^26.3.2",
-    "nuqs": "^2.5.0"
+    "nuqs": "^2.10.1"
   },
   "peerDependencies": {
     "@tailwindcss/vite": "^4.0.0",

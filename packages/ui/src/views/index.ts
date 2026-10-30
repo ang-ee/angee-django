@@ -194,7 +194,7 @@ export {
   RelationFieldWidget,
   type RelationFieldWidgetProps,
 } from "./relation/RelationFieldWidget";
-export { RecordReference, RecordReferenceRow, type RecordReferenceProps, type RecordReferenceRowProps } from "./relation/RecordReference";
+export { RecordReference, RecordReferencePreview, useRecordReference, REFERENCE_CONTAINERS, RecordReferenceRow, type RecordReferenceProps, type RecordReferenceRowProps } from "./relation/RecordReference";
 export {
   RelationMultiFieldWidget,
   type RelationMultiFieldWidgetProps,
@@ -404,6 +404,7 @@ export {
 } from "./relation/relation-facet";
 export {
   useRelationOptions,
+  useRelationPickerOptions,
   useRelationSelectedOption,
   relationOptionsFromRows,
   relationSelectedOption,

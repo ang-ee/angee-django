@@ -2,6 +2,7 @@
 {# variables, then include the one shared manifest body. The include path resolves #}
 {# from the template root that holds copier.yml, as Copier resolves includes. #}
 {% set stack_flavor = "framework" %}
+{% set container_project_dir = "/app" %}
 {% set ingress_domain_value = ingress_domain %}
 {# The OPERATOR owns path-input translation (copierx.ResolvePathInputs): every render #}
 {# flow rewrites a relative `type: path` input to be ANGEE_ROOT-relative before this #}
@@ -9,9 +10,9 @@
 {# stack root (ANGEE_ROOT=.), so the defaults arrive as "." and the src slot path. #}
 {% set app_source = project_path %}
 {% set framework_source = framework_path %}
-{# The rendered project pyproject owns framework resolution (django-angee editable #}
-{# from the framework slot, postgres extra baked into the dep) and pins uv's cache #}
-{# to the stack-owned caches/uv — so process commands run bare `uv run` with no #}
+{# The rendered project pyproject owns framework resolution (the editable angee #}
+{# meta-distribution from the framework slot, postgres extra baked into the dep) #}
+{# and pins uv's cache to stack-owned caches/uv — commands run bare `uv run` with no #}
 {# --project, no --extra, and no UV_CACHE_DIR override in any layout. #}
 {# Process mode reaches published ports; Docker mode uses Compose DNS and the host gateway. #}
 {# Guarded sets stay on one physical line for pongo2 and the contract-test mini-renderer. #}

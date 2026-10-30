@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from copy import copy
 from typing import Any
 
 import pytest
@@ -14,17 +15,12 @@ from rebac import system_context
 
 from angee.agents.models import AgentLifecycle, SessionStatus, TurnStatus
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceProvider
-from angee.fields import StateField
+from angee.base.exceptions import TransitionNotAllowed
+from angee.base.fields.state import StateField
+from angee.base.models.base import AngeeModel
+from angee.base.models.transitions import StateTransitions, get_transition_save_field, save_state, transition
 from angee.integrate.models import IntegrationLifecycle
 from angee.integrate.testing.integration import Integration
-from angee.models import (
-    AngeeModel,
-    StateTransitions,
-    TransitionNotAllowed,
-    get_transition_save_field,
-    save_state,
-    transition,
-)
 from tests.conftest import make_integration
 from tests.tables import model_tables
 
@@ -168,10 +164,10 @@ def test_field_names_include_both_state_transition_declarations() -> None:
 
 
 @isolate_apps()
-def test_transition_host_requires_angee_model() -> None:
+def test_transition_host_requires_state_transitions_mixin() -> None:
     """A concrete host must compose the owner of guarded reload authorization."""
 
-    with pytest.raises(ImproperlyConfigured, match=r"tests.PlainTransitionTask.*AngeeModel"):
+    with pytest.raises(ImproperlyConfigured, match=r"tests.PlainTransitionTask.*StateTransitionsMixin"):
         class PlainTransitionTask(models.Model):
             state = StateField(choices_enum=TransitionTask.State, default=TransitionTask.State.DRAFT)
             state_transitions = StateTransitions(state, {})
@@ -192,7 +188,10 @@ def test_composition_missing_declared_state_field_names_host_and_declaration() -
             app_label = "tests"
             abstract = True
 
-    with pytest.raises(ImproperlyConfigured, match=r"tests.MissingStateTask.state_transitions.*'state'"):
+    with pytest.raises(
+        ImproperlyConfigured,
+        match=r"tests.test_transitions.*MissingStateTask.state_transitions.*'state'",
+    ):
         class MissingStateTask(StateSource):
             state = None
 
@@ -863,34 +862,33 @@ def test_policy_marker_requires_a_policy_setting() -> None:
                 """A policy edge with no ``policy_setting`` to govern it."""
 
 
-def test_action_specs_project_declared_transitions_in_method_name_order() -> None:
-    """Action specs are a frozen public view over transition methods."""
 
-    specs = StateTransitions.action_specs(PolicyTask)
 
-    assert tuple(spec.name for spec in specs) == ("cancel", "post", "reopen")
-    assert specs == (
-        specs[0].__class__(
-            name="cancel",
-            field="state",
-            sources=("draft",),
-            target="cancelled",
-            policy=None,
-        ),
-        specs[0].__class__(
-            name="post",
-            field="state",
-            sources=("draft",),
-            target="posted",
-            policy=None,
-        ),
-        specs[0].__class__(
-            name="reopen",
-            field="state",
-            sources=("posted",),
-            target="draft",
-            policy="posted->draft",
-        ),
-    )
-    with pytest.raises(AttributeError):
-        specs[0].name = "mutated"  # type: ignore[misc]
+@isolate_apps()
+def test_scalar_state_copy_does_not_inherit_the_source_models_transition_policy() -> None:
+    """Copied column values belong to their new model, while source writes stay guarded."""
+
+    class ScalarCopy(models.Model):
+        state = copy(TransitionTask._meta.get_field("state"))
+
+        class Meta:
+            app_label = "tests"
+
+    copied = ScalarCopy(state=TransitionTask.State.DRAFT)
+    copied.state = TransitionTask.State.RUNNING
+    assert copied.state == TransitionTask.State.RUNNING
+    source = TransitionTask(state=TransitionTask.State.DRAFT)
+    with pytest.raises(TransitionNotAllowed, match="direct assignment"):
+        source.state = TransitionTask.State.RUNNING
+
+
+def test_transition_eligibility_uses_execution_guards_without_side_effects():
+    task = TransitionTask(ready=True)
+    assert task.state_transitions.can_run(task, "mark_running")
+    assert task.state == task.State.DRAFT
+    assert not hasattr(task, "body_state")
+    task.ready = False
+    assert not task.state_transitions.can_run(task, "mark_running")
+    task.ready = True
+    done = TransitionTask(state=TransitionTask.State.DONE)
+    assert not done.state_transitions.can_run(done, "mark_running")

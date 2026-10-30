@@ -115,6 +115,7 @@ export function useDashboardWidgetData(
 
   const refresh = source ? source.refresh ?? { mode: "live" as const } : { mode: "manual" as const };
   const enabled = visible && prepared.query !== null;
+  const refetchInterval = refresh.mode === "interval" ? refresh.seconds * 1_000 : false;
   const aggregateOperation = useAggregateOperation(resource);
   const groupOperation = useGroupOperation(resource);
   const wantsValue = spec.data.shape === "value" && enabled;
@@ -125,6 +126,7 @@ export function useDashboardWidgetData(
     measures: prepared.measure ? [prepared.measure] : [],
     where: prepared.where,
     enabled: wantsValue,
+    refetchInterval,
   });
   const projection = prepared.groups?.[0]?.groupBy();
   const groupOrder = spec.options.order === "group";
@@ -136,6 +138,7 @@ export function useDashboardWidgetData(
     where: prepared.where,
     pageSize: 500,
     enabled: wantsSeries,
+    refetchInterval,
   });
   const order = prepared.sort
     ? Object.fromEntries(prepared.sort.map((item) => [item.field, item.direction]))
@@ -150,6 +153,7 @@ export function useDashboardWidgetData(
       pageSize: Math.min(source?.limit ?? 10, 100),
     } : null,
     enabled: wantsRows,
+    refetchInterval,
   });
 
   const seriesResult = React.useMemo(() => {
@@ -177,16 +181,6 @@ export function useDashboardWidgetData(
       return { series: [], error: errorValue(cause) };
     }
   }, [grouped.buckets, grouped.totalCount, groupOrder, prepared.groups, prepared.measure, source?.limit, spec.kind, wantsSeries]);
-
-  React.useEffect(() => {
-    if (refresh.mode !== "interval" || !visible) return;
-    const timer = window.setInterval(() => {
-      if (wantsValue) aggregate.refetch();
-      if (wantsSeries) grouped.refetch();
-      if (wantsRows) void rows.query.refetch();
-    }, refresh.seconds * 1_000);
-    return () => window.clearInterval(timer);
-  }, [aggregate.refetch, grouped.refetch, refresh, rows.query.refetch, visible, wantsRows, wantsSeries, wantsValue]);
 
   const updatedAt = Math.max(
     wantsValue ? aggregate.updatedAt ?? 0 : 0,

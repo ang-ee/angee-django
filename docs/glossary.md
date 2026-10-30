@@ -10,10 +10,16 @@ the smallest accurate statement.
 **Angee** — a thin composition framework that binds proven libraries into one
 deterministic product surface. It owns the seams, not the concerns.
 
-**Addon** — the unit of capability. An addon declares a contract (source models,
-operations, routes, containers, resources) that the composer assembles into a project.
-Everything that gives a product a capability, including its API protocol, is an
-addon. The framework core is not. **Addon** is also the user-facing name;
+**Component** — a Python distribution authored by `pyproject.toml`. For the
+current django-compose contract, each participating component provides one Django
+app; models, a custom AppConfig and a provisioning hook are optional. Installed
+identity, version and requirements come from native distribution metadata.
+
+**Addon** — an Angee component advertised by an `angee.addons` entry point.
+Its package declares requirements and capability facts; its Python
+and web modules implement those capabilities. Installation makes it available;
+project roots and their required apps determine whether it is enabled.
+**Addon** is also the user-facing name;
 **App** is reserved for a domain root or an included, non-flattened app in the
 product rail.
 
@@ -21,27 +27,30 @@ product rail.
 shows root apps and their sub-apps at most two levels; each app's own menu items
 belong in the top bar.
 
-**Framework core** — Angee's composition language and loom: the data contract,
-composer, model toolkit, serving seams, and jobs seam. It is the `django-angee`
-wheel, not an addon.
+**Framework addon** — a reusable capability shipped with Angee under `src/`.
+Foundation primitives belong to `angee.base`, HTTP serving policy to
+`angee.server`, and generic composition to the independent `django-compose`
+library. There is no separate Angee core package.
 
-**Framework addon** — a reusable product capability that is part of Angee itself
-and builds on the framework core. Framework addons live under `addons/`.
-
-**Base addon** — a synonym for framework addon, not another architectural level.
+**Foundation addon (`angee.base`)** — the reusable model foundation: models,
+mixins, fields, managers, querysets, identity, validation, permission integration,
+deployment settings and its permission-synchronization provision hook. Its
+persisted Django app label is `base`.
 
 **Consumer addon** — an addon written by a product team for a specific project,
-built on top of the framework and base addons.
+built on top of the framework and its reusable addons.
 
-**Composer** — the framework machinery that resolves addon declarations and
-emits concrete model modules, permission extensions and other `runtime/`
-artifacts. It selects class definitions before Django imports and registers them;
-runtime model classes are not monkey-patched. See [The Composer](composer.md).
+**Composer** — the independent `django-compose` library. It resolves app
+selection, emits concrete models, and publishes and verifies artifacts supplied
+by capability integrations. It also owns explicit database preparation and
+readiness for the verified composition. Permission, resource and web semantics
+stay with those integrations. See [The Composer](composer.md).
 
-**Project settings** — the `settings.yaml` and optional Python settings module
-selected by `ANGEE_PROJECT_SETTINGS`. They declare root apps with Django
-`INSTALLED_APPS`, addon directories, and project-specific overrides. Angee's
-composed settings module turns that contract into the running Django settings.
+**Project settings** — the authored Python module selected by Django's
+`DJANGO_SETTINGS_MODULE`, with optional terse `settings.yaml` loaded through
+`angee.base.conf.configure`. Projects declare root `INSTALLED_APPS` and overrides;
+the loader delegates app selection and contribution merging to django-compose.
+Settings are not generated.
 
 **Project** — a runnable product: project settings, consumer addons, frontend
 entrypoints, and generated runtime output. A project is scaffolded from a
@@ -61,8 +70,8 @@ stays the project's. The two stack layouts live in the operator's
 default Host; a project *is* the Host's source. The operator is Host-agnostic — to
 it, a project is just a git Source.
 
-**Addon contract** — the addon facts declared in `addon.toml`, parsed by
-hatch-angee and consumed by composition and capability owners. Fields, executable
+**Addon contract** — the addon facts declared in `pyproject.toml`, parsed by
+native metadata readers and consumed by their capability owners. Fields, executable
 behavior and native library objects remain in their Python or web modules;
 manifest references and conventional defaults connect those implementations.
 
@@ -72,8 +81,8 @@ hooks, explicit owners, deterministic order, fail-fast on collisions.
 
 ## Backend
 
-**Source model** — an abstract Django model declared in an addon. Its own
-`runtime` and `extends` markers select its composition role; unmarked abstract
+**Source model** — an abstract Django model declared in an addon. Native `Composable` class keywords (`concrete`, `extends`, `inherits`,
+`demands`) select its composition role; unmarked abstract
 helpers are ordinary reusable bases. Edit the source model, not emitted output.
 
 **Concrete app** — the generated concrete model module and migration package
@@ -81,16 +90,17 @@ for a source Django app. Its models register under the source app's existing
 AppConfig identity. Change the source, not the generated artifact.
 
 **`runtime/`** — the directory of generated backend output (concrete apps,
-GraphQL SDL, codegen stubs, migrations). Output, not source.
+GraphQL SDL and web artifacts). Generated models/artifacts are replaceable;
+tracked native migration packages beneath it are durable project history.
 
 **Model extension (same-row)** — a narrow abstract donor with its own
-`extends = "app.Model"` and no own `runtime = True`. The donor class precedes the
+`extends="app.Model"`. The donor class precedes the
 target source in the generated model's bases, adding fields or behavior to the
 same database row.
 
 **Model extension (materialized child)** — a Django multi-table-inheritance
-child emitted from a narrow abstract source declaring both `runtime = True` and
-`extends = "app.Model"`. It shares the concrete parent's identity and stores
+child emitted from a narrow abstract `Composable` source declaring
+`inherits="app.Model"`. It shares the concrete parent's identity and stores
 kind-specific fields in its own table. Its source precedes the concrete parent
 in the generated bases, so child behavior overrides through ordinary Python MRO.
 In conversation, "extend a model" can mean either this child-row reading or the
@@ -131,13 +141,13 @@ also accepts non-user REBAC subjects.
 converts it to the FK's Python type and returns no user for other subject types.
 
 **Changeset** — attribution for one logical write, owned by
-[`changeset()`](../angee/changesets.py) and stored by the
-[provenance addon](../addons/angee/provenance/models.py).
+[`changeset()`](../src/angee/provenance/context.py) and stored by the
+[provenance addon](../src/angee/provenance/models.py).
 
 **Action / activity** — action uses FHIR AuditEvent's C/U/D verbs; activity
 classifies the logical work, including `pull`/`push` for sync, `import` for a
 one-shot import and `seed` for seed loads. The
-[`Changeset` enums](../addons/angee/provenance/models.py) own that vocabulary.
+[`Changeset` enums](../src/angee/provenance/models.py) own that vocabulary.
 
 **Write group** — an internal ephemeral identity for nested ORM dispatch. Its
 deduplication ends with the dispatch; successive writes in one changeset remain
@@ -148,17 +158,16 @@ distinct history events.
 `statements = StatementRecords(aspects=…)` gets a typed `<Model>Statement` table
 beside its history table, read through the subject like history rows and
 written only by `statements.set()` and the status verbs
-([owner](../angee/models/statements.py)).
+([owner](../src/angee/provenance/statements.py)).
 
 **Aspect** — a declared field group of a canonical model, optionally with a
-typed member (a Handle, a counterparty), carrying its survivorship strategy and
-source precedence. The aspect is the unit of resolution; a value field belongs
+typed member (a Handle, a counterparty), carrying its source precedence. The aspect is the unit of resolution; a value field belongs
 to exactly one aspect, and consumer donors contribute aspects additively.
 
 **Survivorship** — how an aspect's asserted normal-rank statements resolve onto
-the operational row through `SOURCE_PRIORITY`. Preferred person statements always
-precede it; the winner is marked **applied** and its values materialise on the
-row. A re-derivation, never a migration, when a knob flips.
+the operational row through the model's source-priority ordering. Preferred
+person statements precede normal statements; the winner is marked **applied**
+and its values materialise on the row. Changing precedence re-derives that row.
 
 **SourceKind** — the assertion-time classification of the asserting principal:
 `PERSON`, `SYSTEM_OF_RECORD`, `DIRECTORY`, `NETWORK`, `IMPORT`, `SEED`,
@@ -253,7 +262,7 @@ does not change the principal's `auth/user` identity.
 
 **Resource file** — tabular data owned by an addon and imported idempotently by
 tier (`master`, `install`, `demo`). Addons list resource files in their
-`addon.toml` `[resources]` manifest.
+`pyproject.toml` `[tool.angee.resources]` manifest.
 
 **GraphQL data resource** — a list/detail/mutation metadata contract emitted from
 a GraphQL schema contribution for the frontend data-view layer. It is a UI/API
@@ -310,19 +319,19 @@ contributes to fixed buckets, and Angee builds one Strawberry `Schema` per name.
 
 **Held reply** — an outbound draft awaiting operator approval or its scheduled
 release. Discarded and failed replies do not exclude another answer. See
-[posts reply policy](../addons/angee/posts/README.md).
+[posts reply policy](../src/angee/posts/README.md).
 
 **Reply hold** — a feed's operator-controlled release policy: approval-only,
 release after a duration, or queue immediately. See the
-[posts owner](../addons/angee/posts/models.py).
+[posts owner](../src/angee/posts/models.py).
 
 **Feed stream** — an independently ordered public-feed partition driven by
 integrate's shared stream engine; activity and history classify each record
-against the feed's live horizon. See [public feeds](../addons/angee/posts/README.md).
+against the feed's live horizon. See [public feeds](../src/angee/posts/README.md).
 
 **Delivery settlement** — messaging's reflection of provider acceptance or refusal
 into the outbound message's status, provider identity and retry schedule. See
-[the delivery owner](../addons/angee/messaging/delivery.py).
+[the delivery owner](../src/angee/messaging/delivery.py).
 
 **Workflow version** — an immutable published definition, including the
 normalized contracts of any child workflows it awaits. A run pins one version.
@@ -359,7 +368,7 @@ read, created, changed, deleted or called. Admission inputs use the same relatio
 with no step. Readers see record identities through their current read scope.
 
 **Derived-from evidence** — a frozen fact or source link admitted through
-`angee.evidence`'s standing-read check. Decisions, run inputs and
+`angee.provenance.evidence`'s standing-read check. Decisions, run inputs and
 extraction retain their own edges to this shared source identity.
 
 ## Decisions

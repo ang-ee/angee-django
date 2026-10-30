@@ -24,10 +24,11 @@ from rebac import (
     write_relationships,
 )
 
-from angee.errors import RecordAccessSubjectRefused
+from angee.base.exceptions import RecordAccessSubjectRefused
+from angee.base.models.locks import StaleRevisionError
 from angee.messaging.testing.models import Person
-from angee.models import CreationKeyConflict, StaleRevisionError
 from angee.projects.testing.models import Project, Task
+from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.conftest import Backend, Drive, create_platform_admin
 from tests.proposals_models import Answer, Proposal, Round, Topic
 from tests.test_project_access import project_access_schema as project_access_schema

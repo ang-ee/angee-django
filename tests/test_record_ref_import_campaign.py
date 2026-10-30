@@ -97,7 +97,8 @@ def test_import_resolves_child_xref_to_canonical_parent_and_reimport_keeps_ident
     replay = _import(import_reference(model), ["_xref", prefix], ["edge", "reference_import.child"], raise_errors=True)
     assert replay.rows[0].import_type == RowResult.IMPORT_TYPE_SKIP
     assert model.objects.get().pk == edge.pk
-    assert Resource.objects.filter(xref="edge").count() == 1
+    with system_context(reason="test.record_reference.ledger_readback"):
+        assert Resource.objects.filter(xref="edge").count() == 1
 
 
 def test_unresolved_xref_reports_the_failing_row_and_does_not_persist_it(import_reference):
@@ -111,7 +112,8 @@ def test_unresolved_xref_reports_the_failing_row_and_does_not_persist_it(import_
     invalid = result.invalid_rows[0]
     assert invalid.number == 2
     assert "unresolved xref 'reference_import.missing'" in str(invalid.error)
-    assert not Resource.objects.filter(xref="invalid").exists()
+    with system_context(reason="test.record_reference.ledger_readback"):
+        assert not Resource.objects.filter(xref="invalid").exists()
 
 
 @pytest.mark.parametrize("model,backing", [
@@ -129,7 +131,8 @@ def test_prefix_and_backing_column_collision_is_rejected_before_xref_resolution(
     assert f"{prefix} cannot be combined with its backing columns" in str(result.invalid_rows[0].error)
     assert "unresolved xref" not in str(result.invalid_rows[0].error)
     assert not model.objects.exists()
-    assert not Resource.objects.filter(xref="collision").exists()
+    with system_context(reason="test.record_reference.ledger_readback"):
+        assert not Resource.objects.filter(xref="collision").exists()
 
 
 @pytest.mark.parametrize("empty", [None, ""])
@@ -157,7 +160,8 @@ def test_empty_required_reference_is_a_named_field_validation_error(import_refer
     assert result.invalid_rows[0].number == 1
     assert "content_type" in result.invalid_rows[0].error.message_dict
     assert not RecordRefTargetEdge.objects.exists()
-    assert not Resource.objects.filter(xref="edge").exists()
+    with system_context(reason="test.record_reference.ledger_readback"):
+        assert not Resource.objects.filter(xref="edge").exists()
 
 
 def test_dry_run_resolves_references_without_leaving_rows_or_receipts(import_reference):
@@ -168,7 +172,8 @@ def test_dry_run_resolves_references_without_leaving_rows_or_receipts(import_ref
     )
     assert result.rows[0].import_type == RowResult.IMPORT_TYPE_NEW
     assert not RecordRefTargetEdge.objects.exists()
-    assert not Resource.objects.filter(xref="edge").exists()
+    with system_context(reason="test.record_reference.ledger_readback"):
+        assert not Resource.objects.filter(xref="edge").exists()
 
 
 def test_resource_file_loads_ownerless_vault_and_both_binding_kinds(composed_tables, tmp_path: Path):
@@ -179,12 +184,14 @@ def test_resource_file_loads_ownerless_vault_and_both_binding_kinds(composed_tab
             "040_knowledge.recordbinding.yaml",
         ]},
     )
-    (tmp_path / "010_knowledge.vault.yaml").write_text("- _xref: vault\n  name: Seeded vault\n")
-    (tmp_path / "020_knowledge.page.yaml").write_text(
+    resources = tmp_path / "resources"
+    resources.mkdir()
+    (resources / "010_knowledge.vault.yaml").write_text("- _xref: vault\n  name: Seeded vault\n")
+    (resources / "020_knowledge.page.yaml").write_text(
         "- _xref: page\n  vault: knowledge_seed.vault\n  title: Seeded page\n"
     )
-    (tmp_path / "030_mtidemo.mtiparent.yaml").write_text("- _xref: record\n  title: Seeded record\n")
-    (tmp_path / "040_knowledge.recordbinding.yaml").write_text(
+    (resources / "030_mtidemo.mtiparent.yaml").write_text("- _xref: record\n  title: Seeded record\n")
+    (resources / "040_knowledge.recordbinding.yaml").write_text(
         "- _xref: page_binding\n  page: knowledge_seed.page\n  target: knowledge_seed.record\n"
         "- _xref: vault_binding\n  vault: knowledge_seed.vault\n  target: knowledge_seed.record\n"
     )

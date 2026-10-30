@@ -786,3 +786,37 @@ def test_group_chat_buckets_keep_coverage_totals_without_misclassifying_direct_a
         assert (groups.count, groups.record_count, groups.message_count) == (1, 1, 2)
         assert groups.rows[0].message_count == 1
         assert navigator.page(scope=InboxGroupScope(axis="group", value=None)).count == 0
+
+
+def test_status_feeds_are_explicit_coverage_and_never_named_after_unrelated_authors():
+    owner = User.objects.create_user(username="status-owner")
+    hidden = User.objects.create_user(username="status-hidden")
+    account = make_integration(owner.username, model=Channel, owner=owner)
+    private_account = make_integration(hidden.username, model=Channel, owner=hidden)
+    with system_context(reason="seed shared status feed and actual conversation"):
+        feed = Thread._base_manager.create(created_by=owner, channel=account, platform="whatsapp", modality="status")
+        chat = Thread._base_manager.create(created_by=owner, channel=account, platform="whatsapp", modality="direct")
+        hidden_feed = Thread._base_manager.create(
+            created_by=hidden, channel=private_account, platform="whatsapp", modality="status")
+        authors = [Handle._base_manager.create(platform="whatsapp", value=value, display_name=name, created_by=owner)
+                   for value, name in [("+4917000001", "Ada"), ("+4917000002", "Bob")]]
+        updates = [Message._base_manager.create(created_by=owner, channel=account, thread=feed,
+                   platform="whatsapp", sender=author, status="synced", sent_at=T0) for author in authors]
+        direct = Message._base_manager.create(created_by=owner, channel=account, thread=chat, platform="whatsapp",
+                                              sender=authors[0], status="synced", sent_at=T0)
+        Message._base_manager.create(created_by=hidden, channel=private_account, thread=hidden_feed,
+                                     platform="whatsapp", status="synced", sent_at=T0)
+    with actor_context(owner):
+        inbox = Message.objects.all().explorer()
+        assert set(inbox.coverage(InboxCoverage()).values_list("pk", flat=True)) == {direct.pk}
+        for kinds in (["direct"], ["group"], ["other"]):
+            assert not inbox.coverage(InboxCoverage(kinds=kinds)).filter(thread=feed).exists()
+        updates_scope = inbox.coverage(InboxCoverage(kinds=["updates"], accounts=[account.sqid]))
+        assert set(updates_scope.values_list("pk", flat=True)) == {row.pk for row in updates}
+        assert Thread.objects.filter(pk=feed.pk).conversation_labels() == {feed.pk: "Status updates"}
+        groups = InboxResults(inbox, updates_scope, InboxResultOptions()).groups("conversation").page()
+        assert [(row.label, row.modality, row.account, row.count) for row in groups.rows] == [
+            ("Status updates", "status", account.display_name, 2)]
+        assert set(inbox.coverage(InboxCoverage(kinds=["direct", "updates"])).values_list("pk", flat=True)) == {
+            direct.pk, *(row.pk for row in updates)}
+        assert not inbox.coverage(InboxCoverage(kinds=["updates"], after=T0 + timedelta(days=1))).exists()

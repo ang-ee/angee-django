@@ -1,0 +1,20 @@
+"""Canonical concrete {{ addon_title | lower }} models for the bare-Django test runtime.
+
+One concrete model per resource type; the composed runtime emits its own. The
+package docstring (``{{ addon_name }}.testing``) owns where this module is
+registered.
+"""
+
+from {{ addon_name }}.models import {{ model_name }} as Abstract{{ model_name }}
+
+
+class {{ model_name }}(Abstract{{ model_name }}):
+    """Concrete {{ model_name | lower }} used by the {{ addon_id }} tests."""
+
+    class Meta(Abstract{{ model_name }}.Meta):
+        """Django model options for the canonical test {{ model_name | lower }}."""
+
+        abstract = False
+        app_label = "{{ addon_id }}"
+        db_table = "test_{{ addon_id }}_{{ model_name | lower }}"
+        rebac_resource_type = "{{ addon_id }}/{{ model_name | lower }}"

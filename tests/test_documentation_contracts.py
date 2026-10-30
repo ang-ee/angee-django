@@ -15,6 +15,7 @@ DOCUMENTS = sorted(
         *(ROOT / name for name in ("AGENTS.md", "README.md", "CONTRIBUTING.md")),
         *(ROOT / "docs").rglob("*.md"),
         *(ROOT / ".agents").rglob("*.md"),
+        *(ROOT / "src/angee").glob("*/skills/**/*.md"),
         *(ROOT / "packages").glob("*/README.md"),
         ROOT / "examples/e2e/README.md",
     }
@@ -71,9 +72,18 @@ def test_documented_pnpm_recipes_use_existing_scripts_and_safe_slot_invocation()
     snippets = re.findall(r"`([^`\n]*\bpnpm [^`\n]*)`", prose(guide))
     snippets += [line for block in re.findall(r"```sh\n(.*?)\n```", guide, re.DOTALL) for line in block.splitlines()]
     checked = set()
+    executed = set()
     for snippet in snippets:
         argv = shlex.split(snippet)
-        if "pnpm" not in argv or "run" not in argv:
+        if "pnpm" not in argv:
+            continue
+        if "exec" in argv:
+            binary = argv[argv.index("exec") + 1]
+            if binary == "angee-web-codegen":
+                assert binary in packages["@angee/app"]["bin"]
+                assert "--config.verify-deps-before-run=false" in argv, snippet
+                executed.add(binary)
+        if "run" not in argv:
             continue
         if "exec" in argv and argv.index("exec") < argv.index("run"):
             continue  # e.g. `exec vitest run` invokes a binary, not a package script.
@@ -94,7 +104,8 @@ def test_documented_pnpm_recipes_use_existing_scripts_and_safe_slot_invocation()
             assert argv[argv.index("--dir") + 1] == "web"
             assert script in host_scripts
         checked.add(script)
-    assert {"typecheck", "test", "build", "codegen", "test:e2e"} <= checked
+    assert {"typecheck", "test", "build", "test:e2e"} <= checked
+    assert "angee-web-codegen" in executed
 
 
 def test_documented_verification_files_exist() -> None:
@@ -108,5 +119,5 @@ def test_documented_verification_files_exist() -> None:
 def test_stack_documents_the_local_only_permission_backend() -> None:
     guide = prose((ROOT / "docs/stack.md").read_text())
     assert re.search(r"local backend is the only supported REBAC permission backend", guide)
-    assert "[Base autoconfig](../angee/autoconfig.py)" in guide
+    assert "[Base autoconfig](../src/angee/base/autoconfig.py)" in guide
     assert "[REBAC rules](backend/guidelines.md#rebac)" in guide

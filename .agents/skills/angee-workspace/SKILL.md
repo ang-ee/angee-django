@@ -191,8 +191,8 @@ jj -R <store-path> workspace add --colocate \
 - The workspace has no running host, no database, and no JS install: the
   stack's JS install links only the `src` workspace's slots. Run focused Python
   checks in the slot. Run web checks, codegen, and browser verification on
-  `src`, after merging the workspace's bookmark there with
-  [Pull From Another Workspace Or Ref](#pull-from-another-workspace-or-ref).
+  `src`, after bringing the workspace's sealed change there with
+  [Hand Off A Lane Locally](#hand-off-a-lane-locally).
 
 Remove one with `jj -R <store-path> workspace forget <stack>--<name>`, then
 delete its directory.
@@ -292,6 +292,37 @@ abandon the merge, use:
 angee --root "$angee_root" ws source merge-abort <current-workspace> <slot>
 ```
 
+## Hand Off A Lane Locally
+
+A lane and `src` are workspaces of one store, so a sealed lane reaches `src`
+without a remote; publication stays [Push](#push-commit-and-publish-current-workspace)
+under its own authorization. Builder, in the lane slot: review with `jj status`
+and `jj diff`, then seal the working copy into a described change and name it:
+
+```sh
+jj commit -m "<message>"
+jj bookmark set <prefix>/<name> -r @-
+```
+
+Report the sealed change id and the bookmark. Coordinator, in `src`: only what
+the integration touches must be clean — `src`'s working copy (`jj st` there)
+and the descendants the rebase rewrites, i.e. the lane's own working copy atop
+the sealed change (`jj st` in the lane; empty right after sealing), because
+`jj rebase` rewrites only the moved change and its descendants. Other lanes'
+working copies never block an integration. In a jj `src`, rebase the lane onto
+`src`'s head and continue on top of it, resolving conflicts with `jj squash`:
+
+```sh
+jj rebase -b <prefix>/<name> -d @-
+jj new <prefix>/<name>
+```
+
+In an operator `src`, the bookmark is a local branch of the shared store: merge
+it through [Pull From Another Workspace Or Ref](#pull-from-another-workspace-or-ref)
+with the bookmark as the ref argument, never the lane as a workspace name. The
+clean-but-unpushed [Safety Stop](#safety-stops) permits this ref — a sealed local
+change, not an unpublished workspace — and still applies to a workspace by name.
+
 ## Push: Commit And Publish Current Workspace
 
 `/push` means "commit the current workspace changes and publish the workspace
@@ -369,7 +400,9 @@ Stop and ask before proceeding when:
 - Source workspace has uncommitted changes during workspace-to-workspace pull.
 - Any local worktree for the pull source is dirty.
 - Any local worktree for the pull source is clean but unpushed, unless the user
-  explicitly overrides.
+  explicitly overrides. A sealed lane bookmark passed as the ref by
+  [Hand Off A Lane Locally](#hand-off-a-lane-locally) is not an unpushed
+  workspace and does not trigger this stop.
 - Any local worktree for the pull source is diverged from upstream.
 - A merge or rebase is already in progress and the user did not ask to continue
   or abort it.

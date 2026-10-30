@@ -12,9 +12,9 @@ from graphql import parse, validate
 from rebac import actor_context, system_context
 from rebac.backends import backend
 from rebac.schema.parser import parse_zed
+from rebac.testing import install_schema
 
 from angee.graphql.schema import GraphQLSchemas
-from angee.testing.permissions import install_permission_schema
 from tests.native_intake_capture import IntakeAccessCase
 from tests.native_work import WorkCase
 from tests.test_work_task_access import withhold_assignees
@@ -52,8 +52,8 @@ class ProjectSurfaceCampaign(WorkCase):
             else definition
             for definition in schema.definitions
         ]
-        install_permission_schema(schema, active=active)
-        self.addCleanup(install_permission_schema, original, active=active)
+        install_schema(schema, backend=active)
+        self.addCleanup(install_schema, original, backend=active)
         data = self.graphql(query, {}, user=self.reader)
         self.assertEqual(
             data,

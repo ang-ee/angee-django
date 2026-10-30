@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { Button } from "./button";
@@ -163,4 +163,16 @@ describe("InlineTextAction", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
+});
+
+test("a rejected inline submit displays its error and preserves the draft for retry", async () => {
+  const submit = vi.fn().mockRejectedValueOnce(new Error("Name already exists")).mockResolvedValueOnce(undefined);
+  render(<InlineTextAction defaultOpen inputLabel="Name" onSubmit={submit} />);
+  fireEvent.change(screen.getByRole("textbox", { name: "Name" }), { target: { value: "Projects" } });
+  fireEvent.submit(screen.getByRole("form", { name: "Name" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("Name already exists");
+  expect(screen.getByDisplayValue("Projects")).toBeTruthy();
+  fireEvent.submit(screen.getByRole("form", { name: "Name" }));
+  await waitFor(() => expect(screen.queryByRole("textbox", { name: "Name" })).toBeNull());
+  expect(submit).toHaveBeenNthCalledWith(2, "Projects");
 });

@@ -4,10 +4,10 @@ import pytest
 from django.core.exceptions import ValidationError
 from rebac import actor_context, system_context
 
-from angee.changesets import changeset_model
+from angee.base.models.locks import StaleRevisionError
 from angee.dashboards.models import DashboardConflictError
 from angee.graphql.schema import GraphQLSchemas
-from angee.models import StaleRevisionError
+from angee.provenance.context import changeset_model
 from tests.conftest import create_user
 from tests.test_dashboards import DashboardTarget, dashboard_tables  # noqa: F401
 

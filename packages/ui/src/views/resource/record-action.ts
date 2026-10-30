@@ -107,7 +107,7 @@ export function useRecordActionMutation<TField extends string = string>(
     return options?.settle === true ? {} : null;
   }, [options?.linkTo, options?.settle]);
   const settleActionResult = useActionResultRun(settleOptions ?? undefined);
-  // Legacy callers project the in-band outcome to the rendered `<Action run>`
+  // Rendered callers project the in-band outcome to the `<Action run>`
   // contract. Id-returning bridge actions delegate toast/link settling to the
   // shared ActionResult owner so consumer hooks stay declarative.
   const run = React.useCallback<RecordActionRunner>(

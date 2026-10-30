@@ -1,7 +1,7 @@
 packages:
   - "packages/*"
-  - "addons/angee/*/web"
-  - "examples/addons/*/*/web"
+  - "src/angee/*/web"
+  - "examples/src/*/*/web"
   - "examples/e2e"
 allowBuilds:
   esbuild: true

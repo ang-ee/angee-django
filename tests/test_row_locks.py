@@ -7,8 +7,9 @@ from django.apps import apps
 from django.db import models
 from django.test.utils import isolate_apps
 
-from angee.models.base import AngeeModel
-from angee.models.query import SystemQuerysetMixin, row_lock_paths
+from angee.base.models.base import AngeeModel
+from angee.base.models.persistence import PersistenceMixin
+from angee.base.querysets import row_lock_paths
 
 
 def _multi_table_models():
@@ -110,7 +111,7 @@ def test_subject_lock_excludes_nullable_relations_added_by_the_base_manager(monk
         def get_queryset(self):
             return super().get_queryset().select_related("related")
 
-    class Parent(SystemQuerysetMixin):
+    class Parent(PersistenceMixin):
         class Meta:
             app_label = "lock_contract"
 

@@ -1,0 +1,127 @@
+"""A Hasura data resource over a pydantic row model — the computed-source seam.
+
+The non-model sibling of :func:`hasura_model_resource`. ``strawberry-django-
+hasura`` owns the dialect mechanics (``hasura_run_query_resource`` + the
+in-memory evaluator); this wrapper owns the Angee seam: deriving the GraphQL
+node from the pydantic row model (the row-shape SSOT) and attaching the
+``angee.resources`` metadata so the frontend drives the computed resource
+through the same ``useList`` path as a model resource — no bespoke client path.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import replace
+from typing import Any, Literal
+
+import strawberry.experimental.pydantic
+from django.core.exceptions import ImproperlyConfigured
+from pydantic import BaseModel
+from strawberry_django_hasura import (
+    HasuraResource,
+    InMemoryRowSource,
+    RowSource,
+    hasura_run_query_resource,
+)
+
+from angee.graphql.data.contracts import DataAggregateMeasureMetadata
+from angee.graphql.data.hasura import hasura_query_axes
+from angee.graphql.data.metadata import (
+    DataResourceContribution,
+    DataResourcePolicy,
+    attach_data_resource_contribution,
+)
+
+
+def pydantic_node(row_model: type[BaseModel], *, name: str, include_computed: bool = False) -> type:
+    """Derive the GraphQL node type from a pydantic row model (all fields).
+
+    The resolver returns the pydantic instances directly (strawberry resolves
+    each field by ``getattr``); this holds while the strawberry-exposed field
+    types coincide with the pydantic runtime types (no custom conversion).
+    ``include_computed`` opts into Strawberry's native computed-field support.
+    """
+
+    return strawberry.experimental.pydantic.type(
+        model=row_model, all_fields=True, name=name, include_computed=include_computed
+    )(type(name, (), {"__annotations__": {}}))
+
+
+def hasura_pydantic_resource(
+    row_model: type[BaseModel],
+    *,
+    name: str,
+    model_label: str,
+    filterable: Sequence[str],
+    sortable: Sequence[str],
+    groupable: Sequence[str] = (),
+    rows: Callable[[Any], Iterable[BaseModel]] | None = None,
+    source: RowSource | None = None,
+    node_name: str | None = None,
+    id_field: str = "id",
+    frontend_row_model: Literal["client", "server"] = "client",
+    context_fields: Sequence[str] = (),
+) -> HasuraResource:
+    """Build a read-only Hasura resource from a pydantic row model.
+
+    ``row_model`` is the pydantic SSOT for the row shape; the GraphQL node is
+    derived from it. ``name`` is the resource stem (plural snake, the list field
+    name); ``model_label`` is the dotted ``app.model`` label the frontend keys
+    on. ``rows(info) -> Iterable[row_model]`` is the in-memory provider; pass a
+    ``source`` instead for a pushdown :class:`RowSource`, which must return
+    every matching row when grouping asks for ``limit=None``.
+
+    ``groupable`` names scalar row columns exposed through the library's
+    ``<name>_groups`` roots; their group axes are read from the library's
+    ``HasuraResource.row_model``, as the model path reads its Django model.
+
+    The attached ``DataResourceMetadata`` carries ``roots.list`` so the frontend
+    treats the resource as Hasura-backed and drives it through ``useList``.
+    """
+
+    if source is None:
+        if rows is None:
+            raise TypeError("hasura_pydantic_resource requires rows= or source=")
+        source = InMemoryRowSource(rows)
+    node = pydantic_node(row_model, name=node_name or row_model.__name__)
+    resource = hasura_run_query_resource(
+        node,
+        name=name,
+        filterable=list(filterable),
+        sortable=list(sortable),
+        groupable=list(groupable),
+        source=source,
+        id_field=id_field,
+    )
+    if resource.detail_root is None:
+        raise ImproperlyConfigured(f"{model_label or name} Hasura resource did not expose a detail root.")
+    attach_data_resource_contribution(
+        resource.query,
+        DataResourceContribution(
+            model=None,
+            model_label=model_label,
+            # The computed row is addressed by ``id_field`` — the same fact the
+            # library uses for ``<name>_by_pk``; keep them one source of truth.
+            native_resource=resource,
+            policy=DataResourcePolicy(
+                # Small computed sources may deliberately execute in the browser;
+                # larger sources keep filter/sort/page/group execution on the server.
+                public_id_field=id_field,
+                row_model=frontend_row_model,
+                filter_fields=tuple(filterable),
+                order_fields=tuple(sortable),
+                group_by_fields=tuple(groupable),
+                context_fields=tuple(context_fields),
+                query_axes=(
+                    hasura_query_axes(resource.row_model, tuple(groupable), tuple(filterable))
+                    if resource.row_model is not None
+                    else ()
+                ),
+                default_measures=(DataAggregateMeasureMetadata(op="count"),),
+            ),
+        ),
+    )
+    # The derived node is reachable from the query, but register it in the
+    # bundle's types so a schema bucket carries it explicitly (mirrors the
+    # model path, where the addon registers the node type).
+    return replace(resource, types=[node, *resource.types])

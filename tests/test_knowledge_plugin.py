@@ -11,7 +11,7 @@ way the composer merges per bucket across addons) and assert each seam holds:
 - ``related_pages`` appears on knowledge's ``PageType``;
 - the plugin's ``semantic_search`` MCP tool compiles against the merged schema.
 
-No file under ``addons/angee/knowledge/`` is touched — the plugin imports only the
+No file under ``src/angee/knowledge/`` is touched — the plugin imports only the
 declared knowledge contracts (the schema types, the model registry, the backend
 base). The merged schema is built standalone (no DB needed), like
 :mod:`tests.test_knowledge_mcp`.
@@ -28,12 +28,13 @@ from django.apps import apps
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from graphql import GraphQLObjectType
+from rebac import actor_context
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.knowledge.retrieval import LexicalRetrievalBackend
 from angee.knowledge_graph_pgvector.retrieval import PgvectorRetrievalBackend
 from angee.mcp.graphql import DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT
-from tests.conftest import SchemaAddon
+from tests.conftest import Page, SchemaAddon, Vault, create_user, vault_for
 
 knowledge_schema = importlib.import_module("angee.knowledge.schema")
 plugin_schema = importlib.import_module("angee.knowledge_graph_pgvector.schema")
@@ -101,6 +102,39 @@ def test_pgvector_provider_resolves_from_registry(settings: Any) -> None:
     assert field.resolve_class("pgvector") is PgvectorRetrievalBackend
     assert issubclass(PgvectorRetrievalBackend, LexicalRetrievalBackend)
     assert PgvectorRetrievalBackend.key == "pgvector"
+
+
+class GroupedSearchPlugin(PgvectorRetrievalBackend):
+    """Replace the fixture's default backend through its native registry key."""
+
+    key = "lexical"
+
+
+def test_grouped_and_bound_search_dispatch_to_plugin_contract(
+    composed_tables: None, settings: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One grouped plugin override serves both vault-bound and cross-vault search."""
+
+    settings.ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES = {
+        **settings.ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES,
+        "lexical": "tests.test_knowledge_plugin.GroupedSearchPlugin",
+    }
+    owner = create_user("plugin-search-owner")
+    first = vault_for(owner, name="First")
+    second = vault_for(owner, name="Second")
+    with actor_context(owner):
+        page = Page.objects.create_in(first, title="No lexical match", kind=Page.PageKind.FOLDER)
+    calls: list[tuple[list[Any], str, int]] = []
+
+    def search_many(cls: Any, vaults: Any, query: str, *, first: int = 20) -> list[Any]:
+        calls.append(([vault.pk for vault in vaults], query, first))
+        return [page]
+
+    monkeypatch.setattr(GroupedSearchPlugin, "search_many", classmethod(search_many))
+    with actor_context(owner):
+        assert list(first.retrieval.search("semantic needle", first=3)) == [page]
+        assert Vault.objects.search_pages("semantic needle", first=7) == [page]
+    assert calls == [([first.pk], "semantic needle", 3), ([first.pk, second.pk], "semantic needle", 7)]
 
 
 # --- Seam 2: GraphQL projection + query ------------------------------------------
@@ -191,18 +225,16 @@ def test_manifest_wires_the_seams() -> None:
     """
 
     from django.apps import AppConfig
+    from django_compose.components import enabled_apps
 
     import angee.knowledge_graph_pgvector as plugin_pkg
-    from angee.addons import addon_manifest
 
     config = AppConfig("angee.knowledge_graph_pgvector", plugin_pkg)
-    contract = addon_manifest(config)
-    assert contract is not None
-    assert contract.depends_on == ("angee.knowledge", "angee.mcp")
+    dependencies = enabled_apps((config.name,), group="angee.addons").dependencies[config.name]
+    assert dependencies == ("angee.knowledge", "angee.mcp")
     from angee.graphql.schema import schema_parts_for
     from angee.mcp.server import tool_registrar
 
-    assert contract.schemas is None
     assert "public" in schema_parts_for(config)
     assert tool_registrar(config) is plugin_mcp_tools.register
     # The dotted refs resolve to the contributions composed above.

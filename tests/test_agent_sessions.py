@@ -25,8 +25,8 @@ from angee.agents.testing.drivers import FakeRunner
 from angee.agents.testing.drivers import runner as runner  # noqa: F401 - shared provider fixture
 from angee.agents.testing.drivers import update_chunk as _chunk
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn
+from angee.base.exceptions import TransitionNotAllowed
 from angee.graphql.publishing import connect_publishers, disconnect_publishers
-from angee.models import TransitionNotAllowed
 from angee.workflows.testing.drivers import capture_tasks as capture_task_sends
 from angee.workflows.testing.drivers import observe
 from tests.conftest import create_platform_admin

@@ -1,11 +1,11 @@
-"""Install/disable console mutations — ``settings.yaml`` is the install source.
+"""Enable/disable console mutations preserve authored roots.
 
-``install``/``disable`` are thin admin-gated edges over the addon manager, which
+``enable``/``disable`` are thin admin-gated edges over the addon manager, which
 uses ``AddonInstaller`` to edit ``settings.yaml`` while preserving comments.
 These drive the resolvers over the concrete ``platform.Addon``
 reflection table the way the composed console does:
 
-- install appends an available addon's root to a temp ``settings.yaml`` (it would
+- enable appends an installed addon's root to a temp ``settings.yaml`` (it would
   compose on the next boot) and the in-process reconcile flips its reflected row to
   ``pending``;
 - disable removes the root;
@@ -25,13 +25,13 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
-from hatch_angee import AddonManifest
 from rebac import system_context, to_object_ref
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.platform import models as platform_models
+from angee.platform.installer import AddonInstallerBackend
 from angee.platform.models import _preview_revision
-from tests.conftest import SchemaAddon, execute_schema
+from tests.conftest import SchemaAddon, catalogue_package, execute_schema
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data
 
@@ -49,45 +49,42 @@ SECRET_KEY: dev-key
 
 INSTALLED_APPS:
   - angee.platform  # the console host
-ANGEE_RUNTIME_DIR: "{BASE_DIR}/runtime"
+COMPOSE_OUTPUT_DIR: "{BASE_DIR}/runtime"
 """
 
-_INSTALL = "mutation($addon: String!){ install(addon: $addon){ ok message } }"
+_ENABLE = "mutation($addon: String!){ enable(addon: $addon){ ok message } }"
 _DISABLE = "mutation($addon: String!){ disable(addon: $addon){ ok message } }"
 
 
 @pytest.fixture()
-def project_settings_yaml(tmp_path: Path, settings: Any) -> Path:
+def project_settings_yaml(tmp_path: Path, settings: Any, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point the local installer at a temp ``settings.yaml`` and return its path."""
 
     path = tmp_path / "settings.yaml"
     path.write_text(_SETTINGS_YAML, encoding="utf-8")
     settings.BASE_DIR = tmp_path
     settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
+    monkeypatch.setattr(platform_models.composed, "root_app_names", lambda: frozenset({"angee.platform"}))
     return path
 
 
-@pytest.mark.parametrize("label", [None, "", "remote_label"])
-def test_change_impact_uses_addon_display_label(label: str | None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Preview and catalogue labels agree for resolved and unresolved addons."""
+@pytest.mark.parametrize("label", ["", "remote_label"])
+def test_catalogue_display_label_preserves_native_identity(label: str) -> None:
+    """Unloaded catalogue rows display the canonical name until a label is known."""
 
-    name = "example.remote"
-    config = SimpleNamespace(label=label) if label is not None else None
-    monkeypatch.setattr(platform_models, "resolve_app_config", lambda *_args, **_kwargs: config)
-    impacts = Addon.objects._change_impacts([name], {name: AddonManifest(name=name)}, [name], {}, {})
-    assert impacts[0].label == (label or name)
+    assert platform_models.get_addon_display_label("example.remote", label) == (label or "example.remote")
 
 
-def test_install_appends_the_root_and_reflects_pending(
+def test_enable_appends_the_root_and_reflects_pending(
     composed_tables: None,
     project_settings_yaml: Path,
 ) -> None:
-    """Install adds the root to ``settings.yaml`` and flips the reflected row to pending."""
+    """Enable adds the root to ``settings.yaml`` and flips the reflected row to pending."""
 
     del composed_tables
     admin = _platform_admin("install-admin")
 
-    result = _data(_execute(_schema(), _INSTALL, {"addon": _AVAILABLE_ADDON}, user=admin))["install"]
+    result = _data(_execute(_schema(), _ENABLE, {"addon": _AVAILABLE_ADDON}, user=admin))["enable"]
 
     assert result["ok"] is True
     assert _AVAILABLE_ADDON in result["message"]
@@ -103,7 +100,7 @@ def test_install_appends_the_root_and_reflects_pending(
     assert to_object_ref(row).resource_id == str(row.pk)
 
 
-def test_install_is_idempotent_for_an_already_listed_root(
+def test_enable_is_idempotent_for_an_already_listed_root(
     composed_tables: None,
     project_settings_yaml: Path,
 ) -> None:
@@ -113,14 +110,14 @@ def test_install_is_idempotent_for_an_already_listed_root(
     admin = _platform_admin("install-idempotent-admin")
     before = project_settings_yaml.read_text(encoding="utf-8")
 
-    result = _data(_execute(_schema(), _INSTALL, {"addon": "angee.platform"}, user=admin))["install"]
+    result = _data(_execute(_schema(), _ENABLE, {"addon": "angee.platform"}, user=admin))["enable"]
 
     assert result["ok"] is True
-    assert "already installed" in result["message"]
+    assert "already enabled" in result["message"]
     assert project_settings_yaml.read_text(encoding="utf-8") == before
 
 
-def test_install_refuses_a_non_materialised_addon(
+def test_enable_refuses_a_non_materialised_addon(
     composed_tables: None,
     project_settings_yaml: Path,
 ) -> None:
@@ -135,10 +132,10 @@ def test_install_refuses_a_non_materialised_addon(
     admin = _platform_admin("install-unknown-admin")
     before = project_settings_yaml.read_text(encoding="utf-8")
 
-    result = _data(_execute(_schema(), _INSTALL, {"addon": "not.a.real.addon"}, user=admin))["install"]
+    result = _data(_execute(_schema(), _ENABLE, {"addon": "not.a.real.addon"}, user=admin))["enable"]
 
     assert result["ok"] is False
-    assert "not available" in result["message"]
+    assert "not installed and cannot be enabled" in result["message"]
     assert project_settings_yaml.read_text(encoding="utf-8") == before  # refusal never edits
 
 
@@ -161,11 +158,11 @@ def test_preview_revision_binds_every_change_decision() -> None:
     """A confirmation receipt cannot authorize another action, target, or snapshot."""
 
     revision = _preview_revision
-    manifest = AddonManifest(name="example.demo", description="original")
+    manifest = catalogue_package(name="example.demo", description="original")
     baseline = revision(
         "INSTALLED_APPS: []\n",
         (manifest,),
-        action="install",
+        action="enable",
         addon="example.demo",
         roots_after=("example.demo",),
     )
@@ -180,35 +177,35 @@ def test_preview_revision_binds_every_change_decision() -> None:
         revision(
             "INSTALLED_APPS: []\n",
             (manifest,),
-            action="install",
+            action="enable",
             addon="example.other",
             roots_after=("example.demo",),
         ),
         revision(
             "INSTALLED_APPS:\n  - angee.platform\n",
             (manifest,),
-            action="install",
+            action="enable",
             addon="example.demo",
             roots_after=("example.demo",),
         ),
         revision(
             "INSTALLED_APPS: []\n",
-            (AddonManifest(name="example.demo", description="changed"),),
-            action="install",
+            (catalogue_package(name="example.demo", description="changed"),),
+            action="enable",
             addon="example.demo",
             roots_after=("example.demo",),
         ),
         revision(
             "INSTALLED_APPS: []\n",
-            (AddonManifest(name="example.demo", description="original", depends_on=("example.dependency",)),),
-            action="install",
+            (catalogue_package(name="example.demo", description="original", depends_on=("example.dependency",)),),
+            action="enable",
             addon="example.demo",
             roots_after=("example.demo",),
         ),
         revision(
             "INSTALLED_APPS: []\n",
             (manifest,),
-            action="install",
+            action="enable",
             addon="example.demo",
             roots_after=("example.demo", "example.other"),
         ),
@@ -222,8 +219,8 @@ def test_dependants_canonicalize_aliases_without_duplicate_reverse_edges() -> No
     """Preview and catalogue share sorted reverse edges for authored app aliases."""
 
     manifests = (
-        AddonManifest(name="example.zebra", depends_on=("example.base",)),
-        AddonManifest(name="example.alpha", depends_on=("example.BaseConfig", "example.base")),
+        catalogue_package(name="example.zebra", depends_on=("example.base",)),
+        catalogue_package(name="example.alpha", depends_on=("example.BaseConfig", "example.base")),
     )
 
     assert Addon.objects._dependants(manifests, aliases={"example.BaseConfig": "example.base"}) == {
@@ -264,7 +261,7 @@ def test_disable_removes_the_root(
 
     del composed_tables
     # Seed an extra root so there is something to disable in the file.
-    _data(_execute(_schema(), _INSTALL, {"addon": _AVAILABLE_ADDON}, user=_platform_admin("seed-admin")))
+    _data(_execute(_schema(), _ENABLE, {"addon": _AVAILABLE_ADDON}, user=_platform_admin("seed-admin")))
     admin = _platform_admin("disable-admin")
 
     result = _data(_execute(_schema(), _DISABLE, {"addon": _AVAILABLE_ADDON}, user=admin))["disable"]
@@ -285,7 +282,7 @@ def test_disable_refuses_an_addon_required_by_the_loaded_graph(
 
     del composed_tables
     admin = _platform_admin("forced-admin")
-    monkeypatch.setattr(apps.get_app_config("iam"), "angee_forced", True, raising=False)
+    monkeypatch.setattr(platform_models.composed, "root_app_names", lambda: frozenset({"angee.platform"}))
     if persisted_forced is not None:
         with system_context(reason="test.platform.forced.seed"):
             Addon.objects.update_or_create(
@@ -311,7 +308,7 @@ def test_disable_ignores_stale_catalogue_dependency_flags(
 
     del composed_tables
     admin = _platform_admin("stale-forced-admin")
-    monkeypatch.setattr(apps.get_app_config("platform"), "angee_forced", False, raising=False)
+    monkeypatch.setattr(platform_models.composed, "root_app_names", lambda: frozenset({"angee.platform"}))
     with system_context(reason="test.platform.stale-forced.seed"):
         Addon.objects.update_or_create(
             name="angee.platform",
@@ -329,7 +326,7 @@ def test_disable_ignores_stale_catalogue_dependency_flags(
     assert "angee.platform" not in project_settings_yaml.read_text(encoding="utf-8")
 
 
-def test_install_denies_a_non_admin(
+def test_enable_denies_a_non_admin(
     composed_tables: None,
     project_settings_yaml: Path,
 ) -> None:
@@ -339,7 +336,7 @@ def test_install_denies_a_non_admin(
     plain = User.objects.create_user(username="plain-user", password="plain-user")
     before = project_settings_yaml.read_text(encoding="utf-8")
 
-    result = _execute(_schema(), _INSTALL, {"addon": _AVAILABLE_ADDON}, user=plain)
+    result = _execute(_schema(), _ENABLE, {"addon": _AVAILABLE_ADDON}, user=plain)
 
     assert result.errors is not None
     assert project_settings_yaml.read_text(encoding="utf-8") == before
@@ -358,3 +355,74 @@ def _execute(schema: Any, query: str, variables: dict[str, Any] | None = None, *
     request = RequestFactory().post("/graphql/console/")
     request.user = user or AnonymousUser()
     return execute_schema(schema, query, variables, request=request)
+
+
+def test_change_preview_refuses_overridden_installed_apps(
+    project_settings_yaml: Path,
+    settings: Any,
+) -> None:
+    """Admission refuses YAML edits when another source owns effective roots."""
+
+    before = project_settings_yaml.read_text(encoding="utf-8")
+    settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset()
+
+    preview = Addon.objects.change_preview(_AVAILABLE_ADDON, "enable")
+
+    assert preview.can_apply is False
+    assert preview.refusal == "INSTALLED_APPS is not controlled by a readable project settings.yaml."
+    assert project_settings_yaml.read_text(encoding="utf-8") == before
+
+
+class _RemoteInstallerBackend(AddonInstallerBackend):
+    """Expose remote desired roots without a local settings document."""
+
+    key = "remote"
+
+    def read_settings_text(self) -> str:
+        return "INSTALLED_APPS: [angee.platform]\n"
+
+
+@pytest.mark.parametrize("loaded, expected", [(frozenset({"angee.platform"}), False), (frozenset(), True)])
+def test_pending_changes_uses_configured_transport(
+    settings: Any,
+    tmp_path: Path,
+    monkeypatch: Any,
+    loaded: frozenset[str],
+    expected: bool,
+) -> None:
+    """Drift reads the selected transport even when no local YAML exists."""
+
+    settings.BASE_DIR = tmp_path
+    settings.ANGEE_PROJECT_YAML_SETTINGS = frozenset({"INSTALLED_APPS"})
+    settings.ANGEE_ADDON_INSTALLER_BACKEND = "remote"
+    settings.ANGEE_ADDON_INSTALLER_BACKEND_CLASSES = {
+        "remote": "tests.test_platform_install._RemoteInstallerBackend",
+    }
+    monkeypatch.setattr(platform_models.composed, "root_app_names", lambda: loaded)
+
+    assert Addon.objects.pending_changes() is expected
+
+
+@pytest.mark.parametrize("remove", [False, True])
+def test_package_changes_delegate_to_native_job_without_editing_roots(
+    composed_tables, project_settings_yaml, monkeypatch, remove,
+) -> None:
+    """Installation returns the operator's opaque operation and leaves root intent alone."""
+
+    del composed_tables
+    operation = {"id": "native-operation", "status": "queued"}
+    calls = []
+
+    class Backend:
+        def queue_dependency_change(self, requirement, *, remove=False):
+            calls.append((requirement, remove))
+            return operation
+
+    monkeypatch.setattr(platform_models, "addon_installer", lambda: SimpleNamespace(backend=Backend()))
+    before = project_settings_yaml.read_bytes()
+    with system_context(reason="test.platform.native-dependency-job"):
+        Addon.objects.create(name="example.native_job", distribution="example-native-job")
+        result = (Addon.objects.uninstall if remove else Addon.objects.install)("example.native_job")
+    assert result is operation
+    assert calls == [("example-native-job", remove)]
+    assert project_settings_yaml.read_bytes() == before

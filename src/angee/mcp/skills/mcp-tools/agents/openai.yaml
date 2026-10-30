@@ -1,0 +1,6 @@
+interface:
+  display_name: "MCP Tools"
+  short_description: "Author an addon's MCP tools on the process FastMCP server."
+  default_prompt: "Use $mcp-tools to add or change the MCP tools an Angee addon registers through mcp_tools.py."
+policy:
+  allow_implicit_invocation: false

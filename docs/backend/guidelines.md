@@ -21,13 +21,14 @@ hand-rolling a concern. Python dependency setup belongs in `pyproject.toml` and
 
 When extending a generated manager, bind native `Manager.from_queryset(...)`
 to a module-level name before using it as a class base, as in
-[`AngeeManager`](../../angee/models/manager.py). Leave that assignment inferred:
+[`AngeeManager`](../../src/angee/base/managers.py). Leave that assignment inferred:
 direct class-base calls and `Any` annotations bypass django-stubs' native factory hook.
 
 ## Django-Native Rule
 
-Angee is not a second framework on top of Django. It is a build-time composer
-for Django apps.
+Angee supplies reusable Django addons and their capability integrations.
+`django-compose` owns generic app selection and build-time model composition;
+Django owns the resulting application lifecycle and ORM.
 
 Before adding an Angee abstraction, ask: does Django already have an object,
 method, or convention that owns this fact?
@@ -35,23 +36,27 @@ method, or convention that owns this fact?
 Use Django's native owners:
 
 - Django app identity and lifecycle live on `AppConfig`; addon declarations live
-  in `addon.toml` and are validated against that identity.
+  in `pyproject.toml` and are validated against that identity.
 - Model behavior lives on models, managers, and querysets.
 - Value coercion lives on fields.
 - Command dispatch lives in Django management commands and `argparse`.
 - Table names, app labels, migrations, and model metadata follow Django
   defaults.
 
-Angee code should own only the composition seam: discovering addons, ordering
-them deterministically, emitting runtime apps, merging schemas, syncing
-resources, and failing fast on collisions.
+Angee addons own capability semantics: merging GraphQL schemas, projecting
+permission policy, syncing declared resources and contributing web fragments.
+Generic discovery, dependency ordering and generated model publication belong
+to `django-compose`; callers consume those results instead of rebuilding them.
 
 A wrapper must prove it adds a real new concept. If it only forwards,
 normalizes, or renames a Django object, delete it.
 
 Django-native also means app-native. Addons are reusable Django apps with
-conventional files: `addon.toml` declares the addon contract (and its presence is
-the marker that makes the app an addon), `models.py` owns data and row behavior,
+conventional files: `pyproject.toml` declares package metadata, and its
+`angee.addons` entry point in native distribution metadata identifies the package
+as an addon. Ordinary addons author `dynamic = ["entry-points"]` through the
+published Hatch backend; consumers read prepared or installed metadata. A
+pyproject alone may describe an ordinary library. `models.py` owns data and row behavior,
 `managers.py` owns reusable row-set APIs when they outgrow the model module,
 `schema.py` owns Strawberry declarations, `permissions.zed` owns REBAC structure,
 `mcp_tools.py` owns MCP tool registration, `forms.py` owns Django form
@@ -59,7 +64,7 @@ validation/presentation, `admin.py` owns Django admin presentation, and
 `management/commands/` owns CLI parsing. `apps.py` is optional; use it to customize
 native Django config or lifecycle hooks such as `ready()` / `import_models()`.
 An addon without that customization uses Django's auto-created config. Keep
-declaration facts in the manifest even when an explicit config exists. A proven
+requirements in package metadata and capability facts in their tool tables even when an explicit config exists. A proven
 gap requires extending the native owner or adding the smallest canonical
 composition seam at the owning level. It never authorizes a parallel registry,
 loader, or naming convention alongside the existing owner.
@@ -81,28 +86,24 @@ Before adding backend structure, pass the Django architecture gate:
 
 ## Package Layering
 
-The framework wheel and the GraphQL folder addon have a one-way dependency rule
-that layering tests enforce:
+Generic Django composition belongs to the `django-compose` dependency. It owns
+no Angee/product vocabulary and does not import framework addons. Angee has no
+separate core wheel or namespace initializer.
 
-- Core modules under `angee/` never import folder addons, including test support.
-  Reusable addon test compositions live in the owning addon.
-- `angee` is the model foundation (models, fields, mixins, managers,
-  querysets, and native tracking mixins). It must not import `angee.compose`,
-  `angee.graphql`, or addon packages.
-- `angee.graphql` is the `addons/angee/graphql` folder addon's GraphQL runtime (schema
-  assembly, Strawberry helpers, serving, subscriptions, and SDL commands). It
-  may import `angee`, never `angee.compose`.
-- `angee.compose` is the build-time composer. It may import `angee` and
-  discover plain Django addon configs, but no serving module (`asgi`, `urls`,
-  `views`, `consumers`, `signals`, `models`, `graphql`) may import
-  `angee.compose`.
-
-The same one-way rule extends downward to the base addons under `addons/angee/`
-(`angee.resources`, `angee.iam`, `angee.integrate`, `angee.operator`,
-`angee.storage`): an addon
-may import `angee` and `angee.graphql`, but never `angee.compose`. The
-resource subsystem (`angee.resources`) is itself a base addon, not part of the
-core — it owns the resource ledger described below.
+- `angee.base` owns reusable models, fields, managers, settings/deployment glue,
+  package-data projection and small shared primitives. It consumes declared
+  native Django, compiler and permission-library contracts.
+- `angee.server` owns optional HTTP defaults, Uvicorn commands and connection
+  policy. Web, GraphQL and MCP require it through native package requirements;
+  model-only projects do not activate a serving stack.
+- Capability addons own their own policy and package facts. Cross-addon imports
+  follow declared native requirements toward stable owners.
+- Source models may inherit `django_compose.models.Composable`. Settings,
+  serving and command callers use the compiler's public runtime seams. Serving
+  code never imports compiler build modules or an addon's `build.py`.
+- Explicit capability integrations implement structural protocols in
+  `django_compose.declarations`; dotted `COMPOSE_INTEGRATIONS` entries defer
+  imports until build phase 2. The compiler owns publication and verification.
 
 ### Composition owners
 
@@ -110,20 +111,20 @@ Use these owners instead of maintaining another contract in an addon:
 
 | Concern | Owner and durable rule |
 |---|---|
-| Addon discovery and declarations | [`angee.addons`](../../angee/addons.py) binds hatch-angee's native manifest to Django's config. `addon.toml` is the marker and declaration source; do not copy its configurable values onto `AppConfig`. |
+| Addon discovery and declarations | The native `django_compose.components` index owns identity/closure. [`angee.base.addons`](../../src/angee/base/addons.py) reads packaged `[tool.angee.*]` tables and discovers optional addon modules. Addon requirements stay in `[project].dependencies`; foreign app edges use django-compose's `AppConfig.requires_apps` extension. |
 | Settings and app ordering | [Settings bootstrap and app graph](../composer.md#settings-bootstrap) compose one app set. Keep source-model imports out of settings loading; do not create separate build/run registries. |
-| Capability conventions | [Addon declarations](../composer.md#addon-declarations) identifies the readers. Each capability reads its own manifest section and conventional defaults; dependencies, resource tiers, and intent stay explicit. |
+| Capability conventions | [Addon declarations](../composer.md#addon-declarations) identifies the readers. Resources owns resource semantics; GraphQL [schema discovery](../../src/angee/graphql/schema.py) resolves and validates its schema references. Generic lifecycle and optional hook dispatch belong to django-compose; native `django_compose.urls` owns explicit HTTP URL contributions. |
 | Models and runtime import | [Runtime build and import](../composer.md#runtime-build-and-import) describes source selection and Django phase 2. Use narrow abstract contributors; let Django own inheritance, field cloning, managers, and registration. |
-| Migration history and cleanup | [Addon-owned runtime migrations](../composer.md#addon-owned-runtime-migrations) and [migration policy](#migrations-and-runtime) distinguish generated sources from disposable composed history. |
-| Resource load hooks | [`ResourceLoadMixin`](../../addons/angee/resources/mixins.py) is the resources-owned terminal mixin. Contributors delegate exactly once through `super()`, even when skipping local work; an exception aborts the transaction, so never delegate in `finally`. A row whose state only an owner verb may write declares a `resource_class` adapter that persists through that verb as the row's named actor and records the result in the ledger ([workflow definitions](../../addons/angee/workflows/resources.py), [chatter](../../addons/angee/messaging/resources.py)). |
+| Migration history and cleanup | [Project migration history](../composer.md#project-migration-history) and [migration policy](#migration-history) distinguish replaceable generated models from version-controlled native Django history. |
+| Resource load hooks | [`ResourceLoadMixin`](../../src/angee/resources/mixins.py) is the resources-owned terminal mixin. Contributors delegate exactly once through `super()`, even when skipping local work; an exception aborts the transaction, so never delegate in `finally`. A row whose state only an owner verb may write declares a `resource_class` adapter that persists through that verb as the row's named actor and records the result in the ledger ([workflow definitions](../../src/angee/workflows/resources.py), [chatter](../../src/angee/messaging/resources.py)). |
 
 - **Compose addon discovery through its native owners.** Follow the
   [discovery flow](../composer.md#addon-discovery) for available candidates,
   Django identity, and persisted catalogue state. Serving code never imports
-  `angee.compose` just to list addons.
+  compiler build code just to list addons.
 - **The resource ledger is owned by the resource addon.** The composer discovers
   `angee.resources.models.Resource` as a normal addon source model and emits it
-  under the `resources` label. `angee` must not import `angee.resources`.
+  under the `resources` label. The generic compiler never imports the resource addon.
 - **Refer to an emitted concrete model through the app registry**
   (`apps.get_model("resources", "Resource")`), never by importing the generated
   `runtime/` tree.
@@ -135,20 +136,20 @@ Use these owners instead of maintaining another contract in an addon:
   through `Manager.from_queryset(...)`. Factories and mutations stay on the
   manager that owns the write.
 - Multi-owner setup belongs to one transactional verb. Projects'
-  [`setup_from_task`](../../addons/angee/projects/models.py) calls cooperative
+  [`setup_from_task`](../../src/angee/projects/models.py) calls cooperative
   `apply_setup` hooks; each contributor consumes native values from its typed
   `input_extensions` contribution and delegates
   once. Replays recheck authority and validate the original setup-receipt fingerprint;
   they do not reset later edits. Resume existing partial rows through their
   owners instead of issuing independent browser writes.
 - Actor summary fields compose native SQL scopes before counting. Proposals'
-  [`clarification_waiting_users`](../../addons/angee/proposals/models.py) owns
+  [`clarification_waiting_users`](../../src/angee/proposals/models.py) owns
   both recipient projections and attention counts, so hidden questions and
   answered recipients cannot inflate dashboard totals.
 - A container scope key is an explicit filter-only contract, not a readable
-  relation. [`hasura_container_scope_fields`](../../addons/angee/work/models.py)
+  relation. [`hasura_container_scope_fields`](../../src/angee/work/models.py)
   lets a resource declare stable related keys such as `queue__slug`; the
-  [Hasura owner](../../addons/angee/graphql/data/hasura.py) keeps the root actor
+  [Hasura owner](../../src/angee/graphql/data/hasura.py) keeps the root actor
   scope while permitting this membership test without container read access.
   Container-scope declarations also admit their keys as filters; do not declare
   them twice. Ordinary relation filters and projections retain their redaction guards.
@@ -169,10 +170,11 @@ Use these owners instead of maintaining another contract in an addon:
   preserving locks and batching. A declared
   read-only external import source may select its database explicitly.
   Multi-database support extends Django with a router for static model placement;
-  add operation scoping only for a concrete need. REBAC-managed models must write
-  to the default database, together with the relationship and resource stores; the
-  [base system check](../../angee/checks.py) validates configured routers
-  against that requirement.
+  add operation scoping only for a concrete need. REBAC-managed models and their
+  relationship store must share a database alias. The upstream
+  `rebac.checks.check_policy_models` check owns that routing rule; run native
+  checks for the aliases selected by the deployment rather than imposing a
+  second framework rule that requires the literal `default` alias.
 - External side effects and DB reflection are separate phases. File edits,
   daemon calls, network calls, and other non-DB effects never run inside
   `transaction.atomic`; the following DB mutation path names its transaction
@@ -202,8 +204,8 @@ Use these owners instead of maintaining another contract in an addon:
   Build computed filter expressions only for aliases referenced by the resolved
   native predicate, shared by requests and stored conditions. Preparing an unused
   expression still costs Python work even when Django omits it from SQL.
-  See [the Hasura adapter](../../addons/angee/graphql/data/hasura.py) and
-  [workflow decision fields](../../addons/angee/workflows/schema.py).
+  See [the Hasura adapter](../../src/angee/graphql/data/hasura.py) and
+  [workflow decision fields](../../src/angee/workflows/schema.py).
   Dependencies include inherited `AngeeNode.display_name`: bind its existing
   resolver on the concrete type with
   the fields its model's `__str__` actually reads. Test narrow selections at
@@ -240,7 +242,8 @@ Use these owners instead of maintaining another contract in an addon:
   the backend application of **Find the owner** in `AGENTS.md` and the
   Django-Native Rule above.
 - Compose behavior onto the class that owns the data. Settings construction
-  belongs on `Composer`; runtime model materialization belongs on `Runtime`.
+  belongs to `django_compose.conf`; model materialization belongs to the native
+  compiler build owner.
   Move policy from helpers that interpret or mutate a passive data holder onto
   that owner. A module-level function is appropriate for orchestration when no
   participant owns the rule, or a pure transform with no natural owner. Choose
@@ -271,33 +274,50 @@ Use these owners instead of maintaining another contract in an addon:
 - Source models are abstract. Concrete apps are emitted by the composer.
 - Keep Django `Meta` for Django and library-owned options such as
   `rebac_resource_type`; Angee extension facts live on the owning model class.
-- `angee` declares model markers, decorators, and field projection facts;
-  `angee.compose` interprets them during emission. If runtime code consumes a
+- Foundation and capability addons own model markers, decorators and field
+  projection facts. Their declared build integrations contribute literal
+  declarations; `django-compose` emits them without knowing the owning policy. If runtime code consumes a
   source-model structural marker, the composer carries it onto the emitted
   concrete class instead of callers inheriting or probing the abstract source.
 - Field classes own data-resource classification declarations. Field authors set
-  `angee_widget`, `angee_scalar_hint`, and `angee_currency_field` on the field;
-  `angee.data.field_classification` reads those declarations and does
+  `angee_widget` and `angee_currency_field` on the field; native Django and
+  Strawberry field types own scalar classification.
+  `angee.graphql.data.resource_fields` reads those declarations and does
   not special-case addon-owned field classes. Custom widget keys follow the
   [frontend registry naming rule](../frontend/guidelines.md#rules); the owning
   web addon registers the identical key. Unknown bare built-in names remain
   schema errors.
 - A computed GraphQL field may declare presentation facts through
   `strawberry_django.field(metadata=...)`. The shared classifiers in
-  `angee.data.field_classification` own resolution: surface metadata first,
+  `angee.graphql.data.resource_fields` own resolution: surface metadata first,
   Django field declarations second, then the ordinary type fallback. Money
   projections use `MONEY_CURRENCY_FIELD_METADATA_KEY` from its owner
-  `angee.data.field_classification` instead of repeating its metadata key. Presentation metadata alone grants no
+  `angee.graphql.data.resource_fields` instead of repeating its metadata key. Presentation metadata alone grants no
   ORM write or aggregation capability; those still come from a real model field
   or explicit resource input policy.
 - Manually ordered rows use `FractionalRankField` (NOT NULL) plus a database
   `UniqueConstraint` over their context fields and rank. Use the field's
-  append/between API; `FractionalRankExhausted` means enqueue
-  `jobs.rebalance_fractional_ranks`, never guess an epsilon or reuse a rank.
-  Rebalance context keys are model *field names*, not attnames —
-  `{"project": pk}`, never `{"project_id": pk}`.
-- `runtime/`, generated schemas, migrations, and codegen stubs are output.
-  Change the source, not the artifact.
+  append allocation when a rank is omitted. `FractionalRankExhausted` refuses
+  the write as a validation error; an ordering owner can call the field's
+  `rebalance` on its complete context under its own lock to preserve order and
+  restore gaps. Task board placement retries after this contextual repair. For
+  cyclic reorders, the field's `get_temporary_ranks`
+  allocates outside the stored context and requested destinations; the owning
+  writer stages and finalizes through its native queryset/model lifecycle in
+  one transaction. Both phases retain capture and a failure rolls back the whole
+  reorder. Never guess an epsilon or reuse a rank. Task board drops use the
+  projects-owned `task_order` input extension: visible neighbor ids express
+  intent, while Task resolves its persisted project scope (including no project)
+  and the field allocates between adjacent stored ranks. Assignee/stage lanes
+  never define uniqueness. Task's ordering transaction covers ordinary explicit
+  rank writers and creation too; the Hasura adapter acquires it before its row
+  lock. Task ranks serialize within each project (including no project);
+  child subranks serialize within each non-null parent, including children from
+  different projects. Root subranks are inert and need no global allocation or
+  uniqueness. Explicit numeric ranks, including Stage positions, retain exact values.
+- Runtime model modules, generated schemas and codegen stubs are output.
+  Change their source declarations. Native Django migration history is reviewed,
+  version-controlled project source; preserve it across runtime rebuilds.
 - REBAC is structural and owned by `django-zed-rebac`. Addons declare
   `permissions.zed` beside the owning app. Permission sync is the library's
   own `manage.py rebac sync`. Use the library's
@@ -322,7 +342,7 @@ Use these owners instead of maintaining another contract in an addon:
     `integrate.OAuthClient` are the canonical shape.
   - *Only behaviour differs, open set (addons contribute impls) while persisted
     fields stay the same* → **one concrete model +
-    `angee.impl.ImplClassField`** naming a non-model
+    `angee.base.fields.ImplClassField`** naming a non-model
     strategy/client/backend class. Name the field by the role it plays
     (`backend_class`, `provider_type`), not by a generic "implementation" label.
     One table (unified list/reconcile, no field duplication); the impl is an
@@ -346,7 +366,7 @@ Use these owners instead of maintaining another contract in an addon:
   Optional states declare `null=True, blank=True`; absence is `None` in Python
   and NULL in storage, so native Strawberry-Django `auto` emits a nullable enum.
   Do not add blank-string sentinels or per-field GraphQL coercion;
-  [`StateField.check()`](../../angee/fields.py) rejects that declaration on
+  [`StateField.check()`](../../src/angee/base/fields/__init__.py) rejects that declaration on
   concrete models, and `tests/test_layering.py` guards active source declarations.
 - **Reference codes with upstream labels remain string fields.** A country code
   identifies external ISO reference data; it is not a row lifecycle state.
@@ -378,14 +398,13 @@ Use these owners instead of maintaining another contract in an addon:
   child model is the integration implementation; the backend field is the adapter.
 - **A row-selected impl is stored as a registry key, never a dotted path.**
   `ImplClassField(Base)` stores a short key and resolves it against the Django
-  setting named by `Base.registry_setting`; the owning addon lists `Base` once in
-  `ANGEE_IMPL_REGISTRIES:append`, and contributors add paths through an autoconfig
+  setting named by `Base.registry_setting`; contributors add paths through an autoconfig
   dotted key (`"ANGEE_…_CLASSES.<key>": "<dotted.path>"`). So a writable column
   never feeds `import_string` (the path comes from composed, trusted settings,
   like an addon's `schemas` reference), the available impls are a composition
   fact rather than a base-model import, a project can remap a key to its own
-  class, and the base system check validates every listed registry's paths, base
-  classes, and keys, including rowless catalogues. Because every addon has contributed by schema-build
+  class, and its native field check validates every mapping entry's path, base
+  class and key. Owning addons register native checks for rowless contracts. Because every addon has contributed by schema-build
   time the key set is closed, so the field is a `TextChoicesField` and
   `strawberry-django` renders the GraphQL enum natively (like `StateField`). It
   therefore requires a **non-empty** registry: an addon whose impl set could
@@ -393,20 +412,53 @@ Use these owners instead of maintaining another contract in an addon:
   integrate's `none` VCS client), so a composition always has one selectable
   impl and the enum is never empty.
 - **Rowless implementation catalogues compose the same registry owner.**
-  [`angee.impl`](../../angee/impl.py) owns registry checks, choice
-  metadata and native enum projection for fields and settings-selected uses.
+  [`angee.base.implementations`](../../src/angee/base/implementations.py) owns registry checks, choice
+  metadata for fields and settings-selected uses. Native enum projection belongs
+  to [`ImplClassField`](../../src/angee/base/fields/implementation.py).
   Callers name only the base (`resolve_impl_class(Base, key)`, `impl_choices(Base)`).
   Empty catalogues may pass checks and return no choices; projecting an enum
-  requires entries. The base app registers one check for every declared registry;
-  keep any selected-key policy with its addon. GraphQL adapters
-  live in [`angee.graphql.impl`](../../addons/angee/graphql/impl.py); callers
-  retain authorization policy.
+  requires entries. The owning addon registers a stable native Django check using
+  `check_impl_registry(Base, **kwargs)` for a rowless contract; no second declaration
+  list is required. Keep any selected-key policy with its addon. GraphQL adapters
+  live in [`angee.graphql.impl`](../../src/angee/graphql/impl.py); callers
+  retain authorization policy. Models with picker restrictions extend the existing
+  `ImplementationChoicesMixin` policy; do not put product filtering on a field subclass.
+- **Typed row implementation config has one owner.** A model composing
+  [`ImplDefaultsMixin`](../../src/angee/base/models/implementations.py) uses one
+  effective implementation selector for its concrete `config` JSONField. Native
+  model checks reject a missing/wrong config field or ambiguous typed selectors.
+  Untyped field defaults and rowless implementation config do not require a row
+  config column. Pydantic remains the selected implementation's validation owner.
+- **An `ImplClassField` builds its enum at model-import time from its base's
+  `registry_setting`** — the key→path mapping (e.g. `ANGEE_STORAGE_BACKEND_CLASSES`)
+  is supplied by the owning addon's `autoconfig`, so every settings module that
+  installs the addon must carry a **non-empty** mapping. Bare settings modules
+  declare the required registry inputs explicitly before
+  Django loads models, then add only their fixture implementations. An empty
+  registry raises `ImproperlyConfigured` at import — give the addon a
+  noop/null-object default so the set is never empty. The column stores the key
+  (`local`), never a dotted path. A deconstructed migration-state field omits
+  `base_class` and may reconstruct its declared default after the registry has
+  been removed; active model fields still require a typed base and a non-empty
+  registry.
+- **Pydantic declarations own implementation config defaults.**
+  [`ImplBase.config_defaults()`](../../src/angee/base/implementations.py) reads static input
+  suggestions from Pydantic's validation JSON Schema independently of FormSpec
+  support; [`angee.base.schemas.forms`](../../src/angee/base/schemas/forms.py) projects the
+  same declaration for transport-neutral forms. Dynamic factories
+  resolve through `parse_config()` at runtime; `normalize_config()` serializes
+  that parsed model with its wire aliases. Typed implementation values share
+  [`get_type_adapter`](../../src/angee/base/validators.py)'s cached native adapter
+  and Django field-path errors. Explicit
+  config parsing rejects non-empty values without a model; model-row validation
+  still leaves undeclared legacy config alone. Generated choice metadata stays
+  deterministic.
 - **Hooks are declared callable settings, separate from keyed registries.**
-  The owning addon appends each hook setting name to `ANGEE_HOOKS`, and
-  [`angee.impl`](../../angee/impl.py) resolves its optional callable
-  or ordered callable list with `resolve_hook` or `resolve_hooks`. The base check
-  imports and validates every declared hook; the caller owns invocation order
-  when it needs to sort contributors.
+  The owning addon registers native Django checks for its specific callable
+  settings. [`angee.base.hooks`](../../src/angee/base/hooks.py) supplies shared import and
+  validation with `check_hooks`, `resolve_hook` and ordered `resolve_hooks`.
+  Checks import providers without executing them. There is no second list of
+  hook-setting names; each capability owns its validation and invocation.
 - Cross-addon dependencies are one-way (e.g. `integrate → iam`, never the
   reverse); reject a bridge/diamond addon that would couple both ways.
 - GraphQL authoring is native Strawberry. Addons expose a `schemas` mapping in
@@ -420,14 +472,14 @@ Use these owners instead of maintaining another contract in an addon:
   source); the runtime class is the post-composition source of truth for fields,
   relations, and choices. A registry-backed enum (`ImplClassField`) is read off the
   runtime field, so the GraphQL enum already reflects every addon's contributions.
-  The native enum and choice projections belong to `angee.impl`; callers
+  The native enum and choice projections belong to `angee.base.implementations`; callers
   without a model column use that owner after settings composition.
 - **Extension is symmetric across five axes — extend, never edit the owner — and
   the schema is built after the runtime is composed, so all five apply
   post-composition with the dependency staying one-way (downstream reaches up; the
   upstream never references down).** Add a *concrete subtype* of a parent row with
   a Django child model when exactly one concrete kind applies; add a *field* to
-  another addon's model with an `extends = "app.Model"` source model when the same
+  another addon's model with an abstract `Composable` source declared with `extends="app.Model"` when the same
   row gains optional capability fields; add a *value* to an open enum with an
   `ImplClassField` registry (settings-keyed, one impl class per key — use it only
   when each key has genuinely distinct implementation code, not as a workaround for
@@ -443,17 +495,17 @@ Use these owners instead of maintaining another contract in an addon:
   target input and add fields only; Strawberry merges multiple donors additively in
   addon order and fails fast on field-name collisions. strawberry-django-hasura
   forwards extension values in the resource's write data. The default
-  [`AngeeHasuraWriteBackend`](../../addons/angee/graphql/data/hasura.py) writes
+  [`AngeeHasuraWriteBackend`](../../src/angee/graphql/data/hasura.py) writes
   values naming model fields with the row and, in the same transaction, passes
   the rest to the written row's cooperative
-  [`InputExtensionsMixin.apply_input_extensions`](../../angee/models/inputs.py),
+  [`InputExtensionsMixin.apply_input_extensions`](../../src/angee/base/models/inputs.py),
   composed by `AngeeModel`, with nested line rows included. Input-owning mixins
   also compose this fieldless terminal when they support plain Django hosts.
   Its consumer (a mixin or `extends` donor on the model) takes
   each value it owns as a keyword-only parameter and delegates the rest once
   through `super()`; the terminal fails fast on a value no consumer took. A
   custom write backend consumes its own extensions: IAM's
-  [`UserPasswordInsertInput`](../../addons/angee/iam/schema.py) names the
+  [`UserPasswordInsertInput`](../../src/angee/iam/schema.py) names the
   password column, which only the person factory may hash. Resource metadata
   marks every field of the final insert/set input creatable/updatable,
   extensions included. Type and
@@ -463,6 +515,34 @@ Use these owners instead of maintaining another contract in an addon:
   loudly rather than leaking.
 - Use symbolic model references across addon boundaries; avoid import cycles.
 - Build output must be byte-deterministic.
+- **Derived columns have two drift classes and two owners.** Signals own instance
+  saves/deletes, cascades, and queryset deletes; idempotent repair passes own
+  `bulk_create` and queryset `update` paths, where signals do not run.
+- **Never a database trigger or function.** Business rules, immutability and
+  ownership guards belong to Django owners: cover instance, queryset, bulk,
+  cascade and relation writes in the owning models/managers/querysets, with
+  explicit Django signals where relation writes bypass those owners. Keep
+  declarative constraints (`UniqueConstraint`, `CheckConstraint`) and portable
+  row locks. Forbidden: `CREATE TRIGGER`, `CREATE FUNCTION`, plpgsql, `RunSQL`
+  that installs them, per-backend mirrors of them, and system or deploy checks
+  that verify a trigger exists instead of the rule holding. A trigger is a
+  second, invisible owner of a rule that the ORM cannot see, test, or migrate
+  from models. Raw SQL is not a supported business-write path. On encountering
+  existing trigger machinery, delete it and move the rule to its Django owner
+  in the same change.
+- **JSON Schema concerns have explicit owners.**
+  [`angee.base.validators`](../../src/angee/base/validators.py) validates declarations
+  and values through the native JSON Schema libraries and translates Django errors.
+  [`base.schemas.references`](../../src/angee/base/schemas/references.py) owns
+  bounded local-reference operations. Workflow-specific schema composition stays
+  in [`workflows.schemas`](../../src/angee/workflows/schemas.py).
+  [`FormSpec`](../../src/angee/base/schemas/form_spec.schema.json) is the one
+  contract for Python projection, generated TypeScript types and UI validation;
+  messaging composes it with its own public-form admission policy.
+- **Actor-scoped scalar subqueries and keyset cursors belong to `angee.base`.**
+  The `Coalesce(Subquery(related.with_actor().scoped().filter(pk=OuterRef).values(v)[:1]), "")`
+  shape and the signed `(order_at, pk)` cursor pager are framework primitives;
+  do not copy them into another addon's queryset.
 
 ## REBAC
 
@@ -472,7 +552,7 @@ This project runs **fail-closed**: `REBAC_STRICT_MODE=True` and
 data through REBAC, never a queryset bypass.
 
 - **The local backend is the only supported REBAC backend.** Base
-  [autoconfig](../../angee/autoconfig.py) selects it because field- and
+  [autoconfig](../../src/angee/base/autoconfig.py) selects it because field- and
   const-backed relations, `authenticated`, and SQL read scopes are evaluated
   against the Django rows themselves, which no remote tuple store can see. Do not
   mirror column facts into tuples to keep another backend viable.
@@ -510,10 +590,10 @@ data through REBAC, never a queryset bypass.
   retain the library's `pk` identity default. Sqids are public representations
   owned by the model's public-ID field, not alternate authorization identities.
   Transport subject strings pass through
-  [the public identity boundary](../../angee/identity.py) before reaching
+  [the public identity boundary](../../src/angee/base/identity.py) before reaching
   REBAC, and outputs encode the PK there. Signed tokens are transport too: a
   download token carries its issuing actor's public subject, and
-  [`FileManager.for_download_token`](../../addons/angee/storage/models.py)
+  [`FileManager.for_download_token`](../../src/angee/storage/models.py)
   re-checks that actor's `read` on every request. Tableless role anchors keep
   named IDs. Changing a public prefix or codec must never change grants.
 - **Container inheritance belongs to the resource and scope owners.** A
@@ -521,24 +601,24 @@ data through REBAC, never a queryset bypass.
   contributes additional relations and arrows through its own
   `permissions.extends.zed`. Binding a resource widens access to its contents,
   so the binding edge's own `create` and `delete` require authority over both
-  ends: [project bindings](../../addons/angee/projects/permissions.zed) take
+  ends: [project bindings](../../src/angee/projects/permissions.zed) take
   share on the project and the resource type's grant authority through the
   relation declared for that type, and
-  [`projects.access.bind`](../../addons/angee/projects/access.py) writes them
+  [`projects.access.bind`](../../src/angee/projects/access.py) writes them
   under the actor.
 - **Declare direct sharing once.** Models declare `rebac_grantable`; the
-  [record-access API](../../addons/angee/graphql/sharing.py) dispatches bulk
+  [record-access API](../../src/angee/graphql/sharing.py) dispatches bulk
   grants and revocations through the model's checked methods. Addons do not
   define private share mutations. Metadata projects the grant surface and the
   subject resource's public identity field; the API converts selected public
   subjects to canonical PK references before validating and writing grants.
 - **A record authorizes its tags.** A taggable model's addon depends on
-  `angee.tags`, composes [`TaggedModel`](../../addons/angee/tags/models.py) on
+  `angee.tags`, composes [`TaggedModel`](../../src/angee/tags/models.py) on
   the canonical model (its reverse generic relation is a private field: no
   column, no migration, and the delete collector cascades the edges), declares
   the type's `target`-backed relation on `tags/tag_assignment` from its
   `permissions.extends.zed`, composes
-  [`TaggedNode`](../../addons/angee/tags/schema.py) onto the console node — or a
+  [`TaggedNode`](../../src/angee/tags/schema.py) onto the console node — or a
   console `type_extensions` donor when the node is shared with the public
   schema — with `tags_input_extensions` on its console inputs, and places the
   field in its web fragment. The native prefetch hint batches every row's
@@ -596,8 +676,11 @@ data through REBAC, never a queryset bypass.
   authorization backends without its own superuser shortcut. An additional
   backend may grant codenames through normal Django chaining, so removing the
   REBAC backend alone is not a global fail-closed guarantee.
+- **Login throttling belongs at the IAM auth seam.** Do not add per-view or
+  per-test throttles; IAM composes `django-axes` at the `authenticate(request=...)`
+  backend/signal path, so the password GraphQL mutation stays a thin caller.
 - **Person accounts have one factory.** Actor-requested accounts go through
-  [`UserManager.create_person`](../../addons/angee/iam/models.py), whose `create`
+  [`UserManager.create_person`](../../src/angee/iam/models.py), whose `create`
   permission owns admission; ingress without an actor uses
   `create_person_as_system` with a named reason, once its channel owner has
   required channel `write` and account `create` to enable that ingress.
@@ -637,7 +720,7 @@ data through REBAC, never a queryset bypass.
   then match by primary key against that permission's rows, as IAM's
   `active_account` and `UserQuerySet.active_people` do. No bypass, no audit row.
   Uniqueness and constraint validation compare a row with every row, so
-  [`AngeeModel`](../../angee/models/base.py) runs them under a named system context
+  native `RebacMixin` runs them under a named system context
   once the actor holds the write's access (`create` on the unsaved candidate,
   `write` on a saved row). A field gate is not creation policy: the library enforces `write__<field>` on
   update only, so keep a protected creation value out of generated insert inputs
@@ -654,11 +737,11 @@ data through REBAC, never a queryset bypass.
   `Thread.grant_reader` / `revoke_reader` remain shares governed by `share`.
   Team and record audiences are read live through the messaging contracts;
   they are not copied into followers. See
-  [`ThreadedModelMixin`](../../addons/angee/messaging/models.py) and
-  [`ThreadNotificationManager`](../../addons/angee/messaging/managers.py).
-- **Posture is data, not schema.** `permissions.extends.zed` fragments union
-  permission arms and add no permission other than an owned field gate, so
-  narrowable defaults ship as seeded tuples. Platform-wide tuple-driven visibility
+  [`ThreadedModelMixin`](../../src/angee/messaging/models.py) and
+  [`ThreadNotificationManager`](../../src/angee/messaging/managers.py).
+- **Posture is data, not schema.** `permissions.extends.zed` declares addon-owned
+  capability permissions and unions existing permission arms; deployment-specific
+  narrowable defaults still ship as seeded tuples. Platform-wide tuple-driven visibility
   uses a const-backed singleton relation on each row (for example,
   `auth/user#directory` → `iam/directory:main`) plus grants on that singleton
   (`iam/directory:main#reader` names people managers), never base schema arms or
@@ -666,7 +749,7 @@ data through REBAC, never a queryset bypass.
 - **Row-dependent shared visibility uses a filtered constant.** Filter the
   resource's own columns and target its own resource type at sentinel ID
   `shared`, then arrow to `shared_reader = authenticated`; see
-  [dashboards](../../addons/angee/dashboards/permissions.zed). The sentinel needs
+  [dashboards](../../src/angee/dashboards/permissions.zed). The sentinel needs
   no target row because the arrowed permission is the authenticated builtin.
   `authenticated` admits every non-anonymous subject, so public rows also admit
   non-user subjects such as agents and integration sources that the former
@@ -674,26 +757,34 @@ data through REBAC, never a queryset bypass.
   `shared_reader` is arrow-only: never check it directly or use it as an action
   or field gate, which would bypass the row filter. Check the resource's `read`
   permission instead. Multi-table children read through their parent's permission,
-  as [work queues](../../addons/angee/work/permissions.zed) do for public
-  [groups](../../addons/angee/spaces/permissions.zed); no tuple mirrors the column.
+  as [work queues](../../src/angee/work/permissions.zed) do for public
+  [groups](../../src/angee/spaces/permissions.zed); no tuple mirrors the column.
 - **Always-shared reference data reads through `authenticated`.** A resource
   every signed-in subject reads unions the library's `authenticated` builtin into
-  `read` and stores no wildcard tuple; [`tags/tag`](../../addons/angee/tags/permissions.zed)
+  `read` and stores no wildcard tuple; [`tags/tag`](../../src/angee/tags/permissions.zed)
   is the reference. `authenticated` also admits non-user subjects.
 - **Caveated relations are refused in framework fragments.**
-  [`angee.E024`](../../angee/checks.py) rejects caveated subjects in every
+  [`angee.E024`](../../src/angee/base/checks.py) rejects caveated subjects in every
   effective schema. Actor-scoped querysets carry no caveat context. Express
   row-dependent conditions as live field-backed relations.
 - User-requested reads and writes retain their actor scope. Reserve
   `system_context`/`asystem_context` for named system-owned work; do not elevate
-  a user factory merely because it inserts a row.
+  a user factory merely because it inserts a row. A gated factory that must
+  elevate to create a row returns that row bound to the requesting actor, so
+  callers continue under the original actor, never the elevated one.
+- **Elevated destructive work keeps its dependents' authorization.** A verb that
+  checks the public `delete` permission itself and then runs the owned
+  destructive work under `system_context` (storage's soft delete, messaging's
+  threaded-record delete) never hides independently-authorized
+  `on_delete=CASCADE` children under that elevated cascade; a dependent row
+  derives `delete` through its parent in its own zed relation.
 - **Merge re-points references as named system work.** This is a deliberate
   exception to the actor-scope rule above.
-  - [`MergeableMixin.merge`](../../angee/models/merge.py) first authorizes the actor:
+  - [`MergeableMixin.merge`](../../src/angee/base/models/merge.py) first authorizes the actor:
     it finds the merged records through the actor's read scope, even inside an
     outer system context, and needs `write` on the survivor and `delete` on each
     merged record.
-  - Only then does it call the system fold, [`fold_records`](../../angee/models/merge.py),
+  - Only then does it call the system fold, [`MergeableMixin._fold`](../../src/angee/base/models/merge.py),
     which moves references under `system_context(reason="merge")`, including
     deleting a merged record's copy of an identity row the survivor already
     holds. Under an actor, REBAC only deletes and recreates an edge, which would
@@ -705,7 +796,7 @@ data through REBAC, never a queryset bypass.
     actor's own delete. Readers resolve a redirect through `canonical()`; a
     `merged_from` row stays visible as such.
   - A model's own system verb folding a duplicate (no actor to authorize) calls
-    the system entry [`MergeableMixin.fold`](../../angee/models/merge.py),
+    the system entry [`MergeableMixin.fold`](../../src/angee/base/models/merge.py),
     which joins the open changeset and runs the same hooks under a system
     boundary. Before core row locks, both entries call `lock_for_merge()`
     so a domain can acquire its earlier lock class. Querysets use
@@ -714,7 +805,7 @@ data through REBAC, never a queryset bypass.
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
   const-backed relationships, so per-row `create` gates remain authoritative.
   Compose that path for ordinary factories, as
-  [`AgentSessionManager.start`](../../addons/angee/agents/models.py) does.
+  [`AgentSessionManager.start`](../../src/angee/agents/models.py) does.
   Manual factories needing an explicit relationship preflight call native
   `rebac.check_new`; prepared rows use the manager's native `insert` path and
   retain the verified actor on the instance.
@@ -743,7 +834,7 @@ data through REBAC, never a queryset bypass.
   `permissions.zed` declares the *seam* (for example, the in-repo spaces addon
   extends `messaging/thread`); a consumer addon that needs its own role adds it
   from its own **`permissions.extends.zed`** (sibling to `permissions.zed`),
-  owned by `angee.compose.permissions`. The `tests/extcontrib` fixture keeps the
+  owned by `angee.base.build`. The `tests/extcontrib` fixture keeps the
   mechanical merge covered. Each
   `definition <target> { … }` block in the fragment names an existing definition
   and lists the relations it contributes and the permission arms it unions in
@@ -751,20 +842,20 @@ data through REBAC, never a queryset bypass.
   composer merges every fragment into its target's owning package at build time,
   emits the merged effective zed to `runtime/permissions/<package>.zed`, and
   repoints that package's `AppConfig.rebac_schema` at it, so `rebac sync` /
-  `rebac check` / `reconcile_permissions` all read the additive superset with no
-  library change. The merge fails fast on a relation-name collision (base or two
-  contributors), an arm whose permission the base does not declare, and a target
-  no installed package declares; contributors merge in sorted package order.
-  The only new permission a fragment may declare is a field gate,
-  `read__<field>` or `write__<field>`, on a concrete column that the same
-  package's donor contributes to the target model; no other package may extend
-  that gate. `ModelComposition.field_gate_owners` supplies the ownership map to
-  [`angee.compose.permissions`](../../angee/compose/permissions.py).
-  Functional drift is caught by `rebac sync` (content hash) and `angee build
-  --check` (the emitted file); the contribution is revisioned by the contributing
+  `rebac check` both read the additive superset. The merge fails fast on a relation-name collision (base or two
+  contributors), a new permission name introduced by two contributors or
+  colliding with a relation, and a target no installed package declares;
+  contributors merge in sorted package order. New capability permission names
+  belong to one introducing addon; references pass native schema validation.
+  A new field gate, `read__<field>` or `write__<field>`, additionally requires a
+  concrete column that the same package's donor contributes to the target model;
+  no other package may extend that declaration. [`angee.base.build.field_gate_owners`](../../src/angee/base/build.py)
+  interprets the compiler's neutral donor-field provenance for REBAC.
+  Functional drift is caught by `rebac sync` (content hash) and `angee check`
+  (the emitted file); the contribution is revisioned by the contributing
   addon (`@rebac_schema_revision` in its fragment, echoed into the merged file's
-  `@rebac_extended_by`), so the base addon does **not** bump its revision for an
-  additive extension. **Editing a framework/base-addon `permissions.zed` to name
+  `@rebac_extended_by`), so the extended addon does **not** bump its revision for an
+  additive extension. **Editing a framework addon's `permissions.zed` to name
   a domain role (for example, `<consumer>_reviewer`) is a bug** — the vocabulary
   belongs in the consumer addon that owns the concern.
 - There is no `rebac_roles` command. Grant writable role memberships through
@@ -789,22 +880,22 @@ data through REBAC, never a queryset bypass.
   hint that under-grants).
 - `rebac sync` persists the zed into DB `Schema*` tables, and the system checks
   gate every subcommand on that persisted state — so editing the zed can deadlock
-  the sync. Unstick with `rebac --skip-checks sync --force-overwrite --yes` then
-  `rebac sync`; never smoke-test a zed against the shared example DB.
+  the sync. Unstick with `rebac --skip-checks sync --prune-stale --yes`, then
+  `check`; never smoke-test a zed against the shared example DB.
 - The local backend compiles permissions into queries over application tables;
   it maintains no permission index. Run `migrate` and `rebac sync` to prepare
   the database and store the schema. There is nothing to rebuild or verify.
 - `REBAC_DEPTH_LIMIT` bounds compiled SQL nesting and inherited permission hops.
   On SQLite (default 8), access inherited through more than eight parent hops is
   denied: scoped lists omit those rows; point checks raise `PermissionDepthExceeded`.
-  Deeper hierarchies need PostgreSQL (default 16). [Base autoconfig](../../angee/autoconfig.py)
+  Deeper hierarchies need PostgreSQL (default 16). [Base autoconfig](../../src/angee/base/autoconfig.py)
   owns the defaults; explicit environment values take precedence over project settings.
-- Core [`reconcile_permissions`](../../angee/management/commands/reconcile_permissions.py)
-  prunes stale package-managed schema through [`angee.permissions`](../../angee/permissions.py),
-  independently of optional addons. Provision runs it check-free after migrations
-  preserve identity changes and before `rebac sync` and system checks. Use that
-  sequence when removing or renaming definitions, removing an addon, or deleting
-  its last `permissions.zed` file; `rebac sync` alone skips absent declarations.
+- Native `rebac --skip-checks sync --prune-stale --yes` retires removed
+  package-managed declarations and their stored relationships in the same policy
+  transaction as synchronization. Provision runs it after migrations preserve
+  identity changes and before system checks. This includes removed addons and
+  packages whose last `permissions.zed` disappeared. `--force-overwrite` remains
+  a separate explicit choice for replacing locally managed live policy.
 
 ## Pitfalls
 
@@ -820,259 +911,236 @@ and current contracts before applying a historical example to a new deployment.
 
 ### Environment and checks
 
-- **Localhost ports do not isolate browser cookies.** Keep the project template's
-  project-scoped Django session and CSRF cookie names; two development stacks on
-  different ports otherwise replace each other's login cookies.
-- **Run every changed test module standalone.** A full suite's file order can
-  leak concrete test models into the shared registry and mask a missing
-  registration; a broad run does not replace the direct module run.
-- **Temporary app registries can wire shared signals.** Django's `isolate_apps`
-  runs app ready hooks. Tests including auth restore the sign-in stamp through
-  [IAM's signal owner](../../addons/angee/iam/signals.py), as the
-  [deletion tests](../../tests/test_deletion.py) do, so later tests retain the
-  configured lifecycle.
-- **Django owns static test-table lifecycle.** Register concrete models before
-  database setup in installed, unmigrated apps, and use pytest-django's native
-  setup and transactional flush. Share source compositions through the owning
-  [`resources`](../../addons/angee/resources/testing/__init__.py),
-  [`workflows`](../../addons/angee/workflows/testing/__init__.py), and
-  [`integrate`](../../addons/angee/integrate/testing/__init__.py) test apps.
-  Import the reusable addon-owned concrete compositions from the root test
-  conftest before database setup, including
-  [`decisions`](../../addons/angee/decisions/testing/models.py) and
-  [`messaging`](../../addons/angee/messaging/testing/models.py); decisions tests
-  import those models without workflow test support.
-  Framework probes declared after setup, in isolated registries, unmanaged, or
-  under uninstalled or migrated
-  labels use the single [`model_tables`](../../tests/tables.py) helper. It drops only
-  tables it created; it never clears existing tables. Keep production code
-  independent of test support.
-- **Patch inherited Django manager methods on the manager class.** Pytest's
-  `monkeypatch` can restore an instance patch as a bound instance attribute;
-  Django's `db_manager()` copies then retain the original manager and lose their
-  binding. Patch `type(manager)` and accept the manager argument in the spy.
-- **A relocated virtualenv can retain stale launcher shebangs.** Diagnose the
-  interpreter and environment owner when a console script cannot spawn; do not
-  assume an application failure. [Checks](../checks.md) owns the supported
-  commands, module invocation, and environment preparation.
-- **Celery workers do not autoreload.** Only the ASGI `runserver` reloads on
-  source edits. After changing task, model or settings code, restart the workers
-  through the operator (`angee --root "$ANGEE_ROOT" restart celery-worker` and any
-  other worker services), or run the whole-application restart; see
-  [Restart the running stack](../howto/getstarted.md#restart-the-running-stack).
-- **`angee dev` serves via Angee's `runserver` override, not `uvicorn --reload`.**
-  `angee.compose` ships a `runserver` that runs `ASGI_APPLICATION` under uvicorn
-  supervised by Django's follow-imports autoreloader (mirrors Daphne's override).
-  It needs no `--reload-dir`: Django watches imported source — consumer/base addons,
-  framework core, *and* editable deps — and never the generated `runtime/` (each
-  child re-emits before its reloader snapshots), so a model edit reloads once. Don't
-  reintroduce `uvicorn --reload`/`--reload-dir` heuristics in the stack template. The
-  boot regenerates the SDL when `ANGEE_DEV_SDL=1` (set only by that command), so a
-  live edit refreshes `runtime/schemas/*.graphql` and Vite HMRs; `schema --check`
-  stays a real drift gate because management commands never import `angee.asgi`.
-  Generated files (runtime models + SDL) are written atomically via
-  `angee.fs.write_atomic`. The override also hard-exits the autoreloader child on
-  reload: open uvicorn/channels WebSocket work can leave non-daemon runtime threads
-  alive, so Django's default `sys.exit(3)` can wedge the child on a dead listener.
-  Install `pywatchman` for event-based (vs 1s-poll) reload.
-- **Each running stack needs a unique Compose project name and edge port.**
-  Colliding names can merge containers into another stack's Compose project;
-  colliding ingress ports can route requests to the wrong runtime. Inspect the
-  rendered stack manifest and use its template-owned names and port leases.
-  A source workspace inside one stack does not itself imply a second running
-  stack. Resolve the lifecycle owner through the workspace workflow before
-  changing stack or service templates.
-- **Addon moves can change the workspace dependency graph and live imports.**
-  Use [checks and dependency preparation](../checks.md) to select the owning
-  environment. In a materialized workspace, run a needed `pnpm install` only at
-  the owning stack root, never in this source slot.
-- **Never name an addon module after a third-party top-level package it imports.**
-  `unittest` discovery inserts the discovery-root directory onto `sys.path`, so an
-  addon's `mcp.py` that does `from mcp.server… import …` becomes an importable
-  top-level `mcp` that shadows the real package — `ModuleNotFoundError: 'mcp' is not
-  a package` during a test run, while a single-module run and `manage.py check` pass.
-  Name such a module for its role, not the library (the MCP tool seam infers — or
-  resolves a `[mcp].tools` override to — `mcp_tools.py`, not `mcp.py`).
+The environment, test-registry and running-stack pitfalls that lived here now
+belong to the `angee-tests` skill: [environment pitfalls](../../.agents/skills/angee-tests/references/environment.md).
+The development server contract stayed under [Development server](#development-server)
+and the module-naming rule under [Naming](#naming).
 
 ### Migrations and runtime
 
-- History snapshots retain stored values even when the actor's view is redacted.
-  [`ModelHistory`](../../angee/models/history.py) gives native history construction a
-  detached snapshot and records deletion inside the delete transaction before
-  the source row disappears; it never unredacts the caller's instance.
-- **Review enrolled local rows before enabling two-way record sync.** The
-  [record-sync driver](../../addons/angee/integrate/README.md) may publish targeted
-  links after the first baseline. Directory membership belongs to RecordLink;
-  creating a Party never enrolls it in a remote address book.
-- [`HistoryMixin`](../../angee/models/history.py) excludes `GeneratedField` and its
-  subclasses from historical models because their expressions belong to the live
-  row. A queryset update that writes only columns the history excludes (a
-  counter), with at most auto-now stamps, records no version. A multi-table
-  child's save records the child's history only; its version carries the inherited
-  columns, and its revert restores them. A record's chatter thread and edge are its
-  bookkeeping: they revert under the record's `write`, and undoing the record's
-  creation tears them down with it. Base autoconfig enables the native
-  `SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD` setting, so simple-history
-  allocates a separate nullable text change-reason field for each historical
-  model; inherited tracking must never share mutable field instances across models.
-  This is an intentional project-wide default, including consumer and third-party
-  `HistoricalRecords` declarations. Existing histories that used the default
-  `CharField(max_length=100)` need a schema migration to `TextField`; declarations
-  with an explicit `history_change_reason_field` retain their chosen field.
-- **Domain renames need an explicit upgrade path.** When persisted references or
-  permission namespaces change, describe which old state needs data migration
-  and which reconciliation follows it. Keep those operations out of startup.
-  Consumers still carrying the historical `social/*` permission namespace need
-  a planned transition to `posts/*`; verify their actual data and migration state
-  before selecting the migration and `reconcile_permissions` steps. A fresh
-  installation does not inherit an old deployment's repair procedure.
-- **A schema change leaves PostgreSQL planner statistics behind.** An added or
-  altered column has none until `ANALYZE`, and autovacuum analyzes on row churn,
-  not schema changes. `angee provision` analyzes the tables of every app it
-  migrates; follow a manual `migrate` with `ANALYZE` of the changed tables.
-- **Row updates followed by DDL on the same tables need immediate constraints.**
-  PostgreSQL queues deferred foreign-key checks for rows a migration updates and
-  refuses a later `ALTER TABLE` or index build in the same atomic migration.
-  Run `SET CONSTRAINTS ALL IMMEDIATE` (PostgreSQL only) before the data step.
-  SQLite never shows this; rehearse such a migration against populated PostgreSQL.
-- **A structural marker consumed after runtime emission must be emitted too.**
-  A non-inherited `__dict__` source-model marker stops at the abstract source unless
-  the composer carries it into the concrete runtime class body.
-- **Regenerate the SDL after `angee build`** — re-run `manage.py schema`
-  (+ `--check`). A missing `runtime/schemas/*.graphql` makes Vite ENOENT and the
-  SPA silently fails to mount (every e2e fails at list load) while `:5173` still
-  returns 200; check `runtime/schemas/` before chasing app/test regressions. (The
-  dev server regenerates it for you — see the `runserver` pitfall — but a manual
-  `angee build` outside `angee dev` still needs the explicit `schema` step.)
-- **Data migrations access REBAC-scoped models through `_base_manager`, and
-  backfills need a rows-present proof.** A manager with `use_in_migrations = True`
-  (iam's `UserManager`, inherited from Django's) rides into the historical model,
-  so `objects` inside a `RunPython` is REBAC-scoped and raises `MissingActorError`
-  under strict mode — a migration is a system operation; use
-  `model._base_manager.using(db)`. And a fresh-DB `migrate` never executes a
-  row-dependent backfill body: prove backfills against a database that has rows
-  (the agents service-user backfill failed only on live dev DBs for this reason).
-- **A stack's composed migration history is disposable.** After every upgrade,
-  [`reset_migration_history`](../../angee/compose/management/commands/reset_migration_history.py)
-  is the sole owner that verifies the composed graph is fully applied and matches
-  live models, replaces its files with fresh initial migrations, and fake-records
-  them without touching non-composed apps. A data transition that `makemigrations`
-  cannot express uses an addon `[[migrations]]` declaration as a write → apply on
-  every stack → delete in the next change vehicle; no declaration is released
-  history. A stack collapses its history **before** taking a release that moves a
-  module its generated migrations import; where a release renames such a module
-  anyway (`angee.base` → `angee`), the old paths stay as thin re-export aliases
-  (`angee/base/`) until every stack has collapsed, because the applied graph must
-  load for `makemigrations`, `migrate` and `reset_migration_history` alike.
-- **Removing a field, model or donor addon whose storage holds data needs a
-  declared cutover.** `makemigrations` refuses the autodetected drop through the
-  [composer's drop guard](../composer.md#addon-owned-runtime-migrations). An
-  addon that stays installed declares a runtime migration that preserves or
-  retires the data and removes the field or model; an empty column needs
-  nothing, and neither does a table holding only rows its own resource files
-  seeded once the addon names the model under `retired_models` in its
-  `addon.toml` `[resources]`.
-- **A restricted `makemigrations` invocation must cover every changed concrete
-  app.** Derive labels from the composed model registry instead of copying an
-  old example's label list. Missing a changed app's migrations can leave its
-  tables absent when resources load. Use [checks](../checks.md) for the host
-  lifecycle sequence and execution root.
-- **`MIGRATION_MODULES` may be assigned during app populate only for generated
-  runtime apps.** That exception belongs to composed settings/runtime boot; do
-  not use it as an addon-local shortcut or a way to hide source-model migration
-  state.
+The migration and runtime procedures that lived here now belong to the
+`angee-runtime` skill: [migration pitfalls](../../.agents/skills/angee-runtime/references/migrations.md).
+The migration policy stayed under [Migration history](#migration-history) and the
+history contracts under [Persistence primitives](#persistence-primitives).
 
 ### Models, queries, and resources
 
-- **Group counts add to root totals only for disjoint populations.** Reuse the
-  grouped scan with a window total when every record belongs to one bucket;
-  recipient fan-out and shared content require distinct root counts. Hydrate
-  labels after paging unless they determine group identity or sort order.
-- **`.values_list(...).distinct()` must clear the model's default ordering.**
-  `Meta.ordering` columns silently join the DISTINCT projection, so a
-  single-column `values_list("owner_id").distinct()` returns one row per
-  *source row*, not per owner — a loop over it repeats its whole body once per
-  row (a 4-hour beat tick that should take a second, live-measured). Append
-  `.order_by()` (or order only by the selected columns) before `.distinct()`
-  on every values/values_list distinct read.
-- **Seeded rows selected by clients carry a resource-assigned stable key.**
-  Select them by that stable key, never by a mutable display name.
-- **Parties bookkeeping follows its writer's transaction contract.** IAM's person
-  factory links the party inside its own transaction by design:
-  [`person_created`](../../addons/angee/iam/events.py) fires before commit, so a
-  linkage failure rolls the account back. Foreign writes that only enrich parties
-  treat that work as best effort: ingest defers it with `transaction.on_commit`,
-  OIDC login contains its handle claim, and both log failures and let the foreign
-  write continue.
-- **IAM stores the canonical person email.**
-  [`UserManager.normalize_email`](../../addons/angee/iam/models.py) owns the rule,
-  and saves that write `email` apply it, so lookups and the person-email unique
-  constraint compare the stored column without SQL transforms. `bulk_create` and
-  queryset `update()` bypass it; normalize before writing email through them.
-- **Polymorphic edges authorize their target in the schema.** Back one relation
-  per target type with the edge's `GenericForeignKey`, contributed by the app
-  that owns the type (`relation task: projects/task // rebac:field=target`) or
-  declared by the edge's own addon when it already depends on the type's, and
-  write the edge's `create`, `read` and `delete` over them; the type's model must
-  be its own canonical model and its identity its primary key (`rebac.E009`).
-  Store targets with `rebac.generic_target(record)`, create and delete edges
-  under the actor, and list a record's edges with the scoped edge queryset
-  filtered by `generic_target(record).lookups(Edge, "target")`. Move an edge by
-  deleting and recreating it; the library refuses a retargeting save. A type
-  without a relation is refused under an actor, and an edge that accepts only
-  some types derives that set from the schema through
-  `RecordRefMixin.declared_target_models` (`declares_target` for one type)
-  instead of listing it again. Resource metadata projects the inverse as
-  `recordEdges`, so a surface listing one edge applies only to the record types
-  that can carry it; a resolver does not re-decide that per request. Each
-  edge's own `permissions.zed` states its rule:
-  [storage](../../addons/angee/storage/permissions.zed),
-  [knowledge](../../addons/angee/knowledge/permissions.zed),
-  [projects](../../addons/angee/projects/permissions.zed) (a binding takes
-  share on the project and the type's grant authority),
-  [portfolio](../../addons/angee/portfolio/permissions.zed),
-  [tags](../../addons/angee/tags/permissions.zed) (an assignment also needs
-  the tag's read) and
-  [messaging](../../addons/angee/messaging/permissions.zed) (a const relation on
-  the row's role keeps the arms off chatter edges). Evidence and provenance edges
-  whose access follows their owner (workflow subjects, step records and watches,
-  decision records, extraction sources, integrate record links, currency-rate
-  contexts) take no target relations: the owner's admission gate checks the
-  record at write time, and the edge still stores `rebac.generic_target`. Only
-  an edge that names rows outside REBAC (a chatter thread on an ungated host, an
-  import record link to a plain sink) stores
-  `angee.refs.generic_pointer_target`, which keeps Django's own identity
-  for such a row. Compose `ThreadedModelMixin` and reverse `GenericRelation`s on
-  the same canonical ancestor either way.
-- **Derived columns have two drift classes and two owners.** Signals own instance
-  saves/deletes, cascades, and queryset deletes; idempotent repair passes own
-  `bulk_create` and queryset `update` paths, where signals do not run.
-- **Live timelines read owners; notifications invalidate reads.**
-  [Timeline kinds](../../addons/angee/timeline/kinds.py) contribute actor-scoped
-  source querysets. The [read owner](../../addons/angee/timeline/reading.py)
-  combines their common columns with Django's `union(all=True)`, applying
-  permissions, attention, folding and cursors in each branch before the shared
-  page limit. Display payloads are hydrated only for selected source rows.
-  There is no event projection table or backfill requirement. Folding hides a
-  child only when a readable parent target occurs on the same record; counts
-  and attention use that same scope, independent of the page's filters.
-  [`publish_change` / `change_published`](../../addons/angee/graphql/publishing.py)
-  delivers owner observations inside the transaction. The
-  [timeline observer](../../addons/angee/timeline/events.py) captures affected
-  record identities, including old membership before a save or delete, and
-  uses the declared record feeds to invalidate reads after commit. Django's
-  callback queue owns rollback; no projection queue or source-row lock is needed.
-  Observation never enables a private source's transport feed. Kinds name the
-  source fields they read, so unrelated partial saves skip dependency discovery;
-  inherited sources and the core's bounded `bulk_updated` batches use the same
-  seam. A verb completing a conditional or bulk write publishes after its
-  related rows are ready. `change_batch_targets` may coalesce publications;
-  local observers still receive original bulk batches where needed.
-- **`MembershipDecisionMixin` owns plain roster decisions, not provenance.**
-  A subclass that needs REBAC side effects overrides the transition; never add
-  REBAC writes to the shared mixin.
+The query, model and seed pitfalls that lived here now belong to the `angee-models`
+and `angee-resources` skills: [model pitfalls](../../.agents/skills/angee-models/references/pitfalls.md),
+[resource pitfalls](../../.agents/skills/angee-resources/references/pitfalls.md). The contracts stayed
+in this guide: model rules under [Rules](#rules), row primitives under
+[Persistence primitives](#persistence-primitives), generic edges under
+[Direct record access](#direct-record-access), the loader under [Resource loading](#resource-loading),
+timeline reads under [Schema lifecycle and change publication](#schema-lifecycle-and-change-publication).
+
+### GraphQL and authorization
+
+The GraphQL input and authorization pitfalls that lived here now belong to the
+`angee-graphql` and `angee-permissions` skills: [GraphQL pitfalls](../../.agents/skills/angee-graphql/references/pitfalls.md),
+[authorization pitfalls](../../.agents/skills/angee-permissions/references/pitfalls.md). The contracts
+stayed under [GraphQL actor and write contracts](#graphql-actor-and-write-contracts),
+[Schema lifecycle and change publication](#schema-lifecycle-and-change-publication) and [REBAC](#rebac).
+
+### Record sync
+
+The record-sync protocol that lived here is a contract, not a pitfall: it moved
+under [Integration and worker contracts](#integration-and-worker-contracts). The
+integrate migration procedures belong to the `integrate-bridges` skill:
+[integrate pitfalls](../../src/angee/integrate/skills/integrate-bridges/references/pitfalls.md).
+
+### Integrations and workers
+
+The bridge, live-session and outbound-HTTP pitfalls that lived here now belong to
+the `integrate-bridges` skill: [integrate pitfalls](../../src/angee/integrate/skills/integrate-bridges/references/pitfalls.md);
+the Celery task pitfalls to the `jobs-tasks` skill: [task pitfalls](../../src/angee/jobs/skills/jobs-tasks/references/pitfalls.md).
+The contracts stayed under [Integration and worker contracts](#integration-and-worker-contracts).
+
+### Workflow execution
+
+The execution contracts that lived here moved under [Workflow contracts](#workflow-contracts).
+The signal pitfall belongs to the `workflow-definitions` skill:
+[workflow pitfalls](../../src/angee/workflows/skills/workflow-definitions/references/pitfalls.md).
+
+## Framework Contracts
+
+### Persistence primitives
+
+[Base models](../../src/angee/base/models/) own these row contracts and their
+system checks; compose them instead of a local column, comparison, or guard.
+Their docstrings own the exact behavior.
+
+[`StatementRecords`](../../src/angee/provenance/statements.py) composes simple-history's field
+copying into typed statement models. Their [manager](../../src/angee/provenance/statements.py)
+owns locked assertion writes and survivorship; the canonical subject owns source
+eligibility and application. Like history tables, statements have no independent
+REBAC resource or ORM read policy. Read them through their subject: the
+subject-bound `instance.statements` accessor once the subject row is in hand, or
+`StatementQuerySet.for_reader(actor)` for a cross-record surface such as Review,
+which scopes rows to the subjects the actor may read. A statement read never
+widens what the subject reader may see: related rows (the member, the asserting
+principal) resolve through their own read gates at the serving seam, no group or
+filter axis reads a related row's columns, and serving surfaces own gated-field
+redaction. Writes use the asserting source's native REBAC write scope on the
+subject. Merge collisions remain retained as superseded rows outside the current
+per-aspect key. `Statement.sort_key(aspect)` is the one trust ordering — preferred
+rank, the aspect's source precedence (`Aspect.priority`), confidence, the row
+class's `tie_break()`, the stance's update time (bookkeeping — `applied`,
+supersession, a merge move — keeps it), primary key — shared by survivorship,
+cross-subject member resolution (`Handle.objects.resolve`) and merge collapse;
+`trust_ordering` is the SQL display order of the same stances. The model owns
+one source-priority rule; there is no separate strategy enum.
+Principals compose `StatementSourceMixin`, whose per-row `source_kind` contract
+classifies eligible sources; `set()` refuses missing or unknown classifications.
+Statements retain the assertion-time classification across source edits and
+deletion. The declaring addon passes `StatementRecords(link="integrate.RecordLink")`
+(and `model_name=` when `<Subject>Statement` is already a domain model; a money
+column copied without its currency column becomes a plain decimal on the statement);
+the base declaration defaults to `None`, and the named model composes `StatementLinkMixin`: its
+`authoritative` fact (`SyncStream.authoritative`, read through `RecordLink.stream`)
+places a SYSTEM_OF_RECORD source ahead of PERSON in every aspect listing both
+kinds, for normal-rank statements only. `SyncStream.objects.set_authoritative`
+flips it and re-derives the linked subjects. Declare compiler projections at the
+owning integration; serving code does not reach into source declarations.
+
+Ordinary person saves on aspect-backed fields assert normal statements on aspects
+whose precedence admits a person, including separate MTI child tables; parent
+declarations keep their shared-pk owner. An aspect whose precedence leaves PERSON
+out belongs to its native owner: a person's save writes those fields as an ordinary
+save. A person's create states no group whose values are all empty; clearing a
+field later is an edit and is stated. Confirm or dismiss stay explicit.
+Consumers contribute domain aspects through the descriptor's abstract donors: the
+subject source's own declaration finalizes the one statement table (bases, prefix,
+queryset, link) and every donor's aspects join it. `Aspect.precedence` owns source
+ordering. Preferred person decisions precede normal source ordering; a winning
+preferred no-value clears the aspect's operational values so a dismissal sticks.
+Ordered `PairAspect` carriers assert symmetric facts. The merge action chooses
+the survivor; survivorship never moves records. See [parties](../../src/angee/parties/README.md).
+
+Parties bookkeeping follows its writer's transaction contract: IAM's person
+factory links the party inside its own transaction
+([`person_created`](../../src/angee/iam/events.py) fires before commit, so a
+linkage failure rolls the account back), while a foreign write that only
+enriches parties treats that work as best effort — deferred with
+`transaction.on_commit`, logged on failure, never blocking the foreign write.
+IAM stores the canonical person email:
+[`UserManager.normalize_email`](../../src/angee/iam/models.py) owns the rule
+and every save that writes `email` applies it, so lookups and the person-email
+unique constraint compare the stored column without SQL transforms.
+
+[`MergeableMixin`](../../src/angee/base/models/merge.py) owns operational redirects, actor
+admission and the system fold. Models declare domain refusals and carry/retire
+hooks; pointing rows declare `MergePolicy` (an edge's `merge_policy`, a key's
+entry in `merge_policies` where its `on_delete` implies the wrong one) and their
+collision contract. Retained
+references include their historical versions. Redirects flatten in the same
+changeset and protect their survivor from deletion. `canonical()` selects
+operational identities; statement querysets use `applied()` for winning value
+assertions. Source-copy identity remains reversible pair evidence and never
+chooses a transport or moves channel occurrences.
+
+[`HistoryMixin.history_relations`](../../src/angee/provenance/contrib/angee/history.py) declares owned
+reverse-FK collections, such as dashboard widgets or project milestones. These
+rows keep their own history and read gates; document history groups their deltas
+with record identity. `history_tables()` is the one concrete-table inventory.
+`ChangesetQuerySet.touching(record)` and its inverse `records_touched()` own
+document membership, including MTI, pairs and generated statements. Projections
+consume these scopes instead of rediscovering documents from history rows.
+`HistoryMixin.admitted_reverts(changesets)` owns complete-boundary admission;
+`Changeset.revertable(record, actor=...)` then checks the record's declared
+`history_revert_permission`. An entry may revert from that record only when its
+complete write boundary belongs to the document, or it is the record's
+operational merge.
+Changes spanning independent documents require their wider owner. Native FK
+relationships order restoration of missing rows. Hierarchy parents are ordered
+also when present, so restoring an earlier tree does not create a temporary cycle;
+other existing rows keep their normal update order. A record task uses its own
+`RecordRefMixin` subject and declared `projects/task` permission arms; chatter is
+an independent capability.
+
+The [Changeset](../../src/angee/provenance/models.py) owns atomic pre-boundary
+revert and deterministic lossless export. Closing a boundary writes one bookkeeping
+row; `document()` computes and records the hash through the one hash owner.
+Closure publishes a change; committed projections read history independently
+through its scopes. Revert uses native history ordering and
+diffs, refuses later touches, retains withdrawn/superseded statements, and reuses
+trash for created subjects. Without trash, retained references block removal.
+Restoring database state does not undo HTTP effects; record sync detects the
+corrected local projection under its existing write-back policy. Archive callers
+use an explicit system boundary; serving exports retain subject authorization and
+gated-field redaction. No archive sink or history-pruning policy is introduced.
+
+Every captured write runs inside a [changeset boundary](../../src/angee/provenance/context.py);
+strict mode refuses one without it. Entrypoints own boundaries, one per unit of
+work, and nothing else opens a `fresh` one except a deliberately separate logical
+write (merge, revert, seed): HTTP requests through `ChangesetMiddleware` on the
+stack's own sync or async path; WebSocket connections through
+`ChangesetScopeMiddleware`, composed in the native ASGI contribution seam; Celery
+tasks through [`angee.provenance.tasks.Task`](../../src/angee/provenance/tasks.py); management
+commands through the native launcher's `COMPOSE_COMMAND_CONTEXT` hooks, contributed by
+[`provenance`](../../src/angee/provenance/contrib/angee/context.py). The
+[native launcher](../composer.md#flow) supplies the winning command's parsed,
+read-only options at its `execute` boundary; use those options for `--database`
+selection rather than parsing argv. (`serve`, `runserver` and `test` are
+excluded because their requests, connections, tasks and tests own boundaries;
+interactive shells keep the command boundary); a bridge live-session run through
+[`run_bridge_session_job`](../../src/angee/integrate/session_runner.py). A
+boundary stores one changeset row per writing thread and actor under its shared
+facts, so `copy_context().run` in a worker pool and a per-event actor loop
+attribute exactly. A response status of 400 or more, a GraphQL result with
+`errors` (marked by the [provenance result receiver](../../src/angee/provenance/graphql.py)) or an
+exception closes the rows as failed. Tests inherit a boundary from the root
+`conftest.py`; modules marked `entrypoint_boundaries` exercise the production ones.
+
+- **Optimistic lock:** `OptimisticLockMixin` counts instance saves. A verb that
+  accepts a client's `expected_revision` passes it to `save()` and maps
+  `StaleRevisionError` to its conflict result; queryset updates never bump.
+- **Idempotent creation:** the concrete changeset manager owns
+  `Changeset.objects.claim(scope, key, *, fingerprint)`. A new claim returns
+  `None`; a matching replay returns its changeset and `created_row`; reusing the
+  key for different content raises `CreationKeyConflict`. Product rows carry no
+  client-key or fingerprint columns. A keyed operation opens a fresh changeset
+  inside its transaction and claims before writing; nested keyed operations
+  therefore receive distinct claim rows without leaving the enclosing boundary.
+- **Ownership:** `owner` has one spelling. A grant root composes `OwnerMixin`,
+  so `owner` is transferable access in a column and `created_by` remains
+  attribution. Its Zed backs `owner` with that column and declares its transfer
+  permission (`angee.E022`); its `write__owner` gate names that permission
+  (`angee.E027`). No other relation is named `owner` (`angee.E045`): attribution
+  used as access is `relation creator: auth/user // rebac:field=created_by`, a
+  domain role keeps its own word (`user`, `organizer`, `salesperson`, `buyer`),
+  and ownership is never a stored tuple. Change it through `transfer_ownership`;
+  bulk release belongs only to an owning verb that already authorized it. See the
+  [example notes](../../examples/src/example/notes/permissions.zed).
+- **Delegated field gates:** a definition that delegates to a parent re-declares
+  the parent's field gates through that relation, as enforced for ownership by
+  [the base checks](../../src/angee/base/checks.py). Re-save a fresh, unreloaded
+  instance with `update_fields`: without a loaded snapshot, a full save writes
+  every column, including `owner`, and must pass every applicable field gate.
+- **Owning containers:** a container composing `ItemOwnershipMixin` can own its
+  newly inserted items, which then reach access through it; items name it with
+  `owner_container` (`angee.E025`) and ask
+  [`OwnerMixin.container_owns_items()`](../../src/angee/base/models/ownership.py) for its policy.
+  Changing the flag affects later inserts only.
+- **Write-once fields:** `ImmutableFieldsMixin` rejects changes to declared
+  fields; only an authorized owning verb grants the next save an allowance.
+- **Archive and trash are different facts.** `ArchiveMixin` soft-hides a row
+  from default pickers. `TrashMixin` removes it: who, when and an optional reason
+  are stamped and restore re-grants nothing. The model's Zed withholds a trashed
+  row from everyone but its managers — a constant `trashed` relation filtered on
+  `is_trashed`, subtracted outside any recursive arm (see
+  [knowledge pages](../../src/angee/knowledge/permissions.zed)). The shared
+  [`trash_record` / `restore_record`](../../src/angee/graphql/trash.py) verbs
+  check the row's `delete`; metadata marks the flag `trashable` for shared views.
+  A domain authority that is not `delete` (record-chatter moderation) keeps its own
+  verbs and narrows the shared ones through `TrashQuerySet.trash_targets()`; a
+  sudo read path it owns, such as the chatter transcript, must exclude trashed rows
+  itself. Managers
+  are a positive arm beside the exclusion, never an exclusion inside it: rebac's
+  named-grant scan cannot compile an exclusion that holds another
+  ([tasks](../../src/angee/projects/permissions.zed)).
+
 - **State columns are `StateField`; guarded changes go through transition methods, never direct assignment.**
-  [`StateTransitions`](../../angee/models/transitions.py) owns one transaction around
+  [`StateTransitions`](../../src/angee/base/models/transitions.py) owns one transaction around
   the body and success hook, including `save_state`; consumer outer transactions
   compose through Django savepoints. Since the body runs inside that transaction, follow the
   [two-phase side-effect rule](#rules): defer non-database effects to
@@ -1088,51 +1156,35 @@ and current contracts before applying a historical example to a new deployment.
   Compose a custom final save through `persist(instance, *, update_fields)`;
   the success hook must explicitly forward it to `save_state`, which retains the
   concurrency guard and transaction.
-- **MTI down-casts use `angee.refs.concrete_child`.** The parent-link
+- **Give a model an opaque public id by mixing in `SqidMixin` and declaring
+  `sqid_prefix = "abc_"`** — the one fact that varies per model. The shared
+  `angee.base.fields.SqidField` reads that prefix in `contribute_to_class`; don't
+  re-declare the column. The field is NULL-safe by design, because a sqid can be
+  selected through a nullable join where `django_sqids.SqidsField` crashes on a
+  NULL (REBAC `// rebac:field=` arrows run over nullable FKs).
+- **`AngeeModel` managers/querysets must keep the canon.** If a model customizes
+  `objects`, its queryset class must derive from `AngeeQuerySet`; otherwise
+  shared methods such as public-id lookup, actor scoping, and elevated reads drift
+  between models.
+- **MTI down-casts use `angee.base.lineage.concrete_child`.** The parent-link
   accessor and any query prefetch identify the child; callers supply their
   actor-scoped queryset when that lookup is permission-sensitive. A parent
   row never grows a human-label kind column to mirror its child model.
   Clients read a parent's exposed children from its resource metadata's
-  `concrete_kinds` ([projection](../../addons/angee/graphql/data/metadata.py))
+  `concrete_kinds` ([projection](../../src/angee/graphql/data/metadata.py))
   instead of re-deriving inheritance.
-- **Integration children use the ordinary emitted Django MRO.** The composer
-  emits donors, the child's abstract source, then its concrete parent, so child
-  behavior can override parent behavior and cooperative methods delegate with
-  `super()`. A verb starting from an `Integration` parent row must still resolve
-  the concrete child before dispatch because Django does not downcast multi-table
-  parent instances automatically (`Integration.concrete_capability` composes the
-  shared child lookup). Walking
-  `models_with(base=Bridge)` fans a query across every installed bridge table, so it is not
-  free.
-- **Instance `save()`/`delete()` overrides do not run on cascade or bulk queryset paths.**
-  Lifecycle guards and side effects that must survive those paths belong on Django
-  signals calling the owning model rules. Agents' teardown and active-turn guards
-  use `pre_delete`; service-user deactivation uses `post_delete`. See the
-  [agents receivers](../../addons/angee/agents/signals.py).
 - **Deletion refusals have one model owner.** Override
-  [`AngeeModel.delete_blocker()`](../../angee/models/base.py) with a public-safe
-  message. [`DeletePreview`](../../addons/angee/graphql/deletion.py) reports each
+  [`AngeeModel.delete_blocker()`](../../src/angee/base/models/base.py) with a public-safe
+  message. [`DeletePreview`](../../src/angee/graphql/deletion.py) reports each
   distinct refusal before deleting, without row counts or hidden identities.
   A model overriding the hook must bind a `pre_delete` receiver enforcing that
   same rule on every deletion path; an instance override cannot protect cascades.
   Receivers remain authoritative when state changes after preview and ensure
   Django collects those models rather than fast-deleting them.
   When deleting a model needs locks in a domain order (a parent before the row),
-  override its [`lock_for_delete()`](../../angee/models/base.py); its `pre_delete`
+  override its [`lock_for_delete()`](../../src/angee/base/models/base.py); its `pre_delete`
   receiver and every confirmed-delete caller of that model then lock through the
   hook, callers only after their permission preflight.
-- **Never a database trigger or function.** Business rules, immutability and
-  ownership guards belong to Django owners: cover instance, queryset, bulk,
-  cascade and relation writes in the owning models/managers/querysets, with
-  explicit Django signals where relation writes bypass those owners. Keep
-  declarative constraints (`UniqueConstraint`, `CheckConstraint`) and portable
-  row locks. Forbidden: `CREATE TRIGGER`, `CREATE FUNCTION`, plpgsql, `RunSQL`
-  that installs them, per-backend mirrors of them, and system or deploy checks
-  that verify a trigger exists instead of the rule holding. A trigger is a
-  second, invisible owner of a rule that the ORM cannot see, test, or migrate
-  from models. Raw SQL is not a supported business-write path. On encountering
-  existing trigger machinery, delete it and move the rule to its Django owner
-  in the same change.
 - **Write rules use their Django owners.** Keep persistence policy at the
   level that owns the invariant; do not add a framework-wide operation,
   payload, token, or consumption protocol.
@@ -1151,8 +1203,12 @@ and current contracts before applying a historical example to a new deployment.
   queryset through its public `QuerySet.update()` path. Queryset and
   instance deletion overrides do not protect against every collector path; choose
   FK policies deliberately, including generic relations that can cascade into
-  retained rows. This is a modelling rule, not a mechanical system check. Shared
-  retained models compose [`AppendOnlyModel`](../../angee/models/append_only.py) and
+  retained rows. This is a modelling rule, not a mechanical system check. Generic collection-update guards share
+  [`ClosedUpdateQuerySet`](../../src/angee/base/querysets.py). Its closed
+  `update`/`bulk_update` rule and protected `owner_update` live together; compose
+  that guard before downstream policy and native capture. Bank identity-style
+  models can reuse this edit policy while retaining their own insert/delete rules.
+  Retained models compose [`AppendOnlyModel`](../../src/angee/base/models/append_only.py) and
   their default managers compose `AppendOnlyQuerySet`. The model closes ordinary instance
   writes and declares a guarded base manager through `Meta.base_manager_name`;
   `angee.E034` checks its default manager's queryset composition. The queryset
@@ -1164,7 +1220,10 @@ and current contracts before applying a historical example to a new deployment.
   owner's guard and retain downstream authorization and queryset guards. Each
   owner supplies its validated predicates and allowed fields. `HierarchyQuerySet`
   exposes the same `owner_update` contract for derived path maintenance. They do
-  not reopen generic mutations or replace model/FK invariants. `AuditMixin` uses its serializable
+  not reopen generic mutations or replace model/FK invariants. `AuditMixin` dispatches
+  collector-owned nulls through the selected queryset; a closed-update policy
+  uses its protected owner verb, preserving every downstream guard and capture.
+  It uses its serializable
   `retained_set_null` FK policy to schedule nulling inside Django's delete
   transaction under `system_context(reason="delete.retain")`. Removing that
   retained edge is part of the authorized target deletion, for tracked and
@@ -1174,63 +1233,18 @@ and current contracts before applying a historical example to a new deployment.
   system policy must declare `retained_set_null` until an upstream collector
   hook can carry that origin without elevating ordinary FK edits.
   Bounded diagnostics and persisted model labels use `DiagnosticTextField` and
-  `ModelLabelField` from [`angee.fields`](../../angee/fields.py), so
+  `ModelLabelField` from [`angee.base.fields`](../../src/angee/base/fields/__init__.py), so
   instance saves and queryset writes share their storage rules.
-  **Messaging field adoption debt:**
-  [`MessageSubtype.model_label`](../../addons/angee/messaging/models.py) and
-  [`ThreadNotification.failure_reason`](../../addons/angee/messaging/models.py)
-  still use plain Django fields. Adopt `ModelLabelField` and
-  `DiagnosticTextField` at those models after live-data migrations preserve and
-  normalize existing values; the required migration is the blocker.
+  [`MessageSubtype.model_label`](../../src/angee/messaging/models.py) and
+  [`ThreadNotification.failure_reason`](../../src/angee/messaging/models.py)
+  compose these field owners. A deployment crossing the
+  [upgrade cutoff](#migration-history) must preflight
+  unknown/colliding subtype labels and retained diagnostics before canonicalizing
+  them on its pre-refactor snapshot, preserving IDs/keys, global blank semantics
+  and retained text. Those completed transition bodies are absent from current
+  source. The persisted subtype business key `activity_done` remains current;
+  renaming it requires mapping subtype rows, follower choices and callers together.
   Never replace these rules with a database trigger or function.
-- **Resource imports use the native import-export lifecycle.** Models composing
-  [`ResourceLoadMixin`](../../addons/angee/resources/mixins.py) may declare
-  an `AngeeResource` subclass through `resource_class`; [`build_resource`](../../addons/angee/resources/loader.py)
-  composes it with native identity loading, validation, row results and the single
-  ledger hook. Domain adapters may defer persistence to a manager without
-  inventing another importer or ledger API. A batch preflight may acquire only
-  the complete ordered domain lock set; it must not consume groups or write rows.
-  `AngeeResource.resolve_existing` resolves declared targets and retained ledgers
-  through the same native instance loader; preflights compose this public owner.
-  `Resource.objects.load_xref` imports one declared dotted xref through that
-  pipeline, preserving widgets, the demo-tier guard, and caller authorization
-  before updating existing targets and on unchanged replays. It does not import
-  other rows or prerequisite targets.
-  A `RecordRefMixin` import column uses the model's single `GenericForeignKey`
-  name; that field also owns the content-type and object-id backing column names.
-  Other relation columns name rows by `<addon>.<xref>` (a list or
-  comma-separated string for many-to-many). Content types are never ledger rows,
-  so a foreign key or many-to-many to `contenttypes.ContentType` takes Django
-  model labels instead (`applies_to: [parties.Handle, parties.Person]`),
-  resolved by [`ModelLabelField.get_model`](../../angee/fields.py); an
-  unknown label fails its row. Row hashes cover the seed's labels, never
-  content-type ids, so a seed hashes the same in every database.
-  Source omission and explicit null must remain
-  distinguishable through dataset normalization.
-- <a id="seeded-transition-state"></a>**Transition-owned state in a seed is an initial value, applied on create and never on update.**
-  Seed initial state through model construction.
-  This covers only fields guarded by a
-  [`StateTransitions`](../../angee/models/transitions.py) declaration; the
-  [resource loader](../../addons/angee/resources/loader.py) validates seeded state
-  before discarding it on updates. Companion fields written by transitions
-  (an agent's `workspace`, `service`, `runtime_status`, `last_error`, or receipts
-  such as `submitted_at`) remain ordinary seed fields and are not protected.
-  Seeds must omit those fields to preserve their live values.
-  Unchanged rows with hashes from the previous state-inclusive rule migrate
-  only their ledger hash; changed seed values or keys still trigger import.
-- **A resource yaml loads only when listed** in the addon's `addon.toml`
-  `[resources]` manifest (`{tier = [paths]}`); an unlisted file silently
-  loads nothing.
-- **Demo resource tiers are additive across installed addons.** A deployment that
-  needs demo rows but not one permissive seed must exclude that exact entry with
-  `ANGEE_RESOURCE_EXCLUDED_ENTRIES`, keyed as `addon.name:resources/path.yaml`;
-  do not edit the addon seed or fork the loader.
-- **Give a model an opaque public id by mixing in `SqidMixin` and declaring
-  `sqid_prefix = "abc_"`** — the one fact that varies per model. The shared
-  `angee.fields.SqidField` reads that prefix in `contribute_to_class`; don't
-  re-declare the column. The field is NULL-safe by design, because a sqid can be
-  selected through a nullable join where `django_sqids.SqidsField` crashes on a
-  NULL (REBAC `// rebac:field=` arrows run over nullable FKs).
 - **Row locks must keep the SQLite floor.** Call the Angee queryset/manager
   `lock_if_supported()` method to name lock intent, delegating `of`,
   `skip_locked` and `no_key` to `select_for_update`.
@@ -1255,106 +1269,180 @@ and current contracts before applying a historical example to a new deployment.
   optimistic-concurrency guard for free: the committed source is re-read under the
   same lock before the write, so a lost race raises `TransitionNotAllowed` instead
   of double-applying (e.g. double-posting a ledger).
-- **Django 6 refreshes `F()`/expression fields back onto the instance via
-  `UPDATE ... RETURNING` before `post_save`.** A `save(update_fields=…)` whose
-  fields hold expressions (`F("count") + 1`, `Greatest(…)`) leaves the instance
-  carrying the DB-true resolved values, not the expression objects — the
-  `post_save` receiver (and any `changes` publisher) sees the true row. Never
-  "restore" a locally recomputed value (`prior + 1`) after such a save: it stomps
-  the RETURNING value and undercounts whenever a concurrent write advanced the
-  column further.
-- **`AngeeModel` managers/querysets must keep the canon.** If a model customizes
-  `objects`, its queryset class must derive from `AngeeQuerySet`; otherwise
-  shared methods such as public-id lookup, actor scoping, and elevated reads drift
-  between models.
+- **`MembershipDecisionMixin` owns plain roster decisions, not provenance.**
+  A subclass that needs REBAC side effects overrides the transition; never add
+  REBAC writes to the shared mixin.
 - **`EncryptedField` keys are bound to `model._meta.label_lower` plus field
   name.** Renaming a model/app/field changes the derived key. Plan
   `ANGEE_FERNET_KEYS`/`MultiFernet` rotation before such a rename, and treat one
   corrupt row as a row-local unreadable value, not as a reason to break list
   queries.
-- **An `ImplClassField` builds its enum at model-import time from its base's
-  `registry_setting`** — the key→path mapping (e.g. `ANGEE_STORAGE_BACKEND_CLASSES`)
-  is supplied by the owning addon's `autoconfig`, so every settings module that
-  installs the addon must carry a **non-empty** mapping. Bare settings modules
-  call [`AutoConfig.apply_installed()`](../../angee/compose/autoconfig.py) before
-  Django loads models, then add only their fixture implementations. An empty
-  registry raises `ImproperlyConfigured` at import — give the addon a
-  noop/null-object default so the set is never empty. The column stores the key
-  (`local`), never a dotted path. A deconstructed migration-state field omits
-  `base_class` and may reconstruct its declared default after the registry has
-  been removed; active model fields still require a typed base and a non-empty
-  registry.
-- **Implementation subclasses must replace every inherited semantic default that changes.**
-  See `ImplBase.effective_defaults()` for the merge contract. An OpenAI-compatible
-  backend that omits its own `name` and `vendor` silently creates an OpenAI provider row.
-- **Pydantic declarations own implementation config defaults.**
-  [`ImplBase.config_defaults()`](../../angee/impl.py) reads static input
-  suggestions from Pydantic's validation JSON Schema independently of FormSpec
-  support; [`angee.data.form_specs`](../../angee/data/form_specs.py) projects the
-  same declaration for transport-neutral forms. Dynamic factories
-  resolve through `parse_config()` at runtime; `normalize_config()` serializes
-  that parsed model with its wire aliases. Typed implementation values share
-  [`get_type_adapter`](../../angee/validation.py)'s cached native adapter
-  and Django field-path errors. Explicit
-  config parsing rejects non-empty values without a model; model-row validation
-  still leaves undeclared legacy config alone. Generated choice metadata stays
-  deterministic.
-- **JSON Schema policy belongs to the shared base owner.**
-  [`angee.jsonschema`](../../angee/jsonschema.py) checks declarations
-  and local references before value validation, asserts supported formats, and
-  translates errors for Django callers. Compose its bounded schema algebra;
-  keep graph and binding policy in the workflow definition.
-- **Actor-scoped scalar subqueries and keyset cursors belong to `angee`.**
-  The `Coalesce(Subquery(related.with_actor().scoped().filter(pk=OuterRef).values(v)[:1]), "")`
-  shape and the signed `(order_at, pk)` cursor pager are framework primitives;
-  do not copy them into another addon's queryset.
+- History snapshots retain stored values even when the actor's view is redacted.
+  [`ModelHistory`](../../src/angee/provenance/contrib/angee/history.py) gives native history construction a
+  detached snapshot and records deletion inside the delete transaction before
+  the source row disappears; it never unredacts the caller's instance.
+- [`HistoryMixin`](../../src/angee/provenance/contrib/angee/history.py) excludes `GeneratedField` and its
+  subclasses from historical models because their expressions belong to the live
+  row. A queryset update that writes only columns the history excludes (a
+  counter), with at most auto-now stamps, records no version. A multi-table
+  child's save records the child's history only; its version carries the inherited
+  columns, and its revert restores them. A record's chatter thread and edge are its
+  bookkeeping: they revert under the record's `write`, and undoing the record's
+  creation tears them down with it. Provenance autoconfig enables the native
+  `SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD` setting, so simple-history
+  allocates a separate nullable text change-reason field for each historical
+  model; inherited tracking must never share mutable field instances across models.
+  This is an intentional project-wide default, including consumer and third-party
+  `HistoricalRecords` declarations. Existing histories that used the default
+  `CharField(max_length=100)` need a schema migration to `TextField`; declarations
+  with an explicit `history_change_reason_field` retain their chosen field.
 
-### GraphQL and authorization
+Angee's [`ModelHistory`](../../src/angee/provenance/contrib/angee/history.py)
+requires native `use_base_model_db=True`: snapshots, Changeset references and
+replay stay co-located with the live model. Explicit `False` is refused. Generic
+[`angee.provenance.history.ModelHistory`](../../src/angee/provenance/history.py)
+retains its native routing contract.
 
-- **GraphQL authorization tests include a non-admin reader.** Admin-only tests
-  neither pin deny-hard-fail behavior nor expose a leaked `sudo()` scope.
-- **`hasura_model_resource` create `full_clean`s the input, so model + input defaults must agree.**
-  Strawberry prepares one instance and calls `full_clean()` before persistence;
-  the locked version then calls `manager.create(**kwargs)`, so that prepared
-  instance is not the saved instance. Do not depend on its identity surviving.
-  Factory invariants needed by both ORM and GraphQL creation belong on the
-  queryset's cooperative `insert()`, which ordinary `create()` also composes.
-  When creation needs preparation before validation, the existing
-  [`AngeeHasuraWriteBackend`](../../addons/angee/graphql/data/hasura.py) dispatches
-  to a model manager factory; keep native mutation envelopes, metadata and form
-  submission. [`IntegrationWriteBackend`](../../addons/angee/integrate/schema.py)
-  composes that seam for integration capabilities. Required fields and defaults
-  must come from the final input contract, never another list in a consumer form.
-  Model-owned defaults belong in `clean()` and `save()`; see
-  [`Cadence`](../../addons/angee/nexus/models.py). A required field defaulted by
-  `clean()` uses `blank=True` so Django's preceding field validation can defer
-  the missing value to that owner; the database column remains non-null.
-  Two input traps follow. (1) A `JSONField(default=dict)`
-  (or `default=list`) needs `blank=True`: Django counts `{}`/`[]` as blank, so a
-  `blank=False` container default fails `full_clean` ("cannot be blank") on every
-  create. (2) An optional create-input field over a **non-null** column must
-  default to `strawberry.UNSET`, never `None` — `None` is submitted as an explicit
-  null that overwrites the model default (e.g. `status`/`config`), and
-  `full_clean` then rejects the null. Mirror this for any new
-  `hasura_model_resource` input.
-- **A `strawberry_django.field(only=[...])` hint must list every column the resolver dereferences.**
-  Include columns read by shared properties the resolver delegates to; otherwise
-  selecting that field alone can defer-load the missing column per row.
-- **Type extensions retain native optimizer hints.** Declare hints on the contributed
-  field; [`AngeeSchema`](../../addons/angee/graphql/schema.py) exposes the composed
-  definition to optimizer consumers without mutating shared addon declarations.
-  Exercise narrow list selections at multiple row counts, including named schemas
-  with different extensions.
-- **Explicit delete preflight plus elevated destructive work must test both branches.**
-  Storage's soft-delete path and messaging's threaded-record delete path check the
-  public `delete` permission themselves, then run the owned destructive work under
-  `system_context`; the library's denial-audit signal is skipped on the explicit
-  deny branch by design, so add a deny-path regression whenever you use this shape.
-  Do not hide independently-authorized `on_delete=CASCADE` children under an elevated
-  parent cascade; dependent rows must derive delete through the parent in their own
-  zed relation.
-- **zed exclusion binds loosest.** Parenthesize `(a - b) + c` when combining
-  exclusion with union.
+### Migration history
+
+- **Each project owns durable native Django migration history.** After compose,
+  native `makemigrations` compares composed models with retained history.
+  Review and commit the result. `compose --check` checks generated artifacts;
+  `check_migrations` checks native history. Packaging creates archives and
+  provisioning applies history without authoring it. Released names and bodies
+  are immutable; corrections use forward migrations and retain the original
+  chains while partially upgraded databases remain supported.
+- **History retirement/reset requires an explicit support cutoff.** Native
+  `retire_history` and `reset_migration_history` own their applied-history and
+  dependency proofs. Read the installed command before choosing options. Preserve
+  Python imports still used by live histories through narrow compatibility aliases.
+  [Migration procedures](../../.agents/skills/angee-runtime/references/migrations.md)
+  own the operational cautions; routine startup never retires history.
+- **Removing a field, model or donor addon whose storage holds data needs a
+  declared cutover.** `makemigrations` refuses the autodetected drop through the
+  [composer's drop guard](../composer.md#project-migration-history). An
+  project authors a native migration that preserves or retires the data and
+  removes the field or model; an empty column needs
+  nothing, and neither does a table holding only rows its own resource files
+  seeded once the addon names the model under `retired_models` in its
+  `pyproject.toml` `[tool.angee.resources]`.
+- **`MIGRATION_MODULES` may be assigned during app populate only for generated
+  runtime apps.** That exception belongs to composed settings/runtime boot; do
+  not use it as an addon-local shortcut or a way to hide source-model migration
+  state.
+- **A rename of persisted references or permission namespaces is an upgrade
+  path, never startup work.** The release that changes them declares which old
+  state needs data migration and which reconciliation follows it; a fresh
+  installation inherits no older deployment's repair procedure.
+- **Data migrations are system operations.** A `RunPython` body reads a
+  REBAC-scoped model through `model._base_manager.using(db)`: a manager with
+  `use_in_migrations = True` rides into the historical model, so its `objects`
+  stays actor-scoped there and raises under strict mode.
+
+### Resource loading
+
+- **Resource imports use the native import-export lifecycle.** Models composing
+  [`ResourceLoadMixin`](../../src/angee/resources/mixins.py) may declare
+  an `AngeeResource` subclass through `resource_class`; [`build_resource`](../../src/angee/resources/loader.py)
+  composes it with native identity loading, validation, row results and the single
+  ledger hook. Domain adapters may defer persistence to a manager without
+  inventing another importer or ledger API. A batch preflight may acquire only
+  the complete ordered domain lock set; it must not consume groups or write rows.
+  `AngeeResource.resolve_existing` resolves declared targets and retained ledgers
+  through the same native instance loader; preflights compose this public owner.
+  `Resource.objects.load_xref` imports one declared dotted xref through that
+  pipeline, preserving widgets, the demo-tier guard, and caller authorization
+  before updating existing targets and on unchanged replays. It does not import
+  other rows or prerequisite targets.
+  A `RecordRefMixin` import column uses the model's single `GenericForeignKey`
+  name; that field also owns the content-type and object-id backing column names.
+  Other relation columns name rows by `<addon>.<xref>` (a list or
+  comma-separated string for many-to-many). Content types are never ledger rows,
+  so a foreign key or many-to-many to `contenttypes.ContentType` takes Django
+  model labels instead (`applies_to: [parties.Handle, parties.Person]`),
+  resolved by [`ModelLabelField.get_model`](../../src/angee/base/fields/__init__.py); an
+  unknown label fails its row. Row hashes cover the seed's labels, never
+  content-type ids, so a seed hashes the same in every database.
+  Source omission and explicit null must remain
+  distinguishable through dataset normalization.
+- <a id="seeded-transition-state"></a>**Transition-owned state in a seed is an initial value, applied on create and never on update.**
+  Seed initial state through model construction.
+  This covers only fields guarded by a
+  [`StateTransitions`](../../src/angee/base/models/transitions.py) declaration; the
+  [resource loader](../../src/angee/resources/loader.py) validates seeded state
+  before discarding it on updates. Companion fields written by transitions
+  (an agent's `workspace`, `service`, `runtime_status`, `last_error`, or receipts
+  such as `submitted_at`) remain ordinary seed fields and are not protected.
+  Seeds must omit those fields to preserve their live values.
+  Unchanged rows with hashes from the previous state-inclusive rule migrate
+  only their ledger hash; changed seed values or keys still trigger import.
+- **Demo resource tiers are additive across installed addons.** A deployment that
+  needs demo rows but not one permissive seed must exclude that exact entry with
+  `ANGEE_RESOURCE_EXCLUDED_ENTRIES`, keyed as `addon.name:resources/path.yaml`;
+  do not edit the addon seed or fork the loader.
+- **A seeded row that clients select carries a resource-assigned stable key.**
+  Clients and tests select it by that key, never by a mutable display name.
+
+### Development server
+
+- **The native launcher owns the Django reloader parent.** Rendered `manage.py`
+  calls `django_compose.management.execute`, which composes in a fresh process
+  before a reloader child. Django owns imported/input-file watching and reload
+  decisions. [`angee.server`'s runserver override](../../src/angee/server/management/commands/runserver.py)
+  serves the child with Uvicorn and closes its ASGI lifecycle on shutdown. Do not
+  add a second `uvicorn --reload` watcher or start a server outside the operator.
+- **Serving consumes artifacts.** GraphQL owns SDL and metadata through its
+  [SDL owner](../../src/angee/graphql/sdl.py); its ready-phase `SchemaIntegration`
+  contributes SDL/metadata to native compose. `schema --check` reads that snapshot;
+  codegen remains a separate lifecycle step. The compiler owns generated-tree
+  publication and receipt verification. [Checks](../checks.md#composition-and-schema)
+  owns the ordering; neither a web request nor ASGI mounting repairs output.
+- **Session and CSRF cookie names are project-scoped.** Localhost ports do not
+  isolate browser cookies between stacks; preserve the project template's names.
+
+### Addon WebSocket endpoints
+
+Contribute socket protocols through `AppConfig.compose_asgi()` and compose
+`RebacChannelsConsumerMixin` to pin the cookie actor before creating tasks.
+The [GraphQL Channels owner](../../src/angee/graphql/asgi.py) discovers and validates
+addon `asgi.py` WebSocket routes and middleware, and owns Origin trust and Django
+session authentication; never repeat those handshake checks per consumer. Long-lived
+protocols that accept writes must revalidate the session at each request and
+open fresh evaluator scopes for authorization and change-feed reads.
+
+### GraphQL actor and write contracts
+
+- **View-as is a server-side, read-only HTTP preview.** `X-Angee-View-As`
+  carries the target user's public id. [IAM admission](../../src/angee/iam/models.py)
+  checks the real actor's `view_as` permission and the target's eligibility;
+  [ViewAs](../../src/angee/graphql/view_as.py) binds both `request.user` and
+  the ambient actor to that target. Mutations and HTTP subscriptions fail with
+  `VIEW_AS_READ_ONLY`; query database writes are rolled back. The
+  [GraphQL WebSocket consumer](../../src/angee/graphql/consumers.py) retains its
+  handshake actor and does not support this header. [MCP execution](../../src/angee/mcp/graphql.py)
+  carries a synthetic request whose only meaningful attribute is `user`, equal
+  to the ambient actor's eligible user (anonymous for a non-user or inactive
+  user); it has no HTTP headers or view-as preview lifecycle.
+- **Concurrency and replay tokens are GraphQL root arguments.** On models
+  composing `OptimisticLockMixin`, `update_<resource>_by_pk` accepts
+  `expected_revision: Int`; a stale value fails with `STALE_REVISION`.
+  With the [provenance write adapter](../../src/angee/provenance/graphql.py) installed,
+  `insert_<resource>_one` also accepts `idempotency_key: String`; replaying the same
+  actor/resource-scoped key and content returns the readable original, and
+  changed content fails with
+  `CREATION_KEY_CONFLICT`. Neither token belongs in `_set` or `object`.
+  The [Hasura adapter](../../src/angee/graphql/data/hasura.py) composes native
+  write backends and their declared arguments; provenance owns creation claims,
+  and the model owns optimistic locking. A host without provenance exposes no
+  idempotency argument.
+- **Permission answers reuse the authorization owner.** Declare a type's
+  `permissions` through [`permissions_field(names)`](../../src/angee/graphql/capabilities.py);
+  it reports only the declared Zed permissions held by the current actor,
+  validates names at schema build and batches list evaluation in SQL.
+  Server predicates compose the same owner's `held_permissions(record, names)`.
+  View-as therefore reports the target's permissions. Clients consume these
+  answers; they never reconstruct authority from roles or identity.
+
 - **A status field is read/write-asymmetric** — GraphQL serializes it on read as
   the uppercase enum NAME (`ACTIVE`) but the writable `Patch.status` `String`
   takes the lowercase model value (`"disabled"`). This holds inside F6 nested line
@@ -1373,16 +1461,16 @@ and current contracts before applying a historical example to a new deployment.
   stay their own resource. The child writes run elevated because the parent
   write authorizes them, which never makes them system work. A child whose
   invariants separate users from system writers composes
-  [`RowLockMixin`](../../angee/models/locks.py): `locked_fields()` names what its
+  [`RowLockMixin`](../../src/angee/base/models/locks.py): `locked_fields()` names what its
   state locks, user writes may not change those fields, delete the row or create
-  one, and `HasuraLines` checks the same lock before each elevated child write.
-  Its node projects `locked_fields`, advertised as the lines' `lock_field`. Never
-  guard a child on `is_sudo()` alone; [`Stage`](../../addons/angee/work/models.py)
+  one. Its default manager composes `RowLockQuerySet` so native collection
+  writes enforce the same owner rule; the declared base manager retains that
+  guard. A collector may remove locked children only through the model's explicit
+  owning-parent cascade contract. `HasuraLines` checks the same lock before each
+  intentionally elevated child write. Its node projects `locked_fields`, advertised as the lines' `lock_field`. Never
+  guard a child on `is_sudo()` alone; [`Stage`](../../src/angee/work/models.py)
   is the reference. A nested insert only inserts beside children the parent's own
   save provisions.
-- **Intersect write-only fields out of the read/return selection** — a field
-  absent from the SDL read type (e.g. `password`) makes the detail query invalid
-  and the form loads blank if it is selected.
 - **Server-owned fields are excluded from the write surface, never merely
   `readOnly` in a form.** A column the server owns (audit, derived, or
   default-only) must be left out of the resource's `insertable`/`writable` set so
@@ -1395,32 +1483,87 @@ and current contracts before applying a historical example to a new deployment.
   `extensions.validationErrors` (keys follow the schema naming, snake_case on Hasura resources), but GraphQL input-coercion errors
   fire before resolvers and never reach it, so guard required inputs client-side
   from `rootFields.requiredCreateFields`.
-- **In test-client logins pass the backend** —
-  `force_login(user, backend="angee.iam.auth.ModelBackend")`; the default backend
-  order is chosen for runtime authentication concerns and may not be the session
-  reload backend a focused test wants.
-- **Login throttling belongs at the IAM auth seam.** Do not add per-view or
-  per-test throttles; IAM composes `django-axes` at the `authenticate(request=...)`
-  backend/signal path, so the password GraphQL mutation stays a thin caller.
-- **A gated factory that uses `sudo()` must restore the actor before returning.**
-  Elevated writes may be necessary to create the row, but callers continue under
-  the original actor. Capture `current_actor()` before the elevated block and
-  rebind the returned instance with `.with_actor(actor)` after save.
-- **Publishers wire during `angee.graphql` app `ready()`, not schema build or
-  schema import.** GraphQL schema modules declare subscription surfaces;
-  `GraphQLSchemas` connects publishers from declared `changes` metadata after
-  model population without constructing schemas. Readable-field projection is
-  resolved only when an observable partial update needs changed values, through
-  that schema owner. Building a schema never mutates process-global signal state.
+- **Create writes validate the final input contract.** `hasura_model_resource`
+  creation prepares one instance and `full_clean`s it before persistence; the
+  locked Strawberry version then persists through `manager.create(**kwargs)`, so
+  the prepared instance is not the saved instance. Model and input defaults must
+  agree: required fields and defaults come from the final input contract, never
+  a second list in a consumer form; model-owned defaults belong in `clean()` and
+  `save()` ([`Cadence`](../../src/angee/nexus/models.py)); a required field
+  that `clean()` defaults declares `blank=True` so field validation defers to
+  that owner while the column stays non-null; and an optional create-input field
+  over a non-null column defaults to `strawberry.UNSET`, never `None`. Factory
+  invariants shared by ORM and GraphQL creation belong on the queryset's
+  cooperative `insert()`, which ordinary `create()` composes; creation that needs
+  preparation before validation dispatches through
+  [`AngeeHasuraWriteBackend`](../../src/angee/graphql/data/hasura.py) to a
+  model manager factory ([`IntegrationWriteBackend`](../../src/angee/integrate/schema.py)
+  composes that seam), keeping native mutation envelopes, metadata and form
+  submission.
+- **Scoped feed roots share payload construction.** Pass an authorized domain
+  queryset to Messaging's feed payload factories; root membership and search
+  predicates remain with their querysets.
+- **Payload envelopes share a base.** Repeated `error`/`error_code`, counters and
+  thread-state fields across mutation payloads want one base type and one
+  projector. Reuse `angee.graphql.actions.ActionResult` and `action_guard` when
+  their error contract fits; changing an existing error envelope is a separate
+  API migration, not a mechanical refactor.
+  In-band refusals preserve the error's declared `DomainError` or `ValidationError`
+  code in nullable `ActionResult.code`, with `null` when the error carries none.
+- **Domain refusals are typed.** Raise a subclass of
+  [`DomainError`](../../src/angee/base/exceptions.py) with a stable `code`; the
+  [GraphQL sanitizer](../../src/angee/graphql/schema.py) maps non-validation
+  refusals by type to that code without detail. Never add a domain code to the sanitizer's
+  expected-code allow-list.
+- **Resolvers never inspect `info.selected_fields` to choose annotations.** A sort
+  alias that needs an annotation is declared on `hasura_model_resource`. Lazy
+  preparation belongs in `strawberry-django-hasura` at its resolved `order_by`
+  boundary; extend that owner rather than re-walking selections in Angee.
+- **Public-id lookups preserve their authorization boundary.** Use
+  `require_instance_for_id` for required reads with the original queryset.
+  `resolve_action_target` and IAM's `user_from_public_id` elevate lookup and are
+  not interchangeable with readable queries.
+
+### Schema lifecycle and change publication
+
+- **Live timelines read owners; notifications invalidate reads.**
+  [Timeline kinds](../../src/angee/timeline/kinds.py) contribute actor-scoped
+  source querysets. The [read owner](../../src/angee/timeline/reading.py)
+  combines their common columns with Django's `union(all=True)`, applying
+  permissions, attention, folding and cursors in each branch before the shared
+  page limit. Display payloads are hydrated only for selected source rows.
+  There is no event projection table or backfill requirement. Folding hides a
+  child only when a readable parent target occurs on the same record; counts
+  and attention use that same scope, independent of the page's filters.
+  [`publish_change` / `change_published`](../../src/angee/graphql/publishing.py)
+  delivers owner observations inside the transaction. The
+  [timeline observer](../../src/angee/timeline/events.py) captures affected
+  record identities, including old membership before a save or delete, and
+  uses the declared record feeds to invalidate reads after commit. Django's
+  callback queue owns rollback; no projection queue or source-row lock is needed.
+  Observation never enables a private source's transport feed. Kinds name the
+  source fields they read, so unrelated partial saves skip dependency discovery;
+  inherited sources and the core's bounded `bulk_updated` batches use the same
+  seam. A verb completing a conditional or bulk write publishes after its
+  related rows are ready. `change_batch_targets` may coalesce publications;
+  local observers still receive original bulk batches where needed.
+- **Publisher wiring reads prebuilt server metadata.** The ready-phase
+  [schema integration](../../src/angee/graphql/sdl.py) emits `schemas/publishers.json`
+  from finalized resources: published model labels and readable concrete fields,
+  unioned across named schemas with aliases and FK attnames preserved. Public
+  resource JSON omits these field origins. Ordinary app `ready()` reads the
+  native receipt-verified artifact and connects eager field sets; startup,
+  partial writes and related-record invalidations never discover addon schemas.
+  Missing or stale output requires compose. Compose wires publishers only after
+  all ready callbacks; bare source-model tests wire the same projection explicitly
+  in their [session fixture](../../tests/conftest.py), without a serving fallback.
 - **Validate every named schema before deploying writer processes.** The GraphQL
-  addon's [Django system check](../../addons/angee/graphql/checks.py) builds every
+  addon's [Django system check](../../src/angee/graphql/checks.py) builds every
   named schema through `GraphQLSchemas` and reports construction failures. It runs
   in ordinary `manage.py check` and commands requesting the default system checks.
   ASGI WebSocket routing at application boot and the `schema` command also demand
   schema construction; MCP's resource-tool check validates its console contract.
-  Run the default checks against the deployment's code and settings before
-  starting writer tiers. Bare app population and `manage.py --help` stay
-  build-free. Writer-only processes that call `django.setup()` without running
+  Bare app population and `manage.py --help` stay build-free. Writer-only processes that call `django.setup()` without running
   checks deliberately retain lazy construction: their first observable partial
   update builds the required schemas synchronously, including inside an open
   transaction. This one-time latency keeps generic writer boot cheap; later
@@ -1439,9 +1582,9 @@ and current contracts before applying a historical example to a new deployment.
   existing Hasura/Pydantic resource and authored-root helpers; do not construct
   partial resource descriptions for later reconciliation.
 - **Metadata callers consume the built schema's finalized descriptions.**
-  [`GraphQLSchemas`](../../addons/angee/graphql/schema.py) owns schema lookup and
+  [`GraphQLSchemas`](../../src/angee/graphql/schema.py) owns schema lookup and
   attaching the finalized payload;
-  [`angee.data.metadata`](../../angee/data/metadata.py) owns the transport-neutral
+  [`angee.graphql.data.contracts`](../../src/angee/graphql/data/contracts.py) owns the transport-neutral
   declarations. Declare aliases and exclusions through Pydantic and compose its
   JSON serializer (`as_wire` dumps with `mode="json"`, so non-JSON leaves in
   `Any`-typed fields become strings or lists at build time and an
@@ -1462,38 +1605,181 @@ and current contracts before applying a historical example to a new deployment.
   governs the event. The publisher captures that anchor before deletion, so
   create, update, and delete all use the same authorization boundary.
 - **Data-resource field widgets are backend-owned vocabulary.** Add or rename
-  widget keys in `angee.data.field_classification` with the matching
+  widget keys in `angee.graphql.data.resource_fields` with the matching
   frontend renderer; resource callers declare fields, not ad hoc widget strings.
   Status shape is likewise a field-owned projection fact: a field or Strawberry
   surface declares `angee_status_display`, metadata emits `status_display`, and
   the wire alias is `statusDisplay`.
-- **Scoped feed roots share payload construction.** Pass an authorized domain
-  queryset to Messaging's feed payload factories; root membership and search
-  predicates remain with their querysets.
-- **Payload envelopes share a base.** Repeated `error`/`error_code`, counters and
-  thread-state fields across mutation payloads want one base type and one
-  projector. Reuse `angee.graphql.actions.ActionResult` and `action_guard` when
-  their error contract fits; changing an existing error envelope is a separate
-  API migration, not a mechanical refactor.
-  In-band refusals preserve the error's declared `DomainError` or `ValidationError`
-  code in nullable `ActionResult.code`, with `null` when the error carries none.
-- **Domain refusals are typed.** Raise a subclass of
-  [`DomainError`](../../angee/errors.py) with a stable `code`; the
-  [GraphQL sanitizer](../../addons/angee/graphql/schema.py) maps non-validation
-  refusals by type to that code without detail. Never add a domain code to the sanitizer's
-  expected-code allow-list.
-- **Resolvers never inspect `info.selected_fields` to choose annotations.** A sort
-  alias that needs an annotation is declared on `hasura_model_resource`. Lazy
-  preparation belongs in `strawberry-django-hasura` at its resolved `order_by`
-  boundary; extend that owner rather than re-walking selections in Angee.
-- **Public-id lookups preserve their authorization boundary.** Use
-  `require_instance_for_id` for required reads with the original queryset.
-  `resolve_action_target` and IAM's `user_from_public_id` elevate lookup and are
-  not interchangeable with readable queries.
+- **Type extensions retain native optimizer hints.** Declare hints on the
+  contributed field; [`AngeeSchema`](../../src/angee/graphql/schema.py) exposes
+  the composed definition to optimizer consumers without mutating shared addon
+  declarations, so a narrow list selection costs the same at any row count.
 
-### Record sync
+### Direct record access
 
-[`angee.integrate`](../../addons/angee/integrate/README.md) owns the shared record
+Direct grants and ownership transfers acquire their model's cooperative
+`lock_for_record_access` hook before fresh subject admission. An addon with a
+domain lock order acquires its prerequisite rows there and delegates; validators
+stay usable independently of a write transaction. See
+[`AngeeModel`](../../src/angee/base/models/base.py) and the
+[Proposals owners](../../src/angee/proposals/models.py).
+
+[`RecordRefMixin`](../../src/angee/base/models/refs.py)
+owns the generic pointer's model contract, accepted targets, merge policy and
+deletion policy. [`angee.base.refs`](../../src/angee/base/refs.py) owns the underlying pointer
+identities and public reference values. Its public projection uses the minimal
+[`model identity contract`](../../src/angee/base/models/identity.py), without
+importing the composed model toolkit.
+[`RetainedGenericRelation`](../../src/angee/base/fields/relations.py) owns the
+native reverse relation's exclusion from automatic collection.
+Each edge declares `on_target_delete` as `CASCADE`, `PROTECT`, or `SET_NULL`; a
+model needing row-aware cleanup implements `teardown_for_target(target)`. The
+foundation target-delete receiver invokes that one declaration for instance and
+queryset deletion paths.
+[`RecordReferenceNode`](../../src/angee/graphql/relations.py) and
+`with_record_reference_access` project it into GraphQL under the current
+reader's scope. A hidden target yields null identity fields; its model and ID
+must also stay unavailable through resource filters and aggregate counts. Addon
+resources declare their record-reference filter axes through the shared Hasura
+resource owner instead of reimplementing this projection.
+
+**Polymorphic edges authorize their target in the schema.** Back one relation
+per target type with the edge's `GenericForeignKey`, contributed by the app
+that owns the type (`relation task: projects/task // rebac:field=target`) or
+declared by the edge's own addon when it already depends on the type's, and
+write the edge's `create`, `read` and `delete` over them; the type's model must
+be its own canonical model and its identity its primary key (`rebac.E009`).
+Store targets with `rebac.generic_target(record)`, create and delete edges
+under the actor, and list a record's edges with the scoped edge queryset
+filtered by `generic_target(record).lookups(Edge, "target")`. Move an edge by
+deleting and recreating it; the library refuses a retargeting save. A type
+without a relation is refused under an actor, and an edge that accepts only
+some types derives that set from the schema through
+`RecordRefMixin.declared_target_models` (`declares_target` for one type)
+instead of listing it again. Resource metadata projects the inverse as
+`recordEdges`, so a surface listing one edge applies only to the record types
+that can carry it; a resolver does not re-decide that per request. Each
+edge's own `permissions.zed` states its rule:
+[storage](../../src/angee/storage/permissions.zed),
+[knowledge](../../src/angee/knowledge/permissions.zed),
+[projects](../../src/angee/projects/permissions.zed) (a binding takes
+share on the project and the type's grant authority),
+[portfolio](../../src/angee/portfolio/permissions.zed),
+[tags](../../src/angee/tags/permissions.zed) (an assignment also needs
+the tag's read) and
+[messaging](../../src/angee/messaging/permissions.zed) (a const relation on
+the row's role keeps the arms off chatter edges). Evidence and provenance edges
+whose access follows their owner (workflow subjects, step records and watches,
+decision records, extraction sources, integrate record links, currency-rate
+contexts) take no target relations: the owner's admission gate checks the
+record at write time, and the edge still stores `rebac.generic_target`. Only
+an edge that names rows outside REBAC (a chatter thread on an ungated host, an
+import record link to a plain sink) stores
+`angee.base.refs.generic_pointer_target`, which keeps Django's own identity
+for such a row. Compose `ThreadedModelMixin` and reverse `GenericRelation`s on
+the same canonical ancestor either way.
+
+Models opt into direct sharing with `rebac_grantable`, mapping each relation to
+the permission required to manage it. The model remains the policy owner:
+`direct_record_access(relations=...)` lists only the caller-authorized declared
+subset, and `validate_record_access_target()` enforces model-specific target
+rules for listing, options, grants, and revocations. For example, Workflow
+accepts grants only on its lineage head; GraphQL must not infer that rule from
+Workflow fields. A `validate_record_access_subject()` override that keeps one
+user out of a record's holders raises the foundation-owned
+[`RecordAccessSubjectRefused`](../../src/angee/base/exceptions.py) when
+[`subject_reaches_user`](../../src/angee/base/permissions.py), the one predicate for
+whether a subject reference resolves to, or contains, that user, answers true;
+it never decodes wildcards or usersets itself.
+
+The public GraphQL recipient is typed as either a user or group. It resolves to
+the canonical REBAC subject (`auth/user:<id>` or
+`auth/group:<id>#member`); arbitrary subject strings are not accepted. Historic
+unsupported, wildcard, or malformed subjects remain visible as raw audit
+subjects with a null typed recipient.
+
+Use `authorized_action_target` for mutation preflight that requires the native
+unredacted write scope. A surface that manages a declared relation under another
+permission uses `authorized_permission_target`, which resolves through that
+exact actor permission while preserving scoped not-found behavior and the final
+row access check.
+
+Framework contracts should be self-explaining in code. Add docstrings to public
+modules, classes, methods, functions, declarative manifest attributes, and public
+module-level constants. Add docstrings to private helpers when their role is not
+obvious from the function name and signature. Do not maintain a parallel spec, field inventory, or model
+API list for behavior that can live clearly beside the code.
+
+Native package metadata owns addon identity and requirements; `pyproject.toml`
+ships capability declarations under `[tool.angee]`. AppConfig owns Django's
+identity customization, registration and lifecycle. Each
+capability owner interprets its own declarations and conventional defaults; it
+never creates a separately configurable package-fact mirror. Model/manager behavior
+stays with the native class, and composition lifecycle stays with the compiler.
+Keep the exact authoring forms in owner docstrings and the native package
+contract, rather than duplicating them in this guideline.
+
+Before decomposing backend code, classify each fact by its Django owner:
+
+- Persisted choices live beside the model field, usually as model-owned
+  `TextChoices`.
+- Row-set behavior lives on managers and querysets.
+- Instance behavior lives on model methods and properties.
+- Addon declarations live in `pyproject.toml`; capability owners resolve their paths from Django `AppConfig.path`.
+- Management commands parse arguments and dispatch to the owning model, manager,
+  service, or composer function.
+- Compatibility facades exist only for an explicit compatibility promise.
+
+The project settings contract declares project facts; Angee owns Django
+composition wiring. Anchor project defaults to `BASE_DIR`, never the current
+working directory, and use Python settings only for facts that need Python.
+Follow [settings bootstrap](../composer.md#settings-bootstrap) and
+[autoconfig](../composer.md#autoconfig) for the current loading and merge owners.
+`django_compose.conf.configure` owns settings order and the immutable snapshot.
+[`angee.base.conf.configure`](../../src/angee/base/conf/__init__.py) loads
+bounded source/deployment overlays before delegating once. The compiler owns
+native migration mappings and verified serving output. An enclosing stack never
+silently supplies settings to a nested project.
+
+Declare autoconfig `SETTINGS` and derived `settings()` with source-owned types,
+including nullable values and normalized `:append` contributions. Native
+compiler/provenance typing integrations consume these contracts; do not patch
+source models, compiler output or a filesystem history cache to supply types.
+
+Keep `angee.*` a native PEP 420 namespace. Leave namespace roots such as
+`src/angee/` without an `__init__.py`; installed distributions contribute
+portions without a host namespace shim.
+
+Avoid `__all__` unless a module has a concrete star-import or compatibility
+requirement. Public API should usually be obvious from module names, object
+names, and docstrings.
+
+### Verb eligibility projections
+
+Record controls consume eligibility from the verb owner. Task audience domains
+extend [`Task.visibility_blockers`](../../src/angee/projects/models.py): each
+SQL condition names its validation exception. The locked visibility verb and
+optimized `allowed_visibility` projection share those conditions and native
+permission scopes. Hidden domain facts stay inside the projection query.
+Message writers must still preserve publication invariants under the task lock.
+
+Task hand verbs follow the same shape. [`Task.action_blockers`](../../src/angee/projects/models.py)
+names each row condition refusing a verb with its validation message; contributors
+extend it and `hand_actions` through `super()`, as
+[work's stage rules](../../src/angee/work/models.py) do. Each verb calls
+`validate_action` after its idempotent replay, and the `task_actions` projection
+batches the same conditions with the verb's `write` scope. A control shows where
+its verb would act (the row's status or stage) and where `task_actions` offers it.
+A round's lift reads `can_open`, which composes the same
+`Round.opening_phase_condition` its verb checks.
+
+Decision admission, answers and withdrawal belong to the
+[decisions manager](../../src/angee/decisions/managers.py). Asking owners
+consume its verdict; controls consume the owning verb's eligibility.
+
+### Integration and worker contracts
+
+[`angee.integrate`](../../src/angee/integrate/README.md) owns the shared record
 protocol. Backends declare independently ordered stream partitions; domain
 managers retain identity and ingest policy. Event feeds are append-only and
 idempotent by domain identity, so they never create replica links. Mutable record
@@ -1512,6 +1798,15 @@ projection through their existing write-back policies and remote preconditions.
 `reconcile_interval`, `absence_threshold`, `tombstone_retention`, and `config`.
 Persisted stream rows carry runtime state; management pages do not redefine
 those declaration facts.
+
+Public-feed responding composes [held replies, reply hold, feed streams and
+delivery settlement](../glossary.md#workflows) through the
+[posts](../../src/angee/posts/README.md),
+[messaging](../../src/angee/messaging/README.md) and
+[thin workflow](../../src/angee/workflows_posts/README.md) owners.
+Eligibility and the locked pre-create recheck belong to the message owner;
+steps call that predicate and factory. Verified webhook landing uses the same
+bridge advisory lock as polling and delivery settlement.
 
 - **The cursor commits with the records it covers.** Extract outside the database
   transaction; commit the applied page, its quarantine and the stream cursor in
@@ -1559,7 +1854,7 @@ those declaration facts.
   evidence but does no transport work and ignores cursor expiry; an explicit
   resync creates a new generation.
   Recurring event feeds without reconciliation remain open. Declare the source
-  through [`StreamDefinition.snapshot`](../../addons/angee/integrate/states.py),
+  through [`StreamDefinition.snapshot`](../../src/angee/integrate/states.py),
   mirrored on `SyncStream.snapshot`; backend-private `config` does not own cadence.
   Do not interpret a missing interval alone as read-once.
 - **Inventory is a resumable import.** `reconcile_stream` consumes one bounded
@@ -1586,30 +1881,6 @@ those declaration facts.
   concurrency.
   Workflow execution and durable scheduling stay with their existing
   owners; integrate must not import workflows.
-- **Retire conversion inputs only after proving history parity.** Integrate's
-  manifest orders its history fold before its store retirement declaration.
-  The retirement verifies all converted observations and failures before native
-  `DeleteModel` operations; reverse rebuilds from ordered link history and retained stream state, with legacy IDs and native-only
-  distinctions lost as documented in the migration.
-
-### Integrations and workers
-
-Public-feed responding composes [held replies, reply hold, feed streams and
-delivery settlement](../glossary.md#workflows) through the
-[posts](../../addons/angee/posts/README.md),
-[messaging](../../addons/angee/messaging/README.md) and
-[thin workflow](../../addons/angee/workflows_posts/README.md) owners.
-Eligibility and the locked pre-create recheck belong to the message owner;
-steps call that predicate and factory. Verified webhook landing uses the same
-bridge advisory lock as polling and delivery settlement.
-
-- **Bridge scheduling follows the final MTI kind.** A child capability may
-  extend another bridge (a public Feed extends Channel). The
-  [`Integration.concrete_type`](../../addons/angee/integrate/models.py) identity
-  selects the one bridge row to schedule and route; querying every ancestor
-  would queue the same connection twice. Keep parent-scoped message access on
-  the declared Channel relation, with child access inherited through its REBAC
-  parent arrow.
 - **An integration failure reaches the operator only as an `IntegrationError`.**
   `Bridge.record_sync_error` and the console action results project every other
   exception to the generic "Integration operation failed." — a vendor SDK's
@@ -1621,38 +1892,6 @@ bridge advisory lock as polling and delivery settlement.
   credential probe, a capability child (a `Channel` → its `ChannelBackend`)
   overrides it with the real handshake, and `test_connection(id)` reports only
   an `IntegrationError`'s `public_message` in band.
-- **Native bridge SDKs can abort the interpreter.** Declare process isolation on
-  the owning `LiveBridgeImpl`; use the shared integration process host rather
-  than serializing selected calls in Python. The session child owns the store
-  and account locks until native cleanup completes or the process exits.
-  Infrastructure crashes stay retryable; terminal account outcomes retain their
-  existing runtime-error latch.
-- **Never mix `select()` with buffered `readline()` on a subprocess pipe.** A
-  buffered wrapper may consume several complete records while the file descriptor
-  becomes non-readable, stranding those records behind the readiness check; it
-  can also block mid-line past the stop cadence. Read raw bytes with `os.read()`
-  into a manual newline accumulator and drain complete buffered lines before the
-  next readiness wait.
-- **A long-lived Celery task needs the three-check wake loop.** A session task
-  that outlives the tick (a live chat connection) runs on a dedicated queue's
-  threads-pool worker — the threads pool enforces **no** time limits, so queue
-  isolation is the protection and `time_limit=None` on the task is only
-  defense-in-depth. Its loop must wake on a bound (shorter than the reconciler
-  tick) and check: (1) the persisted desired-state, so a cooperative stop never
-  waits on an idle socket; (2) a process-local `worker_shutting_down` event, or
-  a warm SIGTERM wedges behind the pool's blocking join until SIGKILL; (3) that
-  it still holds its advisory lock — Postgres advisory locks are
-  connection-scoped, and a DB reconnect drops the lock under a live process, so
-  the holder must exit for a clean reconciler restart instead of racing a
-  duplicate against shared state. The reconciler enqueues with `expires=` of one
-  tick so a saturated or absent worker never accumulates a backlog
-  (`angee.integrate.session` + `angee.integrate.tasks` are the references).
-- **An asyncio vendor SDK owns its loop on the live session's connection thread.**
-  Create and run that loop where the vendor connects; the task thread remains the
-  only persistence owner. When task-thread work must call an async vendor hook
-  (for example, downloading media during ingest), schedule the coroutine with
-  `asyncio.run_coroutine_threadsafe` onto that owning loop and wait with a finite
-  timeout. Never create a second loop around a coroutine bound to the live client.
 - **A lifecycle column is declared intent, never proof of achievement.**
   `integrate.Integration.lifecycle` records what the operator asked for; how far a
   runtime handshake actually got belongs on `runtime_status`/`sync_progress`.
@@ -1663,37 +1902,6 @@ bridge advisory lock as polling and delivery settlement.
   logout or a rejected account is an outcome, not a request, and recording it as
   one reverts the operator within a tick. It reports the failure on the runtime
   axis and stops itself through the desired-state it also owns.
-- **An Integration child's second intent axis is the reconciler's to close.**
-  A child declaring no `sqid_prefix` of its own *is* an `int_…` row, so the
-  generic lifecycle actions (`integrate/schema.py`, `IntegrationActionMutation`)
-  move it without the owning addon in the call path. They can only know the one
-  axis every Integration has, so any second axis a child adds — a live
-  desired-state, a subscription — is unset on rows that arrive that way. Two
-  independently writable intent axes need a declared precedence and one owner
-  that reconciles the other: let the child's reconciler select on the lifecycle
-  and drive its own axis from it, rather than select on its own axis and trust
-  something else to have set it. A child's runtime guards must equally honour the
-  lifecycle itself — test the one state that runs, not the one state you happen
-  to stop on. `angee.integrate.tasks` is the reference:
-  `ensure_bridge_sessions` selects CONNECTED and reconciles the live desire to it, and
-  gates on `runtime_status` so a known-broken handshake is not redispatched
-  forever. Reconcile only when the axes disagree: the write has no dirty check and
-  publishes a subscription event, so an unconditional one broadcasts a no-op edit
-  per row per tick.
-- **A latching gate needs a reset the operator's verb owns.** A reconciler that
-  skips rows on `runtime_status=ERROR` disables itself until something clears the
-  error — so the repair verb must clear it *itself*, not rely on a lifecycle edge
-  doing it as a side effect. `set_lifecycle` returns early when the row already
-  reads the target, so a CONNECTED+ERROR row repaired by a verb that only declares
-  CONNECTED clears nothing and gets exactly the one dispatch the verb enqueues
-  directly; lose that (worker down, queue saturated, a restart) and the row is
-  skipped forever. `resume_channel_pairing` reports OK unconditionally for this
-  reason. Keep the gate on the shared `runtime_status` rather than a private
-  health key: a private one is a further axis the generic verbs cannot clear, so
-  it reintroduces the same latch on the generic path.
-- **Celery periodic tasks accept `timestamp` when a scheduler supplies one.**
-  Static Celery beat ticks call without it, but tests and future scheduler
-  backends may inject a Unix timestamp. Keep wrappers tolerant of both shapes.
 - **Agent runtime auth is a `(runtime × provider × credential-kind)` fact, not provider-only.**
   The `AgentRuntime` an agent's `runtime_class` selects (`angee.agents.runtimes`) owns how a
   credential becomes container env *and* the synced secret payload (`auth_env` /
@@ -1711,41 +1919,57 @@ bridge advisory lock as polling and delivery settlement.
   same external work, but persisted state transitions still use model/queryset row
   locks, constraints, and idempotent managers. Do not hold row locks during network
   IO.
-- **OAuth/OIDC outbound requests must send an honest, non-browser User-Agent.**
-  Anthropic's token-endpoint edge 429s spoofed browser/curl User-Agents with a
-  `rate_limit_error` (before any auth check) and 403s urllib's `Python-urllib`
-  default; an honest client UA passes. `angee.integrate.oauth.client` owns the value
-  (`USER_AGENT`); never reintroduce a browser spoof or fall back to urllib's
-  default.
-- **httpx and httpx2 objects do not mix.** An `httpx2.Client`, which Authlib's
-  `OAuth2Client` is from 1.8.0, asserts its own stream type inside the
-  transport, so an httpx transport fails on the first real request while
-  `MockTransport` tests pass. Integrate's outbound HTTP is httpx2 end to end
-  ([`angee.integrate.http`](../../addons/angee/integrate/http.py)). Cover a
-  transport or HTTP-library change with a real-socket test such as
-  `test_oauth_protocol_round_trips_over_the_real_pinned_transport`.
-- **Anthropic's JSON OAuth token exchange must echo redirect `state`.** Standard
-  OAuth validates state before the token POST and does not send it, but
-  Anthropic's public-client JSON token endpoint rejects that request as malformed
-  without the state field. Keep the exception inside
-  `angee.integrate.oauth.client`'s JSON shim; do not move it to the frontend,
-  generated callback route, or generic form-token path.
+- **A long-lived session task stops within one reconciler tick.** A task that
+  outlives the tick (a live connection) runs on a dedicated queue consumed by a
+  threads-pool worker, so queue isolation — not a time limit — is its
+  protection. Its loop wakes on a bound shorter than the tick and exits when the
+  persisted desired-state no longer wants it, when the worker is shutting down,
+  or when it no longer holds its advisory lock; the reconciler enqueues with
+  `expires=` of one tick so an absent or saturated worker never accumulates a
+  backlog. `angee.integrate.session` and `angee.integrate.tasks` are the
+  references.
+- **Bridge scheduling follows the final MTI kind.** A child capability may
+  extend another bridge (a public Feed extends Channel); the
+  [`Integration.concrete_type`](../../src/angee/integrate/models.py) identity
+  selects the one bridge row to schedule and route. Parent-scoped message access
+  stays on the declared Channel relation; child access inherits through its
+  REBAC parent arrow.
+- **An asyncio vendor SDK owns its loop on the live session's connection
+  thread; the task thread remains the only persistence owner.** Task-thread
+  work that must call an async vendor hook schedules the coroutine onto that
+  owning loop with `asyncio.run_coroutine_threadsafe` and waits with a finite
+  timeout.
+- **An Integration child's second intent axis is the reconciler's to close.** A
+  child declaring no `sqid_prefix` of its own is an `int_…` row, so the generic
+  lifecycle actions (`integrate/schema.py`, `IntegrationActionMutation`) move it
+  knowing only the one axis every Integration has. Two independently writable
+  intent axes need a declared precedence and one owner that reconciles the
+  other: the child's reconciler selects on the lifecycle and drives its own axis
+  (a live desired-state, a subscription) from it, reconciling only when the axes
+  disagree, and its runtime guards honour the lifecycle itself.
+  `ensure_bridge_sessions` in `angee.integrate.tasks` is the reference.
+- **A latching gate needs a reset the operator's verb owns.** A reconciler that
+  skips rows on `runtime_status=ERROR` is re-enabled only by the repair verb
+  clearing that status itself, never by a lifecycle edge as a side effect. Keep
+  the gate on the shared `runtime_status`, not a private health key the generic
+  verbs cannot clear.
+- **Periodic tasks accept an optional `timestamp`.** Static Celery beat ticks
+  call without it; tests and scheduler backends may inject a Unix timestamp.
 - **TLS trust is an environment concern, not a per-call one.** Which CA roots we
   trust is owned by the runtime, set once — never threaded as an `ssl_context`
   through each outbound HTTPS call. Outbound code uses the stdlib default context
   (`ssl.create_default_context()`), which OpenSSL resolves against the system
-  trust store and honours `SSL_CERT_FILE`/`SSL_CERT_DIR`. A dev mac trusts via
-  Homebrew `ca-certificates`; an environment that lacks a CA store (a minimal
-  container, a bare CI/agent sandbox) is fixed *there* — install OS
-  `ca-certificates`, or `export SSL_CERT_FILE="$(python -m certifi)"` at bootstrap
-  — not by adding `certifi` plumbing to call sites. Backend outbound HTTP has one
+  trust store and honours `SSL_CERT_FILE`/`SSL_CERT_DIR`. An environment that
+  lacks a CA store is repaired in that environment
+  ([environment pitfalls](../../.agents/skills/angee-tests/references/environment.md)),
+  never by adding `certifi` plumbing to call sites. Backend outbound HTTP has one
   owner already: `angee.integrate.http.HttpClient` (`self.http`), which builds the
   one context; route new outbound calls through it rather than hand-rolling
   `urlopen` + context.
 - **Instance names on a row follow daemon-confirmed facts.** Record a daemon
   instance's name when the daemon reports it created and blank it only when the
   daemon confirms it gone. A 409 is the typed
-  [`OperatorDaemonConflict`](../../addons/angee/operator/daemon.py) whose `kind` and
+  [`OperatorDaemonConflict`](../../src/angee/operator/daemon.py) whose `kind` and
   `name` come from the daemon's error body; never parse the message or re-derive
   the name.
 - **MCP bearers are per agent and derived from the server credential.**
@@ -1754,19 +1978,19 @@ bridge advisory lock as polling and delivery settlement.
   until reprovision. The verifier logs each decline with its reason; FastMCP's 401 text
   about "expired" tokens is boilerplate.
 
-### Workflow execution
+### Workflow contracts
 
 - **Root subject lifecycle belongs to the record.** Models opt into
-  [`RunSubject`](../../addons/angee/workflows/subjects.py) to admit starts and
+  [`RunSubject`](../../src/angee/workflows/subjects.py) to admit starts and
   retries and settle the first terminal transition. The engine locks the run
   before the subject and keeps these database-only hooks in its transaction;
   UI cancellation, failures and timeouts use the same terminal writer. Bridge
   cycles compose this contract through
-  [`SyncCycleBridge`](../../addons/angee/workflows_integrate/sync.py), while
+  [`SyncCycleBridge`](../../src/angee/workflows_integrate/sync.py), while
   integrate retains scheduling, queue tokens, advisory locks and dispatch
   compare-and-set. Consumer bridges supply scope locks and an input snapshot;
   they do not create another subject lifecycle receiver. Run-owned auxiliary
-  resources use the engine's [`run_stopping`](../../addons/angee/workflows/signals.py)
+  resources use the engine's [`run_stopping`](../../src/angee/workflows/signals.py)
   cleanup seam for terminal transitions. Deferred cancellation schedules the
   transition after the caller releases its locks. Decorate receivers with
   `isolated_run_cleanup` before connecting them; they must be idempotent.
@@ -1792,7 +2016,7 @@ bridge advisory lock as polling and delivery settlement.
   belong to the runner's attempt record, not to consumer settlements.
   A failed IO attempt cannot roll back writes already committed by its body.
 - **`WorkflowRunQuerySet.hold` owns the run lock and transaction.** It registers
-  ready-row dispatch on successful commit. [`Runner.advance`](../../addons/angee/workflows/runner.py)
+  ready-row dispatch on successful commit. [`Runner.advance`](../../src/angee/workflows/runner.py)
   requires that lock and composes `Definition` with the persistence owners.
   The runner owns execution and the tick; managers and querysets own row-set
   verbs. It isolates settlement,
@@ -1822,7 +2046,7 @@ bridge advisory lock as polling and delivery settlement.
   records one protected cause with its origin at start; retention cannot prune
   a cited cause before its effects, and a retained event protects its trigger.
 - **Reviews retain one current decision per step.**
-  [`DecisionStep`](../../addons/angee/workflows/decision_steps.py) asks through
+  [`DecisionStep`](../../src/angee/workflows/decision_steps.py) asks through
   `ctx.ask(request, state=...)`; `StepRun.decision` retains the question.
   The answer wakes the step after commit, with a tick sweep for missed delivery.
   A continuation may ask again after an answer when its reviewed facts changed;
@@ -1833,304 +2057,6 @@ bridge advisory lock as polling and delivery settlement.
   as the run actor. A failure rolls the body back and retains the answer for
   retry. Non-workflow askers apply synchronously inside the
   verdict transaction; refused application rolls the answer back.
-- **Conditional queryset updates send no model signals.** Workflow owners
-  publish completed run writes through `publish_change` and step transitions
-  through bounded `bulk_updated` batches. Dispatch locks ready
-  rows with `skip_locked` and uses `enqueue_task` to send after commit; callers
-  do not infer publication or task delivery from `post_save`.
-
-## Framework Contracts
-
-### Persistence primitives
-
-[Base models](../../angee/models/) own these row contracts and their
-system checks; compose them instead of a local column, comparison, or guard.
-Their docstrings own the exact behavior.
-
-[`StatementRecords`](../../angee/models/statements.py) composes simple-history's field
-copying into typed statement models. Their [manager](../../angee/models/manager.py)
-owns locked assertion writes and survivorship; the canonical subject owns source
-eligibility and application. Like history tables, statements have no independent
-REBAC resource or ORM read policy. Read them through their subject: the
-subject-bound `instance.statements` accessor once the subject row is in hand, or
-`StatementQuerySet.for_reader(actor)` for a cross-record surface such as Review,
-which scopes rows to the subjects the actor may read. A statement read never
-widens what the subject reader may see: related rows (the member, the asserting
-principal) resolve through their own read gates at the serving seam, no group or
-filter axis reads a related row's columns, and serving surfaces own gated-field
-redaction. Writes use the asserting source's native REBAC write scope on the
-subject. Merge collisions remain retained as superseded rows outside the current
-per-aspect key. `Statement.sort_key(aspect)` is the one trust ordering — preferred
-rank, the aspect's source precedence (`Aspect.priority`), confidence, the row
-class's `tie_break()`, the stance's update time (bookkeeping — `applied`,
-supersession, a merge move — keeps it), primary key — shared by survivorship,
-cross-subject member resolution (`Handle.objects.resolve`) and merge collapse;
-`Survivorship` strategies only reorder its components and `trust_ordering` is the
-SQL display order of the same stances.
-Principals compose `StatementSourceMixin`, whose per-row `source_kind` contract
-classifies eligible sources; `set()` refuses missing or unknown classifications.
-Statements retain the assertion-time classification across source edits and
-deletion. The declaring addon passes `StatementRecords(link="integrate.RecordLink")`
-(and `model_name=` when `<Subject>Statement` is already a domain model; a money
-column copied without its currency column becomes a plain decimal on the statement);
-core defaults to `None`, and the named model composes `StatementLinkMixin`: its
-`authoritative` fact (`SyncStream.authoritative`, read through `RecordLink.stream`)
-places a SYSTEM_OF_RECORD source ahead of PERSON in every aspect listing both
-kinds, for normal-rank statements only. `SyncStream.objects.set_authoritative`
-flips it and re-derives the linked subjects. Composer extensions do not reach
-generated models.
-
-Ordinary person saves on aspect-backed fields assert normal statements on aspects
-whose precedence admits a person, including separate MTI child tables; parent
-declarations keep their shared-pk owner. An aspect whose precedence leaves PERSON
-out belongs to its native owner: a person's save writes those fields as an ordinary
-save. A person's create states no group whose values are all empty; clearing a
-field later is an edit and is stated. Confirm or dismiss stay explicit.
-Consumers contribute domain aspects through the descriptor's abstract donors: the
-subject source's own declaration finalizes the one statement table (bases, prefix,
-queryset, link) and every donor's aspects join it. `Aspect.precedence` owns source
-ordering. Preferred person decisions precede normal source ordering; a winning
-preferred no-value clears the aspect's operational values so a dismissal sticks.
-Ordered `PairAspect` carriers assert symmetric facts. The merge action chooses
-the survivor; survivorship never moves records. See [parties](../../addons/angee/parties/README.md).
-
-[`MergeableMixin`](../../angee/models/merge.py) owns operational redirects, actor
-admission and the system fold. Models declare domain refusals and carry/retire
-hooks; pointing rows declare `MergePolicy` (an edge's `merge_policy`, a key's
-entry in `merge_policies` where its `on_delete` implies the wrong one) and their
-collision contract. Retained
-references include their historical versions. Redirects flatten in the same
-changeset and protect their survivor from deletion. `canonical()` selects
-operational identities; statement querysets use `applied()` for winning value
-assertions. Source-copy identity remains reversible pair evidence and never
-chooses a transport or moves channel occurrences.
-
-[`HistoryMixin.history_relations`](../../angee/models/history.py) declares owned
-reverse-FK collections, such as dashboard widgets or project milestones. These
-rows keep their own history and read gates; document history groups their deltas
-with record identity. `history_tables()` is the one concrete-table inventory.
-`ChangesetQuerySet.touching(record)` and its inverse `records_touched()` own
-document membership, including MTI, pairs and generated statements. Projections
-consume these scopes instead of rediscovering documents from history rows.
-`HistoryMixin.admitted_reverts(changesets)` owns complete-boundary admission;
-`Changeset.revertable(record, actor=...)` then checks the record's declared
-`history_revert_permission`. An entry may revert from that record only when its
-complete write boundary belongs to the document, or it is the record's
-operational merge.
-Changes spanning independent documents require their wider owner. Native FK
-relationships order restoration of missing rows. Hierarchy parents are ordered
-also when present, so restoring an earlier tree does not create a temporary cycle;
-other existing rows keep their normal update order. A record task uses its own
-`RecordRefMixin` subject and declared `projects/task` permission arms; chatter is
-an independent capability.
-
-The [Changeset](../../addons/angee/provenance/models.py) owns atomic pre-boundary
-revert and deterministic lossless export. Closing a boundary writes one bookkeeping
-row; `document()` computes and records the hash through the one hash owner.
-Closure publishes a change; committed projections read history independently
-through its scopes. Revert uses native history ordering and
-diffs, refuses later touches, retains withdrawn/superseded statements, and reuses
-trash for created subjects. Without trash, retained references block removal.
-Restoring database state does not undo HTTP effects; record sync detects the
-corrected local projection under its existing write-back policy. Archive callers
-use an explicit system boundary; serving exports retain subject authorization and
-gated-field redaction. No archive sink or history-pruning policy is introduced.
-
-Every captured write runs inside a [changeset boundary](../../angee/changesets.py);
-strict mode refuses one without it. Entrypoints own boundaries, one per unit of
-work, and nothing else opens a `fresh` one except a deliberately separate logical
-write (merge, revert, seed): HTTP requests through `ChangesetMiddleware` on the
-stack's own sync or async path; WebSocket connections through
-`ChangesetScopeMiddleware`, composed in [`angee.asgi`](../../angee/asgi.py); Celery
-tasks through [`angee.jobs.celery.Task`](../../angee/jobs/celery.py); management
-commands through [`angee.compose.manage.main()`](../../angee/compose/manage.py),
-which every rendered `manage.py` calls (`serve`, `runserver` and `test` are
-excluded because their requests, connections, tasks and tests own boundaries;
-interactive shells keep the command boundary); a bridge live-session run through
-[`run_bridge_session_job`](../../addons/angee/integrate/session_runner.py). A
-boundary stores one changeset row per writing thread and actor under its shared
-facts, so `copy_context().run` in a worker pool and a per-event actor loop
-attribute exactly. A response status of 400 or more, a GraphQL result with
-`errors` (marked by [`AngeeGraphQLView`](../../addons/angee/graphql/views.py)) or an
-exception closes the rows as failed. Tests inherit a boundary from the root
-`conftest.py`; modules marked `entrypoint_boundaries` exercise the production ones.
-
-- **Optimistic lock:** `OptimisticLockMixin` counts instance saves. A verb that
-  accepts a client's `expected_revision` passes it to `save()` and maps
-  `StaleRevisionError` to its conflict result; queryset updates never bump.
-- **Idempotent creation:** the concrete changeset manager owns
-  `Changeset.objects.claim(scope, key, *, fingerprint)`. A new claim returns
-  `None`; a matching replay returns its changeset and `created_row`; reusing the
-  key for different content raises `CreationKeyConflict`. Product rows carry no
-  client-key or fingerprint columns. A keyed operation opens a fresh changeset
-  inside its transaction and claims before writing; nested keyed operations
-  therefore receive distinct claim rows without leaving the enclosing boundary.
-- **Ownership:** `owner` has one spelling. A grant root composes `OwnerMixin`,
-  so `owner` is transferable access in a column and `created_by` remains
-  attribution. Its Zed backs `owner` with that column and declares its transfer
-  permission (`angee.E022`); its `write__owner` gate names that permission
-  (`angee.E027`). No other relation is named `owner` (`angee.E045`): attribution
-  used as access is `relation creator: auth/user // rebac:field=created_by`, a
-  domain role keeps its own word (`user`, `organizer`, `salesperson`, `buyer`),
-  and ownership is never a stored tuple. Change it through `transfer_ownership`;
-  bulk release belongs only to an owning verb that already authorized it. See the
-  [example notes](../../examples/addons/example/notes/permissions.zed).
-- **Delegated field gates:** a definition that delegates to a parent re-declares
-  the parent's field gates through that relation, as enforced for ownership by
-  [the base checks](../../angee/checks.py). Re-save a fresh, unreloaded
-  instance with `update_fields`: without a loaded snapshot, a full save writes
-  every column, including `owner`, and must pass every applicable field gate.
-- **Owning containers:** a container composing `ItemOwnershipMixin` can own its
-  newly inserted items, which then reach access through it; items name it with
-  `owner_container` (`angee.E025`) and ask
-  [`OwnerMixin.container_owns_items()`](../../angee/models/ownership.py) for its policy.
-  Changing the flag affects later inserts only.
-- **Write-once fields:** `ImmutableFieldsMixin` rejects changes to declared
-  fields; only an authorized owning verb grants the next save an allowance.
-- **Archive and trash are different facts.** `ArchiveMixin` soft-hides a row
-  from default pickers. `TrashMixin` removes it: who, when and an optional reason
-  are stamped and restore re-grants nothing. The model's Zed withholds a trashed
-  row from everyone but its managers — a constant `trashed` relation filtered on
-  `is_trashed`, subtracted outside any recursive arm (see
-  [knowledge pages](../../addons/angee/knowledge/permissions.zed)). The shared
-  [`trash_record` / `restore_record`](../../addons/angee/graphql/trash.py) verbs
-  check the row's `delete`; metadata marks the flag `trashable` for shared views.
-  A domain authority that is not `delete` (record-chatter moderation) keeps its own
-  verbs and narrows the shared ones through `TrashQuerySet.trash_targets()`; a
-  sudo read path it owns, such as the chatter transcript, must exclude trashed rows
-  itself. Managers
-  are a positive arm beside the exclusion, never an exclusion inside it: rebac's
-  named-grant scan cannot compile an exclusion that holds another
-  ([tasks](../../addons/angee/projects/permissions.zed)).
-
-### Addon WebSocket endpoints
-
-Mount addon sockets through `asgi.websocket_urlpatterns` and compose
-`RebacChannelsConsumerMixin` to pin the cookie actor before creating tasks.
-The [shared router](../../angee/asgi.py) owns Origin trust and Django session
-authentication; never repeat those handshake checks per consumer. Long-lived
-protocols that accept writes must revalidate the session at each request and
-open fresh evaluator scopes for authorization and change-feed reads.
-
-### GraphQL actor and write contracts
-
-- **View-as is a server-side, read-only HTTP preview.** `X-Angee-View-As`
-  carries the target user's public id. [IAM admission](../../addons/angee/iam/models.py)
-  checks the real actor's `view_as` permission and the target's eligibility;
-  [ViewAs](../../addons/angee/graphql/view_as.py) binds both `request.user` and
-  the ambient actor to that target. Mutations and HTTP subscriptions fail with
-  `VIEW_AS_READ_ONLY`; query database writes are rolled back. The
-  [GraphQL WebSocket consumer](../../addons/angee/graphql/consumers.py) retains its
-  handshake actor and does not support this header. [MCP execution](../../addons/angee/mcp/graphql.py)
-  carries a synthetic request whose only meaningful attribute is `user`, equal
-  to the ambient actor's eligible user (anonymous for a non-user or inactive
-  user); it has no HTTP headers or view-as preview lifecycle.
-- **Concurrency and replay tokens are GraphQL root arguments.** On models
-  composing `OptimisticLockMixin`, `update_<resource>_by_pk` accepts
-  `expected_revision: Int`; a stale value fails with `STALE_REVISION`.
-  `insert_<resource>_one` accepts `idempotency_key: String`; replaying the same
-  actor/resource-scoped key and content returns the readable original, and
-  changed content fails with
-  `CREATION_KEY_CONFLICT`. Neither token belongs in `_set` or `object`.
-  The [Hasura adapter](../../addons/angee/graphql/data/hasura.py) declares and
-  consumes them through the changeset claim and optimistic-lock owners.
-- **Permission answers reuse the authorization owner.** Declare a type's
-  `permissions` through [`permissions_field(names)`](../../addons/angee/graphql/capabilities.py);
-  it reports only the declared Zed permissions held by the current actor,
-  validates names at schema build and batches list evaluation in SQL.
-  Server predicates compose the same owner's `held_permissions(record, names)`.
-  View-as therefore reports the target's permissions. Clients consume these
-  answers; they never reconstruct authority from roles or identity.
-
-### Direct record access
-
-[`RecordRefMixin`](../../angee/refs.py) owns the canonical content-type
-and public-ID projection for a generic record pointer.
-Each edge declares `on_target_delete` as `CASCADE`, `PROTECT`, or `SET_NULL`; a
-model needing row-aware cleanup implements `teardown_for_target(target)`. The
-core target-delete receiver invokes that one declaration for instance and
-queryset deletion paths.
-[`RecordReferenceNode`](../../addons/angee/graphql/relations.py) and
-`with_record_reference_access` project it into GraphQL under the current
-reader's scope. A hidden target yields null identity fields; its model and ID
-must also stay unavailable through resource filters and aggregate counts. Addon
-resources declare their record-reference filter axes through the shared Hasura
-resource owner instead of reimplementing this projection.
-
-Models opt into direct sharing with `rebac_grantable`, mapping each relation to
-the permission required to manage it. The model remains the policy owner:
-`direct_record_access(relations=...)` lists only the caller-authorized declared
-subset, and `validate_record_access_target()` enforces model-specific target
-rules for listing, options, grants, and revocations. For example, Workflow
-accepts grants only on its lineage head; GraphQL must not infer that rule from
-Workflow fields. A `validate_record_access_subject()` override that keeps one
-user out of a record's holders raises `RecordAccessSubjectRefused` when
-[`subject_reaches_user`](../../angee/actors.py), the one predicate for
-whether a subject reference resolves to, or contains, that user, answers true;
-it never decodes wildcards or usersets itself.
-
-The public GraphQL recipient is typed as either a user or group. It resolves to
-the canonical REBAC subject (`auth/user:<id>` or
-`auth/group:<id>#member`); arbitrary subject strings are not accepted. Historic
-unsupported, wildcard, or malformed subjects remain visible as raw audit
-subjects with a null typed recipient.
-
-Use `authorized_action_target` for mutation preflight that requires the native
-unredacted write scope. A surface that manages a declared relation under another
-permission uses `authorized_permission_target`, which resolves through that
-exact actor permission while preserving scoped not-found behavior and the final
-row access check.
-
-Framework contracts should be self-explaining in code. Add docstrings to public
-modules, classes, methods, functions, declarative manifest attributes, and public
-module-level constants. Add docstrings to private helpers when their role is not
-obvious from the function name and signature. Do not maintain a parallel spec, field inventory, or model
-API list for behavior that can live clearly beside the code.
-
-The addon's `addon.toml` owns declaration facts, parsed into hatch-angee's native
-manifest. AppConfig owns Django's identity, registration and lifecycle. Each
-capability owner interprets its own declarations and conventional defaults; it
-never creates a separately configurable manifest mirror. Model/manager behavior
-stays with the native class, and composition lifecycle stays with the compiler.
-Keep the exact authoring forms in owner docstrings and the upstream manifest
-contract, rather than duplicating them in this guideline.
-
-Before decomposing backend code, classify each fact by its Django owner:
-
-- Persisted choices live beside the model field, usually as model-owned
-  `TextChoices`.
-- Row-set behavior lives on managers and querysets.
-- Instance behavior lives on model methods and properties.
-- Addon declarations live in `addon.toml`; capability owners resolve their paths from Django `AppConfig.path`.
-- Management commands parse arguments and dispatch to the owning model, manager,
-  service, or composer function.
-- Compatibility facades exist only for an explicit compatibility promise.
-
-The project settings contract declares project facts; Angee owns Django
-composition wiring. Anchor project defaults to `BASE_DIR`, never the current
-working directory, and use Python settings only for facts that need Python.
-Follow [settings bootstrap](../composer.md#settings-bootstrap) and
-[autoconfig](../composer.md#autoconfig) for the current loading and merge owners.
-`Composer` resolves settings and app order; `Runtime.configure_migration_modules`
-binds generated labels during Django phase 2. Keep YAML loading bounded to the
-project's settings and explicit configuration file: an enclosing stack must not
-silently contribute settings to a nested project.
-
-Declare autoconfig `SETTINGS` with a source-owned `TypedDict`, including the
-normalized value types of `:append` contributions; annotate derived `settings()`
-results the same way. Preserve configurable unions and nullable values rather
-than inferring a contract from one default. The [typing adapter](../../angee/compose/typing.py)
-reads those native declarations through [yamlconf provenance](../../angee/compose/yamlconf.py).
-
-Keep the shared `angee.*` namespace open to every configured addon source.
-The core's [`angee/__init__.py`](../../angee/__init__.py) owns
-`pkgutil.extend_path`, preserving addon portions alongside the foundation
-package. Leave addon namespace roots such as `addons/angee/` without an
-`__init__.py`; they contribute to that namespace rather than replacing it.
-
-Avoid `__all__` unless a module has a concrete star-import or compatibility
-requirement. Public API should usually be obvious from module names, object
-names, and docstrings.
 
 ## Naming
 
@@ -2155,48 +2081,21 @@ it exactly.
   `_leading_underscore` for internal. Settings and constants are `UPPER_SNAKE`.
 - **camelCase only when extending an external API that uses it** (e.g. Django's
   `unittest` assertions). Otherwise never.
+- **Never name an addon module after a third-party top-level package it imports.**
+  `unittest` discovery inserts the discovery-root directory onto `sys.path`, so an
+  addon's `mcp.py` that does `from mcp.server… import …` becomes an importable
+  top-level `mcp` that shadows the real package — `ModuleNotFoundError: 'mcp' is not
+  a package` during a test run, while a single-module run and `manage.py check` pass.
+  Name such a module for its role, not the library. The conventional MCP tool
+  contribution lives at `mcp_tools.py`, not `mcp.py`.
 
 ## Checks
 
-Use [the verification matrix](../checks.md) for commands, execution roots, and
-required checks. Run focused tests while editing, then the applicable broad
-checks before handoff; report any unavailable check and its actual blocker.
-
-Before adding a backend abstraction, search for the native owner first:
-`rg "AppConfig|schemas|permissions|resources|autoconfig"`,
-`rg "QuerySet|Manager.from_queryset"`, and
-`rg "apps.get_model|get_app_configs"`. If the change introduces or extends a
-seam, add a focused guard in the owning test area: layering in
-[`tests/test_base_layering.py`](../../tests/test_base_layering.py) (dependency
-direction) and [`tests/test_layering.py`](../../tests/test_layering.py) (import
-closures), addon/manifest binding in app tests, settings/autoconfig/app graph
-behavior in [`tests/test_settings.py`](../../tests/test_settings.py), runtime
-emission in [`tests/test_compose.py`](../../tests/test_compose.py), migration
-history in [`tests/test_runtime_migrations.py`](../../tests/test_runtime_migrations.py),
-and schema composition in GraphQL tests. Preserve the focused proof obligations
-in the relevant pitfalls: isolated test-module runs, non-admin authorization
-coverage, narrow GraphQL selections at multiple row counts, and populated-state
-data-migration checks.
-
-### Verb eligibility projections
-
-Record controls consume eligibility from the verb owner. Task audience domains
-extend [`Task.visibility_blockers`](../../addons/angee/projects/models.py): each
-SQL condition names its validation exception. The locked visibility verb and
-optimized `allowed_visibility` projection share those conditions and native
-permission scopes. Hidden domain facts stay inside the projection query.
-Message writers must still preserve publication invariants under the task lock.
-
-Task hand verbs follow the same shape. [`Task.action_blockers`](../../addons/angee/projects/models.py)
-names each row condition refusing a verb with its validation message; contributors
-extend it and `hand_actions` through `super()`, as
-[work's stage rules](../../addons/angee/work/models.py) do. Each verb calls
-`validate_action` after its idempotent replay, and the `task_actions` projection
-batches the same conditions with the verb's `write` scope. A control shows where
-its verb would act (the row's status or stage) and where `task_actions` offers it.
-A round's lift reads `can_open`, which composes the same
-`Round.opening_phase_condition` its verb checks.
-
-Decision admission, answers and withdrawal belong to the
-[decisions manager](../../addons/angee/decisions/managers.py). Asking owners
-consume its verdict; controls consume the owning verb's eligibility.
+Commands, execution roots and required checks live in
+[Python and composition contracts](../checks.md#python-and-composition-contracts),
+including the [owner search](../checks.md#owner-search) scans that precede a new
+backend abstraction.
+When to run which check, which test area guards a new or extended seam, and the
+proof obligations the moved pitfalls carry belong to the `angee-tests` skill:
+[verification procedure](../../.agents/skills/angee-tests/references/environment.md#verification-procedure)
+and [seam guards](../../.agents/skills/angee-tests/references/environment.md#seam-guards).

@@ -18,7 +18,6 @@ from django.utils import timezone
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.actors import to_subject_ref
 
-from angee.actors import source_kind_for
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.messaging.backends import ManualChannelBackend
@@ -40,9 +39,12 @@ from angee.messaging.testing.models import (
     RelationshipKind,
     Thread,
 )
-from angee.models import SourceKind
-from angee.parties.backends import ParsedAddress, ParsedContact
+from angee.parties.backends import ManualDirectoryBackend, ParsedAddress, ParsedContact
 from angee.parties.models import RelationshipKind as AbstractRelationshipKind
+from angee.provenance.statements import (
+    SourceKind,
+    StatementSourceMixin,
+)
 from angee.tags.testing.models import Tag, TagAssignment
 from tests.conftest import current_stream, make_integration
 from tests.test_messaging import _grant
@@ -109,7 +111,8 @@ def test_manual_contact_reuses_a_retained_alias_survivor(composed_tables: None) 
             party, platform="email", value=alias.value, actor=owner,
         )
     assert stance.handle_id == survivor.pk
-    assert not Party.statements.filter(handle=alias).exists()
+    with system_context(reason="test manual contact redirect retained statements"):
+        assert not Party.statements.filter(handle=alias).exists()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -527,7 +530,7 @@ def test_a_moved_import_statement_stays_beside_the_directorys_and_the_directory_
         party = Party._base_manager.create(display_name="Bob", created_by=owner)
         takeout = make_integration("move-mixed-takeout", model=Channel, backend_class="manual").integration_ptr
         directory = make_integration("move-mixed-directory", model=Directory)
-        assert source_kind_for(to_subject_ref(takeout)) == SourceKind.IMPORT
+        assert StatementSourceMixin.source_kind_for(to_subject_ref(takeout)) == SourceKind.IMPORT
         imported, carded = (
             statements._base_manager.create(
                 subject=party,
@@ -665,8 +668,8 @@ def test_folding_a_handle_redirects_ingestion_to_the_survivor(composed_tables: N
         assert Handle.objects.canonical().filter(pk=alias.pk).exists() is False
 
         phone.refresh_from_db()
+        assert Party.statements.filter(handle=phone).count() == 1
     assert phone.party_id == party.pk
-    assert Party.statements.filter(handle=phone).count() == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -927,9 +930,9 @@ def test_suggest_for_resolved_handle_returns_without_competing_links(composed_ta
 
         resolved.refresh_from_db()
         result = Party.objects.suggest_for(resolved)
+        assert list(Party.statements.filter(handle=resolved).values_list("subject_id", flat=True)) == [alice.pk]
 
     assert result is None
-    assert list(Party.statements.filter(handle=resolved).values_list("subject_id", flat=True)) == [alice.pk]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -956,6 +959,7 @@ def test_suggest_for_keeps_dismissed_link_dismissed(composed_tables: None) -> No
         dismissed = dismissed.with_actor(owner).dismiss()
 
         repeated = Party.objects.suggest_for(unknown)
+        assert Party.statements.filter(subject=alice, handle=unknown).count() == 2
 
     dismissed.refresh_from_db()
     unknown.refresh_from_db()
@@ -964,7 +968,6 @@ def test_suggest_for_keeps_dismissed_link_dismissed(composed_tables: None) -> No
     assert dismissed.is_dismissed
     assert not dismissed.is_confirmed
     assert unknown.party_id is None
-    assert Party.statements.filter(subject=alice, handle=unknown).count() == 2
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1208,7 +1211,7 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
             created_by=owner,
         )
 
-        again = Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk, link=link, target=person)
+        again = Party.objects.ingest_contact(parsed, folder=folder, created_by_id=owner.pk, link=link)
         unchanged = Relationship._base_manager.get(
             party=again,
             kind=employee,
@@ -1225,6 +1228,30 @@ def test_ingest_contact_upserts_carddav_employment_in_place(composed_tables: Non
         )
         Party.objects.ingest_contact(changed, folder=folder, created_by_id=owner.pk, link=link, target=person)
         refreshed = Relationship._base_manager.get(pk=first_pk)
+        backend = ManualDirectoryBackend(directory)
+        local = backend._local_states(stream, ("contact-1",), links=(RecordLink.objects.get(pk=link.pk),))
+        assert local["contact-1"][0].pk == person.pk
+
+        foreign, _created = get_user_model()._base_manager.get_or_create(
+            pk=person.pk, defaults={"username": "same-primary-key-contact-target"},
+        )
+        foreign_link = RecordLink.objects.observe(stream, "foreign-contact")
+        foreign_link.target = foreign
+        foreign_link.save(update_fields=["target_content_type", "target_object_id"])
+        foreign_link.refresh_from_db()
+        foreign_type = foreign_link.target_content_type_id
+        with pytest.raises(ValidationError, match="Party"):
+            Party.objects.ingest_contact(
+                replace(parsed, uid="foreign-contact", display_name="Wrong identity"),
+                folder=folder, created_by_id=owner.pk, link=foreign_link,
+            )
+        with pytest.raises(ValidationError, match="Party"):
+            backend._local_states(stream, ("foreign-contact",), links=(foreign_link,))
+        foreign_link.refresh_from_db()
+        person.refresh_from_db()
+        assert foreign_link.target_content_type_id == foreign_type
+        assert foreign_link.target_object_id == str(person.pk)
+        assert person.display_name == "Ada Lovelace"
 
     assert synced.other_name == "Analytical Engines"
     assert synced.title == "Mathematician"
@@ -1312,7 +1339,7 @@ def test_seed_vocabulary_matches_model_contract() -> None:
 
     seed_path = (
         Path(__file__).resolve().parent.parent
-        / "addons"
+        / "src"
         / "angee"
         / "parties"
         / "resources"

@@ -75,59 +75,14 @@ describe("composeAddons", () => {
     expect(() => composeAddons([a, b], IDENTITY_CANONICALIZER)).toThrow(/dup/);
   });
 
-  test("rejects duplicate menu item ids across nested menus", () => {
-    const a = defineAddon({
-      id: "a",
-      menus: [
-        {
-          id: "root",
-          label: "Root",
-          children: [{ id: "dup", label: "Dup" }],
-        },
-      ],
-    });
-    const b = defineAddon({ id: "b", menus: [{ id: "dup", label: "Dup" }] });
-
-    expect(() => composeAddons([a, b], IDENTITY_CANONICALIZER)).toThrow(
-      /menu item id "dup"/,
-    );
-  });
-
-  test("defaults menu item id to route before claiming collisions", () => {
-    const composed = composeAddons([
-      defineAddon({
-        id: "notes",
-        menus: [
-          {
-            label: "Notes",
-            route: "notes.home",
-            children: [{ label: "Archive", route: "notes.archive" }],
-          },
-        ],
-      }),
-    ], IDENTITY_CANONICALIZER);
-
-    expect(composed.menus[0]?.id).toBe("notes.home");
-    expect(composed.menus[0]?.children?.[0]?.id).toBe("notes.archive");
-    expect(() =>
-      composeAddons([
-        defineAddon({ id: "a", menus: [{ route: "shared.route" }] }),
-        defineAddon({ id: "b", menus: [{ id: "shared.route" }] }),
-      ], IDENTITY_CANONICALIZER),
-    ).toThrow(/menu item id "shared.route"/);
-  });
-
   test("preserves route params while composing cross-addon menu targets", () => {
     const composed = composeAddons(
       [
         defineAddon({
           id: "document-review",
-          menus: [
-            {
-              route: "dashboards.addon",
-              params: { key: "example.document_review.overview" },
-            },
-          ],
+          menus: {
+            "document-review.overview": { route: "dashboards.addon", params: { key: "example.document_review.overview" } },
+          },
         }),
       ],
       IDENTITY_CANONICALIZER,
@@ -135,20 +90,11 @@ describe("composeAddons", () => {
 
     expect(composed.menus).toEqual([
       {
-        id: "dashboards.addon",
+        id: "document-review.overview",
         route: "dashboards.addon",
         params: { key: "example.document_review.overview" },
       },
     ]);
-  });
-
-  test("requires a menu id when no route can own the default", () => {
-    expect(() =>
-      composeAddons(
-        [defineAddon({ id: "bad", menus: [{ label: "Bad" }] })],
-        IDENTITY_CANONICALIZER,
-      ),
-    ).toThrow(/without id or route/);
   });
 
   test("merges widget and i18n registries", () => {

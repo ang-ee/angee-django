@@ -2,20 +2,21 @@
 
 The VCS marketplace tier contributes two admin-gated source controls onto the
 platform console, composing integrate's existing owners (it never re-implements
-bridge/repo creation or the discovery walk):
+bridge/repo creation or metadata projection):
 
 - ``addSource`` inventories a repository on an existing ``VcsBridge``
   (``import_repository``) and points an addon ``Source`` at it;
 - ``scan`` runs ``Source.refresh()`` (→ ``AddonCatalog.sync_from_source``), which
-  discovers ``addon.toml`` rows into the one ``platform.Addon`` marketplace registry.
+  projects built wheel metadata into the one ``platform.Addon`` marketplace registry.
 
-Driven over the stub VCS backend (canned tree/blobs ride on the bridge config), the
+Driven over the native local VCS backend with already-built wheel fixtures, the
 same path the ``marketplace sync`` command and integrate's ``refresh_source`` use.
 """
 
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 from typing import Any
 
 from django.apps import apps
@@ -34,30 +35,13 @@ from tests.conftest import (
 )
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data
+from tests.wheel_fixtures import write_wheel
 
 User = get_user_model()
 platform_schema = importlib.import_module("angee.platform.schema")
 vcs_schema = importlib.import_module("angee.platform_integrate_vcs.schema")
 Addon = apps.get_model("platform", "Addon")
 VcsBridge = apps.get_model("integrate_vcs", "VcsBridge")
-
-_REPOS = [
-    {
-        "name": "acme/addons",
-        "org": "acme",
-        "remote": "https://github.com/acme/addons.git",
-        "default_branch": "main",
-        "visibility": "public",
-    },
-]
-_TREE = [
-    {"path": "addons/angee/demo/addon.toml", "type": "blob", "oid": "a"},
-    {"path": "addons/angee/demo/README.md", "type": "blob", "oid": "b"},
-]
-_BLOBS = {
-    "addons/angee/demo/addon.toml": '[addon]\nname = "angee.demo"\ndescription = "A demo addon."\n'
-    'depends_on = ["angee.platform"]\n',
-}
 
 _ADD_SOURCE = """
 mutation AddSource($data: AddonSourceInput!) {
@@ -67,31 +51,31 @@ mutation AddSource($data: AddonSourceInput!) {
 _SCAN = "mutation($id: ID!){ scan(source_id: $id){ ok message } }"
 
 
-def _bridge() -> Any:
-    """Create a stub-backed VCS bridge serving one repo + one discoverable addon."""
+def _bridge(root: Path) -> Any:
+    """Create a native local VCS bridge for the fixture repository."""
 
     return make_integration(
         "mkt",
         model=VcsBridge,
-        backend_class="stub",
-        config={"stub_repos": _REPOS, "stub_tree": _TREE, "stub_blobs": _BLOBS},
+        backend_class="local",
+        config={"local_root": str(root), "local_name": "acme/addons", "local_org": "acme"},
     )
 
 
 def test_add_source_inventories_the_repo_and_points_an_addon_source_at_it(
-    composed_tables: None,
+    composed_tables: None, tmp_path: Path,
 ) -> None:
     """``addSource`` imports the repo and creates one ``Source(kind="addon")``."""
 
     del composed_tables
-    bridge = _bridge()
+    bridge = _bridge(tmp_path)
     admin = _platform_admin("add-source-admin")
 
     result = _data(
         _execute(
             _schema(),
             _ADD_SOURCE,
-            {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "addons"}},
+            {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "src"}},
             user=admin,
         )
     )["add_source"]
@@ -101,22 +85,26 @@ def test_add_source_inventories_the_repo_and_points_an_addon_source_at_it(
     with system_context(reason="test.marketplace.add_source.verify"):
         repository = Repository.objects.get(name="acme/addons")
         source = Source.objects.get(repository=repository)
-    assert (source.kind, source.path) == ("addon", "addons")
+    assert (source.kind, source.path) == ("addon", "src")
 
 
-def test_scan_discovers_addon_toml_rows_into_the_registry(
-    composed_tables: None,
+def test_scan_prepares_native_package_metadata_into_the_registry(
+    composed_tables: None, tmp_path: Path,
 ) -> None:
-    """``scan`` runs the discovery walk and writes a REMOTE ``platform.Addon`` row."""
+    """``scan`` projects an already-built wheel into a REMOTE ``platform.Addon`` row."""
 
     del composed_tables
-    bridge = _bridge()
+    write_wheel(
+        tmp_path / "src/angee_demo.whl", "angee.demo", "angee-demo",
+        requirements=("angee-platform",), description="A demo addon.",
+    )
+    bridge = _bridge(tmp_path)
     admin = _platform_admin("scan-admin")
     _data(
         _execute(
             _schema(),
             _ADD_SOURCE,
-            {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "addons"}},
+            {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "src"}},
             user=admin,
         )
     )
@@ -130,16 +118,19 @@ def test_scan_discovers_addon_toml_rows_into_the_registry(
     with system_context(reason="test.marketplace.scan.verify"):
         row = Addon.objects.get(name="angee.demo")
     assert str(row.source) == Addon.AddonSource.REMOTE
-    assert row.vcs_path == "addons/angee/demo"
+    assert row.vcs_path == "src/angee_demo.whl"
+    assert row.distribution == "angee-demo"
+    assert row.description == "A demo addon."
+    assert row.depends_on == ["angee.platform"]
 
 
 def test_scan_refuses_a_non_addon_source(
-    composed_tables: None,
+    composed_tables: None, tmp_path: Path,
 ) -> None:
     """``scan`` of a non-addon source kind is reported, never dispatched."""
 
     del composed_tables
-    bridge = _bridge()
+    bridge = _bridge(tmp_path)
     admin = _platform_admin("scan-wrong-kind-admin")
     with system_context(reason="test.marketplace.scan.template_seed"):
         repository = Repository.objects.create(vcs_bridge=bridge, org="acme", name="acme/addons", remote="r")
@@ -152,18 +143,18 @@ def test_scan_refuses_a_non_addon_source(
 
 
 def test_add_source_denies_a_non_admin(
-    composed_tables: None,
+    composed_tables: None, tmp_path: Path,
 ) -> None:
     """The REBAC admin gate denies a non-admin actor."""
 
     del composed_tables
-    bridge = _bridge()
+    bridge = _bridge(tmp_path)
     plain = User.objects.create_user(username="mkt-plain", password="mkt-plain")
 
     result = _execute(
         _schema(),
         _ADD_SOURCE,
-        {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "addons"}},
+        {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "src"}},
         user=plain,
     )
 

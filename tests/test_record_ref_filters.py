@@ -8,12 +8,12 @@ from django.db import connection, models
 from django.test.utils import CaptureQueriesContext, isolate_apps
 from rebac import actor_context
 
+from angee.base.models.refs import RecordRefMixin
 from angee.decisions import schema as decision_schema
 from angee.decisions.testing.drivers import seed_decision
 from angee.decisions.testing.models import Decision, DecisionRecord
-from angee.graphql.data import hasura_model_resource
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.relations import with_record_reference_access
-from angee.refs import RecordRefMixin
 from tests.conftest import Page, addon_schema, create_user, execute_schema, result_data, vault_for
 from tests.tables import model_tables
 

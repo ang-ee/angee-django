@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import type { Row } from "@angee/metadata";
+import { testDataResource } from "@angee/metadata/testing";
 import {
   act,
   cleanup,
@@ -23,6 +24,7 @@ import { AppRuntimeProvider } from "../../runtime";
 import { defaultWidgets } from "../../widgets";
 import type { ActionDescriptor } from "../page";
 import { jsonSchemaActionArgs } from "./json-schema";
+import { useTrashActions } from "../resource/trash";
 
 const { Provider, clearClients } = createUiTestProviders({
   queryClientConfig: { defaultOptions: {
@@ -31,6 +33,24 @@ const { Provider, clearClients } = createUiTestProviders({
 });
 
 describe("RecordActionBar", () => {
+  test("trash opens its native reason prompt without a second confirmation", async () => {
+    const resource = testDataResource("test.Note", { resourceType: "test/note", fields: [{
+      name: "is_trashed", kind: "scalar", scalar: "Boolean", readable: true, aggregatable: false,
+      creatable: false, updatable: false, requiredOnCreate: false, trashable: true,
+    }] });
+    function TrashBar() {
+      const actions = useTrashActions(resource);
+      return <RecordActionBar record={{ id: "note_1", is_trashed: false, permissions: ["delete"] }} actions={actions} />;
+    }
+    renderActionBar(<TrashBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Move to trash" }));
+    const prompt = await screen.findByRole("alertdialog", { name: "Move this record to the trash?" });
+    expect(within(prompt).getByLabelText("Reason (optional)")).toBeTruthy();
+    expect(screen.queryByText("Are you sure?")).toBeNull();
+    fireEvent.click(within(prompt).getByRole("button", { name: "Keep it" }));
+  });
+
   test.each([false, true])("all verbs and Delete are native blocked menu buttons (parent menu: %s)", async (inParent) => {
     const run = vi.fn();
     const onDelete = vi.fn();

@@ -139,23 +139,62 @@ def test_ls_tree_filters_by_path_and_rejects_truncation(monkeypatch: pytest.Monk
         gh.GitHubBackend(_integration()).ls_tree(repository, ref="main", path="templates", recursive=True)
 
 
-def test_cat_file_decodes_base64_and_404_is_filenotfound(monkeypatch: pytest.MonkeyPatch) -> None:
-    """cat_file decodes the contents API blob; a 404 surfaces as FileNotFoundError."""
-
-    content = base64.b64encode(b"_angee:\n  kind: workspace\n").decode("ascii")
-
-    def fake_http_get(url: str, headers: dict[str, str], *, timeout: int = 15) -> tuple[int, bytes]:
-        if "missing" in url:
-            return 404, b""
-        return 200, json.dumps({"encoding": "base64", "content": content}).encode("utf-8")
-
-    _patch_get(monkeypatch, fake_http_get)
+def test_cat_file_decodes_base64_and_404_is_filenotfound(monkeypatch):
+    content = b"PK\x00\xff\x80binary-wheel"
+    def respond(request):
+        if "missing" in request.url.path:
+            return httpx2.Response(404)
+        return httpx2.Response(200, json={"encoding": "base64", "content": base64.b64encode(content).decode()})
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(respond)))
     backend = gh.GitHubBackend(_integration())
     repository = SimpleNamespace(name="acme/widgets")
-
-    assert b"kind: workspace" in backend.cat_file(repository, ref="main", path="templates/dev/copier.yml")
+    assert backend.cat_file(repository, ref="a" * 40, path="dist/addon.whl") == content
     with pytest.raises(FileNotFoundError):
-        backend.cat_file(repository, ref="main", path="missing")
+        backend.cat_file(repository, ref="a" * 40, path="missing")
+
+
+def test_large_binary_file_uses_bounded_raw_bytes_at_the_selected_revision(monkeypatch):
+    content = b"PK\x00\xff\x80already-built-wheel"
+    calls = []
+    def respond(request):
+        assert request.url.params["ref"] == "a" * 40
+        assert request.headers["Authorization"] == "Bearer token"
+        calls.append(request.headers["Accept"])
+        if request.headers["Accept"] == "application/vnd.github.raw+json":
+            return httpx2.Response(200, content=content)
+        return httpx2.Response(200, json={"encoding": "none", "content": "", "size": len(content)})
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(respond)))
+    backend = gh.GitHubBackend(_integration())
+    assert backend.cat_file(SimpleNamespace(name="acme/widgets"), ref="a" * 40, path="dist/addon.whl") == content
+    assert calls == ["application/vnd.github+json", "application/vnd.github.raw+json"]
+
+
+def test_raw_artifact_redirect_cannot_forward_the_selected_credential(monkeypatch):
+    from angee.integrate.http import RedirectOriginError
+    calls = []
+    def respond(request):
+        calls.append(str(request.url))
+        if request.headers["Accept"] == "application/vnd.github.raw+json":
+            return httpx2.Response(302, headers={"Location": "https://outside.example/steal"})
+        return httpx2.Response(200, json={"encoding": "none", "content": ""})
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(respond)))
+    backend = gh.GitHubBackend(_integration())
+    with pytest.raises(RedirectOriginError):
+        backend.cat_file(SimpleNamespace(name="acme/widgets"), ref="a" * 40, path="dist/addon.whl")
+    assert len(calls) == 2 and all(url.startswith("https://api.github.com/") for url in calls)
+
+
+def test_raw_artifact_download_enforces_the_native_decoded_byte_limit(monkeypatch):
+    from angee.integrate.http import ResponseTooLargeError
+    def respond(request):
+        if request.headers["Accept"] == "application/vnd.github.raw+json":
+            return httpx2.Response(200, content=b"123456789")
+        return httpx2.Response(200, json={"encoding": "none", "content": ""})
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(respond)))
+    backend = gh.GitHubBackend(_integration())
+    backend.max_file_bytes = 8
+    with pytest.raises(ResponseTooLargeError):
+        backend.cat_file(SimpleNamespace(name="acme/widgets"), ref="a" * 40, path="dist/addon.whl")
 
 
 def test_search_repos_projects_candidates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -187,3 +226,10 @@ def test_verify_webhook_checks_hmac(monkeypatch: pytest.MonkeyPatch) -> None:
     assert backend.verify_webhook(vcs_bridge, bad) is False
     # No secret configured → never authentic.
     assert backend.verify_webhook(SimpleNamespace(webhook_secret=""), good) is False
+
+
+def test_repository_page_exhaustion_refuses_incomplete_inventory(monkeypatch):
+    monkeypatch.setattr(gh, "MAX_REPO_PAGES", 1)
+    monkeypatch.setattr(gh.GitHubBackend, "_get", lambda self, path: [_repo("acme/r")] * gh.PER_PAGE)
+    with pytest.raises(gh.GitHubApiError, match="inventory is incomplete"):
+        gh.GitHubBackend(_integration()).ls_repos()

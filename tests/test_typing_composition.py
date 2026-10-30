@@ -11,15 +11,15 @@ _SOURCE = """\
 from typing import ClassVar, Self, overload
 from uuid import uuid4
 from django.db import models
-class Target(models.Model):
-    runtime = True
+from django_compose.models import Composable
+class Target(Composable, concrete=True):
     key = models.UUIDField(primary_key=True, default=uuid4)
     title = models.CharField(max_length=30)
     def chain(self) -> str:
         return 'target'
     class Meta:
         abstract = True
-class Shared(models.Model):
+class Shared(Composable):
     shared = models.IntegerField()
     class Meta:
         abstract = True
@@ -34,8 +34,7 @@ class GenericMethods[T]:
     @classmethod
     def generic_class(cls, value: T) -> T:
         return value
-class First(Shared, GenericMethods[int]):
-    extends: ClassVar[str] = 'typing_composition.Target'
+class First(Shared, GenericMethods[int], extends='typing_composition.Target'):
     first = models.IntegerField()
     described: Description = Description()
     def only_first(self) -> int:
@@ -72,8 +71,7 @@ class First(Shared, GenericMethods[int]):
         return 'first-' + super().chain()
     class Meta:
         abstract = True
-class Second(Shared):
-    extends: ClassVar[str] = 'typing_composition.Target'
+class Second(Shared, extends='typing_composition.Target'):
     second = models.CharField(max_length=30)
     def only_second(self) -> str:
         return self.second
@@ -83,41 +81,31 @@ class Second(Shared):
         return 'second-' + super().chain()
     class Meta:
         abstract = True
-class Child(models.Model):
-    runtime = True
-    extends: ClassVar[str] = 'typing_composition.Target'
+class Child(Composable, inherits='typing_composition.Target'):
     child = models.BooleanField()
     class Meta:
         abstract = True
-class Link(models.Model):
-    runtime = True
+class Link(Composable, concrete=True):
     target = models.ForeignKey('typing_composition.Target', on_delete=models.CASCADE)
     targets = models.ManyToManyField('typing_composition.Target', related_name='many_links')
     class Meta:
         abstract = True
-class Middle(models.Model):
-    runtime = True
-    extends: ClassVar[str] = 'typing_composition.Target'
+class Middle(Composable, inherits='typing_composition.Target'):
     middle_value = models.IntegerField()
     class Meta:
         abstract = True
-class Last(models.Model):
-    extends: ClassVar[str] = 'typing_composition.Middle'
+class Last(Composable, extends='typing_composition.Middle'):
     def deepest(self) -> str:
         return self.title
     class Meta:
         abstract = True
-class Capability(models.Model):
-    requires_parent: ClassVar[str] = 'typing_composition.Target'
+class Capability(Composable, demands='typing_composition.Target'):
     ordinary: int
     def parent_title(self) -> str:
         return self.title
     class Meta:
         abstract = True
-class CapableChild(Capability):
-    runtime = True
-    extends: ClassVar[str] = 'typing_composition.Middle'
-    requires_parent: ClassVar[str] = 'typing_composition.Target'
+class CapableChild(Capability, inherits='typing_composition.Middle', demands='typing_composition.Target'):
     class Meta:
         abstract = True
 class Ordinary(models.Model):
@@ -267,34 +255,36 @@ def test_composition_fields_identity_and_cache_follow_native_declarations(tmp_pa
     second_module = app / "second.py"
 
     def write_source(source: str) -> None:
-        first_declaration = "class First(Shared, GenericMethods[int]):"
+        first_declaration = "class First(Shared, GenericMethods[int], extends='typing_composition.Target'):"
         prefix, first = source.split(first_declaration, 1)
-        first, second = first.split("class Second(Shared):", 1)
-        second, suffix = second.split("class Child(models.Model):", 1)
+        first, second = first.split("class Second(Shared, extends='typing_composition.Target'):", 1)
+        second, suffix = second.split("class Child(Composable, inherits='typing_composition.Target'):", 1)
         imports = (
             "from typing import ClassVar, Self, overload\nfrom django.db import models\n"
+            "from django_compose.models import Composable\n"
             "from .models import Shared, Description, GenericMethods\n"
         )
         first_module.write_text(imports + first_declaration + first)
-        second_module.write_text(imports + "class Second(Shared):" + second)
+        second_module.write_text(imports + "class Second(Shared, extends='typing_composition.Target'):" + second)
         models.write_text(prefix + "from .first import First as First\nfrom .second import Second as Second\n"
-                          + "class Child(models.Model):" + suffix)
+                          + "class Child(Composable, inherits='typing_composition.Target'):" + suffix)
 
     write_source(_SOURCE)
     (tmp_path / "typing_composition_settings.py").write_text(
         "from pathlib import Path\n"
         "SECRET_KEY = 'composition-typing'\n"
         "INSTALLED_APPS = ['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', "
-        "'angee', 'typing_composition', 'angee.compose']\n"
+        "'typing_composition']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
-        f"ANGEE_RUNTIME_DIR = Path({str(tmp_path / 'composition_runtime')!r})\n"
-        "ANGEE_RUNTIME_MODULE = 'composition_runtime'\n"
+        f"COMPOSE_OUTPUT_DIR = Path({str(tmp_path / 'composition_runtime')!r})\n"
+        "COMPOSE_OUTPUT_MODULE = 'composition_runtime'\n"
+        "from django_compose.conf import configure\nconfigure(globals())\n"
     )
     config = tmp_path / "mypy.ini"
     config.write_text(
-        "[mypy]\nplugins = angee.compose.typing\n"
-        f"mypy_path = {tmp_path},{root},{root / 'addons'}\n"
+        "[mypy]\nplugins = django_compose.typing\n"
+        f"mypy_path = {tmp_path},{root},{root / 'src'}\n"
         f"cache_dir = {tmp_path / 'cache'}\n"
         "ignore_missing_imports = True\n"
         "[mypy.plugins.django-stubs]\ndjango_settings_module = typing_composition_settings\n"
@@ -377,20 +367,21 @@ def test_composition_fields_identity_and_cache_follow_native_declarations(tmp_pa
             "from django.db.migrations.state import ProjectState",
             "from typing_composition.models import Target, First, Second, Shared, Child, Link, Ordinary",
             "from typing_composition.models import GenericMethods",
-            "from angee.compose.typing import CompositionContext",
+            "from django_compose.typing import CompositionContext",
             "before = ProjectState.from_apps(apps)",
             "context = CompositionContext('typing_composition_settings')",
             "emitted = apps.get_model('typing_composition', 'Target')",
             "child = apps.get_model('typing_composition', 'Child')",
             "assert emitted().chain() == 'first-second-target'",
             "assert emitted().winner() == 'first'",
-            "winner = context.member_origins['typing_composition.models.Target']['winner']",
+            "winner = context.members['typing_composition.models.Target']['winner'].owner",
             "assert winner == 'typing_composition.first.First'",
             "assert issubclass(child, emitted)",
             "assert not issubclass(Child, Target)",
             "assert First.__bases__ == (Shared, GenericMethods)",
             "assert Second.__bases__ == (Shared,)",
-            "assert Target.__bases__ == Child.__bases__ == (models.Model,)",
+            "from django_compose.models import Composable",
+            "assert Target.__bases__ == Child.__bases__ == (Composable,)",
             "assert Link._meta.get_field('target').remote_field.model == 'typing_composition.Target'",
             "assert apps.get_model('typing_composition', 'Link')._meta.get_field('target').related_model is emitted",
             "assert context.get_model_class_by_fullname('typing_composition.models.Target') is emitted",

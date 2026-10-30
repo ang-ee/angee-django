@@ -25,8 +25,7 @@ from graphql import (
     GraphQLString,
 )
 
-from angee.addons import addon_manifest
-from angee.data.metadata import (
+from angee.graphql.data.contracts import (
     DataQueryField,
     DataQueryFilter,
     DataQueryIdentity,
@@ -250,11 +249,9 @@ def test_resource_registrar_adds_honest_catalogue_and_readers(monkeypatch: pytes
     }
 
 
-def test_mcp_manifest_owns_its_resource_tool_registrar() -> None:
-    """The generated reader entrypoint is an explicit addon-contract fact."""
+def test_mcp_conventional_module_owns_its_resource_tool_registrar() -> None:
+    """The conventional MCP module owns the metadata-generated resource registrar."""
 
-    contract = addon_manifest(apps.get_app_config("mcp"))
-    assert contract is not None
     from angee.mcp.mcp_tools import register
     from angee.mcp.server import tool_registrar
 

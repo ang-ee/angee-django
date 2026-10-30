@@ -16,6 +16,7 @@ from django.db import models, transaction
 from fastmcp import Context, FastMCP
 from fastmcp.tools import Tool, ToolResult
 from mcp.types import ToolAnnotations
+from pydantic import TypeAdapter
 from pydantic_ai import RunContext
 from pydantic_ai.capabilities import ToolSearch
 from pydantic_ai.exceptions import ModelRetry
@@ -69,9 +70,9 @@ from angee.agents_runtime_pydantic.toolsets import (
     _accessible_tool_grant_ids,
     _assert_in_process_compatible,
 )
+from angee.base.models.audit import AuditMixin
 from angee.mcp.graphql import _CompiledTool
 from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
-from angee.models import AuditMixin
 
 User = get_user_model()
 
@@ -575,12 +576,17 @@ def test_native_tool_error_mapping_ceiling_and_context_constraint(
     def typed_echo(value: int) -> int:
         return value
 
-    registry = _registered_server((huge_result, True), (explode_secret, True), (typed_echo, True))
+    def body_validation_error() -> int:
+        return TypeAdapter(int).validate_python("private-body-secret")
+
+    registry = _registered_server(
+        (huge_result, True), (explode_secret, True), (typed_echo, True), (body_validation_error, True),
+    )
     monkeypatch.setattr(toolsets_module, "mcp_server", lambda: registry)
     with system_context(reason="test native errors grant"):
         rows = [
             MCPTool.objects.create(server=server_row, name=name)
-            for name in ("huge_result", "explode_secret", "typed_echo")
+            for name in ("huge_result", "explode_secret", "typed_echo", "body_validation_error")
         ]
         agent.mcp_tools.add(*rows)
 
@@ -598,6 +604,12 @@ def test_native_tool_error_mapping_ceiling_and_context_constraint(
     with pytest.raises(ModelRetry, match="could not be completed") as secret_error:
         async_to_sync(native.call_tool)("explode_secret", {}, _native_context(), advertised["explode_secret"])
     assert "password" not in str(secret_error.value)
+
+    with pytest.raises(ModelRetry, match="could not be completed") as body_error:
+        async_to_sync(native.call_tool)(
+            "body_validation_error", {}, _native_context(), advertised["body_validation_error"],
+        )
+    assert "private-body-secret" not in str(body_error.value)
 
     with pytest.raises(ModelRetry, match="Invalid tool arguments"):
         async_to_sync(native.call_tool)(

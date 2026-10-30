@@ -1,0 +1,14 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-workflows-agents"
+version = "3.0.0"
+description = "Agent conversations observed by workflow steps"
+keywords = ["agents", "workflows"]
+dependencies = ["angee-base>=3,<4", "angee-workflows>=3,<4", "angee-agents>=3,<4", "angee-jobs>=3,<4"]
+dynamic = ["entry-points"]
+
+[tool.angee]
+
+[tool.angee.platform]
+category = "Workflows"

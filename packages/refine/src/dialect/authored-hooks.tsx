@@ -6,12 +6,14 @@ import {
   useSubscription,
   type BaseRecord,
   type HttpError,
+  type UseCustomMutationProps,
 } from "@refinedev/core";
 import {
   useQuery,
   useQueries,
   useQueryClient,
   type UseQueryResult,
+  type Query,
 } from "@tanstack/react-query";
 
 import {
@@ -69,7 +71,7 @@ export interface AuthoredQueryOptions extends AuthoredOperationOptions {
   /** Models whose changes match only through their event's related records. */
   relatedModels?: readonly string[];
   /** Native TanStack Query polling policy for durable external operations. */
-  refetchInterval?: number | false;
+  refetchInterval?: number | false | ((query: Pick<Query<unknown, Error>, "state">) => number | false | undefined);
   /**
    * Exact canonical model labels this bespoke read depends on; local writes and
    * live changes refetch it. This metadata-free package does no alias resolution:
@@ -116,25 +118,30 @@ export function useAuthoredQuery<TDocument extends AuthoredDocument>(
 /** Native query results addressed by a domain label; labels never key the cache. */
 export function useAuthoredQueryBatch<TDocument extends AuthoredDocument>(
   scopes: readonly AuthoredQueryBatchScope<TDocument>[],
-  options: AuthoredOperationOptions & Pick<AuthoredQueryOptions, "enabled" | "errorNotification"> = {},
+  options: AuthoredOperationOptions & Pick<AuthoredQueryOptions, "enabled" | "errorNotification" | "refetchInterval"> = {},
 ): ReadonlyMap<string, UseQueryResult<DocumentData<TDocument>, Error>> {
   const activeProvider = useActiveDataProviderName();
   const provider = options.dataProviderName ?? activeProvider ?? "default";
   const dataProvider = useDataProvider();
   const client = useQueryClient();
-  const queries = scopes.map((scope) => {
-    const configured = authoredQueryOptions(
-      client, dataProvider, provider, scope.document, scope.variables, scope.models, scope.records, scope.relatedModels,
-    );
-    return {
-      ...configured, enabled: options.enabled ?? true,
-    };
-  });
+  const configured = scopes.map((scope) => authoredQueryOptions(
+    client, dataProvider, provider, scope.document, scope.variables, scope.models, scope.records, scope.relatedModels,
+  ));
+  // Labels address results; only native provider/document/variables identity owns
+  // requests. A dynamic batch may contain several labels for the same request.
+  const hashes = configured.map((query) => client.defaultQueryOptions(query).queryHash);
+  const unique = new Map(hashes.map((hash, index) => [hash, configured[index]!]));
+  const indexByHash = new Map([...unique.keys()].map((hash, index) => [hash, index]));
+  const queries = [...unique.values()].map((query) => ({
+    ...query,
+    enabled: options.enabled ?? true,
+    refetchInterval: options.refetchInterval,
+  }));
   const results = useQueries({ queries });
   const models = useStableArray([...new Set(scopes.flatMap((scope) => scope.models ?? []))].sort());
   useAuthoredLiveInterest(options.enabled ?? true, models);
   useAuthoredErrorPolicy(queries.map((query) => query.queryKey), { notify: options.errorNotification !== false });
-  return new Map(scopes.map((scope, index) => [scope.key, results[index]!]));
+  return new Map(scopes.map((scope, index) => [scope.key, results[indexByHash.get(hashes[index]!)!]!]));
 }
 
 /** Invalidate every authored read registered against any supplied model. */
@@ -147,19 +154,19 @@ export function useInvalidateAuthoredModels(): (
   }, [queryClient]);
 }
 
-/** Install an authoritative mutation result into one exact authored-read cache. */
+/** Cancel older snapshots before accepting a complete typed result at its exact native key. */
 export function useSetAuthoredQueryData(): <TDocument extends AuthoredDocument>(
   document: TDocument,
   variables: AuthoredVariables<TDocument> | undefined,
-  data: DocumentData<TDocument>,
-) => void {
+  data: DocumentData<TDocument> | ((current: DocumentData<TDocument> | undefined) => DocumentData<TDocument> | undefined),
+  options?: AuthoredOperationOptions,
+) => Promise<void> {
   const queryClient = useQueryClient();
   const activeProvider = useActiveDataProviderName();
-  return useCallback((document, variables, data) => {
-    queryClient.setQueryData(
-      authoredQueryKey(document, variables, activeProvider ?? "default"),
-      data,
-    );
+  return useCallback(async (document, variables, data, options) => {
+    const queryKey = authoredQueryKey(document, variables, options?.dataProviderName ?? activeProvider ?? "default");
+    await queryClient.cancelQueries({ queryKey, exact: true });
+    queryClient.setQueryData(queryKey, data);
   }, [activeProvider, queryClient]);
 }
 
@@ -174,7 +181,7 @@ export interface AuthoredMutationOptions<
   /**
    * For operations whose result is a secret shown once: observer reset on
    * settlement; the cache entry is collected on the next tick; single-flight
-   * per hook instance.
+   * per hook instance. Overlapping calls reject before executing.
    */
   transient?: boolean;
   /**
@@ -191,6 +198,13 @@ export interface AuthoredMutationOptions<
   invalidateModels?: readonly string[];
   /** Resource invalidations prepared by the caller that owns resource metadata. */
   invalidates?: readonly InvalidateParams[];
+  /**
+   * Explicit response-backed completion: accept authoritative returned values at
+   * their native query owner before resolving, then refresh derived reads in the
+   * background. Omit to retain completion after awaited refresh. Rejected reads
+   * remain native Query errors and follow the existing read error policy.
+   */
+  acceptResponse?: (data: TData | undefined, variables: TVariables) => void | Promise<void>;
   /** Optional domain-level success guard before invalidating registered reads. */
   shouldInvalidate?: (data: TData | undefined, variables: TVariables) => boolean;
   /**
@@ -221,36 +235,45 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
   const queryClient = useQueryClient();
   const shouldInvalidate = options.shouldInvalidate;
   const errorFrom = options.errorFrom;
+  const acceptResponse = options.acceptResponse;
+  const inFlight = useRef({ count: 0, transient: false });
   // Native context pins completion policy before transport starts; later renders
   // can update the next operation without retargeting this operation's writes.
   const captureMutationContext = () => ({
-    invalidate, invalidateModelLabels, invalidates, queryClient, shouldInvalidate, errorFrom,
+    invalidate, invalidateModelLabels, invalidates, queryClient, shouldInvalidate, errorFrom, acceptResponse,
   });
-  const run = useCustomMutation<BaseRecord, HttpError, Variables>({
-    mutationOptions: {
-      ...(options.transient ? { gcTime: 0 } : {}),
-      onMutate: captureMutationContext,
-      async onSuccess(response, { values }, context) {
-        // Refine exposes native mutation context as unknown; this hook supplies it.
-        const { invalidate, invalidateModelLabels, invalidates, queryClient, shouldInvalidate, errorFrom } =
-          context as ReturnType<typeof captureMutationContext>;
-        const data = authoredOperationData<Data>(response.data);
-        const resultError = errorFromAuthoredEnvelope(errorFrom?.(data, values));
-        if (resultError) throw resultError;
-        if (
-          (invalidateModelLabels.length > 0 || invalidates.length > 0)
-          && (shouldInvalidate?.(data, values) ?? true)
-        ) {
-          await Promise.all([
-            ...invalidates.map((target) => invalidate(target)),
-            ...(invalidateModelLabels.length > 0
-              ? [invalidateAuthoredQueries(queryClient, invalidateModelLabels)]
-              : []),
-          ]);
-        }
-      },
+  const mutationOptions: NonNullable<UseCustomMutationProps<BaseRecord, HttpError, Variables>["mutationOptions"]> = {
+    onMutate: captureMutationContext,
+    async onSuccess(response, { values }, context) {
+      // Refine exposes native mutation context as unknown; this hook supplies it.
+      const { invalidate, invalidateModelLabels, invalidates, queryClient, shouldInvalidate, errorFrom, acceptResponse } =
+        context as ReturnType<typeof captureMutationContext>;
+      const data = authoredOperationData<Data>(response.data);
+      const resultError = errorFromAuthoredEnvelope(errorFrom?.(data, values));
+      if (resultError) throw resultError;
+      if (acceptResponse) await acceptResponse(data, values);
+      if (!(shouldInvalidate?.(data, values) ?? true)) return;
+      if (
+        (invalidateModelLabels.length > 0 || invalidates.length > 0)
+      ) {
+        const refresh = Promise.all([
+          ...invalidates.map((target) => invalidate(target)),
+          ...(invalidateModelLabels.length > 0
+            ? [invalidateAuthoredQueries(queryClient, invalidateModelLabels)]
+            : []),
+        ]);
+        if (acceptResponse) void refresh.catch(() => undefined);
+        else await refresh;
+      }
     },
+  };
+  // Native observers retain a fixed policy: changing the next dispatch's mode
+  // must neither extend a pending secret's GC nor shorten an ordinary call's GC.
+  const ordinaryRun = useCustomMutation<BaseRecord, HttpError, Variables>({ mutationOptions });
+  const transientRun = useCustomMutation<BaseRecord, HttpError, Variables>({
+    mutationOptions: { ...mutationOptions, gcTime: 0 },
   });
+  const lastTransient = useRef(false);
   // Stable identity: chat runtimes and other long-lived effects may depend on
   // authored mutations, while refine can churn `mutateAsync` across renders.
   // Read the latest execution context at call time so consumers do not reconnect
@@ -258,16 +281,16 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
   const mutationRef = useRef({
     dataProviderName,
     document,
-    mutateAsync: run.mutateAsync,
-    reset: run.mutation.reset,
+    ordinaryRun,
+    transientRun,
     transient: options.transient,
     errorNotification: options.errorNotification,
   });
   mutationRef.current = {
     dataProviderName,
     document,
-    mutateAsync: run.mutateAsync,
-    reset: run.mutation.reset,
+    ordinaryRun,
+    transientRun,
     transient: options.transient,
     errorNotification: options.errorNotification,
   };
@@ -275,14 +298,23 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
     const {
       dataProviderName,
       document,
-      mutateAsync,
-      reset,
+      ordinaryRun,
+      transientRun,
       transient,
       errorNotification,
     } = mutationRef.current;
+    // Guard synchronously, before native MutationObserver creates an operation.
+    // Also protect a transient operation if the next render changes its policy.
+    if (inFlight.current.count > 0 && (transient || inFlight.current.transient)) {
+      throw new Error("Transient authored mutations cannot overlap another mutation.");
+    }
+    const run = transient ? transientRun : ordinaryRun;
+    lastTransient.current = transient ?? false;
+    inFlight.current.count += 1;
+    if (transient) inFlight.current.transient = true;
     const resolvedVariables = (variables ?? {}) as Variables;
     try {
-      const response = await mutateAsync({
+      const response = await run.mutateAsync({
         url: "",
         method: "post",
         values: resolvedVariables,
@@ -292,15 +324,24 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
       });
       return authoredOperationData<Data>(response.data);
     } finally {
-      if (transient) reset();
+      if (transient) {
+        run.mutation.reset();
+        inFlight.current.transient = false;
+      }
+      inFlight.current.count -= 1;
     }
   }, []);
+  const reset = useCallback(() => {
+    const { ordinaryRun, transientRun } = mutationRef.current;
+    (lastTransient.current ? transientRun : ordinaryRun).mutation.reset();
+  }, []);
+  const run = lastTransient.current ? transientRun : ordinaryRun;
   return [
     mutate,
     {
       fetching: run.mutation.isPending,
       error: run.mutation.error as Error | null,
-      reset: run.mutation.reset,
+      reset,
     },
   ];
 }

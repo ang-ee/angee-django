@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable, Iterator, cast
@@ -14,12 +15,14 @@ from django.core.cache import cache
 from django.core.management import call_command
 from rebac import ObjectRef, RelationshipTuple, SubjectRef
 from rebac.schema import ConstBinding, parse_zed
+from rebac.testing import install_schema
 
 from angee.integrate.errors import RequestNotSentError
 from angee.integrate.http import HttpClient
 from angee.operator import daemon as daemon_module
 from angee.operator import schema as operator_schema
 from angee.operator.daemon import (
+    ConnectionToken,
     OperatorDaemon,
     OperatorDaemonConflict,
     OperatorDaemonError,
@@ -28,7 +31,6 @@ from angee.operator.daemon import (
     WorkspaceStatus,
 )
 from angee.operator.management.commands import operator_schema as operator_schema_command
-from angee.testing.permissions import install_permission_schema
 
 _CONNECTION_QUERY = "{ operatorConnection { endpoint token restartJob } }"
 _ACTOR = SubjectRef.of("auth/user", "abc")
@@ -321,7 +323,7 @@ def test_file_tools_call_the_files_api_and_carry_the_etag(monkeypatch: pytest.Mo
 # --- endpoint resolution ------------------------------------------------------
 #
 # The daemon resolves from Django settings only. Dev stack env and project YAML
-# are normalized by ``angee.compose.settings`` before apps read configuration.
+# are normalized by ``the generated settings module`` before apps read configuration.
 
 
 def test_endpoint_defaults_to_same_origin_proxy() -> None:
@@ -397,11 +399,13 @@ def test_mint_token_posts_actor_scope_ttl_and_returns_token(
 
     def fake_post(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
         seen.update(url=url, payload=payload, bearer=self.admin_bearer)
-        return {"token": "minted-abc"}
+        return {"token": "minted-abc", "expires_at": "2099-01-01T00:00:00Z"}
 
     monkeypatch.setattr(OperatorDaemon, "_post_json", fake_post)
 
-    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == "minted-abc"
+    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == (
+        ConnectionToken("minted-abc", datetime(2099, 1, 1, tzinfo=timezone.utc))
+    )
     assert seen["url"] == "http://localhost:9000/tokens/mint"
     assert seen["payload"] == {"actor": "auth/user:abc", "scope": ["service:read"], "ttl": "30m"}
     assert seen["bearer"] == "admin-bearer"
@@ -419,11 +423,13 @@ def test_mint_token_derives_host_from_full_graphql_endpoint(
 
     def fake_post(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
         seen["url"] = url
-        return {"token": "ok"}
+        return {"token": "ok", "expires_at": "2099-01-01T00:00:00Z"}
 
     monkeypatch.setattr(OperatorDaemon, "_post_json", fake_post)
 
-    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == "ok"
+    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == (
+        ConnectionToken("ok", datetime(2099, 1, 1, tzinfo=timezone.utc))
+    )
     assert seen["url"] == "http://daemon:9000/tokens/mint"
 
 
@@ -443,11 +449,13 @@ def test_mint_token_preserves_mount_prefix(
 
     def fake_post(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
         seen["url"] = url
-        return {"token": "ok"}
+        return {"token": "ok", "expires_at": "2099-01-01T00:00:00Z"}
 
     monkeypatch.setattr(OperatorDaemon, "_post_json", fake_post)
 
-    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == "ok"
+    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == (
+        ConnectionToken("ok", datetime(2099, 1, 1, tzinfo=timezone.utc))
+    )
     assert seen["url"] == "https://host/operator/tokens/mint"
 
 
@@ -463,11 +471,13 @@ def test_mint_token_strips_only_trailing_graphql_from_prefixed_endpoint(
 
     def fake_post(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
         seen["url"] = url
-        return {"token": "ok"}
+        return {"token": "ok", "expires_at": "2099-01-01T00:00:00Z"}
 
     monkeypatch.setattr(OperatorDaemon, "_post_json", fake_post)
 
-    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == "ok"
+    assert OperatorDaemon.from_settings().mint_token("auth/user:abc") == (
+        ConnectionToken("ok", datetime(2099, 1, 1, tzinfo=timezone.utc))
+    )
     assert seen["url"] == "https://host/operator/tokens/mint"
 
 
@@ -546,14 +556,14 @@ def test_mint_token_reuses_cached_actor_token(
     def fake_post(self: OperatorDaemon, url: str, payload: dict[str, object]) -> dict[str, object]:
         del self
         calls.append((url, payload))
-        return {"token": f"minted-{len(calls)}"}
+        return {"token": f"minted-{len(calls)}", "expires_at": "2099-01-01T00:00:00Z"}
 
     monkeypatch.setattr(OperatorDaemon, "_post_json", fake_post)
     daemon = OperatorDaemon.from_settings()
 
-    assert daemon.mint_token("auth/user:abc") == "minted-1"
-    assert daemon.mint_token("auth/user:abc") == "minted-1"
-    assert daemon.mint_token("auth/user:def") == "minted-2"
+    assert daemon.mint_token("auth/user:abc") == ConnectionToken("minted-1", datetime(2099, 1, 1, tzinfo=timezone.utc))
+    assert daemon.mint_token("auth/user:abc") == ConnectionToken("minted-1", datetime(2099, 1, 1, tzinfo=timezone.utc))
+    assert daemon.mint_token("auth/user:def") == ConnectionToken("minted-2", datetime(2099, 1, 1, tzinfo=timezone.utc))
     assert calls == [
         (
             "http://localhost:9000/tokens/mint",
@@ -587,9 +597,9 @@ class _StubDaemon:
         self._token = token
         self.minted_for: str | None = None
 
-    def mint_token(self, actor: str) -> str | None:
+    def mint_token(self, actor: str) -> ConnectionToken | None:
         self.minted_for = actor
-        return self._token
+        return ConnectionToken(self._token, datetime(2099, 1, 1, tzinfo=timezone.utc)) if self._token else None
 
 
 def test_connection_hidden_for_anonymous(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -689,7 +699,7 @@ definition auth/user {}
 definition auth/group { relation member: auth/user }
 definition angee/role { relation member: auth/user | auth/group#member }
 """
-_OPERATOR_ZED = Path(__file__).resolve().parents[1] / "addons/angee/operator/permissions.zed"
+_OPERATOR_ZED = Path(__file__).resolve().parents[1] / "src/angee/operator/permissions.zed"
 
 
 @pytest.mark.django_db
@@ -709,7 +719,7 @@ def test_operator_admin_role_reaches_connection_read_tuple_free() -> None:
     reader = next(relation for relation in connection.relations if relation.name == "reader")
     assert reader.backing == ConstBinding(target_id="operator_admin")
 
-    backend = install_permission_schema(schema)
+    backend = install_schema(schema)
     operator = SubjectRef.of("auth/user", "operator-1")
     connection_ref = ObjectRef("operator/connection", "default")
 
@@ -734,7 +744,7 @@ def test_operator_admin_role_reaches_connection_read_tuple_free() -> None:
 def test_operator_schema_writes_the_live_sdl_into_the_runtime(monkeypatch, settings, tmp_path) -> None:
     """The stack job's export lands in the runtime, never in the operator package's committed snapshot."""
 
-    settings.ANGEE_RUNTIME_DIR = tmp_path
+    settings.COMPOSE_OUTPUT_DIR = tmp_path
     stub = SimpleNamespace(
         admin_bearer="token", server_base="http://operator", introspect_sdl=lambda: "type Query { ping: String }",
     )
@@ -746,3 +756,32 @@ def test_operator_schema_writes_the_live_sdl_into_the_runtime(monkeypatch, setti
 
     assert (tmp_path / "schemas" / "external" / "operator.graphql").read_text() == "type Query { ping: String }\n"
     assert committed.read_bytes() == before
+
+
+def test_connection_cache_lifetime_uses_issued_expiry_instead_of_requested_ttl(settings, monkeypatch):
+    settings.ANGEE_OPERATOR_URL = "http://localhost:9000"
+    settings.ANGEE_OPERATOR_TOKEN = "admin"
+    settings.ANGEE_OPERATOR_TOKEN_TTL = "1h"
+    now = datetime(2026, 10, 29, tzinfo=timezone.utc)
+    monkeypatch.setattr(daemon_module.timezone, "now", lambda: now)
+    monkeypatch.setattr(OperatorDaemon, "_post_json", lambda *args: {
+        "token": "capped", "expires_at": (now + timedelta(seconds=60)).isoformat(),
+    })
+    stored = []
+    monkeypatch.setattr(cache, "set", lambda key, value, timeout: stored.append((value, timeout)))
+    issued = OperatorDaemon.from_settings().mint_token("auth/user:capped")
+    assert issued == ConnectionToken("capped", now + timedelta(seconds=60))
+    assert stored == [(issued, 55)]
+
+
+@pytest.mark.parametrize("expiry", [None, "bad", "2000-01-01T00:00:00Z", "2099-01-01T00:00:00"])
+def test_mint_refuses_absent_invalid_naive_or_expired_issue_metadata(settings, monkeypatch, expiry):
+    settings.ANGEE_OPERATOR_URL = "http://localhost:9000"
+    settings.ANGEE_OPERATOR_TOKEN = "admin"
+    monkeypatch.setattr(OperatorDaemon, "_post_json", lambda *args: {"token": "refused", "expires_at": expiry})
+    assert OperatorDaemon.from_settings().mint_token("auth/user:invalid-expiry") is None
+
+
+def test_operator_has_no_catalogue_execution_or_checkout_api():
+    assert not hasattr(OperatorDaemon, "source_checkout")
+    assert not hasattr(OperatorDaemon, "run_source_build")

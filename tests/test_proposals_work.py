@@ -9,6 +9,7 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
+from packaging.requirements import Requirement
 from rebac import (
     ObjectRef,
     PermissionDenied,
@@ -310,13 +311,15 @@ class DenormalizedProposalsWorkTests(ProposalsWorkTests):
 
 
 def test_proposals_work_manifest():
-    addon = Path(__file__).resolve().parents[1] / "addons/angee/proposals_work"
-    manifest = tomllib.loads((addon / "addon.toml").read_text())
-    assert manifest["addon"]["depends_on"] == ["angee.proposals", "angee.work"]
-    assert "resources" not in manifest
+    addon = Path(__file__).resolve().parents[1] / "src/angee/proposals_work"
+    manifest = tomllib.loads((addon / "pyproject.toml").read_text())
+    assert {Requirement(requirement).name for requirement in manifest["project"]["dependencies"]} >= {
+        "angee-proposals", "angee-work", "angee-web",
+    }
+    assert "resources" not in manifest.get("tool", {}).get("angee", {})
     assert not tuple(addon.glob("permissions*.zed"))
-    proposals = tomllib.loads((addon.parent / "proposals/addon.toml").read_text())
-    assert "angee.work" not in proposals["addon"]["depends_on"]
+    proposals = tomllib.loads((addon.parent / "proposals/pyproject.toml").read_text())
+    assert "angee-work" not in {Requirement(value).name for value in proposals["project"]["dependencies"]}
     assert "work." not in (addon.parent / "proposals/models.py").read_text()
 
 

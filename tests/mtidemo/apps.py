@@ -2,7 +2,7 @@
 
 Registered in ``tests.settings`` so pytest-django creates the demo tables on
 demand and ``rebac sync`` discovers the adjacent ``permissions.zed`` (its
-``.path`` is this package). The app carries no ``addon.toml`` — it is a plain
+``.path`` is this package). The app carries no addon entry point — it is a plain
 Django app, not an Angee addon, so the composer and schema discovery ignore it.
 """
 

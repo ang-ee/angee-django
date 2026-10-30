@@ -32,9 +32,7 @@ from rebac import (
     write_relationships,
 )
 
-from angee import asgi
 from angee.agents.acp_server import SessionAgent
-from angee.agents.asgi import websocket_urlpatterns
 from angee.agents.context import render_view_context
 from angee.agents.models import AgentSessionManager, TurnStatus
 from angee.agents.protocol import ACP_PATH, TURN_FAILED_STOP_REASON, TURN_FAILURE_CODE
@@ -45,7 +43,8 @@ from angee.agents.testing.drivers import runner as runner  # noqa: F401 - shared
 from angee.agents.testing.drivers import update_chunk as _chunk
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceModel
 from angee.agents_runtime_pydantic import runner as pydantic_runner
-from angee.errors import RecordAccessSubjectRefused
+from angee.base.exceptions import RecordAccessSubjectRefused
+from angee.graphql import asgi
 from angee.graphql.publishing import connect_publishers, disconnect_publishers
 from tests.conftest import create_platform_admin
 from tests.test_agents import _provider
@@ -62,7 +61,7 @@ def chat(composed_tables: None, capture_tasks: list[Any], monkeypatch: pytest.Mo
     connect_publishers(AgentTurn)
     try:
         with actor_context(owner):
-            yield agent, owner, asgi.websocket_application(websocket_urlpatterns), capture_tasks
+            yield agent, owner, asgi.websocket_application(), capture_tasks
     finally:
         disconnect_publishers(AgentTurn)
 

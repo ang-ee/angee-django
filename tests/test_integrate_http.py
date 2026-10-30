@@ -618,3 +618,64 @@ def test_empty_dns_result_is_a_typed_resolution_failure(monkeypatch: pytest.Monk
         resolved_addresses("unresolved.example", 443)
     with pytest.raises(AddressResolutionError):
         HttpClient().get("https://unresolved.example/")
+
+
+@pytest.mark.parametrize("destination", ["https://cdn.example/file", "https://other.example:8443/file"])
+def test_bounded_download_uses_native_redirect_credentials(monkeypatch, destination):
+    calls = []
+    def respond(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx2.Response(302, headers={"Location": destination})
+        assert "authorization" not in request.headers
+        assert "cookie" not in request.headers
+        assert request.headers["host"] == httpx2.URL(destination).netloc.decode()
+        return httpx2.Response(200, content=b"ok")
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(lambda **_: httpx2.MockTransport(respond)))
+    result = HttpClient().download_bounded(
+        URL, headers={"Authorization": "Bearer test-secret", "Cookie": "session=test-secret"},
+    )
+    assert result is not None and result.content == b"ok"
+    assert len(calls) == 2
+    assert calls[0].headers["authorization"] == "Bearer test-secret"
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_stream_retains_native_response_until_context_exit(monkeypatch: pytest.MonkeyPatch, fail: bool) -> None:
+    closed = False
+
+    class Body(httpx2.SyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            yield b"first\n"
+            yield b"second\n"
+
+        def close(self) -> None:
+            nonlocal closed
+            closed = True
+
+    def transport(*, allow_private: bool) -> httpx2.MockTransport:
+        assert allow_private
+
+        def respond(request: httpx2.Request) -> httpx2.Response:
+            assert request.headers["host"] == "example.com"
+            assert request.headers["authorization"] == "Bearer test-token"
+            assert request.content == b"request"
+            return httpx2.Response(200, stream=Body())
+
+        return httpx2.MockTransport(respond)
+
+    monkeypatch.setattr(HttpClient, "transport_factory", staticmethod(transport))
+    try:
+        with HttpClient().stream(
+            "POST", "https://example.com/checkout", body=b"request", allow_private=True,
+            headers={"Host": "spoof.invalid", "Authorization": "Bearer test-token"},
+        ) as response:
+            assert not response.is_closed and not closed
+            lines = response.iter_lines()
+            assert next(lines) == "first"
+            assert not response.is_closed and not closed
+            if fail:
+                raise ValueError("consumer failed")
+    except ValueError:
+        assert fail
+    assert response.is_closed and closed

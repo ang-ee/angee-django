@@ -1,0 +1,53 @@
+"""Settings fragments required by the agents addon."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from typing import TypedDict
+
+_Settings = TypedDict(
+    "_Settings",
+    {
+        "ANGEE_INFERENCE_BACKEND_CLASSES": dict[str, str],
+        "ANGEE_INFERENCE_APPROVED_DEPLOYMENTS": Mapping[str, Sequence[Mapping[str, object]]] | None,
+        "ANGEE_AGENT_RUNTIME_CLASSES": dict[str, str],
+        "ANGEE_OPENCODE_OAUTH_ENABLED": bool,
+        "ANGEE_MCP_ACTOR_VERIFIER": str,
+        "ANGEE_AGENT_CHAT_TOKEN_TTL": str,
+    },
+)
+
+SETTINGS: _Settings = {
+    # Inference providers select their backend with a provider-owned
+    # ``backend_class`` field. ``manual`` lists no models; its catalogue is
+    # hand-curated.
+    "ANGEE_INFERENCE_BACKEND_CLASSES": {
+        "manual": "angee.agents.backends.ManualInferenceBackend",
+    },
+    # Optional exact endpoint/model allowlists keyed by consumer-defined roles.
+    # ``None`` leaves role approval to the deployment; a configured mapping fails
+    # closed for a missing or non-matching role.
+    "ANGEE_INFERENCE_APPROVED_DEPLOYMENTS": None,
+    # An agent selects its runtime (the program it is rendered into) with a
+    # ``runtime_class`` field. The runtime owns how it consumes an inference
+    # credential as container env and which operator service template renders it
+    # (see ``angee.agents.runtimes``). ``none`` renders no service (workspace-only).
+    "ANGEE_AGENT_RUNTIME_CLASSES": {
+        "none": "angee.agents.runtimes.NoRuntime",
+        "claude_code": "angee.agents.runtimes.ClaudeCodeRuntime",
+        "opencode": "angee.agents.runtimes.OpenCodeRuntime",
+    },
+    # OpenCode + Anthropic Personal-Plans OAuth is off by default: it needs a community
+    # auth plugin in the opencode image (see its Dockerfile) and using a Pro/Max token in
+    # OpenCode is against Anthropic's terms. Enable only on an image built with the plugin.
+    "ANGEE_OPENCODE_OAUTH_ENABLED": False,
+    # The agents addon owns the MCP catalogue, so it supplies the bearer→actor
+    # verifier the base ``angee.mcp`` runtime calls: it matches an inbound bearer to an
+    # ``agents.MCPServer.credential`` and resolves the agent actor (see ``mcp_verifier``).
+    "ANGEE_MCP_ACTOR_VERIFIER": "angee.agents.mcp_verifier.resolve_actor",
+    # TTL of the per-actor chat route token minted by ``agentChatEndpoint`` (the
+    # daemon caps it at 24h). The TTL policy lives here, not as a literal in the
+    # resolver; mirrors ``ANGEE_OPERATOR_TOKEN_TTL`` for the GraphQL token.
+    "ANGEE_AGENT_CHAT_TOKEN_TTL": "2h",
+}
+"""Django settings contributed when the agents addon is installed."""

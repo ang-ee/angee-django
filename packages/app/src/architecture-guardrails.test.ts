@@ -33,25 +33,25 @@ const FRAMEWORK_IMPORT_RULES: Record<string, readonly string[]> = {
   "@angee/app": ["@angee/refine", "@angee/metadata", "@angee/ui"],
 };
 const REQUIRED_ADDON_ROOTS = [
-  join(MONOREPO_ROOT, "addons"),
-  join(MONOREPO_ROOT, "examples", "addons"),
+  join(MONOREPO_ROOT, "src"),
+  join(MONOREPO_ROOT, "examples", "src"),
 ] as const;
 const OPTIONAL_ADDON_ROOTS = [
-  resolve(MONOREPO_ROOT, "../angee-messaging-bridges/addons"),
+  resolve(MONOREPO_ROOT, "../angee-messaging-bridges/src"),
 ] as const;
 // Consumer repositories materialized beside this slot compose the same owners; the
 // UX ontology guard covers them when present, the layering guards stay in-repo.
 const CONSUMER_ADDON_ROOTS = [
-  resolve(MONOREPO_ROOT, "../angee-arp/addons"),
-  resolve(MONOREPO_ROOT, "../angee-odoo/addons"),
-  resolve(MONOREPO_ROOT, "../angee-phrogg/addons"),
+  resolve(MONOREPO_ROOT, "../angee-arp/src"),
+  resolve(MONOREPO_ROOT, "../angee-odoo/src"),
+  resolve(MONOREPO_ROOT, "../angee-phrogg/src"),
 ] as const;
 // Parsing every framework, tooling, and addon source file grows with the tree,
 // not with a hang; Vitest's 5s unit default fails it on loaded CI runners.
 const FULL_TREE_SCAN_TIMEOUT_MS = 30_000;
 
 test("addon TypeScript resolves host-generated GraphQL before the standalone cache", () => {
-  const path = join(MONOREPO_ROOT, "addons", "angee", "tsconfig.base.json");
+  const path = join(MONOREPO_ROOT, "src", "angee", "tsconfig.base.json");
   const parsed = ts.parseConfigFileTextToJson(path, readFileSync(path, "utf8"));
   expect(parsed.error).toBeUndefined();
   expect(parsed.config.compilerOptions.paths["@angee/gql/*"]).toEqual([
@@ -278,6 +278,24 @@ describe("React architecture guardrails", () => {
     ]);
   });
 
+  test("runtime dependency scans retain mixed imports while excluding erased type edges", () => {
+    const source = ts.createSourceFile("fixture.ts", `
+      import type { ErrorObject } from "ajv";
+      import { type Options } from "ajv/options";
+      export type { Schema } from "ajv/types";
+      export { type Schema as Erased } from "ajv/erased";
+      type Validator = import("ajv/validator").Validator;
+      import { type Config, compile } from "./compiler";
+      export { type Config as PublicConfig, compile } from "./exports";
+      import "./side-effect";
+      const lazy = import("./lazy");
+    `, ts.ScriptTarget.Latest, true);
+    expect(importSpecifiersFromSource(source)).toEqual([
+      "ajv", "ajv/options", "ajv/types", "ajv/erased", "ajv/validator", "./compiler", "./exports", "./side-effect", "./lazy",
+    ]);
+    expect(importSpecifiersFromSource(source, true)).toEqual(["./compiler", "./exports", "./side-effect", "./lazy"]);
+  });
+
   test.each(["vi", "v"])("reports project-schema mocks through the %s binding in a package", (binding) => {
     const scratch = join(PACKAGES_ROOT, "app", "test-results");
     mkdirSync(scratch, { recursive: true });
@@ -336,7 +354,7 @@ describe("React architecture guardrails", () => {
       if (visited.has(file)) return;
       visited.add(file);
       expect(file).not.toBe(schemaEntry);
-      for (const specifier of importSpecifiers(file)) {
+      for (const specifier of sourceAnalysis(file).runtimeSpecifiers) {
         expect(specifier).not.toMatch(/^ajv(?:-formats)?(?:\/|$)/);
         if (angeePackageName(specifier) === "@angee/ui") {
           const key = specifier === "@angee/ui" ? "." : `.${specifier.slice("@angee/ui".length)}`;
@@ -357,7 +375,7 @@ describe("React architecture guardrails", () => {
     "discovers the explicit in-repo addon roots",
     () => {
       expect(REQUIRED_ADDON_ROOTS.map((root) => relative(MONOREPO_ROOT, root)))
-        .toEqual(["addons", join("examples", "addons")]);
+        .toEqual(["src", join("examples", "src")]);
       expect(addonRepositoryRoots()).toEqual(expect.arrayContaining([...REQUIRED_ADDON_ROOTS]));
     },
   );
@@ -420,7 +438,7 @@ describe("React architecture guardrails", () => {
   );
 
   test("lazy route import guard detects runtime imports but ignores type imports", () => {
-    const file = join(MONOREPO_ROOT, "addons", "example", "web", "src", "index.tsx");
+    const file = join(MONOREPO_ROOT, "src", "example", "web", "src", "index.tsx");
     expect(lazyRouteImportViolations(file, `
       import type { PageProps } from "./views/Page";
       import { form } from "./views/../views/Page";
@@ -428,9 +446,9 @@ describe("React architecture guardrails", () => {
       export { usePage } from "./views/Page";
       const route = lazyRouteComponent(() => import("./views/Page"), "Page");
     `)).toEqual([
-      "addons/example/web/src/index.tsx imports ./views/../views/Page and loads it lazily",
-      "addons/example/web/src/index.tsx imports ./views/Page.tsx and loads it lazily",
-      "addons/example/web/src/index.tsx imports ./views/Page and loads it lazily",
+      "src/example/web/src/index.tsx imports ./views/../views/Page and loads it lazily",
+      "src/example/web/src/index.tsx imports ./views/Page.tsx and loads it lazily",
+      "src/example/web/src/index.tsx imports ./views/Page and loads it lazily",
     ]);
   });
 
@@ -439,6 +457,26 @@ describe("React architecture guardrails", () => {
       ["@angee/a", ["@angee/b"]],
       ["@angee/b", ["@angee/a"]],
     ]))).toEqual(["@angee/a -> @angee/b -> @angee/a"]);
+  });
+
+  test("shell validation has one native JS export for boot and codegen", () => {
+    const manifest = JSON.parse(readFileSync(resolve(MONOREPO_ROOT, "packages/app/package.json"), "utf8"));
+    expect(manifest.exports["./shell-runtime"]).toEqual({
+      types: "./src/shell-settings.d.mts", import: "./src/shell-settings.mjs",
+    });
+    expect(manifest.publishConfig.exports["./shell-runtime"]).toEqual({
+      types: "./dist/shell-settings.d.mts", default: "./dist/shell-settings.mjs",
+    });
+  });
+
+  test("frontend generation has one callable native ESM export for Vite and the CLI", () => {
+    const manifest = JSON.parse(readFileSync(resolve(MONOREPO_ROOT, "packages/app/package.json"), "utf8"));
+    expect(manifest.exports["./web-codegen"]).toEqual({
+      types: "./src/web-codegen.d.mts", import: "./src/web-codegen.mjs",
+    });
+    expect(manifest.publishConfig.exports["./web-codegen"]).toEqual({
+      types: "./dist/web-codegen.d.mts", default: "./dist/web-codegen.mjs",
+    });
   });
 
   test("framework critical exports exist in their declared owners", () => {
@@ -463,17 +501,16 @@ describe("React architecture guardrails", () => {
       ];
       expect(invalidCriticalExports(declarations)).toEqual([]);
       const contents = allPackageRoots().flatMap((pkg) =>
-        sourceFiles(pkg.root).map((file) => ({
-          file,
-          consumed: consumedIdentifiers(ts.createSourceFile(
-            file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true,
-          )),
-        })),
+        sourceFiles(pkg.root)
+          .filter((file) => !isTestFile(file) && !isStoryFile(file))
+          .map((file) => ({
+            file,
+            consumed: sourceAnalysis(file).consumed,
+          })),
       );
       const unused = declarations
         .filter((declaration) => !contents.some((candidate) => {
           if (resolve(candidate.file) === resolve(declaration.ownerFile)) return false;
-          if (isTestFile(candidate.file) || isStoryFile(candidate.file)) return false;
           return candidate.consumed.has(declaration.name);
         }))
         .map((declaration) => declaration.name);
@@ -615,7 +652,7 @@ describe("React architecture guardrails", () => {
     ["local-recipe", 'import { Chip, tv } from "@angee/ui"; const pill = tv({ base: "x" });', "declares a local tv() recipe"],
     ["local-tone-map", 'const TONES = { DONE: "success", FAILED: "danger" } as const;', "maps status values to tones locally"],
   ])("UX ontology guard %s reports a seeded violation", (rule, text, detail) => {
-    const hits = uxGuardViolations("addons/fixture/web/src/View.tsx", text);
+    const hits = uxGuardViolations("src/fixture/web/src/View.tsx", text);
     expect(hits.map((hit) => hit.rule)).toContain(rule);
     expect(hits.find((hit) => hit.rule === rule)?.detail).toContain(detail);
   });
@@ -631,7 +668,7 @@ describe("React architecture guardrails", () => {
       'const hidden = <input type="hidden" value="x" />;',
       "const when = formatDate(at);",
     ].join("\n");
-    expect(uxGuardViolations("addons/fixture/web/src/View.tsx", text)).toEqual([]);
+    expect(uxGuardViolations("src/fixture/web/src/View.tsx", text)).toEqual([]);
   });
 
   test(
@@ -932,26 +969,37 @@ function sourceFiles(root: string): string[] {
   return files;
 }
 
-// Source files do not change during a run, so each is parsed once across the
-// layering scan and the published-vitest graph of every guardrail.
-const importSpecifierCache = new Map<string, readonly string[]>();
+// Source files do not change during a run. Import and production-consumer scans
+// share one parse and retain only the facts their checks need.
+const sourceAnalysisCache = new Map<string, {
+  specifiers: readonly string[];
+  runtimeSpecifiers: readonly string[];
+  consumed: ReadonlySet<string>;
+}>();
 
 function importSpecifiers(file: string): readonly string[] {
-  const cached = importSpecifierCache.get(file);
+  return sourceAnalysis(file).specifiers;
+}
+
+function sourceAnalysis(file: string) {
+  const cached = sourceAnalysisCache.get(file);
   if (cached) return cached;
-  const text = readFileSync(file, "utf8");
   const source = ts.createSourceFile(
     file,
-    text,
+    readFileSync(file, "utf8"),
     ts.ScriptTarget.Latest,
     true,
   );
-  const specifiers = importSpecifiersFromSource(source);
-  importSpecifierCache.set(file, specifiers);
-  return specifiers;
+  const analysis = {
+    specifiers: importSpecifiersFromSource(source),
+    runtimeSpecifiers: importSpecifiersFromSource(source, true),
+    consumed: isTestFile(file) || isStoryFile(file) ? new Set<string>() : consumedIdentifiers(source),
+  };
+  sourceAnalysisCache.set(file, analysis);
+  return analysis;
 }
 
-function importSpecifiersFromSource(source: ts.SourceFile): string[] {
+function importSpecifiersFromSource(source: ts.SourceFile, runtimeOnly = false): string[] {
   const specifiers: string[] = [];
   const vitestBindings = new Set(["vi", "vitest"]);
   for (const statement of source.statements) {
@@ -968,11 +1016,20 @@ function importSpecifiersFromSource(source: ts.SourceFile): string[] {
   }
   const visit = (node: ts.Node): void => {
     let specifier: ts.Node | undefined;
-    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+    if (ts.isImportDeclaration(node)) {
+      const clause = node.importClause;
+      if (runtimeOnly && (clause?.isTypeOnly || clause && !clause.name && clause.namedBindings
+        && ts.isNamedImports(clause.namedBindings) && clause.namedBindings.elements.length > 0
+        && clause.namedBindings.elements.every((binding) => binding.isTypeOnly))) return;
+      specifier = node.moduleSpecifier;
+    } else if (ts.isExportDeclaration(node)) {
+      if (runtimeOnly && (node.isTypeOnly || node.exportClause && ts.isNamedExports(node.exportClause)
+        && node.exportClause.elements.length > 0 && node.exportClause.elements.every((binding) => binding.isTypeOnly))) return;
       specifier = node.moduleSpecifier;
     } else if (ts.isExternalModuleReference(node)) {
       specifier = node.expression;
     } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      if (runtimeOnly) return;
       specifier = node.argument.literal;
     } else if (
       ts.isCallExpression(node)

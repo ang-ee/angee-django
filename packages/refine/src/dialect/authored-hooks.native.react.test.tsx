@@ -6,7 +6,7 @@ import { parse } from "graphql";
 import { StrictMode, type ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { authoredQueryKey, authoredQueryOptions, useAuthoredMutation, useAuthoredQuery, useAuthoredQueryBatch } from "./authored-hooks";
+import { authoredQueryKey, authoredQueryOptions, useAuthoredMutation, useAuthoredQuery, useAuthoredQueryBatch, useSetAuthoredQueryData } from "./authored-hooks";
 import type { TypedDocumentNode } from "../typed-document";
 import { invalidateAuthoredQueries } from "../query-invalidation";
 import { createRefineTestProviders } from "../testing";
@@ -433,7 +433,6 @@ test("authored reads run with no live provider", async () => {
   expect(result.current.error).toBeNull();
 });
 
-
 test("auth error policy covers data-only consumers and imperative refreshes", async () => {
   const failure = Object.assign(new Error("denied"), { statusCode: 403 });
   const f = fixture(vi.fn().mockRejectedValue(failure));
@@ -521,4 +520,199 @@ test("authored singleton reads opt into native previous-data placeholders across
   expect(read.result.current.data?.notes[0]?.id).toBe("one");
   await act(async () => { next.resolve({ data: { notes: [{ id: "two" }] } }); });
   await waitFor(() => expect(read.result.current.data?.notes[0]?.id).toBe("two"));
+});
+
+test.each(["success", "failure"] as const)("transient %s rejects overlap without detaching its pending operation", async (outcome) => {
+  let resolve!: (value: { data: Data }) => void;
+  let reject!: (reason: Error) => void;
+  const response = new Promise<{ data: Data }>((accept, decline) => { resolve = accept; reject = decline; });
+  const f = fixture(vi.fn(() => response));
+  const { result } = renderHook(() => useAuthoredMutation(MUTATION, { transient: true }), { wrapper: f.wrapper });
+  const variables = { id: "first" };
+  let pending!: ReturnType<typeof result.current[0]>;
+  act(() => { pending = result.current[0](variables); });
+  const settled = pending.then((data) => data, (error: unknown) => error);
+  await waitFor(() => expect(result.current[1].fetching).toBe(true));
+  await act(async () => {
+    await expect(result.current[0]({ id: "overlap" })).rejects.toThrow("Transient authored mutations cannot overlap another mutation.");
+  });
+  expect(f.custom).toHaveBeenCalledTimes(1);
+  expect(result.current[1].fetching).toBe(true);
+  expect(f.client.getMutationCache().findAll(mutationWithValues(variables))).toHaveLength(1);
+  await act(async () => {
+    if (outcome === "success") resolve({ data: { notes: [{ id: "secret" }] } });
+    else reject(new Error("Secret unavailable"));
+    await settled;
+  });
+  await waitFor(() => expect(result.current[1].fetching).toBe(false));
+  await waitFor(() => expect(f.client.getMutationCache().findAll(mutationWithValues(variables))).toHaveLength(0));
+  expect(result.current[1].error).toBeNull();
+  f.custom.mockResolvedValue({ data: { notes: [{ id: "next" }] } });
+  await act(async () => { await expect(result.current[0]({ id: "next" })).resolves.toEqual({ notes: [{ id: "next" }] }); });
+});
+
+test("ordinary authored mutations overlap while transient calls reject until earlier operations settle", async () => {
+  const first = deferred<{ data: Data }>();
+  const second = deferred<{ data: Data }>();
+  const f = fixture(vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise));
+  const { result, rerender } = renderHook(({ transient }) => useAuthoredMutation(MUTATION, { transient }), {
+    initialProps: { transient: false }, wrapper: f.wrapper,
+  });
+  let firstCall!: ReturnType<typeof result.current[0]>;
+  let secondCall!: ReturnType<typeof result.current[0]>;
+  act(() => {
+    firstCall = result.current[0]({ id: "first" });
+    secondCall = result.current[0]({ id: "second" });
+  });
+  await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(2));
+  await act(async () => { second.resolve({ data: { notes: [] } }); await secondCall; });
+  rerender({ transient: true });
+  await act(async () => {
+    await expect(result.current[0]({ id: "transient" })).rejects.toThrow("Transient authored mutations cannot overlap another mutation.");
+  });
+  expect(f.custom).toHaveBeenCalledTimes(2);
+  await act(async () => { first.resolve({ data: { notes: [] } }); await firstCall; });
+  f.custom.mockResolvedValue({ data: { notes: [] } });
+  await act(async () => { await expect(result.current[0]({ id: "transient" })).resolves.toEqual({ notes: [] }); });
+});
+
+
+test.each(["success", "failure"] as const)("a transient %s keeps zero cache retention when the next render disables transient mode", async (outcome) => {
+  let resolve!: (value: { data: Data }) => void;
+  let reject!: (error: Error) => void;
+  const response = new Promise<{ data: Data }>((accept, decline) => { resolve = accept; reject = decline; });
+  const f = fixture(vi.fn(() => response));
+  f.client.setDefaultOptions({ mutations: { gcTime: Infinity } });
+  const { result, rerender } = renderHook(({ transient }) => useAuthoredMutation(MUTATION, { transient }), {
+    initialProps: { transient: true }, wrapper: f.wrapper,
+  });
+  const variables = { id: "secret" };
+  let pending!: ReturnType<typeof result.current[0]>;
+  act(() => { pending = result.current[0](variables); });
+  const settled = pending.then((data) => data, (error: unknown) => error);
+  await waitFor(() => expect(result.current[1].fetching).toBe(true));
+  rerender({ transient: false });
+  const mutation = f.client.getMutationCache().findAll(mutationWithValues(variables))[0];
+  expect(mutation?.gcTime).toBe(0);
+  expect(mutation?.options.gcTime).toBe(0);
+  const error = new Error("Secret unavailable");
+  await act(async () => {
+    if (outcome === "success") resolve({ data: { notes: [{ id: "secret" }] } });
+    else reject(error);
+    const value = await settled;
+    expect(value).toEqual(outcome === "success" ? { notes: [{ id: "secret" }] } : error);
+  });
+  await waitFor(() => expect(f.client.getMutationCache().findAll(mutationWithValues(variables))).toHaveLength(0));
+  expect(result.current[1].error).toBeNull();
+  expect(result.current[1].fetching).toBe(false);
+  // The pinned lifetime belongs only to the completed dispatch, not later calls.
+  const nextVariables = { id: "ordinary" };
+  f.custom.mockResolvedValue({ data: { notes: [{ id: "ordinary" }] } });
+  await act(async () => { await result.current[0](nextVariables); });
+  const next = f.client.getMutationCache().findAll(mutationWithValues(nextVariables));
+  expect(next).toHaveLength(1);
+  expect(next[0]?.gcTime).toBe(Infinity);
+});
+
+test("an ordinary mutation chained immediately after transient settlement keeps its native retention policy", async () => {
+  const response = deferred<{ data: Data }>();
+  const f = fixture(vi.fn().mockReturnValueOnce(response.promise)
+    .mockResolvedValue({ data: { notes: [{ id: "ordinary" }] } }));
+  f.client.setDefaultOptions({ mutations: { gcTime: Infinity } });
+  const { result, rerender } = renderHook(({ transient }) => useAuthoredMutation(MUTATION, { transient }), {
+    initialProps: { transient: true }, wrapper: f.wrapper,
+  });
+  const firstVariables = { id: "secret" };
+  const nextVariables = { id: "ordinary" };
+  let pending!: ReturnType<typeof result.current[0]>;
+  act(() => { pending = result.current[0](firstVariables); });
+  await waitFor(() => expect(result.current[1].fetching).toBe(true));
+  rerender({ transient: false });
+  // The next dispatch is a normal promise continuation, without waiting for a
+  // React render between the first dispatch's reset and the next invocation.
+  const chained = pending.then(() => result.current[0](nextVariables));
+  await act(async () => {
+    response.resolve({ data: { notes: [{ id: "secret" }] } });
+    await chained;
+  });
+  const next = f.client.getMutationCache().findAll(mutationWithValues(nextVariables));
+  expect(next).toHaveLength(1);
+  expect(next[0]?.gcTime).toBe(Infinity);
+  await waitFor(() => expect(f.client.getMutationCache().findAll(mutationWithValues(firstVariables))).toHaveLength(0));
+});
+
+
+test("a transient mutation chained immediately after an ordinary mutation uses zero retention and owns reset state", async () => {
+  const response = deferred<{ data: Data }>();
+  const error = new Error("Ordinary write declined.");
+  const f = fixture(vi.fn().mockImplementationOnce(async () => { await response.promise; throw error; })
+    .mockResolvedValue({ data: { notes: [{ id: "secret" }] } }));
+  f.client.setDefaultOptions({ mutations: { gcTime: Infinity } });
+  const { result, rerender } = renderHook(({ transient }) => useAuthoredMutation(MUTATION, { transient }), {
+    initialProps: { transient: false }, wrapper: f.wrapper,
+  });
+  const firstVariables = { id: "ordinary" };
+  const nextVariables = { id: "secret" };
+  let pending!: ReturnType<typeof result.current[0]>;
+  act(() => { pending = result.current[0](firstVariables); });
+  const chained = pending.catch(() => result.current[0](nextVariables));
+  await waitFor(() => expect(result.current[1].fetching).toBe(true));
+  rerender({ transient: true });
+  await act(async () => { response.resolve({ data: { notes: [] } }); await chained; });
+  const first = f.client.getMutationCache().findAll(mutationWithValues(firstVariables));
+  expect(first).toHaveLength(1);
+  expect(first[0]?.gcTime).toBe(Infinity);
+  expect(first[0]?.state.error).toBe(error);
+  await waitFor(() => expect(f.client.getMutationCache().findAll(mutationWithValues(nextVariables))).toHaveLength(0));
+  expect(result.current[1].fetching).toBe(false);
+  expect(result.current[1].error).toBeNull();
+});
+
+test("response-backed completion accepts typed cache data before held background refresh", async () => {
+  const refreshed = deferred<{ data: Data }>();
+  const custom = vi.fn(async () => ({ data: { notes: [{ id: "one" }] } }));
+  custom.mockResolvedValueOnce({ data: { notes: [{ id: "one" }] } });
+  custom.mockResolvedValueOnce({ data: { notes: [{ id: "accepted" }] } });
+  custom.mockImplementationOnce(() => refreshed.promise);
+  const f = fixture(custom);
+  const { result } = renderHook(() => {
+    const accept = useSetAuthoredQueryData();
+    return {
+      read: useAuthoredQuery(DOCUMENT, { id: "a" }, { models: ["notes.Note"] }),
+      mutation: useAuthoredMutation(MUTATION, {
+        invalidateModels: ["notes.Note"],
+        acceptResponse: async (data, variables) => {
+          if (data) await accept(DOCUMENT, variables, (current) => current ? { ...current, notes: data.notes } : undefined);
+        },
+      }),
+    };
+  }, { wrapper: f.wrapper });
+  await waitFor(() => expect(result.current.read.data).toBeDefined());
+  await act(async () => { await result.current.mutation[0]({ id: "a" }); });
+  await waitFor(() => expect(custom).toHaveBeenCalledTimes(3));
+  expect(result.current.mutation[1].fetching).toBe(false);
+  expect(result.current.read.isFetching).toBe(true);
+  expect(result.current.read.data).toEqual({ notes: [{ id: "accepted" }] });
+  await act(async () => { refreshed.resolve({ data: { notes: [{ id: "refreshed" }] } }); });
+  await waitFor(() => expect(result.current.read.data).toEqual({ notes: [{ id: "refreshed" }] }));
+});
+
+test("background refresh failure remains a native read error after accepted completion", async () => {
+  const custom = vi.fn(async () => ({ data: { notes: [{ id: "one" }] } }));
+  custom.mockResolvedValueOnce({ data: { notes: [{ id: "one" }] } });
+  custom.mockResolvedValueOnce({ data: { notes: [{ id: "accepted" }] } });
+  custom.mockRejectedValueOnce(new Error("Refresh unavailable"));
+  const f = fixture(custom);
+  const { result } = renderHook(() => ({
+    read: useAuthoredQuery(DOCUMENT, { id: "a" }, { models: ["notes.Note"] }),
+    mutation: useAuthoredMutation(MUTATION, {
+      invalidateModels: ["notes.Note"], acceptResponse: () => undefined,
+    }),
+  }), { wrapper: f.wrapper });
+  await waitFor(() => expect(result.current.read.data).toBeDefined());
+  await act(async () => { await result.current.mutation[0]({ id: "a" }); });
+  await waitFor(() => expect(result.current.read.error?.message).toBe("Refresh unavailable"));
+  expect(result.current.mutation[1].error).toBeNull();
+  expect(result.current.mutation[1].fetching).toBe(false);
+  expect(f.notify).toHaveBeenCalledOnce();
 });

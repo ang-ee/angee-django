@@ -1,0 +1,6 @@
+interface:
+  display_name: "Angee Project"
+  short_description: "Configure a customer system's host, stack and settings."
+  default_prompt: "Use $angee-project to configure this customer system's host, stack and settings."
+policy:
+  allow_implicit_invocation: false

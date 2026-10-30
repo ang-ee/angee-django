@@ -19,15 +19,16 @@ describe("gqlAliasFor", () => {
     );
 
     expect(() => gqlAliasFor(missingRuntime)).toThrow(
-      /Compose the stack first, then run pnpm codegen from the stack web host/,
+      "Compose the stack first, then run pnpm --config.verify-deps-before-run=false exec angee-web-codegen --runtime ../runtime --web-root . from the stack web host.",
     );
   });
 });
 
 test("the emitted addon Vitest config loads the public web defaults", async () => {
   const appRoot = fileURLToPath(new URL("..", import.meta.url));
+  const templateRoot = fileURLToPath(new URL("../../../templates/addons/web/template/", import.meta.url));
   const template = readFileSync(
-    new URL("../../../templates/addons/web/template/vitest.config.ts.jinja", import.meta.url),
+    join(templateRoot, "{% if include_web %}web{% endif %}", "vitest.config.ts.jinja"),
     "utf8",
   );
   // The config is static; require rendering if the template gains substitutions.

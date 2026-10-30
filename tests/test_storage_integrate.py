@@ -868,3 +868,23 @@ def test_mount_graphql_connect_sync_list_and_non_admin_reader_denials(
         user=reader,
     )
     assert denied_connect.errors is not None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_failed_directory_enumeration_never_becomes_a_missing_file_inventory(
+    mount_env: SimpleNamespace, queued_mounts: list[Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = mount_env.tmp_path / "unreadable-subtree"
+    root.mkdir()
+    _write(root / "kept.txt", b"keep", mtime_ns=BASE_MTIME_NS)
+    mount = _connect(mount_env, root, mode=MountMode.REFERENCE, name="Unreadable subtree")
+    assert _run_sync(mount) == 1
+
+    def failed_walk(top: Any, *, followlinks: bool, onerror: Any):
+        onerror(PermissionError("subtree unavailable"))
+        yield
+
+    monkeypatch.setattr(os, "walk", failed_walk)
+    with pytest.raises(PermissionError):
+        _run_sync(mount)
+    assert not _file_map(mount.drive)["kept.txt"].is_trashed

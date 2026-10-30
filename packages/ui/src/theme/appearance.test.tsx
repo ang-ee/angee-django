@@ -13,7 +13,7 @@ import {
   type RuntimeUserPreferencesPatch,
 } from "../runtime/runtime";
 import { setColorSchemePreference } from "../lib/color-scheme";
-import { defineTheme } from "./runtime.mjs";
+import { bootstrapAppearance, defineTheme } from "./runtime.mjs";
 import type { ThemeContribution } from "./index";
 import {
   APPEARANCE_CACHE_KEY,
@@ -30,7 +30,6 @@ const paper: ThemeContribution = {
   definition: defineTheme({
     contractVersion: 1,
     id: "example.paper",
-    legacyIds: ["example.old-paper"],
     labelKey: "paper.label",
     descriptionKey: "paper.description",
     revision: 1,
@@ -122,7 +121,8 @@ test("an open draft re-applies theme, scheme and options without persisting", as
   expect(result.current.preferences).toEqual(saved);
   expect(result.current.currentPreferences).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark" });
   expect(result.current.dirty).toBe(true);
-  expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark", theme: "dark" });
+  expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark" });
+  expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
   expect(document.documentElement.style.colorScheme).toBe("dark");
   expect(document.documentElement.style.getPropertyValue("--brand")).toBe("#556677");
 
@@ -184,7 +184,12 @@ test("save persists once, preserves other preference slices and closes the draft
   expect(result.current.dirty).toBe(false);
   expect(result.current.saving).toBe(false);
   expect(JSON.parse(window.localStorage.getItem(APPEARANCE_CACHE_KEY)!)).toMatchObject({
-    themeId: paper.definition.id, colorScheme: "dark", options: changedOptions,
+    themeId: paper.definition.id, colorSchemePreference: "dark",
+    tokenLayers: {
+      shared: { "--brand": "#abcdef", "--surface-rail": "#334455" },
+      light: paper.definition.tokens.light,
+      dark: paper.definition.tokens.dark,
+    },
   });
   await act(async () => result.current.save());
   expect(patchPreferences).toHaveBeenCalledOnce();
@@ -246,6 +251,7 @@ test("reset directly deletes saved preferences, closes the draft and applies the
   expect(result.current.currentPreferences).toEqual({ version: 1 });
   expect(result.current.dirty).toBe(false);
   expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark" });
+  expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
   expect(document.documentElement.style.getPropertyValue("--surface-rail")).toBe("");
   await act(async () => result.current.setColorScheme("light"));
   expect(patchPreferences).toHaveBeenCalledTimes(2);
@@ -274,6 +280,32 @@ test("draft-only edits never write the boot cache and remounting applies saved a
   expect(reloaded.result.current.dirty).toBe(false);
   expect(document.documentElement.dataset).toMatchObject({ themeId: paper.definition.id, colorScheme: "light" });
   expect(document.documentElement.style.getPropertyValue("--brand")).toBe("#445566");
+});
+
+test.each([true, false])("the saved cache follows a changed system scheme before auth resolves (dark: %s)", (dark) => {
+  const matchMedia = window.matchMedia.bind(window);
+  let systemDark = !dark;
+  vi.spyOn(window, "matchMedia").mockImplementation((query) => {
+    const media = matchMedia(query);
+    Object.defineProperty(media, "matches", { value: systemDark });
+    return media;
+  });
+  const { unmount } = renderAppearance({
+    preferences: { appearance: { ...saved, colorScheme: "system" } },
+  });
+  unmount();
+  systemDark = dark;
+  document.documentElement.removeAttribute("style");
+  bootstrapAppearance({
+    fingerprint: host.fingerprint!,
+    host: { themeId: ink.definition.id, colorScheme: "dark", fingerprint: host.fingerprint!, tokenLayers: ink.definition.tokens },
+    catalogue: { schema: 1, fingerprint: "catalogue", themes: [paper.definition, ink.definition] },
+  }, window);
+  renderAppearance({ status: "resolving" });
+  expect(document.documentElement.dataset.colorScheme).toBe(dark ? "dark" : "light");
+  expect(document.documentElement.style.getPropertyValue("--surface-canvas")).toBe(dark ? "#111111" : "#fafafa");
+  expect(document.documentElement.style.getPropertyValue("--brand")).toBe("#445566");
+  expect(document.documentElement.style.getPropertyValue("--surface-rail")).toBe("#223344");
 });
 
 test("a failed save retains the draft, saved appearance cache and error, and permits retry", async () => {
@@ -331,16 +363,19 @@ test("removing optional overrides becomes clean again and keeps following host d
   expect(result.current.dirty).toBe(false);
   expect(result.current.currentPreferences).toEqual({ version: 1 });
   expect(document.documentElement.dataset).toMatchObject({ themeId: ink.definition.id, colorScheme: "dark" });
+  expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
   expect(patchPreferences).not.toHaveBeenCalled();
 });
 
-test("legacy theme aliases remain clean and save through the canonical preference path", async () => {
-  const { result, stored } = renderAppearance({ preferences: { appearance: { ...saved, themeId: "example.old-paper" } } });
-  act(() => result.current.openDraft());
-  expect(result.current.dirty).toBe(false);
-  expect(result.current.preferences.themeId).toBe(paper.definition.id);
-  await act(async () => result.current.save());
-  expect(stored().appearance).toEqual(saved);
+test("the cutoff leaves historical browser choices untouched and applies saved preferences", () => {
+  const previousCache = JSON.stringify({ pendingLegacy: { actorId: null, preference: "dark" } });
+  window.localStorage.setItem("angee:theme", "dark");
+  window.localStorage.setItem("angee:appearance", previousCache);
+  const { result, patchPreferences } = renderAppearance();
+  expect(result.current.preferences).toEqual(saved);
+  expect(window.localStorage.getItem("angee:theme")).toBe("dark");
+  expect(window.localStorage.getItem("angee:appearance")).toBe(previousCache);
+  expect(patchPreferences).not.toHaveBeenCalled();
 });
 
 test("scheme commands use the same setter and stay in an open draft", async () => {

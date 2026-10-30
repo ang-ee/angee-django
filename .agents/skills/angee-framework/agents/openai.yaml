@@ -1,0 +1,6 @@
+interface:
+  display_name: "Angee Framework"
+  short_description: "Route a change to a framework seam instead of an addon."
+  default_prompt: "Use $angee-framework to route this change to its framework seam and required checks."
+policy:
+  allow_implicit_invocation: false

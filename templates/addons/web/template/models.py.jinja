@@ -1,0 +1,35 @@
+"""Source models for the {{ addon_title | lower }} addon."""
+
+from __future__ import annotations
+
+from django.db import models
+
+from angee.base.models.base import AngeeDataModel
+from angee.base.models.ownership import OwnerMixin
+
+
+class {{ model_name }}(OwnerMixin, AngeeDataModel, concrete=True):
+    """One {{ model_name | lower }}, owned by the user who created it.
+
+    ``OwnerMixin`` supplies the ``owner`` column the field-backed ``owner``
+    relation in ``permissions.zed`` reads; ``rebac_grantable`` names the
+    relations a sharer may grant and the permission that allows it.
+    """
+
+    sqid_prefix = "{{ (model_name | lower)[:3] }}_"
+    rebac_grantable = {"reader": "share", "editor": "share"}
+
+    title = models.CharField(max_length=160)
+    body = models.TextField(blank=True, default="")
+
+    class Meta:
+        """Django model options."""
+
+        abstract = True
+        ordering = ("-updated_at", "title", "sqid")
+        rebac_resource_type = "{{ addon_id }}/{{ model_name | lower }}"
+
+    def __str__(self) -> str:
+        """Return the title for Django displays."""
+
+        return self.title

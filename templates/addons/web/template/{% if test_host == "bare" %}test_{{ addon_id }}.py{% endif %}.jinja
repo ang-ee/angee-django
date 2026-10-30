@@ -1,0 +1,34 @@
+"""Per-actor visibility of {{ model_name | lower }} rows under the ownership gate.
+
+Runs on the bare test host, which collects only the framework repository's
+``tests/`` (pytest ``testpaths``): this module is rendered beside the addon
+only because Copier writes nowhere else. Adopt it with the registration
+``{{ addon_name }}.testing`` owns:
+
+- move this file to the framework repository's ``tests/test_{{ addon_id }}.py``;
+- list ``"{{ addon_name }}"`` in ``tests/settings.py`` ``INSTALLED_APPS``;
+- import ``{{ addon_name }}.testing.models`` once from ``tests/conftest.py``.
+
+``composed_tables`` (``angee.base.testing.fixtures``) owns the tables and the
+REBAC sync.
+"""
+
+from __future__ import annotations
+
+from django.contrib.auth import get_user_model
+from rebac import system_context
+
+from {{ addon_name }}.testing.models import {{ model_name }}
+
+
+def test_owner_reads_own_rows_and_an_outsider_reads_none(composed_tables: None) -> None:
+    """The field-backed owner relation scopes reads without storing a tuple."""
+
+    del composed_tables
+    with system_context(reason="{{ addon_id }} test setup"):
+        owner = get_user_model().objects.create_user(username="owner", password="owner")
+        outsider = get_user_model().objects.create_user(username="outsider", password="outsider")
+        row = {{ model_name }}.objects.create(title="First", owner=owner)
+
+    assert [visible.pk for visible in {{ model_name }}.objects.as_user(owner)] == [row.pk]
+    assert not {{ model_name }}.objects.as_user(outsider).exists()

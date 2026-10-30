@@ -26,13 +26,15 @@ Project and stack templates expose three build inputs:
 
 - `appearance_theme_id`, which defaults to `angee.stock`;
 - `appearance_color_scheme`, one of `system`, `light` or `dark`;
-- `appearance_options`, an optional JSON `{ "version": 1, "value": ... }`
-  envelope for a configurable host theme.
+- `appearance_options`, an optional JSON `{ "version": ..., "value": ... }`
+  envelope matching the selected theme's current options version.
 
 The Vite configuration validates those values against the generated catalogue.
 Changing a host default therefore requires the normal codegen and web build.
 The synchronous head bootstrap applies that default, or a validated actor cache,
-before the application entry loads.
+before the application entry loads. Vite bundles the React-free
+[`bootstrapAppearance`](../../packages/ui/src/theme/runtime.mjs) owner; bootstrap
+and React share its token validation, cache protocol and root application.
 
 A signed-in user's `iam.User.preferences.appearance` fields override the host
 independently. The stored document contains stable IDs and versioned inputs:
@@ -71,15 +73,23 @@ slice. If a saved theme is later uninstalled, the UI uses the host or intrinsic
 fallback and retains the unavailable ID so reinstalling the addon can restore
 the selection.
 
-The former `angee.brand` theme ID is a compatibility alias claimed by Default.
-Its version 1, 2 and 3 customization envelopes resolve through Default's
-migrator and the next successful appearance save writes the canonical
-`angee.stock` ID. The deprecated `angee.theme_brand` addon contains no theme
-implementation; it only depends on `angee.theme_stock` for older stack manifests.
+Theme IDs are exact canonical IDs and options envelopes must match the selected
+implementation's current version. Compatibility aliases and predecessor option
+migrators are not part of the current renderer.
+
+Before crossing this cutoff, save older selections and options through Appearance
+on the pre-refactor snapshot. Browser-only preferences are separate from
+the server database: a device may still hold `angee:theme` or a `pendingLegacy`
+entry in `angee:appearance`. While signed in on the snapshot, open Appearance and
+save the intended scheme and theme, or manually transfer that choice to the current
+Appearance page. The new code neither consumes those old keys nor deletes them; its disposable
+first-paint cache uses the separate current `angee:appearance:3` protocol.
+A database history reset does not prove every browser has completed this step;
+keep the snapshot available until each affected device's choice is preserved.
 
 The DOM uses `data-theme-id` for implementation identity and
-`data-color-scheme="light|dark"` for the resolved scheme. `data-theme` mirrors
-the scheme for one compatibility cycle.
+`data-color-scheme="light|dark"` for the resolved scheme. Theme identity and
+color scheme have separate attributes.
 
 The editable Appearance page keeps a provider draft open for its mounted
 lifetime. Theme, color scheme, customization and contributed tools read and
@@ -90,7 +100,8 @@ the saved preference. Both leave the page ready for the next edit. Leaving with
 unsaved changes uses the standard navigation guard; confirmed departure discards
 the draft, and unmounting always restores the saved appearance. Read-only
 appearance opens no draft and offers neither action. The boot cache contains
-only saved values, so reloading restores the saved appearance.
+only saved values and both resolved scheme layers, so reloading restores the
+saved appearance even when the device's color scheme changed between visits.
 
 The three recovery verbs have distinct scopes: **Discard** restores the last
 saved appearance; **Restore theme defaults** edits the draft inside the
@@ -168,7 +179,7 @@ defineThemeContribution({
 
 ## Authoring a theme addon
 
-A model-less theme addon has the same `addon.toml` and web package structure as
+A model-less theme addon has the same `pyproject.toml` and web package structure as
 other addons. Its package exports the browser contribution at `.` and a pure
 Node-loadable definition entry at `./themes`:
 
@@ -258,13 +269,13 @@ standard palette/type/shape controls; define theme-specific options only when
 their inputs have different meaning.
 
 The complete consumer example is
-[`examples/addons/example/theme`](../../examples/addons/example/theme). The
-framework catalogue under `addons/angee/theme_*` shows fixed, asset-bearing and
+[`examples/src/example/theme`](../../examples/src/example/theme). The
+framework catalogue under `src/angee/theme_*` shows fixed, asset-bearing and
 configurable variants.
 
 ## Build outputs and migration
 
-`angee build` discovers `./themes` only for composed addon packages and writes
+The explicit host build discovers `./themes` only for composed addon packages and writes
 `runtime/web/themes.css` plus `runtime/web/themes.catalog.json`. The project CSS
 entry imports the generated stylesheet; Vite resolves theme-relative images and
 fonts through its normal asset pipeline. Browser composition also checks that
@@ -272,10 +283,9 @@ each addon contribution references its canonical discovered definition.
 
 Projects created before this feature need a template update. Re-render the
 project template, review the explicit `/src/index.css` head link and virtual
-`virtual:angee-appearance` wiring, then run the normal Angee build and production
-web build. The deprecated color-scheme names continue to delegate during this
-cycle, but new code should import `ColorSchemePreference` and
-`useColorSchemePreference` and target `data-color-scheme`.
+`virtual:angee-appearance` wiring, then run the runtime build and production
+web build. Import `ColorSchemePreference` and `useColorSchemePreference` and
+target `data-color-scheme`.
 
 `angee.appearance_integrate` is optional. It adds a signed-in GraphQL analysis
 operation and a tool on the Appearance page, as an `appearance.settings#tools`

@@ -3,7 +3,7 @@
 import pytest
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 
-from angee.errors import exception_text
+from angee.base.exceptions import exception_text
 
 
 @pytest.mark.parametrize("error,expected", [
@@ -32,3 +32,47 @@ def test_exception_text_diagnostic_keeps_type_and_cause():
         assert exception_text(error, diagnostic=True) == (
             "ValueError: invalid plan; caused by LookupError: missing owner"
         )
+
+
+@pytest.mark.parametrize("attribute", ["__cause__", "__context__"])
+def test_exception_text_diagnostic_stops_at_self_reference(attribute):
+    error = RuntimeError("failed")
+    setattr(error, attribute, error)
+
+    assert exception_text(error, diagnostic=True) == "RuntimeError: failed"
+    assert exception_text(error) == "failed"
+
+
+def test_exception_text_diagnostic_stops_at_mixed_chain_cycle():
+    first = RuntimeError("first")
+    second = ValueError("second")
+    first.__cause__ = second
+    second.__context__ = first
+
+    assert exception_text(first, diagnostic=True) == (
+        "RuntimeError: first; caused by ValueError: second"
+    )
+
+
+def test_exception_text_diagnostic_respects_suppressed_context_and_explicit_cause():
+    error = RuntimeError("failed")
+    error.__context__ = LookupError("hidden")
+    error.__suppress_context__ = True
+    assert exception_text(error, diagnostic=True) == "RuntimeError: failed"
+
+    error.__cause__ = ValidationError({"status": "Invalid state."})
+    assert exception_text(error, diagnostic=True) == (
+        "RuntimeError: failed; caused by ValidationError: status: Invalid state."
+    )
+
+
+def test_exception_text_diagnostic_formats_deep_chains_without_recursion():
+    error = RuntimeError("root")
+    for _ in range(1200):
+        outer = RuntimeError("outer")
+        outer.__cause__ = error
+        error = outer
+
+    text = exception_text(error, diagnostic=True)
+    assert text.count("RuntimeError: outer") == 1200
+    assert text.endswith("; caused by RuntimeError: root")

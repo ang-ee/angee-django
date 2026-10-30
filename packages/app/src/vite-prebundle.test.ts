@@ -2,6 +2,8 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
+import { Window } from "happy-dom";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { createServer, optimizeDeps, resolveConfig, type ConfigEnv, type Plugin, type UserConfig } from "vite";
 
@@ -46,12 +48,49 @@ const uiSource = fileURLToPath(new URL("../../ui/src/", import.meta.url));
 /** A web root whose only `@angee/*` dependency is the linked UI source, as on a dev stack. */
 function linkedUiWebRoot(prefix: string): string {
   const webRoot = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(webRoot, "runtime", "web"), { recursive: true });
+  writeFileSync(join(webRoot, "runtime", "web", "manifest.json"), JSON.stringify({ schema: 1 }));
   writeFileSync(join(webRoot, "package.json"), '{"dependencies":{"@angee/ui":"workspace:*"}}\n');
   symlinkSync(fileURLToPath(new URL("../node_modules", import.meta.url)), join(webRoot, "node_modules"));
   writeFileSync(join(webRoot, "index.html"), '<script type="module" src="/main.ts"></script>\n');
   writeFileSync(join(webRoot, "main.ts"), 'import "@angee/ui"; import "react-dom/client";\n');
   return webRoot;
 }
+
+test("bundles and applies appearance synchronously before the app module loads", async () => {
+  const webRoot = linkedUiWebRoot("angee-vite-appearance-");
+  const window = new Window({ url: "http://localhost" });
+  try {
+    const config = await defineAngeeWebViteConfig({
+      prebundleAngeePackages: false,
+      gqlRuntimeDir: join(webRoot, "runtime", "gql"),
+      webRoot,
+      appearance: { colorScheme: "light" },
+    });
+    const server = await createServer({
+      ...config,
+      configFile: false,
+      logLevel: "silent",
+      optimizeDeps: { noDiscovery: true, entries: [] },
+      server: { middlewareMode: true, ws: false, watch: null },
+    });
+    try {
+      const html = await server.transformIndexHtml("/", '<html><head></head><body><script type="module" src="/main.ts"></script></body></html>');
+      const bootstrap = html.match(/<script data-angee-appearance-bootstrap="">([\s\S]*?)<\/script>/);
+      expect(bootstrap).not.toBeNull();
+      expect(html.indexOf("data-angee-appearance-bootstrap")).toBeLessThan(html.indexOf('src="/main.ts"'));
+      runInNewContext(bootstrap![1]!, { document: window.document, localStorage: window.localStorage });
+      expect(window.document.documentElement.dataset.colorScheme).toBe("light");
+      expect(window.document.documentElement.style.colorScheme).toBe("light");
+      expect(window.document.documentElement.hasAttribute("data-theme")).toBe(false);
+    } finally {
+      await server.close();
+    }
+  } finally {
+    await window.happyDOM.close();
+    rmSync(webRoot, { recursive: true, force: true });
+  }
+});
 
 /** Every bare CodeMirror import in the UI's shipped source, with its importing file. */
 function uiCodeMirrorImports(): Array<{ specifier: string; importer: string }> {
@@ -79,7 +118,6 @@ test("linked UI requests the CodeMirror graph as one unoptimized copy on first u
     const server = await createServer({
       ...config,
       configFile: false,
-      plugins: [],
       logLevel: "silent",
       appType: "custom",
       cacheDir: join(webRoot, "cache"),
@@ -126,11 +164,12 @@ test.each([false, true])("discovers linked UI dependencies across lazy boundarie
     // Run Vite's native scanner/optimizer without a server. Scanning the UI
     // entry directly supplies the reference graph, including its import()
     // edges, so new lazy dependencies need no hand-maintained test inventory.
-    const scanConfig = { ...config, configFile: false as const, plugins: [], logLevel: "silent" as const };
+    const resolved = await resolveConfig({ ...config, configFile: false, logLevel: "silent" }, "serve");
+    const scanConfig = { ...config, optimizeDeps: resolved.optimizeDeps, configFile: false as const, plugins: [], logLevel: "silent" as const };
     const reference = await optimizeDeps(await resolveConfig({
       ...scanConfig,
       cacheDir: join(webRoot, "reference-cache"),
-      optimizeDeps: { ...config.optimizeDeps, entries: [fileURLToPath(new URL("../../ui/src/index.ts", import.meta.url))] },
+      optimizeDeps: { ...resolved.optimizeDeps, entries: [fileURLToPath(new URL("../../ui/src/index.ts", import.meta.url))] },
     }, "serve"));
     const actual = await optimizeDeps(await resolveConfig({
       ...scanConfig,
@@ -163,7 +202,7 @@ test("proxies the agent ACP WebSocket with the browser Origin intact", async () 
       webRoot,
     });
     const protocol = readFileSync(
-      new URL("../../../addons/angee/agents/protocol.py", import.meta.url), "utf8",
+      new URL("../../../src/angee/agents/protocol.py", import.meta.url), "utf8",
     );
     const acpPath = protocol.match(/^ACP_PATH = "([^"]+)"$/m)?.[1];
     expect(acpPath).toBeDefined();
@@ -252,7 +291,7 @@ describe("angeePrebundleForce", () => {
     expect(angeePrebundleForce(webRoot, ["@angee/ui"])).toBe(true);
     // A fresh coverage/test-results tree inside the package must be skipped, so
     // the unchanged source tree still reads as cached.
-    for (const dir of ["coverage", "storybook-static", "test-results", "playwright-report"]) {
+    for (const dir of [".jj", "coverage", "storybook-static", "test-results", "playwright-report"]) {
       const churn = join(webRoot, "node_modules", "@angee", "ui", dir);
       mkdirSync(churn, { recursive: true });
       writeFileSync(join(churn, "report.txt"), `${Math.random()}\n`);

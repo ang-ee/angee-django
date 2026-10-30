@@ -46,7 +46,7 @@ depend on addons or a composed project's generated schema.
 Knowledge's role-scoped notes compose messaging's `RecordThreadStream` through
 its child item and inline composer contracts. Knowledge owns page creation, body
 writes, binding, and vault permission reads; record hosts declare the role and
-public vault id. See the [knowledge addon](../../addons/angee/knowledge/README.md).
+public vault id. See the [knowledge addon](../../src/angee/knowledge/README.md).
 
 ### Ownership boundaries
 
@@ -74,6 +74,25 @@ public vault id. See the [knowledge addon](../../addons/angee/knowledge/README.m
 - Record display representation is a backend-emitted metadata fact in the
   `angee.resources` artifact. Frontend code reads that field and keeps only the
   `id` floor; it does not probe candidate display fields.
+- The composed web manifest is the Tailwind source list: the composer emits
+  `runtime/web/tailwind.sources.css` from the declared package sources,
+  resolving workspace links to real directories so the dev watcher sees edits.
+  Runtime CSS is never hand-edited; every addon web package enters that manifest
+  and the stack-owned dependency graph.
+- Installed `@angee/*` packages are prebundled by source signature. Vite's
+  optimizer hash covers only the lockfile and manifests, so
+  `defineAngeeWebViteConfig` (`@angee/app/vite`) hashes each package's on-disk
+  source and sets `optimizeDeps.force` when that signature differs from its
+  persisted marker; the in-repo example links `@angee/*` source (HMR) and is
+  excluded.
+- Vite dev and build await the shared `@angee/app` generator before serving or
+  bundling; preview consumes built output. Native compose and operator SDL are
+  its inputs. Standalone fragment checks invoke the same generator through its
+  explicit CLI ([Composition and schema](../checks.md#composition-and-schema)).
+- Operator daemon types are generated, never authored: the
+  [operator manifest](../../src/angee/operator/pyproject.toml) contributes the
+  committed daemon SDL and document glob to the shared codegen pass, and daemon
+  actions return `MutationResult{status}`.
 - Layering and unconsumed-owner guardrails are Vitest checks over the locked
   package graph. Do not add a boundary-lint dependency without updating
   [the opinionated stack](../stack.md) and the manifests together.
@@ -125,14 +144,15 @@ bundle is rejected by [`composeAddons`](../../packages/app/src/define-addon.ts).
 Use the owning addon's namespace with `createNamespaceT`; do not override
 shared UI copy through an addon bundle.
 
+**Plural copy uses native i18next suffixes:** declare `key_one`/`key_other` in the bundle and call `t("key", { count })` with a numeric count; `createNamespaceT` supplies the declared native plural defaults, including in provider-less renders. A missing category falls back to `_other`; zero uses the locale's category unless the bundle explicitly declares `_zero`.
+
 ## Component ontology
 
 The [public catalog](../../packages/ui/src/catalog.ts) assigns one UX kind to
 each shipped component and its owner-specific hooks. The
 [Library overview](../../packages/storybook/src/stories/Library.stories.tsx) (story id `library-overview--default`)
-renders the owners; the
-[composition report](../../packages/storybook/src/stories/Composition.stories.tsx) (story id `reports-composition--default`)
-shows their dependencies.
+renders the owners. The running application's `createApp(...).explain` exposes
+menu and container provenance through the [runtime explanation owner](../../packages/app/src/explain.ts).
 
 | Kind | Meaning |
 |---|---|
@@ -151,9 +171,6 @@ catalog and container contracts, and brings the concrete gap and intended
 composition to the framework owner. Extend that owner or contribute through its
 container. A new owner belongs in `@angee/ui` (or app composition in
 `@angee/app`) with its story and catalog entry, never as an addon-local copy.
-Addon route instances awaiting the lane-2 page shapes appear in the composition
-report as “composes no page shape yet”; they are information, not ownership
-violations.
 
 **The shipped owner is the only Storybook authority.** Authoritative stories
 render real `@angee/ui`, `@angee/app` shell owners and shipped addon components,
@@ -162,7 +179,7 @@ needing its own markup belongs under `Explorations/<YYYY-MM-DD> <name>` (a
 `packages/storybook/src/explorations/` folder with its own story glob in
 `.storybook/main.mjs`; none exists today), names the ruling it fed and its
 superseding owner, and is deleted once that owner exists. Explorations sort last
-and never enter the Library or the shipped composition tree.
+and never enter the Library.
 
 The `@angee/ui/catalog` subpath audits runtime exports, including aliases; the
 root entry does not load it. Type-only exports are contracts, not rendered
@@ -176,8 +193,7 @@ stable.
 The [generator](../../packages/storybook/scripts/catalog.mjs) reads these facts
 through TypeScript, reports independent owners of the same shell place, and
 derives story links only from CSF `meta.component` or `parameters.owner`.
-Missing coverage stays `null` and is visible in the Library. This lane omits
-`composes`; the composition graph carries the inventory edges separately.
+Missing coverage stays `null` and is visible in the Library.
 `recipeAxes(recipe)` reads native tailwind-variants metadata for specimens.
 The guard regenerates and diffs the catalog, so shape-valid but stale facts fail.
 
@@ -213,13 +229,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `documents.public.ts` (or vice versa) fails codegen loudly against the wrong
   schema. Optional schema contributions keep their documents and UI registrations
   in the contributing addon's web package, so hosts without it never scan those
-  operations; see [OIDC sign-in](../../addons/angee/iam_integrate_oidc/web/src/index.ts).
-  An opaque `JSON`-scalar value is parsed at its domain owner with a
-  valibot schema (`safeParse`), never asserted into an application shape; a
-  recursive shape a declarative schema cannot express may wrap its type guard
-  in `v.custom`, keeping the parse boundary in the schema.
+  operations; see [OIDC sign-in](../../src/angee/iam_integrate_oidc/web/src/index.ts).
+  An opaque `JSON`-scalar value is parsed at its domain owner with its declared
+  schema, never asserted into an application shape. Resource metadata uses
+  Valibot `safeParse`; FormSpec uses the standalone Ajv validator generated from
+  its shared [JSON Schema](../../src/angee/base/schemas/form_spec.schema.json).
+  Reuse the existing contract and validator instead of maintaining another schema.
 - **Eligible ActionResult mutations are derived, not authored.** Codegen in
-  `packages/app/bin/angee-web-codegen.mjs` derives mutations with at least one
+  the shared `@angee/app` generator derives mutations with at least one
   argument when every argument is required (non-null without a default), or
   when `id: ID!` is the sole required argument and all others are optional or
   defaulted. Other shapes stay authored. Generated documents preserve the
@@ -336,7 +353,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   Settings. Never add a landing flag or fall back to route order.
 - Rendered resource pages use `resourcePageRoutes(name, path, component,
   resource?)` from `@angee/app`; the helper owns the list + `$id` child pair and
-  the default `"console"` layout. An explicit `detailComponent` gets a native
+  the default `"console"` layout. A layout binds its own schema
+  (`RefineLayoutConfig.schema`): console-only fields need the console client, so
+  a layout rendering them sets `defaultSchema: "console"` while the public/login
+  layout stays `public`. An explicit `detailComponent` gets a native
   router index page for the list, so its record page replaces the list. Without
   it the list surface keeps owning the selected record through the child param.
   Addon manifest tests call
@@ -377,7 +397,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   multiword terminal widget name, matching the web widget registry. Backend field
   metadata and the owning addon's `widgets` contribution use the identical key,
   for example `angee.integrate.integrationSyncCursor`. The validator in
-  [`angee.data.field_classification`](../../angee/data/field_classification.py)
+  [`angee.graphql.data.resource_fields`](../../src/angee/graphql/data/resource_fields.py)
   also accepts existing underscore names; unknown bare names remain errors.
 - **A resource registry key is the emitted canonical `modelLabel`** (for example
   `"integrate.OAuthClient"`). Addon composition may accept a unique bare or
@@ -412,7 +432,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   because there the canvas is the subject and the inspector its editor). The
   drawers are tools: session-scoped and record-independent (agents, logs). A
   candidate that fails its region's test belongs elsewhere. Related records
-  navigate the middle and the explorer keeps the place; the aside drills in for
+  navigate the middle and the explorer keeps the place (see
+  [Explorer navigation continuity](#explorer-navigation-continuity)); the aside drills in for
   a bounded question about one object in the record's context (this run, this
   changeset, this decision, this conversation) and links to the object's page
   for the open-ended work. Aside publishers compose by owner for their mounted lifetime:
@@ -442,7 +463,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   inside its layout's `<Outlet/>`, so the chrome stays mounted. The previous page
   stays mounted but hidden meanwhile; its portaled control band and statusline
   hide with it ([layout band](../../packages/ui/src/layouts/layout-band.tsx)).
-  Link intent preloads the chunk, so the fallback shows only for slow loads. Do not hand-roll
+  Link intent preloads the chunk, so the fallback shows only for slow loads.
+  Intent preloading also runs each matched route's `beforeLoad`, so a
+  `beforeLoad` only reads and redirects; session side effects belong to a router
+  event (`?debug` uses `onBeforeLoad`). Do not hand-roll
   `React.lazy` + a manual `<Suspense>`
   around a route's `<Outlet/>`. Lighter manifest content (container children,
   forms, glyphs) stays eager. Keep a registered form and its descriptor in an
@@ -450,7 +474,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   re-export the page module. A page may import its form, and form callers import
   the form module directly. A heavy optional surface may use `React.lazy` inside
   the shared `LazyBoundary` when its dependency tree otherwise enters the boot
-  bundle. The [agents chat](../../addons/angee/agents/web/src/views/AgentChatterPane.tsx)
+  bundle. The [agents chat](../../src/angee/agents/web/src/views/AgentChatterPane.tsx)
   defers assistant-ui, streamdown and its code renderer until chat opens; its
   `record#aside` child and context remain eager so addon composition stays
   synchronous. A transport or context shared
@@ -618,18 +642,21 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `use<Addon>T()` in an addon (created with `createNamespaceT(ns, fallback)`),
   with namespace-relative English keys in the namespace bundle. A prop whose default is a
   label defaults to `undefined` and resolves `?? t("key")` in the body — never call
-  `t()` in a default parameter. No hardcoded copy in a component. Four boundaries
+  `t()` in a default parameter. No hardcoded copy in a component. Three boundaries
   stay plain English: an addon's declarative manifest menu/route `label:` and
   chatter/drawer contribution labels (chrome data, not in-component copy — none
-  are routed), a form registered via `forms:` (a statically parsed element,
-  never rendered as a component, so a hook cannot reach its `<Field label>`),
-  and a dashboard widget row-column `label` (authored resource data).
+  are routed) and a dashboard widget row-column `label` (authored resource data).
+  A form registered via `forms:` is a component (`RegisteredFormView` renders it),
+  so `use<Addon>T()` reaches its `<Field label>`.
 - Every icon is a registered glyph rendered via `<Glyph name="…">` (or the
   `renderGlyph(icon)` slot adapter). A component never imports `lucide-react`
   directly: base glyphs live in `chrome/icon-registry.ts`; an addon contributes its
   own lucide components through the manifest `icons:` field (the registry seam), not
   by rendering them. Glyph ids are lowercase/kebab-case; the lookup normalizes
   requested names to lowercase, so camelCase registry keys do not resolve.
+  Glyph composition is fail-fast on id: base composes first, an addon cannot
+  re-register another's glyph, and a name added to `baseIcons` collides with any
+  addon already contributing it.
 - Use shared page, resource, form, table, widget, and layout primitives before
   adding new local state. Never hand-roll a resource list (grid/list/group/board),
   form, or detail in an addon — compose the shared resource actions
@@ -649,6 +676,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   owners. Small size does not excuse duplication. Pages do not own table
   mechanics, duplicate route params, cache state, bespoke loading/error surfaces,
   or local copies of shared resource-view state.
+- **A list selects only declared fields.** The selection owner
+  (`requestedFieldPaths`) fetches the paths its columns declare plus the
+  `ListView fields={[…]}` extras and nothing else; a render callback reads only
+  those fields.
 - A row verb is a `rowActions` declaration on `ListView`/`RowsListView`, never a
   hand-rolled trailing column with local `useConfirm`/`toast.danger` ceremony.
   Declare `presentation="icon"`, `"label"`, or `"both"`; labelled text is the default
@@ -835,7 +866,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `contextLine` remains the deliberate custom-rendering escape hatch. Place
   operational fields in a collapsed Details group when their create-default
   behavior must remain available.
-  Projects exports its [standard declarations](../../addons/angee/projects/README.md)
+  Projects exports its [standard declarations](../../src/angee/projects/README.md)
   so consumer routes compose the same forms, lists and record tabs.
   See the shipped [FormView hero](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--forms`).
 - **Statusbar steps are projections of owner facts.** `StatusbarSteps` renders only
@@ -859,7 +890,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   state. The model's Hasura resource owns filter/order/group/facet capabilities;
   the list owns its heading row, paging and `rowActions`, including
   confirmations for generated action callbacks. See
-  [Integration Streams](../../addons/angee/integrate/web/src/IntegrationStreams.tsx).
+  [Integration Streams](../../src/angee/integrate/web/src/IntegrationStreams.tsx).
   A large browsable set inside a record (child runs, trigger events, a project's
   tasks) keeps the full list: the default presentation with `scope="local"`.
   A product narrows a form's sections and verbs per app or route with `only`
@@ -921,12 +952,12 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **Inline visibility controls bind a server verb.** Declare a
   `<Field name="visibility" widget="visibility" placement="title" visibilityAction={...} />`.
   The [shared widget](../../packages/ui/src/widgets/visibility.tsx) uses record
-  chrome's server choices, revision and action gate; [Task fields](../../addons/angee/projects/web/src/task-actions.tsx)
-  and [Answer fields](../../addons/angee/proposals/web/src/index.tsx) declare the binding.
+  chrome's server choices, revision and action gate; [Task fields](../../src/angee/projects/web/src/task-actions.tsx)
+  and [Answer fields](../../src/angee/proposals/web/src/index.tsx) declare the binding.
 - **Records have one chronology.** The timeline addon owns the `Timeline`
   tab and the `timeline` read, which pages a SQL `UNION ALL` of native source
   queries behind one cursor. Each addon contributes a Python
-  [timeline kind](../../addons/angee/timeline/kinds.py) and a `timeline#kinds` presentation (label,
+  [timeline kind](../../src/angee/timeline/kinds.py) and a `timeline#kinds` presentation (label,
   glyph, verb, target). A line is a pointer: one sentence, actor, time, one
   verb, never a body, never an action. A run folds its decisions and changes
   into its line; the run drill-in shows one run with its own Stop. The same
@@ -948,25 +979,22 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   field-by-field permission query or render a misleading empty value.
 - A relation field is a link, not a dead end. A routed collection page tags its
   refine resource on the route — `{ name, path, component, resource:
-  "integrate.OAuthClient" }` (one route per resource, build-time fail-fast) — and the
+  "integrate.OAuthClient" }` (declared route claims are checked during composition) — and the
   relation widget resolves its registered record route. Read-only fields render
   `RecordReference` links; editable pickers show a "follow" arrow. Refine owns the route
   trail, while the routed record surface replaces the generic action leaf with
   the model's `recordRepresentation`. A resource with no routed page simply shows
   the retained label without a link.
-- Register a resource's create form once via `defineAddon`'s
-  `forms: { "integrate.OAuthClient": <…Field/Group children…> }`; the standard renderer uses it
-  wherever that resource is created, including the relation-picker inline create. Use
-  it when the create input diverges from the read projection (write-only secrets,
-  scalar-id pickers, a kind discriminator). With a registered form,
-  `RelationPicker`'s `create` needs only `{ resource }` (the override supersedes any
-  passed `fields` on create); pass inline `fields` only for a data-dependent form
-  whose options are fetched at runtime and so cannot be a static registration.
-  `RelationPicker` also offers inline **edit** (a pencil beside the picker opens the
-  *selected* record in a form dialog) — wired by `RelationFieldWidget` from the
-  related model's fields, so a relation is created, edited, and followed without
-  leaving the parent form. The create-form override stays create-only: an edit
-  dialog renders the passed `fields` (the registered form is not reused for edit).
+- Register a resource's complete form once with
+  [`registerForm`](../../packages/ui/src/views/form/registered-form.ts), and
+  contribute that registration through `defineAddon`'s `forms` dictionary.
+  Its component composes `Form`, `Field` and `Group` and receives
+  `RegisteredFormProps`; it owns any create/edit distinction through the record
+  `id`. Collection routes and relation-picker create/edit dialogs use that same
+  form, so a caller declares the resource instead of repeating its fields.
+  Inline `fields` remain for a caller-specific form; they are not a second
+  per-model registration. Relation pickers also follow the selected record's
+  registered route, so creation, editing and navigation compose the same owners.
 - **An MTI parent's inline create chooses a kind.** A picker on a model whose
   metadata lists `concreteKinds` creates through one dialog with a kind switcher,
   and selects the new row under the parent. The switcher decides only what is
@@ -1036,7 +1064,7 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   the resource's declared `subjectField`; never construct a subject from a
   public display id. The shared package owns presentation, and IAM owns the
   generated GraphQL document adapter.
-- Never poll for data freshness. Live updates ride GraphQL subscriptions through
+- Live model updates ride GraphQL subscriptions through
   refine's live provider and react-query invalidation, not a `setInterval`
   refetch loop. Opt a model into live cross-actor refresh by declaring
   `changes(Model, field="<model>Changed")` in its `schema.py`; local writes
@@ -1048,21 +1076,30 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   resolver actually reads. Refine's own resource hooks still invalidate per
   push. Stream foreign-system state (e.g. the operator
   daemon's `onWorkspaceStatusChange`) over its own subscriptions.
-  A timed `setInterval` is only ever for non-data UI motion (a carousel) or
-  rotating a short-lived credential before it expires — never to re-read a
-  resolver hoping it changed. If a foreign system publishes no change
-  subscription, add one there rather than polling it from the client.
+  A dashboard widget may explicitly declare interval refresh through its
+  [refresh contract](../../packages/ui/src/dashboard/headless.ts). Its data
+  adapter forwards that interval to native Query `refetchInterval`; Query owns
+  scheduling and observer cleanup. This declaration does not authorize a
+  private polling loop in a page or addon. Use `setInterval` only for non-data
+  UI motion or rotating a short-lived credential. Foreign systems should
+  publish their own change subscriptions.
 - Authored mutation result envelopes are decoded at the hook boundary. Pass
   `errorFrom` to `useAuthoredMutation` for `{error, error_code}` payloads; the
   hook throws before invalidating, so pages do not repeat result-error checks or
   accidentally refresh failed writes. Its native pending lifecycle includes
-  result validation and awaited invalidation. Clear settled failures through
+  result validation and awaited invalidation by default. A response-backed save
+  explicitly supplies `acceptResponse`: first merge accepted fields into the
+  existing complete typed query result with `useSetAuthoredQueryData`, which
+  cancels older reads at the exact native key; then the form acknowledges its
+  accepted baseline while derived reads refresh in the background. Keep live
+  invalidation and reconnect catch-up. Partial mutation data never replaces a
+  complete read projection, and background read failures retain native Query
+  error reporting. Clear settled failures through
   the hook's `reset`; resetting a pending mutation detaches its observer without
   cancelling the write, so a dismissing dialog must preserve that pending state.
 - Client-side gates are UX only. The server is the authorization boundary.
-- **Presence reflects permissions; it never gates.** A menu entry (app roots
-  and legacy list items too; dependents and the deployment may set it like any
-  declaration field) or a container child may name `requires:
+- **Presence reflects permissions; it never gates.** A menu entry (dependents and the deployment may set it like any declaration
+  field) or a container child may name `requires:
   "<app_label.ModelName>#<permission>"`. The identity read asks
   `current_user.permitted` about every composed ref; an entry the session
   lacks leaves the rail, menus and palette with its subtree, a child leaves its
@@ -1070,501 +1107,10 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   where row-specific arms are false, so name a role- or const-decidable
   permission (`iam.User#read__last_login`). A question about one row stays the
   child's per-row `permission`; data stays with querysets and field values with
-  their gates. See [IAM presence](../../addons/angee/iam/README.md#presence).
+  their gates. See [IAM presence](../../src/angee/iam/README.md#presence).
 - No Python view DSL, no frontend metadata hidden in backend decorators.
-
-## Containers
-
-A container is a named, ordered list on a node that the node's owner renders:
-a form's sections, a record's chatter tabs, the user menu. An entry in it is a
-child. Addons extend each other's pages by adding, moving, removing, hiding or
-narrowing children, layered along addon dependencies as menus are. The
-[compiler](../../packages/app/src/containers.ts) validates and layers the
-addons' declarations at composition; the contracts and `useContainer` live in
-[`@angee/ui/runtime`](../../packages/ui/src/runtime/containers.ts).
-
-### Addresses, kinds and inheritance
-
-A container's address is `node#name`; one child is `node#name/id`. The
-framework's record containers sit at a kind-level node and also take a model
-node: a child of `form#sections` shows on every model's form, a child of
-`projects.Task#sections` only on Task's. A record renders the kind address,
-then its canonical (MTI parent) model's address, then its concrete model's,
-merged into one order, so a child of `parties.Party#aside` also shows on
-Party's MTI children. Model spellings are canonicalized at composition.
-
-The name after `#` types the entry. Each owner adds its name and content type to
-the `ContainerKinds` interface, so a `#aside` child carries
-`ChatterTabContent`, a `#views` child `ResourceViewKindContent`, and a
-`#sections` child the `Group`, `Action` and `Tab` declarations a form parses.
-Contribute those markers directly: the form parser does not render a component
-to discover declarations inside it. Use `LabelKey` for translated marker labels
-and put components in their rendered content slots.
-There are no per-kind constructor functions; an addon helper returns a plain
-child (`recordPagesTab()`, `decisionRecordTab()`). A new
-container name is added by declaration merging, as
-[IAM](../../addons/angee/iam/web/src/ShareAccess.tsx) does:
-
-```ts
-declare module "@angee/ui/runtime" {
-  interface ContainerKinds {
-    "access-roles": React.ComponentType<AccessRoleOwnerProps>;
-  }
-}
-```
-
-### Authoring
-
-An addon declares one `containers` dict keyed by address. A key in the addon's
-own namespace (`<id>.…`) declares a child; a second declaration of an id at one
-address fails. From [work](../../addons/angee/work/web/src/index.tsx):
-
-```tsx
-containers: {
-  [`${TASK_MODEL}#sections`]: {
-    "work.task-fields": { sequence: 40, content: taskWorkFormSection },
-  },
-  [`${TASK_MODEL}#actions`]: {
-    "work.task-triage-actions": { sequence: 40, content: <TriageRecordActions /> },
-  },
-},
-```
-
-A child carries `content` and, optionally, `sequence` and `before`/`after`
-(its position), `permission` (a projected record permission the row must hold,
-checked by owners rendering for one record), `requires` (presence: a ref the
-session must hold, whatever the row; see Rules), `requiredFields` (readable
-fields it consumes, which the form selects), `impl`, `variant` and `key`.
-
-Any other key alters a child an addon this one depends on declared:
-`sequence`, `before` and `after` move it (at the address it was declared at),
-`remove: true` takes it out at composition, `hide: true` hides it at render and
-`hide: false` shows again what a dependency hid. The framework's own children
-are every addon's to adjust. Two unrelated layers setting one field fail.
-[Messaging](../../addons/angee/messaging/web/src/index.tsx) contributes the
-presentation of the timeline kinds its Python source implements:
-
-```tsx
-"timeline#kinds": {
-  "messaging.comment": { content: { label: "Comments", icon: "comments", verb: "Discussion", target: { tab: "messaging.discussion", focus: "message" } } },
-  "messaging.conversation": { content: { label: "Conversations", icon: "channel", verb: "Open conversation", target: { tab: "messaging.conversation" } } },
-},
-```
-
-An addon declares a container of its own by naming an address on its own node,
-with no children or with its own: `"messaging.channels#toolbar": {}`. Two
-entry keys apply only there. `unique: "key"` makes every child carry a `key`
-and fails two children with one key. `models: true`
-makes the container model-scoped: IAM declares `iam#access-roles`, and
-[proposals](../../addons/angee/proposals/web/src/record-rounds.tsx) adds
-children at `proposals.Round#access-roles`; the owner passes the record's
-models to `useContainer`. A model-scoped name belongs to one kind.
-
-Unknown addresses, unknown children, unknown keys and ids outside the
-addon's namespace fail composition at app boot; `pnpm run test` composes the
-full addon set.
-
-### Narrowing and `when`
-
-`only: [ids]` keeps the listed children and `except: [ids]` drops them;
-`only: []` keeps none. Narrowing applies at render and per layer: each layer's
-`only` intersects with what it inherits and never filters children the
-layer's own dependents add. Narrowing an addon's container requires depending
-on that addon; the framework's containers are open to every addon.
-
-`when: { app, route }` limits an entry's render verbs (`only`, `except` and
-`hide`) to some pages. `route` matches the route or any route below it, `app`
-any app on the page's menu trail (its root and every included app on the way,
-flattened ones too, so `when: { app: "work" }` holds on work's pages inside the
-PM suite; with an app selected, a page outside its rail sits in the selection's
-home root alone). Each takes one id or a list, and an id that names no route or
-app fails at boot. An array of entries holds conditional alternatives:
-
-```ts
-// A product layered on its dependencies.
-containers: {
-  "form#chrome": { only: ["iam.share-record"] },
-  "shell#drawers-bottom": { only: [] },
-  "record#aside": [
-    { only: ["timeline.rail", "related"] },
-    { only: [], when: { route: "projects.my-work" } },
-  ],
-},
-```
-
-Children are declared unconditionally; declaring, moving or removing under
-`when` fails. A container has no hide of its own: hide its children, or narrow
-it with `only: []`. `hide: false` undoes a `hide`, never an `only`. The
-deployment's `ANGEE_UI.containers` is a last layer that depends on every addon:
-it alters and narrows, and declares nothing. A deployment `only` narrows like
-any other unless it says `force: true` (G-14): then, where it holds, it stands
-in for every addon's `only` and `except` across the addresses the page merges
-(a forced `only` at `notes.Note#sections` also sets aside the addons' narrowing
-at `form#sections` on notes forms), so a deployment can admit a child an addon
-narrowed away; a `hide` stays until the deployment shows it again. Only the
-deployment may force, and only beside an `only`. Developer mode labels such a
-rule "force only". `ANGEE_UI.menus` forces the same way, per menu node.
-
-### Variants and `impl`
-
-Vary a child per row by the implementation the row carries (its
-`ImplClassField` value). A child with `impl: "<key>"` shows only on rows of
-that implementation. A child with `variant: { of, impl }` stands in for the
-child `of` on rows of that implementation and leaves the original on other
-rows. A variant inherits its original's admission: an `only` that drops the
-original drops its variants, and a `hide` of the original hides them. Where
-the row lacks the variant's `permission`, the original stays. Two variants of
-one child for one `impl` fail composition. The
-[channel bridges](../../addons/angee/messaging/web/src/channel-bridge-addon.tsx)
-are the reference: each vendor's verbs are `impl` children, and its pairing
-verbs are variants of Integration's resume and disconnect:
-
-```tsx
-[`${CHANNEL_MODEL}#actions-menu`]: {
-  [`${id}.disconnect`]: { variant: { of: INTEGRATION_DISCONNECT_ACTION_ID, impl: key }, sequence: 13, content: disconnectAction },
-},
-```
-
-Owners pass the row's implementations where they render for one record. The
-form does so for all of `#sections`, `#rail`, `#actions` and `#actions-menu`:
-it resolves each with `projection: true` so the record projection reads every
-candidate's fields, then shows the groups, tabs, actions and rail groups of
-the children the loaded record admits; its layout (title, status, body) and its
-save read only those children's fields. An original and its variants may reuse
-a tab or rail group id, never a fixed group's. A create form knows no
-implementation: originals stand, and the children that need one stay out of
-the form with their required fields and defaults.
-
-Record verbs are `#actions` children. The one exception is an inline action
-form rendered inside the record, such as a decision answered on its own page:
-its submit button must share the form's React Hook Form state, which a container
-child cannot reach, so `ActionFormDialog` with `inline` portals that button into
-the toolbar through `RecordChromeContext.toolbarHost`
-([record chrome context](../../packages/ui/src/views/resource/record-chrome-context.tsx)).
-
-### Framework containers
-
-| Address | Children | Content |
-|---|---|---|
-| `form#sections` | `Group`, `Action` and `Tab` declarations on a record form | `ReactNode` |
-| `form#rail` | `FormView.RailGroup` beside a saved record's tabs | `ReactNode` |
-| `form#actions` | record verbs in a saved form's toolbar | `ReactNode` |
-| `form#actions-menu` | record verbs in a saved form's overflow menu | `ReactNode` |
-| `form#chrome` | record-header controls at the toolbar's right edge: marks, status, Share, Follow, Needs you | `ReactNode` |
-| `resource#views` | view kinds a collection's switcher offers | `ResourceViewKindContent` |
-| `resource#utilities` | collection utilities beside a resource view's toolbar | `ReactNode` |
-| `resource#search` | separate controls over the list search model; page shortcuts are `page.*` extras | `SearchShortcut` |
-| `record#aside` | context-aside tabs (`strip: true`) and drill-ins (`strip: false`, with a target) | `ChatterTabContent` |
-| `timeline#kinds` | presentation of a timeline kind a Python source implements | `TimelineKindContent` |
-| `related#groups`, `<model>#groups` | one group of the Links tab per edge: rows that link to their records and one verb | `RelatedGroupContent` |
-| `shell#notices` | notices below the console navigation | `ReactNode` |
-| `shell#user-menu` | user-menu items between the theme item and sign-out | `ReactNode` |
-| `shell#drawers-right`, `shell#drawers-bottom` | non-modal drawers docked on that edge | `DockedDrawerContent` |
-| `auth.login#method` | sign-in methods on the login page | `ReactNode` |
-| `auth.login#password-help` | password help on the login page | `ReactNode` |
-
-The `form`, `resource` and `record` containers also take model addresses. The
-declarations are `FORM_CONTAINERS`, `RESOURCE_CONTAINERS`, `CHATTER_CONTAINERS`
-and `SHELL_CONTAINERS` in `@angee/ui` and `LOGIN_CONTAINERS` in `@angee/app`.
-Addons own theirs, such as `messaging.channels#toolbar`,
-`parties.overview#items`, `appearance.settings#tools`, `decisions#origin`
-and `iam#access-visibility`.
-
-### Context aside
-
-Owner stories: [Chatter and its panes](../../packages/storybook/src/stories/Chatter.stories.tsx) (story id `communication-chatter--default`),
-[timeline rail](../../packages/storybook/src/stories/TimelineRail.stories.tsx) (story id `communication-timelinerail--default`),
-[related pane](../../packages/storybook/src/stories/RelatedPane.stories.tsx) (story id `communication-relatedpane--default`),
-[step list](../../packages/storybook/src/stories/StepList.stories.tsx) (story id `communication-steplist--default`),
-[pane toolbar band](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--pane-toolbar`),
-and [pane rows and labels](../../packages/storybook/src/stories/PaneRow.stories.tsx) (story id `communication-panerow--default`).
-
-The context aside is the shell's right region: what is around the record. Its
-children are `record#aside` and `<model>#aside` contributions. A `record#aside`
-child shows on saved model-backed record views; the shared create-route sentinel
-does not identify a record. A model-level child shows on that
-model's pages and may narrow itself further with its content's `when`. A
-`ChatterTabContent` carries `label`, `icon`, `render` and `strip`, and
-optionally `when`, `count`/`useCount`, `target` and `panelClassName`. Every
-pane renders into the shell's `PaneToolbar` band (scope · selector · search ·
-actions · overflow; back and title first on a drill-in) instead of its own
-header row; the same band heads explorer panes on the left.
-Collections in these panes keep their native resource query/state owner and use
-`ListView.renderPaneRow` for pointer rows and explicit `pane` for compact
-selector and scope chrome. Row anatomy does not select a toolbar: omit `pane`
-to keep the standard resource toolbar and its pager. With `pane`, the shared
-toolbar publishes search, chips, ordering, grouping and utilities into the pane
-band and the collection pager goes below the rows. `search.box: true` exposes
-the same search control below the compact band. Group expansion and paging
-remain owned by the resource collection in either presentation.
-
-**Four tabs are in the strip, in this order**, each only where its capability
-exists. A tab serves a recurring record-wide job (reading what happened,
-talking, planning, finding what is linked), including its empty state and first
-action; everything that answers a bounded question about one object is a
-drill-in:
-
-| id | seq | shows when | holds | owner |
-|---|---|---|---|---|
-| `timeline.rail` | 10 | the view is a model-backed record with at least one eligible kind | one chronology, newest first, one line per event, scope chips with counts | timeline |
-| `messaging.discussion` | 20 | the model composes the chatter thread (`messaging.ThreadAttachment:chatter` in `recordEdges`) and the body is not itself the conversation | the record's thread: comments, internal notes, emails sent from here, the composer | messaging |
-| `projects.tasks` | 30 | `projects.Task` in `recordEdges` and the body does not own the task plan | tasks about the record in Planned and Done scopes, schedule and assign | projects |
-| `related` | 40 | at least one `related#groups` or `<model>#groups` child is eligible | groups Files (upload), Pages (bind), Sources (external links), Conversations (source threads); Attached to on files; Backlinks and Bound to on pages | framework tab; storage, knowledge, integrate, messaging own the groups |
-
-A tab earns the strip by creating things; everything else is a **drill-in**: a
-`record#aside` child with `strip: false` that renders one object named by its
-`target` (a run, a changeset, a decision, a conversation). The rail opens it
-with `setActiveTab(id, { from, target })`; the shell shows "‹ Timeline" above
-it, keeps a return stack with filters, window, scroll and focus, writes
-`chatterTab`, `chatterTarget`, `chatterFocus` and `chatterFrom` to the URL, and
-shows an unavailable state with Back when the target cannot be read. Hiding a
-destination from the strip never unregisters its drill-in. The record's own
-state belongs in the header and sheet; a drill-in acts on the record's process
-(answer, stop, revert) and never edits its content.
-
-Messaging's [`messaging.conversation`](../../addons/angee/messaging/web/src/index.tsx)
-drill-in targets a `ThreadAttachment`. Its pane resolves the thread through the
-authorized `record_source_threads` read and composes `ThreadTranscript`.
-Conversation rows in Links continue linking to the thread page.
-Message matches open the full conversation at the selected message; inspecting
-the message record is a separate secondary action. Messaging's
-[`MessageReplyQuote`](../../addons/angee/messaging/web/src/MessageReplyQuote.tsx)
-renders the access-checked parent in readers, transcripts and record discussions.
-Readers and transcripts navigate quotes through the host when retaining an
-explorer scope, or through the same-thread anchor or native record link.
-
-A tab that lists one polymorphic edge (files, pages, sources, the chatter
-thread, tasks) shows only where the record's type can carry it: Links groups
-declare `edge.model`; other tabs check it in `when`. The framework checks the
-edge's model label in `context.route.recordEdges`, the resource
-metadata the backend derives from each edge's schema target relations. Timeline
-sources use the same fact to decline unsupported records; workflow run evidence
-accepts any canonical REBAC record. Never let a pane report the edge
-"unavailable" or offer writes on a type whose schema declares no arm. A section
-with neither rows nor a verb is absent, not empty.
-
-Mount count hooks in independent keyed readers. Route and permission changes
-can change the eligible groups while the aside stays mounted; aggregating hooks
-in a loop changes their order. The [Related count owner](../../packages/ui/src/communication/RelatedPane.tsx)
-sums the results published by each group reader.
-
-Each `related#groups` child (or `<model>#groups` for one model's pages) is one
-group of the framework's Links tab, declared by the addon that owns the edge.
-Use **Backlinks** for incoming references, such as pages citing a record or
-messages using a file. The tab includes both directions; the existing `related`
-tab id and `related#groups` contribution addresses remain stable.
-The tab draws the group's label, count and action; the group supplies its rows
-through the shared pane row anatomy:
-
-```ts
-interface RelatedGroupContent {
-  when?: (context: ChatterViewContext) => boolean;
-  edge?: { model: string };
-  label: ReactNode;
-  useCount?: (context: ChatterViewContext) => number | undefined;
-  useVerb?: (context: ChatterViewContext) => boolean;
-  render: (context: ChatterViewContext, label: (action?: ReactNode) => ReactNode) => ReactNode;
-}
-```
-
-A group with neither rows nor a verb is absent, not empty. `useVerb` is the
-presence rule, including write restrictions such as view-as. `render(context,
-label)` returns one component with local state. It calls `label(action)` for the
-framework's counted `PaneLabel` and places its row content in a sibling `li`.
-Only when `useVerb` is true does the label show the action. Compose
-`PaneLabelPopover` for a small Upload or Bind picker; the component's upload or
-mutation state survives the popover closing. Count and presence probes never
-mount that component or its write state.
-
-`edge.model` makes a group eligible only when that exact model is declared in
-the route's `recordEdges`; `when` adds optional narrowing. Addons own role claims
-through typed content extending `RelatedGroupContent` and use
-`useRelatedGroups(context)` to find eligible siblings after model scope,
-container narrowing and `when`. A generic group excludes those roles from both its
-rows and count; a role-specific group lists its own role. Knowledge's generic
-Pages group therefore includes `related` and unclaimed roles while a Contract
-group owns `contract`, without counting that binding twice.
-
-**Every pane list composes one row anatomy** (`PaneRow`, `PaneRows`,
-`PaneLabel`, `PaneLabelAction`, `PaneLabelPopover` in `@angee/ui`): glyph or avatar, `title · detail`, a right meta, a muted
-second line and an optional secondary control, on the 13/12 scale; a row is a link when its
-target has a page and a button when it opens something beside it. Rows without
-either remain non-interactive. `PaneRow` composes `useInAppLink` for host navigation,
-preloading and native modified clicks. Reverse record pointers use
-`RecordReferenceRow`, supplying the list's references so labels share one bounded
-query per model without changing row order. A string `verb` describes the primary
-action in its tooltip; a node is an always visible secondary action beside the
-primary target. Supply `avatar` from the identity owner when a row represents a
-person; the shared Avatar owns image loading and initials fallback. Day and
-section labels sit above rows. Folded sections open from
-their label, or from a separate chevron when `PaneLabel.labelAction` supplies a
-navigable title. A pane
-never picks its own font size, card or header row.
-
-Each `timeline#kinds` child presents one kind a Python timeline kind
-implements; [the kind contract](../../addons/angee/timeline/kinds.py) owns its
-source models, source query, presentation and live attention predicate. The read
-combines owner querysets with SQL `UNION ALL`, applying the record's and each
-target owner's read policies before pagination. Published owner changes
-invalidate open record reads after commit:
-
-```ts
-interface TimelineKindContent {
-  label: string;
-  icon: string;
-  tone?: StatusIconTone;
-  verb: string;
-  target: { tab: string; focus?: string } | { page: true };
-}
-```
-
-The rail composes lines from the union read and these presentations. Semantic
-grouping (a run's decisions and changes counted on the run's line) is the
-read's: kinds name a fold target, and readable events on the same record are
-counted beneath lines targeting that row. Top-level lines page independently of
-their children. The rail owns day separators, filtering, keyset paging, loading,
-empty and error states. `target.focus`
-names the focus kind (`message`, `decision`, `field`), carried in `chatterFocus`;
-the target's public id travels in `chatterTarget`. A strip tab opened from a
-Timeline line receives the same `ChatterSelection` as a drill-in. The back strip
-is labelled with the origin tab's label. Follow subscribes to timeline kinds; the messaging
-tracking subtypes that mirrored provenance and workflows are retired.
-
-Tabs a page publishes with `useChatterContent` are runtime children of the same
-container (a selection inspector on a studio or graph page is the usual case).
-They follow the composed tabs and take the same narrowing. To keep the aside
-off a route, narrow `record#aside` with `only: []` under `when: { route }`.
-Agents use the shell's right drawer so conversation state survives navigation
-independently of the record aside. See the
-[Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
-
-### Resource views
-
-`resource#views` holds the view kinds a collection's switcher offers. The
-framework declares the built-in kinds under the bare ids URLs and saved views
-already carry: `list`, `board`, `calendar`, `gantt` and `dashboard`. An addon
-contributes a kind as a `<model>#views` child with a namespaced id. Its
-`ResourceViewKindContent` carries `label` (or a ui `labelKey`), `icon`,
-`capabilities` (which collection controls apply while it is active) and
-`render`, a component receiving `{ resource }` that reads the collection's
-filter and state through `useResourceView()`. `?view=` selects a kind by id,
-and presets and favourites name it. Whether a built-in kind can run on a page
-(calendar, Gantt and dashboard need declared sources) stays the kind's
-capability check; whether a
-kind is offered is the container's, so layers narrow kinds per model with
-`only`, `except` and `hide`. See [resource view kinds](../../packages/ui/src/views/resource/resource-view-kinds.tsx).
-
-`resource#search` has model inheritance and accepts page-declared `page.*`
-extras alongside contributed typed shortcuts. `only`/`except` reach both;
-`hide` alters declared contributions only, and route/app `when` narrows those
-verbs. The box follows the shortcuts and is never a child that
-can be hidden. Field capability checks run at composition for model
-contributions; list catalogs validate page and kind-level targets at render.
-See [search declarations](../../packages/ui/src/views/resource/search/shortcuts.ts).
-
-### Rendering and testing
-
-An owner reads its container with `useContainer(address, { models, row, impls,
-extra })`: the children in order, narrowed for the current app and route, with
-variants applied and `permission` checked when a `row` is given. Render-time extras with a `sequence` interleave with composed children;
-unpositioned extras trail in input order, preserving page chatter tab order.
-An extra's `before`/`after` may anchor on a composed child id. `only`/`except`
-reach extras by id; `hide` alters declared children, so hiding an extra id fails
-composition. Memoize `models` and `impls`. `ContainerOutlet` renders renderable
-children in order, `containerContents` returns them as keyed nodes for a
-parser, and `containerHasContent` lets the host omit an empty wrapper.
-`useDrawers(edge)` reads one drawer edge; `resolveContainer` is the same
-resolution outside React.
-
-Stories and tests place children straight into the runtime with
-`containersFromChildren(core, { [address]: { [id]: child } })`, with no
-layering, and pass the result as the runtime's `containers` (and a
-`containerScope` when a `when` rule matters). Pass the owner's declaration list
-as `core` (`FORM_CONTAINERS`, `RESOURCE_CONTAINERS`, `CHATTER_CONTAINERS`,
-`SHELL_CONTAINERS`) so its containers and the framework's own children exist:
-
-```tsx
-const containers = containersFromChildren(RESOURCE_CONTAINERS, {
-  "notes.Note#utilities": { "notes.capture": { content: <button type="button">Capture</button> } },
-});
-render(<AppRuntimeProvider runtime={{ containers }}><ResourceViewUtilities value={value} /></AppRuntimeProvider>);
-```
-
-### Developer mode
-
-Developer mode's composition dialog lists container narrowing (each layer's
-`only`, `except`, `hide` and `when` per address), removed children with the
-layer that removed them, and the layers behind each child's fields. The same
-facts are on `createApp(...).explain.containers`; see the
-[app package](../../packages/app/README.md). It also lists the menu nodes and
-children absent for the session with the ref each lacks;
-`createApp(...).explain.requires` maps every declared one to its ref.
-
-## Form save contracts
-
-`FormView` composes `SaveDiscardActions` in `ControlBand` with
-`dirtyControlBandClassName`; non-record edit surfaces compose the same owners
-over their own draft and persistence callbacks, with the page band outside
-`SettingsShell` so it reaches the layout host.
-
-View-as is a memory-only, read-only preview: IAM supplies the viewed identity,
-real identity and permitted people. Compose `useRuntimeViewAs` at shared write
-owners so permitted actions remain visible but disabled, including keyboard,
-submit and upload paths. The app resets actor-bound queries on enter and exit;
-change subscriptions stay closed during preview because WebSockets retain their
-handshake actor. See [the provider](../../packages/app/src/providers/view-as.ts).
-
-`FormView` treats an existing record as read-only when its resource has no update
-root and the caller supplies no custom submit handler. A create-only resource can
-still open a creation form. Fixtures must declare the write operations they intend
-to exercise. Record locking (`readOnlyWhen`) uses the server record, not unsaved
-form values.
-
-Native form saves refresh their resource queries and authored reads of that
-model; custom commands retain their mutation owner's invalidation. Declare
-other affected models through `invalidateModels`; the
-[shared save owner](../../packages/ui/src/views/form/use-form-view-save.ts)
-resolves their resource and authored-query invalidation. A dependency between
-read models is not a reason to replace generated CRUD with a custom mutation.
-
-A save whose normalized header and line values equal the server record sends no
-mutation. It resets the dirty-but-equivalent draft to those server values and
-clears the dirty state, including the editable lines.
-
-**Lines are owned parts; embedded lists show associated records.** "Lines" means
-rows that exist only as part of the record and are saved with it, such as a
-queue's stages or a document's lines. Declare them with `lines=HasuraLines(...)`;
-the form renders them as one ordered section, saved by its one Save, with row
-order as the position. `linePrimaryFields` chooses the columns shown first (the
-rest wait in the data view's visible-fields menu) and `lineFields` their headers,
-choices and help. `<Group label lines />` places the lines as a section; carried
-by a `<model>#sections` child it narrows like any section, so a product keeps only
-the lines on its route with `only` under `when`, and narrowed away they are gone.
-Undeclared, the lines trail the form. A record with a life of its own (its own verbs, revision,
-pages or references from elsewhere) is an associated record and stays an
-embedded list, however small or ordered it is. Never split one owned collection
-into several lists to protect some of its rows; lock those rows instead. See
-[QueuesPage](../../addons/angee/work/web/src/views/QueuesPage.tsx).
-
-A line row the backend locks is a system row. The child model owns the fact
-(`RowLockMixin.locked_fields`), its node projects it, and the lines metadata
-names it as `lockField`; [EditableLines](../../packages/ui/src/views/form/EditableLines.tsx)
-reads it per row. Through the data view's `canReorderRow`, the row shows a lock
-where its reorder handle would be; it carries a "System" marker, offers no duplicate
-or remove, and keeps its locked cells read-only while its other cells edit. Never
-re-derive a lock from a category or name in the page; the backend refuses the same
-writes regardless of what the composer shows.
-
-## Pitfalls
-
-Hard-won traps — the wise learn from others' mistakes
-([Development Guidelines](../guidelines.md)).
-
-- **Plural copy uses native i18next suffixes:** declare `key_one`/`key_other` in the bundle and call `t("key", { count })` with a numeric count; `createNamespaceT` supplies the declared native plural defaults, including in provider-less renders. A missing category falls back to `_other`; zero uses the locale's category unless the bundle explicitly declares `_zero`.
-- **A container query never matches the container itself:** a rule for `.x` inside `@container` on `.x` queries an ancestor container, usually none. Put width-dependent rules on the container's children, as [`.resource-toolbar`](../../packages/ui/src/styles/index.css) does.
 - **Server preference writes are live but not transactional across tabs:** each delivered `changes()` event rebases later patches immediately, while whole-document writes already in flight can still be accepted in server order and the last accepted write wins.
 - **Effect cleanup must not permanently kill a memoized resource:** StrictMode's simulated mount → cleanup → remount leaves it dead; own the resource inside the effect or explicitly re-arm it on mount, as the preference patch queue does.
-- **A render callback may only read fields some column declares or the `ListView fields={[…]}` extras name:** the selection owner (`requestedFieldPaths`) fetches column-declared paths plus those extras and nothing else — an undeclared read is `undefined` on every row (a link built from it throws, a caption silently blanks). Still null-guard values a row may legitimately lack.
 - **Collection state follows the surface owner.** An unrouted `List`,
   `RowsListView`, or `ResourceList` explicitly passed `presentation="embedded"`
   defaults to local `pageSize`, sorting, grouping, filtering, and view state;
@@ -1573,23 +1119,17 @@ Hard-won traps — the wise learn from others' mistakes
   state or own the unnamespaced route query; a page with multiple route-backed
   collections must give each an explicit state owner rather than sharing those
   keys.
-- **Generated documents are an explicit prerequisite for addon checks.** Neither
-  root nor package typecheck/test scripts regenerate them automatically. After a
-  schema change, refresh the host's SDL and codegen before checking consumers;
-  [Checks](../checks.md) owns the command order and working directories. Addon
-  fragments resolve the composed stack's generated documents first. The
-  repository-local `.angee/runtime` fallback may be stale in a workspace slot.
 - **Optional operations travel with their owning addon.** Keep documents and their
   transport UI in the addon contributing the schema fields; a base fragment must
   codegen without optional dependents. Every agent uses the one
-  [ACP runtime](../../addons/angee/agents/web/src/useAcpRuntime.ts), selecting the
+  [ACP runtime](../../src/angee/agents/web/src/useAcpRuntime.ts), selecting the
   SDK version from its endpoint.
 - **Agent sessions are URL selections, created on intent.** The
-  [sessions page](../../addons/angee/agents/web/src/views/AgentSessionsPage.tsx)
+  [sessions page](../../src/angee/agents/web/src/views/AgentSessionsPage.tsx)
   owns `?session=` through route search; the ACP runtime restores known/newest
   sessions and creates on first send or New session. Native Query pages own the list.
 - **ACP view context follows the protocol owner.** The
-  [runtime](../../addons/angee/agents/web/src/useAcpRuntime.ts) derives Current view
+  [runtime](../../src/angee/agents/web/src/useAcpRuntime.ts) derives Current view
   attachment from the session's sent prompts: first/changed views attach automatically,
   sending consumes the badge, and users can remove or reattach it. Replayed history
   without a known normalized envelope starts unsent. V2 sends context on session
@@ -1600,40 +1140,8 @@ Hard-won traps — the wise learn from others' mistakes
   node projects as a bare `ID` scalar auto-wires too, but as a scalar-id relation:
   the backend classifies it `kind:"scalar"`, `scalar:"ID"`, `widget:"select"` while
   keeping its `relationModelLabel`, so `relationFieldInfo` still resolves the picker
-  and label (see the ID-scalar to-one pitfall below). A bare `ID` scalar with **no**
+  and label (see the [ID-scalar to-one pitfall](../../.agents/skills/angee-forms/references/pitfalls.md)). A bare `ID` scalar with **no**
   relation target (a record's own id) stays a leaf with no widget.
-- **An `ID`-scalar to-one is selected as a leaf, not an object.** Any FK a node
-  projects as a bare `ID!` rather than a nested object is a scalar on the wire:
-  FormView must select it *without* a sub-selection, or the detail query fails to
-  build with a "must not have a selection" GraphQL error. The owner is the
-  field-classification/metadata layer (`angee.graphql.data.field_classification` +
-  the metadata projection): a to-one relation the node projects as a bare scalar id
-  classifies as a `scalar` LEAF (so the form/detail query selects it as a scalar)
-  carrying a `select` scalar-id widget and the relation target, and the frontend
-  `relationFieldInfo` (`@angee/ui`'s `model-metadata-defaults`) resolves that
-  scalar-id shape to the same relation picker/label as an object relation. The
-  scalar-id form reads/writes the flat id; the object form reads the nested `{id}`.
-- **An enum field reads UPPERCASE but writes lowercase** — a `StateField`/
-  `ImplClassField` column serializes the enum *member name* on read (`GITHUB`,
-  `ACTIVE`) yet its create/patch input is a `String` keyed by the lowercase
-  *value* (`github`, `active`). A bare metadata-driven `select` submits the member
-  name, which the String input rejects. On a create form pass `options` with
-  lower-cased values (the member name is `key.upper()`, so
-  `value.toLowerCase()`) and mark the field `createOnly`, so the read-side casing
-  never has to round-trip back through the select. To keep the field *editable*
-  instead, the `select`/`combobox` widgets reconcile the UPPERCASE read back to the
-  authored option via `canonicalOptionValue` (a case-insensitive unique match), so
-  lower-cased `options` round-trip correctly without `createOnly`. For status verbs
-  prefer an `<Action set={{status:"disabled"}}>` over an editable status field.
-  The F6 lines composer applies the same rule per cell but at the *diff boundary*,
-  not with `createOnly`: `editable-lines.ts`'s `lineFieldValue` lower-cases an enum
-  line cell's write (the child line input types the choices column as `String`), so
-  even an untouched UPPERCASE read serializes as the lowercase model value. The
-  same boundary owns the blank-cell rule (`lineToInput`): a blank non-String cell
-  (`""` seed or widget-cleared `null`) is omitted on a created row so input/model
-  defaults apply — Strawberry rejects `""` for Decimal/Int/Date — and ships `null`
-  on an existing row (the honest "cleared" value); only a String-scalar cell's
-  `""` is a real wire value and ships verbatim.
 - **A to-many relation is a relation multi-select, not a `tagInput`** — a
   `kind:"list"` field that carries a relation target (an M2M, e.g. a team's
   `members` or a line's `tags`) defaults to the `many2many` widget, on record forms
@@ -1675,12 +1183,6 @@ Hard-won traps — the wise learn from others' mistakes
   expose remote search through `onSearchChange` and `searchState`. Non-resource
   searches, such as host repository candidates, keep their authored-operation
   adapter with the owning addon and use Refine's query/mutation lifecycle.
-- **A FormView create dialog under the console layout** needs
-  `<ControlBandProvider host={undefined}>` to keep its Save band inline instead of
-  portaling into the layout's band.
-- **Layouts bind their own schema** (`RefineLayoutConfig.schema`): console-only fields
-  need the console client — set `defaultSchema: "console"` and pin the
-  public/login layout to `public`.
 - **Use the shared Refine/TanStack Query data path.** Django resources and the
   operator's request/response calls use declared Refine providers. Operator
   subscriptions feed the same Query cache; raw log streams stay with their
@@ -1693,22 +1195,6 @@ Hard-won traps — the wise learn from others' mistakes
   remount. A model with **no** `changes()` subscription only reflects cross-actor
   edits on explicit invalidation or once `staleTime` expires; a query that must be
   always-fresh sets its own per-hook `queryOptions`, not a new app default.
-- **Route code-splitting touches three things.** (1) `defaultPendingComponent` is
-  the *app-wide* pending surface — it renders for every non-root match while its
-  chunk loads, and (after `defaultPendingMs`) for any future `loader`-bearing
-  route, not just lazy pages. Intent preloading runs each matched route's
-  `beforeLoad` on hover (an already-active ancestor with the current search), so a
-  `beforeLoad` only reads and redirects; session side effects belong to a router
-  event, as `?debug` does with `onBeforeLoad`. A future `loader` would also run on
-  hover, at most once per `defaultPreloadStaleTime`. (2) The addon-index imports in `runtime/web/app.ts`
-  stay eager — manifests compose synchronously; only each manifest's *page*
-  imports go through `lazyRouteComponent`. (3) A test that renders a routed page
-  *through the router* (`createApp`/`RouterProvider`) must await the lazy boundary
-  (`findBy*`); a test that imports the page component directly is unaffected, and a
-  manifest assertion (`component` is a function) still holds for a lazy component.
-  Project TypeScript configs must allow importing `.ts`/`.tsx` extensions because
-  the generated runtime imports addon index source files by their package export
-  paths.
 - **Generated schema metadata loads before app composition.** The codegen-owned
   `loadComposedSchemas()` fetches metadata JSON assets in parallel. The host
   passes it to `@angee/app`'s `bootApp`, which shows the shared loading state and
@@ -1716,64 +1202,12 @@ Hard-won traps — the wise learn from others' mistakes
   still compose synchronously; errors from metadata validation or route creation
   propagate as programming errors. The `@angee/app/vite` config preloads the
   metadata assets in built HTML.
-- **Generate operator types from the daemon-owned SDL.** The operator's
-  [addon manifest](../../addons/angee/operator/addon.toml) contributes the
-  committed SDL and daemon document glob to the shared codegen pass. Do not
-  hand-author daemon result types; actions return `MutationResult{status}`.
-- **Expose every addon web package through the composed web manifest** — the
-  composer emits `runtime/web/tailwind.sources.css` from declared package
-  sources, resolving workspace links to real directories so the dev watcher sees
-  edits. Do not hand-edit runtime CSS; a package missing from the manifest will
-  miss its unique arbitrary Tailwind classes.
-- **Shared/generic icon glyphs live in the base `chrome/icon-registry.ts`** —
-  composition is fail-fast on id, so an addon cannot re-register another's glyph,
-  **and adding a name to `baseIcons` collides with any addon already contributing
-  it** (base composes first). This throws only at app boot — `typecheck`/`build`
-  miss it — so verify the full composed app still boots after touching `baseIcons`
-  or an addon's `icons`; `tsc` alone cannot catch the collision. Use the browser
-  verification path in [Checks](../checks.md).
-- **A new web package must enter the composed manifest and dependency graph.**
-  Declare it through the addon/template owners, refresh the stack-owned install
-  and generated composition, and restart the frontend through the operator
-  (`angee --root "$ANGEE_ROOT" restart frontend`, or the whole-application
-  restart after an install; see
-  [Restart the running stack](../howto/getstarted.md#restart-the-running-stack))
-  so Vite sees the new package. See [Checks](../checks.md) for environment setup
-  and safe script invocation.
-- **Install JS dependencies once at the owning stack workspace root.** Never run
-  `pnpm install` inside a source slot, `packages/`, `addons/`, or `examples/`: a
-  nested install forks linked
-  `vite`/`vitest` identities and can produce `Excessive stack depth comparing
-  types 'UserConfig' and 'UserConfig'` in `vitest.shared.ts`. Fix that environment
-  by removing the nested package `node_modules` and reinstalling at the root;
-  do not weaken the types. Every workspace package must resolve through the one
-  root virtual store.
-- **Prebundled `@angee/*` source edits are cache-busted by source signature, not
-  a manual wipe.** A project that consumes `@angee/*` as installed packages
-  (`prebundleAngeePackages: true`) prebundles them; Vite's optimizer hash comes
-  from the lockfile + manifests, never package source, so a workspace edit to a
-  linked `@angee/*` package (same version) would otherwise be served stale (the
-  slice-1 live-verify trap). `defineAngeeWebViteConfig` (`@angee/app/vite`) hashes
-  each package's on-disk source mtimes and sets `optimizeDeps.force` when it
-  changed vs a persisted marker — a source edit re-optimizes, an unchanged tree
-  stays cached. The in-repo example excludes `@angee/*` (linked source, HMR) so
-  this never applies there.
 - **Vendored third-party UI records its provenance beside the code.** Keep the
   upstream license and an `UPSTREAM.md` naming the pinned source, original file
   hashes and every local adaptation, and list both in the package's published
   `files`. Adapt primitives, glyphs, tokens and types; leave upstream algorithms
   intact. The [ReUI Gantt](../../packages/ui/src/views/gantt/UPSTREAM.md) is the
   reference.
-- **Start new addon web packages from `templates/addons/web`.** The Copier template
-  owns the current ceremony: `defineBaseAddon`, `resourcePageRoutes`, lazy routed
-  pages, `createNamespaceT`, `expectValidBaseAddon`, and package/test wiring.
-  Don't copy an older addon and then manually chase drift.
-- **Architecture guardrails are tests, not review folklore.** After changing a
-  framework package edge, addon package dependency, or newly exported shared owner,
-  update `packages/app/src/architecture-guardrails.test.ts` deliberately. It owns
-  both the package tree and the explicit addon/example roots. Record the intended
-  edge or public-export allowance; do not bypass it with an undeclared import or
-  a second local implementation.
 - **`ResourceList` owns the record surface.** Use a `<Form>` child or `formFields`
   for generated forms, including read-only records; use `renderRecord` for a
   domain-owned transcript or detail surface. An all-read-only form never assembles
@@ -1914,24 +1348,6 @@ Hard-won traps — the wise learn from others' mistakes
   `changes(Model, field="<model>Changed")` in its `schema.py` refreshes on local
   writes only (no live push, no error). Add the subscription to opt a model into
   live updates; omit it and you simply get local-write invalidation.
-- **A `createDefaults` seed submits on create even when `readOnly`.** `ResourceList`'s
-  `createDefaults` seeds the create form, and `form-view-model.ts`'s `mutationData` submits a create
-  seed even for a `readOnly`/`createOnly` field — whether the seed is the field's own
-  `defaultValue` or a page-level `createDefaults` entry — so a seeded read-only field is
-  no longer silently dropped from the create payload. Prefer `createOnly` (editable on
-  create carrying the seed, locked on edit) when the value should stay visible-but-fixed;
-  `readOnly` + `createDefaults` also works for a value the form never renders editable.
-  (`editOnly` fields stay excluded on create.)
-- **A storybook `meta.args`/`argTypes` is dead only if no story consumes it.** A
-  bare `export const X: Story = {}` (or a `render: (args) => …`) AUTO-RENDERS from
-  `meta.args` — those args are live; only a file whose every story is a zero-param
-  `render: () => …` has dead meta args. Removing them when `meta.component` has a
-  required prop breaks `StoryObj<typeof meta>` (it still demands the arg) — type the
-  self-rendering stories as bare `StoryObj` (keep `component:` for autodocs). A
-  data-bound view story uses the shared `runtime-fixtures` owner (`RuntimeFixture` +
-  `storySchema(fetch)` + `jsonResponse`), not a hand-rolled provider stack; global
-  providers (`ToastProvider`, router, runtime, client) come from the preview
-  decorator — don't nest a second one.
 - **`Workbench` (`layouts/Workbench.tsx`) is the collapsible inner-shell owner;
   `Explorer` is removed.** Every multi-pane content region (console body, storage,
   knowledge, iam schema, agents sessions) composes `Workbench` over `page/SplitPanes`
@@ -1978,7 +1394,6 @@ Hard-won traps — the wise learn from others' mistakes
   `useChatterContent`; *primary*/*secondary* are the Workbench sidebars; a *Panel* is
   a content `Card`. Don't reuse one term for another's concept across components,
   props, or slots.
-
 - **Message projections have one owner.** A peer addon that lists messages spreads
   the fragments messaging exports (sender, parts + file + mime, reaction groups,
   feed window) instead of re-authoring the selection; three copies of the same
@@ -1989,7 +1404,7 @@ Hard-won traps — the wise learn from others' mistakes
   Live feeds supply retained-ID revalidation; explicit remote snapshots can omit
   it and configure native freshness/refetch options on the same owner. Use its
   restart operation for a fresh snapshot, rather than remount keys or manual page
-  accumulation. See the [IMAP sample preview](../../addons/angee/messaging_integrate_imap/README.md).
+  accumulation. See the [IMAP sample preview](../../src/angee/messaging_integrate_imap/README.md).
 - **Enum casing is decided once.** `useEnumOptions` owns read/write casing; a
   caller that re-uppercases option values is working around the owner. Select its
   casing option for authored enum actions and retain lowercase CRUD inputs.
@@ -2007,7 +1422,9 @@ Hard-won traps — the wise learn from others' mistakes
   children render straight into the panel, which owns scroll and padding while the
   pane owns width, border and background; `RailPanel` owns the inspector card. Lay
   out a bounded graph — the selection or a capped neighbourhood — never a whole
-  schema: Dagre holds the main thread for minutes at around two thousand nodes.
+  schema. Bound relationships as well as nodes: layout and canvas initialization
+  both occupy the main thread. The [platform graph](../../src/angee/platform/web/src/lib/explorer.ts)
+  pages incident relationships while keeping every model and relationship reachable.
 - **A connect action is one ceremony.** Pass the button as `MutationDialog.trigger`
   so the dialog owns open state, reset and native focus pairing. Addons retain
   vendor pairing and source selection.
@@ -2015,28 +1432,573 @@ Hard-won traps — the wise learn from others' mistakes
   never hand-write `…Result`/`…Variables` interfaces and cast to
   `TypedDocumentNode`.
 
-## Checks
+## Containers
 
-Use [Checks](../checks.md) for package, composed-addon, distribution, architecture
-and browser commands, including their working directories and prerequisites.
-Run focused checks while editing and the relevant broad checks before handoff.
+A container is a named, ordered list on a node that the node's owner renders:
+a form's sections, a record's chatter tabs, the user menu. An entry in it is a
+child. Addons extend each other's pages by adding, moving, removing, hiding or
+narrowing children, layered along addon dependencies as menus are. The
+[compiler](../../packages/app/src/containers.ts) validates and layers the
+addons' declarations at composition; the contracts and `useContainer` live in
+[`@angee/ui/runtime`](../../packages/ui/src/runtime/containers.ts).
 
-Run the package vitest suite — not just `tsc` and a story render, which miss
-stale assertion drift. When verifying data-bound views, wait for the async query
-to load before asserting. Meaningful UI changes require browser verification;
-[End-to-End Testing](e2e.md) owns browser authoring and isolation expectations.
+### Addresses, kinds and inheritance
 
-For page/addon changes, run a primitive-drift scan and explain every hit outside
-`@angee/ui`. From the framework repository root:
+A container's address is `node#name`; one child is `node#name/id`. The
+framework's record containers sit at a kind-level node and also take a model
+node: a child of `form#sections` shows on every model's form, a child of
+`projects.Task#sections` only on Task's. A record renders the kind address,
+then its canonical (MTI parent) model's address, then its concrete model's,
+merged into one order, so a child of `parties.Party#aside` also shows on
+Party's MTI children. Model spellings are canonicalized at composition.
 
-```sh
-rg -n '<table\b|<thead\b|<tbody\b|<tr\b|<td\b|<th\b|role="grid"|useReactTable|manualPagination' packages addons examples -g '*.tsx'
-rg -n 'useAuthored(Query|Mutation)<|interface .*Data|interface .*Variables|fetch\([^)]*graphql|gql`' packages addons examples -g '*.ts' -g '*.tsx'
+The name after `#` types the entry. Each owner adds its name and content type to
+the `ContainerKinds` interface, so a `#aside` child carries
+`ChatterTabContent`, a `#views` child `ResourceViewKindContent`, and a
+`#sections` child the `Group`, `Action` and `Tab` declarations a form parses.
+Contribute those markers directly: the form parser does not render a component
+to discover declarations inside it. Use `LabelKey` for translated marker labels
+and put components in their rendered content slots.
+There are no per-kind constructor functions; an addon helper returns a plain
+child (`recordPagesTab()`, `decisionRecordTab()`). A new
+container name is added by declaration merging, as
+[IAM](../../src/angee/iam/web/src/ShareAccess.tsx) does:
+
+```ts
+declare module "@angee/ui/runtime" {
+  interface ContainerKinds {
+    "access-roles": React.ComponentType<AccessRoleOwnerProps>;
+  }
+}
 ```
 
-Include `../angee-messaging-bridges/addons` in the scan when that optional slot is
-present and affected. Run the architecture guardrail when changing package
-layering, public shared owners, or addon manifests.
+### Authoring
 
-A hit is not automatically wrong, but it must either compose the shared primitive
-or identify the owning framework gap to fix first.
+An addon declares one `containers` dict keyed by address. A key in the addon's
+own namespace (`<id>.…`) declares a child; a second declaration of an id at one
+address fails. From [work](../../src/angee/work/web/src/index.tsx):
+
+```tsx
+containers: {
+  [`${TASK_MODEL}#sections`]: {
+    "work.task-fields": { sequence: 40, content: taskWorkFormSection },
+  },
+  [`${TASK_MODEL}#actions`]: {
+    "work.task-triage-actions": { sequence: 40, content: <TriageRecordActions /> },
+  },
+},
+```
+
+A child carries `content` and, optionally, `sequence` and `before`/`after`
+(its position), `permission` (a projected record permission the row must hold,
+checked by owners rendering for one record), `requires` (presence: a ref the
+session must hold, whatever the row; see Rules), `requiredFields` (readable
+fields it consumes, which the form selects), `impl`, `variant` and `key`.
+
+Any other key alters a child an addon this one depends on declared:
+`sequence`, `before` and `after` move it (at the address it was declared at),
+`remove: true` takes it out at composition, `hide: true` hides it at render and
+`hide: false` shows again what a dependency hid. The framework's own children
+are every addon's to adjust. Two unrelated layers setting one field fail.
+[Messaging](../../src/angee/messaging/web/src/index.tsx) contributes the
+presentation of the timeline kinds its Python source implements:
+
+```tsx
+"timeline#kinds": {
+  "messaging.comment": { content: { label: "Comments", icon: "comments", verb: "Discussion", target: { tab: "messaging.discussion", focus: "message" } } },
+  "messaging.conversation": { content: { label: "Conversations", icon: "channel", verb: "Open conversation", target: { tab: "messaging.conversation" } } },
+},
+```
+
+An addon declares a container of its own by naming an address on its own node,
+with no children or with its own: `"messaging.channels#toolbar": {}`. Two
+entry keys apply only there. `unique: "key"` makes every child carry a `key`
+and fails two children with one key. `models: true`
+makes the container model-scoped: IAM declares `iam#access-roles`, and
+[proposals](../../src/angee/proposals/web/src/record-rounds.tsx) adds
+children at `proposals.Round#access-roles`; the owner passes the record's
+models to `useContainer`. A model-scoped name belongs to one kind.
+
+Unknown addresses, unknown children, unknown keys and ids outside the
+addon's namespace fail composition at app boot; `pnpm run test` composes the
+full addon set.
+
+### Narrowing and `when`
+
+`only: [ids]` keeps the listed children and `except: [ids]` drops them;
+`only: []` keeps none. Narrowing applies at render and per layer: each layer's
+`only` intersects with what it inherits and never filters children the
+layer's own dependents add. Narrowing an addon's container requires depending
+on that addon; the framework's containers are open to every addon.
+
+`when: { app, route }` limits an entry's render verbs (`only`, `except` and
+`hide`) to some pages. `route` matches the route or any route below it, `app`
+any app on the page's menu trail (its root and every included app on the way,
+flattened ones too, so `when: { app: "work" }` holds on work's pages inside the
+PM suite; with an app selected, a page outside its rail sits in the selection's
+home root alone). Each takes one id or a list, and an id that names no route or
+app fails at boot. An array of entries holds conditional alternatives:
+
+```ts
+// A product layered on its dependencies.
+containers: {
+  "form#chrome": { only: ["iam.share-record"] },
+  "shell#drawers-bottom": { only: [] },
+  "record#aside": [
+    { only: ["timeline.rail", "related"] },
+    { only: [], when: { route: "projects.my-work" } },
+  ],
+},
+```
+
+Children are declared unconditionally; declaring, moving or removing under
+`when` fails. A container has no hide of its own: hide its children, or narrow
+it with `only: []`. `hide: false` undoes a `hide`, never an `only`. The
+deployment's `ANGEE_UI.containers` is a last layer that depends on every addon:
+it alters and narrows, and declares nothing. A deployment `only` narrows like
+any other unless it says `force: true` (G-14): then, where it holds, it stands
+in for every addon's `only` and `except` across the addresses the page merges
+(a forced `only` at `notes.Note#sections` also sets aside the addons' narrowing
+at `form#sections` on notes forms), so a deployment can admit a child an addon
+narrowed away; a `hide` stays until the deployment shows it again. Only the
+deployment may force, and only beside an `only`. Developer mode labels such a
+rule "force only". `ANGEE_UI.menus` forces the same way, per menu node.
+
+### Variants and `impl`
+
+Vary a child per row by the implementation the row carries (its
+`ImplClassField` value). A child with `impl: "<key>"` shows only on rows of
+that implementation. A child with `variant: { of, impl }` stands in for the
+child `of` on rows of that implementation and leaves the original on other
+rows. A variant inherits its original's admission: an `only` that drops the
+original drops its variants, and a `hide` of the original hides them. Where
+the row lacks the variant's `permission`, the original stays. Two variants of
+one child for one `impl` fail composition. The
+[channel bridges](../../src/angee/messaging/web/src/channel-bridge-addon.tsx)
+are the reference: each vendor's verbs are `impl` children, and its pairing
+verbs are variants of Integration's resume and disconnect:
+
+```tsx
+[`${CHANNEL_MODEL}#actions-menu`]: {
+  [`${id}.disconnect`]: { variant: { of: INTEGRATION_DISCONNECT_ACTION_ID, impl: key }, sequence: 13, content: disconnectAction },
+},
+```
+
+Owners pass the row's implementations where they render for one record. The
+form does so for all of `#sections`, `#rail`, `#actions` and `#actions-menu`:
+it resolves each with `projection: true` so the record projection reads every
+candidate's fields, then shows the groups, tabs, actions and rail groups of
+the children the loaded record admits; its layout (title, status, body) and its
+save read only those children's fields. An original and its variants may reuse
+a tab or rail group id, never a fixed group's. A create form knows no
+implementation: originals stand, and the children that need one stay out of
+the form with their required fields and defaults.
+
+Record verbs are `#actions` children. The one exception is an inline action
+form rendered inside the record, such as a decision answered on its own page:
+its submit button must share the form's React Hook Form state, which a container
+child cannot reach, so `ActionFormDialog` with `inline` portals that button into
+the toolbar through `RecordChromeContext.toolbarHost`
+([record chrome context](../../packages/ui/src/views/resource/record-chrome-context.tsx)).
+
+### Framework containers
+
+| Address | Children | Content |
+|---|---|---|
+| `form#sections` | `Group`, `Action` and `Tab` declarations on a record form | `ReactNode` |
+| `form#rail` | `FormView.RailGroup` beside a saved record's tabs | `ReactNode` |
+| `form#actions` | record verbs in a saved form's toolbar | `ReactNode` |
+| `form#actions-menu` | record verbs in a saved form's overflow menu | `ReactNode` |
+| `form#chrome` | record-header controls at the toolbar's right edge: marks, status, Share, Follow, Needs you | `ReactNode` |
+| `resource#views` | view kinds a collection's switcher offers | `ResourceViewKindContent` |
+| `resource#utilities` | collection utilities beside a resource view's toolbar | `ReactNode` |
+| `resource#search` | separate controls over the list search model; page shortcuts are `page.*` extras | `SearchShortcut` |
+| `record#aside` | context-aside tabs (`strip: true`) and drill-ins (`strip: false`, with a target) | `ChatterTabContent` |
+| `timeline#kinds` | presentation of a timeline kind a Python source implements | `TimelineKindContent` |
+| `reference#preview`, `<model>#preview` | opt-in record previews composed by `RecordReferencePreview`; addon content reads `useRecordReference` identity/navigation | React node |
+| `related#groups`, `<model>#groups` | one group of the Links tab per edge: rows that link to their records and one verb | `RelatedGroupContent` |
+| `shell#notices` | notices below the console navigation | `ReactNode` |
+| `shell#user-menu` | user-menu items between the theme item and sign-out | `ReactNode` |
+| `shell#drawers-right`, `shell#drawers-bottom` | non-modal drawers docked on that edge | `DockedDrawerContent` |
+| `auth.login#method` | sign-in methods on the login page | `ReactNode` |
+| `auth.login#password-help` | password help on the login page | `ReactNode` |
+
+The `form`, `resource` and `record` containers also take model addresses. The
+declarations are `FORM_CONTAINERS`, `RESOURCE_CONTAINERS`, `CHATTER_CONTAINERS`
+and `SHELL_CONTAINERS` in `@angee/ui` and `LOGIN_CONTAINERS` in `@angee/app`.
+Addons own theirs, such as `messaging.channels#toolbar`,
+`parties.overview#items`, `appearance.settings#tools`, `decisions#origin`
+and `iam#access-visibility`.
+
+### Context aside
+
+Owner stories: [Chatter and its panes](../../packages/storybook/src/stories/Chatter.stories.tsx) (story id `communication-chatter--default`),
+[timeline rail](../../packages/storybook/src/stories/TimelineRail.stories.tsx) (story id `communication-timelinerail--default`),
+[related pane](../../packages/storybook/src/stories/RelatedPane.stories.tsx) (story id `communication-relatedpane--default`),
+[step list](../../packages/storybook/src/stories/StepList.stories.tsx) (story id `communication-steplist--default`),
+[pane toolbar band](../../packages/storybook/src/stories/OwnerSpecimens.stories.tsx) (story id `library-owners--pane-toolbar`),
+and [pane rows and labels](../../packages/storybook/src/stories/PaneRow.stories.tsx) (story id `communication-panerow--default`).
+
+The context aside is the shell's right region: what is around the record. Its
+children are `record#aside` and `<model>#aside` contributions. A `record#aside`
+child shows on saved model-backed record views; the shared create-route sentinel
+does not identify a record. A model-level child shows on that
+model's pages and may narrow itself further with its content's `when`. A
+`ChatterTabContent` carries `label`, `icon`, `render` and `strip`, and
+optionally `when`, `count`/`useCount`, `target` and `panelClassName`. Every
+pane renders into the shell's `PaneToolbar` band (scope · selector · search ·
+actions · overflow; back and title first on a drill-in) instead of its own
+header row; the same band heads explorer panes on the left.
+Collections in these panes keep their native resource query/state owner and use
+`ListView.renderPaneRow` for pointer rows and explicit `pane` for compact
+selector and scope chrome. Row anatomy does not select a toolbar: omit `pane`
+to keep the standard resource toolbar and its pager. With `pane`, the shared
+toolbar publishes search, chips, ordering, grouping and utilities into the pane
+band and the collection pager goes below the rows. `search.box: true` exposes
+the same search control below the compact band. Group expansion and paging
+remain owned by the resource collection in either presentation.
+
+**Four tabs are in the strip, in this order**, each only where its capability
+exists. A tab serves a recurring record-wide job (reading what happened,
+talking, planning, finding what is linked), including its empty state and first
+action; everything that answers a bounded question about one object is a
+drill-in:
+
+| id | seq | shows when | holds | owner |
+|---|---|---|---|---|
+| `timeline.rail` | 10 | the view is a model-backed record with at least one eligible kind | one chronology, newest first, one line per event, scope chips with counts | timeline |
+| `messaging.discussion` | 20 | the model composes the chatter thread (`messaging.ThreadAttachment:chatter` in `recordEdges`) and the body is not itself the conversation | the record's thread: comments, internal notes, emails sent from here, the composer | messaging |
+| `projects.tasks` | 30 | `projects.Task` in `recordEdges` and the body does not own the task plan | tasks about the record in Planned and Done scopes, schedule and assign | projects |
+| `related` | 40 | at least one `related#groups` or `<model>#groups` child is eligible | groups Files (upload), Pages (bind), Sources (external links), Conversations (source threads); Attached to on files; Backlinks and Bound to on pages | framework tab; storage, knowledge, integrate, messaging own the groups |
+
+A tab earns the strip by creating things; everything else is a **drill-in**: a
+`record#aside` child with `strip: false` that renders one object named by its
+`target` (a run, a changeset, a decision, a conversation). The rail opens it
+with `setActiveTab(id, { from, target })`; the shell shows "‹ Timeline" above
+it, keeps a return stack with filters, window, scroll and focus, writes
+`chatterTab`, `chatterTarget`, `chatterFocus` and `chatterFrom` to the URL, and
+shows an unavailable state with Back when the target cannot be read. Hiding a
+destination from the strip never unregisters its drill-in. The record's own
+state belongs in the header and sheet; a drill-in acts on the record's process
+(answer, stop, revert) and never edits its content.
+
+Messaging's [`messaging.conversation`](../../src/angee/messaging/web/src/index.tsx)
+drill-in targets a `ThreadAttachment`. Its pane resolves the thread through the
+authorized `record_source_threads` read and composes `ThreadTranscript`.
+Conversation rows in Links continue linking to the thread page.
+Message matches open the full conversation at the selected message; inspecting
+the message record is a separate secondary action. Messaging's
+[`MessageReplyQuote`](../../src/angee/messaging/web/src/MessageReplyQuote.tsx)
+renders the access-checked parent in readers, transcripts and record discussions.
+Readers and transcripts navigate quotes through the host when retaining an
+explorer scope, or through the same-thread anchor or native record link.
+
+A tab that lists one polymorphic edge (files, pages, sources, the chatter
+thread, tasks) shows only where the record's type can carry it: Links groups
+declare `edge.model`; other tabs check it in `when`. The framework checks the
+edge's model label in `context.route.recordEdges`, the resource
+metadata the backend derives from each edge's schema target relations. Timeline
+sources use the same fact to decline unsupported records; workflow run evidence
+accepts any canonical REBAC record. Never let a pane report the edge
+"unavailable" or offer writes on a type whose schema declares no arm. A section
+with neither rows nor a verb is absent, not empty.
+
+Mount count hooks in independent keyed readers. Route and permission changes
+can change the eligible groups while the aside stays mounted; aggregating hooks
+in a loop changes their order. The [Related count owner](../../packages/ui/src/communication/RelatedPane.tsx)
+sums the results published by each group reader.
+
+Each `related#groups` child (or `<model>#groups` for one model's pages) is one
+group of the framework's Links tab, declared by the addon that owns the edge.
+Use **Backlinks** for incoming references, such as pages citing a record or
+messages using a file. The tab includes both directions; the existing `related`
+tab id and `related#groups` contribution addresses remain stable.
+The tab draws the group's label, count and action; the group supplies its rows
+through the shared pane row anatomy:
+
+```ts
+interface RelatedGroupContent {
+  when?: (context: ChatterViewContext) => boolean;
+  edge?: { model: string };
+  label: ReactNode;
+  useCount?: (context: ChatterViewContext) => number | undefined;
+  useVerb?: (context: ChatterViewContext) => boolean;
+  render: (context: ChatterViewContext, label: (action?: ReactNode) => ReactNode) => ReactNode;
+}
+```
+
+A group with neither rows nor a verb is absent, not empty. `useVerb` is the
+presence rule, including write restrictions such as view-as. `render(context,
+label)` returns one component with local state. It calls `label(action)` for the
+framework's counted `PaneLabel` and places its row content in a sibling `li`.
+Only when `useVerb` is true does the label show the action. Compose
+`PaneLabelPopover` for a small Upload or Bind picker; the component's upload or
+mutation state survives the popover closing. Count and presence probes never
+mount that component or its write state.
+
+`edge.model` makes a group eligible only when that exact model is declared in
+the route's `recordEdges`; `when` adds optional narrowing. Addons own role claims
+through typed content extending `RelatedGroupContent` and use
+`useRelatedGroups(context)` to find eligible siblings after model scope,
+container narrowing and `when`. A generic group excludes those roles from both its
+rows and count; a role-specific group lists its own role. Knowledge's generic
+Pages group therefore includes `related` and unclaimed roles while a Contract
+group owns `contract`, without counting that binding twice.
+
+**Every pane list composes one row anatomy** (`PaneRow`, `PaneRows`,
+`PaneLabel`, `PaneLabelAction`, `PaneLabelPopover` in `@angee/ui`): glyph or avatar, `title · detail`, a right meta, a muted
+second line and an optional secondary control, on the 13/12 scale; a row is a link when its
+target has a page and a button when it opens something beside it. Rows without
+either remain non-interactive. `PaneRow` composes `useInAppLink` for host navigation,
+preloading and native modified clicks. Reverse record pointers use
+`RecordReferenceRow`, supplying the list's references so labels share one bounded
+query per model without changing row order. A string `verb` describes the primary
+action in its tooltip; a node is an always visible secondary action beside the
+primary target. Supply `avatar` from the identity owner when a row represents a
+person; the shared Avatar owns image loading and initials fallback. Day and
+section labels sit above rows. Folded sections open from
+their label, or from a separate chevron when `PaneLabel.labelAction` supplies a
+navigable title. A pane
+never picks its own font size, card or header row.
+
+Each `timeline#kinds` child presents one kind a Python timeline kind
+implements; [the kind contract](../../src/angee/timeline/kinds.py) owns its
+source models, source query, presentation and live attention predicate. The read
+combines owner querysets with SQL `UNION ALL`, applying the record's and each
+target owner's read policies before pagination. Published owner changes
+invalidate open record reads after commit:
+
+```ts
+interface TimelineKindContent {
+  label: string;
+  icon: string;
+  tone?: StatusIconTone;
+  verb: string;
+  target: { tab: string; focus?: string } | { page: true };
+}
+```
+
+The rail composes lines from the union read and these presentations. Semantic
+grouping (a run's decisions and changes counted on the run's line) is the
+read's: kinds name a fold target, and readable events on the same record are
+counted beneath lines targeting that row. Top-level lines page independently of
+their children. The rail owns day separators, filtering, keyset paging, loading,
+empty and error states. `target.focus`
+names the focus kind (`message`, `decision`, `field`), carried in `chatterFocus`;
+the target's public id travels in `chatterTarget`. A strip tab opened from a
+Timeline line receives the same `ChatterSelection` as a drill-in. The back strip
+is labelled with the origin tab's label. Follow subscribes to timeline kinds; the messaging
+tracking subtypes that mirrored provenance and workflows are retired.
+
+Tabs a page publishes with `useChatterContent` are runtime children of the same
+container (a selection inspector on a studio or graph page is the usual case).
+They follow the composed tabs and take the same narrowing. To keep the aside
+off a route, narrow `record#aside` with `only: []` under `when: { route }`.
+Agents use the shell's right drawer so conversation state survives navigation
+independently of the record aside. See the
+[Chatter owner](../../packages/ui/src/communication/Chatter.tsx).
+
+### Resource views
+
+`resource#views` holds the view kinds a collection's switcher offers. The
+framework declares the built-in kinds under the bare ids URLs and saved views
+already carry: `list`, `board`, `calendar`, `gantt` and `dashboard`. An addon
+contributes a kind as a `<model>#views` child with a namespaced id. Its
+`ResourceViewKindContent` carries `label` (or a ui `labelKey`), `icon`,
+`capabilities` (which collection controls apply while it is active) and
+`render`, a component receiving `{ resource }` that reads the collection's
+filter and state through `useResourceView()`. `?view=` selects a kind by id,
+and presets and favourites name it. Whether a built-in kind can run on a page
+(calendar, Gantt and dashboard need declared sources) stays the kind's
+capability check; whether a
+kind is offered is the container's, so layers narrow kinds per model with
+`only`, `except` and `hide`. See [resource view kinds](../../packages/ui/src/views/resource/resource-view-kinds.tsx).
+
+`resource#search` has model inheritance and accepts page-declared `page.*`
+extras alongside contributed typed shortcuts. `only`/`except` reach both;
+`hide` alters declared contributions only, and route/app `when` narrows those
+verbs. The box follows the shortcuts and is never a child that
+can be hidden. Field capability checks run at composition for model
+contributions; list catalogs validate page and kind-level targets at render.
+See [search declarations](../../packages/ui/src/views/resource/search/shortcuts.ts).
+
+### Rendering and testing
+
+An owner reads its container with `useContainer(address, { models, row, impls,
+extra })`: the children in order, narrowed for the current app and route, with
+variants applied and `permission` checked when a `row` is given. Render-time extras with a `sequence` interleave with composed children;
+unpositioned extras trail in input order, preserving page chatter tab order.
+An extra's `before`/`after` may anchor on a composed child id. `only`/`except`
+reach extras by id; `hide` alters declared children, so hiding an extra id fails
+composition. Memoize `models` and `impls`. `ContainerOutlet` renders renderable
+children in order, `containerContents` returns them as keyed nodes for a
+parser, and `containerHasContent` lets the host omit an empty wrapper.
+`useDrawers(edge)` reads one drawer edge; `resolveContainer` is the same
+resolution outside React.
+
+Stories and tests place children straight into the runtime with
+`containersFromChildren(core, { [address]: { [id]: child } })`, with no
+layering, and pass the result as the runtime's `containers` (and a
+`containerScope` when a `when` rule matters). Pass the owner's declaration list
+as `core` (`FORM_CONTAINERS`, `RESOURCE_CONTAINERS`, `CHATTER_CONTAINERS`,
+`SHELL_CONTAINERS`) so its containers and the framework's own children exist:
+
+```tsx
+const containers = containersFromChildren(RESOURCE_CONTAINERS, {
+  "notes.Note#utilities": { "notes.capture": { content: <button type="button">Capture</button> } },
+});
+render(<AppRuntimeProvider runtime={{ containers }}><ResourceViewUtilities value={value} /></AppRuntimeProvider>);
+```
+
+A data-bound view story declares `parameters.angeeFixture` with its schemas,
+resources, runtime and operation documents; the preview mounts the shared
+[`RuntimeFixture`](../../packages/storybook/src/stories/runtime-fixtures.tsx).
+Transport fixtures use `storySchema(fetch)` and `jsonResponse`. A routed fixture
+reused by tests sets `angeeOwnRuntime: true` and passes
+`appearance={storyAppearance(context.globals)}` into the same owner. Each story
+has one provider stack — appearance, data, toasts and modals.
+
+### Developer mode
+
+Developer mode's composition dialog lists container narrowing (each layer's
+`only`, `except`, `hide` and `when` per address), removed children with the
+layer that removed them, and the layers behind each child's fields. The same
+facts are on `createApp(...).explain.containers`; see the
+[app package](../../packages/app/README.md). It also lists the menu nodes and
+children absent for the session with the ref each lacks;
+`createApp(...).explain.requires` maps every declared one to its ref.
+
+## Form save contracts
+
+`FormView` composes `SaveDiscardActions` in `ControlBand` with
+`dirtyControlBandClassName`; non-record edit surfaces compose the same owners
+over their own draft and persistence callbacks, with the page band outside
+`SettingsShell` so it reaches the layout host.
+
+View-as is a memory-only, read-only preview: IAM supplies the viewed identity,
+real identity and permitted people. Compose `useRuntimeViewAs` at shared write
+owners so permitted actions remain visible but disabled, including keyboard,
+submit and upload paths. The app resets actor-bound queries on enter and exit;
+change subscriptions stay closed during preview because WebSockets retain their
+handshake actor. See [the provider](../../packages/app/src/providers/view-as.ts).
+
+`FormView` treats an existing record as read-only when its resource has no update
+root and the caller supplies no custom submit handler. A create-only resource can
+still open a creation form. Fixtures must declare the write operations they intend
+to exercise. Record locking (`readOnlyWhen`) uses the server record, not unsaved
+form values.
+
+Native form saves refresh their resource queries and authored reads of that
+model; custom commands retain their mutation owner's invalidation. Declare
+other affected models through `invalidateModels`; the
+[shared save owner](../../packages/ui/src/views/form/use-form-view-save.ts)
+resolves their resource and authored-query invalidation. A dependency between
+read models is not a reason to replace generated CRUD with a custom mutation.
+
+A save whose normalized header and line values equal the server record sends no
+mutation. It resets the dirty-but-equivalent draft to those server values and
+clears the dirty state, including the editable lines.
+
+**Lines are owned parts; embedded lists show associated records.** "Lines" means
+rows that exist only as part of the record and are saved with it, such as a
+queue's stages or a document's lines. Declare them with `lines=HasuraLines(...)`;
+the form renders them as one ordered section, saved by its one Save, with row
+order as the position. `linePrimaryFields` chooses the columns shown first (the
+rest wait in the data view's visible-fields menu) and `lineFields` their headers,
+choices and help. `<Group label lines />` places the lines as a section; carried
+by a `<model>#sections` child it narrows like any section, so a product keeps only
+the lines on its route with `only` under `when`, and narrowed away they are gone.
+Undeclared, the lines trail the form. A record with a life of its own (its own verbs, revision,
+pages or references from elsewhere) is an associated record and stays an
+embedded list, however small or ordered it is. Never split one owned collection
+into several lists to protect some of its rows; lock those rows instead. See
+[QueuesPage](../../src/angee/work/web/src/views/QueuesPage.tsx).
+
+The lines composer owns the line wire shape at the diff boundary
+([editable-lines](../../packages/ui/src/views/form/editable-lines.ts)):
+`lineFieldValue` lower-cases an enum cell's write because the child line input
+types a choices column as `String`, so an untouched UPPERCASE read serializes as
+the lowercase model value; `lineToInput` owns the blank-cell rule — a blank
+non-String cell (`""` seed or widget-cleared `null`) is omitted on a created row
+so input and model defaults apply, ships `null` on an existing row, and only a
+String-scalar cell's `""` is a real wire value sent verbatim.
+
+A line row the backend locks is a system row. The child model owns the fact
+(`RowLockMixin.locked_fields`), its node projects it, and the lines metadata
+names it as `lockField`; [EditableLines](../../packages/ui/src/views/form/EditableLines.tsx)
+reads it per row. Through the data view's `canReorderRow`, the row shows a lock
+where its reorder handle would be; it carries a "System" marker, offers no duplicate
+or remove, and keeps its locked cells read-only while its other cells edit. Never
+re-derive a lock from a category or name in the page; the backend refuses the same
+writes regardless of what the composer shows.
+
+**A `createDefaults` seed submits on create even when `readOnly`.** `ResourceList`'s
+`createDefaults` seeds the create form, and `form-view-model.ts`'s `mutationData` submits a create
+seed even for a `readOnly`/`createOnly` field — whether the seed is the field's own
+`defaultValue` or a page-level `createDefaults` entry — so a seeded read-only field is
+no longer silently dropped from the create payload. Prefer `createOnly` (editable on
+create carrying the seed, locked on edit) when the value should stay visible-but-fixed;
+`readOnly` + `createDefaults` also works for a value the form never renders editable.
+(`editOnly` fields stay excluded on create.)
+
+## Pitfalls
+
+The traps that lived here moved to the skills that own the work: page, route,
+navigation and rendering traps to [angee-pages](../../.agents/skills/angee-pages/references/pitfalls.md),
+form, widget and save traps to [angee-forms](../../.agents/skills/angee-forms/references/pitfalls.md),
+story and vitest traps to [angee-tests](../../.agents/skills/angee-tests/references/web-pitfalls.md), and
+build, codegen, install and package-layering traps to [angee-framework](../../.agents/skills/angee-framework/references/web-pitfalls.md).
+The contracts and invariants that sat beside them stayed in this guide under
+[Rules](#rules), [Form save contracts](#form-save-contracts) and
+[Reserved translation namespace](#reserved-translation-namespace).
+
+## Explorer navigation continuity
+
+A record navigation changes the selected record without replacing its collection.
+Pending, missing or failed detail data does not itself select an empty root. Keep
+the current root, search, expansion and scroll position while another record in
+that root loads. A deliberate root change, or a resolved record belonging to a
+different root, may reset collection state for that new scope.
+
+Explorer pages compose
+[`useScopedTreeExplorer`](../../packages/ui/src/views/tree/useScopedTreeExplorer.ts)
+for retained root and tree selection, then pass its controller and hydrated query
+rows to [`ScopedExplorerPane`](../../packages/ui/src/views/tree/ScopedExplorerPane.tsx).
+The pane owns picker display. Routes own record identity; queries own loaded
+records; collection owners retain search and expansion. Resolved record roots
+update the shared selection owner; unresolved detail leaves its retained scope
+intact. Explicit root navigation returns its acceptance through `onRootIdChange`; a
+blocked dirty-form transition leaves the current scope intact. Use
+`invalidateRoot(id)` only after the selected-root read resolves unavailable;
+search misses, pending reads and read errors are not proof of removal.
+A controlled `rootId` remains authoritative, including an explicit empty
+value. Do not mirror retained selection in addon state or add a parallel selection
+helper, row cache or navigator implementation.
+
+Keys that reset collection state must follow actual collection identity, never
+a temporary gap in detail data. Preserve navigator state separately from record
+data: showing the previous editable record under the next record's URL is not a
+valid way to keep the navigator mounted.
+
+Verify the transition as well as its settled result:
+
+- Use the native router, query and shell test providers. Hold the next record's
+  response pending; check that the navigator controls remain the same DOM nodes
+  and that search and expanded branches survive both pending and resolved reads.
+- Cover entry from the collection and from a directly opened record, navigation
+  within and across roots, explicit picker changes, and browser Back/Forward.
+  Check that a resolved record's root wins over an earlier picker choice.
+- Exercise empty, pending and failed picker searches independently of detail
+  reads. Check that delayed responses cannot restore an obsolete selection, and
+  that unavailable detail data does not expose the previous record's write actions.
+- In the live browser, navigate to an uncached record and observe the pending
+  interval. A screenshot taken only after loading cannot establish continuity.
+
+## Checks
+
+[Frontend packages and addon fragments](../checks.md#frontend-packages-and-addon-fragments)
+owns the package, composed-addon, distribution and architecture commands, their
+working directories and prerequisites, and the primitive-drift scan;
+[Browser verification](../checks.md#browser-verification) and
+[End-to-End Testing](e2e.md) own browser acceptance. The vitest and story false
+greens moved to the `angee-tests` skill's [web pitfalls](../../.agents/skills/angee-tests/references/web-pitfalls.md).

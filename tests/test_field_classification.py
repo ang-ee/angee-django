@@ -7,10 +7,12 @@ from typing import cast
 import strawberry
 from django.db import models
 
-from angee.data.field_classification import RESOURCE_FIELD_SCALARS, is_to_one_relation, resource_field_widget
-from angee.data.metadata import DataResourceRoots, DataResourceTypeNames, serialize_data_resources
-from angee.fields import ColorField, StateField
+from angee.base.fields.state import StateField
+from angee.base.fields.text import ColorField
+from angee.graphql.data.contracts import DataResourceRoots, DataResourceTypeNames
 from angee.graphql.data.metadata import _finalize_data_resource
+from angee.graphql.data.resource_fields import RESOURCE_FIELD_SCALARS, resource_field_widget
+from angee.graphql.introspection import is_to_one_relation
 
 
 def test_uuid_is_a_supported_resource_scalar() -> None:
@@ -26,15 +28,6 @@ def test_generic_relation_without_one_fixed_model_is_not_a_to_one_axis() -> None
     assert is_to_one_relation(generic) is False
 
 
-def test_generated_field_projects_as_its_output_field_scalar() -> None:
-    from angee.data.field_classification import model_field_scalar
-
-    field = models.GeneratedField(
-        expression=models.Q(active=True),
-        output_field=models.BooleanField(),
-        db_persist=True,
-    )
-    assert model_field_scalar(field) == "Boolean"
 
 
 def test_color_field_classifies_to_the_color_widget() -> None:
@@ -83,7 +76,7 @@ def test_state_field_status_display_reaches_the_resource_artifact() -> None:
         filter_fields=("id", "status"),
     )
 
-    [artifact] = serialize_data_resources((metadata,), schema_name="console")
+    [artifact] = [item.as_wire(schema_name="console") for item in (metadata,)]
     fields = cast("list[dict[str, object]]", artifact["fields"])
     status = next(field for field in fields if field["name"] == "status")
 

@@ -26,16 +26,20 @@ from rebac import (
 from rebac.backends import LocalBackend, backend, reset_backend
 from rebac.resources import model_resource_type
 from rebac.schema import parse_zed
+from rebac.testing import install_schema
 from strawberry import auto
 
+from angee.base.models.base import AngeeDataModel
 from angee.graphql.capabilities import permissions_field
-from angee.graphql.data import declared_hasura_resource_fields, hasura_model_resource
-from angee.graphql.data.hasura import _declared_aliases, aggregate_queryset
+from angee.graphql.data.hasura import (
+    _declared_aliases,
+    aggregate_queryset,
+    declared_hasura_resource_fields,
+    hasura_model_resource,
+)
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
-from angee.models import AngeeDataModel
-from angee.testing.permissions import install_permission_schema
 from tests.conftest import (
     SchemaAddon,
     execute_schema,
@@ -204,11 +208,11 @@ def relation_grouping_case(transactional_db: None):
     with (
         model_tables(models_in_order),
         patch(
-            "angee.graphql.capabilities.effective_rebac_definition",
+            "angee.graphql.capabilities.declared_rebac_definition",
             side_effect=lambda model: definition.get_definition(cast(str, model_resource_type(model))),
         ),
     ):
-        install_permission_schema(definition, active=active)
+        install_schema(definition, backend=active)
         try:
             alice = SubjectRef.of("auth/user", "alice")
             bob = SubjectRef.of("auth/user", "bob")
@@ -738,7 +742,7 @@ def test_declared_sort_alias_rejects_field_gated_paths(monkeypatch: pytest.Monke
         }
     """)
     monkeypatch.setattr(
-        "angee.graphql.access.effective_rebac_definition",
+        "angee.graphql.data.hasura.declared_rebac_definition",
         lambda model: definition.get_definition(cast(str, model_resource_type(model))),
     )
     with pytest.raises(ImproperlyConfigured, match="field-gated reads"):

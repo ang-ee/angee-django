@@ -9,8 +9,8 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.backends import backend
 from rebac.models import active_relationship_model
 from rebac.schema.parser import parse_zed
+from rebac.testing import install_schema
 
-from angee.testing.permissions import install_permission_schema
 from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
@@ -29,8 +29,8 @@ def withhold_assignees(case):
         else definition
         for definition in schema.definitions
     ]
-    install_permission_schema(schema)
-    case.addCleanup(install_permission_schema, original)
+    install_schema(schema)
+    case.addCleanup(install_schema, original)
 
 
 class TaskAccessTests(WorkCase):

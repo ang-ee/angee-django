@@ -777,7 +777,8 @@
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R src/styles dist/styles && cp src/theme/runtime.mjs dist/theme/runtime.mjs && cp src/theme/runtime.d.ts dist/theme/runtime.d.ts && cp src/views/calendar/calendar-surface.css dist/views/calendar/calendar-surface.css"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R src/styles dist/styles && cp src/theme/runtime.mjs dist/theme/runtime.mjs && cp src/theme/runtime.d.ts dist/theme/runtime.d.ts && cp src/views/calendar/calendar-surface.css dist/views/calendar/calendar-surface.css && cp src/views/form/form-spec.validator.generated.js src/views/form/form-spec.validator.generated.d.ts dist/views/form/",
+    "generate:form-spec": "node scripts/generate-form-spec.mjs"
   },
   "dependencies": {
     "@angee/logo-react": "^0.2.1",
@@ -803,7 +804,7 @@
     "@tanstack/react-table": "^8.21.3",
     "@tanstack/react-virtual": "^3.14.3",
     "@xyflow/react": "^12.11.1",
-    "ajv": "^8.20.0",
+    "ajv": "8.20.0",
     "ajv-formats": "^3.0.1",
     "cmdk": "^1.1.1",
     "codemirror": "^6.0.0",
@@ -811,7 +812,7 @@
     "graphql-tag": "^2.12.6",
     "i18next": "^26.3.2",
     "lucide-react": "^1.21.0",
-    "nuqs": "^2.5.0",
+    "nuqs": "^2.10.1",
     "react-day-picker": "^10.0.1",
     "react-hook-form": "^7.81.0",
     "react-markdown": "^10.1.0",
@@ -839,6 +840,8 @@
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "json-schema-to-typescript": "16.0.0",
+    "esbuild": "0.28.1"
   }
 }

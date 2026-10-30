@@ -28,8 +28,8 @@ its jj recipes.
 - **`angee/`** — the consolidated framework repository. Its root `AGENTS.md`
   carries the constitution for framework work. The main areas are:
 
-  - `angee/` — the Python core and composer;
-  - `addons/` — standard `angee.*` folder addons and co-located web fragments;
+  - `src/` — native `angee.*` distributions, with base primitives, optional
+    server policy and capability-owned web fragments;
   - `packages/` — schema-independent `@angee/*` React packages and workshops;
   - `examples/` — showcase consumer addons and the reference e2e suite;
   - `templates/` — project, stack, workspace, service, and addon templates.
@@ -49,10 +49,13 @@ its jj recipes.
   exists, use `jj` only there and follow `.work/AGENTS.md`, which owns how it
   is committed and published.
 
-`hatch-angee` and `strawberry-django-hasura` remain independently published
-repositories, but normal framework development consumes their PyPI releases;
-this workspace does not materialize co-development slots for them. The Go
-operator likewise remains on its own release train and is consumed as the
+The framework's addon distributions form its native uv workspace. Addon manifests
+consume the published
+[hatch-angee backend](https://github.com/ang-ee/hatch-angee#readme) for layout and
+metadata defaults over Hatchling. It and `strawberry-django-hasura` remain external
+dependencies with their own release processes; their owning manifests declare
+the consumed versions.
+The Go operator likewise remains on its own release train and is consumed as the
 installed `angee` CLI.
 
 ## Rules of the workspace

@@ -37,11 +37,12 @@ from rebac.middleware import ActorMiddleware
 from rebac.roles import grant
 from strawberry.django.views import GraphQLView
 
-from angee.data.field_classification import is_archive_field, is_trash_field
+from angee.base.models.identity import public_id_of
+from angee.base.models.trash import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
+from angee.base.permissions import DirectRecordAccess
 from angee.graphql import records
+from angee.graphql.data.resource_fields import is_archive_field, is_trash_field
 from angee.graphql.views import graphql_endpoint
-from angee.identity import public_id_of
-from angee.models import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet, DirectRecordAccess
 from angee.storage import exceptions
 from angee.storage import models as storage_models
 from angee.storage.models import FileManager, UploadState
@@ -80,7 +81,7 @@ def test_file_source_model_owns_the_upload_protocol() -> None:
     from angee.storage.models import File as AbstractFile
 
     assert AbstractFile._meta.abstract is True
-    assert AbstractFile.__dict__["runtime"] is True
+    assert AbstractFile.compose_concrete is True
     assert isinstance(File.objects, FileManager)
     assert hasattr(File.objects, "draft")
     assert all(hasattr(AbstractFile, verb) for verb in ("receive_bytes", "finalize", "issue_upload_token"))
@@ -420,13 +421,18 @@ def test_file_attachment_attach_converges_across_mti_levels(tmp_path: Path, driv
     connection.vendor != "postgresql",
     reason="PostgreSQL canonical attachment-target serialization contract",
 )
-def test_file_attachment_attach_serializes_on_canonical_target(tmp_path: Path, drive: Any) -> None:
+def test_file_attachment_attach_serializes_on_canonical_target(
+    tmp_path: Path, drive: Any, composed_permissions: None,
+) -> None:
     """A reviewed target lock fences concurrent changes to its complete File set."""
 
-    del tmp_path
+    del tmp_path, composed_permissions
     file = _proxy_upload(drive, PNG_BYTES)
+    reviewer = create_platform_admin("storage-attachment-reviewer")
     with system_context(reason="file attachment serialization setup"):
         child = MtiChild.objects.create(title="Acme", detail="org")
+    assert file.with_actor(reviewer).has_access("read")
+    assert child.with_actor(reviewer).has_access("write")
 
     def attach_while_locked() -> str:
         close_old_connections()
@@ -434,21 +440,22 @@ def test_file_attachment_attach_serializes_on_canonical_target(tmp_path: Path, d
             with connection.cursor() as cursor:
                 cursor.execute("SET lock_timeout TO '250ms'")
             try:
-                FileAttachment.objects.attach(file, child)
+                with actor_context(reviewer):
+                    FileAttachment.objects.attach(file, child)
             except OperationalError as error:
                 return str(error)
             raise AssertionError("The attachment write bypassed the canonical target lock.")
         finally:
             connections.close_all()
 
-    with transaction.atomic(), system_context(reason="file attachment serialization review"):
+    with transaction.atomic(), actor_context(reviewer):
         MtiParent._base_manager.select_for_update().get(pk=child.pk)
         with ThreadPoolExecutor(max_workers=1) as pool:
             blocked = pool.submit(attach_while_locked).result(timeout=5)
         assert "lock timeout" in blocked.lower()
         assert not FileAttachment._base_manager.filter(object_id=child.pk).exists()
 
-    with system_context(reason="file attachment serialization retry"):
+    with actor_context(reviewer):
         attachment = FileAttachment.objects.attach(file, child)
     assert attachment.object_id == child.pk
 
@@ -1823,3 +1830,39 @@ def test_storage_preview_does_not_mint_download_urls(
         assert "errors" not in data
         assert data["data"]["files_by_pk"]["url"].startswith("/storage/download/")
         mint.assert_called_once()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_purge_preserves_bytes_when_an_enclosing_transaction_rolls_back(tmp_path: Path, drive: Any) -> None:
+    row = _proxy_upload(drive, PNG_BYTES)
+    pk, key = row.pk, row.storage_path
+    with pytest.raises(RuntimeError), transaction.atomic(), system_context(reason="test.storage.purge.rollback"):
+        row.purge()
+        assert (tmp_path / key).exists()
+        raise RuntimeError("rollback enclosing work")
+    assert File._base_manager.filter(pk=pk).exists()
+    assert (tmp_path / key).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_backend_cache_includes_selected_implementation(tmp_path: Path, drive: Any) -> None:
+    backend = drive.backend
+    first = backend.storage
+    with system_context(reason="test.storage.change_implementation"):
+        Backend.objects.filter(pk=backend.pk).update(backend_class="local_folder")
+        backend.refresh_from_db()
+    assert isinstance(backend.storage, LocalFolderBackend)
+    assert backend.storage is not first
+
+
+def test_drive_local_file_path_uses_readable_live_file_and_native_location(drive, tmp_path):
+    with system_context(reason="test local file location fixtures"):
+        file = File.objects.ingest_bytes(b"Manifest placeholder", filename="Manifest.db", owner_id=drive.alice.pk,
+                                        drive_id=drive.sqid)
+    with actor_context(drive.alice):
+        assert drive.with_actor(drive.alice).local_file_path("Manifest.db") == file.local_path()
+        file.trash(reason="local file lookup excludes trash")
+        assert drive.local_file_path("Manifest.db") is None
+    stranger = get_user_model().objects.create_user(username="local-path-stranger")
+    with actor_context(stranger), pytest.raises(PermissionDenied):
+        drive.with_actor(stranger).local_file_path("Manifest.db")

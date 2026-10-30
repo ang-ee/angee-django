@@ -6,25 +6,16 @@ from collections.abc import Iterator
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import connection, models
 from rebac import system_context
 
 from angee.projects.models import Milestone as AbstractMilestone
 from angee.projects.models import Task as AbstractTask
+from angee.projects.testing.models import Stage, Task
 from angee.work.models import Stage as AbstractStage
 from angee.work.models import TaskWork
+from tests.conftest import standalone_relation
 from tests.scopedemo.models import Scope
-
-
-def _local_constraints(constraints: tuple[models.BaseConstraint, ...]) -> tuple[models.BaseConstraint, ...]:
-    """Copy inherited constraints under module-local names; SQLite index names are global."""
-
-    copies = []
-    for constraint in constraints:
-        path, args, kwargs = constraint.deconstruct()
-        kwargs["name"] = f"freshness_{kwargs['name']}"
-        copies.append(type(constraint)(*args, **kwargs))
-    return tuple(copies)
 
 
 class FreshnessStage(AbstractStage):
@@ -33,7 +24,6 @@ class FreshnessStage(AbstractStage):
     class Meta(AbstractStage.Meta):
         abstract = False
         app_label = "scopedemo"
-        constraints = _local_constraints(AbstractStage.Meta.constraints)
         # Its own type: the production type has one concrete model, in angee.projects.testing.models.
         rebac_resource_type = "scopedemo/freshness_stage"
 
@@ -44,7 +34,6 @@ class FreshnessMilestone(AbstractMilestone):
     class Meta(AbstractMilestone.Meta):
         abstract = False
         app_label = "scopedemo"
-        constraints = _local_constraints(getattr(AbstractMilestone.Meta, "constraints", ()))
         # Its own type: the production type has one concrete model, in angee.projects.testing.models.
         rebac_resource_type = "scopedemo/freshness_milestone"
 
@@ -52,6 +41,9 @@ class FreshnessMilestone(AbstractMilestone):
 class FreshnessTask(TaskWork, AbstractTask):
     # This scope intentionally supplies no item-ownership policy.
     owner_container = None
+    assignee = standalone_relation(AbstractTask, "assignee")
+    delegate = standalone_relation(AbstractTask, "delegate")
+    activity_type = standalone_relation(AbstractTask, "activity_type")
     project = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)
     milestone = models.ForeignKey(FreshnessMilestone, null=True, blank=True, on_delete=models.SET_NULL)
     queue = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)
@@ -66,10 +58,31 @@ class FreshnessTask(TaskWork, AbstractTask):
     class Meta(AbstractTask.Meta):
         abstract = False
         app_label = "scopedemo"
-        # The subject pair check and both rank uniqueness rules; the idempotency key is not mirrored.
-        constraints = _local_constraints(AbstractTask.Meta.constraints[:3])
         # Its own type: the production type has one concrete model, in angee.projects.testing.models.
         rebac_resource_type = "scopedemo/freshness_task"
+
+
+@pytest.mark.parametrize(("model", "extension"), ((Task, FreshnessTask), (Stage, FreshnessStage)))
+def test_inherited_constraints_are_local_to_concrete_tables(
+    db: None, model: type[models.Model], extension: type[models.Model],
+) -> None:
+    """Multiple concrete declarations retain their own checks and partial unique indexes."""
+
+    del db
+    assert {constraint.name for constraint in model._meta.constraints}.isdisjoint(
+        constraint.name for constraint in extension._meta.constraints
+    )
+    with connection.cursor() as cursor:
+        for concrete in (model, extension):
+            stored = connection.introspection.get_constraints(cursor, concrete._meta.db_table)
+            for constraint in concrete._meta.constraints:
+                if isinstance(constraint, models.CheckConstraint):
+                    assert stored[constraint.name]["check"]
+                elif isinstance(constraint, models.UniqueConstraint) and constraint.condition is not None:
+                    assert stored[constraint.name]["unique"]
+                    assert stored[constraint.name]["columns"] == [
+                        concrete._meta.get_field(name).column for name in constraint.fields
+                    ]
 
 
 @pytest.fixture

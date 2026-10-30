@@ -23,18 +23,20 @@ from rebac import (
 )
 
 import angee.graphql.actions as actions_module
-from angee.errors import RecordAccessSubjectRefused
+from angee.base.exceptions import RecordAccessSubjectRefused, TransitionNotAllowed
+from angee.base.models.locks import StaleRevisionError
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
     action_guard,
     action_target,
     authorized_action_target,
+    authorized_permission_target,
     many_actions,
     resolve_action_target,
 )
 from angee.graphql.schema import AngeeSchema
-from angee.models import CreationKeyConflict, StaleRevisionError, TransitionNotAllowed
+from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from tests.conftest import create_user
 from tests.linesdemo.models import Document
 
@@ -549,3 +551,11 @@ def test_many_actions_unexpected_failure_rolls_back_the_whole_call():
     with pytest.raises(RuntimeError):
         many_actions(selection, run)
     assert not Group.objects.exists()
+
+
+@pytest.mark.parametrize("authorize", [authorized_action_target, authorized_permission_target])
+@pytest.mark.parametrize("request_context", [SimpleNamespace(), SimpleNamespace(scope={}), SimpleNamespace(user=None)])
+def test_action_targets_deny_contexts_without_a_session_user(authorize, request_context) -> None:
+    info = SimpleNamespace(context=SimpleNamespace(request=request_context))
+    with pytest.raises(PermissionDenied, match="Authentication required"):
+        authorize(info, Document, "sd_missing", "write")
