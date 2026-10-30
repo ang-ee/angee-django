@@ -1,8 +1,10 @@
 import { useCallback, useMemo } from "react";
 import { useNavigate, useRouter } from "@tanstack/react-router";
+import { isStatusUpdate } from "@angee/messaging";
 import { Filter, localTimeZone, mergeResourceViewSearch, resourceViewStateToSearch, routeSearchParam, updateRouteSearch, useRouteSearch, type ResourceViewFilter, type ResourceViewState } from "@angee/ui";
 import {
   InboxFilter,
+  coverageKindFilter,
   NAVIGATOR_LENSES,
   RESULT_LENSES,
   resultLenses,
@@ -87,6 +89,11 @@ export function useInboxNavigation() {
     message: undefined,
     part: undefined,
   }), [patch]);
+  const updatesSearch = useCallback((state: ResourceViewState) => (current: Record<string, unknown>) => mergeResourceViewSearch(
+    { ...current, lens: "timeline", thread: undefined, at: undefined, message: undefined, part: undefined },
+    resourceViewStateToSearch({ ...state, filter: coverageKindFilter(state.filter, "updates"),
+      groupStack: [{ field: "by_day" }], pagination: { ...state.pagination, pageIndex: 0 } }, RESULTS_INITIAL), "c",
+  ), []);
   const param = (key: string) => routeSearchParam(search, key) ?? "";
   return useMemo(
     () => ({
@@ -104,6 +111,8 @@ export function useInboxNavigation() {
       relatedFrom: param("relatedFrom"),
       href: (values: Record<string, string | undefined>) => router.buildLocation({ to: ".", search: updateRouteSearch(values) }).href,
       patch,
+      updatesHref: (state: ResourceViewState) => router.buildLocation({ to: ".", search: updatesSearch(state) }).href,
+      showUpdates: (state: ResourceViewState) => void navigate({ to: ".", search: updatesSearch(state) }),
       changeNavigator: (finder: NavigatorLens, state: ResourceViewState) => {
         const filter =
           finder === "groups" || finder === "circles"
@@ -150,8 +159,8 @@ export function useInboxNavigation() {
       read,
       conversation,
       /** Read a match in its complete conversation; standalone messages use the inspector. */
-      openInContext: (message: { id: string; thread?: { id: string } | null }) =>
-        message.thread ? conversation(message.thread.id, message.id) : read(message.id),
+      openInContext: (message: { id: string; thread?: { id: string; modality?: string | null } | null }) =>
+        message.thread && !isStatusUpdate(message) ? conversation(message.thread.id, message.id) : read(message.id),
       results: () =>
         patch({
           thread: undefined,
@@ -175,7 +184,7 @@ export function useInboxNavigation() {
         connect(`file:${file}`, message),
       closeRelated: () => connect(),
     }),
-    [search, patch, connect, read, conversation, navigate, router],
+    [search, patch, connect, read, conversation, navigate, router, updatesSearch],
   );
 }
 export type InboxNavigation = ReturnType<typeof useInboxNavigation>;

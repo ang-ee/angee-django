@@ -10,11 +10,14 @@ _angee:
   name: src
   description: >-
     Conventional framework-source workspace. The consolidated angee checkout
-    is one worktree on `<branch_prefix>/<name>` (the stack supplies its name as
-    the prefix through workspace_defaults), with optional external-addon
-    worktrees for messaging bridges and arpee on the same branch. Update a slot
-    through workspaceSourcePull (`angee ws source pull`); do not switch the
-    worktree to its base ref.
+    is one slot on `<branch_prefix>/<name>` (the stack supplies its name as
+    the prefix through workspace_defaults), with optional external-addon slots
+    for messaging bridges and arpee on the same branch. slot_mode cuts the
+    three code slots as git worktrees (the default) or as jj workspaces of
+    their source's store; the work-state slot names no mode and follows the
+    stack's vcs. Update a worktree slot through workspaceSourcePull (`angee ws
+    source pull`), a jj slot through `angee ws sync-base`; never switch a slot
+    to its base ref.
   instance_naming:
     pattern: "${inputs.agent_name | slug | truncate(48)}"
     max_length: 48
@@ -46,16 +49,21 @@ _angee:
       type: str
       default: ""
       help: Stack source name for the private work-state slot; empty renders a slot the operator skips (a clean-machine stack has no private work-state source). A stack's workspace_defaults for this template supplies it without --input.
+    slot_mode:
+      type: str
+      default: worktree
+      choices: [worktree, jj]
+      help: How the three code slots are cut — git worktrees of their source's cache, or jj workspaces of it; a slot keeps the mode it was cut with. The work-state slot names no mode and follows the stack's vcs. A stack's workspace_defaults for this template supplies it without --input.
   sources:
     angee:
       source: angee
-      mode: worktree
+      mode: "${inputs.slot_mode}"
       ref: "${inputs.angee_ref}"
       branch: "${inputs.branch_prefix}/${name | slug}"
       subpath: angee
     angee-messaging-bridges:
       source: angee-messaging-bridges
-      mode: worktree
+      mode: "${inputs.slot_mode}"
       ref: "${inputs.angee_messaging_bridges_ref}"
       branch: "${inputs.branch_prefix}/${name | slug}"
       subpath: angee-messaging-bridges
@@ -63,7 +71,7 @@ _angee:
       optional: true
     angee-arp:
       source: angee-arp
-      mode: worktree
+      mode: "${inputs.slot_mode}"
       ref: "${inputs.angee_arp_ref}"
       branch: "${inputs.branch_prefix}/${name | slug}"
       subpath: angee-arp
@@ -71,6 +79,8 @@ _angee:
       optional: true
     # Inherit the declared Source kind: Git sources clone, while local sources
     # materialize as symlinks. A fixed `kind: local` here breaks Git stacks.
+    # No mode, ever (slot_mode never names it): the stack's vcs decides, and
+    # sync-base and `ws push` skip it, so it keeps its own publish recipe.
     # The source name comes from the work_state_source input; when it is empty
     # the slot resolves to its own undeclared name and `optional` skips it.
     work-state:
@@ -105,3 +115,8 @@ angee_arp_ref:
 work_state_source:
   type: str
   default: ""
+
+slot_mode:
+  type: str
+  default: worktree
+  choices: [worktree, jj]

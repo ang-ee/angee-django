@@ -698,6 +698,7 @@ class ThreadQuerySet[ThreadT: Thread](
     def conversation_labels(self) -> dict[Any, str]:
         """Label each thread for the actor: its title, else the people in it.
 
+        Status feeds use their category, never a title inferred from authors.
         An untitled direct thread names its counterpart; an untitled group names
         up to two people and counts the rest ("Anna, Tim +4"). People are the
         actor-readable senders of inbound messages other than the actor's own
@@ -707,9 +708,9 @@ class ThreadQuerySet[ThreadT: Thread](
         bounded page of threads; each call costs a fixed number of queries.
         """
 
-        rows = list(self.order_by().values_list("pk", "modality", "title__text"))
-        labels = {pk: str(title or "").strip() for pk, _, title in rows}
-        untitled = {pk: modality for pk, modality, _ in rows if not labels[pk]}
+        rows = list(self.order_by().select_related("title").only("pk", "modality", "title__text"))
+        labels = {thread.pk: thread.display_title for thread in rows}
+        untitled = {thread.pk: thread.modality for thread in rows if not labels[thread.pk]}
         actor = self.actor() or current_actor()
         people: dict[Any, list[str]] = {pk: [] for pk in untitled}
         if untitled and actor is not None:

@@ -9,7 +9,7 @@ export const enMessagingMessages: Record<string, string> = {
   "copies.showAll": "Show source copies",
   "copies.collapse": "Group source copies",
   "copies.inspect": "Source copies",
-  "copies.transport": "Source: {channel}",
+  "copies.transport": "Source account: {channel}",
   "copies.open": "Open copy",
   "copies.separate": "Keep separate",
   "copies.unknownTransport": "Unavailable transport",
@@ -104,6 +104,8 @@ export const enMessagingMessages: Record<string, string> = {
 
   // MessageSummary and MessageReader — a message read like an email.
   "message.label": "Message",
+  "message.statusUpdate": "Status update",
+  "message.updateSource": "{platform} status update · Account: {account}",
   "message.unknownSender": "Unknown sender",
   "message.read": "Read",
   "message.starred": "Starred",

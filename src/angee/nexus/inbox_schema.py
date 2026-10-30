@@ -118,6 +118,7 @@ class InboxGroup:
     latest: datetime | None
     platform: str
     account: str
+    modality: str
 
 
 @strawberry.type

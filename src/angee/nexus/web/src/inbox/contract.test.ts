@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import {
   InboxFilter,
+  coverageKindFilter,
+  statusCoverage,
   inboxCollectionQuery,
   navigatorAxes,
   resultLensForGroup,
@@ -85,4 +87,15 @@ test("live interest stays with the owners each inbox read uses", () => {
   expect(source(true).groups?.models).toContain("nexus.Tie");
   // Source options depend on eligible messages, their threads, edges and accounts.
   expect(INBOX_SOURCE_MODELS).toEqual(expect.arrayContaining(["messaging.Message", "messaging.Thread"]));
+});
+
+
+test("status coverage is explicit and changes kinds without losing account, author scope or search", () => {
+  const filter = { kind: { exact: "direct" }, account: { exact: "acc_one" }, text: { iContains: "parking" } };
+  const updates = coverageKindFilter(filter, "updates");
+  expect(statusCoverage(updates)).toEqual({ includes: true, only: true });
+  expect(new InboxFilter(updates).coverage("UTC")).toMatchObject({ accounts: ["acc_one"], kinds: ["updates"] });
+  expect(new InboxFilter(updates).search().text).toBe("parking");
+  expect(statusCoverage(coverageKindFilter(filter, "all"))).toEqual({ includes: true, only: false });
+  expect(new InboxFilter(coverageKindFilter(updates, "any")).values("kind")).toEqual([]);
 });
