@@ -21,7 +21,7 @@ interface TaskRow extends Row {
   title: string;
   project: { id: string; title: string } | null;
   status: string;
-  assignee: string | null;
+  assignee: { id: string; username: string } | null;
   priority: string;
   due_date: string | null;
   sort_order: number;
@@ -51,7 +51,7 @@ const initialTasks: readonly TaskRow[] = [
     title: "Review route ownership",
     project: { id: project.id, title: project.title },
     status: "OPEN",
-    assignee: users[0].id,
+    assignee: users[0],
     priority: "HIGH",
     due_date: "2026-08-24",
     sort_order: 1024,
@@ -62,7 +62,7 @@ const initialTasks: readonly TaskRow[] = [
     title: "Exercise capture need",
     project: { id: project.id, title: project.title },
     status: "OPEN",
-    assignee: users[0].id,
+    assignee: users[0],
     priority: "MEDIUM",
     due_date: "2026-08-25",
     sort_order: 2048,
@@ -73,7 +73,7 @@ const initialTasks: readonly TaskRow[] = [
     title: "Publish project stories",
     project: { id: project.id, title: project.title },
     status: "OPEN",
-    assignee: users[1].id,
+    assignee: users[1],
     priority: "LOW",
     due_date: null,
     sort_order: 3072,
@@ -181,13 +181,13 @@ const metadata = {
                 "title": testQueryField("title", { scalar: "String", filter: null }),
                 "project": testQueryField("project", { scalar: "ID", kind: "relation", filter: { field: "project", scalar: "ID", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull"] }, sort: { field: "project" }, relation: { model: "projects.Project", identityPath: "project.id", labelPath: "project.title" }, row: { path: "project.id", paths: ["project.id"] } }),
                 "status": testQueryField("status", { scalar: "String", kind: "enum", values: ["OPEN", "DONE", "DROPPED"].map((value) => ({ value })), filter: { field: "status", scalar: "String", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull", "contains", "iContains", "startsWith", "iStartsWith", "endsWith", "iEndsWith", "gt", "gte", "lt", "lte"] }, sort: { field: "status" } }),
-                "assignee": testQueryField("assignee", { scalar: "ID", kind: "relation", filter: { field: "assignee", scalar: "ID", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull"] }, relation: { model: "iam.User", identityPath: "assignee", labelPath: "assignee.username" }, row: { path: "assignee", paths: ["assignee"] } }),
+                "assignee": testQueryField("assignee", { scalar: "ID", kind: "relation", filter: { field: "assignee", scalar: "ID", values: [], operators: ["exact", "ne", "inList", "notInList", "isNull"] }, relation: { model: "iam.User", identityPath: "assignee.id", labelPath: "assignee.username" }, row: { path: "assignee.id", paths: ["assignee.id"] } }),
                 "priority": testQueryField("priority", { scalar: "String", kind: "enum", values: ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"].map((value) => ({ value })), filter: null, sort: { field: "priority" } }),
                 "due_date": testQueryField("due_date", { scalar: "Date", filter: null, sort: { field: "due_date" } }),
                 "sort_order": testQueryField("sort_order", { scalar: "Float", filter: null, sort: { field: "sort_order" } }),
                 "sub_sort_order": testQueryField("sub_sort_order", { scalar: "Float", filter: null, sort: { field: "sub_sort_order" } }) }, axes: { "project": testQueryAxis("project", { kind: "relation", identityPath: "project.id", paths: ["project.id", "project.title"], labelPath: "project.title", server: { input: "project", key: "project" }, extractions: [], drill: null }),
                 "status": testQueryAxis("status", { kind: "column", identityPath: "status", paths: ["status"], server: { input: "status", key: "status" }, extractions: [], drill: null }),
-                "assignee": testQueryAxis("assignee", { kind: "relation", identityPath: "assignee", paths: ["assignee", "assignee.username"], labelPath: "assignee.username", server: { input: "assignee", key: "assignee" }, extractions: [], drill: null }) }, sort: { default: [] } }),
+                "assignee": testQueryAxis("assignee", { kind: "relation", identityPath: "assignee.id", paths: ["assignee.id", "assignee.username"], labelPath: "assignee.username", server: { input: "assignee", key: "assignee" }, extractions: [], drill: null }) }, sort: { default: [] } }),
 
         schemaName: "public",
         modelLabel: "projects.Task",
@@ -196,11 +196,12 @@ const metadata = {
 
         roots: {
           list: "project_tasks",
+          aggregate: "project_tasks_aggregate",
           detail: "project_tasks_by_pk",
           create: "insert_project_tasks_one",
           update: "update_project_tasks_by_pk",
         },
-        typeNames: { node: "TaskType" },
+        typeNames: { node: "TaskType", filter: "TaskFilter", order: "TaskOrder" },
         recordRepresentation: "title",
         capabilities: ["list", "detail", "create", "update"],
         fields: [
@@ -208,7 +209,7 @@ const metadata = {
           scalarField("title", "String", true),
           relationField("project", "projects.Project"),
           enumField("status", ["OPEN", "DONE", "DROPPED"]),
-          scalarIdRelationField("assignee", "iam.User"),
+          relationField("assignee", "iam.User"),
           enumField("priority", ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"], true),
           scalarField("due_date", "Date", true),
           scalarField("sort_order", "Float", true),
@@ -335,7 +336,8 @@ function createProjectSchemas() {
   let tasks = initialTasks.map((task) => ({ ...task }));
   const schemas = storySchema(async (_input, init) => {
     const request = requestPayload(init);
-    const values = recordValue(request.variables.data)
+    const values = recordValue(request.variables._set)
+      ?? recordValue(request.variables.data)
       ?? recordValue(request.variables.values)
       ?? recordValue(request.variables.input)
       ?? {};
@@ -348,14 +350,14 @@ function createProjectSchemas() {
     const detailTask = tasks.find((task) => task.id === detailId) ?? tasks[0];
     return jsonResponse({
       data: {
-        projects: collection([project]),
+        ...collection("projects", [project]),
         projects_by_pk: project,
         update_projects_by_pk: project,
-        project_tasks: collection(tasks),
+        ...collection("project_tasks", tasks),
         project_tasks_by_pk: detailTask,
         insert_project_tasks_one: detailTask,
         update_project_tasks_by_pk: detailTask,
-        users: collection(users),
+        ...collection("users", users),
       },
     });
   });
@@ -366,7 +368,7 @@ function createProjectSchemas() {
 function taskWithValues(task: TaskRow, values: Record<string, unknown>): TaskRow {
   const assigneeId = stringValue(values.assignee);
   const assignee = assigneeId
-    ? assigneeId
+    ? users.find((user) => user.id === assigneeId) ?? task.assignee
     : values.assignee === null
       ? null
       : task.assignee;
@@ -382,12 +384,8 @@ function taskWithValues(task: TaskRow, values: Record<string, unknown>): TaskRow
   };
 }
 
-function collection<T>(results: readonly T[]) {
-  return {
-    totalCount: results.length,
-    results,
-    pageInfo: { offset: 0, limit: 200 },
-  };
+function collection<T>(root: string, rows: readonly T[]) {
+  return { [root]: rows, [`${root}_aggregate`]: { aggregate: { count: rows.length } } };
 }
 
 function requestPayload(init?: RequestInit): {
