@@ -9,6 +9,11 @@ const mocks = vi.hoisted(() => ({
   scopes: {} as Record<string, string>,
 }));
 
+vi.mock("@angee/refine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@angee/refine")>()),
+  useAuthoredQuery: () => ({ data: { platform_explorer: { addons: [{ id: "addon_notes", name: "example.notes" }] } } }),
+}));
+
 vi.mock("nuqs", () => ({
   parseAsString: {},
   useQueryState: (key: string) => [mocks.scopes[key] ?? null],
@@ -66,7 +71,7 @@ vi.mock("@angee/ui", async (importOriginal) => ({
             depends_on: ["iam.User"],
           }
         : {
-            id: "example.notes",
+            id: "addon_notes",
             name: "example.notes",
             label: "example.notes",
             kind: "REQUIRED",
@@ -167,7 +172,7 @@ describe("platform route consumers", () => {
       id: "notes.Note",
     });
     expect(mocks.routeHref).toHaveBeenCalledWith("platform.addons.record", {
-      id: "example.notes",
+      id: "addon_notes",
     });
     expect(mocks.routeHref).toHaveBeenCalledWith("platform.models.record", {
       id: "iam.User",
@@ -191,7 +196,7 @@ describe("platform route consumers", () => {
     render(<AddonsPage />);
 
     expect(mocks.routeHref).toHaveBeenCalledWith("platform.addons.record", {
-      id: "example.notes",
+      id: "addon_notes",
     });
   });
 

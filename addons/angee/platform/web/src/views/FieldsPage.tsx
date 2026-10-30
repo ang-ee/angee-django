@@ -6,6 +6,7 @@ import {
   ListView, useRouteHref, type ResourceToolbarGroupOption, type ListColumn, type RouteHref } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
+import { AddonLink } from "./AddonLink";
 
 // The `platform.Field` Hasura resource row (`hasura_pydantic_resource`,
 // `addons/angee/platform/schema.py`): every composed model's fields flattened
@@ -43,9 +44,9 @@ function columns(
       field: "addon",
       header: t("col.addon"),
       render: (row) => (
-        <NavLink href={routeHref("platform.addons.record", { id: row.addon })} variant="inline">
+        <AddonLink name={row.addon}>
           {row.addon}
-        </NavLink>
+        </AddonLink>
       ),
     },
     { field: "kind", header: t("col.type") },

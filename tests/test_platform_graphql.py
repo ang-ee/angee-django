@@ -13,6 +13,7 @@ from rebac import system_context
 from strawberry.schema.config import StrawberryConfig
 
 import tests.test_platform_install  # noqa: F401 -- register the fixture model graph before database setup
+from angee.graphql.ids import require_instance_for_id
 from angee.platform import composed
 from tests.conftest import addon_schema, execute_schema
 from tests.conftest import create_platform_admin as _platform_admin
@@ -145,7 +146,7 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(composed_table
     addon = apps.get_model("platform", "Addon")
     with system_context(reason="test.platform.explorer.seed"):
         addon.objects.all().delete()
-        addon.objects.create(
+        local_addon = addon.objects.create(
             name=config.name,
             label=config.label,
             namespace="tests",
@@ -157,7 +158,7 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(composed_table
             depends_on=["example.dependency"],
             model_labels=[line_row.label, tag_row.label],
         )
-        addon.objects.create(name="example.remote", source=addon.AddonSource.REMOTE)
+        remote_addon = addon.objects.create(name="example.remote", source=addon.AddonSource.REMOTE)
     with monkeypatch.context() as patch:
         patch.setattr(platform_schema, "platform_can_read", lambda: True)
         patch.setattr(composed, "model_rows", lambda: [line_row, tag_row])
@@ -170,7 +171,7 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(composed_table
                 """
                 query {
                   platform_explorer {
-                    addons { id label model_labels resource_count depends_on }
+                    addons { id name label model_labels resource_count depends_on }
                     models { label fields { name relation_target } }
                     edges { id source target kind field_name }
                   }
@@ -196,14 +197,16 @@ def test_explorer_reads_persisted_addons_and_shared_computed_rows(composed_table
     explorer = data["platform_explorer"]
     assert explorer["addons"] == [
         {
-            "id": "example.remote",
+            "id": remote_addon.public_id,
+            "name": "example.remote",
             "label": "example.remote",
             "model_labels": [],
             "resource_count": 0,
             "depends_on": [],
         },
         {
-            "id": config.name,
+            "id": local_addon.public_id,
+            "name": config.name,
             "label": config.label,
             "model_labels": [line_row.label, tag_row.label],
             "resource_count": 7,
@@ -241,9 +244,10 @@ def test_addon_names_support_text_search_sort_and_labels_with_unknown_identity(c
     del composed_tables
     admin = _platform_admin("catalogue-search-admin")
     addon = apps.get_model("platform", "Addon")
+    rows = {}
     with system_context(reason="test.platform.catalogue.search"):
         for name, label in (("catalogue_probe.zebra", ""), ("catalogue_probe.alpha", "Zulu"), ("other.hidden", "")):
-            addon.objects.create(name=name, label=label, source=addon.AddonSource.REMOTE)
+            rows[name] = addon.objects.create(name=name, label=label, source=addon.AddonSource.REMOTE)
 
     data = _data(
         execute_schema(
@@ -260,9 +264,36 @@ def test_addon_names_support_text_search_sort_and_labels_with_unknown_identity(c
     )
 
     assert data["platform_addons"] == [
-        {"id": "catalogue_probe.alpha", "name": "catalogue_probe.alpha", "label": "Zulu"},
-        {"id": "catalogue_probe.zebra", "name": "catalogue_probe.zebra", "label": "catalogue_probe.zebra"},
+        {"id": rows["catalogue_probe.alpha"].public_id, "name": "catalogue_probe.alpha", "label": "Zulu"},
+        {"id": rows["catalogue_probe.zebra"].public_id, "name": "catalogue_probe.zebra", "label": "catalogue_probe.zebra"},
     ]
+
+
+def test_addon_detail_and_record_services_share_canonical_public_identity(composed_tables: None) -> None:
+    """Catalogue names remain filter vocabulary; record navigation uses the model ID."""
+
+    del composed_tables
+    admin = _platform_admin("catalogue-identity-admin")
+    addon = apps.get_model("platform", "Addon")
+    with system_context(reason="test.platform.catalogue.identity"):
+        row = addon.objects.create(name="catalogue_probe.identity", label="Identity")
+    assert row.public_id != row.name
+    data = _data(execute_schema(
+        _schema(),
+        """query($id: ID!) {
+          platform_addons_by_pk(id: $id) { id name label }
+          platform_addons(where: {name: {_eq: "catalogue_probe.identity"}}) { id name }
+        }""",
+        {"id": row.public_id},
+        user=admin,
+    ))
+    assert data == {
+        "platform_addons_by_pk": {"id": row.public_id, "name": row.name, "label": "Identity"},
+        "platform_addons": [{"id": row.public_id, "name": row.name}],
+    }
+    assert require_instance_for_id(
+        addon, data["platform_addons_by_pk"]["id"], queryset=addon.objects.with_actor(admin),
+    ) == row
 
 
 def test_field_collection_groups_rows_by_model_and_kind(monkeypatch: Any) -> None:

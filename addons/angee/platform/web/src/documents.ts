@@ -12,6 +12,7 @@ export const PlatformExplorer = graphql(`
       pending_addon_changes
       addons {
         id
+        name
         label
         namespace
         kind
@@ -50,6 +51,15 @@ export const PlatformExplorer = graphql(`
         kind
         field_name
       }
+    }
+  }
+`);
+
+/** Resolve native addon names to the catalogue's canonical record identities. */
+export const PlatformAddonIdentities = graphql(`
+  query PlatformAddonIdentities {
+    platform_explorer {
+      addons { id name }
     }
   }
 `);

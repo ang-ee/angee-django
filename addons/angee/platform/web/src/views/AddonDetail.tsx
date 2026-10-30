@@ -4,12 +4,13 @@ import { Chip, Code, DetailSection, DetailSurface, OverflowChipList, useRouteHre
 
 import { addonEnumLabel, usePlatformT } from "../i18n";
 import { platformScopeSearch } from "../lib/paths";
-import { usePlatformAddon } from "../lib/explorer";
+import { usePlatformAddon, usePlatformAddonHref } from "../lib/explorer";
 
 export function AddonDetail(): ReactElement {
   const t = usePlatformT();
   const id = useRouteRecordId();
   const routeHref = useRouteHref();
+  const addonHref = usePlatformAddonHref();
   const { addon, dependsOn, dependedBy, modelLabels, isFetching: fetching } =
     usePlatformAddon(id);
 
@@ -31,7 +32,7 @@ export function AddonDetail(): ReactElement {
       meta={
         addon ? (
           <>
-            <Code tone="muted">{addon.id}</Code>
+            <Code tone="muted">{addon.name}</Code>
             <Chip tone="neutral">{addon.namespace}</Chip>
             <Chip tone="neutral">{addonEnumLabel(t, "kind", addon.kind)}</Chip>
           </>
@@ -48,7 +49,7 @@ export function AddonDetail(): ReactElement {
                   ? routeHref(
                       "platform.models",
                       undefined,
-                      platformScopeSearch({ addon: addon.id }),
+                      platformScopeSearch({ addon: addon.name }),
                     )
                   : undefined,
               },
@@ -60,7 +61,7 @@ export function AddonDetail(): ReactElement {
                   ? routeHref(
                       "platform.fields",
                       undefined,
-                      platformScopeSearch({ addon: addon.id }),
+                      platformScopeSearch({ addon: addon.name }),
                     )
                   : undefined,
               },
@@ -80,11 +81,11 @@ export function AddonDetail(): ReactElement {
             rows={[
               [
                 t("col.dependsOn"),
-                <OverflowChipList items={dependsOn.map((id) => ({ id, label: id, href: routeHref("platform.addons.record", { id }) }))} />,
+                <OverflowChipList items={dependsOn.map((id) => ({ id, label: id, href: addonHref(id) }))} />,
               ],
               [
                 t("col.dependedBy"),
-                <OverflowChipList items={dependedBy.map((id) => ({ id, label: id, href: routeHref("platform.addons.record", { id }) }))} />,
+                <OverflowChipList items={dependedBy.map((id) => ({ id, label: id, href: addonHref(id) }))} />,
               ],
             ]}
           />

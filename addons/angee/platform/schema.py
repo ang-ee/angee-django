@@ -23,6 +23,8 @@ from angee.graphql.access import actor_can_read
 from angee.graphql.actions import ActionResult
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.data.pydantic_resource import hasura_pydantic_resource
+from angee.graphql.ids import PublicID
+from angee.graphql.node import AngeeNode
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.platform import composed
 from angee.platform.models import Addon as AddonModel
@@ -130,17 +132,12 @@ class PlatformEdge:
     field_name: str
 
 
-def _addon_id(root: Any) -> str:
-    """Return the catalogue addon's native name as the explorer identity."""
-
-    return root.name
-
-
 @strawberry.type
 class PlatformAddon:
     """Detail projection over the persisted addon catalogue."""
 
-    id: str = strawberry.field(resolver=_addon_id)
+    id: PublicID = strawberry.field(resolver=AngeeNode.id)
+    name: str
     label: str = strawberry.field(resolver=_Addon.get_display_label)
     namespace: str
     kind: AddonModel.AddonKind
@@ -263,9 +260,9 @@ def _edge_rows(models: list[composed.PlatformModelRow]) -> list[PlatformEdge]:
 class AddonNode:
     """Read-only projection of one composed/available addon (the reflection table).
 
-    Identity is the addon ``name`` (e.g. ``angee.iam``) — the stable key the whole
-    console cross-links on (the model/field pages filter by it) — not a sqid. The
-    table is system-synced (``post_migrate``), so this resource is read-only.
+    Public identity is the model sqid; ``name`` (e.g. ``angee.iam``) remains the
+    native catalogue key used by filters and lifecycle actions. The table is
+    system-synced (``post_migrate``), so this resource is read-only.
     """
 
     name: auto
@@ -286,11 +283,7 @@ class AddonNode:
     depended_by: list[str]
     model_labels: list[str]
 
-    @strawberry_django.field
-    def id(self) -> str:
-        """Return the addon name as the row identity."""
-
-        return self.name
+    id: PublicID = strawberry_django.field(resolver=AngeeNode.id, only=["id"])
 
 
 # Read is gated by the model's own ``platform/addon`` REBAC scope (const-backed
@@ -301,7 +294,6 @@ _ADDON_RESOURCE = hasura_model_resource(
     model=_Addon,
     name="platform_addons",
     model_label="platform.Addon",
-    public_id_field="id",
     filterable=[
         "name",
         "label",
@@ -322,8 +314,6 @@ _ADDON_RESOURCE = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
-    id_decode=lambda value: value,
-    id_column="name",
 )
 
 

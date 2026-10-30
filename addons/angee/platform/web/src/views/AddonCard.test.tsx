@@ -78,7 +78,7 @@ vi.mock("@angee/refine", async (importOriginal) => ({
 
 function row(overrides: Partial<AddonResourceRow> = {}): AddonResourceRow {
   return {
-    id: "angee.notes",
+    id: "addon_notes",
     name: "angee.notes",
     label: "notes",
     namespace: "angee",
@@ -133,6 +133,7 @@ describe("AddonCard", () => {
     render(<AddonCard row={row()} />);
     expect(screen.getByText("notes")).toBeTruthy();
     expect(screen.getByText("angee.notes")).toBeTruthy();
+    expect(screen.queryByText("addon_notes")).toBeNull();
     expect(screen.getByText("Product logic for the example.")).toBeTruthy();
     expect(screen.getByText("demo")).toBeTruthy(); // keyword chip
     expect(screen.getByText("Enabled")).toBeTruthy();
@@ -145,7 +146,7 @@ describe("AddonCard", () => {
 
   test("shows the server's canonical-name label for an unresolved remote addon", () => {
     render(<AddonCard row={row({
-      id: "example.remote",
+      id: "addon_remote",
       name: "example.remote",
       label: "example.remote",
       source: "REMOTE",

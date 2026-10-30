@@ -5,10 +5,11 @@ import {
   useAuthoredQuery,
   type DocumentData,
 } from "@angee/refine";
-import type { GraphViewEdge, GraphViewNode } from "@angee/ui";
+import { useRouteHref, type GraphViewEdge, type GraphViewNode } from "@angee/ui";
 
 import {
   PlatformExplorer,
+  PlatformAddonIdentities,
   type PlatformAddonData,
   type PlatformExplorerData,
   type PlatformModelData,
@@ -85,10 +86,10 @@ export function selectPlatformAddonDetail(
 ): PlatformAddonDetail {
   const addons = explorerOrEmpty(data).addons;
   const addon = id ? addons.find((candidate) => candidate.id === id) : undefined;
-  const ids = new Set(addons.map((candidate) => candidate.id));
+  const names = new Set(addons.map((candidate) => candidate.name));
   return {
     addon,
-    dependsOn: sortedUnique((addon?.depends_on ?? []).filter((dep) => ids.has(dep))),
+    dependsOn: sortedUnique((addon?.depends_on ?? []).filter((dep) => names.has(dep))),
     dependedBy: addon?.depended_by ?? [],
     modelLabels: sortedUnique(addon?.model_labels ?? []),
   };
@@ -176,4 +177,14 @@ export function usePlatformModelGraph({
     [query.data, model, relationPage],
   );
   return { ...query, ...graph };
+}
+
+/** Build record links from native catalogue names without treating names as public IDs. */
+export function usePlatformAddonHref(): (name: string) => string | undefined {
+  const routeHref = useRouteHref();
+  const query = useAuthoredQuery(PlatformAddonIdentities);
+  return (name) => {
+    const addon = query.data?.platform_explorer?.addons.find((candidate) => candidate.name === name);
+    return addon ? routeHref("platform.addons.record", { id: addon.id }) : undefined;
+  };
 }

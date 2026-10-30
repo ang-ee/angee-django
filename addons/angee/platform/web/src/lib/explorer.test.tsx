@@ -42,9 +42,12 @@ beforeEach(() => {
 
 describe("platform explorer selectors", () => {
   test("projects addon dependency detail from known platform addons", () => {
-    const detail = selectPlatformAddonDetail(explorerResult(), "angee.iam");
+    const detail = selectPlatformAddonDetail(explorerResult(), "addon_iam");
 
     expect(detail.addon?.label).toBe("iam");
+    expect(detail.addon?.id).toBe("addon_iam");
+    expect(detail.addon?.name).toBe("angee.iam");
+    expect(selectPlatformAddonDetail(explorerResult(), "angee.iam").addon).toBeUndefined();
     expect(detail.dependsOn).toEqual(["angee.resources"]);
     expect(detail.dependedBy).toEqual(["angee.operator"]);
     expect(detail.modelLabels).toEqual(["iam.group", "iam.user"]);
@@ -138,7 +141,7 @@ describe("platform explorer hooks", () => {
   test("preserves loading state for missing detail records", () => {
     sdkMocks.query = queryResult(undefined, { isFetching: true });
 
-    const { result } = renderHook(() => usePlatformAddon("angee.iam"));
+    const { result } = renderHook(() => usePlatformAddon("addon_iam"));
 
     expect(result.current.addon).toBeUndefined();
     expect(result.current.notFound).toBe(false);
@@ -172,7 +175,8 @@ function explorerResult(): PlatformExplorerResult {
 
 const addons: PlatformAddonData[] = [
   {
-    id: "angee.iam",
+    id: "addon_iam",
+    name: "angee.iam",
     label: "iam",
     namespace: "angee",
     kind: "REQUIRED",
@@ -184,7 +188,8 @@ const addons: PlatformAddonData[] = [
     model_labels: ["iam.user", "iam.group", "iam.user"],
   },
   {
-    id: "angee.operator",
+    id: "addon_operator",
+    name: "angee.operator",
     label: "operator",
     namespace: "angee",
     kind: "CONSUMER",
@@ -196,7 +201,8 @@ const addons: PlatformAddonData[] = [
     model_labels: ["operator.task"],
   },
   {
-    id: "angee.resources",
+    id: "addon_resources",
+    name: "angee.resources",
     label: "resources",
     namespace: "angee",
     kind: "REQUIRED",

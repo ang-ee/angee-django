@@ -511,8 +511,8 @@ def _preview_revision(
 class Addon(AngeeModel, concrete=True):
     """The composed-runtime addon registry — local reflection, system-synced.
 
-    Identity is ``name`` (e.g. ``angee.iam``) — the stable key the console
-    cross-links on — not a sqid.
+    Public identity is the inherited sqid. ``name`` (e.g. ``angee.iam``) is the
+    unique native catalogue key used by composition and lifecycle actions.
     """
 
 
