@@ -172,7 +172,6 @@ product specifics down into the framework. Every fact lives at its owning level.
 ```text
 .                    # consolidated framework source slot
 ├── addons/          # angee.base foundation and capability addons; co-located web fragments
-├── tools/hatch-angee/ # native Hatchling layout backend; no runtime compiler
 ├── packages/        # schema-independent @angee/* packages and workshop/test tooling
 ├── examples/        # consumer addons and reference browser suite
 ├── templates/       # Copier project, stack, workspace, service, and addon sources
@@ -193,9 +192,10 @@ addon entry point; absence of `apps.py` never changes package identity.
 
 `angee.base` owns reusable models, settings/bootstrap and small shared primitives;
 `angee.server` owns HTTP policy. Generic composition belongs to `django-compose`.
-The in-tree `tools/hatch-angee` workspace member only supplies package layout
-defaults over Hatchling. In a materialized workspace the stack root owns JS
-installation; the repository manifest also supports standalone package CI.
+The published [hatch-angee](https://github.com/ang-ee/hatch-angee) backend owns
+addon layout and metadata defaults over Hatchling; its README owns the authoring
+contract. In a materialized workspace the stack root owns JS installation; the
+repository manifest also supports standalone package CI.
 See [the stack](docs/stack.md).
 
 Personal-messaging bridges remain in the optional external

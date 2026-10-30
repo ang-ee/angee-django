@@ -40,10 +40,6 @@ def test_native_addon_members_reach_base_and_explicit_library_stays_outside_grou
         data = tomllib.loads((path / "pyproject.toml").read_text())
         project = data["project"]
         name = project["name"]
-        if name == "hatch-angee":
-            assert path == ROOT / "tools/hatch-angee"
-            assert project["version"].startswith("1.")
-            continue
         if name in LIBRARIES:
             assert project["requires-python"] == ">=3.14" and project["license"]
             assert not project.get("entry-points", {}).get("angee.addons")
@@ -53,7 +49,10 @@ def test_native_addon_members_reach_base_and_explicit_library_stays_outside_grou
         assert len(points) == 1
         app = next(iter(points))
         assert name == app.replace(".", "-").replace("_", "-")
-        assert data["build-system"]["build-backend"] == "hatch_angee"
+        assert data["build-system"] == {
+            "requires": ["hatch-angee>=1.1,<2"],
+            "build-backend": "hatch_angee",
+        }
         if name == "angee-base":
             assert project["requires-python"] == ">=3.14" and project["license"]
         else:
@@ -87,6 +86,8 @@ def test_meta_exact_pins_and_native_sources_match_actual_members():
     projects = {tomllib.loads((path / "pyproject.toml").read_text())["project"]["name"] for path in members()}
     sources = data["tool"]["uv"]["sources"]
     assert {name for name, source in sources.items() if source.get("workspace")} == projects
+    assert "hatch-angee" not in projects
+    assert not (ROOT / "tools/hatch-angee").exists()
     assert "addons" not in data.get("dependency-groups", {})
     assert not list((ROOT / "addons").rglob(".gitignore"))
     assert not list((ROOT / "addons").rglob("addon.toml"))
@@ -98,7 +99,6 @@ def test_native_release_bumps_only_cohort_and_updates_all_consumers(tmp_path, ki
         "": ("angee", "3.0.0", ["angee-base==3.0.0", "angee-web==3.0.0"]),
         "addons/angee/base": ("angee-base", "3.0.0", []),
         "addons/angee/web": ("angee-web", "3.0.0", ["angee-base>=3,<4"]),
-        "tools/hatch-angee": ("hatch-angee", "1.0.1", []),
         "examples/addons/example/notes": ("example-notes", "0.9.0", ["angee-base>=3,<4"]),
         "tests/blankchoices": ("tests-blankchoices", "0.7.0", ["angee-web==3.0.0"]),
     }
@@ -113,7 +113,7 @@ def test_native_release_bumps_only_cohort_and_updates_all_consumers(tmp_path, ki
     with target.open("a") as stream:
         stream.write("""
 [tool.uv.workspace]
-members=["addons/angee/*","tools/hatch-angee","examples/addons/example/*","tests/blankchoices"]
+members=["addons/angee/*","examples/addons/example/*","tests/blankchoices"]
 [tool.uv.sources]
 angee-base={workspace=true}
 angee-web={workspace=true}

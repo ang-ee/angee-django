@@ -1,4 +1,4 @@
-build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
 
 [project]
 name = "angee-work"
@@ -31,6 +31,3 @@ depends_on = ["demo/015_work.cycle.yaml", "projects:demo/031_projects.task.yaml"
 
 [tool.angee.platform]
 category = "Productivity"
-
-[tool.hatch.metadata]
-allow-direct-references = true

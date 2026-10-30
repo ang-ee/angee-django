@@ -1,4 +1,4 @@
-build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
 
 [project]
 name = "angee-server"
@@ -10,6 +10,3 @@ entry-points."angee.addons"."angee.server" = "angee.server"
 
 [tool.angee.platform]
 category = "Foundation"
-
-[tool.hatch.metadata]
-allow-direct-references = true

@@ -21,7 +21,7 @@ wires declarations only; the reference example throughout is `examples/addons/ex
 |---|---|---|
 | `pyproject.toml` | Identity, dependencies, declared capability seams | `examples/addons/example/notes/pyproject.toml` |
 | Native `EntryPoint`, `Distribution`, `packaging.Requirement` | Addon identity, installed requirement activation, and package metadata | `addons/angee/base/addons.py` |
-| `addons/angee/base/addons.py` | Package-data projection and entry-point identity agreement, optional-module and dotted-reference conventions | `native `django_compose.components` index + base reader` |
+| `addons/angee/base/addons.py` | Package-data projection, optional-module and dotted-reference conventions | `native `django_compose.components` index + base reader` |
 | `apps.py` (optional) | `name`, pinned `label`, `ready()` hooks, check registration | `addons/angee/money/apps.py:17`, `addons/angee/base/apps.py:22` |
 | `autoconfig.py` | Settings fragments merged by native `django_compose.conf` in dependency order | `examples/addons/example/notes/autoconfig.py:5`, `addons/angee/base/autoconfig.py:23,42` |
 | `testing/models.py`, `tests/settings.py`, `tests/conftest.py` | Concrete models and roster of the bare test host | `addons/angee/tags/testing/models.py`, `tests/settings.py:29,144`, `tests/conftest.py:645` |
@@ -53,7 +53,7 @@ wires declarations only; the reference example throughout is `examples/addons/ex
    activation. Capability-specific facts belong to their own tool tables:
 
    ```toml
-   build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee" }
+   build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
    tool.angee.platform.category = "Example"
    [project]
    name = "example-notes"
@@ -80,8 +80,9 @@ wires declarations only; the reference example throughout is `examples/addons/ex
    ([composition owners](../../../docs/backend/guidelines.md#composition-owners)).
 
    A library is explicitly packaged without an `angee.addons` entry point; do not
-   infer library identity from missing `apps.py`. The layout backend lives at
-   `tools/hatch-angee` and delegates native builds to Hatchling.
+   infer library identity from missing `apps.py`. The published
+   [hatch-angee backend](https://github.com/ang-ee/hatch-angee#readme) owns addon
+   layout and metadata defaults and delegates native builds to Hatchling.
 
 3. **Add `apps.py` only for native customization.** Notes has none. Add one for checks,
    signals or a pinned label (shape: `addons/angee/money/apps.py:17`):

@@ -110,7 +110,8 @@ def test_src_workspace_agents_describes_the_consolidated_framework_slot() -> Non
     for area in ("`angee/`", "`addons/`", "`packages/`", "`examples/`", "`templates/`"):
         assert area in text
     assert "native uv workspace" in text
-    assert "owning package declares the consumed revision" in text
+    assert "https://github.com/ang-ee/hatch-angee#readme" in text
+    assert "owning manifests declare" in text
     assert "never `git checkout`" in text
     assert "Never `pnpm install` inside a slot" in text
     assert "commit and push continuously" in text
