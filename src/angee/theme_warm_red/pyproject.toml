@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "A warm red visual theme for Angee"
 keywords = ["theme", "appearance", "red"]
 dependencies = ["angee-web>=3,<4"]
-
-[project.entry-points]
-"angee.addons" = {"angee.theme_warm_red" = "angee.theme_warm_red"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

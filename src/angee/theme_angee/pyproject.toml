@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "The angee.ai gold and graphite identity theme"
 keywords = ["theme", "appearance", "angee", "gold"]
 dependencies = ["angee-web>=3,<4"]
-
-[project.entry-points]
-"angee.addons" = {"angee.theme_angee" = "angee.theme_angee"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

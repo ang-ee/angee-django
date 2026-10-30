@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "Notion API connections for knowledge vaults"
 keywords = ["knowledge", "notion", "integration"]
 dependencies = ["angee-base>=3,<4", "angee-knowledge>=3,<4", "angee-integrate>=3,<4", "angee-web>=3,<4", "markdown-it-py>=4.2"]
-
-[project.entry-points]
-"angee.addons" = {"angee.knowledge_integrate_notion" = "angee.knowledge_integrate_notion"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

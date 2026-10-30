@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "A consumer-authored configurable theme example"
 keywords = ["theme", "appearance", "example"]
 dependencies = ["angee-web>=3,<4"]
-
-[project.entry-points]
-"angee.addons" = {"example.theme" = "example.theme"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

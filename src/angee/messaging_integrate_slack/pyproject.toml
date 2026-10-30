@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "Slack messaging sync — polls workspace conversations into chat threads"
 keywords = ["slack", "chat", "messaging", "sync"]
 dependencies = ["angee-messaging>=3,<4", "angee-integrate>=3,<4", "angee-parties>=3,<4", "angee-web>=3,<4", "slack-sdk>=3.43.0"]
-
-[project.entry-points]
-"angee.addons" = {"angee.messaging_integrate_slack" = "angee.messaging_integrate_slack"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

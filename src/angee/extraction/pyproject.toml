@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "Immutable document evidence, profiles, and inference"
 keywords = ["extraction", "documents", "evidence"]
 dependencies = ["angee-base>=3,<4", "angee-decisions>=3,<4", "angee-agents>=3,<4", "angee-storage>=3,<4", "angee-messaging>=3,<4", "angee-graphql>=3,<4", "angee-provenance>=3,<4", "jsonpointer>=3.1", "pypdfium2>=4.30", "pillow>=11.0"]
-
-[project.entry-points]
-"angee.addons" = {"angee.extraction" = "angee.extraction"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

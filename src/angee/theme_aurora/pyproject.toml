@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "A soft, luminous visual theme for Angee"
 keywords = ["theme", "appearance", "aurora"]
 dependencies = ["angee-web>=3,<4"]
-
-[project.entry-points]
-"angee.addons" = {"angee.theme_aurora" = "angee.theme_aurora"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

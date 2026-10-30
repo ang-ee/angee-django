@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "Contacts — people and organizations, their circles, relationships, addresses, and directory sync"
 keywords = ["parties", "contacts", "crm"]
 dependencies = ["angee-base>=3,<4", "angee-provenance>=3,<4", "angee-graphql>=3,<4", "angee-iam>=3,<4", "angee-integrate>=3,<4", "angee-storage>=3,<4", "angee-tags>=3,<4", "angee-jobs>=3,<4", "angee-web>=3,<4", "django-countries>=9,<10", "phonenumbers>=9.0", "pycountry>=26,<27", "django-compose>=0.1.0.dev1,<0.2"]
-
-[project.entry-points]
-"angee.addons" = {"angee.parties" = "angee.parties"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

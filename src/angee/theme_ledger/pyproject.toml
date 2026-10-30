@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "Ink-on-paper ledger theme with a solar accent"
 keywords = ["theme", "appearance", "ledger", "ink"]
 dependencies = ["angee-web>=3,<4"]
-
-[project.entry-points]
-"angee.addons" = {"angee.theme_ledger" = "angee.theme_ledger"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

@@ -4,8 +4,6 @@ build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_ange
 name = "tests-blankchoices"
 version = "3.0.0"
 dependencies = ["angee-parties>=3,<4"]
-
-[project.entry-points]
-"angee.addons" = {"tests.blankchoices" = "tests.blankchoices"}
+dynamic = ["entry-points"]
 
 [tool]

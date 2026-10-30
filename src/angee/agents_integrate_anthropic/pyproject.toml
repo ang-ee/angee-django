@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "Anthropic (Claude) inference backend — adds the Claude client to the agents catalogue"
 keywords = ["anthropic", "claude", "inference"]
 dependencies = ["angee-agents>=3,<4", "angee-integrate>=3,<4", "anthropic>=0.109.2", "pydantic-ai-slim[anthropic]>=2.13"]
-
-[project.entry-points]
-"angee.addons" = {"angee.agents_integrate_anthropic" = "angee.agents_integrate_anthropic"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

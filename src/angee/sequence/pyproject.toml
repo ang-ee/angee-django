@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "Gapless, period-resetting document numbering drawn under a row lock."
 keywords = ["sequence", "numbering", "counter"]
 dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-graphql>=3,<4"]
-
-[project.entry-points]
-"angee.addons" = {"angee.sequence" = "angee.sequence"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 

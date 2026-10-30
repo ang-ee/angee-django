@@ -6,9 +6,7 @@ version = "3.0.0"
 description = "OpenAI (GPT) inference backend — adds the OpenAI client to the agents catalogue"
 keywords = ["openai", "gpt", "inference"]
 dependencies = ["angee-agents>=3,<4", "angee-integrate>=3,<4", "openai>=2.43.0", "pydantic-ai-slim[openai]>=2.13"]
-
-[project.entry-points]
-"angee.addons" = {"angee.agents_integrate_openai" = "angee.agents_integrate_openai"}
+dynamic = ["entry-points"]
 
 [tool.angee]
 
