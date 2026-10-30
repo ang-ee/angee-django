@@ -26,7 +26,13 @@ from strawberry_django.utils.requests import get_request
 from angee.agents import provisioning
 from angee.agents.context import render_view_context
 from angee.base.identity import public_subject_ref
-from angee.graphql.actions import ActionResult, action_target, authorized_permission_target, resolve_action_target
+from angee.graphql.actions import (
+    ActionResult,
+    action_target,
+    authorized_permission_target,
+    resolve_action_target,
+    session_user,
+)
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
@@ -34,7 +40,7 @@ from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
-from angee.iam.permissions import PlatformAdminPermission, session_user
+from angee.iam.permissions import PlatformAdminPermission
 from angee.iam.schema import UserType
 from angee.integrate.connect import connect_integration_target
 from angee.integrate.oauth.errors import OAuthFlowError

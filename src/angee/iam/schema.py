@@ -49,7 +49,7 @@ from angee.base.identity import public_subject_ref
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id
 from angee.graphql.access import ActorSelfChangeReadGate
-from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
+from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target, session_user
 from angee.graphql.capabilities import permission_expression
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.data.pydantic_resource import hasura_pydantic_resource
@@ -63,7 +63,7 @@ from angee.iam.identity import user_display_label, user_label
 from angee.iam.models import VISIBLE_PEOPLE_DEFAULT_LIMIT, UserAccountAction
 from angee.iam.models import Group as GroupModel
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
-from angee.iam.permissions import is_platform_admin, session_user
+from angee.iam.permissions import is_platform_admin
 from angee.iam.roles import (
     IAM_OVERVIEW_DEFAULT_PEEK_LIMIT as _IAM_OVERVIEW_DEFAULT_PEEK_LIMIT,
 )

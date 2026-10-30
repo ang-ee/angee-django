@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Annotated, Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.db.models import F, Prefetch, prefetch_related_objects
 from rebac import system_context
 from rebac.resources import model_resource_type
@@ -19,7 +20,8 @@ from strawberry_django.utils.requests import get_request
 
 from angee.base.fields.identity import SqidField
 from angee.base.models.identity import instance_from_public_id
-from angee.graphql.actions import ActionResult, action_guard
+from angee.base.models.locks import StaleRevisionError
+from angee.graphql.actions import ActionResult, action_guard, session_user
 from angee.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data.contracts import DataResourceSubtitleMetadata
 from angee.graphql.data.hasura import (
@@ -42,7 +44,6 @@ from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch
 from angee.iam.identity import user_display_label, user_label, user_public_id
-from angee.iam.permissions import session_user
 from angee.knowledge.models import (
     AmbiguousMatchError,
     PageQuerySet,
@@ -112,6 +113,7 @@ class OutlineEntryType:
 class MarkdownPageType(AngeeNode):
     """GraphQL projection of a concrete markdown page."""
 
+    revision: auto
     title: auto
     body: auto
     body_hash: auto
@@ -191,6 +193,7 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     display_name: str = strawberry_django.field(
         resolver=AngeeNode.display_name, only=["title"], description=NODE_DISPLAY_NAME_DESCRIPTION
     )
+    revision: auto
     title: auto
     icon: auto
     is_trashed: auto
@@ -371,6 +374,10 @@ def _markdown_write_payload(write: Callable[[], Any]) -> PageBodyPayload:
 
     try:
         markdown = write()
+    except StaleRevisionError as error:
+        return PageBodyPayload(ok=False, error=str(error), error_code=error.code)
+    except ValidationError as error:
+        return PageBodyPayload(ok=False, error="; ".join(error.messages), error_code="VALIDATION_ERROR")
     except StaleBodyError as error:
         return PageBodyPayload(ok=False, error=str(error), error_code="STALE_BODY")
     except UnsupportedPageKindError as error:
@@ -702,12 +709,17 @@ class KnowledgeMutation:
             strawberry.argument(name="expected_hash"),
         ] = None,
         title: str | None = None,
+        expected_revision: Annotated[
+            int | None, strawberry.argument(name="expected_revision"),
+        ] = None,
     ) -> PageBodyPayload:
         """Write a markdown body and optional title atomically with a stale guard."""
 
         target = require_instance_for_id(Page, page)
         return _markdown_write_payload(
-            lambda: MarkdownPage._default_manager.write_body(target, body, expected_hash=expected_hash, title=title)
+            lambda: MarkdownPage._default_manager.write_body(
+                target, body, expected_hash=expected_hash, title=title, expected_revision=expected_revision,
+            )
         )
 
     @strawberry.mutation(name="patch_page_section")

@@ -45,6 +45,7 @@ from angee.base.exceptions import TransitionNotAllowed
 from angee.base.fields.state import StateField
 from angee.base.models.base import AngeeModel
 from angee.base.permissions import require_rebac_queryset
+from angee.graphql.actions import session_user
 from angee.graphql.data import hasura as hasura_data
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.node import AngeeNode
@@ -55,7 +56,6 @@ from angee.graphql.schema import (
     GraphQLSchemas,
 )
 from angee.graphql.view_as import ViewAsReadOnlyExtension
-from angee.iam.permissions import session_user
 from tests.conftest import make_addon
 from tests.core_persistence import OwnedRow
 from tests.hierdemo.models import HierNode

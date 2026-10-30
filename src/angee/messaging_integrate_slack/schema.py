@@ -6,7 +6,8 @@ from typing import cast
 
 import strawberry
 
-from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
+from angee.graphql.actions import session_user
+from angee.iam.permissions import ADMIN_PERMISSION_CLASSES
 from angee.messaging.schema import ChannelType
 from angee.messaging_integrate_slack.connect import create_slack_channel
 

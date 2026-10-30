@@ -10,7 +10,7 @@ import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import wraps
-from typing import ParamSpec, TypeVar, cast
+from typing import Any, ParamSpec, TypeVar, cast
 
 import strawberry
 from django.core.exceptions import NON_FIELD_ERRORS, ImproperlyConfigured, ObjectDoesNotExist, ValidationError
@@ -237,6 +237,23 @@ def action_guard(
     return decorate
 
 
+def session_user(info: strawberry.Info) -> Any:
+    """Return a signed-in session user, or deny contexts without authentication.
+
+    Strawberry owns HTTP and WebSocket request resolution. Its missing-user
+    exceptions represent an unauthenticated context at this action boundary.
+    IAM and self-service resolvers compose this same gate.
+    """
+
+    try:
+        user = get_current_user(info)
+    except (AttributeError, KeyError, ValueError) as error:
+        raise PermissionDenied("Authentication required.") from error
+    if not getattr(user, "is_authenticated", False):
+        raise PermissionDenied("Authentication required.")
+    return user
+
+
 def authorized_action_target(
     info: strawberry.Info,
     model: type[_ActionTarget],
@@ -250,8 +267,8 @@ def authorized_action_target(
     repeats:
 
     1. An unauthenticated session raises ``rebac.PermissionDenied`` — a GraphQL
-       error, the same contract as ``angee.iam``'s ``session_user`` gate, so the
-       client re-authenticates instead of toasting.
+       error through the shared ``session_user`` gate, so the client
+       re-authenticates instead of toasting.
     2. The row resolves through the actor's write-scoped queryset: a row the actor cannot
        reach reads as plain not-found, never an existence oracle.
     3. The resolved row must grant the per-row REBAC ``permission`` (e.g.
@@ -266,9 +283,7 @@ def authorized_action_target(
     and leaves authorization to the caller.
     """
 
-    user = get_current_user(info)
-    if user is None or not getattr(user, "is_authenticated", False):
-        raise PermissionDenied("Authentication required.")
+    session_user(info)
     instance = instance_for_write(model, id)
     return _require_action_permission(instance, model, id, permission)
 
@@ -287,9 +302,7 @@ def authorized_permission_target(
     lookup; a narrowed-away row reads as not found.
     """
 
-    user = get_current_user(info)
-    if user is None or not getattr(user, "is_authenticated", False):
-        raise PermissionDenied("Authentication required.")
+    user = session_user(info)
     scoped: models.QuerySet[_ActionTarget] = require_rebac_queryset(model).with_actor(user).with_action(permission)
     if narrow is not None:
         scoped = narrow(scoped)

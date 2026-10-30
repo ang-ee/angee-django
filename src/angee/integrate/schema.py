@@ -42,6 +42,7 @@ from angee.graphql.actions import (
     authorized_action_target,
     resolve_action_target,
 )
+from angee.graphql.actions import session_user as _session_user
 from angee.graphql.capabilities import PermissionsExtension, held_permissions
 from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
@@ -60,7 +61,6 @@ from angee.iam.identity import user_from_public_id as _user_from_public_id
 from angee.iam.identity import user_principal as _user_principal
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import is_platform_admin
-from angee.iam.permissions import session_user as _session_user
 from angee.iam.schema import UserType
 from angee.integrate import connect as _connect
 from angee.integrate.credentials import CredentialKind

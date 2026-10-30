@@ -188,8 +188,19 @@ materializes its framework sources and boots the complete stack.
    ```sh
    angee init myproject   # dev is the default template; add -y for non-interactive use
    cd myproject
-   angee dev              # materialize sources and boot everything
+   angee job run deps     # materialize sources and install JS dependencies
+   angee job run py-sync  # install Python dependencies
+   angee job run compose  # generate runtime models and artifacts
+   uv run --no-sync python manage.py makemigrations
+   # Review and commit runtime/*/migrations before first provisioning.
+   angee dev              # apply tracked history and boot services
    ```
+
+   Those first three jobs are explicit and ordered: a job checks its
+   prerequisites but does not start them. Do not use `--chained-restart` during
+   initial history authoring: it would advance into provisioning. On later
+   starts, the project already owns its migration history and `angee dev` is
+   sufficient. Provisioning validates and applies history; it never authors it.
 
    There is no `--dev` flag: `dev` is the default value of `-t/--template`.
    `angee dev` is the supported bring-up command for the whole local stack;
@@ -201,7 +212,16 @@ materializes its framework sources and boots the complete stack.
    `src` workspace, and runs the composed host at the stack root against those
    worktrees.
 
+For a host without `angee.jobs`, or one using separately managed workers, set
+the stack template input `enable_celery=false`. This omits worker services and
+their dependency holds; app activation still belongs to `INSTALLED_APPS`.
+
 ### Containerized mode and remote hosts
+
+Author and commit initial project migration history in the development host
+before deploying its container stack. The container lifecycle consumes that
+tracked history; it does not silently create it on the first start. A brand-new
+project therefore uses the authoring steps above before switching to Docker mode.
 
 `runtime_mode` is a template input (a recorded answer, so one stack can switch
 later): the default `process` runs Django, Celery, Vite, and Storybook as local

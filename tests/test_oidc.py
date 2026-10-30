@@ -2331,3 +2331,24 @@ def test_disconnect_does_not_count_unusable_oidc_alternatives(composed_tables: N
     with pytest.raises(ValidationError) as caught:
         credential.check_disconnect()
     assert caught.value.code == "only_sign_in_method"
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("selected_status", ["revoked", "expired"])
+def test_disconnect_unusable_account_preserves_the_active_alternative(composed_tables, selected_status) -> None:
+    user = get_user_model().objects.create_user("disconnect-unusable-account")
+    client = _oauth_client()
+    selected = ExternalAccount.objects.link(client, "unusable-selected", owner=user)
+    credential = Credential.objects.upsert_for_user(
+        user, client, "oauth", {"access_token": "selected"}, external_account=selected,
+    )
+    alternative_client = _oauth_client(slug="usable-alternative")
+    alternative = ExternalAccount.objects.link(alternative_client, "active-alternative", owner=user)
+    kept = Credential.objects.upsert_for_user(
+        user, alternative_client, "oauth", {"access_token": "alternative"}, external_account=alternative,
+    )
+    with system_context(reason="test.oidc.disconnect_unusable"):
+        type(selected).objects.filter(pk=selected.pk).update(status=selected_status)
+    assert Credential.objects.disconnect_account(user, selected.sqid)
+    with system_context(reason="test.oidc.disconnect_unusable_result"):
+        assert not Credential.objects.filter(pk=credential.pk).exists()
+        assert Credential.objects.filter(pk=kept.pk).exists()

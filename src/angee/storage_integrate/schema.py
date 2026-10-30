@@ -10,12 +10,12 @@ from django.apps import apps
 from django.utils import timezone
 from strawberry import auto
 
-from angee.graphql.actions import ActionResult, action_target, resolve_action_target
+from angee.graphql.actions import ActionResult, action_target, resolve_action_target, session_user
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID, require_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
+from angee.iam.permissions import ADMIN_PERMISSION_CLASSES
 from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.schema import BridgeTypeMixin
 from angee.storage_integrate.connect import create_local_folder_mount

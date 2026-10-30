@@ -4,7 +4,8 @@ from typing import cast
 
 import strawberry
 
-from angee.iam.permissions import ADMIN_PERMISSION_CLASSES, session_user
+from angee.graphql.actions import session_user
+from angee.iam.permissions import ADMIN_PERMISSION_CLASSES
 from angee.parties.schema import DirectoryType
 from angee.parties_integrate_carddav.connect import connect_directory
 

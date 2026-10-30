@@ -39,11 +39,9 @@ reads those page facts; continuation cursors stay private to the feed adapter. T
 retries; mailbox probes follow explicit preview and load-older actions. A fresh
 preview resets the query's pages through the shared owner.
 
-Mailbox polling uses one stream cursor per mailbox. On the first stream open,
-`seed_cursor` translates a retained `Bridge.cursor` position once; an existing
-stream never reseeds. The driver moves legacy future-only policy into the bridge's
-config under its row lock and removes the migrated policy from the retained
-cursor. Later partitions retain their positions without restoring policy that
-an operator has removed, and epoch resets preserve the current config. The paused
+Mailbox polling stores each mailbox position in its `SyncStream.cursor`.
+Future-only policy belongs to the bridge's configuration. The paused
 starting-point action snapshots remote boundaries before its transaction and
-installs them through the driver's stream reset owner.
+installs those positions through the driver's stream reset owner; epoch resets
+preserve current configuration. Retired bridge cursor formats are not read by
+the live backend.

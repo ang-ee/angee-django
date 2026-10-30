@@ -35,6 +35,7 @@ def connect() -> None:
 def rebuild_backlinks(
     sender: type[Any],
     instance: Any,
+    using: str,
     raw: bool = False,
     update_fields: Iterable[str] | None = None,
     knowledge_backlinks_rebuilt: bool = False,
@@ -46,14 +47,16 @@ def rebuild_backlinks(
         return
     link_model = apps.get_model(instance._meta.app_label, "Link")
     if instance._meta.label_lower == _MARKDOWN_LABEL and (update_fields is None or "body" in update_fields):
-        link_model._default_manager.rebuild_for(instance)
+        link_model._default_manager.db_manager(using).rebuild_for(instance)
     if update_fields is None or {"title", "is_trashed"}.intersection(update_fields):
-        link_model._default_manager.refresh_targets((instance,))
+        link_model._default_manager.db_manager(using).refresh_targets((instance,))
 
 
-def refresh_bulk_targets(sender: type[Any], instances: Iterable[Any], update_fields: Iterable[str], **_: Any) -> None:
+def refresh_bulk_targets(
+    sender: type[Any], instances: Iterable[Any], update_fields: Iterable[str], using: str, **_: Any,
+) -> None:
     """Bulk trash/restore uses the same index owner as individual target saves."""
 
     if (sender._meta.label_lower in {_MARKDOWN_LABEL, "knowledge.page"}
             and {"title", "is_trashed"}.intersection(update_fields)):
-        apps.get_model("knowledge", "Link").objects.refresh_targets(instances)
+        apps.get_model("knowledge", "Link").objects.db_manager(using).refresh_targets(instances)

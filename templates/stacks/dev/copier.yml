@@ -16,9 +16,15 @@ _message_after_copy: |
   - docker: Django, Celery, Vite, Storybook, Playwright{% if postgres_mode == "external" %}{% else %}, Postgres{% endif %}{% if redis_mode == "external" %}{% else %}, and Redis{% endif %} run as
     containers; the operator daemon remains host-local and orchestrates Docker.{% if postgres_mode == "external" %} PostgreSQL: {{ postgres_host }}:{{ postgres_port }}/{{ postgres_db }} as {{ postgres_user }} (set db-password to that role's password).{% endif %}{% if redis_mode == "external" %} Redis: {{ redis_host }}:{{ redis_port }} (databases {{ redis_db }} and {{ redis_broker_db }}).{% endif %}
 
-  1. Bring it up. `angee dev` materializes the declared source caches, cuts the
-     `src` workspace (the consolidated framework plus optional external addon
-     worktrees), runs the dependency/provision/codegen lifecycle, and boots:
+  1. Prepare tracked migration history before first provisioning.
+     In process mode, run each prerequisite explicitly:
+       angee job run deps
+       angee job run py-sync
+       angee job run compose
+       uv run --no-sync python manage.py makemigrations
+     Review and commit runtime/*/migrations. Container deployments consume this
+     same project history authored in the development host.
+     Then provision and start the stack (also the normal command on later starts):
        angee dev
   2. Point an external CLI shell at the tokenized local operator (run from this
      root; `angee secret reveal` reads the stack's secrets backend):
@@ -462,6 +468,11 @@ edge_port:
 process_compose_port:
   type: int
   default: 8080
+
+enable_celery:
+  type: bool
+  default: true
+  help: Run local Celery workers; disable for hosts without angee.jobs or with external workers.
 
 # Extra Celery queues, comma-separated; they share one `celery-queues` worker
 # service (threads pool, 8 threads per queue) beside the shared worker. An addon

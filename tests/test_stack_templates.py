@@ -379,6 +379,7 @@ def _render_local_stack(
     *,
     framework: str = "source",
     celery_queues: str = "",
+    enable_celery: bool = True,
     serve_mode: str = "development",
     serve_workers: int = 0,
     db_pool_max_size: int = 2,
@@ -393,6 +394,7 @@ def _render_local_stack(
         "_src_path": "https://github.com/ang-ee/angee-django/tree/main/templates/stacks/local",
         "caddy_image": "caddy:2.9-alpine",
         "celery_queues": celery_queues,
+        "enable_celery": "true" if enable_celery else "",
         "django_image": "ghcr.io/ang-ee/django-angee-base:latest",
         "django_port": "8000",
         "framework": framework,
@@ -428,6 +430,7 @@ def _render_dev_stack(
     work_state_ref: str = "main",
     sources_home: str = "",
     celery_queues: str = "",
+    enable_celery: bool = True,
     enable_ollama: bool = False,
     ollama_port: str = "11434",
     ingress_domain: str = "localhost",
@@ -466,6 +469,7 @@ def _render_dev_stack(
         "include_arp": "true" if include_arp else "",
         "arp_repo": arp_repo,
         "celery_queues": celery_queues,
+        "enable_celery": "true" if enable_celery else "",
         "caddy_image": "caddy:2.9-alpine",
         "django_image": "ghcr.io/ang-ee/django-angee-base:latest",
         "django_port": str(django_port),
@@ -515,6 +519,7 @@ def _render_dev_stack(
 def _render_dev_docker_stack(
     *,
     celery_queues: str = "",
+    enable_celery: bool = True,
     ingress_domain: str = "localhost",
     ingress_aliases: str = "",
     operator_home: str = "",
@@ -523,6 +528,7 @@ def _render_dev_docker_stack(
 
     return _render_dev_stack(
         celery_queues=celery_queues,
+        enable_celery=enable_celery,
         ingress_domain=ingress_domain,
         ingress_aliases=ingress_aliases,
         operator_home=operator_home,
@@ -2345,3 +2351,11 @@ def test_python_jobs_and_services_share_the_selected_platform_environment() -> N
         )
         assert "exec .venv/bin/python" not in command
         assert "exec uv sync --locked" in command
+
+
+@pytest.mark.parametrize("render", [_render_dev_stack, _render_dev_docker_stack, _render_local_stack])
+def test_worker_free_hosts_have_no_celery_services_or_dependency_holds(render) -> None:
+    stack = render(enable_celery=False, celery_queues="reports")
+    assert not any(name.startswith("celery-") for name in stack["services"])
+    assert stack["jobs"]["py-sync"]["holds"] == ["django"]
+    assert stack["jobs"]["compose"]["holds"] == ["django"]

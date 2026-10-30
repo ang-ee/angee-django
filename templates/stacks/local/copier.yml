@@ -19,11 +19,12 @@ _message_after_copy: |
   - baked: set framework=baked and django_image=ghcr.io/ang-ee/django-angee:latest to
     run a code-baked runtime image (no source checkout, no per-start uv sync).
 
-  1. Bring it up (operator + Postgres + Redis + Django + Caddy). The provision job's
-     `manage.py angee provision` owns first start: it waits for Postgres, emits runtime/,
-     creates migrations, migrates, syncs permissions, loads resources, writes GraphQL
-     schemas, and bootstraps the admin user. Then Caddy serves the built SPA:
+  1. Supply the project's reviewed runtime/*/migrations, authored in its
+     development host after composition. Provision never creates migration history.
+     Bring up operator + Postgres + Redis + Django + Caddy:
        angee dev
+     The compose job emits artifacts; `manage.py provision` waits for Postgres,
+     validates and applies tracked history, then runs app-owned preparation hooks.
   2. Point an external CLI shell at the tokenized local operator (run from this root;
      `angee secret reveal` reads the stack's secrets backend, so no hand-parsing of
      .env — its values are quoted):
@@ -204,6 +205,11 @@ ui_port:
 process_compose_port:
   type: int
   default: 8090
+
+enable_celery:
+  type: bool
+  default: true
+  help: Run local Celery workers; disable for hosts without angee.jobs or with external workers.
 
 # Extra Celery queues, comma-separated; they share one `celery-queues` worker
 # service (threads pool, 8 threads per queue) beside the shared worker. An addon
