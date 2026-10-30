@@ -740,7 +740,8 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
         decisions = self.model._meta.apps.get_model("decisions.Decision")
         with transaction.atomic():
             decision = decisions.objects.with_actor(actor).get(pk=decision_id)
-            if decision.kind != expected_action or decision.verdict != [expected_choice]:
+            answered_by = decision.answered_by
+            if answered_by is None or decision.kind != expected_action or decision.verdict != [expected_choice]:
                 raise ValidationError("The correction decision has another chosen alternative.")
             original, parent = self._correction_records(decision, actor=actor, binding=binding)
             self._require_target_write(original.target, actor)
@@ -766,7 +767,7 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
                 "revision_parent_extraction_id": str(parent.sqid),
                 "revision_parent_extraction_revision": parent.revision,
                 "decision_id": str(decision.sqid),
-                "decision_answered_by": public_id_of(decision.answered_by),
+                "decision_answered_by": public_id_of(answered_by),
                 "corrected_paths": paths,
                 "result_digest": canonical_json_sha256(result),
             }
