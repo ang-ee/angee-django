@@ -1486,7 +1486,8 @@ class Thread(
 
         if self.modality == self.Modality.STATUS:
             return str(self.Modality.STATUS.label)
-        return self.title.text.strip() if self.title_id else ""
+        fragment = self.title
+        return fragment.text.strip() if fragment is not None else ""
 
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Channel threads inherit access and cannot carry personal ownership."""
