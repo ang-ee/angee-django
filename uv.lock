@@ -913,7 +913,6 @@ source = { editable = "src/angee/mcp" }
 dependencies = [
     { name = "angee-base" },
     { name = "angee-iam" },
-    { name = "angee-provenance" },
     { name = "angee-server" },
     { name = "django-compose" },
     { name = "fastmcp" },
@@ -924,7 +923,6 @@ dependencies = [
 requires-dist = [
     { name = "angee-base", editable = "src/angee/base" },
     { name = "angee-iam", editable = "src/angee/iam" },
-    { name = "angee-provenance", editable = "src/angee/provenance" },
     { name = "angee-server", editable = "src/angee/server" },
     { name = "django-compose", specifier = ">=0.1.0.dev2,<0.2" },
     { name = "fastmcp", specifier = ">=3.4.7,<4" },

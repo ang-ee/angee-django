@@ -14,8 +14,10 @@ stack's owner of RFC-5545. The timezone/window contract is documented on
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 
+from dateutil.parser import parse
 from dateutil.rrule import rrule, rruleset, rrulestr
 from django.core.exceptions import ValidationError
 from django.utils import timezone
@@ -29,9 +31,9 @@ class Recurrence:
 
     Construct from the stored rule string; an empty string means "no recurrence"
     (a single event). The object is immutable-by-convention — it only reads the
-    rule it was given. End-bounded rules use UTC ``UNTIL`` values, as RFC-5545
-    requires for an aware ``DTSTART``; floating and date-only ``UNTIL`` values
-    are refused by dateutil.
+    rule it was given. Legacy floating and date-only ``UNTIL`` values use
+    the anchor's local timezone (date-only values mean local midnight).
+    Explicit UTC bounds retain their instant.
 
     **Deviation kept for v1 — DTSTART must synchronize with the rule.** ``dateutil``
     follows the interpretation in which a ``BY*`` part that excludes the ``dtstart``
@@ -107,7 +109,17 @@ class Recurrence:
     def _compile(self, anchor: datetime) -> rrule | rruleset:
         """Parse the rule anchored at an aware local ``anchor`` (a dateutil rrule/rruleset)."""
 
-        return rrulestr(self.rule, dtstart=anchor)
+        def local_until(match: re.Match[str]) -> str:
+            # Dateutil remains the date grammar owner; adapt only the legacy
+            # floating cutoff to the aware DTSTART contract it requires.
+            until = parse(match[1], default=anchor.replace(tzinfo=None, hour=0, minute=0, second=0))
+            if until.tzinfo is None:
+                until = until.replace(tzinfo=anchor.tzinfo)
+                return "UNTIL=" + until.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+            return match[0]
+
+        rule = re.sub(r"(?im)(?<![A-Z])UNTIL=([^;\s]+)", local_until, self.rule)
+        return rrulestr(rule, dtstart=anchor)
 
 
 def _require_aware(**moments: datetime) -> None:

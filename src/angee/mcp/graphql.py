@@ -56,7 +56,6 @@ from strawberry.utils.str_converters import to_camel_case, to_snake_case
 from angee.base.permissions import actor_user_id
 from angee.graphql.actions import ActionResult
 from angee.graphql.schema import GraphQLSchemas
-from angee.provenance.context import changeset
 from mcp.types import ToolAnnotations
 
 _SCALAR_JSON = {
@@ -114,31 +113,27 @@ def _execute_sync(built: Any, document: str, variables: dict[str, Any] | None) -
 
     A tool call carries a synthetic request whose only meaningful attribute is ``user``:
     the ambient actor's user, or anonymous for a non-user or ineligible user. No HTTP
-    middleware runs, so own a fresh changeset under the ambient REBAC actor. The synthetic
-    user remains the session identity; history attribution comes from the changeset.
-    Reads persist no changeset. GraphQL reports handled errors on the result;
-    translate them before leaving the boundary so the changeset closes as failed.
-    Successful statements commit before handled GraphQL errors are translated
-    to a tool error; that error marks the attribution boundary as failed.
+    middleware runs; optional attribution composes the schema's native operation
+    extension. The synthetic user remains the session identity. Successful
+    statements commit before handled GraphQL errors are translated to a tool error.
     """
 
     close_old_connections()
     try:
-        with changeset(fresh=True):
-            with transaction.atomic():
-                user = _actor_user()
-                request = HttpRequest()
-                request.user = (
-                    user if user is not None and ModelBackend().user_can_authenticate(user) else AnonymousUser()
-                )
-                result = built.execute_sync(
-                    document,
-                    variable_values=dict(variables or {}),
-                    context_value=SimpleNamespace(request=request),
-                )
-            if result.errors:
-                raise _tool_error(result.errors[0])
-            return result
+        with transaction.atomic():
+            user = _actor_user()
+            request = HttpRequest()
+            request.user = (
+                user if user is not None and ModelBackend().user_can_authenticate(user) else AnonymousUser()
+            )
+            result = built.execute_sync(
+                document,
+                variable_values=dict(variables or {}),
+                context_value=SimpleNamespace(request=request),
+            )
+        if result.errors:
+            raise _tool_error(result.errors[0])
+        return result
     finally:
         close_old_connections()
 

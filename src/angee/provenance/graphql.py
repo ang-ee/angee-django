@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from functools import partial
 from typing import Any
 
@@ -11,19 +11,17 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models, transaction
 from rebac import PermissionDenied, current_actor
 from rebac.resources import model_resource_type
-from strawberry.types import ExecutionResult
+from strawberry.extensions import SchemaExtension
 from strawberry_django_hasura import WriteBackend
 
 from angee.base.permissions import require_rebac_queryset
 from angee.base.signals import bulk_updated, connect_for_models
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.publishing import publish_bulk_update
-from angee.graphql.views import result_processed
 from angee.provenance.context import (
     changeset,
     changeset_model,
     changeset_model_label,
-    mark_changeset_failed,
     require_changeset,
 )
 
@@ -91,15 +89,42 @@ def write_backend(model: type[models.Model], backend: WriteBackend) -> tuple[Wri
     return ClaimingWriteBackend(model, backend), {"idempotency_key": str | None}
 
 
-def _mark_failed(sender: object, *, result: ExecutionResult, **kwargs: Any) -> None:
-    if result.errors:
-        mark_changeset_failed()
+class _ChangesetExtension(SchemaExtension):
+    """Mark native handled errors on the operation's attribution boundary."""
+
+    def _mark_failed(self, mark_failed: Callable[[], None]) -> None:
+        result = self.execution_context.result
+        if self.execution_context.pre_execution_errors or result is not None and result.errors:
+            mark_failed()
+
+
+class ChangesetExtension(_ChangesetExtension):
+    """Join transport attribution, or own a boundary for direct sync execution."""
+
+    def on_operation(self) -> Iterator[None]:
+        with changeset() as mark_failed:
+            yield
+            self._mark_failed(mark_failed)
+
+
+class AsyncChangesetExtension(_ChangesetExtension):
+    """Close direct async execution in the attribution owner's worker thread."""
+
+    async def on_operation(self) -> AsyncIterator[None]:
+        async with changeset() as mark_failed:
+            yield
+            self._mark_failed(mark_failed)
+
+
+def schema_extension(*, sync: bool) -> type[SchemaExtension]:
+    """Select the native operation hook for Strawberry's execution mode."""
+
+    return ChangesetExtension if sync else AsyncChangesetExtension
 
 
 def setup_graphql() -> None:
-    """Bind result failures and closure publication without changing storage behavior."""
+    """Bind changeset closure publication without changing storage behavior."""
 
-    result_processed.connect(_mark_failed, dispatch_uid="provenance.graphql_result")
     connect_for_models(
         bulk_updated, partial(publish_bulk_update, broadcast=False),
         applies=lambda model: model._meta.label_lower == changeset_model_label().lower(),

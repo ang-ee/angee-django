@@ -6,6 +6,7 @@ import asyncio
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from contextvars import copy_context
 from typing import Any
 
@@ -20,12 +21,13 @@ from django.db import close_old_connections, connections
 from django.http import HttpResponse
 from django.test import RequestFactory
 from django_compose import management as manage
-from graphql import GraphQLError
+from fastmcp.exceptions import ToolError
 from rebac import actor_context, system_context, to_subject_ref
-from strawberry.types import ExecutionResult
+from rebac.middleware import ActorMiddleware
 
-from angee.graphql.views import AngeeGraphQLView
+from angee.graphql.schema import AngeeSchema
 from angee.jobs.celery import app as celery_app
+from angee.mcp.graphql import _execute_sync
 from angee.provenance.context import (
     ChangesetRequired,
     changeset,
@@ -275,19 +277,84 @@ def test_celery_task_owns_attribution_and_correlation_on_success_and_failure(fai
 
 
 @pytest.mark.parametrize("errors", [False, True])
-def test_graphql_errors_close_the_request_changeset_as_failed(errors: bool) -> None:
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("join", [False, True])
+def test_graphql_operation_attributes_direct_and_transport_execution(errors, asynchronous, join):
     @strawberry.type
     class Query:
         @strawberry.field
         def ready(self) -> bool:
+            write()
+            if errors:
+                raise ValueError("boom")
             return True
 
-    view = AngeeGraphQLView(schema=strawberry.Schema(query=Query))
-    result = ExecutionResult(data=None, errors=[GraphQLError("boom")] if errors else None)
-    with changeset(fresh=True):
-        write()
-        assert view.process_result(RequestFactory().post("/graphql/"), result) == (
-            {"data": None, "errors": [{"message": "boom"}]} if errors else {"data": None}
-        )
+    @strawberry.type
+    class AsyncQuery:
+        @strawberry.field
+        async def ready(self) -> bool:
+            await sync_to_async(write)()
+            if errors:
+                raise ValueError("boom")
+            return True
+
+    schema = AngeeSchema(query=AsyncQuery if asynchronous else Query)
+    with changeset(fresh=True) if join else nullcontext():
+        result = (async_to_sync(schema.execute)("{ready}") if asynchronous
+                  else schema.execute_sync("{ready}"))
+        assert bool(result.errors) == errors
     (context,) = changesets()
     assert (context.state, context.outcome) == ("closed", "failure" if errors else "success")
+
+
+
+@pytest.mark.parametrize("boundary_outer", [True, False])
+@pytest.mark.parametrize("asynchronous", [True, False])
+def test_request_captures_actor_in_either_boundary_order(boundary_outer, asynchronous):
+    with changeset(fresh=True):
+        user = create_user("request-actor")
+    request = RequestFactory().get("/")
+    request.user = user
+
+    def response(request):
+        write("request-actor")
+        return HttpResponse()
+
+    async def async_response(request):
+        await sync_to_async(write)("request-actor")
+        return HttpResponse()
+
+    endpoint = async_response if asynchronous else response
+    endpoint = (ChangesetMiddleware(ActorMiddleware(endpoint)) if boundary_outer
+                else ActorMiddleware(ChangesetMiddleware(endpoint)))
+    if asynchronous:
+        async_to_sync(endpoint)(request)
+    else:
+        endpoint(request)
+    context = changeset_of(OwnedRow.system_queryset().get(title="request-actor"))
+    assert context.actor_ref == str(to_subject_ref(user))
+    assert (context.state, context.outcome) == ("closed", "success")
+
+
+def test_direct_mcp_graphql_keeps_partial_writes_and_failed_attribution():
+    @strawberry.type
+    class Query:
+        ready: bool = True
+
+    @strawberry.type
+    class Mutation:
+        @strawberry.mutation
+        def create(self) -> bool:
+            write("partial MCP success")
+            return True
+
+        @strawberry.mutation
+        def fail(self) -> bool | None:
+            raise ValueError("handled failure")
+
+    schema = AngeeSchema(query=Query, mutation=Mutation)
+    with pytest.raises(ToolError):
+        _execute_sync(schema, "mutation {create fail}", None)
+    record = OwnedRow.system_queryset().get(title="partial MCP success")
+    context = changeset_of(record)
+    assert (context.state, context.outcome) == ("closed", "failure")

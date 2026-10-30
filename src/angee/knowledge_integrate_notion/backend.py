@@ -280,7 +280,10 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
             if snapshots and deadline is not None and monotonic() >= deadline:
                 break
             try:
-                snapshot = self._snapshot(cursor.pending[0])
+                node = cursor.pending[0]
+                link = stream.links.filter(external_key=str(node.id)).first()
+                previous = NotionSnapshot.model_validate(link.source_payload) if link is not None else None
+                snapshot = self._snapshot(node, previous=previous)
             except IntegrationError as error:
                 if not snapshots or not error.transient:
                     raise
@@ -289,8 +292,13 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
             cursor.pending.pop(0)
         return StreamPage(self._changes(stream, snapshots), cursor.model_dump(mode="json"), exhausted=False)
 
-    def _snapshot(self, node: NotionNode) -> NotionSnapshot:
+    def _snapshot(self, node: NotionNode, *, previous: NotionSnapshot | None = None) -> NotionSnapshot:
         content = None
+        if (
+            previous is not None and previous.node == node
+            and previous.content is not None and previous.failure is None and not node.is_trashed
+        ):
+            return NotionSnapshot(node=node, content=previous.content)
         if node.object == "page" and not node.is_trashed:
             try:
                 content = self._request(NotionMarkdown, f"pages/{node.id}/markdown")
@@ -364,7 +372,12 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
             node = snapshot.node
             resolved_links = {key: page_links[key] for key in references if key in page_links}
             if body is not None and resolved_links and failure is None:
-                body = NotionMarkdownConverter(resolved_links).convert(body)
+                assert snapshot.content is not None
+                try:
+                    body = NotionMarkdownConverter(resolved_links).convert(snapshot.content.markdown)
+                except ValueError as error:
+                    body = None
+                    failure = SemanticError("notion_unsupported_markup", details={"message": str(error)})
             link = links.get(str(node.id))
             target = targets.get(link.target_object_id) if link else None
             parent_link = links.get(node.parent_key)

@@ -46,7 +46,7 @@ Strict mode refuses a captured write without an open boundary
 
 | Entrypoint | Boundary | Owner |
 |---|---|---|
-| HTTP request | one per request, sync or async, failed on status ≥ 400 or a GraphQL `errors` result | [`ChangesetMiddleware`](middleware.py), the [GraphQL result receiver](graphql.py) |
+| HTTP request | one per request, sync or async, failed on status ≥ 400 or a GraphQL `errors` result | [`ChangesetMiddleware`](middleware.py), the [native GraphQL operation extension](graphql.py) |
 | WebSocket connection (GraphQL subscriptions, agent ACP) | one per ASGI connection scope | [`ChangesetScopeMiddleware`](middleware.py) via the [GraphQL Channels contribution](../graphql/asgi.py) |
 | Celery task | one per task run, `task.<name>` | [`angee.provenance.tasks.Task`](tasks.py) |
 | Management command | one per command, `manage.<command>`; `serve`, `runserver` and `test` hand it to their requests, connections, tasks and tests | the native launcher's `COMPOSE_COMMAND_CONTEXT`, contributed by [provenance](contrib/angee/context.py) |
@@ -118,3 +118,10 @@ through the shared hash owner and records on first export; closing a boundary
 writes one bookkeeping row and never re-reads its history. This is the cold-store
 seam; no sink, pruning, routing or sealing job ships here. User-facing history exports must authorize and redact through each
 touched subject; direct changeset access does not grant those records' reads.
+
+GraphQL attribution composes Strawberry's native operation extension through
+`ANGEE_GRAPHQL_EXTENSION_FACTORIES`. It joins an existing request or connection
+boundary; direct schema and MCP tool execution opens its own boundary. The
+factory receives Strawberry's sync flag so asynchronous teardown uses the
+changeset owner's thread-sensitive close path. Handled execution errors mark the
+boundary failed while preserving successful statements.

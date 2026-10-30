@@ -123,7 +123,7 @@ class NotionMarkdownConverter(HTMLParser):
             if rewritten != original:
                 label_end = self.parser.helpers.parseLinkLabel(state, start, True)
                 title = opening.attrGet("title")
-                suffix = f" {json.dumps(title)}" if title else ""
+                suffix = f" {json.dumps(title, ensure_ascii=False)}" if title else ""
                 self.edits.append((label_end + 1, state.pos, f"(<{rewritten}>{suffix})"))
         return True
 
