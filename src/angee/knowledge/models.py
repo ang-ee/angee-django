@@ -634,12 +634,15 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
         if not body:
             raise ValidationError("Write a note before posting.")
         role = self._role(role)
-        reference = generic_target(self._saved(target, "target"))
-        claim_values = [reference.content_type.pk, reference.object_id, vault.pk, role, body]
-        boundary = changeset(fresh=True) if idempotency_key is not None else nullcontext()
-        with boundary, transaction.atomic():
+        target = self._saved(target, "target")
+        using = self._db or router.db_for_write(self.model, instance=target)
+        bindings = self.db_manager(using, hints={"instance": target})
+        boundary = changeset(fresh=True, using=using) if idempotency_key is not None else nullcontext()
+        with database_context(using), boundary, transaction.atomic(using=using):
+            reference = generic_target(target)
+            claim_values = [reference.content_type.pk, reference.object_id, vault.pk, role, body]
             if idempotency_key is not None:
-                binding = changeset_model().objects.claim_created(
+                binding = changeset_model().objects.db_manager(using).claim_created(
                     f"knowledge.record_note:{user_id}",
                     idempotency_key,
                     values=claim_values,
@@ -650,8 +653,10 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
                     return binding.with_actor(actor)
             page_model = self.model._meta.apps.get_model("knowledge", "Page")
             title = f"{body.splitlines()[0][:100]} · {timezone.now().isoformat()}"
-            page = page_model.objects.create_in(vault, title=title, body=body)
-            binding = self.upsert(target=target, page=page, role=role)
+            page = page_model.objects.db_manager(using, hints={"instance": vault}).create_in(
+                vault, title=title, body=body,
+            )
+            binding = bindings.upsert(target=target, page=page, role=role)
             if idempotency_key is not None:
                 require_changeset().record_created(binding)
             return binding
@@ -685,13 +690,18 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
         deletion wins, the locked lookup refuses the now-absent target.
         """
 
-        reference = generic_target(self._saved(target, "target"))
-        with transaction.atomic():
+        target = self._saved(target, "target")
+        using = self._db or router.db_for_write(self.model, instance=target)
+        bindings = self.db_manager(using, hints={"instance": target})
+        with database_context(using), transaction.atomic(using=using):
+            reference = generic_target(target)
             with system_context(reason="knowledge.record_binding.lock"):
                 canonical = reference.content_type.model_class()
                 if canonical is None:
                     raise ValueError("Knowledge binding target model is unavailable.")
-                canonical._base_manager.select_for_update(of=row_lock_paths(canonical), no_key=True).get(
+                canonical._base_manager.db_manager(using, hints={"instance": target}).select_for_update(
+                    of=row_lock_paths(canonical), no_key=True,
+                ).get(
                     pk=reference.object_id
                 )
             owner = page
@@ -700,13 +710,14 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
                 with system_context(reason="knowledge.record_binding.page_lock"):
                     owner = (
                         type(owner)
-                        ._base_manager.select_for_update(of=row_lock_paths(type(owner)), no_key=True)
+                        ._base_manager.db_manager(using, hints={"instance": owner})
+                        .select_for_update(of=row_lock_paths(type(owner)), no_key=True)
                         .get(pk=owner.pk)
                     )
                     assert isinstance(owner, TrashMixin)
                     if owner.is_trashed:
                         raise ValidationError("Cannot bind a page in the trash.")
-            binding, _created = self.get_or_create(**self._key(target, page=owner, vault=vault, role=role))
+            binding, _created = bindings.get_or_create(**self._key(target, page=owner, vault=vault, role=role))
             return binding
 
     def unbind(

@@ -76,7 +76,7 @@ def concrete_child[T: models.Model](
         if cached is not None and not isinstance(cached, child_model):
             raise TypeError("An MTI relation cache must contain a row of its child model.")
         return cached
-    rows = queryset if queryset is not None else child_model._base_manager.all()
+    rows = queryset if queryset is not None else child_model._base_manager.db_manager(hints={"instance": parent}).all()
     return rows.filter(pk=parent.pk).first()
 
 
