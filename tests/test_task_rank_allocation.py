@@ -19,8 +19,9 @@ def test_task_ordering_allocation_retains_explicit_ranks() -> None:
     """An omitted rank appends once on save; explicit ranks survive repeated saves."""
 
     with system_context(reason="test.task_rank_allocation"):
-        Task.objects.create(title="Existing tail", sort_order=100.0, sub_sort_order=4096.0)
-        task = Task(title="Append child order", sort_order=12.5)
+        root = Task.objects.create(title="Root", sort_order=100.0)
+        Task.objects.create(title="Existing tail", parent=root, sort_order=200.0, sub_sort_order=4096.0)
+        task = Task(title="Append child order", parent=root, sort_order=12.5)
         allocations: list[str] = []
 
         def record_rank_reads(
@@ -75,7 +76,7 @@ def test_rank_rebalance_preserves_order_with_an_exhausted_tail():
         second = Task.objects.create(title="Second", sort_order=math.nextafter(1.0, math.inf))
         third = Task.objects.create(title="Last", sort_order=1e308)
         field = Task._meta.get_field("sort_order")
-        with Task.ordering_write(using=connection.alias):
+        with Task.ordering_write(using=connection.alias, project_ids=(None,)):
             field.rebalance(Task.system_queryset())
         assert list(Task._base_manager.order_by("sort_order").values_list("pk", "sort_order")) == [
             (first.pk, 1024), (second.pk, 2048), (third.pk, 3072),

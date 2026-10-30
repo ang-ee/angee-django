@@ -194,8 +194,7 @@ class MergeableMixin(AngeeModel):
             merged_ids = sorted({row.pk for row in found.values()})
             if self.pk in merged_ids:
                 raise ValidationError("A record cannot be merged into itself.")
-            for row in sorted((self, *found.values()), key=lambda item: item.pk):
-                row.lock_for_merge()
+            model.lock_merge_records((self, *found.values()))
             rows = model._base_manager.db_manager(hints={"instance": self}).filter(
                 pk__in=(self.pk, *merged_ids)
             ).order_by("pk")
@@ -238,8 +237,7 @@ class MergeableMixin(AngeeModel):
         ids = sorted(keys)
         using = self._state.db
         with transaction.atomic(using=using):
-            for row in sorted((self, *merged), key=lambda item: item.pk):
-                row.lock_for_merge()
+            model.lock_merge_records((self, *merged))
             rows = model._base_manager.db_manager(hints={"instance": self}).filter(
                 pk__in=[self.pk, *ids]
             ).order_by("pk")
@@ -299,6 +297,13 @@ class MergeableMixin(AngeeModel):
                             reference.move(pointing, survivor=survivor)
             for record in merged:
                 self.retire_merged(record)
+
+    @classmethod
+    def lock_merge_records(cls, records: Sequence[Self]) -> None:
+        """Acquire domain locks for the complete batch before core record locks."""
+
+        for row in sorted(records, key=lambda item: item.pk):
+            row.lock_for_merge()
 
     def lock_for_merge(self) -> None:
         """Acquire domain locks that must precede the core record locks."""

@@ -311,7 +311,10 @@ Use these owners instead of maintaining another contract in an addon:
   and the field allocates between adjacent stored ranks. Assignee/stage lanes
   never define uniqueness. Task's ordering transaction covers ordinary explicit
   rank writers and creation too; the Hasura adapter acquires it before its row
-  lock. Explicit numeric ranks, including Stage positions, retain exact values.
+  lock. Task ranks serialize within each project (including no project);
+  child subranks serialize within each non-null parent, including children from
+  different projects. Root subranks are inert and need no global allocation or
+  uniqueness. Explicit numeric ranks, including Stage positions, retain exact values.
 - Runtime model modules, generated schemas and codegen stubs are output.
   Change their source declarations. Native Django migration history is reviewed,
   version-controlled project source; preserve it across runtime rebuilds.
