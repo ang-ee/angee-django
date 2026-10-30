@@ -171,7 +171,7 @@ product specifics down into the framework. Every fact lives at its owning level.
 
 ```text
 .                    # consolidated framework source slot
-├── src/          # angee.base foundation and capability addons; co-located web fragments
+├── src/             # angee.base foundation and capability addons; co-located web fragments
 ├── packages/        # schema-independent @angee/* packages and workshop/test tooling
 ├── examples/        # consumer addons and reference browser suite
 ├── templates/       # Copier project, stack, workspace, service, and addon sources
@@ -183,7 +183,8 @@ product specifics down into the framework. Every fact lives at its owning level.
 
 The `angee.*` namespace is a native PEP 420 namespace contributed by addon
 packages. Each addon is a component distribution with a `pyproject.toml` and one
-`angee.addons` entry point. The current compiler component contract selects one
+`angee.addons` entry point in its native distribution metadata. Ordinary addons
+author `dynamic = ["entry-points"]`; Hatch owns its generation. The current compiler component contract selects one
 Django app per distribution; models and provision hooks are optional. The root `angee` meta-distribution requires the
 framework cohort. Dependencies belong to the owning package's
 `[project].dependencies`, resolved versions to native lockfiles, and capability

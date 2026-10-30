@@ -60,7 +60,7 @@ wires declarations only; the reference example throughout is `examples/src/examp
    version = "1.0.0"
    description = "Notes example"
    dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-resources>=3,<4"]
-   entry-points."angee.addons"."example.notes" = "example.notes"
+   dynamic = ["entry-points"]
    [tool.angee.resources]
    demo = [{ path = "demo/020_notes.note.yaml", depends_on = "angee.iam:demo/010_iam.user.yaml" }]
    ```
@@ -82,7 +82,11 @@ wires declarations only; the reference example throughout is `examples/src/examp
    A library is explicitly packaged without an `angee.addons` entry point; do not
    infer library identity from missing `apps.py`. The published
    [hatch-angee backend](https://github.com/ang-ee/hatch-angee#readme) owns addon
-   layout and metadata defaults and delegates native builds to Hatchling.
+   layout and metadata defaults and delegates native builds to Hatchling. Use
+   `dynamic = ["entry-points"]` for ordinary addons; retain explicit entry points
+   only for custom mappings or additional groups described by that owner. Readers
+   consume prepared or installed distribution metadata, never infer identity from
+   an omitted source table.
 
 3. **Add `apps.py` only for native customization.** Notes has none. Add one for checks,
    signals or a pinned label (shape: `src/angee/money/apps.py:17`):

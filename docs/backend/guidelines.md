@@ -53,8 +53,10 @@ normalizes, or renames a Django object, delete it.
 
 Django-native also means app-native. Addons are reusable Django apps with
 conventional files: `pyproject.toml` declares package metadata, and its
-`angee.addons` entry point identifies the package as an addon. A pyproject alone
-may describe an ordinary library. `models.py` owns data and row behavior,
+`angee.addons` entry point in native distribution metadata identifies the package
+as an addon. Ordinary addons author `dynamic = ["entry-points"]` through the
+published Hatch backend; consumers read prepared or installed metadata. A
+pyproject alone may describe an ordinary library. `models.py` owns data and row behavior,
 `managers.py` owns reusable row-set APIs when they outgrow the model module,
 `schema.py` owns Strawberry declarations, `permissions.zed` owns REBAC structure,
 `mcp_tools.py` owns MCP tool registration, `forms.py` owns Django form

@@ -4,14 +4,13 @@ Static: run with ``-p no:django --noconftest`` like ``test_agent_methodology.py`
 Every Owner cell cites a ``symbol path:line``, every ``path:line`` in it is such a
 citation, and the cited line (or a decorator line above it) declares the symbol.
 Every public class a foundation ``models``/``fields`` module declares and every
-``angee.*`` addon has a row.
+``angee.*`` source distribution has a row, including explicit libraries.
 """
 
 from __future__ import annotations
 
 import ast
 import re
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -55,13 +54,9 @@ def foundation_classes() -> list[tuple[str, str]]:
     ]
 
 
-def addons() -> list[tuple[str, str]]:
-    """Return native addon entry-point names and folders, excluding library packages."""
-    return sorted(
-        (name, package.parent.relative_to(ROOT).as_posix())
-        for package in ADDONS.glob("*/pyproject.toml")
-        for name in tomllib.loads(package.read_text())["project"].get("entry-points", {}).get("angee.addons", {})
-    )
+def package_folders() -> list[str]:
+    """Cover authored packages without re-deriving their generated entry points."""
+    return sorted(package.parent.relative_to(ROOT).as_posix() for package in ADDONS.glob("*/pyproject.toml"))
 
 
 def declares(line: str, symbol: str) -> bool:
@@ -107,8 +102,7 @@ def test_every_public_foundation_class_has_an_owner_row(symbol: str, module: str
     assert (symbol, module) in cited, f"no Owner cell cites `{symbol}` {module}"
 
 
-@pytest.mark.parametrize(("name", "folder"), addons(), ids=lambda value: value if value.startswith("angee.") else "")
-def test_every_addon_has_an_owner_row(name: str, folder: str) -> None:
-    """An addon appears by its declared name or by a path inside its folder in an Owner cell."""
-    named = re.compile(rf"{re.escape(name)}(?!\w)")
-    assert any(named.search(cell) or f"{folder}/" in cell for cell in owner_cells()), f"no Owner cell names {name}"
+@pytest.mark.parametrize("folder", package_folders())
+def test_every_package_has_an_owner_row(folder: str) -> None:
+    """Each distribution has an owner definition within its source folder."""
+    assert any(f"{folder}/" in cell for cell in owner_cells()), f"no Owner cell cites {folder}"

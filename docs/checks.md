@@ -182,7 +182,7 @@ adapter parity, and mocked helper behavior without starting the application.
 `tests/test_owner_index.py` validates the owner index citations: every cited
 `path:line` in `.agents/skills/angee-design/references/owners.md` declares the
 named symbol, and every public class a foundation models or fields module
-declares, and every addon manifest, has a row.
+declares, and every source distribution (including libraries), has a row.
 Disabling pytest-django, application configuration, and conftest intentionally
 isolates these tests; use normal pytest for application or template behavior.
 If template source changes too, run its contract tests and the Python suite above. A prose-only
