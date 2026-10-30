@@ -59,3 +59,24 @@ def test_persisted_rank_gap_exhaustion_refuses_instead_of_reusing_a_neighbor():
 
     with pytest.raises(FractionalRankExhausted):
         FractionalRankField.get_rank_between(1.0, math.nextafter(1.0, math.inf))
+
+
+@pytest.mark.parametrize("previous,following", [(2, 1), (1, 1)])
+def test_reversed_rank_neighbors_are_invalid_instead_of_exhausted(previous, following):
+    with pytest.raises(ValueError) as error:
+        FractionalRankField.get_rank_between(previous, following)
+    assert not isinstance(error.value, FractionalRankExhausted)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_rank_rebalance_preserves_order_with_an_exhausted_tail():
+    with system_context(reason="tests.rank.rebalance"):
+        first = Task.objects.create(title="First", sort_order=1.0)
+        second = Task.objects.create(title="Second", sort_order=math.nextafter(1.0, math.inf))
+        third = Task.objects.create(title="Last", sort_order=1e308)
+        field = Task._meta.get_field("sort_order")
+        with Task.ordering_write(using=connection.alias):
+            field.rebalance(Task.system_queryset())
+        assert list(Task._base_manager.order_by("sort_order").values_list("pk", "sort_order")) == [
+            (first.pk, 1024), (second.pk, 2048), (third.pk, 3072),
+        ]

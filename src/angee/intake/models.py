@@ -451,13 +451,25 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
 
         if reference.name != "task":
             return NotImplemented
-        for need in rows.order_by("pk").lock_if_supported():
+        for need in rows.order_by("pk"):
             need.task = survivor
             try:
                 need.save(update_fields=("task", "updated_at"))
             except RecordAccessSubjectRefused as error:
                 raise ValidationError({"canonical": error.code}) from error
         return None
+
+    def _lock_access_question(self) -> Any:
+        """Lock the observed question before its Need; callers recheck the FK."""
+
+        decision_id = type(self).system_queryset().filter(pk=self.pk).values_list(
+            "access_decision_id", flat=True,
+        ).get()
+        if decision_id is not None:
+            apps.get_model("decisions", "Decision").objects.sudo(
+                reason="intake.need.assignment_question",
+            ).locked_get(pk=decision_id)
+        return decision_id
 
     @property
     def requester_access_granted(self) -> bool:
@@ -594,13 +606,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
         with transaction.atomic():
             observed_decision = None
             if not self._state.adding:
-                observed_decision = type(self).system_queryset().filter(pk=self.pk).values_list(
-                    "access_decision_id", flat=True,
-                ).get()
-                if observed_decision is not None:
-                    apps.get_model("decisions", "Decision").objects.sudo(
-                        reason="intake.need.assignment_question",
-                    ).locked_get(pk=observed_decision)
+                observed_decision = self._lock_access_question()
             previous: Mapping[str, object] | None = (
                 None
                 if self._state.adding
@@ -815,13 +821,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             raise ValidationError({"confirmed": "Confirm resetting requester access."})
         actor = instance_actor(self)
         with actor_context(actor), transaction.atomic():
-            observed_decision = type(self).system_queryset().filter(pk=self.pk).values_list(
-                "access_decision_id", flat=True,
-            ).get()
-            if observed_decision is not None:
-                apps.get_model("decisions", "Decision").objects.sudo(
-                    reason="intake.need.reset_question",
-                ).locked_get(pk=observed_decision)
+            observed_decision = self._lock_access_question()
             locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
             if locked.access_decision_id != observed_decision:
                 raise ValidationError({"revision": "The access question has changed; reload it."})
@@ -906,6 +906,7 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
             raise ValidationError("A saved need and queue are required for conversion.")
         actor = current_actor()
         with system_context(reason="intake.need.convert_to_task"), transaction.atomic():
+            observed_decision = self._lock_access_question()
             locked = (
                 type(self)
                 .objects.sudo(reason="intake.need.convert_to_task.need")
@@ -913,6 +914,8 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Ang
                 .select_related("task", "project", "source_message")
                 .get(pk=self.pk)
             )
+            if locked.access_decision_id != observed_decision:
+                raise ValidationError({"revision": "The access question has changed; reload it."})
             task: Task
             if locked.task is not None:
                 task = locked.task

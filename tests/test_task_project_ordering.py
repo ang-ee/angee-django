@@ -1,5 +1,6 @@
 """Task board intent respects persisted project ranks and native write admission."""
 
+import math
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import replace
@@ -66,6 +67,16 @@ class TaskProjectOrderingTests(WorkCase):
         self.assertEqual(list(self.Task._base_manager.filter(project=self.project).order_by(
             "sort_order",
         ).values_list("pk", flat=True)), [before.pk, hidden.pk, moving.pk, after.pk])
+
+    def test_board_drop_repairs_exhausted_context_then_preserves_intent(self):
+        before = self.ordered_task("Before", 1.0)
+        after = self.ordered_task("After", math.nextafter(1.0, math.inf))
+        moving = self.ordered_task("Moving", 4096)
+        result = self.execute_move(moving, [before.sqid], [after.sqid])
+        self.assertIsNone(result.errors, result.errors)
+        self.assertEqual(list(self.Task._base_manager.filter(project=self.project).order_by(
+            "sort_order",
+        ).values_list("pk", flat=True)), [before.pk, moving.pk, after.pk])
 
     def test_mixed_project_visible_neighbors_do_not_define_task_scope(self):
         before = self.ordered_task("Before", 0)

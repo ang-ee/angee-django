@@ -30,7 +30,7 @@ from rebac.backends import backend
 from rebac.field_backing import canonical_model
 
 from angee.base.exceptions import RecordAccessSubjectRefused
-from angee.base.fields.ordering import FractionalRankField
+from angee.base.fields.ordering import FractionalRankExhausted, FractionalRankField
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
@@ -1099,7 +1099,13 @@ class Task(
                 else:
                     lower = ranks.order_by("-sort_order").values_list("sort_order", flat=True).first()
                     upper = None
-                self.sort_order = FractionalRankField.get_rank_between(lower, upper)
+                try:
+                    self.sort_order = FractionalRankField.get_rank_between(lower, upper)
+                except FractionalRankExhausted:
+                    field = type(self)._meta.get_field("sort_order")
+                    assert isinstance(field, FractionalRankField)
+                    field.rebalance(type(self).system_queryset().using(using).filter(project_id=project_id))
+                    return self.apply_input_extensions(task_order=task_order, **values)
                 # Keep the original actor: native write/write__sort_order and
                 # history capture decide this save, including extension-only writes.
                 self.save(using=using, update_fields=("sort_order", "updated_at"))

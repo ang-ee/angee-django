@@ -298,8 +298,10 @@ Use these owners instead of maintaining another contract in an addon:
 - Manually ordered rows use `FractionalRankField` (NOT NULL) plus a database
   `UniqueConstraint` over their context fields and rank. Use the field's
   append allocation when a rank is omitted. `FractionalRankExhausted` refuses
-  the write; an ordering owner must perform any deliberate contextual reranking
-  under its own lock. For cyclic reorders, the field's `get_temporary_ranks`
+  the write as a validation error; an ordering owner can call the field's
+  `rebalance` on its complete context under its own lock to preserve order and
+  restore gaps. Task board placement retries after this contextual repair. For
+  cyclic reorders, the field's `get_temporary_ranks`
   allocates outside the stored context and requested destinations; the owning
   writer stages and finalizes through its native queryset/model lifecycle in
   one transaction. Both phases retain capture and a failure rolls back the whole
