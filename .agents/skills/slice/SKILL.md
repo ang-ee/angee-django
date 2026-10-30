@@ -26,8 +26,10 @@ commits, publication, new features, or a change to the user's chosen scope.
    review pass and report that independence could not be established.
 4. **Verify the changed behavior.** Use `docs/checks.md` to select commands and
    their execution roots. Meaningful UI changes require browser verification;
-   backend or tooling changes need evidence at their affected boundary. A
-   documentation-only slice needs link/contract checks, not a live app. Report
+   backend or tooling changes need evidence at their affected boundary. For
+   explorer navigation, use the pending-transition checks in
+   [Explorer navigation continuity](../../../docs/frontend/guidelines.md#explorer-navigation-continuity).
+   A documentation-only slice needs link/contract checks, not a live app. Report
    checks that could not run and their concrete limitation.
 5. **Hand off.** Describe the behavior, evidence, unresolved findings, and
    changed files. Commit or publish only when requested or already authorized;
