@@ -17,7 +17,7 @@ an owner. Normal application data changes belong to their addon.
 | Composition snapshot and app closure | `django_compose.conf`, `snapshot`, `components` |
 | Models and structural integrations | `django_compose.models`, `model_composition`, `declarations` |
 | Artifact publication and serving verification | `django_compose.build`, `artifacts`, `serving` |
-| Transition binding, native history, guarded drops and retirement | `django_compose.migrations` and native management commands |
+| Native history, guarded drops and retirement | `django_compose.migrations` and native management commands |
 | Database prep, per-app hooks and readiness | `django_compose.provision` |
 | HTTP child and production worker serving | `src/angee/server/management/commands/` |
 | Dependency order and held service recovery | Stack `angee.yaml` jobs; native Go operator |
@@ -35,8 +35,8 @@ an owner. Normal application data changes belong to their addon.
    class keywords. Capability build integrations implement the compiler's public
    structural protocols. Keep REBAC/resources/web policy with those addons.
 4. Run native `makemigrations` after composition for changed labels, review the
-   emitted history and commit it. A transition source lives at
-   `compose_migrations/<label>/<name>.py`; keep original names and exact bodies.
+   emitted history and commit it. Author required data operations in ordinary
+   project migrations with explicit dependencies and historical Django models.
    An ignored output tree is not a migration retention policy.
 5. Retained history survives addon removal. Package-removal preflight audits
    historical Python imports before applying the native lock change. Preserve

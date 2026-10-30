@@ -48,15 +48,14 @@ do not introduce a source-model append, generated stub directory or parallel
 model registry to make a missing native type visible. The composed typing host
 is isolated from the running stack and pytest's bare source-model settings.
 
-A declared addon transition is a temporary executable input: its materialized
-copy carries a source fingerprint until it is applied and the stack's history is
-consolidated. Native mypy/Ruff discovery excludes those bodies; integrity-test
-imports remain followed silently so their types are available. Do not change an
-applied copy or digest to fix checker diagnostics. The
-[runtime-migration mechanism tests](../tests/test_runtime_migrations.py) cover
-materialization, fingerprints, replay and guarded history replacement through
-neutral fixtures. Retire completed transition declarations only through an explicit supported
-upgrade cutoff; preserve every historical Python import required by retained history.
+Projects author data upgrades as ordinary Django migrations with explicit
+dependencies, historical models and the schema editor's database alias. Compose
+preserves those files. The [native-history tests](../tests/test_native_initial_history.py)
+cover initial authoring, project data operations and preservation across rebuilds;
+the [migration-policy tests](../tests/test_runtime_migrations.py) cover Resources'
+retirement policy and the native drop guard. Previously shipped transition sources
+are historical upgrade assets only; retire them after the supported upgrade cutoff
+and preserve Python imports still required by retained migration history.
 
 [`tests/test_layering.py`](../tests/test_layering.py) guards framework import
 boundaries and optional state-field declarations. See the
@@ -212,7 +211,6 @@ Management checks use `--no-sync` so invoking one cannot install or rebuild firs
 | Check composition drift | `uv run --no-sync python manage.py compose --check` | Native read-only artifact/receipt comparison |
 | Check migration drift/imports | `uv run --no-sync python manage.py check_migrations --imports` | Native retained-history integrity and Python import audit |
 | Author schema migrations | `uv run --no-sync python manage.py makemigrations <app-labels>` | After compose; review and commit `runtime/<label>/migrations/` before packaging |
-| Preview explicit baseline adoption | `uv run --no-sync python manage.py adopt_transition <declaring-app>:<transition> --baseline <label>.<migration> --dry-run` | After compose; requires the owner satisfaction assertion and a retained initial baseline. Remove `--dry-run` to author; review and commit the new origin before migrate |
 | Apply migrations | `uv run --no-sync python manage.py migrate` | Operates on the selected stack database |
 | Sync permissions | `uv run --no-sync python manage.py rebac sync` | After migrations when permissions change; `rebac sync --prune-stale` also retires removed definitions, the shape provision runs ([REBAC](backend/guidelines.md#rebac)) |
 | Load declared resource data | `uv run --no-sync python manage.py resources load` | After migrations when resource data changes |

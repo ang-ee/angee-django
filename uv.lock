@@ -508,7 +508,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=44" },
     { name = "django", specifier = ">=6.1.2,<6.2" },
     { name = "django-choices-field", git = "https://github.com/ang-ee/django-choices-field.git?rev=b02c1488660d0bf1f4483d2e73bc842b41b70632" },
-    { name = "django-compose", specifier = "==0.1.0.dev7" },
+    { name = "django-compose", specifier = "==0.1.0.dev8" },
     { name = "django-environ", specifier = ">=0.12" },
     { name = "django-sqids", specifier = ">=0.1" },
     { name = "django-yamlconf", specifier = ">=1.5.0" },
@@ -2668,16 +2668,16 @@ dependencies = [
 
 [[package]]
 name = "django-compose"
-version = "0.1.0.dev7"
+version = "0.1.0.dev8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "django" },
     { name = "django-yamlconf" },
     { name = "packaging" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3d/90/4a41fa14a90f90489cbd4141387d4310e51022d008addc071991729a1585/django_compose-0.1.0.dev7.tar.gz", hash = "sha256:34cc03a02cd1821e0d452fb1ba9173ebf288626e663bc73331bbc30b7214a6c6", size = 297506, upload-time = "2026-10-30T20:19:25.848Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b4/a2/5a0aec0d792d23ab906ff9d6f69b3c4b5a874905861502b66e8161b3e4e7/django_compose-0.1.0.dev8.tar.gz", hash = "sha256:0f50b245ace8d3bc38a3640512736ddfd0591a76a61b68927b7d851f52d74424", size = 269024, upload-time = "2026-10-30T21:40:10.362Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1c/d5/6ac6248e68df32b30f82d4dbc78afd340233549a7004ed6b04a03c6885c5/django_compose-0.1.0.dev7-py3-none-any.whl", hash = "sha256:511304894d90692b5e3eb990b7038f231ad976a5dc7e932d7cb63271dcfc8d20", size = 109020, upload-time = "2026-10-30T20:19:24.712Z" },
+    { url = "https://files.pythonhosted.org/packages/51/ad/e2d20925a186299de225afee6338645195a60eb87e608262af647e6b1b45/django_compose-0.1.0.dev8-py3-none-any.whl", hash = "sha256:47a2055a0b1d75bd5709d37d5e64ebcb56e0147cd203fee718d99d73630249cb", size = 97917, upload-time = "2026-10-30T21:40:09.313Z" },
 ]
 
 [[package]]

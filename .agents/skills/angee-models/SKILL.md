@@ -222,7 +222,7 @@ A jj workspace lane has no host, database or JS install: run the focused pytest 
 
 - [Model and query pitfalls](references/pitfalls.md)
 - `docs/backend/guidelines.md#rules`, `#persistence-primitives`, `#direct-record-access`
-- `docs/composer.md#runtime-build-and-import`, `#addon-owned-runtime-migrations`
+- `docs/composer.md#runtime-build-and-import`, `#project-migration-history`
 - `docs/guidelines.md#put-behavior-on-the-owning-object`; `docs/stack.md#backend`
 - `docs/glossary.md` (Source model, Model extension, Child model, Backend class, Record edge, Merge)
 - `angee-design` (owner index), `angee-addon`, `angee-permissions`, `slice`, `angee-workspace`

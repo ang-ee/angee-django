@@ -29,7 +29,8 @@ package or stack profile. Addon-local declarations belong to `angee-addon`.
 2. Add native requirements and portable uv source overrides at the project owner.
    Local addons are real installed distributions; folder paths do not activate
    them. Keep workspace member globs aligned with actual packages. Compiler
-   requirements use the committed immutable public Git source; optional local
+   requirements follow the [base package pin](../../../src/angee/base/pyproject.toml)
+   and its public PyPI artifacts in the native lockfile; optional local
    co-development belongs in a separate disposable check environment, never a
    live stack or a committed second resolution surface.
 3. Declare root apps in `INSTALLED_APPS`. Requirements activate their required

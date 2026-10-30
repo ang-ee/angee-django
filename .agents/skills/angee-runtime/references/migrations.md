@@ -4,7 +4,7 @@ Migration and runtime procedures moved from the backend guide. The policy and
 contracts stayed there: [Migration history](../../../../docs/backend/guidelines.md#migration-history),
 [Persistence primitives](../../../../docs/backend/guidelines.md#persistence-primitives),
 [Development server](../../../../docs/backend/guidelines.md#development-server) and
-[Addon-owned runtime migrations](../../../../docs/composer.md#addon-owned-runtime-migrations).
+[Project migration history](../../../../docs/composer.md#project-migration-history).
 Commands live in [Composition and schema](../../../../docs/checks.md#composition-and-schema).
 
 - **Domain renames need an explicit upgrade path**

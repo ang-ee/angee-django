@@ -1,11 +1,9 @@
 """Base defaults remain optional native app contributions."""
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
-from django.core.exceptions import ImproperlyConfigured
 
 from angee.base.conf import configure
 
@@ -79,67 +77,3 @@ def test_plain_native_composer_preserves_host_choices_without_capability_default
     assert namespace["ASGI_APPLICATION"] == "project.asgi.application"
     for name in ("MIDDLEWARE", "COMPOSE_INTEGRATIONS", "REBAC_BACKEND", "ANGEE_CHANGESET_MODEL"):
         assert name not in namespace
-
-
-@pytest.fixture
-def baseline_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """A real installed package whose transition modules must stay unimported."""
-    package = tmp_path / "baseline_package"
-    package.mkdir()
-    (package / "__init__.py").write_text("")
-    document = package / "pyproject.toml"
-    document.write_text('[tool.angee.migrations.initial_baseline]\nlegacy_schema = "satisfied"\n')
-    transitions = package / "compose_migrations" / "baseline_package"
-    transitions.mkdir(parents=True)
-    for name in ("legacy_schema", "real_bootstrap"):
-        (transitions / f"{name}.py").write_text('raise AssertionError("settings imported a transition")\n')
-    info = tmp_path / "baseline_package-1.dist-info"
-    info.mkdir()
-    (info / "METADATA").write_text(
-        "Metadata-Version: 2.1\nName: baseline-package\nVersion: 1\nRequires-Dist: angee-base>=3,<4\n"
-    )
-    (info / "entry_points.txt").write_text("[angee.addons]\nbaseline_package = baseline_package\n")
-    (info / "RECORD").write_text("baseline_package/pyproject.toml,,\n")
-    monkeypatch.syspath_prepend(str(tmp_path))
-    monkeypatch.setenv("DJANGO_COMPOSE_MODE", "write")
-    namespace = {
-        "__file__": str(tmp_path / "settings.py"), "INSTALLED_APPS": ["baseline_package"],
-        "COMPOSE_OUTPUT_DIR": tmp_path / "runtime", "SECRET_KEY": "baseline-declarations",
-    }
-    yield namespace, document
-    for name in tuple(sys.modules):
-        if name == "baseline_package" or name.startswith("baseline_package."):
-            del sys.modules[name]
-
-
-def test_baseline_metadata_annotates_native_discovery_without_importing_transitions(baseline_package) -> None:
-    namespace, _ = baseline_package
-    configure(namespace)
-    records = namespace["COMPOSE_SNAPSHOT"].settings["COMPOSE_TRANSITION_SOURCE"]
-    assert [(record["name"], record.get("initial_baseline")) for record in records] == [
-        ("legacy_schema", "satisfied"), ("real_bootstrap", None),
-    ]
-    assert all(record["declaring_app"] == "baseline_package" for record in records)
-
-
-def test_explicit_project_transition_source_preserves_owner_choice(baseline_package) -> None:
-    namespace, document = baseline_package
-    document.write_text('[tool.angee.migrations.initial_baseline]\nremoved_transition = "satisfied"\n')
-    namespace["COMPOSE_TRANSITION_SOURCE"] = ()
-    configure(namespace)
-    assert namespace["COMPOSE_SNAPSHOT"].settings["COMPOSE_TRANSITION_SOURCE"] == ()
-
-
-@pytest.mark.parametrize(
-    ("declaration", "message"),
-    [
-        ('removed_transition = "satisfied"', "initial_baseline names unknown transition"),
-        ('legacy_schema = "skip"', "Transition initial_baseline must be 'satisfied' or absent"),
-        ('legacy_schema = true', "Invalid transition declaration"),
-    ],
-)
-def test_invalid_baseline_declaration_refuses_configuration(baseline_package, declaration, message) -> None:
-    namespace, document = baseline_package
-    document.write_text(f"[tool.angee.migrations.initial_baseline]\n{declaration}\n")
-    with pytest.raises(ImproperlyConfigured, match=message):
-        configure(namespace)
