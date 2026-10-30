@@ -265,7 +265,11 @@ def test_addon_names_support_text_search_sort_and_labels_with_unknown_identity(c
 
     assert data["platform_addons"] == [
         {"id": rows["catalogue_probe.alpha"].public_id, "name": "catalogue_probe.alpha", "label": "Zulu"},
-        {"id": rows["catalogue_probe.zebra"].public_id, "name": "catalogue_probe.zebra", "label": "catalogue_probe.zebra"},
+        {
+            "id": rows["catalogue_probe.zebra"].public_id,
+            "name": "catalogue_probe.zebra",
+            "label": "catalogue_probe.zebra",
+        },
     ]
 
 
