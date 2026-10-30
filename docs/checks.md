@@ -212,6 +212,7 @@ Management checks use `--no-sync` so invoking one cannot install or rebuild firs
 | Check composition drift | `uv run --no-sync python manage.py compose --check` | Native read-only artifact/receipt comparison |
 | Check migration drift/imports | `uv run --no-sync python manage.py check_migrations --imports` | Native retained-history integrity and Python import audit |
 | Author schema migrations | `uv run --no-sync python manage.py makemigrations <app-labels>` | After compose; review and commit `runtime/<label>/migrations/` before packaging |
+| Preview explicit baseline adoption | `uv run --no-sync python manage.py adopt_transition <declaring-app>:<transition> --baseline <label>.<migration> --dry-run` | After compose; requires the owner satisfaction assertion and a retained initial baseline. Remove `--dry-run` to author; review and commit the new origin before migrate |
 | Apply migrations | `uv run --no-sync python manage.py migrate` | Operates on the selected stack database |
 | Sync permissions | `uv run --no-sync python manage.py rebac sync` | After migrations when permissions change; `rebac sync --prune-stale` also retires removed definitions, the shape provision runs ([REBAC](backend/guidelines.md#rebac)) |
 | Load declared resource data | `uv run --no-sync python manage.py resources load` | After migrations when resource data changes |
