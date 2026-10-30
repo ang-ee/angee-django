@@ -5,6 +5,7 @@ import { NavLink, Chip, Code, CodeBlock, DetailSection, DetailSurface, ErrorBann
 
 import { PlatformImplementation, type PlatformImplementationData } from "../documents";
 import { usePlatformT } from "../i18n";
+import { AddonLink } from "./AddonLink";
 
 const ignoreChange = () => {};
 
@@ -83,7 +84,7 @@ export function ImplementationDetail(): ReactElement {
             [t("implementation.registry"), <Code>{implementation.registry_setting}</Code>],
             [t("implementation.baseClass"), <Code>{implementation.base_class_path}</Code>],
             [t("col.addon"), implementation.addon_id
-              ? <NavLink href={routeHref("platform.addons.record", { id: implementation.addon_id })} variant="inline">{implementation.addon_label}</NavLink>
+              ? <AddonLink name={implementation.addon_id}>{implementation.addon_label}</AddonLink>
               : t("implementation.external")],
           ]} />
           <ImplementationSettings implementation={implementation} />

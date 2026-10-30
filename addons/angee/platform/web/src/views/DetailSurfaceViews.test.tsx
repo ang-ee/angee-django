@@ -35,6 +35,7 @@ vi.mock("../i18n", async (importOriginal) => ({
 
 vi.mock("../lib/explorer", () => ({
   usePlatformAddon: platformMocks.usePlatformAddon,
+  usePlatformAddonHref: () => (name: string) => platformMocks.routeHref("platform.addons.record", { id: `addon_${name.split(".").at(-1)}` }),
   usePlatformModel: platformMocks.usePlatformModel,
 }));
 
@@ -87,11 +88,12 @@ describe("platform detail surfaces", () => {
   });
 
   test("AddonDetail renders metrics and dependency sections through the shared surface", () => {
-    routerMocks.params = { id: "angee.storage" };
+    routerMocks.params = { id: "addon_storage" };
     platformMocks.usePlatformAddon.mockReturnValue({
       addon: {
         field_count: 7,
-        id: "angee.storage",
+        id: "addon_storage",
+        name: "angee.storage",
         kind: "REQUIRED",
         label: "Storage",
         model_count: 2,
@@ -109,10 +111,12 @@ describe("platform detail surfaces", () => {
     expect(screen.getByRole("heading", { name: "Storage" })).toBeTruthy();
     expect(screen.getByText("angee.storage")).toBeTruthy();
     expect(screen.getByText("col.models")).toBeTruthy();
+    expect(platformMocks.routeHref).toHaveBeenCalledWith("platform.models", undefined, { addon: "angee.storage" });
+    expect(platformMocks.routeHref).toHaveBeenCalledWith("platform.fields", undefined, { addon: "angee.storage" });
     expect(screen.getByText("2")).toBeTruthy();
     expect(screen.getByText("detail.dependencies")).toBeTruthy();
     expect((screen.getByRole("link", { name: "angee.iam" }) as HTMLAnchorElement).pathname)
-      .toBe("/platform/addons/angee.iam");
+      .toBe("/platform/addons/addon_iam");
     expect(screen.getByText("detail.modelsWithCount:1")).toBeTruthy();
     expect(
       (screen.getByRole("link", { name: "storage.File" }) as HTMLAnchorElement)
@@ -125,11 +129,12 @@ describe("platform detail surfaces", () => {
   });
 
   test("AddonDetail uses the server's label for an unresolved catalogue entry", () => {
-    routerMocks.params = { id: "example.base" };
+    routerMocks.params = { id: "addon_base" };
     platformMocks.usePlatformAddon.mockReturnValue({
       addon: {
         field_count: 0,
-        id: "example.base",
+        id: "addon_base",
+        name: "example.base",
         kind: "REQUIRED",
         label: "example.base",
         model_count: 0,

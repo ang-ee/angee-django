@@ -6,6 +6,7 @@ import {
   Code, ListView, OverflowChipList, useRouteHref, type ResourceToolbarGroupOption, type ListColumn, type RouteHref } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
+import { AddonLink } from "./AddonLink";
 import { platformScopeSearch } from "../lib/paths";
 
 // The `platform.Model` Hasura resource row (`hasura_pydantic_resource`,
@@ -45,9 +46,9 @@ function columns(
       header: t("col.addon"),
       render: (row) =>
         row.addon_id ? (
-          <NavLink href={routeHref("platform.addons.record", { id: row.addon_id })} variant="inline">
+          <AddonLink name={row.addon_id}>
             {row.addon_label}
-          </NavLink>
+          </AddonLink>
         ) : (
           row.addon_label
         ),

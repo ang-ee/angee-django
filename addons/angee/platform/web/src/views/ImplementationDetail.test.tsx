@@ -66,7 +66,7 @@ function renderDetail(): void {
 
 beforeEach(() => {
   mocks.query = {
-    data: { platform_implementation: implementation },
+    data: { platform_implementation: implementation, platform_explorer: { addons: [{ id: "addon_workflows", name: "angee.workflows" }] } },
     error: null,
     isPending: false,
   };
@@ -78,7 +78,7 @@ describe("ImplementationDetail", () => {
   test("shows only truthful read-only defaults", () => {
     renderDetail();
     expect(screen.getByRole("link", { name: "workflows.Step" }).getAttribute("href")).toBe("/platform.models.record/workflows.step");
-    expect(screen.getByRole("link", { name: "Workflows" }).getAttribute("href")).toBe("/platform.addons.record/angee.workflows");
+    expect(screen.getByRole("link", { name: "Workflows" }).getAttribute("href")).toBe("/platform.addons.record/addon_workflows");
     expect(screen.getByText("Explicit flag")).toBeTruthy();
     expect(screen.getByText("Schema flag")).toBeTruthy();
     expect(screen.getByText("Unset flag")).toBeTruthy();

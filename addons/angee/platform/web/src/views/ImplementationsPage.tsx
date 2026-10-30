@@ -5,6 +5,7 @@ import { NavLink, Code, ListView, useRouteHref, type ListColumn, type ResourceTo
 
 import type { PlatformImplementationData } from "../documents";
 import { usePlatformT } from "../i18n";
+import { AddonLink } from "./AddonLink";
 
 type ImplementationRow = Pick<PlatformImplementationData,
   "id" | "label" | "key" | "model" | "field" | "category" | "class_path" | "addon_label" | "addon_id"
@@ -31,7 +32,7 @@ export function ImplementationsPage(): ReactElement {
     {
       field: "addon_label", header: t("col.addon"),
       render: (row) => row.addon_id
-        ? <NavLink href={routeHref("platform.addons.record", { id: row.addon_id })} variant="inline">{row.addon_label}</NavLink>
+        ? <AddonLink name={row.addon_id}>{row.addon_label}</AddonLink>
         : t("implementation.external"),
     },
     { field: "class_path", header: t("implementation.class"), render: (row) => <Code truncate>{row.class_path}</Code> },

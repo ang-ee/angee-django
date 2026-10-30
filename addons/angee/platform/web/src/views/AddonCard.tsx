@@ -58,7 +58,7 @@ export function AddonCard({ row }: { row: AddonResourceRow }): ReactElement {
     <div className="grid min-w-0 gap-2">
       <span className="block min-w-0">
         <span className={textRoleVariants({ role: "title", truncate: true })}>{row.label}</span>
-        <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.id}</span>
+        <span className={textRoleVariants({ role: "caption", truncate: true })}>{row.name}</span>
       </span>
       {row.description ? (
         <p className={textRoleVariants({ role: "description" })}>{row.description}</p>
@@ -89,7 +89,7 @@ export function AddonCardActions({
   const applyingRef = useRef(false);
   const preview = useAuthoredQuery(
     AddonChangePreview,
-    { addon: row.id, action: action ?? "ENABLE" },
+    { addon: row.name, action: action ?? "ENABLE" },
     { enabled: action !== null },
   );
   // Invalidate the board only on an *effective* write — a server refusal (`ok: false`)
@@ -114,8 +114,8 @@ export function AddonCardActions({
     try {
       await settle(async () => {
         const operation = remove
-          ? (await uninstall({ addon: row.id }))?.uninstall
-          : (await install({ addon: row.id }))?.install;
+          ? (await uninstall({ addon: row.name }))?.uninstall
+          : (await install({ addon: row.name }))?.install;
         return operation ? { ok: true, message: t("apps.dependencyQueued") } : null;
       });
     } finally {
@@ -132,8 +132,8 @@ export function AddonCardActions({
       applyingRef.current = true;
       try {
         const outcome = await settle(async () => action === "ENABLE"
-          ? (await enable({ addon: row.id, revision: change.revision }))?.enable
-          : (await disable({ addon: row.id, revision: change.revision }))?.disable);
+          ? (await enable({ addon: row.name, revision: change.revision }))?.enable
+          : (await disable({ addon: row.name, revision: change.revision }))?.disable);
         if (outcome?.ok) {
           setAction(null);
           context.refresh();
@@ -145,7 +145,7 @@ export function AddonCardActions({
         applyingRef.current = false;
       }
     },
-    [action, context, disable, enable, preview.data, preview.refetch, row.id, settle, t],
+    [action, context, disable, enable, preview.data, preview.refetch, row.name, settle, t],
   );
 
   const dialog = action ? (

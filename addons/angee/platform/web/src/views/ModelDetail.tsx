@@ -3,13 +3,15 @@ import { type ReactElement } from "react";
 import { NavLink, Chip, Code, DetailSection, DetailSurface, OverflowChipList, useRouteHref, useRouteRecordId } from "@angee/ui";
 
 import { usePlatformT } from "../i18n";
+import { AddonLink } from "./AddonLink";
 import { platformScopeSearch } from "../lib/paths";
-import { usePlatformModel } from "../lib/explorer";
+import { usePlatformAddonHref, usePlatformModel } from "../lib/explorer";
 
 export function ModelDetail(): ReactElement {
   const t = usePlatformT();
   const id = useRouteRecordId();
   const routeHref = useRouteHref();
+  const addonHref = usePlatformAddonHref();
   const { model, dependedBy, isFetching: fetching } = usePlatformModel(id);
 
   return (
@@ -31,9 +33,9 @@ export function ModelDetail(): ReactElement {
         model ? (
           <>
             <Code tone="muted">{model.label}</Code>
-            <NavLink href={routeHref("platform.addons.record", { id: model.addon_id })} variant="inline">
+            <AddonLink name={model.addon_id}>
               <Chip tone="info">{model.addon_label}</Chip>
-            </NavLink>
+            </AddonLink>
           </>
         ) : null
       }
@@ -59,7 +61,7 @@ export function ModelDetail(): ReactElement {
                 label: t("col.addon"),
                 value: model.addon_label,
                 icon: "grid",
-                href: routeHref("platform.addons.record", { id: model.addon_id }),
+                href: addonHref(model.addon_id),
               },
               {
                 label: t("col.graph"),
