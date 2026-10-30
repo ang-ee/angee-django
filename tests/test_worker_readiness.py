@@ -9,7 +9,9 @@ import angee.base
 from angee.jobs.bootsteps import RequireProvisioned
 
 
+@pytest.mark.django_db
 def test_provision_failure_aborts_blueprint_initialization(monkeypatch):
+    # Celery's Django fixup checks backend/model capabilities before the blueprint.
     started = []
     for owner in (components.Pool, components.Consumer, components.Beat):
         monkeypatch.setattr(owner, 'start', lambda self, worker: started.append(type(self).__name__))

@@ -1,4 +1,4 @@
-"""Minimal Django settings for framework-core and source-addon tests."""
+"""Bare Django source-model host with native addon settings contributions."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ from pathlib import Path
 
 import environ
 from django.apps import AppConfig
+from django_compose.addons import enabled_apps
+from django_compose.conf import apply_app_settings
 
 
 class BareGraphQLConfig(AppConfig):
@@ -120,22 +122,18 @@ else:
             "TEST": {"NAME": _TEST_DB_FILE},
         }
     }
-DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
-USE_TZ = True
 # Bare tests run Django's per-process LocMem cache. Production OAuth redirects
 # must use a shared cache; tests opt in explicitly so the state guard remains loud.
 ANGEE_INTEGRATE_ALLOW_LOCAL_OAUTH_STATE_CACHE = True
 ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER = True
 CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
 
-# These are ordinary Django source-fixture inputs. Composed-host tests below
-# exercise native configuration and generated receipts in a fresh interpreter.
+# These are ordinary Django source-fixture inputs. Composed-host tests exercise
+# native emission and generated receipts in fresh interpreters.
 BASE_DIR = Path(__file__).resolve().parent.parent
 AUTH_USER_MODEL = "iam.User"
 AUTHENTICATION_BACKENDS = ["angee.iam.auth.ModelBackend"]
 ANGEE_CHANGESET_MODEL = "provenance.Changeset"
-ANGEE_GRAPHQL_WRITE_BACKEND_ADAPTER = "angee.provenance.graphql.write_backend"
-SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD = True
 REBAC_BACKEND = "local"
 REBAC_LOCAL_BACKEND_STORAGE = "registry"
 REBAC_STRICT_MODE = True
@@ -144,90 +142,7 @@ REBAC_ALLOW_SUDO = True
 REBAC_SUPERUSER_BYPASS = False
 REBAC_UNIVERSAL_ADMIN_ROLE = "angee/role:admin"
 REBAC_LINT_BARE_PREFETCH = False
-ANGEE_MERGE_GUARDS = ["angee.resources.managers.seeded_record_merge_guard"]
-ANGEE_TIMELINE_KINDS = ["angee.provenance.timeline.timeline_kinds"]
-STATIC_URL = "/static/"
 CELERY_BROKER_URL = "memory://"
-# Test workers have a finite budget; production policy is checked through native configure.
-CELERY_TASK_SOFT_TIME_LIMIT = 300
-CELERY_TASK_TIME_LIMIT = 360
-ANGEE_TEST_CONNECTION_CLASSES = {
-    "connection": "tests.integrate_fixtures.ConnectionAdapter",
-    "live": "tests.integrate_fixtures.LiveConnectionAdapter",
-}
 
-# Source-model fixtures choose real implementations and their in-memory probes.
-# Production registration/ordering is exercised by the composed-host harness.
-ANGEE_OAUTH_PROVIDER_TYPE_CLASSES = {
-    "generic_oauth2": "angee.integrate.oauth.providers.GenericOAuth2",
-    "generic_oidc": "angee.iam_integrate_oidc.providers.GenericOidc",
-    "google": "angee.iam_integrate_oidc.providers.GoogleType",
-    "anthropic": "angee.agents_integrate_anthropic.oauth.AnthropicOAuth",
-}
-ANGEE_VCS_BACKEND_CLASSES = {
-    "local": "angee.integrate_vcs.backend.LocalVCSBackend",
-    "github": "angee.integrate_github.backend.GitHubBackend",
-    "stub": "tests.conftest.StubVCSBackend",
-}
-ANGEE_INFERENCE_BACKEND_CLASSES = {
-    "manual": "angee.agents.backends.ManualInferenceBackend",
-    "anthropic": "angee.agents_integrate_anthropic.backend.AnthropicInferenceBackend",
-    "openai": "angee.agents_integrate_openai.backend.OpenAIInferenceBackend",
-    "ollama": "angee.agents_integrate_ollama.backend.OllamaInferenceBackend",
-    "stub_inference": "tests.conftest.StubInferenceBackend",
-}
-ANGEE_AGENT_RUNTIME_CLASSES = {
-    "none": "angee.agents.runtimes.NoRuntime",
-    "claude_code": "angee.agents.runtimes.ClaudeCodeRuntime",
-    "opencode": "angee.agents.runtimes.OpenCodeRuntime",
-    "pydantic": "angee.agents_runtime_pydantic.runtime.PydanticAIRuntime",
-}
-ANGEE_STORAGE_BACKEND_CLASSES = {
-    "local": "angee.storage.backends.LocalBackend",
-    "local_folder": "angee.storage_integrate.backends.LocalFolderBackend",
-}
-ANGEE_STORAGE_MOUNT_BACKEND_CLASSES = {
-    "local_folder": "angee.storage_integrate.mounts.LocalFolderMountBackend",
-}
-ANGEE_KNOWLEDGE_RETRIEVAL_CLASSES = {"lexical": "angee.knowledge.retrieval.LexicalRetrievalBackend"}
-ANGEE_NOTION_BACKEND_CLASSES = {"notion": "angee.knowledge_integrate_notion.backend.NotionBackend"}
-ANGEE_DIRECTORY_BACKEND_CLASSES = {
-    "manual": "angee.parties.backends.ManualDirectoryBackend",
-    "carddav": "angee.parties_integrate_carddav.backend.CardDavDirectoryBackend",
-}
-ANGEE_CHANNEL_BACKEND_CLASSES = {
-    "email": "angee.messaging.email.AnymailEmailChannelBackend",
-    "manual": "angee.messaging.backends.ManualChannelBackend",
-    "webform": "angee.messaging.backends.WebformChannelBackend",
-    "imap": "angee.messaging_integrate_imap.backend.ImapChannelBackend",
-    "feed": "angee.posts.backends.FeedChannelBackend",
-    "fake_live": "tests.pairing_backend.FakePairingBackend",
-}
-ANGEE_POSTS_FEED_BACKEND_CLASSES = {
-    "manual": "angee.posts.backends.ManualFeedBackend",
-    "stub": "tests.conftest.StubFeedBackend",
-}
-ANGEE_EXTRACTION_PROFILE_CLASSES = {
-    "none": "angee.extraction.profiles.UnconfiguredExtractionProfile",
-    "plain_text": "angee.extraction.profiles.PlainTextExtractionProfile",
-    "retention_notes": "tests.test_extraction_models.NotesProfile",
-    "step_text": "tests.test_extraction_steps.TextProfile",
-}
-ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES = {"record_changed": "angee.workflows.triggers.RecordChanged"}
-ANGEE_WORKFLOW_STEP_CLASSES = {
-    "ask_decision": "angee.workflows.decision_steps.AskDecision",
-    "map": "angee.workflows.maps.Map",
-    "await_run": "angee.workflows.awaits.AwaitRun",
-}
-ANGEE_ADDON_INSTALLER_BACKEND_CLASSES = {
-    "local": "angee.platform.installer.LocalInstallerBackend",
-    "operator": "angee.platform_integrate_operator.installer.OperatorInstallerBackend",
-}
-ANGEE_ADDON_INSTALLER_BACKEND = "local"
-ANGEE_RESOURCE_SOURCE_CLASSES = {
-    "path": "angee.resources.sources.PathSource",
-    "url": "angee.integrate.resource_source.UrlSource",
-}
-ANGEE_RESOURCE_ENTRY_KIND_CLASSES = {
-    "workflows.workflowextension": "angee.workflows.resources.WorkflowExtensionResourceKind",
-}
+# Apply source app declarations without emitting models or replacing this registry.
+apply_app_settings(globals(), enabled_apps(INSTALLED_APPS, group="angee.addons"))

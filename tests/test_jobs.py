@@ -61,7 +61,8 @@ assert app.task_cls == "celery.contrib.django.task:DjangoTask"
 assert issubclass(app.Task, DjangoTask)
 assert not any(name == "angee.provenance" or name.startswith("angee.provenance.") for name in sys.modules)
 assert "ANGEE_PROJECT_DIR" not in os.environ
-assert "DJANGO_SETTINGS_MODULE" not in os.environ
+assert os.environ["DJANGO_SETTINGS_MODULE"] == "settings"
+assert settings.SECRET_KEY == "native-jobs"
 """
     environment = {
         key: value for key, value in os.environ.items()
