@@ -262,7 +262,7 @@ class InboxConversationGroups(InboxGroups):
         keys = [int(cast(str, row.value)) for row in result.rows]
         threads = self.inbox.threads.filter(pk__in=[key for key in keys if key > 0])
         titles = threads.conversation_labels()
-        context = {thread.pk: thread for thread in threads.only("pk", "platform", "channel_id")}
+        context = {thread.pk: thread for thread in threads.only("pk", "platform", "channel_id", "modality")}
         accounts = dict(self.inbox.collection("integrate", "Integration").filter(
             pk__in=[thread.channel_id for thread in context.values() if thread.channel_id],
         ).values_list("pk", "display_name"))
@@ -278,6 +278,7 @@ class InboxConversationGroups(InboxGroups):
                 label=titles.get(key, "") if key > 0 else "Standalone message",
                 platform=thread.platform if thread else "",
                 account=accounts.get(thread.channel_id, "") if thread else "",
+                modality=thread.modality if thread else "",
             ))
         return replace(result, rows=rows)
 

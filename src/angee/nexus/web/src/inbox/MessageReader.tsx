@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { useAuthoredQuery } from "@angee/refine";
 import { useModelMetadata, type Row } from "@angee/metadata";
-import { MessageReader } from "@angee/messaging";
+import { isStatusUpdate, MessageReader } from "@angee/messaging";
+import { senderDisplayName } from "@angee/parties";
 import {
   ActionMenu,
   ActionTrigger,
@@ -17,6 +18,7 @@ import {
   RecordChrome,
   optionLabel,
   useEnumOptions,
+  useResourceView,
   type RecordChromeContext,
 } from "@angee/ui";
 
@@ -36,6 +38,7 @@ export function InboxMessageReader({
   navigation: InboxNavigation;
 }) {
   const t = useNexusT();
+  const view = useResourceView();
   const query = useAuthoredQuery(
     InboxMessage,
     { ...scope, id: navigation.message },
@@ -45,9 +48,11 @@ export function InboxMessageReader({
   const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const message = query.data?.inbox_message.message;
+  const statusUpdate = message ? isStatusUpdate(message) : false;
   useInboxBreadcrumbs(navigation, {
-    message: message?.title || t("inbox.message"),
-    conversation: message?.thread ? { id: message.thread.id, label: message.thread.conversation_label } : undefined,
+    message: statusUpdate ? t("inbox.statusUpdate") : message?.title || t("inbox.message"),
+    resultsHref: statusUpdate ? navigation.updatesHref(view.state) : undefined,
+    conversation: message?.thread && !statusUpdate ? { id: message.thread.id, label: message.thread.conversation_label } : undefined,
   });
   const uses = useMemo(() => {
     // The server count is already distinct messages per target, not per part.
@@ -89,8 +94,8 @@ export function InboxMessageReader({
       <RecordHeader
         density="compact"
         headingLevel={1}
-        crumbs={message?.thread?.conversation_label}
-        title={message?.title || t("inbox.details")}
+        crumbs={statusUpdate ? t("inbox.updates") : message?.thread?.conversation_label}
+        title={statusUpdate ? t("inbox.updateBy", { sender: senderDisplayName(message?.sender) }) : message?.title || t("inbox.details")}
         status={message && !message.thread ? { label: t("inbox.standalone") } : undefined}
         actions={message ? <>
           <ActionMenu label={null} aria-label={t("inbox.messageActions")} glyph="more-vertical" size="iconSm">
@@ -141,7 +146,8 @@ export function InboxMessageReader({
             ) : null}
             {!query.data?.inbox_message.matches ? (
               <Alert tone="info" format="banner">
-                {t("inbox.outside")}
+                {statusUpdate ? t("inbox.updateOutside") : t("inbox.outside")}
+                {statusUpdate ? <Button size="sm" variant="secondary" onClick={() => navigation.showUpdates(view.state)}>{t("inbox.viewUpdates")}</Button> : null}
               </Alert>
             ) : null}
             <ErrorBanner description={actionError ?? null} />
@@ -158,7 +164,7 @@ export function InboxMessageReader({
                 {/* The envelope's labelled facts; the reader's own header names the participants. */}
                 <MetaGrid
                   rows={[
-                    [t("inbox.account"), message.channel?.display_name ?? "—"],
+                    [t("inbox.connectedAccount"), message.channel?.display_name ?? "—"],
                     [t("inbox.platform"), optionLabel(platforms, message.platform)],
                     [t("inbox.direction"), direction ?? "—"],
                     [t("inbox.status"), optionLabel(statuses, message.status)],
