@@ -5,7 +5,7 @@ import { describe, expect, test } from "vitest";
 
 import integrate from "./index";
 import provenance from "@angee/provenance";
-import timeline from "../../../timeline/web/src";
+import timeline from "@angee/timeline";
 import { INTEGRATION_MODEL, INTEGRATION_RESUME_ACTION_ID } from "./IntegrationLifecycleActions";
 import { INTEGRATION_STREAMS_TAB_ID } from "./IntegrationStreams";
 import { RECORD_LINK_MODEL, RECORD_SOURCES_GROUP_ID } from "./RecordSourcesPane";

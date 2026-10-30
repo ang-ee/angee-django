@@ -9,7 +9,7 @@ import { MenuTree } from "@angee/ui/chrome/menu-tree";
 import { describe, expect, test } from "vitest";
 
 import nexus from "./index";
-import iam from "../../../iam/web/src";
+import iam from "@angee/iam";
 
 // Minimal upstream menu contracts exercise aggregation without importing peer pages.
 const upstream = [

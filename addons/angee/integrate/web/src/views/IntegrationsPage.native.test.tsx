@@ -46,7 +46,7 @@ vi.mock("./IntegrationsPage", async (importOriginal) => ({
 
 import integrate from "../index";
 import provenance from "@angee/provenance";
-import timeline from "../../../../timeline/web/src";
+import timeline from "@angee/timeline";
 import { concreteIntegrationHref } from "./IntegrationsPage";
 import { RECORD_LINK_MODEL } from "../RecordSourcesPane";
 
