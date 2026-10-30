@@ -63,7 +63,7 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
     valid = tmp_path / "valid.py"
     valid.write_text(
         "from typing import assert_type\n"
-        "from angee.provenance.statements import Statement\n"
+        "from angee.provenance.statements import Statement, StatementPair\n"
         "from tests.typing_history.models import FixtureHistoricalQuerySet\n"
         "from runtime.typing_history.models import "
         "Subject, SubjectStatement, HistoricalSubject, HistoricalSubjectStatement\n"
@@ -85,6 +85,18 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         "assert_type(Subject.history.label(), str)\n"
         "assert_type(Subject.history.filter().label(), int)\n"
         "SubjectStatement.history.filter().latest_of_each()\n"
+        "from simple_history.models import HistoricalChanges\n"
+        "from tests.typing_history.models import Subject as AbstractSubject\n"
+        "assert_type(AbstractSubject.history.get(), HistoricalChanges)\n"
+        "def abstract_history(record: AbstractSubject) -> None:\n"
+        "    assert_type(record.history.filter().tagged(), FixtureHistoricalQuerySet[HistoricalChanges])\n"
+        "assert_type(AbstractSubject.statements.get(), Statement)\n"
+        "assert_type(AbstractSubject.same_as.get(), StatementPair)\n"
+        "def generic_history[T: AbstractSubject](record: T, model: type[T]) -> None:\n"
+        "    assert_type(record.history.filter().tagged().get(), HistoricalChanges)\n"
+        "    assert_type(model.history.filter().latest_of_each(), FixtureHistoricalQuerySet[HistoricalChanges])\n"
+        "    assert_type(record.statements.get(), Statement)\n"
+        "    assert_type(model.same_as.filter().get(), StatementPair)\n"
     )
     invalid = tmp_path / "invalid.py"
     invalid.write_text(
@@ -97,6 +109,12 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         "wrong_queryset_label: str = Subject.history.filter().label()\n"
         "wrong_manager_label: int = Subject.history.label()\n"
         "Subject.history.filter().missing_queryset_method()\n"
+        "from tests.typing_history.models import Subject as AbstractSubject\n"
+        "AbstractSubject.history.filter().missing_queryset_method()\n"
+        "wrong_abstract_label: str = AbstractSubject.history.filter().label()\n"
+        "def invalid_generic[T: AbstractSubject](record: T) -> None:\n"
+        "    record.history.missing_method()\n"
+        "    record.statements.missing_method()\n"
     )
     # The native plugin owns TypeInfos only. Compare actual Django model/state
     # identities after semantic analysis to the fixture's pre-analysis snapshot.
@@ -125,8 +143,8 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
     assert positive.returncode == 0, positive.stdout + positive.stderr
     negative = subprocess.run([*command, str(invalid)], cwd=root, env=env, capture_output=True, text=True, check=False)
     assert negative.returncode == 1, negative.stdout + negative.stderr
-    assert negative.stdout.count(": error:") == 8, negative.stdout
-    for line in (2, 3, 4, 5, 6, 7, 8, 9):
+    assert negative.stdout.count(": error:") == 12, negative.stdout
+    for line in (2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 14, 15):
         assert f"invalid.py:{line}: error:" in negative.stdout, negative.stdout
     assert {path.relative_to(runtime): path.read_bytes() for path in runtime.rglob("*.py")} == before
     assert not tuple(runtime.rglob("*.pyi"))

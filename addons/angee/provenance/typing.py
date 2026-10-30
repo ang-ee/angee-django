@@ -18,12 +18,13 @@ from django.db import models
 from mypy.build import PRI_MYPY
 from mypy.nodes import MypyFile, TypeInfo
 from mypy.plugin import AttributeContext, FunctionContext, Plugin, ReportConfigContext
-from mypy.typeops import make_simplified_union
-from mypy.types import CallableType, Instance, NoneType, TypeType, get_proper_type
+from mypy.typeops import erase_to_bound, make_simplified_union
+from mypy.types import CallableType, Instance, NoneType, TypeType, TypeVarType, get_proper_type
 from mypy.types import Type as MypyType
 from mypy_django_plugin.lib import helpers
 from mypy_django_plugin.transformers.managers import create_manager_info_from_queryset
 from simple_history.manager import HistoryDescriptor
+from simple_history.models import HistoricalRecords
 
 from angee.provenance.context import changeset_model, changeset_model_label
 
@@ -45,38 +46,50 @@ class ProvenancePlugin(Plugin):
         return self._history_hook(fullname)
 
     def history_manager(self, ctx: AttributeContext, *, name: str) -> MypyType:
-        """Bind native HistoryDescriptor managers to their already projected row type."""
+        """Bind concrete descriptors or retained source declarations to native row contracts."""
         receiver = get_proper_type(ctx.type)
         if isinstance(receiver, TypeType):
             receiver = get_proper_type(receiver.item)
         elif isinstance(receiver, CallableType) and receiver.is_type_obj():
             receiver = get_proper_type(receiver.ret_type)
+        if isinstance(receiver, TypeVarType):
+            receiver = get_proper_type(erase_to_bound(receiver))
         if not isinstance(receiver, Instance):
             return ctx.default_attr_type
         module = sys.modules.get(receiver.type.module_name)
         source = vars(module).get(receiver.type.name) if module is not None else None
         if source is models.Model or not isinstance(source, type) or not issubclass(source, models.Model):
             return ctx.default_attr_type
-        try:
-            # The runtime source owns its native Django identity. Use that
-            # identity to read the selected registry row; never rebuild a model.
-            model = apps.get_model(source._meta.app_label, source._meta.model_name)
-        except LookupError:
-            return ctx.default_attr_type
-        descriptor = getattr_static(model, name, None)
-        if not isinstance(descriptor, HistoryDescriptor):
-            return ctx.default_attr_type
-        history_name = helpers.get_class_fullname(descriptor.model)
-        manager_name = helpers.get_class_fullname(descriptor.manager_class)
-        history = self.lookup_fully_qualified(history_name)
+        if source._meta.abstract:
+            declaration = getattr_static(source, name, None)
+            if not isinstance(declaration, HistoricalRecords):
+                return ctx.default_attr_type
+            runtime_manager = declaration.history_manager
+            runtime_queryset = declaration.historical_queryset
+            history_info = None
+        else:
+            try:
+                # The runtime source owns the identity of its registered row.
+                model = apps.get_model(source._meta.app_label, source._meta.model_name)
+            except LookupError:
+                return ctx.default_attr_type
+            descriptor = getattr_static(model, name, None)
+            if not isinstance(descriptor, HistoryDescriptor):
+                return ctx.default_attr_type
+            runtime_manager = descriptor.manager_class
+            runtime_queryset = descriptor.queryset_class
+            history_name = helpers.get_class_fullname(descriptor.model)
+            history = self.lookup_fully_qualified(history_name)
+            if history is None or not isinstance(history.node, TypeInfo):
+                ctx.api.fail(f"Unavailable native history model {history_name}", ctx.context)
+                return ctx.default_attr_type
+            history_info = history.node
+        manager_name = helpers.get_class_fullname(runtime_manager)
         manager = self.lookup_fully_qualified(manager_name)
-        if history is None or not isinstance(history.node, TypeInfo):
-            ctx.api.fail(f"Unavailable native history model {history_name}", ctx.context)
-            return ctx.default_attr_type
         if manager is None or not isinstance(manager.node, TypeInfo):
             ctx.api.fail(f"Unavailable native history manager {manager_name}", ctx.context)
             return ctx.default_attr_type
-        queryset_name = helpers.get_class_fullname(descriptor.queryset_class)
+        queryset_name = helpers.get_class_fullname(runtime_queryset)
         queryset = self.lookup_fully_qualified(queryset_name)
         if queryset is None or not isinstance(queryset.node, TypeInfo):
             ctx.api.fail(f"Unavailable native history queryset {queryset_name}", ctx.context)
@@ -88,11 +101,15 @@ class ProvenancePlugin(Plugin):
                 manager.node,
                 queryset.node,
                 line=ctx.context.line,
+                runtime_manager=runtime_manager,
             )
         except helpers.IncompleteDefnException:
             ctx.api.fail(f"Unavailable native history manager {manager_name}", ctx.context)
             return ctx.default_attr_type
-        arguments = [Instance(history.node, [])] if len(selected.type_vars) == 1 else []
+        arguments: list[MypyType] = []
+        if len(selected.defn.type_vars) == 1:
+            row = Instance(history_info, []) if history_info is not None else selected.defn.type_vars[0].upper_bound
+            arguments = [row]
         return Instance(selected, arguments)
 
     @staticmethod
