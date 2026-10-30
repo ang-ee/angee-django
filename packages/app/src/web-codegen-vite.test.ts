@@ -55,7 +55,22 @@ async function start() {
     server: { middlewareMode: true, ws: false, watch: { ignored: ["**/.jj/**"] } },
   });
   servers.push(server);
-  await vi.waitFor(() => expect(server.watcher.getWatched()[join(addon, "src")]).toBeDefined());
+  // getWatched() records a directory before its initial scan completes. Prove
+  // delivery of a native source event before testing edits with ignoreInitial.
+  const probe = join(addon, "src", "watcher-ready.txt");
+  let observed = false;
+  const onEvent = (_event: string, file: string) => { if (file === probe) observed = true; };
+  server.watcher.on("all", onEvent);
+  try {
+    let version = 0;
+    await vi.waitFor(() => {
+      write(probe, String(version++));
+      expect(observed).toBe(true);
+    });
+  } finally {
+    server.watcher.off("all", onEvent);
+    rmSync(probe, { force: true });
+  }
   return server;
 }
 function catalogue() {
