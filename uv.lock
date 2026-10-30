@@ -306,7 +306,7 @@ provides-extras = ["postgres"]
 [package.metadata.requires-dev]
 dev = [
     { name = "daphne", specifier = ">=4.0" },
-    { name = "django-stubs", extras = ["compatible-mypy"], git = "https://github.com/ang-ee/django-stubs.git?rev=423ed850e5f2d7ea9e67f3e0f9e8bee4be215988" },
+    { name = "django-stubs", extras = ["compatible-mypy"], git = "https://github.com/ang-ee/django-stubs.git?rev=3596899b3620c1f8f6d27b0f9cb70e69d8c554b1" },
     { name = "django-zed-rebac", extras = ["caveats"], git = "https://github.com/ang-ee/django-zed-rebac.git?rev=610548cda530d1faca2def1190e000d2c7a883d6" },
     { name = "example-notes", editable = "examples/addons/example/notes" },
     { name = "example-theme", editable = "examples/addons/example/theme" },
@@ -2675,7 +2675,7 @@ wheels = [
 [[package]]
 name = "django-stubs"
 version = "6.1.2"
-source = { git = "https://github.com/ang-ee/django-stubs.git?rev=423ed850e5f2d7ea9e67f3e0f9e8bee4be215988#423ed850e5f2d7ea9e67f3e0f9e8bee4be215988" }
+source = { git = "https://github.com/ang-ee/django-stubs.git?rev=3596899b3620c1f8f6d27b0f9cb70e69d8c554b1#3596899b3620c1f8f6d27b0f9cb70e69d8c554b1" }
 dependencies = [
     { name = "django" },
     { name = "django-stubs-ext" },
@@ -2691,7 +2691,7 @@ compatible-mypy = [
 [[package]]
 name = "django-stubs-ext"
 version = "6.1.2"
-source = { git = "https://github.com/ang-ee/django-stubs.git?subdirectory=ext&rev=423ed850e5f2d7ea9e67f3e0f9e8bee4be215988#423ed850e5f2d7ea9e67f3e0f9e8bee4be215988" }
+source = { git = "https://github.com/ang-ee/django-stubs.git?subdirectory=ext&rev=3596899b3620c1f8f6d27b0f9cb70e69d8c554b1#3596899b3620c1f8f6d27b0f9cb70e69d8c554b1" }
 dependencies = [
     { name = "django" },
     { name = "typing-extensions" },
