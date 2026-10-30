@@ -54,6 +54,7 @@ from angee.base.models.merge_references import MergePolicy
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.roles import role_anchor
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
+from angee.base.permissions import declared_rebac_definition
 from angee.base.querysets import MergeableQuerySet
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
@@ -261,7 +262,8 @@ class TagAssignment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, co
         the topmost REBAC-typed MTI ancestor its edges key on. Each needs a
         ``target``-backed relation on this edge's definition, or no actor can tag
         it; each declared target needs :class:`TaggedModel`, or its edges escape
-        the record's ``tags`` field and its delete cascade.
+        the record's ``tags`` field and its delete cascade. Read compiled schema
+        declarations so the check also runs before database provisioning.
         """
 
         errors = super().check(**kwargs)
@@ -282,7 +284,7 @@ class TagAssignment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, co
                     id="tags.E001",
                 )
             )
-        declared = set(cls.declared_target_models().values())
+        declared = set(cls.declared_target_models(definition_for=declared_rebac_definition).values())
         for owner in sorted(owners - declared, key=attrgetter("_meta.label")):
             errors.append(
                 checks.Error(
