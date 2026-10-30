@@ -12,6 +12,7 @@ export const enPlatformMessages: Record<string, string> = {
   "col.fields": "Fields",
   "col.graph": "Graph",
   "col.kind": "Kind",
+  "col.installedVersion": "Installed version",
   "col.model": "Model",
   "col.models": "Models",
   "col.namespace": "Namespace",
@@ -62,6 +63,8 @@ export const enPlatformMessages: Record<string, string> = {
   "kind.required": "Required",
   // The Apps board — card badges, lifecycle actions, and the source dialogs.
   "apps.required": "Required",
+  "apps.installedVersion": "Installed {version}",
+  "apps.notInstalled": "Not installed",
   "apps.pending": "Pending restart",
   "apps.install": "Install",
   "apps.enable": "Enable",

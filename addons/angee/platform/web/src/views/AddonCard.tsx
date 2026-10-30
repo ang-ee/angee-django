@@ -24,6 +24,7 @@ export interface AddonResourceRow extends Record<string, unknown> {
   id: string;
   name: string;
   label: string;
+  installed_version: string | null;
   namespace: string;
   category: string;
   description: string;
@@ -65,6 +66,9 @@ export function AddonCard({ row }: { row: AddonResourceRow }): ReactElement {
       ) : null}
       <OverflowChipList items={keywords} max={MAX_CARD_KEYWORDS} />
       <span className="flex flex-wrap items-center gap-1">
+        <Chip tone="muted">{row.installed_version
+          ? t("apps.installedVersion", { version: row.installed_version })
+          : t("apps.notInstalled")}</Chip>
         <StatusBadge value={row.state}>{addonEnumLabel(t, "state", row.state)}</StatusBadge>
         <StatusBadge value={row.source}>{addonEnumLabel(t, "source", row.source)}</StatusBadge>
         {row.forced ? <Chip tone="info">{t("apps.required")}</Chip> : null}

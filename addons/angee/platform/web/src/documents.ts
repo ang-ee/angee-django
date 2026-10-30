@@ -14,6 +14,7 @@ export const PlatformExplorer = graphql(`
         id
         name
         label
+        installed_version
         namespace
         kind
         model_count

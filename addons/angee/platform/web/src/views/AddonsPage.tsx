@@ -19,6 +19,11 @@ function columns(t: (key: string) => string): readonly ListColumn<AddonResourceR
     // The label with its id beneath: the shared two-line cell.
     { field: "label", header: t("col.addon"), subline: "name" },
     {
+      field: "installed_version",
+      header: t("col.installedVersion"),
+      render: (row) => row.installed_version ?? t("apps.notInstalled"),
+    },
+    {
       field: "category",
       header: t("col.category"),
       render: (row) => row.category ? <Chip tone="muted" size="sm">{row.category}</Chip> : null,
