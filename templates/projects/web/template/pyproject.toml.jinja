@@ -19,7 +19,7 @@ package = false
 cache-dir = "caches/uv"
 
 [tool.uv.workspace]
-members = ["addons/*/*"]
+members = ["src/*/*"]
 {% if framework_source_path and framework != "baked" %}
 
 [tool.uv.sources]
@@ -28,8 +28,8 @@ angee = { path = "{{ framework_source_path }}", editable = true }
 {% if framework_workspace %}
 {% if addons_profile == "full" %}
 angee-messaging-bridges = { path = "workspaces/src/angee-messaging-bridges", editable = true }
-example-notes = { path = "{{ framework_source_path }}/examples/addons/example/notes", editable = true }
-example-theme = { path = "{{ framework_source_path }}/examples/addons/example/theme", editable = true }
+example-notes = { path = "{{ framework_source_path }}/examples/src/example/notes", editable = true }
+example-theme = { path = "{{ framework_source_path }}/examples/src/example/theme", editable = true }
 {% endif %}
 {% if include_arp %}
 arp = { path = "workspaces/src/angee-arp", editable = true }

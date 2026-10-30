@@ -18,7 +18,7 @@ def _probe(source: str, directory: Path) -> None:
     result = subprocess.run(
         [sys.executable, '-c', source, str(directory)],
         env={**environment, 'PYTHONPATH': os.pathsep.join(filter(None, (
-            str(ROOT / 'addons'), os.environ.get('PYTHONPATH'),
+            str(ROOT / 'src'), os.environ.get('PYTHONPATH'),
         )))},
         text=True, capture_output=True, timeout=30, check=False,
     )

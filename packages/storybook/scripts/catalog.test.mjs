@@ -102,7 +102,7 @@ test("the public token-name list follows the stylesheet export", () => {
 });
 
 test("no-owner tokens exist and have no production variable or utility reference", async () => {
-  const production = ["packages/ui/src", "addons"].flatMap(directory => walk(join(root, directory)))
+  const production = ["packages/ui/src", "src"].flatMap(directory => walk(join(root, directory)))
     .filter(file => /\.(?:css|[cm]?[jt]sx?)$/.test(file) && !/\.(?:test|stories)\./.test(file) && !file.endsWith("token-names.ts"))
     .map(file => readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "")).join("\n");
   const compiler = await compileUtilities();

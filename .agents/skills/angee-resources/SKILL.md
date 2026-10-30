@@ -17,14 +17,14 @@ description: "Declares and loads an addon's master, install and demo data: pypro
 
 | File or module | Owns | Reference |
 |---|---|---|
-| `<addon>/pyproject.toml` `[tool.angee.resources]` | which files load, their tier, `adopt`, `depends_on`, `kind`, `model`; `retired_models` | `addons/angee/money/pyproject.toml:8-12`, `examples/addons/example/notes/pyproject.toml:27-42` |
-| `<addon>/resources/<tier>/NNN_<label>.<model>.yaml` | the rows; the filename names the target model | `addons/angee/tags/resources/demo/010_tags.tag.yaml` |
-| `addons/angee/resources/entries.py`, `tiers.py` | manifest parsing, filename inference, dependency order, grant rows; the three tiers and their prerequisite order | `resource_manifest_for:97`, `retired_models_for:111`, `ResourceEntry:221`, `infer_model_label:406`, `EntryGraph.ordered:558`, `GrantRow:632`; `ResourceTier:11`, `with_prerequisites:32` |
-| `addons/angee/resources/loader.py` | xref identity, header validation, adoption, catalogue-tier check, seeded transition state, ledger hash | `AngeeResource:56`, `after_init_instance:174`, `after_save_instance:205`, `_row_content_hash:398`, `_adoption_fields:522`, `_unique_adoption_field:666`, `_validate_headers:753`, `_validate_catalogue_tier:772`, `build_resource:827` |
-| `addons/angee/resources/mixins.py` | `resource_class`, `catalogue`/`catalogue_tier(s)`, cooperative `after_resource_load`, check `angee.E014` | `ResourceLoadMixin:17`, `is_catalogue_model:48`, `check:67`, `after_resource_load:97` |
-| `addons/angee/resources/models.py`, `managers.py` | the ledger `(source_addon, xref)`; validate/load/diff/`load_xref`/`resolve`; demo guard, exclusions, xref collisions, merge guard | `Resource:16`; `retired_seed_keys:106`, `seeded_record_merge_guard:121`, `ResourceManager:137`, `load_addons:221`, `load_xref:248`, `_check_load_tiers:318`, `_excluded_entry_keys:536`, `_check_xref_collisions:562` |
-| `addons/angee/resources/grants.py`, `management/commands/resources.py` | `kind = "grants"` rows into REBAC tuples, idempotent by tuple key; the `resources validate\|load\|diff` command and tier selection | `materialize_grant_groups:61`, docstring `:1-12`; `Command:17` |
-| `addons/angee/resources/build.py`, `django_compose.migrations` | catalogue projection onto runtime models; the populated-table drop guard and its retirement exemption | `CatalogueIntegration:18`, `retired_primary_keys:38`; `DropGuardAutodetector:624` |
+| `<addon>/pyproject.toml` `[tool.angee.resources]` | which files load, their tier, `adopt`, `depends_on`, `kind`, `model`; `retired_models` | `src/angee/money/pyproject.toml:8-12`, `examples/src/example/notes/pyproject.toml:27-42` |
+| `<addon>/resources/<tier>/NNN_<label>.<model>.yaml` | the rows; the filename names the target model | `src/angee/tags/resources/demo/010_tags.tag.yaml` |
+| `src/angee/resources/entries.py`, `tiers.py` | manifest parsing, filename inference, dependency order, grant rows; the three tiers and their prerequisite order | `resource_manifest_for:97`, `retired_models_for:111`, `ResourceEntry:221`, `infer_model_label:406`, `EntryGraph.ordered:558`, `GrantRow:632`; `ResourceTier:11`, `with_prerequisites:32` |
+| `src/angee/resources/loader.py` | xref identity, header validation, adoption, catalogue-tier check, seeded transition state, ledger hash | `AngeeResource:56`, `after_init_instance:174`, `after_save_instance:205`, `_row_content_hash:398`, `_adoption_fields:522`, `_unique_adoption_field:666`, `_validate_headers:753`, `_validate_catalogue_tier:772`, `build_resource:827` |
+| `src/angee/resources/mixins.py` | `resource_class`, `catalogue`/`catalogue_tier(s)`, cooperative `after_resource_load`, check `angee.E014` | `ResourceLoadMixin:17`, `is_catalogue_model:48`, `check:67`, `after_resource_load:97` |
+| `src/angee/resources/models.py`, `managers.py` | the ledger `(source_addon, xref)`; validate/load/diff/`load_xref`/`resolve`; demo guard, exclusions, xref collisions, merge guard | `Resource:16`; `retired_seed_keys:106`, `seeded_record_merge_guard:121`, `ResourceManager:137`, `load_addons:221`, `load_xref:248`, `_check_load_tiers:318`, `_excluded_entry_keys:536`, `_check_xref_collisions:562` |
+| `src/angee/resources/grants.py`, `management/commands/resources.py` | `kind = "grants"` rows into REBAC tuples, idempotent by tuple key; the `resources validate\|load\|diff` command and tier selection | `materialize_grant_groups:61`, docstring `:1-12`; `Command:17` |
+| `src/angee/resources/build.py`, `django_compose.migrations` | catalogue projection onto runtime models; the populated-table drop guard and its retirement exemption | `CatalogueIntegration:18`, `retired_primary_keys:38`; `DropGuardAutodetector:624` |
 
 ## Reuse first
 
@@ -34,11 +34,11 @@ description: "Declares and loads an addon's master, install and demo data: pypro
   (`widgets.py` `split_xref:288`, `resolve_xref:223`).
 - Runtime code reaches a seeded row with `Resource.objects.resolve(handle, model=…)` (`managers.py:146`)
   or re-imports one with `load_xref` (`managers.py:248`); tests take the concrete ledger from
-  `angee.resources.testing` (`addons/angee/resources/testing/__init__.py:1-12`).
-- Shared catalogues exist: `integrate.Vendor` (`addons/angee/integrate/models.py:1464`), `money.Currency`
-  (`addons/angee/money/models.py:80`); contribute rows with `adopt`.
-- Owner-verb adapters exist: `WorkflowDefinitionResource`, `TriggerResource` (`addons/angee/workflows/resources.py:68,124`);
-  non-row declarations use `ResourceEntryKind` (`addons/angee/resources/kinds.py:16`).
+  `angee.resources.testing` (`src/angee/resources/testing/__init__.py:1-12`).
+- Shared catalogues exist: `integrate.Vendor` (`src/angee/integrate/models.py:1464`), `money.Currency`
+  (`src/angee/money/models.py:80`); contribute rows with `adopt`.
+- Owner-verb adapters exist: `WorkflowDefinitionResource`, `TriggerResource` (`src/angee/workflows/resources.py:68,124`);
+  non-row declarations use `ResourceEntryKind` (`src/angee/resources/kinds.py:16`).
 
 ## Steps
 
@@ -134,12 +134,12 @@ description: "Declares and loads an addon's master, install and demo data: pypro
            instance._state.db = installed._state.db
            self.after_save_instance(instance, row, **kwargs)
    ```
-   For batch work, override `after_resource_load` and call `super()` once (`addons/angee/dashboards/models.py:792`).
+   For batch work, override `after_resource_load` and call `super()` once (`src/angee/dashboards/models.py:792`).
    **Owner rule:** the adapter delegates to the manager and keeps the native ledger hooks, adding
    no importer or ledger of its own ([composition owners](../../../docs/backend/guidelines.md#composition-owners)).
 
 6. **Retire a seeded model.** If the table holds only rows this addon's files seeded →
-   `retired_models = ["messaging.ActivityType"]` under `[tool.angee.resources]` (`addons/angee/messaging/pyproject.toml:39`);
+   `retired_models = ["messaging.ActivityType"]` under `[tool.angee.resources]` (`src/angee/messaging/pyproject.toml:39`);
    otherwise → a data migration ([migration history](../../../docs/backend/guidelines.md#migration-history)).
    **Owner rule:** the drop guard exempts only this addon's ledgered keys (`build.py:38`, `managers.py:106`);
    removing a manifest entry retires nothing ([addon declarations](../../../docs/composer.md#addon-declarations)).
@@ -160,7 +160,7 @@ description: "Declares and loads an addon's master, install and demo data: pypro
 - Selecting a seeded row by display name when it has an xref or stable key: the ledger owns the lookup ([seeded rows carry a stable key](references/pitfalls.md)).
 - Seeding fields that `StateTransitions` writes (`workspace`, `runtime_status`, `last_error`): the transition owns them and the loader does not protect them ([seeded transition state](../../../docs/backend/guidelines.md#seeded-transition-state)).
 - A catalogue tier on `AppConfig` or a second registry, or `runtime/` model imports to resolve a seed: the source model owns the tier and the ledger owns resolution ([composition owners](../../../docs/backend/guidelines.md#composition-owners)).
-- Caveated REBAC subjects behind a grant: actor-scoped querysets have no caveat context, so `angee.E024` rejects them (`addons/angee/base/checks.py:37`) and grants are caveat-free (`grants.py:8`).
+- Caveated REBAC subjects behind a grant: actor-scoped querysets have no caveat context, so `angee.E024` rejects them (`src/angee/base/checks.py:37`) and grants are caveat-free (`grants.py:8`).
 
 ## Verify
 

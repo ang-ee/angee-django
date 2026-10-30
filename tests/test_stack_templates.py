@@ -703,7 +703,7 @@ def test_project_template_renders_root_agent_instructions() -> None:
     for contract in (
         "# Angee Project Host",
         "`INSTALLED_APPS` in `settings.yaml` is the roster and the only place it is declared",
-        "`{{ addon_namespace }}.<name>` under `addons/{{ addon_namespace }}/<name>/`",
+        "`{{ addon_namespace }}.<name>` under `src/{{ addon_namespace }}/<name>/`",
         "the arpee slot's `arp.*` addons",
         "`pyproject.toml` (native identity, requirements and capability tables)",
         "`web/` fragment declared with `defineBaseAddon`",
@@ -778,7 +778,7 @@ def test_local_django_baked_mode_uses_the_shared_environment() -> None:
     assert "uv sync" not in " ".join(stack["services"]["django"]["command"])
     assert stack["jobs"]["provision"]["command"][-3:] == ["provision", "--wait-db", "60"]
     command = stack["jobs"]["frontend-build"]["command"][-1]
-    assert '\"packages/*\",\"addons/angee/*/web\"' in command
+    assert '\"packages/*\",\"src/angee/*/web\"' in command
     assert "sources/angee" not in command
 
 
@@ -830,8 +830,8 @@ def test_local_stack_renders_single_caddy_frontend_ingress() -> None:
     frontend_build = stack["jobs"]["frontend-build"]
     assert frontend_build["depends_on"] == ["compose", "operator-schema"]
     assert "../angee-project/sources/angee/packages/*" in frontend_command
-    assert "../angee-project/sources/angee/addons/angee/*/web" in frontend_command
-    assert "../angee-project/addons/*/*/web" in frontend_command
+    assert "../angee-project/sources/angee/src/angee/*/web" in frontend_command
+    assert "../angee-project/src/*/*/web" in frontend_command
     assert frontend_build["mounts"] == ["source://app:/opt/angee-project"]
     assert "fs.cpSync" not in frontend_command
     assert "fs.symlinkSync" not in frontend_command
@@ -1010,7 +1010,7 @@ def _run_probe_command(tmp_path: Path, manage_source: str) -> subprocess.Complet
     """Run a one-shot command that captures a write through the given ``manage.py`` body."""
 
     (tmp_path / "manage.py").write_text(manage_source)
-    addon_dir = tmp_path / "addons"
+    addon_dir = tmp_path / "src"
     commands = addon_dir / "captureprobe" / "management" / "commands"
     commands.mkdir(parents=True)
     for package in (commands, commands.parent, commands.parent.parent):
@@ -1039,7 +1039,7 @@ def _run_probe_command(tmp_path: Path, manage_source: str) -> subprocess.Complet
         from tests.composed_host import boot
 
         root, target = map(Path, sys.argv[1:])
-        boot(root, target / "runtime", [target / "addons"], root_apps=["example.notes", "captureprobe"])
+        boot(root, target / "runtime", [target / "src"], root_apps=["example.notes", "captureprobe"])
         settings.MIGRATION_MODULES = {config.label: None for config in apps.get_app_configs()}
         call_command("migrate", run_syncdb=True, interactive=False, verbosity=0, skip_checks=True)
         call_command("rebac", "sync", verbosity=0)
@@ -1715,10 +1715,10 @@ def test_dev_stack_docker_mode_playwright_services_are_edge_routed() -> None:
     workspace = DEV_PNPM_WORKSPACE.read_text(encoding="utf-8")
     framework_globs = (
         '  - "workspaces/src/angee/packages/*"',
-        '  - "workspaces/src/angee/addons/angee/*/web"',
+        '  - "workspaces/src/angee/src/angee/*/web"',
     )
     full_profile_globs = (
-        '  - "workspaces/src/angee/examples/addons/*/*/web"',
+        '  - "workspaces/src/angee/examples/src/*/*/web"',
         '  - "workspaces/src/angee/examples/e2e"',
     )
     guard_index = workspace.index('{% if addons_profile == "full" %}')

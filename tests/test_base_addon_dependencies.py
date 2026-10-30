@@ -25,7 +25,7 @@ def _framework_projects() -> dict[str, dict[str, Any]]:
         for pattern in project["tool"]["uv"]["workspace"]["members"]
         for path in PROJECT_ROOT.glob(pattern)
         if path.is_dir() and (path / "pyproject.toml").is_file()
-        and path.is_relative_to(PROJECT_ROOT / "addons/angee")
+        and path.is_relative_to(PROJECT_ROOT / "src/angee")
     }
     assert members, "the framework collection must contain actual native package members"
     result = {}

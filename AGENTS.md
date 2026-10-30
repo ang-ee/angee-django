@@ -171,7 +171,7 @@ product specifics down into the framework. Every fact lives at its owning level.
 
 ```text
 .                    # consolidated framework source slot
-├── addons/          # angee.base foundation and capability addons; co-located web fragments
+├── src/          # angee.base foundation and capability addons; co-located web fragments
 ├── packages/        # schema-independent @angee/* packages and workshop/test tooling
 ├── examples/        # consumer addons and reference browser suite
 ├── templates/       # Copier project, stack, workspace, service, and addon sources

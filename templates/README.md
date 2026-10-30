@@ -10,7 +10,7 @@ copy of each one.
 | dir | kind | renders |
 |-----|------|---------|
 | `projects/` | `project` | a downstream host repo — `manage.py`, `settings.yaml`, the consumer-addon namespace, the web package; owns the project root |
-| `addons/` | `addon` | `web`: one complete source addon into `addons/<ns>/<label>/` — `pyproject.toml`, the abstract model and its ownership gate, `schema.py`, a demo resource row, a per-actor test under the addon's `tests/` (composed host, the default), and (optionally) the web fragment; `test_host=bare` instead renders the concrete bare-host test model and a `test_<label>.py` to move into the framework repository's `tests/`; `repository`: the root of a consumer addon repository — `AGENTS.md`, `CLAUDE.md`, the `addons/<ns>/` namespace. The operator lists but does not render addon templates; render them with Copier |
+| `addons/` | `addon` | `web`: one complete source addon into `src/<ns>/<label>/` — `pyproject.toml`, the abstract model and its ownership gate, `schema.py`, a demo resource row, a per-actor test under the addon's `tests/` (composed host, the default), and (optionally) the web fragment; `test_host=bare` instead renders the concrete bare-host test model and a `test_<label>.py` to move into the framework repository's `tests/`; `repository`: the root of a consumer addon repository — `AGENTS.md`, `CLAUDE.md`, the `src/<ns>/` namespace. The operator lists but does not render addon templates; render them with Copier |
 | `stacks/` | `stack` | a runnable `angee.yaml` the operator brings up on docker-compose / process-compose |
 | `workspaces/` | `workspace` | a set of sources + agentic config, materialized as files |
 | `services/` | `service` | one long-running service added to a stack |
@@ -162,7 +162,7 @@ Commit what you author; ignore what a tool regenerates:
   settings.py              # authored base.configure entrypoint
   settings.yaml            # INSTALLED_APPS (base) · DATABASE_URL → postgres
   AGENTS.md · CLAUDE.md    # stack-root ownership rules for coding agents
-  addons/<ns>/             # your addons
+  src/<ns>/                # your addons
   web/                     # your frontend
   runtime/<label>/migrations/ # reviewed native Django history beside models
   .copier-answers.yml · .gitignore

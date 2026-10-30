@@ -43,7 +43,7 @@ def test_state_field_constructor_and_descriptor_typing(tmp_path: Path) -> None:
     config = tmp_path / "mypy.ini"
     config.write_text(
         "[mypy]\nplugins = angee.base.typing\n"
-        f"mypy_path = {tmp_path},{root},{root / 'addons'}\ncache_dir = {tmp_path / 'cache'}\n"
+        f"mypy_path = {tmp_path},{root},{root / 'src'}\ncache_dir = {tmp_path / 'cache'}\n"
         "[mypy.plugins.django-stubs]\ndjango_settings_module = state_typing_settings\n"
     )
     declarations = '''\
@@ -98,7 +98,7 @@ def rejected(row: Row) -> None:
 ''')
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(
-        filter(None, (str(tmp_path), str(root), str(root / "addons"), env.get("PYTHONPATH")))
+        filter(None, (str(tmp_path), str(root), str(root / "src"), env.get("PYTHONPATH")))
     )
     env["DJANGO_SETTINGS_MODULE"] = "state_typing_settings"
     command = [sys.executable, "-m", "mypy", "--config-file", str(config)]

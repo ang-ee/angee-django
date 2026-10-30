@@ -18,15 +18,15 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / ".agents/skills/angee-design/references/owners.md"
-ADDONS = ROOT / "addons/angee"
+ADDONS = ROOT / "src/angee"
 FOUNDATION_MODULES = sorted(
     module
     for area in ("models", "fields")
     for module in (ADDONS / "base" / area).glob("*.py")
     if module.name != "__init__.py"
 )
-CITATION = re.compile(r"`(\w+)` ((?:addons|core/angee|packages|examples)/[\w./-]+):(\d+)")
-LOCATION = re.compile(r"(?<![\w/])((?:addons|core/angee|packages|examples)/[\w./-]+\.\w+)(?::(\d+))?")
+CITATION = re.compile(r"`(\w+)` ((?:src|packages|examples)/[\w./-]+):(\d+)")
+LOCATION = re.compile(r"(?<![\w/])((?:src|packages|examples)/[\w./-]+\.\w+)(?::(\d+))?")
 
 
 def owner_cells() -> list[str]:

@@ -30,7 +30,7 @@ def projects(root: Path) -> tuple[Path, ...]:
 def cohort(root: Path, members: tuple[Path, ...]) -> tuple[Path, ...]:
     """The collection and production framework packages share a release version."""
 
-    return (root, *(path for path in members if path.parent == root / "addons/angee"))
+    return (root, *(path for path in members if path.parent == root / "src/angee"))
 
 
 def update_consumers(root: Path, members: tuple[Path, ...], targets: tuple[Path, ...]) -> None:

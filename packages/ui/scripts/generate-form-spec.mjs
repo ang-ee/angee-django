@@ -6,10 +6,10 @@ import standaloneCode from "ajv/dist/standalone/index.js";
 import { build } from "esbuild";
 import { compile } from "json-schema-to-typescript";
 
-const source = new URL("../../../addons/angee/base/schemas/form_spec.schema.json", import.meta.url);
+const source = new URL("../../../src/angee/base/schemas/form_spec.schema.json", import.meta.url);
 const destination = new URL("../src/views/form/", import.meta.url);
 const schema = JSON.parse(await readFile(source, "utf8"));
-const banner = "/* Generated from addons/angee/base/schemas/form_spec.schema.json. Do not edit. */";
+const banner = "/* Generated from src/angee/base/schemas/form_spec.schema.json. Do not edit. */";
 const types = await compile(schema, "FormSpecDocument", {
   bannerComment: banner,
   unreachableDefinitions: true,

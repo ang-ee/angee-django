@@ -27,7 +27,7 @@ product rail.
 shows root apps and their sub-apps at most two levels; each app's own menu items
 belong in the top bar.
 
-**Framework addon** — a reusable capability shipped with Angee under `addons/`.
+**Framework addon** — a reusable capability shipped with Angee under `src/`.
 Foundation primitives belong to `angee.base`, HTTP serving policy to
 `angee.server`, and generic composition to the independent `django-compose`
 library. There is no separate Angee core package.
@@ -141,13 +141,13 @@ also accepts non-user REBAC subjects.
 converts it to the FK's Python type and returns no user for other subject types.
 
 **Changeset** — attribution for one logical write, owned by
-[`changeset()`](../addons/angee/provenance/context.py) and stored by the
-[provenance addon](../addons/angee/provenance/models.py).
+[`changeset()`](../src/angee/provenance/context.py) and stored by the
+[provenance addon](../src/angee/provenance/models.py).
 
 **Action / activity** — action uses FHIR AuditEvent's C/U/D verbs; activity
 classifies the logical work, including `pull`/`push` for sync, `import` for a
 one-shot import and `seed` for seed loads. The
-[`Changeset` enums](../addons/angee/provenance/models.py) own that vocabulary.
+[`Changeset` enums](../src/angee/provenance/models.py) own that vocabulary.
 
 **Write group** — an internal ephemeral identity for nested ORM dispatch. Its
 deduplication ends with the dispatch; successive writes in one changeset remain
@@ -158,7 +158,7 @@ distinct history events.
 `statements = StatementRecords(aspects=…)` gets a typed `<Model>Statement` table
 beside its history table, read through the subject like history rows and
 written only by `statements.set()` and the status verbs
-([owner](../addons/angee/provenance/statements.py)).
+([owner](../src/angee/provenance/statements.py)).
 
 **Aspect** — a declared field group of a canonical model, optionally with a
 typed member (a Handle, a counterparty), carrying its source precedence. The aspect is the unit of resolution; a value field belongs
@@ -319,19 +319,19 @@ contributes to fixed buckets, and Angee builds one Strawberry `Schema` per name.
 
 **Held reply** — an outbound draft awaiting operator approval or its scheduled
 release. Discarded and failed replies do not exclude another answer. See
-[posts reply policy](../addons/angee/posts/README.md).
+[posts reply policy](../src/angee/posts/README.md).
 
 **Reply hold** — a feed's operator-controlled release policy: approval-only,
 release after a duration, or queue immediately. See the
-[posts owner](../addons/angee/posts/models.py).
+[posts owner](../src/angee/posts/models.py).
 
 **Feed stream** — an independently ordered public-feed partition driven by
 integrate's shared stream engine; activity and history classify each record
-against the feed's live horizon. See [public feeds](../addons/angee/posts/README.md).
+against the feed's live horizon. See [public feeds](../src/angee/posts/README.md).
 
 **Delivery settlement** — messaging's reflection of provider acceptance or refusal
 into the outbound message's status, provider identity and retry schedule. See
-[the delivery owner](../addons/angee/messaging/delivery.py).
+[the delivery owner](../src/angee/messaging/delivery.py).
 
 **Workflow version** — an immutable published definition, including the
 normalized contracts of any child workflows it awaits. A run pins one version.

@@ -59,7 +59,7 @@ architecture decisions; they are not the current packaging recipe.
   engine is separate from the `provenance.contrib.angee` permission and replay
   adapters. HTTP, task, command and test boundaries are installed by the addon.
   GraphQL hosts without provenance retain native CRUD and expose no creation
-  idempotency argument. See the [addon contract](addons/angee/provenance/README.md).
+  idempotency argument. See the [addon contract](src/angee/provenance/README.md).
 - Model references follow Django's explicit model-package exports:
   `RecordRefMixin` and `DerivedFrom` are imported from `angee.base.models`;
   reference discovery and deletion hooks live in `angee.base.models.refs`.

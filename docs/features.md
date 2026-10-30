@@ -78,7 +78,7 @@ actually unique to your product.
 - **Knowledge** — a server-backed, permissioned, Obsidian-shape knowledge base:
   pages, typed properties, wikilink/embed edges, canvases. "Index, don't grep" —
   every change becomes queryable rows. Knowledge provides a retrieval seam;
-  [`knowledge_graph_pgvector`](../addons/angee/knowledge_graph_pgvector/README.md)
+  [`knowledge_graph_pgvector`](../src/angee/knowledge_graph_pgvector/README.md)
   is a skeleton plugin using lexical search, with no embeddings. Vector and
   graph retrieval remain future work.
 - **Integrate** — third-party systems: a vendor catalogue, accounts, stateless
@@ -102,9 +102,9 @@ actually unique to your product.
   rechecks the version's publisher against those grants. Trigger enablement
   discloses prospective grants and run readers; retained run-input evidence is
   projected as record references with per-reader redaction.
-- **MCP** — [generated, bounded read tools per resource](../addons/angee/mcp/resource_tools.py)
+- **MCP** — [generated, bounded read tools per resource](../src/angee/mcp/resource_tools.py)
   plus addon-curated `mcp_tools.py` tools, all scoped to the calling actor.
-  The [compiler](../addons/angee/mcp/graphql.py) builds tool documents from the
+  The [compiler](../src/angee/mcp/graphql.py) builds tool documents from the
   composed GraphQL schema when the server starts; the documents are not persisted.
 - **Agentic resource planning** *(Planned)* — consumer-owned capabilities composed
   over shared primitives such as `money`, `sequence`, and `uom`.
@@ -119,8 +119,8 @@ fragment from an install resource declared with kind
 fragments by composed addon order and then `sequence`, publishes the composed
 version, and leaves the base draft unchanged. The base resource fingerprint
 includes the contributions, so changing either side republishes. Unknown points
-and duplicate node keys stop the load. [`Definition`](../addons/angee/workflows/definition.py) owns
-the graph splice and [`WorkflowExtensionResourceKind`](../addons/angee/workflows/resources.py)
+and duplicate node keys stop the load. [`Definition`](../src/angee/workflows/definition.py) owns
+the graph splice and [`WorkflowExtensionResourceKind`](../src/angee/workflows/resources.py)
 owns the composer-time declaration seam; serving code has no extension registry.
 
 ## How you build & ship

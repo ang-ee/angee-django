@@ -13,13 +13,13 @@ use the native compiler owner for generic Django composition.
 
 | Concern | Owner |
 |---|---|
-| Settings/deployment overlay | `addons/angee/base/conf/__init__.py` and `django_compose.conf` |
-| Angee defaults and native compiler integration selection | `addons/angee/base/autoconfig.py` |
-| Package capability facts and conventional contributions | `addons/angee/base/addons.py` |
-| Shared callables, paths, serialization and model primitives | `addons/angee/base/` |
+| Settings/deployment overlay | `src/angee/base/conf/__init__.py` and `django_compose.conf` |
+| Angee defaults and native compiler integration selection | `src/angee/base/autoconfig.py` |
+| Package capability facts and conventional contributions | `src/angee/base/addons.py` |
+| Shared callables, paths, serialization and model primitives | `src/angee/base/` |
 | Generic closure, declarations, build, receipt, migration and launcher | Installed `django_compose` public modules |
 | Database preparation and readiness | `django_compose.provision` |
-| Optional HTTP policy and Uvicorn commands | `addons/angee/server/` |
+| Optional HTTP policy and Uvicorn commands | `src/angee/server/` |
 | REBAC, resource and web projections | Their owning addon `build.py` integrations |
 | Native addon layout and metadata defaults | Published [hatch-angee](https://github.com/ang-ee/hatch-angee) over Hatchling |
 | React package boundaries | `packages/app/src/architecture-guardrails.test.ts` |

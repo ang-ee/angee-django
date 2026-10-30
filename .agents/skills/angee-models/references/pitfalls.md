@@ -21,9 +21,9 @@ and [Direct record access](../../../../docs/backend/guidelines.md#direct-record-
   `transaction.on_commit`, OIDC login contains its handle claim, and both log
   failures and let the foreign write continue; never let a best-effort
   enrichment roll a foreign write back, and never defer IAM's own person
-  linkage ([`person_created`](../../../../addons/angee/iam/events.py) fires before commit).
+  linkage ([`person_created`](../../../../src/angee/iam/events.py) fires before commit).
 - **IAM stores the canonical person email.** `bulk_create` and queryset
-  `update()` bypass [`UserManager.normalize_email`](../../../../addons/angee/iam/models.py);
+  `update()` bypass [`UserManager.normalize_email`](../../../../src/angee/iam/models.py);
   normalize before writing email through them
   ([persistence contract](../../../../docs/backend/guidelines.md#persistence-primitives)).
 - **Integration children use the ordinary emitted Django MRO.** The composer
@@ -40,7 +40,7 @@ and [Direct record access](../../../../docs/backend/guidelines.md#direct-record-
   Lifecycle guards and side effects that must survive those paths belong on Django
   signals calling the owning model rules. Agents' teardown and active-turn guards
   use `pre_delete`; service-user deactivation uses `post_delete`. See the
-  [agents receivers](../../../../addons/angee/agents/signals.py).
+  [agents receivers](../../../../src/angee/agents/signals.py).
 - **Django 6 refreshes `F()`/expression fields back onto the instance via
   `UPDATE ... RETURNING` before `post_save`.** A `save(update_fields=…)` whose
   fields hold expressions (`F("count") + 1`, `Greatest(…)`) leaves the instance

@@ -699,7 +699,7 @@ definition auth/user {}
 definition auth/group { relation member: auth/user }
 definition angee/role { relation member: auth/user | auth/group#member }
 """
-_OPERATOR_ZED = Path(__file__).resolve().parents[1] / "addons/angee/operator/permissions.zed"
+_OPERATOR_ZED = Path(__file__).resolve().parents[1] / "src/angee/operator/permissions.zed"
 
 
 @pytest.mark.django_db

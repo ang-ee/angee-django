@@ -33,7 +33,7 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
             (
                 str(tmp_path),
                 str(root),
-                str(root / "addons"),
+                str(root / "src"),
                 env.get("PYTHONPATH"),
             ),
         )
@@ -55,7 +55,7 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
     config = tmp_path / "mypy.ini"
     config.write_text(
         "[mypy]\nplugins = angee.base.typing,angee.provenance.typing\n"
-        f"mypy_path = {tmp_path},{root},{root / 'addons'}\n"
+        f"mypy_path = {tmp_path},{root},{root / 'src'}\n"
         "ignore_missing_imports = True\ncache_dir = /dev/null\n"
         "[mypy-simple_history.*,django_sqids.*]\nfollow_untyped_imports = True\n"
         "[mypy.plugins.django-stubs]\ndjango_settings_module = history_settings\n"

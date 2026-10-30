@@ -15,7 +15,7 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - "angee/**"
-      - "addons/**"
+      - "src/**"
       - "packages/**"
       - "package.json"
       - "pnpm-workspace.yaml"

@@ -1087,6 +1087,6 @@ class DecisionRecordTests(IntakeAccessCase):
         schema = GraphQLSchemas.from_discovery().build("console")._schema
         root = Path(__file__).resolve().parents[1]
         for addon in ("intake", "iam"):
-            path = root / "addons" / "angee" / addon / "web" / "src" / "documents.ts"
+            path = root / "src" / "angee" / addon / "web" / "src" / "documents.ts"
             document = parse("\n".join(re.findall(r"graphql\(`(.*?)`\)", path.read_text(), flags=re.S)))
             self.assertEqual(validate(schema, document), [], addon)

@@ -2036,7 +2036,7 @@ def test_google_preset_owns_the_subject_bearing_profile_endpoint() -> None:
 def test_google_seed_discovers_the_preset_profile_without_a_conflicting_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    seed_file = Path(__file__).parents[1] / "addons/angee/integrate/resources/install/010_integrate.oauthclient.yaml"
+    seed_file = Path(__file__).parents[1] / "src/angee/integrate/resources/install/010_integrate.oauthclient.yaml"
     seed = next(row for row in yaml.safe_load(seed_file.read_text()) if row["xref"] == "oauth_gemini")
     client = _stub_oauth_client(**{key: value for key, value in seed.items() if key != "xref"})
     endpoint = GoogleType.effective_defaults()["userinfo_endpoint"]

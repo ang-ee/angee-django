@@ -13,7 +13,7 @@ the linked source and the installed `django_compose` modules.
 1. **Install distributions.** Native `uv sync --locked` resolves project and
    per-addon requirements. `uv build` builds archives. Neither composes a host.
 2. **Load authored settings.** The project's `settings.py` calls
-   [`angee.base.conf.configure`](../addons/angee/base/conf/__init__.py).
+   [`angee.base.conf.configure`](../src/angee/base/conf/__init__.py).
    It loads deployment inputs and delegates once to `django_compose.conf.configure`.
    The compiler derives the enabled closure from the project's `INSTALLED_APPS`.
 3. **Compose explicitly.** The rendered `manage.py` calls
@@ -31,7 +31,7 @@ the linked source and the installed `django_compose` modules.
 
 Development `runserver` uses the native compiler launcher to compose in a fresh
 process before each reloader child. Django owns the reload loop; Angee's
-[`server command`](../addons/angee/server/management/commands/runserver.py)
+[`server command`](../src/angee/server/management/commands/runserver.py)
 serves the child with Uvicorn. Production serving consumes prepared output.
 
 ## Provision Ownership Upgrade
@@ -55,20 +55,20 @@ Custom integrations consume `django_compose.components` and
 |---|---|
 | Distribution requirements, entry points, editable installs and locks | Native Python metadata, uv and Hatchling |
 | Component providers, requirement closure and Django app identity | `django_compose.components` and Django `AppConfig` |
-| Deployment YAML, `.env`, service URLs and Angee defaults | [`angee.base.conf`](../addons/angee/base/conf/__init__.py) and [`base.autoconfig`](../addons/angee/base/autoconfig.py) |
+| Deployment YAML, `.env`, service URLs and Angee defaults | [`angee.base.conf`](../src/angee/base/conf/__init__.py) and [`base.autoconfig`](../src/angee/base/autoconfig.py) |
 | Settings merge, structural provenance and immutable snapshot | `django_compose.conf` and `django_compose.snapshot` |
-| Capability-owned package facts | [`angee.base.addons`](../addons/angee/base/addons.py) reads packaged TOML through the native installed index |
+| Capability-owned package facts | [`angee.base.addons`](../src/angee/base/addons.py) reads packaged TOML through the native installed index |
 | Source declarations, model composition and collision checks | `django_compose.models.Composable`, `model_composition`, and Django |
 | Build/check publication, artifact receipt and serving verification | `django_compose.build`, `artifacts` and `serving` |
 | Migration binding, drop guards and retained history | `django_compose.migrations` and native Django migration commands |
-| REBAC projection and additive schema fragments | [`PermissionIntegration`](../addons/angee/base/build.py) |
-| Source-local catalogue facts and resource retirement exemptions | [`CatalogueIntegration`](../addons/angee/resources/build.py) |
-| Web manifest and Tailwind projection | [`WebIntegration`](../addons/angee/web/build.py) |
+| REBAC projection and additive schema fragments | [`PermissionIntegration`](../src/angee/base/build.py) |
+| Source-local catalogue facts and resource retirement exemptions | [`CatalogueIntegration`](../src/angee/resources/build.py) |
+| Web manifest and Tailwind projection | [`WebIntegration`](../src/angee/web/build.py) |
 | Database readiness and optional app preparation hooks | `django_compose.provision` |
 | Explicit URL and ASGI contributions | `django_compose.urls` and `django_compose.asgi` |
-| HTTP defaults, Uvicorn commands and connection policy | [`angee.server`](../addons/angee/server/) |
-| GraphQL schema, SDL and WebSocket policy | [`angee.graphql`](../addons/angee/graphql/); ready-phase [`SchemaIntegration`](../addons/angee/graphql/sdl.py) emits SDL/metadata during compose |
-| MCP tools, HTTP mount and lifespan | [`angee.mcp`](../addons/angee/mcp/) |
+| HTTP defaults, Uvicorn commands and connection policy | [`angee.server`](../src/angee/server/) |
+| GraphQL schema, SDL and WebSocket policy | [`angee.graphql`](../src/angee/graphql/); ready-phase [`SchemaIntegration`](../src/angee/graphql/sdl.py) emits SDL/metadata during compose |
+| MCP tools, HTTP mount and lifespan | [`angee.mcp`](../src/angee/mcp/) |
 | In-place addon layout and metadata defaults | Published [hatch-angee](https://github.com/ang-ee/hatch-angee) backend |
 
 ## Settings Bootstrap
@@ -132,7 +132,7 @@ of model imports. The compiler merges them in enabled dependency order.
 
 An addon contributes its own implementation registry entries and hooks. It does
 not replace project roots or generated-output identity. Each capability owns
-its callable validation and invocation; [`angee.base.hooks`](../addons/angee/base/hooks.py)
+its callable validation and invocation; [`angee.base.hooks`](../src/angee/base/hooks.py)
 owns the shared dotted-callable mechanics. Bare source-model tests use ordinary
 Django settings with explicit registry inputs; they do not run a private settings
 composer.

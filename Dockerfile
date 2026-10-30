@@ -80,9 +80,8 @@ CMD ["python", "-c", "import django, sys; print('django-angee-base ready — pyt
 FROM deps AS runtime
 WORKDIR /opt/angee-src
 COPY --chown=angee:angee pyproject.toml uv.lock README.md LICENSE LICENSE.GPL ./
-COPY --chown=angee:angee tools ./tools
-COPY --chown=angee:angee addons ./addons
-COPY --chown=angee:angee examples/addons ./examples/addons
+COPY --chown=angee:angee src ./src
+COPY --chown=angee:angee examples/src ./examples/src
 COPY --chown=angee:angee tests/blankchoices ./tests/blankchoices
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable --extra postgres \
@@ -99,5 +98,5 @@ RUN corepack enable
 WORKDIR /opt/angee-src
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY packages ./packages
-COPY addons ./addons
+COPY src ./src
 RUN pnpm install --frozen-lockfile

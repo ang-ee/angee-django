@@ -3,7 +3,7 @@
 The operator lists addon templates but does not render them, so these render
 with the ``copier`` CLI when it is on the path and otherwise pin the template
 sources: the question set, the rendered file set and the shapes that the
-reference addons (``addons/angee/tags``, ``examples/addons/example/notes``)
+reference addons (``src/angee/tags``, ``examples/src/example/notes``)
 establish.
 """
 
@@ -123,7 +123,7 @@ def test_repository_template_renders_a_consumer_addon_root() -> None:
     copier = yaml.safe_load((REPOSITORY_TEMPLATE / "copier.yml").read_text(encoding="utf-8"))
     assert copier["_angee"]["kind"] == "addon"
     assert copier["_preserve_symlinks"] is True
-    assert _template_files(REPOSITORY_TEMPLATE) == {"AGENTS.md", "CLAUDE.md", "addons/{{ addon_namespace }}/.gitkeep"}
+    assert _template_files(REPOSITORY_TEMPLATE) == {"AGENTS.md", "CLAUDE.md", "src/{{ addon_namespace }}/.gitkeep"}
     claude = REPOSITORY_TEMPLATE / "template" / "CLAUDE.md"
     assert claude.is_symlink() and claude.readlink() == Path("AGENTS.md")
 
@@ -139,8 +139,8 @@ def test_repository_template_renders_a_consumer_addon_root() -> None:
         "Product vocabulary stays in the addon.",
         "## Builder Role",
         "`../angee/.agents/skills/<skill>/SKILL.md`",
-        "`../angee/addons/angee/<addon>/skills/<guide>/SKILL.md`",
-        "`../angee/addons/angee/jobs/skills/jobs-tasks/SKILL.md`",
+        "`../angee/src/angee/<addon>/skills/<guide>/SKILL.md`",
+        "`../angee/src/angee/jobs/skills/jobs-tasks/SKILL.md`",
         f"1. [`angee-design`]({skill.format(name='angee-design')})",
         f"2. [`angee-addon`]({skill.format(name='angee-addon')})",
         "`test_host=composed`",
@@ -161,7 +161,7 @@ def test_repository_template_renders_a_consumer_addon_root() -> None:
 
 
 def _render_addon(tmp_path: Path, *, include_web: bool, test_host: str) -> Path:
-    """Render the addon template as ``acme.contacts`` into ``tmp_path/addons/acme/contacts``."""
+    """Render the addon template as ``acme.contacts`` into ``tmp_path/src/acme/contacts``."""
 
     copier = shutil.which("copier")
     if copier is None:
@@ -169,7 +169,7 @@ def _render_addon(tmp_path: Path, *, include_web: bool, test_host: str) -> Path:
     # Copier reads a template inside a git checkout at a git ref; copy it out to render the working tree.
     source = tmp_path / "template"
     shutil.copytree(ADDON_TEMPLATE, source, symlinks=True)
-    target = tmp_path / "addons" / "acme" / "contacts"
+    target = tmp_path / "src" / "acme" / "contacts"
     result = subprocess.run(
         [
             copier,
@@ -262,7 +262,7 @@ import importlib
 import os
 import sys
 
-sys.path[:0] = [{addons!r}, {core!r}, {root!r}, {framework_addons!r}, {example_addons!r}]
+sys.path[:0] = [{addons!r}, {root!r}, {framework_addons!r}, {example_addons!r}]
 os.environ["DJANGO_SETTINGS_MODULE"] = "tests.settings"
 
 import django
@@ -306,9 +306,8 @@ def test_rendered_addon_boots_on_the_bare_django_host(tmp_path: Path, test_host:
     script = textwrap.dedent(BOOT_SCRIPT).format(
         addons=str(target.parents[1]),
         root=str(ROOT),
-        core=str(ROOT / "core"),
-        framework_addons=str(ROOT / "addons"),
-        example_addons=str(ROOT / "examples" / "addons"),
+        framework_addons=str(ROOT / "src"),
+        example_addons=str(ROOT / "examples" / "src"),
         test_host=test_host,
     )
     result = subprocess.run(

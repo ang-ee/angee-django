@@ -19,7 +19,7 @@ an owner. Normal application data changes belong to their addon.
 | Artifact publication and serving verification | `django_compose.build`, `artifacts`, `serving` |
 | Transition binding, native history, guarded drops and retirement | `django_compose.migrations` and native management commands |
 | Database prep, per-app hooks and readiness | `django_compose.provision` |
-| HTTP child and production worker serving | `addons/angee/server/management/commands/` |
+| HTTP child and production worker serving | `src/angee/server/management/commands/` |
 | Dependency order and held service recovery | Stack `angee.yaml` jobs; native Go operator |
 
 ## Work

@@ -100,9 +100,9 @@ jobs:
         with:
           python-version: ${{ inputs.python-version }}
       - run: uv run --locked python -m ruff check . --no-cache
-      - run: uv run --locked python -m mypy addons
+      - run: uv run --locked python -m mypy src
         env:
-          PYTHONPATH: addons
+          PYTHONPATH: src
 
   # The suite runs as six contiguous shards of equal stored time
   # (.test_durations, pytest-split); a test missing from it still runs in one.
@@ -245,7 +245,7 @@ jobs:
   # compose it (native compose + prebuilt schema check + web codegen — no database needed), then
   # typecheck/test addon fragments (the stack root's runtime/ is the @angee/gql
   # fixture), and run the optional bridge source tests.
-  # The consolidated checkout supplies packages, addons, examples, tools, and
+  # The consolidated checkout supplies packages, src, examples, and
   # templates. Only the optional full-profile bridges remain external.
   # Consumer collections span independent PostgreSQL hosts; the first group
   # also checks lint, types and frontend fragments. The stack job keeps one verdict.
@@ -353,7 +353,7 @@ jobs:
           path = Path("pnpm-workspace.yaml")
           workspace = yaml.safe_load(path.read_text())
           workspace["packages"].extend(
-              "workspaces/src/" + source["path"] + "/addons/*/*/web" for source in sources
+              "workspaces/src/" + source["path"] + "/src/*/*/web" for source in sources
           )
           path.write_text(yaml.safe_dump(workspace, sort_keys=False))
           # Native uv reads each collection's pyproject and workspace sources.
@@ -438,11 +438,11 @@ jobs:
               str(typing_root), str(framework), os.environ.get("PYTHONPATH"),
           )))
           os.environ["MYPYPATH"] = os.pathsep.join(filter(None, (
-              str(typing_root), str(slot / "addons"), os.environ.get("MYPYPATH"),
+              str(typing_root), str(slot / "src"), os.environ.get("MYPYPATH"),
           )))
           subprocess.run([
               sys.executable, "-m", "mypy", "--config-file", str(config),
-              str(slot / "addons"),
+              str(slot / "src"),
           ], cwd=framework, check=True)
           PY
       - name: Size the PostgreSQL lock table for consumer test schemas
@@ -513,8 +513,8 @@ jobs:
           CONSUMER_PATH: ${{ inputs.consumer-path }}
         run: |
           if [ -n "$CONSUMER_PATH" ]; then
-            pnpm -r --fail-if-no-match --filter "./workspaces/src/$CONSUMER_PATH/addons/**" typecheck
-            pnpm -r --fail-if-no-match --filter "./workspaces/src/$CONSUMER_PATH/addons/**" test
+            pnpm -r --fail-if-no-match --filter "./workspaces/src/$CONSUMER_PATH/src/**" typecheck
+            pnpm -r --fail-if-no-match --filter "./workspaces/src/$CONSUMER_PATH/src/**" test
           else
             pnpm -r typecheck
             pnpm -r test

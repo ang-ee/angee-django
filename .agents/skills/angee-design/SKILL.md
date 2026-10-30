@@ -33,8 +33,8 @@ reviewers run where the gate or the chosen workflow (`slice`) requires them.
 
 Read in this order and record what each answers: `references/owners.md`
 (`grep -i <keyword>`, then the owner's docstring at the cited `path:line` and the
-linked rule); the nearest two addons under `addons/angee/` carrying the same kind
-of fact, plus `examples/addons/example/notes` as the consumer-level reference;
+linked rule); the nearest two addons under `src/angee/` carrying the same kind
+of fact, plus `examples/src/example/notes` as the consumer-level reference;
 [docs/stack.md](../../../docs/stack.md#backend) for the library that owns the
 concern, its native API before any helper; the sibling slots for the same
 concern and for consumers of any contract the feature changes.
@@ -47,7 +47,7 @@ concern and for consumers of any contract the feature changes.
 2. **Look each fact up.** For every line, `grep -i` the keywords in [references/owners.md](references/owners.md). On a hit, read the owner's docstring and the governing rule, then write the owner symbol in the third column and the applicability condition that admits it. If the condition does not hold (archive is not trash; user-named stages are not code-owned states; a row-selected impl is not a closed `TextChoices`), the hit is evidence for the neighbouring owner, not a licence for a new one.
    **Owner rule:** the index points; the linked rule decides ([owner index](references/owners.md)). When the docstring and the guide disagree, [Reconcile Code, Docs, And Tests](../../../docs/guidelines.md#reconcile-code-docs-and-tests) applies: read the implementing owner and its tests, and do not pick whichever is convenient.
 
-3. **Search two nearby addons and the sibling repositories.** `rg -n "<concept>|<column>|<verb>" addons/angee/<a> addons/angee/<b> examples/addons` and the same in `../angee-arp ../angee-messaging-bridges` when present. Record what exists: the owner to compose, or the concrete gap (which native extension point of which owner does not cover this fact). Run the collision sweep on every new name: `rg -in "<word>|<word family>" addons docs packages` — a word with an existing meaning is dead.
+3. **Search two nearby addons and the sibling repositories.** `rg -n "<concept>|<column>|<verb>" src/angee/<a> src/angee/<b> examples/src` and the same in `../angee-arp ../angee-messaging-bridges` when present. Record what exists: the owner to compose, or the concrete gap (which native extension point of which owner does not cover this fact). Run the collision sweep on every new name: `rg -in "<word>|<word family>" src docs packages` — a word with an existing meaning is dead.
    **Owner rule:** [DRY](../../../docs/guidelines.md#dont-repeat-yourself-dry) applies when an existing owner already provides the capability: compose it even for one caller and name any gap at that owner. [Put Behavior on the Owning Object](../../../docs/guidelines.md#put-behavior-on-the-owning-object) applies when no participant owns a cross-owner rule: the smallest addon-local service or use case orchestrates the owners, which is composition, not a workaround. Similar code with different intent stays separate and names the difference.
 
 4. **Decide the level** per [Repository Role](../../../AGENTS.md#repository-role):
@@ -65,7 +65,7 @@ concern and for consumers of any contract the feature changes.
    ```markdown
    ## Owner map — <feature>
    | fact | owner (symbol, module) | composes / extends | applicability quoted from |
-   | hidden after pay | ArchiveMixin, base.models.trash | composes | `ArchiveMixin` docstring, addons/angee/base/models/trash.py |
+   | hidden after pay | ArchiveMixin, base.models.trash | composes | `ArchiveMixin` docstring, src/angee/base/models/trash.py |
    | line items | HasuraLines + RowLockMixin | composes | frontend:1527-1540 |
    Level: consumer addon `<name>` · Dependency: none new · Names: swept `<words>`
    Thin caller: <each dispatching entrypoint (resolver, command, route, page) → the owner holding the rule it calls>
@@ -92,7 +92,7 @@ concern and for consumers of any contract the feature changes.
 - Walking `parent` in Python or a recursive CTE → `HierarchyMixin`; [Stack: backend](../../../docs/stack.md#backend) "Tree library choice".
 - A dotted-path column, `import_string` from writable data, an entry point or a private registry dict → `ImplClassField` + its base's named settings mapping; [Stack: backend](../../../docs/stack.md#backend) "Implementation-registry choice".
 - Reading `os.environ` or a private settings parser → `autoconfig.py` `SETTINGS`; [Autoconfig](../../../docs/composer.md#autoconfig).
-- A permission decision in a resolver, in React or in a Zed caveat → the model's Zed plus `authorized_permission_target`; [Boundary leaks](../../../docs/guidelines.md#boundary-leaks-and-detail-driven-policy), `angee.E024` (`addons/angee/base/checks.py:31-37`).
+- A permission decision in a resolver, in React or in a Zed caveat → the model's Zed plus `authorized_permission_target`; [Boundary leaks](../../../docs/guidelines.md#boundary-leaks-and-detail-driven-policy), `angee.E024` (`src/angee/base/checks.py:31-37`).
 - A hand-rolled page, table or form → `ListView`/`RowsListView`/`FormView` and `registerForm`; [Frontend rules](../../../docs/frontend/guidelines.md#rules) **Routes and pages stay thin**.
 
 ## Verify
@@ -123,5 +123,5 @@ that names a copy, a wrapper or an unowned fact.
 - [AGENTS.md — Architecture Gate](../../../AGENTS.md#architecture-gate), [Repository Role](../../../AGENTS.md#repository-role)
 - [docs/guidelines.md — Put Behavior on the Owning Object](../../../docs/guidelines.md#put-behavior-on-the-owning-object), [Keep Policy Above Detail](../../../docs/guidelines.md#keep-policy-above-detail)
 - [docs/backend/guidelines.md — Rules](../../../docs/backend/guidelines.md#rules), [docs/frontend/guidelines.md — Component ontology](../../../docs/frontend/guidelines.md#component-ontology)
-- capability guides beside the engine a feature extends, loaded by path from a source checkout: [mcp-tools](../../../addons/angee/mcp/skills/mcp-tools/SKILL.md), [jobs-tasks](../../../addons/angee/jobs/skills/jobs-tasks/SKILL.md), [integrate-bridges](../../../addons/angee/integrate/skills/integrate-bridges/SKILL.md), [workflow-definitions](../../../addons/angee/workflows/skills/workflow-definitions/SKILL.md), [provenance-attribution](../../../addons/angee/provenance/skills/provenance-attribution/SKILL.md), [agent-composition](../../../addons/angee/agents/skills/agent-composition/SKILL.md); other engines keep only `addons/angee/<addon>/README.md`
+- capability guides beside the engine a feature extends, loaded by path from a source checkout: [mcp-tools](../../../src/angee/mcp/skills/mcp-tools/SKILL.md), [jobs-tasks](../../../src/angee/jobs/skills/jobs-tasks/SKILL.md), [integrate-bridges](../../../src/angee/integrate/skills/integrate-bridges/SKILL.md), [workflow-definitions](../../../src/angee/workflows/skills/workflow-definitions/SKILL.md), [provenance-attribution](../../../src/angee/provenance/skills/provenance-attribution/SKILL.md), [agent-composition](../../../src/angee/agents/skills/agent-composition/SKILL.md); other engines keep only `src/angee/<addon>/README.md`
 - skills: `slice`, `angee-workspace`; command: `lift` (reconstructing from another repo)

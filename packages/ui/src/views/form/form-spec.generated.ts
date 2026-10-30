@@ -1,4 +1,4 @@
-/* Generated from addons/angee/base/schemas/form_spec.schema.json. Do not edit. */
+/* Generated from src/angee/base/schemas/form_spec.schema.json. Do not edit. */
 
 export type FormSpecDocument = FormSpecWire & {
   type?: "object";

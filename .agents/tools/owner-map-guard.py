@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Advisory Claude Code ``PreToolUse`` hook for ``Edit|Write|MultiEdit``.
 
-On the first source edit of a session under ``addons/``, ``packages/``,
-``angee/`` or ``examples/`` it adds a reminder to run ``angee-design`` and write
+On the first source edit of a session under ``src/``, ``packages/``,
+or ``examples/`` it adds a reminder to run ``angee-design`` and write
 the owner map before continuing. Paths are classified relative to the project
 root (``$CLAUDE_PROJECT_DIR``, else the nearest ancestor of the event ``cwd``
 holding ``AGENTS.md`` and ``.agents/``); a relative ``file_path`` resolves
@@ -20,7 +20,7 @@ import tempfile
 from fnmatch import fnmatch
 from pathlib import Path
 
-AREAS = ("addons", "packages", "angee", "examples")
+AREAS = ("src", "packages", "examples")
 COLOCATED = ("*.test.*", "*.spec.*", "*.stories.*")
 REMINDER = (
     "Architecture Gate: this is the first source edit of the session.\n"

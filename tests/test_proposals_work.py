@@ -311,7 +311,7 @@ class DenormalizedProposalsWorkTests(ProposalsWorkTests):
 
 
 def test_proposals_work_manifest():
-    addon = Path(__file__).resolve().parents[1] / "addons/angee/proposals_work"
+    addon = Path(__file__).resolve().parents[1] / "src/angee/proposals_work"
     manifest = tomllib.loads((addon / "pyproject.toml").read_text())
     assert {Requirement(requirement).name for requirement in manifest["project"]["dependencies"]} >= {
         "angee-proposals", "angee-work", "angee-web",

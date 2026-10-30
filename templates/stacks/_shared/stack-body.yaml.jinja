@@ -149,7 +149,7 @@ sources:
     path: {{ framework_source }}
   # The consolidated framework source. `angee dev` materializes its clone cache
   # and cuts the `src` workspace's one framework worktree from it. The same
-  # checkout owns core, addons, packages, examples, and templates. With
+  # checkout owns src, packages, examples, and templates. With
   # sources_home set, every git cache lives under that machine-wide directory,
   # named after its repository, and is shared by every stack on the machine;
   # empty keeps the per-stack cache under sources/.
@@ -321,8 +321,8 @@ jobs:
       - "-c"
       - >-
         cd /opt/angee-src
-{% if framework == "source" %}        && pnpm config set packages '["../angee-project/sources/angee/packages/*","../angee-project/sources/angee/addons/angee/*/web","../angee-project/sources/angee-messaging-bridges/addons/angee/*/web","../angee-project/addons/*/*/web","../angee-project/{{ web_path }}"]' --json --location project
-        && pnpm config set globalPnpmfile {{ container_project_dir }}/sources/angee/packages/scripts/pnpm-policy.cjs --location project{% else %}        && pnpm config set packages '["packages/*","addons/angee/*/web","../angee-project/addons/*/*/web","../angee-project/{{ web_path }}"]' --json --location project{% endif %}
+{% if framework == "source" %}        && pnpm config set packages '["../angee-project/sources/angee/packages/*","../angee-project/sources/angee/src/angee/*/web","../angee-project/sources/angee-messaging-bridges/src/angee/*/web","../angee-project/src/*/*/web","../angee-project/{{ web_path }}"]' --json --location project
+        && pnpm config set globalPnpmfile {{ container_project_dir }}/sources/angee/packages/scripts/pnpm-policy.cjs --location project{% else %}        && pnpm config set packages '["packages/*","src/angee/*/web","../angee-project/src/*/*/web","../angee-project/{{ web_path }}"]' --json --location project{% endif %}
         && pnpm install
         && pnpm --config.verify-deps-before-run=false --filter ./../angee-project/{{ web_path }} --fail-if-no-match run codegen
         && pnpm --config.verify-deps-before-run=false --filter ./../angee-project/{{ web_path }} --fail-if-no-match run build{% if sentry_web_dsn %}

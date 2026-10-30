@@ -153,7 +153,7 @@ def test_graphql_startup_discovers_publishers_without_building_schema(tmp_path: 
     )
     env = dict(os.environ)
     env.pop("DJANGO_SETTINGS_MODULE", None)
-    python_path = [str(tmp_path), str(root), str(root / "addons")]
+    python_path = [str(tmp_path), str(root), str(root / "src")]
     if env.get("PYTHONPATH"):
         python_path.append(env["PYTHONPATH"])
     env["PYTHONPATH"] = os.pathsep.join(python_path)

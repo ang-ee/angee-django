@@ -269,8 +269,8 @@ standard palette/type/shape controls; define theme-specific options only when
 their inputs have different meaning.
 
 The complete consumer example is
-[`examples/addons/example/theme`](../../examples/addons/example/theme). The
-framework catalogue under `addons/angee/theme_*` shows fixed, asset-bearing and
+[`examples/src/example/theme`](../../examples/src/example/theme). The
+framework catalogue under `src/angee/theme_*` shows fixed, asset-bearing and
 configurable variants.
 
 ## Build outputs and migration

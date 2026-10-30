@@ -101,14 +101,14 @@ host fixtures must use process-local connections or pytest's worker-local
 ### Source-addon Test Models
 
 Share source-addon compositions through their owning test apps:
-[`angee.resources.testing`](../addons/angee/resources/testing/__init__.py),
-[`angee.workflows.testing`](../addons/angee/workflows/testing/__init__.py), and
-[`angee.integrate.testing`](../addons/angee/integrate/testing/__init__.py). Their
+[`angee.resources.testing`](../src/angee/resources/testing/__init__.py),
+[`angee.workflows.testing`](../src/angee/workflows/testing/__init__.py), and
+[`angee.integrate.testing`](../src/angee/integrate/testing/__init__.py). Their
 package docstrings own the adoption contract. Other reusable concrete
-compositions, including [`decisions`](../addons/angee/decisions/testing/models.py)
-and [`messaging`](../addons/angee/messaging/testing/models.py), register once
+compositions, including [`decisions`](../src/angee/decisions/testing/models.py)
+and [`messaging`](../src/angee/messaging/testing/models.py), register once
 through imports in the root conftest before database setup. The framework-generic
-[`composed_tables`](../addons/angee/base/testing/fixtures.py) fixture uses native transactional
+[`composed_tables`](../src/angee/base/testing/fixtures.py) fixture uses native transactional
 isolation and synchronizes REBAC after each flush; use the native `db` fixture
 when a test needs neither transaction behavior nor permission synchronization.
 Composed hosts also install their schema during native database setup. Register
@@ -116,11 +116,11 @@ Composed hosts also install their schema during native database setup. Register
 that loads it explicitly must pass `-p django -p angee.base.testing.fixtures` in that
 order so pytest-django cannot shadow the shared `django_db_setup` override.
 Hosts installing provenance also register
-[`angee.provenance.testing.fixtures`](../addons/angee/provenance/testing/fixtures.py)
+[`angee.provenance.testing.fixtures`](../src/angee/provenance/testing/fixtures.py)
 for test attribution; the generic framework plugin does not install that boundary.
 A test that reaches a statement source needs the install-tier `provenance.Rule`
 principals parties declares: list
-[`angee.parties.testing.fixtures`](../addons/angee/parties/testing/fixtures.py) in
+[`angee.parties.testing.fixtures`](../src/angee/parties/testing/fixtures.py) in
 `pytest_plugins` and request its `statement_sources` fixture (the framework's own
 hosts load them after every REBAC sync).
 
@@ -279,12 +279,12 @@ the token deletion findings.
 For page or addon changes, run a primitive-drift scan and explain every hit
 outside `@angee/ui`. A hit is not automatically wrong, but it must either compose
 the shared primitive or identify the owning framework gap to fix first. From the
-framework source root; include `../angee-messaging-bridges/addons` in the scan
+framework source root; include `../angee-messaging-bridges/src` in the scan
 when that optional slot is present and affected:
 
 ```sh
-rg -n '<table\b|<thead\b|<tbody\b|<tr\b|<td\b|<th\b|role="grid"|useReactTable|manualPagination' packages addons examples -g '*.tsx'
-rg -n 'useAuthored(Query|Mutation)<|interface .*Data|interface .*Variables|fetch\([^)]*graphql|gql`' packages addons examples -g '*.ts' -g '*.tsx'
+rg -n '<table\b|<thead\b|<tbody\b|<tr\b|<td\b|<th\b|role="grid"|useReactTable|manualPagination' packages src examples -g '*.tsx'
+rg -n 'useAuthored(Query|Mutation)<|interface .*Data|interface .*Variables|fetch\([^)]*graphql|gql`' packages src examples -g '*.ts' -g '*.tsx'
 ```
 
 Run the architecture guardrail above when changing package layering, public

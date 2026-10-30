@@ -1339,7 +1339,7 @@ def test_seed_vocabulary_matches_model_contract() -> None:
 
     seed_path = (
         Path(__file__).resolve().parent.parent
-        / "addons"
+        / "src"
         / "angee"
         / "parties"
         / "resources"

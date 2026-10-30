@@ -9,13 +9,13 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-ANGEE = ROOT / "addons/angee"
+ANGEE = ROOT / "src/angee"
 BASE = ANGEE / "base"
 SERVER = ANGEE / "server"
 SERVING_MANAGEMENT = tuple(SERVER / "management/commands" / name for name in ("runserver.py", "serve.py"))
 GRAPHQL = ANGEE / "graphql"
 RESOURCES = ANGEE / "resources"
-SOURCE_ROOTS = (ROOT / "addons",)
+SOURCE_ROOTS = (ROOT / "src",)
 ADDON_ROOTS = (ANGEE,)
 
 # Derived from the source tree so a new base addon is guarded automatically.
@@ -92,17 +92,17 @@ def _tree_imports(root: Path, *, runtime_only: bool = False) -> set[str]:
     ("source_path", "source", "expected"),
     [
         (
-            "addons/angee/base/models/base.py",
+            "src/angee/base/models/base.py",
             "from . import merge",
             {"angee.base.models", "angee.base.models.merge"},
         ),
         (
-            "addons/angee/example/models.py",
+            "src/angee/example/models.py",
             "from angee.base import models as base_models",
             {"angee.base", "angee.base.models"},
         ),
         (
-            "addons/angee/example/__init__.py",
+            "src/angee/example/__init__.py",
             "from angee.base.models.audit import retained_set_null",
             {
                 "angee.base.models.audit",

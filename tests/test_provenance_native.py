@@ -205,7 +205,7 @@ with system_scope, changeset(fresh=True):
         assert Row.history.using("secondary").count() == before + 1
 """
     root = Path(__file__).resolve().parents[1]
-    environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "addons"), str(tmp_path)))}
+    environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "src"), str(tmp_path)))}
     result = subprocess.run(
         [sys.executable, "-c", script, operation, "angee" if angee_adapter else "native"],
         cwd=root,

@@ -200,7 +200,7 @@ test("proxies the agent ACP WebSocket with the browser Origin intact", async () 
       webRoot,
     });
     const protocol = readFileSync(
-      new URL("../../../addons/angee/agents/protocol.py", import.meta.url), "utf8",
+      new URL("../../../src/angee/agents/protocol.py", import.meta.url), "utf8",
     );
     const acpPath = protocol.match(/^ACP_PATH = "([^"]+)"$/m)?.[1];
     expect(acpPath).toBeDefined();

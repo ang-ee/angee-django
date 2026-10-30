@@ -16,7 +16,7 @@ class RoundRecordTests(CampaignIdentities, ClarificationCase):
 
     def test_active_round_and_authored_documents(self):
         schema = GraphQLSchemas.from_discovery().build("console")
-        path = Path(__file__).resolve().parents[1] / "addons/angee/proposals/web/src/documents.ts"
+        path = Path(__file__).resolve().parents[1] / "src/angee/proposals/web/src/documents.ts"
         document = parse("\n".join(re.findall(r"graphql\(`(.*?)`\)", path.read_text(), flags=re.S)))
         self.assertEqual(validate(schema._schema, document), [])
         result = self.execute("""query($project: String!) {

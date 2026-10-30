@@ -165,7 +165,7 @@ def test_record_pointer_import_closure_reaches_only_the_identity_model_contract(
 def test_integrate_does_not_import_workflows() -> None:
     """Record truth stays independent of optional workflow execution composition."""
 
-    root = PROJECT_ROOT / "addons" / "angee" / "integrate"
+    root = PROJECT_ROOT / "src" / "angee" / "integrate"
     violations = {
         str(path.relative_to(PROJECT_ROOT)): sorted(
             name for name in _module_imports(path)
@@ -200,7 +200,7 @@ def test_framework_does_not_import_retired_ownership_owner() -> None:
             for name in _module_imports(path)
             if any(name == prefix or name.startswith(f"{prefix}.") for prefix in forbidden)
         )
-        for root in (PROJECT_ROOT / "addons" / "angee",)
+        for root in (PROJECT_ROOT / "src" / "angee",)
         for path in sorted(root.rglob("*.py"))
     }
     assert not {path: names for path, names in violations.items() if names}
@@ -208,7 +208,7 @@ def test_framework_does_not_import_retired_ownership_owner() -> None:
 
 def test_addon_serving_modules_never_import_build_owners() -> None:
     """Serving modules cannot load composition; declared build and typing owners may."""
-    root = PROJECT_ROOT / "addons/angee"
+    root = PROJECT_ROOT / "src/angee"
     typing_paths = {root / "base/typing.py", root / "provenance/typing.py"}
     build_paths = set(root.glob("*/build.py")) | typing_paths
     fixture_paths = {root / "base/testing/permissions.py", root / "base/testing/fixtures.py"}
@@ -230,7 +230,7 @@ def test_addon_serving_modules_never_import_build_owners() -> None:
 
 def test_addon_test_harness_does_not_import_the_composer() -> None:
     """Bare source fixtures remain independent of the generic build engine."""
-    root = PROJECT_ROOT / "addons/angee/workflows/testing"
+    root = PROJECT_ROOT / "src/angee/workflows/testing"
     violations = {
         path.relative_to(PROJECT_ROOT).as_posix(): sorted(
             name for name in _module_imports(path, runtime_only=True)
@@ -277,7 +277,7 @@ def test_blank_state_fields_use_null() -> None:
 
     violations = [
         f"{path.relative_to(PROJECT_ROOT).as_posix()}:{line}"
-        for root in (PROJECT_ROOT / "addons/angee",)
+        for root in (PROJECT_ROOT / "src/angee",)
         for path, tree in _production_sources(root)
         for line in _blank_state_fields_without_null(tree)
     ]

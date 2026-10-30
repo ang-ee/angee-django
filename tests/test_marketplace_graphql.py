@@ -51,11 +51,11 @@ _REPOS = [
     },
 ]
 _TREE = [
-    {"path": "addons/angee/demo/pyproject.toml", "type": "blob", "oid": "a"},
-    {"path": "addons/angee/demo/README.md", "type": "blob", "oid": "b"},
+    {"path": "src/angee/demo/pyproject.toml", "type": "blob", "oid": "a"},
+    {"path": "src/angee/demo/README.md", "type": "blob", "oid": "b"},
 ]
 _BLOBS = {
-    "addons/angee/demo/pyproject.toml": (
+    "src/angee/demo/pyproject.toml": (
                                             '[project]\n'
                                             'name = "angee-demo"\n'
                                             'version = "1.0.0"\n'
@@ -98,7 +98,7 @@ def test_add_source_inventories_the_repo_and_points_an_addon_source_at_it(
         _execute(
             _schema(),
             _ADD_SOURCE,
-            {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "addons"}},
+            {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "src"}},
             user=admin,
         )
     )["add_source"]
@@ -108,7 +108,7 @@ def test_add_source_inventories_the_repo_and_points_an_addon_source_at_it(
     with system_context(reason="test.marketplace.add_source.verify"):
         repository = Repository.objects.get(name="acme/addons")
         source = Source.objects.get(repository=repository)
-    assert (source.kind, source.path) == ("addon", "addons")
+    assert (source.kind, source.path) == ("addon", "src")
 
 
 def test_scan_discovers_addon_toml_rows_into_the_registry(
@@ -123,7 +123,7 @@ def test_scan_discovers_addon_toml_rows_into_the_registry(
         _execute(
             _schema(),
             _ADD_SOURCE,
-            {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "addons"}},
+            {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "src"}},
             user=admin,
         )
     )
@@ -137,7 +137,7 @@ def test_scan_discovers_addon_toml_rows_into_the_registry(
     with system_context(reason="test.marketplace.scan.verify"):
         row = Addon.objects.get(name="angee.demo")
     assert str(row.source) == Addon.AddonSource.REMOTE
-    assert row.vcs_path == "addons/angee/demo"
+    assert row.vcs_path == "src/angee/demo"
 
 
 def test_scan_refuses_a_non_addon_source(
@@ -170,7 +170,7 @@ def test_add_source_denies_a_non_admin(
     result = _execute(
         _schema(),
         _ADD_SOURCE,
-        {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "addons"}},
+        {"data": {"vcs_bridge_id": _public_id(bridge), "name": "acme/addons", "path": "src"}},
         user=plain,
     )
 

@@ -648,7 +648,7 @@ def test_native_acquisition_retains_bounded_rasters(step_evidence, media_type):
 def test_document_extraction_installs(execution, with_inference):
     """The shipped graph can feed its exact retained revision into native inference."""
     actor, _sent = execution
-    path = Path(__file__).parents[1] / "addons/angee/workflows_extraction/resources/install/100_workflows.workflow.yaml"
+    path = Path(__file__).parents[1] / "src/angee/workflows_extraction/resources/install/100_workflows.workflow.yaml"
     fields = yaml.safe_load(path.read_text())["rows"][0]["fields"]
     if with_inference:
         fields["draft"]["nodes"]["process_evidence"]["next"] = {

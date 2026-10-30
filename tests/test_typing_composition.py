@@ -284,7 +284,7 @@ def test_composition_fields_identity_and_cache_follow_native_declarations(tmp_pa
     config = tmp_path / "mypy.ini"
     config.write_text(
         "[mypy]\nplugins = django_compose.typing\n"
-        f"mypy_path = {tmp_path},{root},{root / 'addons'}\n"
+        f"mypy_path = {tmp_path},{root},{root / 'src'}\n"
         f"cache_dir = {tmp_path / 'cache'}\n"
         "ignore_missing_imports = True\n"
         "[mypy.plugins.django-stubs]\ndjango_settings_module = typing_composition_settings\n"

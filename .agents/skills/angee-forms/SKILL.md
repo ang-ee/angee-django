@@ -17,11 +17,11 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
 
 | File or module | Owns | Reference |
 |---|---|---|
-| `addons/angee/base/schemas/forms.py` | FormSpec projection of a Pydantic JSON Schema; annotation checks | `config_form_spec` :262, `check_form_annotations` :52 |
-| `addons/angee/base/schemas/form_spec.schema.json` | The one FormSpec contract (Python validator, generated TS types, standalone Ajv) | `$defs.Annotations`, `$defs.Relation` |
-| `addons/angee/base/implementations.py` | `config_model` → `ImplChoice.config_schema` | `config_model` :46, `config_schema` :28, `choice()` :110 |
-| `addons/angee/graphql/data/resource_fields.py` | Widget and currency classification from field declarations | `resource_field_widget` :118, `is_resource_field_widget` :54 |
-| `addons/angee/graphql/schema.py` | Django `ValidationError` → `VALIDATION` extension with per-field messages | `_apply_validation_error` :200 |
+| `src/angee/base/schemas/forms.py` | FormSpec projection of a Pydantic JSON Schema; annotation checks | `config_form_spec` :262, `check_form_annotations` :52 |
+| `src/angee/base/schemas/form_spec.schema.json` | The one FormSpec contract (Python validator, generated TS types, standalone Ajv) | `$defs.Annotations`, `$defs.Relation` |
+| `src/angee/base/implementations.py` | `config_model` → `ImplChoice.config_schema` | `config_model` :46, `config_schema` :28, `choice()` :110 |
+| `src/angee/graphql/data/resource_fields.py` | Widget and currency classification from field declarations | `resource_field_widget` :118, `is_resource_field_widget` :54 |
+| `src/angee/graphql/schema.py` | Django `ValidationError` → `VALIDATION` extension with per-field messages | `_apply_validation_error` :200 |
 | `packages/ui/src/views/form/registered-form.ts` | Complete-form registration and lookup | `registerForm` :22, `RegisteredFormView` :50 |
 | `packages/ui/src/views/form/FormView.tsx`, `use-form-view-save.ts` | The form surface; native save, its invalidation and `expected_revision`; the custom-submit branch | `useFormViewSave` :187, revision detection :216-217, custom branch :475, native `expected_revision` :486-490 |
 | `packages/ui/src/views/form/validation-errors.ts` | `FormSubmitResult`; error decoding; React Hook Form binding | :27, `formSubmitError` :73, `applyFormErrors` :97 |
@@ -52,7 +52,7 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
    **Owner rule:** pages stay thin; form mechanics belong to `@angee/ui` ([frontend rules](../../../docs/frontend/guidelines.md#rules), "Routes and pages stay thin").
 
 2. **Declare the backend facts on the field class.** Metadata projects them as
-   `widget` and `currencyField` (`addons/angee/money/fields.py`).
+   `widget` and `currencyField` (`src/angee/money/fields.py`).
 
    ```python
    class MoneyField(models.DecimalField):
@@ -73,7 +73,7 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
    (`angee.tags.recordTags`). **Owner rule:** field classes own classification and
    `resource_field_widget` special-cases no addon class ([backend rules](../../../docs/backend/guidelines.md#rules), "Field classes own…").
 
-3. **Register the complete form** (`addons/angee/tags/web/src/views/TagForm.tsx`),
+3. **Register the complete form** (`src/angee/tags/web/src/views/TagForm.tsx`),
    in an eager module; the routed page stays lazy.
 
    ```tsx
@@ -101,7 +101,7 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
    canonical model label; routes and pickers resolve it through `useFormOverride` (`packages/ui/src/runtime/runtime.ts:369`)
    ([frontend rules](../../../docs/frontend/guidelines.md#rules), "Register a resource's complete form once").
 
-4. **Declare fields for a caller-specific form** (`examples/addons/example/notes/web/src/NotePage.tsx`).
+4. **Declare fields for a caller-specific form** (`examples/src/example/notes/web/src/NotePage.tsx`).
 
    ```tsx
    <Form resource={MODEL}>
@@ -121,7 +121,7 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
    **Owner rule:** the descriptor resolves its own widget (`fieldWidgetId`,
    Field.tsx:103); a view never re-derives it ([owning object](../../../docs/guidelines.md#put-behavior-on-the-owning-object)).
 
-5. **Build a widget** (`addons/angee/money/web/src/widgets/money.tsx`). The value is
+5. **Build a widget** (`src/angee/money/web/src/widgets/money.tsx`). The value is
    the wire scalar (a Decimal string); `read` is required, `edit`/`cell` optional.
 
    ```tsx
@@ -148,7 +148,7 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
    reads `field` and `row`, never a model probe ([frontend rules](../../../docs/frontend/guidelines.md#rules), "Custom resource widget keys").
 
 6. **Project a typed config into a FormSpec form.** Annotate the Pydantic model
-   (`addons/angee/workflows_agents/steps.py:29` shape); the base owner projects it.
+   (`src/angee/workflows_agents/steps.py:29` shape); the base owner projects it.
 
    ```python
    class WebhookConfig(BaseModel):
@@ -168,7 +168,7 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
    **Owner rule:** `parse_config` stays the validation owner; FormSpec is a projection, never a second
    schema ([backend rules](../../../docs/backend/guidelines.md#rules), "Pydantic declarations own implementation config defaults").
 
-7. **Open a schema action dialog** (`addons/angee/workflows/web/src/run-workflow-actions.tsx`).
+7. **Open a schema action dialog** (`src/angee/workflows/web/src/run-workflow-actions.tsx`).
 
    ```tsx
    import { jsonSchemaActionArgs } from "@angee/ui/views/json-schema";   // Ajv lives only here
@@ -185,7 +185,7 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
    read model changes ([form save contracts](../../../docs/frontend/guidelines.md#form-save-contracts)).
    A custom `submit` returns `savedFormSubmitResult` or `formSubmitError(error)` ([frontend rules](../../../docs/frontend/guidelines.md#rules), "Submit owners return FormSubmitResult").
    On the backend raise Django `ValidationError({"field": "…"})` from `clean()` or the manager; the wire
-   mapping is `_apply_validation_error` (`addons/angee/graphql/schema.py:200`) and `applyFormErrors` binds it. For stale-edit
+   mapping is `_apply_validation_error` (`src/angee/graphql/schema.py:200`) and `applyFormErrors` binds it. For stale-edit
    protection compose `OptimisticLockMixin` (`base/models/locks.py:189`); the token contract is
    [write contracts](../../../docs/backend/guidelines.md#graphql-actor-and-write-contracts) and `useFormViewSave` sends it on native saves only (:216-217, :486-490).
    **Owner rule:** `FormView` owns native saves, their invalidation and `expected_revision` (`use-form-view-save.ts:486-490`); a custom `submit` keeps its mutation owner's invalidation and revision handling (`:475`; [form save contracts](../../../docs/frontend/guidelines.md#form-save-contracts) "custom commands retain their mutation owner's invalidation"); a page adds neither.
@@ -206,7 +206,7 @@ description: "Builds forms and widgets in an Angee addon: registered JSX forms (
 ## Verify
 
 Done means: the manifest test lists the key (`Object.keys(addon.forms)`/`addon.widgets`, as
-`addons/angee/tags/web/src/index.test.ts` does); `check` and `schema --check` accept the widget key;
+`src/angee/tags/web/src/index.test.ts` does); `check` and `schema --check` accept the widget key;
 emitted metadata carries `widget` (and `currencyField`); in the browser the form saves, a stale edit
 reports a conflict, and a `ValidationError` lands under its field.
 
@@ -241,6 +241,6 @@ reports a conflict, and a `ValidationError` lands under its field.
 
 <!--
 Docs: AGENTS.md; docs/guidelines.md; docs/frontend/guidelines.md #package-layering, #ownership-boundaries, #one-way-rules, #native-state-owners, #reserved-translation-namespace, #component-ontology, #rules, #authoring, #narrowing-and-when, #variants-and-impl, #framework-containers, #context-aside, #resource-views, #rendering-and-testing, #form-save-contracts; docs/backend/guidelines.md #rules, #migration-history, #resource-loading, #naming, #checks; docs/stack.md #backend, #stack-serve-mode, #frontend; docs/checks.md #agent-methodology-and-documentation, #composition-and-schema, #frontend-packages-and-addon-fragments; docs/glossary.md (no form/widget terms).
-Code: addons/angee/base/schemas/{forms.py,form_spec.schema.json}; base/implementations.py:28,46-47,95-160; base/exceptions.py:25-60; graphql/schema.py:150-235; graphql/data/resource_fields.py:40-175; money/{pyproject.toml,fields.py,web/**}; tags/web/src/**; tags/models.py:74-85; workflows/web/src/run-workflow-actions.tsx; workflows_agents/steps.py:29,38; examples/addons/example/notes/web/src/NotePage.tsx; packages/ui/src/views/form/{registered-form.ts,FormView.tsx:1-140,Form.tsx,form-spec-schema.ts,form-spec.ts:60-140,json-schema.ts:1-60,117-198,validation-errors.ts:1-100,191-231,use-form-view-save.ts:1-60,143,187-220,486-490}; views/page/{Field.tsx:18-115,Group.tsx:9-67}; views/resource/model-metadata-defaults.ts:61,114; views/relation/RelationRecordDialog.tsx:20,39,253-259; widgets/types.ts:110-212; runtime/{runtime.ts:362-372,contracts.ts:156-161}; packages/metadata/src/{index.ts,artifact-schema.ts:1-80,fields.ts:62-75}; packages/refine/src/operations.ts:18,63,292,320; packages/app/src/define-addon.ts:157,164; packages/ui/package.json:780-781; tests/test_impl.py:669-800.
-Outstanding discrepancies and gaps: `fractionDigitsField` (packages/ui/src/widgets/types.ts:151) is read by addons/angee/money/web/src/widgets/money.tsx:94, but no backend emits it and packages/metadata/src/artifact-schema.ts has no key: an authored <Field> prop documented nowhere. docs/glossary.md has no FormSpec or widget term.
+Code: src/angee/base/schemas/{forms.py,form_spec.schema.json}; base/implementations.py:28,46-47,95-160; base/exceptions.py:25-60; graphql/schema.py:150-235; graphql/data/resource_fields.py:40-175; money/{pyproject.toml,fields.py,web/**}; tags/web/src/**; tags/models.py:74-85; workflows/web/src/run-workflow-actions.tsx; workflows_agents/steps.py:29,38; examples/src/example/notes/web/src/NotePage.tsx; packages/ui/src/views/form/{registered-form.ts,FormView.tsx:1-140,Form.tsx,form-spec-schema.ts,form-spec.ts:60-140,json-schema.ts:1-60,117-198,validation-errors.ts:1-100,191-231,use-form-view-save.ts:1-60,143,187-220,486-490}; views/page/{Field.tsx:18-115,Group.tsx:9-67}; views/resource/model-metadata-defaults.ts:61,114; views/relation/RelationRecordDialog.tsx:20,39,253-259; widgets/types.ts:110-212; runtime/{runtime.ts:362-372,contracts.ts:156-161}; packages/metadata/src/{index.ts,artifact-schema.ts:1-80,fields.ts:62-75}; packages/refine/src/operations.ts:18,63,292,320; packages/app/src/define-addon.ts:157,164; packages/ui/package.json:780-781; tests/test_impl.py:669-800.
+Outstanding discrepancies and gaps: `fractionDigitsField` (packages/ui/src/widgets/types.ts:151) is read by src/angee/money/web/src/widgets/money.tsx:94, but no backend emits it and packages/metadata/src/artifact-schema.ts has no key: an authored <Field> prop documented nowhere. docs/glossary.md has no FormSpec or widget term.
 -->
