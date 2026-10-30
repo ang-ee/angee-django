@@ -305,7 +305,7 @@ provides-extras = ["postgres"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "angee-django-stubs", extras = ["compatible-mypy"], specifier = "==6.1.2.post1" },
+    { name = "angee-django-stubs", extras = ["compatible-mypy"], specifier = "==6.1.2.post2" },
     { name = "angee-mypy", specifier = "==2.1.0" },
     { name = "daphne", specifier = ">=4.0" },
     { name = "django-zed-rebac", extras = ["caveats"], git = "https://github.com/ang-ee/django-zed-rebac.git?rev=f43f0773f2c2a86a6882aeb1b46b34b8c19a0d13" },
@@ -575,7 +575,7 @@ requires-dist = [
 
 [[package]]
 name = "angee-django-stubs"
-version = "6.1.2.post1"
+version = "6.1.2.post2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "angee-django-stubs-ext" },
@@ -583,9 +583,9 @@ dependencies = [
     { name = "types-pyyaml" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e3/7d/3da39f3734c2a995662218694f1353f3ee82a52beaca4cc6dae2660e0a0b/angee_django_stubs-6.1.2.post1.tar.gz", hash = "sha256:1d625478140b7c429a9eadfb12697b4d9d35852d4445bea48cc0ad49cd061a9b", size = 302998, upload-time = "2026-10-30T01:10:33.692Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cd/a7/cc3347dc431ed513777ad9569580fcd25e40c88399b3687b43ca95d31506/angee_django_stubs-6.1.2.post2.tar.gz", hash = "sha256:271f303c8b9863d4fc1f36f2720b82e8867108f4bf9d9666a41965cab3fc64e2", size = 303320, upload-time = "2026-10-30T02:32:29.262Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b7/86/a3b903c135d7c0ddccb6d2997cf142187e9ceaa6ecd52868ade7cb859bdf/angee_django_stubs-6.1.2.post1-py3-none-any.whl", hash = "sha256:be83a24fb1302f45a34cc75ab8164f6cee3d51fe57136c2bfced960ec54acabb", size = 566726, upload-time = "2026-10-30T01:10:32.486Z" },
+    { url = "https://files.pythonhosted.org/packages/16/84/c1c3c8c4d94c27a804059e68604c27e260d8adb7afb4c22ebbadce48ff06/angee_django_stubs-6.1.2.post2-py3-none-any.whl", hash = "sha256:75a96e746fede7e3dbc43a61895ef049ecd1d34694a8a0c82a270c631c3f4591", size = 566967, upload-time = "2026-10-30T02:32:27.846Z" },
 ]
 
 [package.optional-dependencies]

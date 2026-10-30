@@ -11,13 +11,14 @@
 !/runtime/*/migrations/
 /dist/
 
-# The operator's compiled bring-up artifacts and resolved secrets.
+# The operator's runtime artifacts, durable job receipts, and resolved secrets.
 /.env
 /.env.*
 /process-compose.yaml
 /docker-compose.yaml
 /.copier-answers.stack.yml
 /run/
+/state/
 /.angee/
 
 # Operator-materialized source machinery: clone caches, workspace worktree slots,
