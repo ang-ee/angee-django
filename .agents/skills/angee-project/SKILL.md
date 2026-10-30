@@ -28,8 +28,10 @@ package or stack profile. Addon-local declarations belong to `angee-addon`.
    under a source checkout. Read its rendered manifest before choosing a job.
 2. Add native requirements and portable uv source overrides at the project owner.
    Local addons are real installed distributions; folder paths do not activate
-   them. Keep workspace member globs aligned with actual packages. The compiler
-   co-development slot is a declared sibling source, not an invented public URL.
+   them. Keep workspace member globs aligned with actual packages. Compiler
+   requirements use the committed immutable public Git source; optional local
+   co-development belongs in a separate disposable check environment, never a
+   live stack or a committed second resolution surface.
 3. Declare root apps in `INSTALLED_APPS`. Requirements activate their required
    addon providers; foreign Django app edges come from `AppConfig.requires_apps`.
    Keep `COMPOSE_OUTPUT_DIR` and `COMPOSE_OUTPUT_MODULE` authored and importable.

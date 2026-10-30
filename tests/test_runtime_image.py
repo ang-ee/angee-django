@@ -26,14 +26,14 @@ def test_runtime_image_prepares_bind_mount_outputs_before_dropping_privileges() 
 
 
 def test_baked_image_installs_native_distributions_without_path_injection() -> None:
-    """The baked image installs workspace packages and the native compiler source."""
+    """The baked image installs workspace packages and their locked public dependencies."""
 
     dockerfile = DOCKERFILE.read_text()
     assert "COPY --chown=angee:angee addons ./addons" in dockerfile
     assert "COPY --chown=angee:angee examples/addons ./examples/addons" in dockerfile
     assert "COPY --chown=angee:angee tests/blankchoices ./tests/blankchoices" in dockerfile
     assert "COPY --chown=angee:angee tools ./tools" in dockerfile
-    assert "COPY --from=django-compose --chown=angee:angee . /opt/django-compose" in dockerfile
+    assert "from=django-compose" not in dockerfile
     assert "uv sync --frozen --no-dev --no-editable --extra postgres" in dockerfile
     assert "addon-settings.yaml" not in dockerfile
     assert "ANGEE_ADDON_DIRS" not in dockerfile

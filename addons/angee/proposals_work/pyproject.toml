@@ -4,7 +4,7 @@ build-system = { requires = ["hatch-angee>=1,<2"], build-backend = "hatch_angee"
 name = "angee-proposals-work"
 version = "3.0.0"
 description = "Route proposal questions through work queues"
-dependencies = ["angee-proposals>=3,<4", "angee-work>=3,<4", "angee-web>=3,<4", "django-compose>=0.1.0.dev0,<0.2"]
+dependencies = ["angee-proposals>=3,<4", "angee-work>=3,<4", "angee-web>=3,<4", "django-compose @ git+https://github.com/ang-ee/django-compose.git@c7e61d587a91adeba8d26e9551e6c1ffc2dd6ddb"]
 
 [project.entry-points]
 "angee.addons" = {"angee.proposals_work" = "angee.proposals_work"}
@@ -13,3 +13,6 @@ dependencies = ["angee-proposals>=3,<4", "angee-work>=3,<4", "angee-web>=3,<4", 
 
 [tool.angee.platform]
 category = "Productivity"
+
+[tool.hatch.metadata]
+allow-direct-references = true

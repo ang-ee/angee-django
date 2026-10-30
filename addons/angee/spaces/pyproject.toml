@@ -5,7 +5,7 @@ name = "angee-spaces"
 version = "3.0.0"
 description = "Shared groups with canonical rosters, role-derived access, and group threads"
 keywords = ["spaces", "groups", "rosters", "roles"]
-dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-parties>=3,<4", "angee-messaging>=3,<4", "angee-knowledge>=3,<4", "angee-web>=3,<4", "django-compose>=0.1.0.dev0,<0.2"]
+dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-parties>=3,<4", "angee-messaging>=3,<4", "angee-knowledge>=3,<4", "angee-web>=3,<4", "django-compose @ git+https://github.com/ang-ee/django-compose.git@c7e61d587a91adeba8d26e9551e6c1ffc2dd6ddb"]
 
 [project.entry-points]
 "angee.addons" = {"angee.spaces" = "angee.spaces"}
@@ -14,3 +14,6 @@ dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-parties>=3,<4", "a
 
 [tool.angee.platform]
 category = "Data"
+
+[tool.hatch.metadata]
+allow-direct-references = true

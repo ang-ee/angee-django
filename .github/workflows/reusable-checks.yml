@@ -89,9 +89,6 @@ on:
 permissions:
   contents: read
 
-# Python resolution requires the declared local django-compose source slot.
-# No approved remote/ref checkout hook exists here yet; its absence remains a
-# native resolution failure until the reviewed compiler source is available.
 jobs:
   python-quality:
     if: ${{ inputs.uv-enabled }}

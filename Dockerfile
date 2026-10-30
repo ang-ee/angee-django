@@ -14,8 +14,6 @@
 # the framework distributions + `[postgres]` into `ghcr.io/ang-ee/django-angee`, the fuller
 # image the self-contained `local` stack runs.
 
-# Supply the native compiler checkout as a named build context:
-# docker build --build-context django-compose=../django-compose .
 ARG PYTHON_VERSION=3.14
 
 # --- base: the lean OS+python layer, shared by `deps` and `final` --------------
@@ -59,7 +57,6 @@ ARG DEV=
 # Native uv reads workspace members from the mounted build context; none of the
 # workspace distributions are installed in the dependency-only base layer.
 RUN --mount=type=bind,source=.,target=/src,readonly \
-    --mount=type=bind,from=django-compose,source=.,target=/django-compose,readonly \
     --mount=type=cache,target=/root/.cache/uv \
     uv sync --project /src --frozen --no-install-workspace --no-editable ${DEV} \
     && chown -R angee:angee /opt/.venv
@@ -84,7 +81,6 @@ FROM deps AS runtime
 WORKDIR /opt/angee-src
 COPY --chown=angee:angee pyproject.toml uv.lock README.md LICENSE LICENSE.GPL ./
 COPY --chown=angee:angee tools ./tools
-COPY --from=django-compose --chown=angee:angee . /opt/django-compose
 COPY --chown=angee:angee addons ./addons
 COPY --chown=angee:angee examples/addons ./examples/addons
 COPY --chown=angee:angee tests/blankchoices ./tests/blankchoices

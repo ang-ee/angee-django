@@ -5,7 +5,7 @@ name = "angee-work"
 version = "3.0.0"
 description = "Operational queues, named stages, cycles, and triage folded into project tasks."
 keywords = ["work", "queues", "stages", "cycles", "triage", "planning"]
-dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-jobs>=3,<4", "angee-messaging>=3,<4", "angee-projects>=3,<4", "angee-sequence>=3,<4", "angee-spaces>=3,<4", "angee-web>=3,<4", "django-compose>=0.1.0.dev0,<0.2"]
+dependencies = ["angee-base>=3,<4", "angee-iam>=3,<4", "angee-jobs>=3,<4", "angee-messaging>=3,<4", "angee-projects>=3,<4", "angee-sequence>=3,<4", "angee-spaces>=3,<4", "angee-web>=3,<4", "django-compose @ git+https://github.com/ang-ee/django-compose.git@c7e61d587a91adeba8d26e9551e6c1ffc2dd6ddb"]
 
 [project.entry-points]
 "angee.addons" = {"angee.work" = "angee.work"}
@@ -31,3 +31,6 @@ depends_on = ["demo/015_work.cycle.yaml", "projects:demo/031_projects.task.yaml"
 
 [tool.angee.platform]
 category = "Productivity"
+
+[tool.hatch.metadata]
+allow-direct-references = true

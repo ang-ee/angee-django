@@ -423,9 +423,12 @@ Publish in dependency order:
 Local source checks do not establish that this publication chain or a remote CI
 run has completed.
 
-Native compiler co-development uses the declared sibling source slot. Until a
-published compiler distribution/source reference is available, hosted jobs must
-supply that source explicitly; a local lock/build is not evidence that hosted CI
-can resolve it. Docker local builds use the declared named build context. Do not
-invent a repository URL, silently skip the dependency or mark missing-source CI
-green.
+Framework requirements pin the native compiler to its immutable public Git
+source, and `uv.lock` records that commit. Clean checkouts and Docker builds
+resolve the same source without a sibling compiler checkout or named context.
+This is a source pin, not a PyPI release.
+
+Compiler co-development may use an explicit editable sibling checkout in a
+separate disposable check environment. Keep that local override out of committed
+requirements/locks and never apply it to a live stack environment. Normal native
+installation continues to consume the committed public source pin.

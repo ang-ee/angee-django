@@ -5,7 +5,7 @@ name = "angee-agents"
 version = "3.0.0"
 description = "AI agents — the inference provider/model catalogue and the runtimes agents run on"
 keywords = ["agents", "ai", "inference"]
-dependencies = ["angee-base>=3,<4", "angee-integrate>=3,<4", "angee-integrate-vcs>=3,<4", "angee-operator>=3,<4", "angee-mcp>=3,<4", "angee-iam>=3,<4", "angee-jobs>=3,<4", "angee-graphql>=3,<4", "angee-resources>=3,<4", "angee-provenance>=3,<4", "angee-web>=3,<4", "pydantic-ai-slim>=2.13", "httpx>=0.28.1,<0.29", "agent-client-protocol==1.0.0rc2", "django-compose>=0.1.0.dev0,<0.2"]
+dependencies = ["angee-base>=3,<4", "angee-integrate>=3,<4", "angee-integrate-vcs>=3,<4", "angee-operator>=3,<4", "angee-mcp>=3,<4", "angee-iam>=3,<4", "angee-jobs>=3,<4", "angee-graphql>=3,<4", "angee-resources>=3,<4", "angee-provenance>=3,<4", "angee-web>=3,<4", "pydantic-ai-slim>=2.13", "httpx>=0.28.1,<0.29", "agent-client-protocol==1.0.0rc2", "django-compose @ git+https://github.com/ang-ee/django-compose.git@c7e61d587a91adeba8d26e9551e6c1ffc2dd6ddb"]
 
 [project.entry-points]
 "angee.addons" = {"angee.agents" = "angee.agents"}
@@ -24,3 +24,6 @@ adopt = "name"
 
 [tool.angee.platform]
 category = "Agents"
+
+[tool.hatch.metadata]
+allow-direct-references = true

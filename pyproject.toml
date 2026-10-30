@@ -193,7 +193,6 @@ example-notes = {workspace = true}
 example-theme = {workspace = true}
 hatch-angee = {workspace = true}
 tests-blankchoices = {workspace = true}
-django-compose = {path = "../django-compose", editable = true}
 [tool.hatch.build.targets.wheel]
 bypass-selection = true
 
