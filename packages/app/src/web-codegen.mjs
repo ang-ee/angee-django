@@ -264,7 +264,7 @@ function emitAppModule(runtimeDir, manifest, schemaNames, addonSources, installe
   const addonValues = composedAddonValues(addonPackages, manifest.deployment).join(", ");
   const body = [
     "// Generated composed web runtime - do not edit by hand.",
-    "// Run `pnpm codegen`; `manage.py angee build` emits the manifest it reads.",
+    "// Vite dev/build regenerates this file; `manage.py compose` emits the manifest it reads.",
     "",
     [...addonImports, ...themeImports, ...schemaImports].join("\n"),
     "",
@@ -586,7 +586,7 @@ function buildOperationDocuments(name, runtimeDir) {
   });
   const body = [
     `// Generated from runtime/schemas/${name}.graphql - do not edit by hand.`,
-    "// Run `pnpm codegen` to regenerate.",
+    "// From the web host: `pnpm --config.verify-deps-before-run=false exec angee-web-codegen --runtime ../runtime --web-root .`.",
     "//",
     "// Eligible ActionResult mutation fields, plus authored",
     "// aggregate, group, delete-preview, and save operation documents.",
