@@ -1963,7 +1963,11 @@ rows to [`ScopedExplorerPane`](../../packages/ui/src/views/tree/ScopedExplorerPa
 The pane owns picker display. Routes own record identity; queries own loaded
 records; collection owners retain search and expansion. Resolved record roots
 update the shared selection owner; unresolved detail leaves its retained scope
-intact. A controlled `rootId` remains authoritative, including an explicit empty
+intact. Explicit root navigation returns its acceptance through `onRootIdChange`; a
+blocked dirty-form transition leaves the current scope intact. Use
+`invalidateRoot(id)` only after the selected-root read resolves unavailable;
+search misses, pending reads and read errors are not proof of removal.
+A controlled `rootId` remains authoritative, including an explicit empty
 value. Do not mirror retained selection in addon state or add a parallel selection
 helper, row cache or navigator implementation.
 

@@ -242,3 +242,37 @@ test("controlled empty root remains explicit and picking the same root does not 
   expect(result.current.rootId).toBe("");
   expect(result.current.treeRows).toEqual([]);
 });
+
+
+test("a blocked root transition retains the current collection and selection", async () => {
+  let finish!: (accepted: boolean) => void;
+  const change = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+  const { result } = renderHook(() => useScopedTreeExplorer({
+    roots: ROOTS, getRootId, getTreeRows, onRootIdChange: change,
+  }));
+  act(() => result.current.setSelectedId("a-child"));
+  act(() => result.current.setRootId("root-b"));
+  expect(result.current.rootId).toBe("root-a");
+  expect(result.current.selectedId).toBe("a-child");
+  await act(async () => finish(false));
+  expect(result.current.rootId).toBe("root-a");
+  expect(result.current.selectedId).toBe("a-child");
+  act(() => result.current.setRootId("root-b"));
+  await act(async () => finish(true));
+  expect(result.current.rootId).toBe("root-b");
+});
+
+test("authoritative root removal clears the retained scope without navigating", () => {
+  const change = vi.fn();
+  const { result, rerender } = renderHook(({ roots }) => useScopedTreeExplorer({
+    roots, getRootId, getTreeRows, onRootIdChange: change,
+  }), { initialProps: { roots: ROOTS } });
+  rerender({ roots: [] });
+  expect(result.current.rootId).toBe("root-a");
+  act(() => result.current.invalidateRoot("root-b"));
+  expect(result.current.rootId).toBe("root-a");
+  act(() => result.current.invalidateRoot("root-a"));
+  expect(result.current.rootId).toBe("");
+  expect(result.current.treeRows).toEqual([]);
+  expect(change).not.toHaveBeenCalled();
+});

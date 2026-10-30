@@ -103,3 +103,18 @@ test("newly loaded ancestors reveal a pending target without resetting other bra
   expect(screen.getByText("Target")).toBeTruthy();
   expect(screen.queryByText("Unrelated")).toBeNull();
 });
+
+
+test("pointer disclosure activation returns focus to the row for arrow navigation", () => {
+  render(<Tree nodes={[
+    { id: "folder", label: "Folder", children: [{ id: "child", label: "Child" }] },
+    { id: "other", label: "Other" },
+  ]} />);
+  const disclosure = screen.getByRole("button", { name: "Collapse" });
+  disclosure.focus();
+  fireEvent.click(disclosure);
+  const folder = screen.getByText("Folder").closest('[role="treeitem"]')!;
+  expect(document.activeElement).toBe(folder);
+  fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+  expect(document.activeElement).toBe(screen.getByText("Other").closest('[role="treeitem"]'));
+});

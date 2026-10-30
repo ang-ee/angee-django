@@ -239,6 +239,12 @@ the stack's dependency owner before codegen; never install in the source slot.
 
 ## Frontend Packages And Addon Fragments
 
+FormSpec source generation is a repository operation, separate from package builds.
+From the framework source root, run `pnpm generate:form-spec` after editing the
+canonical `src/angee/base/schemas/form_spec.schema.json`, and verify committed
+outputs with `pnpm check:form-spec`. Generator tool versions are exact in
+`packages/ui/package.json`; ordinary UI builds consume the committed outputs.
+
 The stack's JS dependencies must already be installed. Framework packages are
 schema-independent; addon fragments need the composed host's generated documents.
 

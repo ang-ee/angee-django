@@ -33,7 +33,7 @@ const { Provider, clearClients } = createUiTestProviders({ resources: [
   testDataResource("knowledge.Vault", { query: vaultQuery.contract }),
 ], queryClientConfig: { defaultOptions: { queries: { retry: false, staleTime: Infinity } } } });
 const href = createRouteHref([{ name: "knowledge.home", path: "/knowledge" }, { name: "knowledge.page", path: "/knowledge/$id" }, { name: "knowledge.settings", path: "/knowledge/settings" }]);
-const folder: KnowledgePageDetail = {
+const folder: KnowledgePageDetail = { revision: 1,
   id: "pg_parent", title: "Projects", kind: "folder", icon: "", vault: "vlt_1", vault_label: "Reference",
   permissions: ["write", "delete"], parent: null, is_trashed: false, has_children: true, ancestors: [], wikilinks: [], backlinks: [],
   markdown: null, updated_at: "2026-10-20", created_by_label: "Author",

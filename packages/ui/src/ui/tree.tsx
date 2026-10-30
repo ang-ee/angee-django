@@ -483,6 +483,9 @@ function TreeRow({
         tabIndex={-1}
         onClick={(event) => {
           event.stopPropagation();
+          // Pointer activation keeps keyboard navigation on the treeitem;
+          // embedded editors continue owning their own keys.
+          event.currentTarget.parentElement?.focus();
           onToggle();
         }}
       >

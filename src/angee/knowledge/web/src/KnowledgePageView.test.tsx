@@ -5,9 +5,11 @@ import { createMemoryHistory, createRootRoute, createRouter, RouterContextProvid
 import { ResourceQuery } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
-import { AppRuntimeProvider, ModalsHost, ToastProvider, defaultWidgets, type WidgetDefinition } from "@angee/ui";
+import { AppRuntimeProvider, ModalsHost, ToastProvider, defaultWidgets, createRouteHref, type WidgetDefinition } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 import { afterEach, expect, test, vi } from "vitest";
+
+import { markdownPreviewWidget } from "@angee/ui/widgets/markdown";
 
 import { KnowledgePageView } from "./KnowledgePageView";
 import { KnowledgePages, KnowledgeUpdatePageBody, PAGE_MODEL, type KnowledgePageDetail } from "./data/documents";
@@ -30,12 +32,12 @@ const markdownWidget: WidgetDefinition<string> = {
 };
 
 function detail(overrides: Partial<KnowledgePageDetail> = {}): KnowledgePageDetail {
-  return { id: "pg_guide", title: "Guide", kind: "note", permissions: ["write"], icon: "", vault: "vlt_reference",
+  return { id: "pg_guide", revision: 1, title: "Guide", kind: "note", permissions: ["write"], icon: "", vault: "vlt_reference",
     parent: null, vault_label: "Reference", has_children: false, is_trashed: false, ancestors: [], wikilinks: [], updated_at: "2026-01-01T12:00:00Z", created_by_label: "Author", backlinks: [],
     markdown: { body: "Published instructions", body_hash: "original-hash", word_count: 2 }, ...overrides };
 }
 
-async function fixture(initial = detail()) {
+async function fixture(initial = detail(), editor = markdownWidget) {
   let record = initial;
   let failure: Error | null = null;
   let readFailure: Error | null = null;
@@ -62,10 +64,13 @@ async function fixture(initial = detail()) {
     if (variables.expected_hash !== record.markdown?.body_hash) {
       return { data: { update_page_body: { ok: false, error_code: "STALE_BODY", error: "Body hash is stale", markdown: null } } };
     }
-    record = { ...record, title: String(variables.title ?? record.title), markdown: {
+    if (variables.expected_revision !== record.revision) {
+      return { data: { update_page_body: { ok: false, error_code: "STALE_REVISION", error: "Page revision is stale", markdown: null } } };
+    }
+    record = { ...record, revision: record.revision + 1, title: String(variables.title ?? record.title), markdown: {
       body: String(variables.body), body_hash: `hash-${writes.mock.calls.length}`, word_count: 2,
     } };
-    return { data: { update_page_body: { ok: true, error: null, error_code: null, markdown: { ...record.markdown, title: record.title } } } };
+    return { data: { update_page_body: { ok: true, error: null, error_code: null, markdown: { ...record.markdown, title: record.title, revision: record.revision } } } };
   };
   const update = vi.fn<NonNullable<RefineTestDataProvider["update"]>>(async ({ variables }) => {
     record = { ...record, ...(variables as Partial<KnowledgePageDetail>) };
@@ -73,8 +78,8 @@ async function fixture(initial = detail()) {
   });
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
   const renderPage = (pageId = record.id) => <Provider dataProvider={{ custom, update }} queryClient={client}>
-    <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: {
-      ...defaultWidgets, "markdown.editor": markdownWidget,
+    <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ routeHref: createRouteHref([{ name: "knowledge.page", path: "/knowledge/$id" }]), widgets: {
+      ...defaultWidgets, "markdown.editor": editor,
     } }}><KnowledgePageView pageId={pageId} />
     </AppRuntimeProvider></ToastProvider></ModalsHost></RouterContextProvider>
   </Provider>;
@@ -114,12 +119,13 @@ test("native form saves title and body together and advances the hash for the ne
   expect(screen.getAllByRole("button", { name: "Save" })).toHaveLength(1);
   await save();
   await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).toBeNull());
-  expect(f.writes).toHaveBeenLastCalledWith({ page: "pg_guide", title: "Draft title", body: "Draft body", expected_hash: "original-hash" });
+  expect(f.writes).toHaveBeenLastCalledWith({ page: "pg_guide", title: "Draft title", body: "Draft body", expected_hash: "original-hash", expected_revision: 1 });
   expect(f.update).not.toHaveBeenCalled();
+  expect(f.reads).toHaveBeenCalledTimes(2);
   edit("Page body", "Second body");
   await save();
   await waitFor(() => expect(f.record.markdown?.body).toBe("Second body"));
-  expect(f.writes).toHaveBeenLastCalledWith(expect.objectContaining({ expected_hash: "hash-1" }));
+  expect(f.writes).toHaveBeenLastCalledWith(expect.objectContaining({ expected_hash: "hash-1", expected_revision: 2 }));
 });
 
 test("Discard restores the native form baseline without a write", async () => {
@@ -169,7 +175,7 @@ test("a body-only save preserves a concurrent title change", async () => {
   await save();
   await waitFor(() => expect(f.record.markdown?.body).toBe("My body"));
   expect(f.record.title).toBe("Renamed remotely");
-  expect(f.writes).toHaveBeenLastCalledWith({ page: "pg_guide", body: "My body", expected_hash: "original-hash" });
+  expect(f.writes).toHaveBeenLastCalledWith({ page: "pg_guide", body: "My body", expected_hash: "original-hash", expected_revision: 1 });
 });
 
 test("typing during a pending save remains dirty against the accepted hash", async () => {
@@ -184,7 +190,7 @@ test("typing during a pending save remains dirty against the accepted hash", asy
   expect(screen.getByDisplayValue("Later body")).toBeTruthy();
   await save();
   await waitFor(() => expect(f.record.markdown?.body).toBe("Later body"));
-  expect(f.writes).toHaveBeenLastCalledWith(expect.objectContaining({ expected_hash: "hash-1" }));
+  expect(f.writes).toHaveBeenLastCalledWith(expect.objectContaining({ expected_hash: "hash-1", expected_revision: 2 }));
 });
 
 test("revoked write permission makes the native form read-only", async () => {
@@ -229,7 +235,7 @@ test("the accepted response acknowledges Save while derived refresh is held", as
   edit("Page body", "Next accepted body");
   await save();
   await waitFor(() => expect(screen.queryByRole("button", { name: "Save" })).toBeNull());
-  expect(f.writes).toHaveBeenLastCalledWith(expect.objectContaining({ expected_hash: "hash-1" }));
+  expect(f.writes).toHaveBeenLastCalledWith(expect.objectContaining({ expected_hash: "hash-1", expected_revision: 2 }));
   await f.resolveReads();
   await waitFor(() => expect(f.client.isFetching()).toBe(0));
   expect(screen.getByDisplayValue("Next accepted body")).toBeTruthy();
@@ -273,4 +279,13 @@ test("a failed background refresh retains the accepted page and editor draft thr
   expect(screen.getByDisplayValue("Accepted title")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
   expect(f.writes).toHaveBeenCalledOnce();
+});
+
+
+test("wikilinks with headings resolve the page title from the canonical link index", async () => {
+  await fixture(detail({ markdown: { body: "[[Guide#Heading]]", body_hash: "hash", word_count: 1 },
+    wikilinks: [{ title: "Guide", page: "pg_target" }],
+  }), markdownPreviewWidget);
+  const link = await screen.findByRole("link", { name: "Guide#Heading" });
+  expect(link.getAttribute("href")).toBe("/knowledge/pg_target");
 });
