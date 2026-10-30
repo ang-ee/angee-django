@@ -63,7 +63,7 @@ class ProvisionRecorder:
 
     @property
     def records(self) -> Any:
-        return self.Record.objects.using(self.connection.alias)
+        return self.Record._base_manager.using(self.connection.alias)
 
     def has_table(self) -> bool:
         if not self._has_table:

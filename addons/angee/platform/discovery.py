@@ -35,14 +35,16 @@ class AddonCategory(TextChoices):
 def catalogue_category(value: object) -> str:
     """Validate a package's optional catalogue grouping at its capability owner."""
 
-    if value == "":
-        return ""
-    try:
-        return AddonCategory(value)
-    except ValueError as error:
-        raise ImproperlyConfigured(
-            f"Unknown tool.angee.platform.category {value!r}; expected {AddonCategory.values}"
-        ) from error
+    if isinstance(value, str):
+        if value == "":
+            return ""
+        try:
+            return AddonCategory(value)
+        except ValueError:
+            pass
+    raise ImproperlyConfigured(
+        f"Unknown tool.angee.platform.category {value!r}; expected {AddonCategory.values}"
+    )
 
 
 def installed_entry_points() -> dict[str, metadata.EntryPoint]:
@@ -176,7 +178,7 @@ def resolve_catalogue_roots(
     if len(by_name) != len(packages):
         raise ImproperlyConfigured("Duplicate catalogue app identity in proposed selection")
     graph = {name: tuple(package.get("depends_on", ())) for name, package in by_name.items()}
-    graph.update(dependencies or {})
+    graph.update({name: tuple(edges) for name, edges in (dependencies or {}).items()})
     selected: dict[str, tuple[str, ...]] = {}
     pending = list(sorted(roots, reverse=True))
     while pending:

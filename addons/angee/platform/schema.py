@@ -521,14 +521,14 @@ class AddonLifecycleMutation:
         """Queue package installation and return the operator's native operation."""
 
         with system_context(reason="platform.addon.install"):
-            return _Addon.objects.install(addon)
+            return JSON(_Addon.objects.install(addon))
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def uninstall(self, addon: str) -> JSON:
         """Queue package removal through native dependency admission."""
 
         with system_context(reason="platform.addon.uninstall"):
-            return _Addon.objects.uninstall(addon)
+            return JSON(_Addon.objects.uninstall(addon))
 
 
 schemas = {

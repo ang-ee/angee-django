@@ -1,14 +1,20 @@
 """Startup declarations and request policy use their separate native authorities."""
 
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
+from django.apps import AppConfig
 from django.db import models
 from django.test.utils import isolate_apps
 from rebac.mixins import RebacModelBase
 from rebac.schema import parse_zed
 
-from angee.base.permissions import effective_rebac_definition, effective_rebac_schema
+from angee.base.permissions import (
+    bind_rebac_schema,
+    declared_schema_path,
+    effective_rebac_definition,
+    effective_rebac_schema,
+)
 from angee.graphql.access import is_gated_read_axis
 
 
@@ -44,3 +50,25 @@ def test_startup_snapshot_needs_no_policy_backend(tmp_path, monkeypatch):
         raise AssertionError('startup queried policy backend')
     monkeypatch.setattr('angee.base.permissions.backend', forbid_backend)
     assert effective_rebac_schema(config).get_definition('probe/record') is not None
+
+
+def test_schema_binding_retains_source_and_honors_a_new_authored_override(tmp_path):
+    class ProbeConfig(AppConfig):
+        name = "probe"
+        path = str(tmp_path)
+
+    config = ProbeConfig("probe", ModuleType("probe"))
+    source = tmp_path / "permissions.zed"
+    source.write_text("definition probe/source {}")
+    generated = tmp_path / "compiled.zed"
+    generated.write_text("definition probe/compiled {}")
+    override = tmp_path / "override.zed"
+    override.write_text("definition probe/override {}")
+    assert declared_schema_path(config) == source
+    bind_rebac_schema(config, generated)
+    assert declared_schema_path(config) == source
+    assert effective_rebac_schema(config).get_definition("probe/compiled") is not None
+    setattr(config, "rebac_schema", override)
+    assert declared_schema_path(config) == override
+    bind_rebac_schema(config, generated)
+    assert declared_schema_path(config) == override

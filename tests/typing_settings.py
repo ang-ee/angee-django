@@ -13,12 +13,16 @@ from django.core.exceptions import ImproperlyConfigured
 from django_compose.addons import installed_addons
 
 from angee.base.conf import configure
+from tests.composed_host import COMPOSED_TEST_TIMEOUT as composed_test_timeout
 
 if os.environ.get("ANGEE_PROJECT_DIR"):
     raise ImproperlyConfigured(
         "tests.typing_settings is the isolated framework fixture; unset ANGEE_PROJECT_DIR. "
         "Projects select an authored isolated Django settings module through django-stubs."
     )
+
+# Parallel checkers share this output and serialize through the native writer lease.
+os.environ.setdefault("DJANGO_COMPOSE_WAIT", str(composed_test_timeout))
 
 ASGI_APPLICATION: str
 ANGEE_WEB_STATEMENT_TIMEOUT: int

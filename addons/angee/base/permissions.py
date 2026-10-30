@@ -48,25 +48,32 @@ def require_rebac_queryset[M: models.Model](model: type[M]) -> RebacQuerySet[M]:
     return queryset
 
 
+@dataclass(frozen=True, slots=True)
+class _RebacSchemaBinding:
+    source: Path | None
+    effective: Path | None
+
+
+_SCHEMA_BINDING = "_angee_rebac_schema_binding"
+
+
 def declared_schema_path(app_config: AppConfig) -> Path | None:
     """Retain the native authored declaration before binding generated output."""
 
-    effective = app_config.__dict__.get('_angee_rebac_schema_effective')
-    if (
-        '_angee_rebac_schema_source' not in app_config.__dict__
-        or getattr(app_config, 'rebac_schema', None) != effective
-    ):
-        app_config._angee_rebac_schema_source = resolve_schema_path(app_config)
-    return app_config._angee_rebac_schema_source
+    binding = app_config.__dict__.get(_SCHEMA_BINDING)
+    effective = binding.effective if isinstance(binding, _RebacSchemaBinding) else None
+    if not isinstance(binding, _RebacSchemaBinding) or getattr(app_config, "rebac_schema", None) != effective:
+        binding = _RebacSchemaBinding(resolve_schema_path(app_config), effective)
+        app_config.__dict__[_SCHEMA_BINDING] = binding
+    return binding.source
 
 
 def bind_rebac_schema(app_config: AppConfig, path: Path) -> None:
     """Bind a native schema path while retaining its authored declaration."""
 
-    declared_schema_path(app_config)
-    app_config.rebac_schema = path
-    app_config._angee_rebac_schema_effective = path
-
+    source = declared_schema_path(app_config)
+    setattr(app_config, "rebac_schema", path)
+    app_config.__dict__[_SCHEMA_BINDING] = _RebacSchemaBinding(source, path)
 
 
 def merged_schema_relpath(package: str) -> Path:
