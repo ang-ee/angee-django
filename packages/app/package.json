@@ -58,6 +58,10 @@
     "./shell-runtime": {
       "types": "./src/shell-settings.d.mts",
       "import": "./src/shell-settings.mjs"
+    },
+    "./web-codegen": {
+      "types": "./src/web-codegen.d.mts",
+      "import": "./src/web-codegen.mjs"
     }
   },
   "publishConfig": {
@@ -107,13 +111,17 @@
       "./shell-runtime": {
         "types": "./dist/shell-settings.d.mts",
         "default": "./dist/shell-settings.mjs"
+      },
+      "./web-codegen": {
+        "types": "./dist/web-codegen.d.mts",
+        "default": "./dist/web-codegen.mjs"
       }
     }
   },
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R dist/src/. dist && rm -rf dist/src && mkdir -p dist/bin && cp bin/angee-web-codegen.mjs dist/bin/angee-web-codegen.mjs && cp src/shell-settings.mjs src/shell-settings.d.mts dist/"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && cp -R dist/src/. dist && rm -rf dist/src && mkdir -p dist/bin && cp bin/angee-web-codegen.mjs dist/bin/angee-web-codegen.mjs && cp src/shell-settings.mjs src/shell-settings.d.mts src/web-codegen.mjs src/web-codegen.d.mts dist/"
   },
   "dependencies": {
     "@angee/logo-react": "^0.2.1",

@@ -28,6 +28,9 @@ Dependency changes must update this file in the same change.
   optimistic repeat-install shortcut so native package `prepare` scripts run
   even when dependencies are unchanged. In particular, `@angee/metadata` owns
   the compiled headless module consumed by plain Node code generation.
+  Its `prepare` uses TypeScript build mode to reuse unchanged output; the native
+  build information lives inside `dist`, so deleting the output also invalidates
+  the cache. Explicit package builds remain clean builds for publication.
 - A dependency change is complete only when the concern row here and the owning
   Python/addon/package manifest plus the owning lockfile agree.
 

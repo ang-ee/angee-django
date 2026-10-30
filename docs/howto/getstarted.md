@@ -409,11 +409,13 @@ angee --root "$ANGEE_ROOT" restart django celery-worker
   application**. The stack's restart job is `ANGEE_OPERATOR_RESTART_JOB` in its
   `angee.yaml`. The job runs, then its downstream jobs, then every service that
   waits on them restarts. On a dev stack that sequence is:
-  - `deps` runs `pnpm install`;
+  - `deps` authors an absent lock once on a fresh generated host, then runs
+    `pnpm install --frozen-lockfile`;
   - `py-sync` stops its declared held Django/workers and installs native packages;
   - `compose` holds the same Python consumers and emits verified model and capability artifacts;
   - `provision` performs native history checks, migrations and idempotent hooks;
-  - schema/codegen jobs consume those artifacts;
+  - `operator-schema` exports the daemon SDL; frontend dev/build waits for its
+    inputs and Vite awaits shared generation before serving or bundling;
   - successful chained recovery reapplies held and dependent services once.
 
   A direct `compose` run holds Django and the workers so their serving leases

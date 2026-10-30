@@ -52,7 +52,7 @@
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
-    "prepare": "pnpm run build"
+    "prepare": "tsc --build tsconfig.build.json"
   },
   "dependencies": {
     "@refinedev/core": "^5.0.12",

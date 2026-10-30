@@ -34,8 +34,8 @@ template root (the directory holding `copier.yml`), so the stacks include
 inside `_shared/` too (`../_shared/x.jinja`, never a bare `x.jinja`): a bare name
 resolves against the including file only by accident of today's renderer. Both chain `projects/web` to scaffold the host.
 Their manifests expose preparation as explicit jobs: framework dependency install, native runtime installation/build,
-provision, operator schema refresh, and codegen; local instances replace framework
-codegen with a completed static frontend build. Python jobs and services share one
+provision and operator schema refresh; Vite awaits shared generation before
+serving or building. Local instances complete a static frontend build. Python jobs and services share one
 runtime/environment include, while each container synchronizes its own virtualenv.
 
 These manifests require operator support for readiness and chained jobs. A successful
