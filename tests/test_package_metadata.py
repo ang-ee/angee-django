@@ -49,7 +49,7 @@ def test_disabled_catalogue_uses_distribution_paths_without_imports(tmp_path, mo
     dist, _ = distribution(tmp_path, monkeypatch, "probe-poison", editable=editable, dynamic=dynamic)
     facts = discovery.facts_from_distribution(dist)
     assert facts == {
-        "name": "probe.poison", "distribution": "probe-poison", "requirements": (),
+        "name": "probe.poison", "namespace": "probe", "distribution": "probe-poison", "requirements": (),
         "description": "Installed description",
         "keywords": ("one", "two"), "category": "Data", "depends_on": (),
     }
@@ -76,16 +76,19 @@ def test_requirement_metadata_overrides_package_toml(tmp_path, monkeypatch):
     assert discovery.facts_from_distribution(dist)["depends_on"] == ("probe.required",)
 
 
-def test_vcs_projection_uses_explicit_distribution_identity_map():
-    document = {
-        "project": {
-            "name": "probe-root", "entry-points": {"angee.addons": {"probe.root": "probe.root"}},
-            "dependencies": ['external-package>=1', 'probe-required>=3; extra == ""'],
-        },
-    }
-    facts = discovery.facts_from_toml(document, dependencies={"probe-required": "different.import_name"})
-    assert facts["depends_on"] == ("different.import_name",)
-    assert discovery.facts_from_toml({"project": {"name": "ordinary"}}) == {}
+def test_source_distribution_uses_supplied_capabilities_and_native_identity(tmp_path, monkeypatch):
+    dist, package = distribution(tmp_path, monkeypatch, "probe-source", dynamic=True)
+    (package / "pyproject.toml").unlink()
+    facts = discovery.facts_from_distribution(dist, document={
+        "tool": {"angee": {"platform": {"category": "Integration"}}},
+    })
+    assert facts["name"] == "probe.source"
+    assert facts["namespace"] == "probe"
+    assert facts["distribution"] == "probe-source"
+    assert facts["description"] == "Installed description"
+    assert facts["keywords"] == ("one", "two")
+    assert facts["category"] == "Integration"
+    assert "probe.source" not in sys.modules
 
 
 @pytest.mark.parametrize("identities", [

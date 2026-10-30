@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import Any, ClassVar
 
 from django.apps import apps
@@ -19,7 +21,7 @@ from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate_vcs import registry
-from angee.integrate_vcs.backend import VCSBackend
+from angee.integrate_vcs.backend import Checkout, VCSBackend, source_path, tree_entries
 from angee.integrate_vcs.templates import parse_template_meta
 
 
@@ -81,7 +83,7 @@ class VcsBridge(Bridge, inherits="integrate.Integration"):
 
         backend = self.backend
         repository = source.repository
-        ref = source.ref or repository.default_branch
+        ref = backend.rev_parse(repository, source.ref or repository.default_branch)
         descriptors: list[dict[str, Any]] = []
         for entry in backend.ls_tree(repository, ref=ref, path=source.path, recursive=True):
             if entry.type != "blob" or entry.name != marker:
@@ -336,6 +338,24 @@ class Source(AuditMixin, AngeeDataModel, concrete=True):
         manager = type(self).target_for_kind(self.kind)._default_manager
         assert isinstance(manager, registry.VcsOutputManager)
         return manager.sync_from_source(self)
+
+    @contextmanager
+    def materialized(self, *, checkout: Checkout) -> Iterator[tuple[Path, str]]:
+        """Hold the selected backend's source view while a consumer prepares facts."""
+
+        repository = self.repository
+        with repository.vcs_bridge.backend.materialize(
+            repository, ref=self.ref or repository.default_branch, checkout=checkout,
+        ) as source:
+            yield source
+
+    def marker_paths(self, root: Path, *, marker: str) -> tuple[Path, ...]:
+        """Return deterministic marker paths within this materialized source subtree."""
+
+        return tuple(
+            source_path(root, entry.path) for entry in tree_entries(root, path=self.path, recursive=True)
+            if entry.type == "blob" and entry.name == marker
+        )
 
     def materialize_spec(self) -> dict[str, str]:
         """Return the operator handoff coordinates to clone and check out this source."""

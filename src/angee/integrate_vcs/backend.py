@@ -13,6 +13,8 @@ imports no models, so it breaks no import cycle.
 from __future__ import annotations
 
 import pathlib
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -24,7 +26,44 @@ from angee.integrate.impl import BridgeImpl
 
 # Directories the local backend never treats as source — a broad ``Source.path`` on a
 # working tree would otherwise walk (and ingest stray ``copier.yml`` from) these.
-_LOCAL_SKIP_DIRS = frozenset({".git", ".venv", "node_modules", "__pycache__", ".angee"})
+_LOCAL_SKIP_DIRS = frozenset({".git", ".jj", ".venv", "node_modules", "__pycache__", ".angee"})
+
+
+Checkout = Callable[[str, str], AbstractContextManager[tuple[pathlib.Path, str]]]
+"""A transport-owned complete checkout scoped to the caller's context."""
+
+
+def source_path(root: pathlib.Path, path: str) -> pathlib.Path:
+    """Resolve one source-relative path without escaping its materialized root."""
+
+    target = (root / path.strip("/")).resolve()
+    if target != root and root not in target.parents:
+        raise FileNotFoundError(path)
+    return target
+
+
+def tree_entries(root: pathlib.Path, *, path: str, recursive: bool) -> list[TreeEntry]:
+    """Enumerate a materialized source tree using the local backend's file policy."""
+
+    base = source_path(root, path)
+    if not base.is_dir():
+        return []
+    if _LOCAL_SKIP_DIRS.intersection(base.relative_to(root).parts):
+        return []
+    directories = (
+        base.walk(top_down=True, follow_symlinks=False)
+        if recursive else ((base, [], [child.name for child in base.iterdir()]),)
+    )
+    entries = []
+    for directory, subdirectories, files in directories:
+        subdirectories[:] = sorted(name for name in subdirectories if name not in _LOCAL_SKIP_DIRS)
+        for name in sorted([*subdirectories, *files]):
+            if name in _LOCAL_SKIP_DIRS:
+                continue
+            child = directory / name
+            relative = child.relative_to(root)
+            entries.append(TreeEntry(path=relative.as_posix(), type="tree" if child.is_dir() else "blob"))
+    return sorted(entries, key=lambda entry: pathlib.Path(entry.path))
 
 
 @dataclass(frozen=True)
@@ -103,6 +142,18 @@ class VCSBackend(BridgeImpl, HttpClientMixin):
 
         raise NotImplementedError("VCSBackend subclasses must implement rev_parse().")
 
+    @contextmanager
+    def materialize(self, repository: Any, *, ref: str, checkout: Checkout) -> Iterator[tuple[pathlib.Path, str]]:
+        """Resolve once and ask the supplied transport for a complete pinned checkout."""
+
+        revision = self.rev_parse(repository, ref)
+        if not revision:
+            raise ValueError("The VCS backend returned no source revision")
+        with checkout(str(repository.remote), revision) as (root, resolved):
+            if resolved != revision:
+                raise ValueError("Materialized source revision differs from the indexed VCS revision")
+            yield root, resolved
+
     def verify_webhook(self, vcs_bridge: Any, request: Any) -> bool:
         """Return whether an inbound webhook request is authentic for this bridge."""
 
@@ -165,29 +216,26 @@ class LocalVCSBackend(VCSBackend):
         """
 
         del repository, ref
-        base = self._safe_join(path)
-        if not base.is_dir():
-            return []
-        children = sorted(base.rglob("*") if recursive else base.iterdir())
-        entries: list[TreeEntry] = []
-        for child in children:
-            relative = child.relative_to(self._root)
-            if _LOCAL_SKIP_DIRS.intersection(relative.parts):
-                continue
-            entries.append(TreeEntry(path=relative.as_posix(), type="tree" if child.is_dir() else "blob"))
-        return entries
+        return tree_entries(self._root, path=path, recursive=recursive)
 
     def cat_file(self, repository: Any, *, ref: str, path: str) -> bytes:
         """Return one working-tree file's bytes; raise if absent or a directory."""
 
         del repository, ref
-        target = self._safe_join(path)
+        target = source_path(self._root, path)
         if target.is_dir():
             raise IsADirectoryError(path)
         try:
             return target.read_bytes()
         except FileNotFoundError:
             raise FileNotFoundError(path) from None
+
+    @contextmanager
+    def materialize(self, repository: Any, *, ref: str, checkout: Checkout) -> Iterator[tuple[pathlib.Path, str]]:
+        """Use current local files directly; a working tree has no immutable commit."""
+
+        del repository, ref, checkout
+        yield self._root, ""
 
     def rev_parse(self, repository: Any, ref: str) -> str:
         """Return ``ref`` unchanged — a local working tree resolves no commit oid."""
@@ -245,12 +293,3 @@ class LocalVCSBackend(VCSBackend):
             default_branch=str(config.get("local_default_branch") or "main"),
             visibility="private",
         )
-
-    def _safe_join(self, path: str) -> pathlib.Path:
-        """Join ``path`` under the root, rejecting traversal outside it."""
-
-        root = self._root
-        target = (root / path.strip("/")).resolve()
-        if target != root and root not in target.parents:
-            raise FileNotFoundError(path)
-        return target
