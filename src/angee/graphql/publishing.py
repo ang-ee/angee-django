@@ -131,8 +131,8 @@ def connect_change_publishers(metadata: Mapping[str, list[str]] | None = None) -
         if model is None:
             raise ImproperlyConfigured(f"Unknown GraphQL publisher model: {label}; run compose")
         resolved[model] = frozenset(fields)
-    for model, fields in resolved.items():
-        connect_publishers(model, readable_fields=fields)
+    for model, readable_fields in resolved.items():
+        connect_publishers(model, readable_fields=readable_fields)
     _publisher_model_labels = frozenset(model._meta.label_lower for model in resolved)
     return tuple(resolved)
 

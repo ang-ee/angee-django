@@ -55,11 +55,11 @@ def source_descriptors(source: Any) -> list[dict[str, Any]]:
     daemon = OperatorDaemon.from_settings()
     with source.materialized(checkout=daemon.source_checkout) as (root, _revision):
         with tempfile.TemporaryDirectory(prefix="angee-catalogue-metadata-") as temporary, ExitStack() as archives:
-            prepared = []
+            prepared: list[tuple[Path, dict[str, Any], metadata.Distribution]] = []
             for marker in source.marker_paths(root, marker="pyproject.toml"):
                 document = tomllib.loads(marker.read_text(encoding="utf-8"))
-                distribution = build_distribution(marker.parent, Path(temporary) / str(len(prepared)), archives)
-                prepared.append((marker.parent, document, distribution))
+                built_distribution = build_distribution(marker.parent, Path(temporary) / str(len(prepared)), archives)
+                prepared.append((marker.parent, document, built_distribution))
             index = index_components(
                 (distribution for _path, _document, distribution in prepared), group="angee.addons",
             )
