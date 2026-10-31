@@ -452,6 +452,8 @@ def test_declined_sync_run_releases_its_queue_claim(transactional_db: None) -> N
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("declined-run", model=SchedulerBridge)
         bridge.mark_sync_queued(now=now)
+        assert bridge.sync_queue_occurrence == now.isoformat()
+        assert bridge.sync_queue_token_matches(now)
 
     # Hold the lock the way a live session does, then let a sync run decline.
     with bridge_advisory_lock(bridge):

@@ -21,6 +21,7 @@ from angee.graphql.deletion import delete_by_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.knowledge import schema as knowledge_schema
+from angee.workflows import managers as workflow_managers
 from angee.workflows import schema as workflow_schema
 from angee.workflows import triggers
 from angee.workflows.steps import Step
@@ -416,7 +417,7 @@ def test_deleted_record_is_rejected_instead_of_remaining_pending(trigger_setup):
 def test_drain_bound_counts_candidates_including_rejections(trigger_setup, monkeypatch):
     actor, _, _, trigger = trigger_setup
     Trigger.objects.enable(trigger, actor=actor)
-    monkeypatch.setattr(triggers, "TRIGGER_DRAIN_LIMIT", 3)
+    monkeypatch.setattr(workflow_managers, "TRIGGER_DRAIN_LIMIT", 3)
     for index in range(5):
         capture(vault_for(actor, name=f"Pending {index}"))
     assert Trigger.objects.drain() == 0

@@ -11,7 +11,8 @@ from typing import Any, Self
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models, transaction
-from rebac import actor_context, current_actor, system_context
+from rebac import actor_context, current_actor, database_context, system_context
+from rebac.database import write_alias
 
 from angee.agents.models.choices import (
     ACTIVE_TURN_DELETE_MESSAGE,
@@ -40,10 +41,9 @@ class AgentSessionQuerySet[SessionT: AgentSession](AngeeHistoryQuerySet[SessionT
         """Close selected sessions with their open turns under the same database."""
 
         using = self.db
-        with system_context(reason=reason), transaction.atomic(using=using):
+        with database_context(using), system_context(reason=reason), transaction.atomic(using=using):
             for session in (
-                self.sudo(reason=reason).lock_if_supported()
-                .exclude(status=SessionStatus.CLOSED).order_by("pk")
+                self.sudo(reason=reason).lock_if_supported().exclude(status=SessionStatus.CLOSED).order_by("pk")
             ):
                 session._close_locked()
 
@@ -77,25 +77,23 @@ class AgentSessionManager[SessionT: AgentSession](_AgentSessionManagerBase[Sessi
         """
 
         actor = actor or instance_actor(agent)
-        with transaction.atomic():
+        using = write_alias(self.model, using=self._db or agent._state.db, instance=agent)
+        with database_context(using), transaction.atomic(using=using):
             # Serialize lifecycle updates while permitting unrelated FK inserts.
-            locked = type(agent).system_queryset().lock_if_supported(no_key=True).get(pk=agent.pk)
+            locked = type(agent).system_queryset().using(using).lock_if_supported(no_key=True).get(pk=agent.pk)
             blocker = locked.chat_blocker()
             if blocker:
                 raise ValidationError({"agent": blocker})
-            return self.with_actor(actor).create(agent=locked, user=user, context=dict(context))
+            return self.db_manager(using).with_actor(actor).create(agent=locked, user=user, context=dict(context))
 
     def close_for_agent_as_system(self, agent: Any) -> None:
         """Close an agent's sessions as part of its authorized in-process teardown."""
 
-        self.sudo(reason="agents.session.deprovision").filter(agent=agent).close_as_system(
+        self.db_manager(write_alias(self.model, using=self._db or agent._state.db, instance=agent)).sudo(
+            reason="agents.session.deprovision"
+        ).filter(agent=agent).close_as_system(
             reason="agents.session.deprovision",
         )
-
-    def close_as_system(self, sessions: AgentSessionQuerySet[SessionT], *, reason: str) -> None:
-        """Compatibility for workflow callers pending selected-queryset migration."""
-
-        sessions.close_as_system(reason=reason)
 
 
 class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
@@ -107,13 +105,17 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
     Delete authority derives from the agent, independently of the session's user.
     """
 
-
     sqid_prefix = "ase_"
     agent = models.ForeignKey("agents.Agent", on_delete=models.CASCADE, related_name="sessions")
     # A session is its user's own conversation, not a transferable grant root: deleting
     # the user deletes it, and refuses while one of its turns still runs.
     user = models.ForeignKey(
-        settings.AUTH_USER_MODEL, null=True, blank=True, editable=False, on_delete=models.CASCADE, related_name="+",
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        editable=False,
+        on_delete=models.CASCADE,
+        related_name="+",
     )
     title = models.CharField(max_length=200, blank=True)
     context = models.JSONField(default=dict, blank=True)
@@ -173,7 +175,11 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
         return self.title or str(self.agent)
 
     def post(
-        self, text: str, *, context: Mapping[str, Any] = MappingProxyType({}), actor: Any = None,
+        self,
+        text: str,
+        *,
+        context: Mapping[str, Any] = MappingProxyType({}),
+        actor: Any = None,
         dispatch_expires: datetime | None = None,
     ) -> Any:
         """Queue a prompt with this message's view context under the posting actor.
@@ -184,14 +190,16 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
         the worker discards that delivery before a replacement can run.
         """
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         actor = actor or instance_actor(self)
         if not isinstance(context, Mapping):
             raise ValidationError({"context": "Message context must be an object."})
         prompt = text.strip()
         if not prompt:
             raise ValidationError({"text": "A message is required."})
-        with transaction.atomic():
-            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+        with database_context(using), transaction.atomic(using=using):
+            locked = type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
             actor = locked.require_access("post", actor)
             if locked.status == SessionStatus.CLOSED:
                 raise ValidationError({"session": "This agent session is closed."})
@@ -206,20 +214,22 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
             if not locked.title:
                 locked.title = prompt[:200]
                 locked.save(update_fields=["title", "updated_at"])
-            enqueue_task("agents.run_session", kwargs={"session_id": self.pk}, expires=dispatch_expires)
-            self.refresh_from_db()
+            self.enqueue_execution(expires=dispatch_expires)
+            self.refresh_from_db(using=using)
         return turn
 
     def close(self, *, actor: Any = None) -> None:
         """Cancel every open turn and close the conversation atomically."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         actor = actor or instance_actor(self)
-        with transaction.atomic():
-            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+        with database_context(using), transaction.atomic(using=using):
+            locked = type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
             actor = locked.require_access("write", actor)
             with actor_context(actor) if actor is not None else nullcontext():
                 locked._close_locked()
-            self.refresh_from_db()
+            self.refresh_from_db(using=using)
 
     def _close_locked(self) -> None:
         """Cancel open turns after the caller locks and authorizes this session."""
@@ -237,9 +247,11 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
         cannot be recalled, and silent tools cannot be reached until they return.
         """
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         actor = actor or instance_actor(self)
-        with transaction.atomic():
-            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+        with database_context(using), transaction.atomic(using=using):
+            locked = type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
             actor = locked.require_access("write", actor)
             with (
                 actor_context(actor) if actor is not None else nullcontext(),
@@ -254,20 +266,22 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
                     if active and locked.status != SessionStatus.CLOSED:
                         locked.mark_idle()
                     locked._enqueue_pending_turn()
-                turn.refresh_from_db()
-            self.refresh_from_db()
+                turn.refresh_from_db(using=using)
+            self.refresh_from_db(using=using)
 
     def cancel_active_turn(self, *, actor: Any = None) -> None:
         """Select and stop the active turn while holding the session lock."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         actor = actor or instance_actor(self)
-        with transaction.atomic():
-            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+        with database_context(using), transaction.atomic(using=using):
+            locked = type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
             actor = locked.require_access("write", actor)
             turn = locked.turns.with_actor(actor).active().order_by("index").first()
             if turn is not None:
                 locked.cancel_turn(turn, actor=actor)
-            self.refresh_from_db()
+            self.refresh_from_db(using=using)
 
     def claim_turn(self) -> Any | None:
         """Claim the oldest pending turn under the session lock, never an active turn.
@@ -276,8 +290,14 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
         stop. Duplicate deliveries neither reclaim it nor execute another turn.
         """
 
-        with system_context(reason="agents.session.claim"), transaction.atomic():
-            locked = type(self).system_queryset(lock=("self",)).filter(pk=self.pk).first()
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        with (
+            database_context(using),
+            system_context(reason="agents.session.claim"),
+            transaction.atomic(using=using),
+        ):
+            locked = type(self).system_queryset(lock=("self",)).using(using).filter(pk=self.pk).first()
             if locked is None or locked.status == SessionStatus.CLOSED:
                 return None
             if locked.turns.active().exists():
@@ -299,14 +319,20 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
                         ),
                     )
                     turn = None
-            self.refresh_from_db()
+            self.refresh_from_db(using=using)
             return turn
 
     def settle_turn(self, turn: Any, outcome: TurnOutcome) -> None:
         """Store one still-running turn's outcome and dispatch its next pending turn."""
 
-        with system_context(reason="agents.session.settle"), transaction.atomic():
-            locked = type(self).system_queryset(lock=("self",)).filter(pk=self.pk).first()
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        with (
+            database_context(using),
+            system_context(reason="agents.session.settle"),
+            transaction.atomic(using=using),
+        ):
+            locked = type(self).system_queryset(lock=("self",)).using(using).filter(pk=self.pk).first()
             if locked is None:
                 return
             current = locked.turns.lock_if_supported().filter(pk=turn.pk).order_by("pk").first()
@@ -332,14 +358,27 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
                 locked.mark_error(current.error)
             locked.save(update_fields=fields)
             locked._enqueue_pending_turn()
-            self.refresh_from_db()
-            turn.refresh_from_db()
+            self.refresh_from_db(using=using)
+            turn.refresh_from_db(using=using)
+
+    def enqueue_execution(self, *, expires: datetime | None = None, robust: bool = False) -> None:
+        """Deliver this session's queued execution after its producer transaction commits."""
+
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        enqueue_task(
+            "agents.run_session",
+            kwargs={"session_id": self.pk},
+            expires=expires,
+            robust=robust,
+            using=using,
+        )
 
     def _enqueue_pending_turn(self) -> None:
         """Send the next delivery on commit when this locked session has queued work."""
 
         if self.status != SessionStatus.CLOSED and self.turns.filter(status=TurnStatus.PENDING).exists():
-            enqueue_task("agents.run_session", kwargs={"session_id": self.pk}, robust=True)
+            self.enqueue_execution(robust=True)
 
     @transition(
         status,
@@ -416,7 +455,6 @@ _AgentTurnManager = AngeeHistoryManager.from_queryset(AgentTurnQuerySet)
 class AgentTurn(AuditMixin, AngeeDataModel, concrete=True):
     """One prompt-to-response cycle with append-only ACP updates."""
 
-
     sqid_prefix = "atn_"
     session = models.ForeignKey("agents.AgentSession", on_delete=models.CASCADE, related_name="turns")
     index = models.PositiveIntegerField()
@@ -472,10 +510,13 @@ class AgentTurn(AuditMixin, AngeeDataModel, concrete=True):
         turn is stopped and no longer has a transcript to retain.
         """
 
-        with transaction.atomic():
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        with database_context(using), transaction.atomic(using=using):
             locked = (
                 type(self)
-                .objects.only("pk", "status", "updated_at")
+                .objects.using(using)
+                .only("pk", "status", "updated_at")
                 .lock_if_supported()
                 .filter(pk=self.pk)
                 .order_by("pk")

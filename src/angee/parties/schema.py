@@ -125,6 +125,11 @@ class PartyType(AuthoredRefMixin, AngeeNode):
 
         return parent.concrete_kind
 
+    @strawberry.field
+    def merge_scalar_fields(parent: strawberry.Parent[PartyModel]) -> list[str]:
+        """Expose the row owner's admitted scalar merge choices."""
+        return list(parent.merge_common_scalar_fields)
+
     handles: list["HandleType"]
 
     @strawberry_django.field(
@@ -150,6 +155,11 @@ class PartyType(AuthoredRefMixin, AngeeNode):
 class PersonType(PartyType):
     """GraphQL projection of a person."""
 
+    @strawberry.field
+    def merge_scalar_fields(parent: strawberry.Parent[PartyModel]) -> list[str]:
+        """Include Person choices only in the readable Person projection."""
+        return list(parent.merge_scalar_fields)
+
     name_prefix: auto
     given_name: auto
     additional_name: auto
@@ -163,7 +173,7 @@ class PersonType(PartyType):
     def circle_names(self) -> list[str]:
         """Return manager-prefetched, actor-visible circle names as chip values."""
 
-        return cast("list[str]", Person.objects.circle_names_for(cast(Any, self)))
+        return cast("list[str]", cast(Any, self).visible_circle_names())
 
     @strawberry_django.field(only=["user_id"])
     def user(self) -> strawberry.ID | None:
@@ -564,8 +574,6 @@ class PartiesIdentityMutation:
         return cast(SameAsStatementType, Party.same_as.for_pair(party_a, party_b).dismiss(aspect="same_as"))
 
 
-
-
 _PARTY_RESOURCE = hasura_model_resource(
     PartyType,
     model=Party,
@@ -806,7 +814,7 @@ _PARTY_STATEMENT_RESOURCE = hasura_model_resource(
     aggregatable=["id", "confidence"],
     # No handle-field axis: a group key would read handle rows the party reader may
     # not read; ``handle`` resolves through its own gate.
-    groupable=["handle", "subject", "subject__display_name", "source_kind"],
+    groupable=["handle", "handle__display_name", "subject", "subject__display_name", "source_kind"],
     insert=False,
     update=False,
     delete=False,

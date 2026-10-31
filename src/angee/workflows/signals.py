@@ -46,7 +46,7 @@ def stop_deleted_record_runs(sender: Any, *, instance: Any, **kwargs: Any) -> No
     model = apps.get_model("workflows", "WorkflowRun")
     with system_context(reason="workflows.deleted_record"):
         for run in model.objects.working_on(instance).select_related("run_as"):
-            model.objects.cancel_on_commit(run, run.run_as)
+            run.cancel_on_commit(run.run_as)
 
 
 def connect() -> None:
