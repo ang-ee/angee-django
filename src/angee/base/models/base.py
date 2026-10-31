@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import nullcontext
 from typing import Any, ClassVar, Self, TypeVar
 
@@ -15,6 +15,7 @@ from rebac import (
     RelationshipTuple,
     SubjectRef,
     delete_relationship,
+    system_context,
     to_object_ref,
     write_relationships,
 )
@@ -26,6 +27,7 @@ from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type, resource_id_attr
 
 from angee.base.managers import AngeeManager, AngeeUnscopedManager
+from angee.base.models.children import OwnedChildrenMixin
 from angee.base.models.identity import PublicIdentity, SqidMixin
 from angee.base.models.inputs import InputExtensionsMixin
 from angee.base.models.merge_references import MergeContractMixin, named_in_relationships, references
@@ -39,6 +41,7 @@ _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
 class AngeeModel(
+    OwnedChildrenMixin,
     InputExtensionsMixin,
     StateTransitionsMixin,
     MergeContractMixin,
@@ -54,6 +57,16 @@ class AngeeModel(
 
     _angee_base: ClassVar[models.Manager[Self]] = AngeeUnscopedManager()
     """Unfiltered tracked writes for Django's relation and base-manager paths."""
+
+    def save_children(
+        self, field: str, rows: Iterable[tuple[str | None, dict[str, Any], dict[str, Any]]], *,
+        replace: bool = True, **kwargs: Any,
+    ) -> None:
+        """Authorize owned replacements; nested creation retains its create authority."""
+        if replace:
+            self.require_access("write")
+        with system_context(reason="base.save_children"):
+            super().save_children(field, rows, replace=replace, **kwargs)
 
     def retained(self) -> bool:
         """Whether a live or historical reference, or a stored grant, names this row.

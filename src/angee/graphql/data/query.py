@@ -31,7 +31,7 @@ from angee.graphql.data.contracts import (
     DataResourceQuery,
     DataResourceTypeNames,
 )
-from angee.graphql.data.resource_fields import PREFERRED_DISPLAY_FIELDS, final_wire_field_names
+from angee.graphql.data.resource_fields import final_wire_field_names
 from angee.graphql.introspection import FieldPathError, is_to_one_relation, require_field_for_path
 from graphql import (
     GraphQLEnumType,
@@ -98,6 +98,7 @@ class ResourceQueryProjection:
     """Declared filter expressions that never yield NULL, so ``isNull`` cannot match."""
     model: type[models.Model] | None = None
     identity_policies: dict[str, str] | None = None
+    representation_policies: dict[str, str | None] | None = None
 
     def build(self) -> DataResourceQuery:
         """Resolve all projections once, retaining only executable capabilities."""
@@ -423,10 +424,7 @@ class ResourceQueryProjection:
             if getattr(get_named_type(field.type), "name", None) == "ID"
         )
         identity = mapped if mapped in identities else node_identity[0] if len(node_identity) == 1 else None
-        labels = [
-            name for name, field in node.fields.items() if getattr(get_named_type(field.type), "name", None) == "String"
-        ]
-        label = next((name for name in PREFERRED_DISPLAY_FIELDS if name in labels), labels[0] if labels else None)
+        label = (self.representation_policies or {}).get(node.name)
         return DataQueryRelation(
             model=model,
             identity_path=f"{path}.{identity}" if identity else None,
