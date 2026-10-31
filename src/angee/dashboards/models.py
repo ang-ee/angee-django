@@ -120,7 +120,7 @@ class Dashboard(
         """Remove an owner's scoped override under its revision and database lock."""
 
         actor = current_actor()
-        using = router.db_for_write(type(self), instance=self)
+        using = self._state.db or router.db_for_write(type(self), instance=self)
         with (
             database_context(using),
             transaction.atomic(using=using),

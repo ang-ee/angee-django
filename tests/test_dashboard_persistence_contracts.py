@@ -2,12 +2,13 @@
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.test import override_settings
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.base.models.locks import StaleRevisionError
 from angee.dashboards.exceptions import DashboardConflictError
 from angee.graphql.schema import GraphQLSchemas
-from angee.provenance.context import changeset_model
+from angee.provenance.context import changeset, changeset_model
 from tests.conftest import create_user
 from tests.test_dashboards import DashboardTarget, dashboard_tables  # noqa: F401
 
@@ -75,11 +76,19 @@ def test_snapshot_update_bumps_once_and_missing_or_stale_expectation_keeps_conte
 
 
 def test_reset_rejects_stale_revision_before_deleting_the_scoped_dashboard():
+    class NewWriteRouter:
+        def db_for_write(self, model, **hints):
+            return "elsewhere"
+
     owner = create_user("owner")
     with system_context(reason="test.dashboard.scoped"):
         row = DashboardTarget.objects.create(owner=owner, scope="addon", scope_key="demo", name="Scoped")
         row.save()
-    with actor_context(owner):
+    with (
+        override_settings(DATABASE_ROUTERS=[NewWriteRouter()]),
+        actor_context(owner),
+        changeset(fresh=True, using="default"),
+    ):
         with pytest.raises(StaleRevisionError) as caught:
             row.reset_snapshot(expected_revision=1)
         assert caught.value.current == 2
