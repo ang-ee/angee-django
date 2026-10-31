@@ -407,7 +407,9 @@ def test_tag_legacy_readable_donor_still_contributes_filter_and_group_fields(
     monkeypatch.setitem(sys.modules, module_name, module)
     spec.loader.exec_module(module)
     resource = module._TAG_RESOURCE
-    assert "color" in {field.python_name for field in get_object_definition(resource.filter_type, strict=True).fields}
-    assert "color" in {field.python_name for field in get_object_definition(resource.group_key_type, strict=True).fields}
+    filter_fields = get_object_definition(resource.filter_type, strict=True).fields
+    group_fields = get_object_definition(resource.group_key_type, strict=True).fields
+    assert "color" in {field.python_name for field in filter_fields}
+    assert "color" in {field.python_name for field in group_fields}
     assert resource.insertable_fields == tag_schema._TAG_RESOURCE.insertable_fields
     assert resource.updatable_fields == tag_schema._TAG_RESOURCE.updatable_fields
