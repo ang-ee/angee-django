@@ -21,8 +21,8 @@ from typing import Any
 from django.conf import settings
 from pydantic import BaseModel, ConfigDict, Field
 
+from angee.integrate.backends.base import BridgeImpl
 from angee.integrate.http import HttpClientMixin
-from angee.integrate.impl import BridgeImpl
 
 # Directories the local backend never treats as source — a broad ``Source.path`` on a
 # working tree would otherwise walk (and ingest stray ``copier.yml`` from) these.

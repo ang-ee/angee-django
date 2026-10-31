@@ -11,7 +11,6 @@ from rebac import system_context
 
 from angee.integrate.constants import DISCOVERY_TASK, DISCOVERY_TASK_EXPIRES
 from angee.integrate.models import Bridge
-from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.registry import models_with
 from angee.jobs.enqueue import enqueue_task
 
@@ -25,13 +24,17 @@ def enqueue_pending_discoveries(*, now: datetime | None = None) -> int:
         model = apps.get_model("integrate", "Integration")
         rows = list(
             model.objects.pending_discoveries(now=now or timezone.now()).values_list(
-                "pk", "credential_id", "discovery_generation",
+                "pk",
+                "credential_id",
+                "discovery_generation",
             )
         )
         for pk, credential_pk, generation in rows:
             enqueue_task(
-                DISCOVERY_TASK, kwargs={"integration_pk": pk, "credential_pk": credential_pk, "generation": generation},
-                expires=DISCOVERY_TASK_EXPIRES, robust=True,
+                DISCOVERY_TASK,
+                kwargs={"integration_pk": pk, "credential_pk": credential_pk, "generation": generation},
+                expires=DISCOVERY_TASK_EXPIRES,
+                robust=True,
             )
     return len(rows)
 
@@ -57,17 +60,10 @@ def enqueue_due_bridges(*, now: datetime | None = None) -> dict[str, int]:
             due = model._default_manager.of_concrete_type().due_for_enqueue(
                 timestamp=timestamp, stale_before=stale_before
             )
-            due_ids = list(
-                due.order_by("pk").values_list("pk", flat=True)
-            )
+            due_ids = list(due.order_by("pk").values_list("pk", flat=True))
             for pk in due_ids:
                 with transaction.atomic():
-                    bridge = (
-                        due
-                        .lock_if_supported()
-                        .filter(pk=pk)
-                        .first()
-                    )
+                    bridge = due.lock_if_supported().filter(pk=pk).first()
                     if bridge is None:
                         skipped += 1
                         continue
@@ -75,7 +71,7 @@ def enqueue_due_bridges(*, now: datetime | None = None) -> dict[str, int]:
                         bridge.claim_sync(now=timestamp)
                     bridge.mark_sync_queued(now=timestamp)
                 try:
-                    queue_bridge_sync(bridge, now=timestamp, persist=False)
+                    bridge.request_sync(now=timestamp, persist=False)
                 except Exception:
                     with transaction.atomic():
                         reset = model._default_manager.lock_if_supported().filter(pk=pk).first()

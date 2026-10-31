@@ -35,6 +35,14 @@ class SyncStateMixin(models.Model):
         rows = (SyncFailure.from_state(self, slot, data) for slot, data in enumerate(self.inbound))
         return tuple(row for row in rows if not open_only or row.is_open)
 
+    def failure_at(self, slot: int | None) -> SyncFailure:
+        """Read a retained slot from its owner or refuse a stale public selection."""
+
+        for failure in self.failures():
+            if failure.slot == slot:
+                return failure
+        raise ValidationError("The retained sync failure no longer exists.")
+
     def _lock_sync_state(self) -> Self:
         stream = self.failure_stream
         type(stream).objects.lock_current(stream)
