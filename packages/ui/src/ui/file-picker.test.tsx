@@ -23,7 +23,7 @@ describe("FilePickerButton", () => {
 
   test("view-as disables the verb and the input", () => {
     render(<AppRuntimeProvider runtime={{ auth: { user: null, status: "authenticated", hasRole: () => false,
-      viewAs: { viewAs: { userId: "person" }, currentUser: null, realUser: null, viewablePeople: [], enter: vi.fn(), exit: vi.fn() },
+      viewAs: { viewAs: { userId: "person" }, currentUser: null, realUser: null, enter: vi.fn(), exit: vi.fn() },
     } }}><FilePickerButton onFiles={vi.fn()} label="Choose files">Upload</FilePickerButton></AppRuntimeProvider>);
     expect((screen.getByRole("button", { name: "Upload" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByLabelText("Choose files") as HTMLInputElement).disabled).toBe(true);

@@ -65,7 +65,7 @@ afterEach(() => { cleanup(); clearClients(); });
 
 const preview: RuntimeViewAs = {
   viewAs: { userId: "person" }, currentUser: { id: "person", name: "Person" }, realUser: null,
-  viewablePeople: [], enter: () => undefined, exit: () => undefined,
+  enter: () => undefined, exit: () => undefined,
 };
 
 test("preview keeps form submit visible and disabled, including Enter and native submit", async () => {

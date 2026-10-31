@@ -77,7 +77,6 @@ export interface AuthState {
 /** The native Refine identity entry also carries IAM's preview projection. */
 export interface AuthIdentity extends AuthUser {
   realUser?: AuthUser | null;
-  viewablePeople?: RuntimeViewAs["viewablePeople"];
 }
 
 export type CurrentUserPayload = Omit<
@@ -103,7 +102,7 @@ export interface AngeeAuthProviderOptions extends AngeeHasuraClientOptions {
   loginPath?: string;
   onAuthChange?: () => void;
   queryClient?: QueryClient;
-  /** Console IAM owns real_user and viewable_people; public IAM owns login. */
+  /** Console IAM owns real_user; public IAM owns login. */
   identityClient?: AngeeHasuraClientOptions;
   /** The composition's `requires` refs; the identity read asks `current_user.permitted` which it holds. */
   requires?: readonly string[];
@@ -218,14 +217,13 @@ export function createAngeeAuthProviderFromRequest(
       // The read that yields the identity asks which `requires` refs it holds: the console read when one follows.
       const payload = await currentUser(options.identityRequest ? [] : refs);
       if (!payload || !options.identityRequest) return currentUserToAuthState(payload).user;
-      // viewable_people requires a session: never send the console read for an
-      // anonymous login page. Both reads live in Refine's one identity query.
+      // The preview projection requires a session: never send the console read
+      // for an anonymous login page. Both reads share Refine's identity query.
       const identity = await options.identityRequest(AngeeViewAsIdentityDocument, { refs });
       const user = currentUserToAuthState(currentUserPayload(identity.current_user)).user;
       return user ? {
         ...user,
         realUser: currentUserToAuthState(currentUserPayload(identity.real_user)).user,
-        viewablePeople: identity.viewable_people,
       } satisfies AuthIdentity : null;
     },
     async getPermissions() {

@@ -874,7 +874,6 @@ function AppFrame({
       ...preview,
       currentUser: preview.pending ? null : identity,
       realUser: identity?.realUser ?? null,
-      viewablePeople: identity?.viewablePeople ?? [],
       enter: (userId) => { void viewAs.enter(userId); },
       exit: () => { void viewAs.exit(); },
     },
