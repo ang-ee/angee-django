@@ -164,9 +164,11 @@ template also chooses `runtime_mode: process | docker`; the instance template
 remains Docker only. Production serving requires Docker mode; the framework
 Copier validator marks production with process mode invalid. A process render
 still uses the complete development stack if validation is bypassed. Framework development
-runs the autoreloading ASGI `runserver` and Vite HMR. Its single process
-serializes synchronous GraphQL requests, so local page-burst timings do not
-represent production concurrency.
+runs the autoreloading ASGI `runserver` and Vite HMR. Native Django provides
+per-request thread-sensitive execution contexts for synchronous views, including
+GraphQL. A single development process does not itself serialize HTTP requests.
+Local page-burst timings depend on Python execution and database/query workload;
+they do not establish production concurrency.
 Instances keep their built SPA and single uvicorn worker in development.
 Production uses `manage.py serve` to run the configured `angee.server.application`
 under uvicorn without autoreload. GraphQL's ready-phase `SchemaIntegration` emits
