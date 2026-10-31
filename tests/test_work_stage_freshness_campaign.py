@@ -6,7 +6,7 @@ import pytest
 from django.core.exceptions import ValidationError
 from rebac import actor_context, system_context
 
-from tests.work_campaign import CreateTask, Stage, make_task, persisted_state
+from tests.work_campaign import Stage, Task, make_task, persisted_state
 from tests.work_campaign import productivity_create_case as productivity_create_case
 from tests.work_campaign import work_case as work_case
 
@@ -34,7 +34,7 @@ def test_stale_task_cannot_leave_a_stage_that_a_rule_entered(work_case):
     stale = make_task(queue)
     with system_context(reason="test.work.concurrent_rule"):
         reserved = Stage.objects.create(queue=queue, name="Rule", category="completed", rule_owned=True)
-        fresh = CreateTask._base_manager.get(pk=stale.pk)
+        fresh = Task._base_manager.get(pk=stale.pk)
         fresh.stage = reserved
         with fresh._work_verb_write():
             fresh.save(update_fields=["stage"])
@@ -51,12 +51,12 @@ def test_partial_save_uses_persisted_stage_for_guard_and_projection(work_case, l
     stale = make_task(queue)
     if loaded_stage == "null":
         with system_context(reason="test.work.legacy_null"):
-            CreateTask._base_manager.filter(pk=stale.pk).update(stage=None)
-        stale = CreateTask._base_manager.get(pk=stale.pk)
+            Task._base_manager.filter(pk=stale.pk).update(stage=None)
+        stale = Task._base_manager.get(pk=stale.pk)
     monkeypatch.setattr("angee.work.models.timezone.now", lambda: datetime(2026, 1, 1, tzinfo=UTC))
     with system_context(reason="test.work.rule_transition"):
         reserved = Stage.objects.create(queue=queue, name="Rule", category="completed", rule_owned=True)
-        fresh = CreateTask._base_manager.get(pk=stale.pk)
+        fresh = Task._base_manager.get(pk=stale.pk)
         fresh.stage = reserved
         fresh.save(update_fields=["stage"])
     before = persisted_state(stale)
@@ -69,19 +69,19 @@ def test_partial_save_uses_persisted_stage_for_guard_and_projection(work_case, l
     before.pop("updated_at")
     after.pop("updated_at")
     assert after == before
-    assert CreateTask._base_manager.get(pk=stale.pk).title == "Unrelated change"
+    assert Task._base_manager.get(pk=stale.pk).title == "Unrelated change"
 
 
 def test_partial_save_of_null_stage_does_not_write_inferred_default(work_case):
     actor, queue = work_case
     task = make_task(queue)
     with system_context(reason="test.work.legacy_null"):
-        CreateTask._base_manager.filter(pk=task.pk).update(stage=None)
-    task = CreateTask._base_manager.get(pk=task.pk)
+        Task._base_manager.filter(pk=task.pk).update(stage=None)
+    task = Task._base_manager.get(pk=task.pk)
     with actor_context(actor):
         task.title = "Title only"
         task.save(update_fields=["title"])
-    assert CreateTask._base_manager.get(pk=task.pk).stage_id is None
+    assert Task._base_manager.get(pk=task.pk).stage_id is None
 
 
 def test_cached_target_cannot_hide_new_rule_ownership(work_case):
