@@ -89,7 +89,7 @@ def test_await_run_wakes_once_and_forwards_the_child_output(child_graph):
     sent.clear()
     run_until(child)
     assert [(name, payload["kwargs"]) for name, payload in sent if name == "workflows.wake_run"] == [
-        ("workflows.wake_run", {"run_id": child.pk}),
+        ("workflows.wake_run", {"run_id": child.pk, "using": child._state.db}),
     ]
     assert runner.wake_runs(child.pk) == 1
     assert runner.wake_runs(child.pk) == 0
