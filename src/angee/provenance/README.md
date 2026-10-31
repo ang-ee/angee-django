@@ -150,3 +150,8 @@ boundary; direct schema and MCP tool execution opens its own boundary. The
 factory receives Strawberry's sync flag so asynchronous teardown uses the
 changeset owner's thread-sensitive close path. Handled execution errors mark the
 boundary failed while preserving successful statements.
+
+`Aspect[Subject]` and `StatementRecords[Subject]` retain the native owning-model
+callback type. Model-bound candidate methods keep their specific subject
+signatures; a declaration can combine them with ordinary callback-free aspects.
+The protected apply callback retains its existing keyword member/value contract.

@@ -324,7 +324,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T], StatementWriteMix
         return statement
 
     def _resolve_assertion(
-        self, row: Any, subject: Any, definition: NativeAspect, identity: Mapping[str, Any], *, using: str
+        self, row: Any, subject: Any, definition: NativeAspect[models.Model], identity: Mapping[str, Any], *, using: str
     ) -> Any:
         self.resolve(
             subject=subject, aspect=identity["aspect"], members={name: identity[name] for name in definition.members}
@@ -343,7 +343,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T], StatementWriteMix
     def _admit(
         self,
         subject: Any,
-        declaration: Aspect,
+        declaration: Aspect[models.Model],
         member_key: dict[str, Any],
         *,
         values: Mapping[str, Any],
@@ -725,7 +725,7 @@ class StatementLinkMixin(NativeStatementLinkMixin):
 
 
 @dataclass(frozen=True)
-class Aspect(NativeAspect):
+class Aspect[SubjectT: models.Model](NativeAspect[SubjectT]):
     """One field group and its optional typed membership identity.
 
     ``member`` reuses a canonical field name or maps names to new Django fields.
@@ -1043,7 +1043,7 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
     objects = StatementManager()
     _angee_base = _StatementUnscopedManager()
     statement_subject_model: type[StatementsMixin]
-    statement_aspects: dict[str, Aspect]
+    statement_aspects: dict[str, Aspect[models.Model]]
     statement_link: str | None
     subject: models.ForeignKey[Any, Any]
     asserted_by = models.TextField()
@@ -1158,7 +1158,7 @@ class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, 
 
     EVIDENCE_LIMIT: ClassVar[int] = 20
 
-    def sort_key(self, aspect: Aspect | None = None) -> tuple[Any, ...]:
+    def sort_key(self, aspect: Aspect[models.Model] | None = None) -> tuple[Any, ...]:
         """The one trust ordering: preferred rank, source precedence, confidence, ties, recency, identity.
 
         Survivorship, cross-subject member resolution and merge collapse all sort
@@ -1353,7 +1353,7 @@ class StatementPair(
         self.left.apply_pair(aspect=self.pair_name, other=self.right, statement=statement)
 
 
-class StatementRecords(NativeStatementRecords):
+class StatementRecords[SubjectT: models.Model = models.Model](NativeStatementRecords[SubjectT]):
     """Generate typed assertions with simple-history's native model generator.
 
     A concrete MTI child declaring its own aspects gets its own statement table.
@@ -1367,7 +1367,7 @@ class StatementRecords(NativeStatementRecords):
     def __init__(
         self,
         *,
-        aspects: Mapping[str, Aspect],
+        aspects: Mapping[str, Aspect[SubjectT]],
         sqid_prefix: str = "",
         excluded_fields: Sequence[str] = (),
         link: str | None = None,
@@ -1406,7 +1406,7 @@ class StatementRecords(NativeStatementRecords):
                     aspects[key] = None if key in aspects and aspects[key] != aspect else aspect
         return aspects
 
-    def declaration_for(self, model: Any) -> StatementRecords | None:
+    def declaration_for(self, model: Any) -> StatementRecords[SubjectT] | None:
         """The declaration owning ``model``'s one statement table, or None when a parent's table serves it.
 
         Declarations are read down the MRO until an inherited concrete table's

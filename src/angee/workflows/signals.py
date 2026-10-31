@@ -10,7 +10,7 @@ from django.apps import apps
 from django.db import transaction
 from django.db.models.signals import post_delete, pre_delete
 from django.dispatch import Signal
-from rebac import system_context
+from rebac import database_context, system_context
 from rebac.resources import model_resource_type
 
 from angee.base.signals import connect_for_models
@@ -40,12 +40,15 @@ def revoke_deleted_trigger_grants(sender: Any, *, instance: Any, **kwargs: Any) 
     sender.objects.reconcile_grants(instance, ())
 
 
-def stop_deleted_record_runs(sender: Any, *, instance: Any, **kwargs: Any) -> None:
+def stop_deleted_record_runs(sender: Any, *, instance: Any, using: str | None = None, **kwargs: Any) -> None:
     """Deletion leaves retained identities, but no run continues asking about them."""
 
     model = apps.get_model("workflows", "WorkflowRun")
-    with system_context(reason="workflows.deleted_record"):
-        for run in model.objects.working_on(instance).select_related("run_as"):
+    using = using or instance._state.db
+    with database_context(using), system_context(reason="workflows.deleted_record"):
+        for run in (
+            model.objects.db_manager(using, hints={"instance": instance}).working_on(instance).select_related("run_as")
+        ):
             run.cancel_on_commit(run.run_as)
 
 
@@ -56,16 +59,19 @@ def connect() -> None:
     connect_for_models(
         pre_delete,
         stop_deleted_record_runs,
-        applies=lambda model: model._meta.app_label not in {"workflows", "decisions"}
-        and bool(model_resource_type(model)),
+        applies=lambda model: (
+            model._meta.app_label not in {"workflows", "decisions"} and bool(model_resource_type(model))
+        ),
         dispatch_uid="workflows.deleted_record",
     )
     post_delete.connect(
-        deactivate_workflow_principal, sender=apps.get_model("workflows", "Workflow"),
+        deactivate_workflow_principal,
+        sender=apps.get_model("workflows", "Workflow"),
         dispatch_uid="workflows.service_user.deactivate",
     )
     pre_delete.connect(
-        revoke_deleted_trigger_grants, sender=apps.get_model("workflows", "Trigger"),
+        revoke_deleted_trigger_grants,
+        sender=apps.get_model("workflows", "Trigger"),
         dispatch_uid="workflows.trigger_grants.revoke",
     )
 

@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from django.db import models, transaction
-from rebac import system_context
+from rebac import database_context, system_context
 
 from angee.base.models.merge import MergeableMixin
 from angee.base.refs import generic_pointer_model
@@ -37,14 +37,17 @@ def _records(row: Any, *, update_fields: Iterable[str] | None = None) -> list[mo
         if not kind.relevant(type(row), update_fields):
             continue
         try:
-            with transaction.atomic(using=using), system_context(reason="timeline.invalidate"):
+            with database_context(using), transaction.atomic(using=using), system_context(reason="timeline.invalidate"):
                 grouped: dict[type[models.Model], set[int]] = {}
                 for target in kind.targets(row):
                     for model, pk in kind.records(target):
                         grouped.setdefault(generic_pointer_model(model), set()).add(pk)
                 for model, ids in grouped.items():
-                    canonical = set(model.canonical_ids(ids, using=using).values()) \
-                        if issubclass(model, MergeableMixin) else ids
+                    canonical = (
+                        set(model.canonical_ids(ids, using=using).values())
+                        if issubclass(model, MergeableMixin)
+                        else ids
+                    )
                     for pk in canonical:
                         record = model(pk=pk)
                         record._state.db = using
@@ -54,8 +57,15 @@ def _records(row: Any, *, update_fields: Iterable[str] | None = None) -> list[mo
     return records
 
 
-def before_save(sender: Any, *, instance: Any, raw: bool = False, update_fields: Iterable[str] | None = None,
-                using: str, **kwargs: Any) -> None:
+def before_save(
+    sender: Any,
+    *,
+    instance: Any,
+    raw: bool = False,
+    update_fields: Iterable[str] | None = None,
+    using: str,
+    **kwargs: Any,
+) -> None:
     if raw or changes_muted() or instance._state.adding:
         return
     if not any(kind.relevant(sender, update_fields) for kind in kinds_for(sender)):
@@ -75,7 +85,8 @@ def queue_change(sender: Any, *, payload: ModelChange, **kwargs: Any) -> None:
         broadcast_related_records((*previous, *_records(payload.instance, update_fields=payload.changed_fields)))
 
 
-def queue_updates(sender: Any, *, instances: Iterable[models.Model], update_fields: Iterable[str],
-                  **kwargs: Any) -> None:
+def queue_updates(
+    sender: Any, *, instances: Iterable[models.Model], update_fields: Iterable[str], **kwargs: Any
+) -> None:
     for instance in instances:
         broadcast_related_records(_records(instance, update_fields=update_fields))

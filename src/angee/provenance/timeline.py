@@ -66,7 +66,10 @@ class ChangeKind(TimelineKind):
         if row.state == row.State.CLOSED:
             yield from (
                 (model, pk)
-                for model, pk in type(row).objects.filter(pk=row.pk).records_touched()
+                for model, pk in type(row)
+                .objects.db_manager(row._state.db, hints={"instance": row})
+                .filter(pk=row.pk)
+                .records_touched()
                 if self.eligible(model)
             )
 
