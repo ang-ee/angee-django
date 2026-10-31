@@ -194,7 +194,7 @@ def test_reset_channel_pairing_wipes_store_and_restarts(
 ) -> None:
     """Reset stops, proves exit, clears identity/store, and resumes the channel."""
 
-    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda: True)
+    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda *, using=None: True)
     admin = _platform_admin("msg-pairing-reset-admin")
     channel = _live_channel("msg-pairing-reset")
     with system_context(reason="test.messaging.pairing.reset.seed"):
@@ -226,7 +226,7 @@ def test_reset_channel_pairing_refuses_without_a_cross_process_lock(
     """Destructive reset never trusts a process-local view of session liveness."""
 
     del pairing_graphql
-    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda: False)
+    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda *, using=None: False)
     admin = _platform_admin("msg-pairing-reset-blind-admin")
     channel = _live_channel("msg-pairing-reset-blind")
     store = session_store_path(channel)
@@ -252,7 +252,7 @@ def test_reset_channel_pairing_wipes_backend_declared_transients_only(
     """Reset preserves durable login material outside the backend's transient keys."""
 
     del pairing_graphql
-    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda: True)
+    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda *, using=None: True)
     monkeypatch.setattr(
         FakePairingBackend,
         "transient_material_keys",

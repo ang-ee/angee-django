@@ -215,9 +215,9 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
     assert step["records"][0]["record_id"] == record.sqid
     assert step["decision"]["records"][0]["record_id"] == record.sqid
     assert data["decisions"] == [{"id": step["decision"]["id"]}]
-    from angee.graphql.events import ChangeRelatedRecord
+    from angee.base.refs import RecordRef
 
-    concern = ChangeRelatedRecord(record._meta.label, record.sqid)
+    concern = RecordRef.from_instance(record)
     with system_context(reason="tests.timeline.change_concerns"):
         stored = WorkflowRun.objects.get(sqid=run.sqid)
         assert concern in stored.change_related_records()

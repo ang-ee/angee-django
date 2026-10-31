@@ -785,9 +785,12 @@ class StatementsMixin(StatementEditMixin, PersistenceMixin, HistoryDocumentMixin
         """Contribute assertions for direct subjects or the document's retained owned lines."""
 
         scopes = super().history_related_scopes(predicate, root_pk, direct=direct, using=using)
-        subjects = get_history_manager_for_model(cls).using(using).filter(predicate).values(cls._meta.pk.attname)
-        subject_scope = Q(subject_id=root_pk) if direct else Q(subject_id__in=models.Subquery(subjects))
+        subjects = get_history_manager_for_model(cls).using(using).filter(predicate)
         for statement in cls.statement_models():
+            target = _statement_foreign_key(statement, "subject").target_field
+            subject_scope = Q(subject_id=root_pk) if direct and target.model is cls else Q(
+                subject_id__in=models.Subquery(subjects.values(target.attname)),
+            )
             scopes[statement] = scopes[statement] | subject_scope if statement in scopes else subject_scope
         return scopes
 

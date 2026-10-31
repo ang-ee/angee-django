@@ -28,15 +28,16 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T], NativeChangesetQueryS
 
     @staticmethod
     def _merge_touching(record: HistoryMixin) -> Q:
-        content_types = [
-            ContentType.objects.db_manager(hints={"instance": record}).get_for_model(table)
-            for table in record.history_tables()
-        ]
-        return Q(
-            activity="merge",
-            origin_content_type__in=content_types,
-            origin_object_id=str(record.pk),
+        predicate = Q(pk__in=[])
+        content_types = ContentType.objects.db_manager(hints={"instance": record}).get_for_models(
+            *record.history_tables(),
         )
+        for table, content_type in content_types.items():
+            predicate |= Q(
+                activity="merge", origin_content_type=content_type,
+                origin_object_id=str(record._get_pk_val(table._meta)),
+            )
+        return predicate
 
     def records_touched(self) -> Iterable[tuple[type[models.Model], Any]]:
         """Yield only identities of existing records whose history documents we touch.
@@ -59,13 +60,20 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T], NativeChangesetQueryS
         ) -> Iterable[Any]:
             ids: set[Any] = set()
             tables = record.history_tables()
+
+            def include(table: type[models.Model], column: str, keys: Iterable[Any]) -> None:
+                field = record._history_identity_field(table, column)
+                ids.update(
+                    type(record)._base_manager.using(self.db)
+                    .filter(**{f"{field.name}__in": keys}).values_list("pk", flat=True)
+                )
             for table, columns in record.history_identity_columns().items():
                 if not issubclass(table, StatementsMixin):
                     continue
                 for statement in table.statement_models():
                     subjects = touched_ids(statement, "subject_id")
                     if table in tables:
-                        ids.update(subjects)
+                        include(statement, "subject_id", subjects)
                     elif subjects:
                         history = (
                             get_history_manager_for_model(table)
@@ -73,11 +81,11 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T], NativeChangesetQueryS
                             .filter(**{f"{table._meta.pk.attname}__in": subjects})
                         )
                         for column in columns:
-                            ids.update(history.order_by().values_list(column, flat=True))
+                            include(table, column, history.order_by().values_list(column, flat=True))
             if merges:
                 content_types = ContentType.objects.db_manager(self.db).get_for_models(*tables)
-                for content_type in content_types.values():
-                    ids.update(merges.get(content_type.pk, ()))
+                for table, content_type in content_types.items():
+                    include(table, table._meta.pk.attname, merges.get(content_type.pk, ()))
             return ids
 
         documents = (

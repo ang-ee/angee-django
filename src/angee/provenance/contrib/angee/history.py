@@ -12,6 +12,7 @@ from django.db import models
 from django.db.models import F, Q
 from django.db.models.fields.reverse_related import ManyToOneRel
 from django_provenance.base import ChangesetAttribution
+from django_provenance.replay import HistoryScopeMixin
 from rebac import (
     PermissionDenied,
     RebacMixin,
@@ -48,7 +49,7 @@ from angee.provenance.history import (
 from angee.provenance.querysets import model_history
 
 
-class HistoryDocumentMixin(models.Model):
+class HistoryDocumentMixin(HistoryScopeMixin):
     """Noncapturing document-history extension contract for sibling capabilities.
 
     Declaring document contributions does not install a history descriptor or
@@ -453,13 +454,7 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
     def history_scope(self) -> dict[type[models.Model], Q]:
         """Snapshot predicates for this record's concrete tables and owned lines."""
 
-        scopes = {}
-        for table, columns in self.history_identity_columns().items():
-            scope = Q()
-            for column in columns:
-                scope |= Q(**{column: self.pk})
-            scopes[table] = scope
-        return scopes
+        return super().history_scopes()
 
     def history_scopes(self) -> dict[type[models.Model], Q]:
         """Return document and generated-statement predicates for this record."""
@@ -472,7 +467,7 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
                 continue
             for representation, scope in model.history_related_scopes(
                 predicate,
-                self.pk,
+                self._get_pk_val(model._meta) if model in tables else self.pk,
                 direct=model in tables,
                 using=self._state.db,
             ).items():

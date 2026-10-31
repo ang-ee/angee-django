@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from functools import partial
 
-from django.apps import AppConfig, apps
+from django.apps import AppConfig
 from django.core import checks
 
 from angee.base.hooks import check_hooks
@@ -22,13 +22,14 @@ class PartiesConfig(AppConfig):
         """Run parties ready-time hooks after app population."""
 
         super().ready()
+        assert self.apps is not None
         # App population phase 1 imports AppConfig before the models exist; defer.
         from angee.parties import signals
 
         checks.register(check_settings, checks.Tags.models)
 
         signals.connect()
-        if apps.is_installed("angee.graphql"):
+        if self.apps.is_installed("angee.graphql"):
             from angee.graphql.field_types import register_field_type
             from angee.parties.fields import CountryCodeField
 

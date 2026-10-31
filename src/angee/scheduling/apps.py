@@ -1,6 +1,6 @@
 """Django identity for the native recurrence value and field capability."""
 
-from django.apps import AppConfig, apps
+from django.apps import AppConfig
 
 
 class SchedulingConfig(AppConfig):
@@ -12,7 +12,8 @@ class SchedulingConfig(AppConfig):
     def ready(self) -> None:
         """Register the recurrence wire type when GraphQL is enabled."""
         super().ready()
-        if apps.is_installed("angee.graphql"):
+        assert self.apps is not None
+        if self.apps.is_installed("angee.graphql"):
             from angee.graphql.field_types import register_field_type
             from angee.scheduling.fields import RecurrenceField
 

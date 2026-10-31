@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from tempfile import TemporaryDirectory
-from types import MethodType, SimpleNamespace
 from unittest.mock import Mock, patch
 
 from django.apps import apps
@@ -12,6 +11,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.core.management import call_command
 from django.test import TransactionTestCase
+from django.utils import timezone
 from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
@@ -109,11 +109,20 @@ class ArchiveWorkflowTests(TransactionTestCase):
         canonical = str(self.target.sqid)
         padded = SqidField(prefix=self.target.sqid_prefix, min_length=24).public_id_from_value(self.target.pk)
         self.assertNotEqual(padded, canonical)
-        context = SimpleNamespace(
-            subject=self.source, input=ArchiveMappingUnit(extractor="test_drive", target=padded), actor=reader,
-            heartbeat=Mock(), begin_effect=Mock(), record=Mock(), done=Mock(side_effect=lambda value, **_: value),
+        self.source.with_actor(self.actor).grant_record_access("viewer", reader)
+        workflow = load_workflow(
+            "angee.workflows_integrate.archive_import_drive", actor=self.actor, allow_non_dev=True,
         )
-        context.load = MethodType(StepContext.load, context)
+        run = start_run(workflow, actor=self.actor, subject=self.source)
+        context = StepContext(
+            run=run, step_run=None, step=ArchiveExecute, attempt=None,
+            input=ArchiveMappingUnit(extractor="test_drive", target=padded), config=None,
+            actor=reader, now=timezone.now(),
+        )
+        self.enterContext(patch.object(context, "heartbeat", Mock()))
+        self.enterContext(patch.object(context, "begin_effect", Mock()))
+        self.enterContext(patch.object(context, "record", Mock()))
+        self.enterContext(patch.object(context, "done", Mock(side_effect=lambda value, **_: value)))
         self.assertTrue(self.target.with_actor(reader).has_access("read"))
         self.assertFalse(self.target.with_actor(reader).has_access("write"))
         with patch.object(TestDriveExtractor, "execute") as execute:

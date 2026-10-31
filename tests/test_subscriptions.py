@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncGenerator, Awaitable, Callable
-from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -403,17 +402,16 @@ def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
     monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append(payload))
     # Run the on_commit callback inline so the (non-)broadcast is observable now.
     monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
-    stub_payload = ChangePayload(model="tests.Row", id="1", action="update")
-    monkeypatch.setattr(
-        publishing.ChangePayload,
-        "from_instance",
-        classmethod(lambda cls, instance, **kwargs: replace(stub_payload, broadcasts=kwargs["broadcasts"])),
-    )
 
-    class Row(ChangeBroadcastMixin):
-        """Minimal instance carrying only the broadcast opt-out decision."""
+    class Row(ChangeBroadcastMixin, Group):
+        """Native proxy row carrying the broadcast opt-out decision."""
+
+        class Meta:
+            proxy = True
+            app_label = "auth"
 
         def __init__(self, broadcasts: bool) -> None:
+            super().__init__(pk=1, name="broadcast-policy")
             self._broadcasts = broadcasts
 
         def broadcasts_changes(self) -> bool:
@@ -423,11 +421,15 @@ def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
     assert sent == []
 
     publishing.publish_change(Row(broadcasts=True), action="delete", update_fields=None)
-    assert sent == [stub_payload.as_message()]
+    assert len(sent) == 1
+    emitted = ChangePayload.from_mapping(sent[0])
+    assert (emitted.model, emitted.id, emitted.action, emitted.broadcasts) == ("auth.Row", "1", "delete", True)
 
     # A plain model with no hook keeps the default broadcast behavior.
-    publishing.publish_change(object(), action="create", update_fields=None)
-    assert sent == [stub_payload.as_message(), stub_payload.as_message()]
+    publishing.publish_change(Group(pk=2, name="default-broadcast"), action="create", update_fields=None)
+    assert len(sent) == 2
+    emitted = ChangePayload.from_mapping(sent[1])
+    assert (emitted.model, emitted.id, emitted.action, emitted.broadcasts) == ("auth.Group", "2", "create", True)
 
 
 @override_settings(

@@ -1595,7 +1595,7 @@ open fresh evaluator scopes for authorization and change-feed reads.
 - **Register custom model value fields in the owning app's `ready()` callback
   when GraphQL is enabled.** Guard the import and call to
   `angee.graphql.field_types.register_field_type()` with
-  `django.apps.apps.is_installed("angee.graphql")`. Keep neutral field modules free of
+  `self.apps.is_installed("angee.graphql")`. Keep neutral field modules free of
   GraphQL imports. GraphQL schema declarations load lazily in the composer's
   ready-phase schema integration, after every app-ready callback, so Strawberry's
   exact-class `auto` mapping is available regardless of app ordering.

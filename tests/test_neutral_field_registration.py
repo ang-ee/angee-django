@@ -5,6 +5,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from unittest.mock import patch
 
 from django.apps import apps
 from django.test import SimpleTestCase
@@ -81,6 +82,29 @@ class EnabledScalarContract(SimpleTestCase):
             register_field_type(MoneyField, str)
         self.assertIs(field_type_map[MoneyField], Decimal)
         self.assertEqual(GraphQLSchemas.from_discovery().render_sdl()["public"], sdl)
+
+    def test_registration_uses_the_owning_isolated_registry(self):
+        from django.apps.registry import Apps
+        from strawberry_django.fields.types import field_type_map
+
+        from angee.money.fields import MoneyField
+        from angee.parties.fields import CountryCodeField
+        from angee.scheduling.fields import RecurrenceField
+
+        self.assertTrue(apps.is_installed("angee.graphql"))
+        fields = (MoneyField, RecurrenceField, CountryCodeField)
+        # Global GraphQL remains enabled; this real registry has only field owners.
+        with patch.dict(field_type_map):
+            for field in fields:
+                del field_type_map[field]
+            registry = Apps(installed_apps=("angee.money", "angee.scheduling", "angee.parties"))
+            self.assertFalse(registry.is_installed("angee.graphql"))
+            for config in registry.get_app_configs():
+                self.assertIs(config.apps, registry)
+            for field in fields:
+                self.assertNotIn(field, field_type_map)
+        for field in fields:
+            self.assertIn(field, field_type_map)
 
 
 def test_enabled_native_scalar_schema(tmp_path):

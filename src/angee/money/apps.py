@@ -7,8 +7,9 @@ Its value field registers its GraphQL scalar when GraphQL is enabled.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from decimal import Decimal
 
-from django.apps import AppConfig, apps
+from django.apps import AppConfig
 from django.core import checks
 
 _CHECKS_REGISTERED = False
@@ -24,10 +25,9 @@ class MoneyConfig(AppConfig):
         """Register money-owned process hooks after app population."""
 
         super().ready()
+        assert self.apps is not None
         _register_checks()
-        if apps.is_installed("angee.graphql"):
-            from decimal import Decimal
-
+        if self.apps.is_installed("angee.graphql"):
             from angee.graphql.field_types import register_field_type
             from angee.money.fields import MoneyField
 
