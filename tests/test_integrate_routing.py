@@ -106,6 +106,22 @@ class RoutingContract(TransactionTestCase):
         self.assertTrue(bridge.subscription_state["discovered"])
         return bridge
 
+    def test_credential_material_merge_is_row_bound_and_rolls_back(self):
+        other = self._ready("default", "default-material").credential
+        credential = self._ready("producer", "producer-material").credential
+        self.assertEqual(other.pk, credential.pk)
+        credential.update_material(token="producer-token", transient="one-shot")
+        credential.update_material(transient=None)
+        self.assertEqual(credential.reveal(), {"token": "producer-token"})
+        with self.assertRaisesRegex(RuntimeError, "rollback"):
+            with transaction.atomic(using="producer"):
+                credential.update_material(token="rolled-back")
+                raise RuntimeError("rollback")
+        credential.refresh_from_db(using="producer")
+        other.refresh_from_db(using="default")
+        self.assertEqual(credential.reveal(), {"token": "producer-token"})
+        self.assertEqual(other.reveal(), {"token": "test-token"})
+
     def test_queue_rollback_commit_and_explicit_delayed_execution(self):
         other = self._ready("default", "default-route")
         bridge = self._ready("producer", "explicit-producer")

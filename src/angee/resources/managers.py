@@ -218,11 +218,15 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
         """Retain an imported target through the ledger's compatibility invariant."""
 
         values = self._target_values(instance, model=model, source=source, tier=tier, content_hash=content_hash)
-        with transaction.atomic(using=self.db):
-            current = self.filter(source_addon=source_addon, xref=xref).lock_if_supported().first()
-            if current is not None:
-                current.require_target_model(model)
-            ledger, _created = self.update_or_create(source_addon=source_addon, xref=xref, defaults=values)
+        with database_context(self.db), transaction.atomic(using=self.db):
+            ledger, created = self.lock_if_supported().get_or_create(
+                source_addon=source_addon, xref=xref, defaults=values
+            )
+            ledger.require_target_model(model)
+            if not created:
+                for field, value in values.items():
+                    setattr(ledger, field, value)
+                ledger.save(using=self.db, update_fields=[*values, "loaded_at"])
         return ledger
 
     def bind_instance(

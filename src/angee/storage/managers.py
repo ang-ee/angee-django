@@ -21,13 +21,16 @@ from rebac import (
     GenericTarget,
     PermissionDenied,
     SubjectRef,
+    check_permission,
     current_actor,
+    database_context,
     generic_target,
-    require_permission,
     system_context,
+    to_object_ref,
     user_subject_type,
 )
 from rebac.backends import backend as rebac_backend
+from rebac.database import write_alias
 from rebac.field_backing import resolve_field_backing
 from rebac.resources import model_resource_type
 from rebac.schema.introspection import permission_sources
@@ -80,6 +83,7 @@ class DriveManager[DriveT: Drive](_DriveManagerBase[DriveT]):
 
         return (
             self.model.system_queryset()
+            .using(write_alias(self.model, using=self._db))
             .filter(slug=settings.ANGEE_STORAGE_DEFAULT_DRIVE)
             .select_related("backend")
             .first()
@@ -93,22 +97,24 @@ class DriveManager[DriveT: Drive](_DriveManagerBase[DriveT]):
         permissions and attribution.
         """
 
-        default = self.configured_default()
-        if default is None:
-            raise ValidationError({"drive": "Configure an existing default drive before creating a volume."})
-        drive = self.model(
-            slug=slug,
-            name=name,
-            backend_id=default.backend_id,
-            prefix=f"drives/{slug}",
-            owns_items=owns_items,
-        )
-        try:
-            with transaction.atomic():
-                drive.save(ownerless=True)
-        except IntegrityError as error:
-            raise ValidationError({"slug": "This drive slug or key namespace is already in use."}) from error
-        return drive
+        self = self.db_manager(write_alias(self.model, using=self._db))
+        with database_context(self.db):
+            default = self.configured_default()
+            if default is None:
+                raise ValidationError({"drive": "Configure an existing default drive before creating a volume."})
+            drive = self.model(
+                slug=slug,
+                name=name,
+                backend_id=default.backend_id,
+                prefix=f"drives/{slug}",
+                owns_items=owns_items,
+            )
+            try:
+                with transaction.atomic(using=self.db):
+                    drive.save(using=self.db, ownerless=True)
+            except IntegrityError as error:
+                raise ValidationError({"slug": "This drive slug or key namespace is already in use."}) from error
+            return drive
 
     def image_drive(self) -> DriveT | None:
         """Return the image drive (``ANGEE_STORAGE_IMAGE_DRIVE``), creating it at first use.
@@ -125,25 +131,37 @@ class DriveManager[DriveT: Drive](_DriveManagerBase[DriveT]):
         provision it beside (a fresh database before resources load).
         """
 
-        slug = str(settings.ANGEE_STORAGE_IMAGE_DRIVE)
-        everyone = DirectRecordAccess(relation="viewer", subject=SubjectRef.of(user_subject_type(), "*"))
-        with system_context(reason="storage.drive.image_drive"):
-            drive = self.model.system_queryset().filter(slug=slug).first()
-            if drive is None:
-                try:
-                    drive = self.create_on_default_backend(slug=slug, name="Images")
-                except ValidationError:
-                    # A concurrent first use created it, or no default drive exists yet.
-                    drive = self.model.system_queryset().filter(slug=slug).first()
-            if drive is None:
-                return None
-            grants = set(drive.direct_record_access())
-            if grants - {everyone} or drive.files.exclude(owner=None).exists():
-                logger.error("Drive %r holds grants or owned files, so it cannot serve as the image drive.", slug)
-                return None
-            if not grants:
-                drive.system_grant_record_access(everyone.relation, everyone.subject)
-            return drive
+        self = self.db_manager(write_alias(self.model, using=self._db))
+        with database_context(self.db):
+            slug = str(settings.ANGEE_STORAGE_IMAGE_DRIVE)
+            everyone = DirectRecordAccess(relation="viewer", subject=SubjectRef.of(user_subject_type(), "*"))
+            with system_context(reason="storage.drive.image_drive"):
+                drive = (
+                    self.model.system_queryset()
+                    .using(write_alias(self.model, using=self._db))
+                    .filter(slug=slug)
+                    .first()
+                )
+                if drive is None:
+                    try:
+                        drive = self.create_on_default_backend(slug=slug, name="Images")
+                    except ValidationError:
+                        # A concurrent first use created it, or no default drive exists yet.
+                        drive = (
+                            self.model.system_queryset()
+                            .using(write_alias(self.model, using=self._db))
+                            .filter(slug=slug)
+                            .first()
+                        )
+                if drive is None:
+                    return None
+                grants = set(drive.direct_record_access())
+                if grants - {everyone} or drive.files.exclude(owner=None).exists():
+                    logger.error("Drive %r holds grants or owned files, so it cannot serve as the image drive.", slug)
+                    return None
+                if not grants:
+                    drive.system_grant_record_access(everyone.relation, everyone.subject)
+                return drive
 
 
 _FolderManagerBase = AngeeHistoryManager.from_queryset(FolderQuerySet)
@@ -161,32 +179,41 @@ class FolderManager[FolderT: Folder](_FolderManagerBase[FolderT]):
         Mirrors :meth:`FileManager.draft`.
         """
 
-        drive_model = self.model.drive.field.related_model
-        drive = drive_model._default_manager.all().from_public_id(str(drive_id))
-        if drive is None:
-            raise exceptions.UploadTargetNotFound("drive not found")
-        if not drive.storage.writable:
-            raise exceptions.UploadConflict("drive is read-only")
-        if not drive.has_access("write"):
-            raise exceptions.UploadDenied("write access to the drive is required")
-        parent = None
-        if parent_id:
-            parent = self.all().from_public_id(str(parent_id))
-            if parent is None or parent.is_virtual:
-                raise exceptions.UploadTargetNotFound("parent folder not found")
-        actor = current_actor()
-        folder = self.model(
-            drive_id=drive.pk, parent_id=parent.pk if parent is not None else None, name=name, description=description
-        )
-        try:
-            folder.full_clean()
-        except ValidationError as error:
-            raise exceptions.UploadError(f"invalid folder request: {error}") from error
-        folder.sudo(reason="storage.folder.create")
-        folder.save()
-        if actor is not None:
-            folder.with_actor(actor)
-        return folder
+        self = self.db_manager(write_alias(self.model, using=self._db))
+        with database_context(self.db):
+            drive_model = self.model.drive.field.related_model
+            drive = (
+                drive_model._default_manager.db_manager(write_alias(self.model, using=self._db))
+                .all()
+                .from_public_id(str(drive_id))
+            )
+            if drive is None:
+                raise exceptions.UploadTargetNotFound("drive not found")
+            if not drive.storage.writable:
+                raise exceptions.UploadConflict("drive is read-only")
+            if not drive.has_access("write"):
+                raise exceptions.UploadDenied("write access to the drive is required")
+            parent = None
+            if parent_id:
+                parent = self.all().from_public_id(str(parent_id))
+                if parent is None or parent.is_virtual:
+                    raise exceptions.UploadTargetNotFound("parent folder not found")
+            actor = current_actor()
+            folder = self.model(
+                drive_id=drive.pk,
+                parent_id=parent.pk if parent is not None else None,
+                name=name,
+                description=description,
+            )
+            try:
+                folder.full_clean()
+            except ValidationError as error:
+                raise exceptions.UploadError(f"invalid folder request: {error}") from error
+            folder.sudo(reason="storage.folder.create")
+            folder.save(using=self.db)
+            if actor is not None:
+                folder.with_actor(actor)
+            return folder
 
     def ensure_path(
         self, drive: Any, parts: Sequence[str], *, cache: dict[tuple[str, ...], Any | None] | None = None
@@ -199,27 +226,29 @@ class FolderManager[FolderT: Folder](_FolderManagerBase[FolderT]):
         caller-owned prefix cache lets a tree walk resolve each directory once.
         """
 
-        prefixes: dict[tuple[str, ...], Any | None] = cache if cache is not None else {(): None}
-        prefixes.setdefault((), None)
-        prefix: tuple[str, ...] = ()
-        parent = prefixes[()]
-        with system_context(reason="storage.folder.ensure_path"):
-            for raw_part in parts:
-                name = str(raw_part).strip()
-                if not name or name in {".", ".."} or "/" in name or "\\" in name:
-                    raise exceptions.UploadError(f"invalid folder path segment: {raw_part!r}")
-                prefix = (*prefix, name)
-                if prefix in prefixes:
-                    parent = prefixes[prefix]
-                    continue
-                parent, _created = self.get_or_create(
-                    drive_id=drive.pk,
-                    parent_id=parent.pk if parent is not None else None,
-                    name=name,
-                    defaults={"is_virtual": False},
-                )
-                prefixes[prefix] = parent
-        return parent
+        self = self.db_manager(write_alias(self.model, using=self._db or drive._state.db, instance=drive))
+        with database_context(self.db):
+            prefixes: dict[tuple[str, ...], Any | None] = cache if cache is not None else {(): None}
+            prefixes.setdefault((), None)
+            prefix: tuple[str, ...] = ()
+            parent = prefixes[()]
+            with system_context(reason="storage.folder.ensure_path"):
+                for raw_part in parts:
+                    name = str(raw_part).strip()
+                    if not name or name in {".", ".."} or "/" in name or "\\" in name:
+                        raise exceptions.UploadError(f"invalid folder path segment: {raw_part!r}")
+                    prefix = (*prefix, name)
+                    if prefix in prefixes:
+                        parent = prefixes[prefix]
+                        continue
+                    parent, _created = self.get_or_create(
+                        drive_id=drive.pk,
+                        parent_id=parent.pk if parent is not None else None,
+                        name=name,
+                        defaults={"is_virtual": False},
+                    )
+                    prefixes[prefix] = parent
+            return parent
 
 
 _FileManagerBase = AngeeHistoryManager.from_queryset(FileQuerySet)
@@ -260,80 +289,86 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         read/write arm. It never returns an existing dedup row.
         """
 
-        drive = self._drive_for(drive_id=drive_id, drive_slug=drive_slug, folder_id=folder_id)
-        if not drive.storage.writable:
-            raise exceptions.UploadConflict("drive is read-only")
-        folder = self._folder_for(folder_id, drive=drive)
-        if not drive.has_access("write"):
-            raise exceptions.UploadDenied("write access to the drive is required")
+        self = self.db_manager(write_alias(self.model, using=self._db))
+        with database_context(self.db):
+            drive = self._drive_for(drive_id=drive_id, drive_slug=drive_slug, folder_id=folder_id)
+            if not drive.storage.writable:
+                raise exceptions.UploadConflict("drive is read-only")
+            folder = self._folder_for(folder_id, drive=drive)
+            if not drive.has_access("write"):
+                raise exceptions.UploadDenied("write access to the drive is required")
 
-        try:
-            visibility = FileVisibility(visibility)
-        except ValueError as error:
-            raise exceptions.UploadError("invalid file visibility") from error
-        if visibility == FileVisibility.RECORD and record is None:
-            raise exceptions.UploadError("record visibility requires an attachment record")
-        attachment_model = self.model._meta.get_field("attachments").related_model
-        assert attachment_model is not None
-        attachments = cast("FileAttachmentManager[FileAttachment]", attachment_model._default_manager)
-        try:
-            target = generic_target(record) if record is not None else None
-        except ValueError as error:
-            raise exceptions.UploadRecordDenied() from error
-
-        digest = _normalized_hash(content_hash) if content_hash else ""
-        actor = current_actor()
-        # The checked factory owns both writes; attribution keeps the real actor.
-        with transaction.atomic():
-            if target is not None:
-                try:
-                    attachments._lock_target(target)
-                except ObjectDoesNotExist as error:
-                    raise exceptions.UploadRecordDenied() from error
-            if digest and visibility == FileVisibility.INHERITED:
-                existing = (
-                    self.select_for_update()
-                    .filter(
-                        drive_id=drive.pk,
-                        content_hash=digest,
-                        upload_state=UploadState.READY,
-                        visibility=FileVisibility.INHERITED,
-                    )
-                    .first()
-                )
-                if existing is not None:
-                    if target is not None:
-                        self._attach_record(attachments, existing, target)
-                    if existing.is_trashed:
-                        existing.restore()
-                    return existing
-            placeholder = secrets.token_hex(32)
-            mime = _mime_row(self.model, mime_type)
-            row = self.model(
-                drive=drive,
-                owner_id=owner_id,
-                folder_id=folder.pk if folder is not None else None,
-                filename=filename,
-                mime_type_id=mime.pk if mime is not None else None,
-                size_bytes=max(int(size_bytes or 0), 0),
-                content_hash=placeholder,
-                storage_path=drive.object_key(placeholder, filename),
-                upload_state=UploadState.DRAFT,
-                visibility=visibility,
-            )
             try:
-                row.full_clean()
-            except ValidationError as error:
-                raise exceptions.UploadError(f"invalid file request: {error}") from error
-            row.sudo(reason="storage.file.draft").save()
-            if target is not None:
-                self._attach_record(attachments, row, target)
-                # After the edge authorized the record, so the arm reveals nothing.
-                if visibility == FileVisibility.RECORD:
-                    attachments.require_record_arm(target)
-        if actor is not None:
-            row.with_actor(actor)
-        return row
+                visibility = FileVisibility(visibility)
+            except ValueError as error:
+                raise exceptions.UploadError("invalid file visibility") from error
+            if visibility == FileVisibility.RECORD and record is None:
+                raise exceptions.UploadError("record visibility requires an attachment record")
+            attachment_model = self.model._meta.get_field("attachments").related_model
+            assert attachment_model is not None
+            attachments = cast(
+                "FileAttachmentManager[FileAttachment]", attachment_model._default_manager.db_manager(self.db)
+            )
+            if record is not None and record._state.db is not None and record._state.db != self.db:
+                raise exceptions.UploadRecordDenied()
+            try:
+                target = generic_target(record) if record is not None else None
+            except ValueError as error:
+                raise exceptions.UploadRecordDenied() from error
+
+            digest = _normalized_hash(content_hash) if content_hash else ""
+            actor = current_actor()
+            # The checked factory owns both writes; attribution keeps the real actor.
+            with transaction.atomic(using=self.db):
+                if target is not None:
+                    try:
+                        attachments._lock_target(target)
+                    except ObjectDoesNotExist as error:
+                        raise exceptions.UploadRecordDenied() from error
+                if digest and visibility == FileVisibility.INHERITED:
+                    existing = (
+                        self.select_for_update()
+                        .filter(
+                            drive_id=drive.pk,
+                            content_hash=digest,
+                            upload_state=UploadState.READY,
+                            visibility=FileVisibility.INHERITED,
+                        )
+                        .first()
+                    )
+                    if existing is not None:
+                        if target is not None:
+                            self._attach_record(attachments, existing, target)
+                        if existing.is_trashed:
+                            existing.restore()
+                        return existing
+                placeholder = secrets.token_hex(32)
+                mime = _mime_row(self.model, mime_type, using=self.db)
+                row = self.model(
+                    drive=drive,
+                    owner_id=owner_id,
+                    folder_id=folder.pk if folder is not None else None,
+                    filename=filename,
+                    mime_type_id=mime.pk if mime is not None else None,
+                    size_bytes=max(int(size_bytes or 0), 0),
+                    content_hash=placeholder,
+                    storage_path=drive.object_key(placeholder, filename),
+                    upload_state=UploadState.DRAFT,
+                    visibility=visibility,
+                )
+                try:
+                    row.full_clean()
+                except ValidationError as error:
+                    raise exceptions.UploadError(f"invalid file request: {error}") from error
+                row.sudo(reason="storage.file.draft").save(using=self.db)
+                if target is not None:
+                    self._attach_record(attachments, row, target)
+                    # After the edge authorized the record, so the arm reveals nothing.
+                    if visibility == FileVisibility.RECORD:
+                        attachments.require_record_arm(target)
+            if actor is not None:
+                row.with_actor(actor)
+            return row
 
     @staticmethod
     def _attach_record(attachments: Any, file: Any, target: GenericTarget) -> None:
@@ -411,11 +446,13 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         :class:`exceptions.UploadTargetNotFound` while no image drive can exist.
         """
 
-        mime = require_image(content)
-        drive = self.model.drive.field.related_model.objects.image_drive()
-        if drive is None:
-            raise exceptions.UploadTargetNotFound("The image drive needs a default drive to provision it.")
-        return self.ingest_bytes(content, filename=f"image{attachment_extension(mime)}", drive_slug=drive.slug)
+        self = self.db_manager(write_alias(self.model, using=self._db))
+        with database_context(self.db):
+            mime = require_image(content)
+            drive = self.model.drive.field.related_model.objects.db_manager(self.db).image_drive()
+            if drive is None:
+                raise exceptions.UploadTargetNotFound("The image drive needs a default drive to provision it.")
+            return self.ingest_bytes(content, filename=f"image{attachment_extension(mime)}", drive_slug=drive.slug)
 
     def ingest_stream(
         self,
@@ -466,50 +503,52 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         truncated to the File field's limit; content identity stays lossless.
         """
 
-        digest = _normalized_hash(content_hash)
-        filename_limit = self.model.filename.field.max_length
-        assert filename_limit is not None
-        filename = truncate_filename(filename, filename_limit)
-        expected_size = max(int(size_bytes), 0)
-        with system_context(reason="storage.file.ingest_stream"):
-            row = self.draft(
-                filename=filename,
-                size_bytes=expected_size,
-                drive_id=drive_id,
-                drive_slug=drive_slug,
-                folder_id=folder_id,
-                content_hash=digest,
-                owner_id=owner_id,
-            )
-            if row.upload_state == UploadState.READY:
-                row._grant_dedup_reach(owner_id)
-                row.merge_metadata(metadata)
-                return row, False  # content-addressed dedup hit
-            storage = row.storage
-            saved_path = storage.save(row.storage_path, DjangoFile(reader, name=row.storage_path))
-            if saved_path and saved_path != row.storage_path:
-                row.storage_path = saved_path
-                row.save(update_fields=["storage_path"])
-            try:
-                result = row.finalize(expected_hash=digest, expected_size=expected_size)
-            except exceptions.UploadConflict:
-                if row.upload_envelope.get("failure_reason") == "duplicate":
-                    row.sudo(reason="storage.ingest.duplicate").purge()
-                # A concurrent ingest of identical bytes won the dedup race; the
-                # winner is READY, so resolve to it instead of failing the sync.
-                winner = self.filter(
-                    drive_id=row.drive_id,
+        self = self.db_manager(write_alias(self.model, using=self._db))
+        with database_context(self.db):
+            digest = _normalized_hash(content_hash)
+            filename_limit = self.model.filename.field.max_length
+            assert filename_limit is not None
+            filename = truncate_filename(filename, filename_limit)
+            expected_size = max(int(size_bytes), 0)
+            with system_context(reason="storage.file.ingest_stream"):
+                row = self.draft(
+                    filename=filename,
+                    size_bytes=expected_size,
+                    drive_id=drive_id,
+                    drive_slug=drive_slug,
+                    folder_id=folder_id,
                     content_hash=digest,
-                    upload_state=UploadState.READY,
-                    visibility=FileVisibility.INHERITED,
-                ).first()
-                if winner is not None:
-                    winner._grant_dedup_reach(owner_id)
-                    result = winner
-                else:
-                    raise
-            result.merge_metadata(metadata)
-            return result, result.pk == row.pk
+                    owner_id=owner_id,
+                )
+                if row.upload_state == UploadState.READY:
+                    row._grant_dedup_reach(owner_id)
+                    row.merge_metadata(metadata)
+                    return row, False  # content-addressed dedup hit
+                storage = row.storage
+                saved_path = storage.save(row.storage_path, DjangoFile(reader, name=row.storage_path))
+                if saved_path and saved_path != row.storage_path:
+                    row.storage_path = saved_path
+                    row.save(using=self.db, update_fields=["storage_path"])
+                try:
+                    result = row.finalize(expected_hash=digest, expected_size=expected_size)
+                except exceptions.UploadConflict:
+                    if row.upload_envelope.get("failure_reason") == "duplicate":
+                        row.sudo(reason="storage.ingest.duplicate").purge()
+                    # A concurrent ingest of identical bytes won the dedup race; the
+                    # winner is READY, so resolve to it instead of failing the sync.
+                    winner = self.filter(
+                        drive_id=row.drive_id,
+                        content_hash=digest,
+                        upload_state=UploadState.READY,
+                        visibility=FileVisibility.INHERITED,
+                    ).first()
+                    if winner is not None:
+                        winner._grant_dedup_reach(owner_id)
+                        result = winner
+                    else:
+                        raise
+                result.merge_metadata(metadata)
+                return result, result.pk == row.pk
 
     def index_external(
         self,
@@ -534,102 +573,67 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         as :class:`~angee.storage.exceptions.ExternalDuplicate`.
         """
 
-        path = str(storage_path).strip()
-        if not path:
-            raise exceptions.UploadError("storage_path is required")
-        digest = _normalized_hash(content_hash)
-        with system_context(reason="storage.file.index_external"), transaction.atomic():
-            mime = self._cached_mime_row(mime_type, cache=mime_cache)
-            row = None
-            if existing_pk is not None:
-                row = self.filter(drive=drive, pk=existing_pk).first()
-            if row is None:
-                row = self.filter(drive=drive, storage_path=path).first()
+        self = self.db_manager(write_alias(self.model, using=self._db or drive._state.db, instance=drive))
+        with database_context(self.db):
+            path = str(storage_path).strip()
+            if not path:
+                raise exceptions.UploadError("storage_path is required")
+            digest = _normalized_hash(content_hash)
+            with system_context(reason="storage.file.index_external"), transaction.atomic(using=self.db):
+                mime = self._cached_mime_row(mime_type, cache=mime_cache)
+                row = None
+                if existing_pk is not None:
+                    row = self.filter(drive=drive, pk=existing_pk).first()
+                if row is None:
+                    row = self.filter(drive=drive, storage_path=path).first()
 
-            if row is None:
-                duplicate = self.filter(
-                    drive=drive,
-                    content_hash=digest,
-                    upload_state=UploadState.READY,
-                ).first()
-                if duplicate is not None:
-                    if not duplicate.is_trashed:
-                        self._raise_external_duplicate(duplicate)
-                    row = duplicate
-
-            metadata_patch = dict(metadata or {})
-
-            if row is None:
-                row = self.model(
-                    drive_id=drive.pk,
-                    folder_id=folder.pk if folder is not None else None,
-                    filename=filename,
-                    content_hash=digest,
-                    size_bytes=max(int(size_bytes), 0),
-                    mime_type_id=mime.pk if mime is not None else None,
-                    storage_path=path,
-                    metadata=self.model.merged_metadata({}, metadata_patch),
-                    upload_state=UploadState.READY,
-                    owner_id=owner_id,
-                )
-                try:
-                    row.full_clean()
-                except ValidationError as error:
-                    raise exceptions.UploadError(f"invalid external file: {error}") from error
-                try:
-                    with transaction.atomic():
-                        row.save()
-                except IntegrityError as error:
+                if row is None:
                     duplicate = self.filter(
                         drive=drive,
                         content_hash=digest,
                         upload_state=UploadState.READY,
                     ).first()
                     if duplicate is not None:
-                        self._raise_external_duplicate(duplicate, cause=error)
-                    raise
-                row._emit_finalized()
-                return row
+                        if not duplicate.is_trashed:
+                            self._raise_external_duplicate(duplicate)
+                        row = duplicate
 
-            content_changed = row.content_hash != digest
-            if content_changed:
-                duplicate = (
-                    self.filter(
-                        drive=drive,
+                metadata_patch = dict(metadata or {})
+
+                if row is None:
+                    row = self.model(
+                        drive_id=drive.pk,
+                        folder_id=folder.pk if folder is not None else None,
+                        filename=filename,
                         content_hash=digest,
+                        size_bytes=max(int(size_bytes), 0),
+                        mime_type_id=mime.pk if mime is not None else None,
+                        storage_path=path,
+                        metadata=self.model.merged_metadata({}, metadata_patch),
                         upload_state=UploadState.READY,
+                        owner_id=owner_id,
                     )
-                    .exclude(pk=row.pk)
-                    .first()
-                )
-                if duplicate is not None:
-                    self._raise_external_duplicate(duplicate)
-            updates: list[str] = []
-            values = {
-                "folder": folder,
-                "filename": filename,
-                "content_hash": digest,
-                "size_bytes": max(int(size_bytes), 0),
-                "mime_type": mime,
-                "storage_path": path,
-                "upload_state": UploadState.READY,
-                **self.model.UNTRASHED_VALUES,
-            }
-            if metadata_patch:
-                values["metadata"] = self.model.merged_metadata(row.metadata, metadata_patch)
-            for field, value in values.items():
-                if getattr(row, field) != value:
-                    setattr(row, field, value)
-                    updates.append(field.removesuffix("_id"))
-            if updates:
-                try:
-                    row.full_clean()
-                except ValidationError as error:
-                    raise exceptions.UploadError(f"invalid external file: {error}") from error
-                try:
-                    with transaction.atomic():
-                        row.save(update_fields=[*updates, "updated_at"])
-                except IntegrityError as error:
+                    try:
+                        row.full_clean()
+                    except ValidationError as error:
+                        raise exceptions.UploadError(f"invalid external file: {error}") from error
+                    try:
+                        with transaction.atomic(using=self.db):
+                            row.save(using=self.db)
+                    except IntegrityError as error:
+                        duplicate = self.filter(
+                            drive=drive,
+                            content_hash=digest,
+                            upload_state=UploadState.READY,
+                        ).first()
+                        if duplicate is not None:
+                            self._raise_external_duplicate(duplicate, cause=error)
+                        raise
+                    row._emit_finalized()
+                    return row
+
+                content_changed = row.content_hash != digest
+                if content_changed:
                     duplicate = (
                         self.filter(
                             drive=drive,
@@ -640,11 +644,48 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
                         .first()
                     )
                     if duplicate is not None:
-                        self._raise_external_duplicate(duplicate, cause=error)
-                    raise
-            if content_changed:
-                row._emit_finalized()
-            return row
+                        self._raise_external_duplicate(duplicate)
+                updates: list[str] = []
+                values = {
+                    "folder": folder,
+                    "filename": filename,
+                    "content_hash": digest,
+                    "size_bytes": max(int(size_bytes), 0),
+                    "mime_type": mime,
+                    "storage_path": path,
+                    "upload_state": UploadState.READY,
+                    **self.model.UNTRASHED_VALUES,
+                }
+                if metadata_patch:
+                    values["metadata"] = self.model.merged_metadata(row.metadata, metadata_patch)
+                for field, value in values.items():
+                    if getattr(row, field) != value:
+                        setattr(row, field, value)
+                        updates.append(field.removesuffix("_id"))
+                if updates:
+                    try:
+                        row.full_clean()
+                    except ValidationError as error:
+                        raise exceptions.UploadError(f"invalid external file: {error}") from error
+                    try:
+                        with transaction.atomic(using=self.db):
+                            row.save(using=self.db, update_fields=[*updates, "updated_at"])
+                    except IntegrityError as error:
+                        duplicate = (
+                            self.filter(
+                                drive=drive,
+                                content_hash=digest,
+                                upload_state=UploadState.READY,
+                            )
+                            .exclude(pk=row.pk)
+                            .first()
+                        )
+                        if duplicate is not None:
+                            self._raise_external_duplicate(duplicate, cause=error)
+                        raise
+                if content_changed:
+                    row._emit_finalized()
+                return row
 
     def _cached_mime_row(self, mime_type: str, *, cache: dict[str, Any | None] | None) -> Any | None:
         """Resolve one MIME taxonomy row, caching distinct values for a sync run."""
@@ -652,12 +693,12 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         key = str(mime_type or "").strip().lower() or FALLBACK_MIME
         if cache is not None and key in cache:
             return cache[key]
-        row = _mime_row(self.model, key)
+        row = _mime_row(self.model, key, using=self.db)
         if row is None and key != FALLBACK_MIME:
             if cache is not None and FALLBACK_MIME in cache:
                 row = cache[FALLBACK_MIME]
             else:
-                row = _mime_row(self.model, FALLBACK_MIME)
+                row = _mime_row(self.model, FALLBACK_MIME, using=self.db)
                 if cache is not None:
                     cache[FALLBACK_MIME] = row
         if cache is not None:
@@ -751,14 +792,26 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
 
         drive_model = self.model.drive.field.related_model
         if drive_id:
-            drive = drive_model._default_manager.all().from_public_id(str(drive_id))
+            drive = (
+                drive_model._default_manager.db_manager(write_alias(self.model, using=self._db))
+                .all()
+                .from_public_id(str(drive_id))
+            )
         elif folder_id and not drive_slug:
             folder_model = self.model.folder.field.related_model
-            folder = folder_model._default_manager.all().from_public_id(str(folder_id))
+            folder = (
+                folder_model._default_manager.db_manager(write_alias(self.model, using=self._db))
+                .all()
+                .from_public_id(str(folder_id))
+            )
             drive = None if folder is None or folder.is_virtual else folder.drive
         else:
             slug = drive_slug or str(settings.ANGEE_STORAGE_DEFAULT_DRIVE)
-            drive = drive_model._default_manager.filter(slug=slug).first()
+            drive = (
+                drive_model._default_manager.db_manager(write_alias(self.model, using=self._db))
+                .filter(slug=slug)
+                .first()
+            )
         if drive is None:
             raise exceptions.UploadTargetNotFound("drive not found")
         if drive.is_archived:
@@ -771,7 +824,11 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         if not folder_id:
             return None
         folder_model = self.model.folder.field.related_model
-        folder = folder_model._default_manager.all().from_public_id(str(folder_id))
+        folder = (
+            folder_model._default_manager.db_manager(write_alias(self.model, using=self._db))
+            .all()
+            .from_public_id(str(folder_id))
+        )
         try:
             self.model.validate_placement(folder, drive.pk)
         except ValidationError as error:
@@ -793,7 +850,6 @@ class FileAttachmentManager[AttachmentT: FileAttachment](_FileAttachmentManagerB
     actor, so a target type without a relation is refused.
     """
 
-    @require_permission("read", resource_arg="file")
     def attach(self, file: Any, record: models.Model, *, label: str = "") -> AttachmentT:
         """Attach a readable file to a writable record, idempotently per edge.
 
@@ -804,11 +860,17 @@ class FileAttachmentManager[AttachmentT: FileAttachment](_FileAttachmentManagerB
         ``ValueError`` for a record without a REBAC type.
         """
 
-        target = generic_target(record)
-        with transaction.atomic():
-            self._lock_target(target)
-            file = type(file).system_queryset(lock=("self",)).get(pk=file.pk)
-            return self._attach(file, target, label=label)
+        self = self.db_manager(write_alias(self.model, using=self._db or file._state.db, instance=file))
+        with database_context(self.db):
+            if not check_permission("read", to_object_ref(file)).allowed:
+                raise PermissionDenied("read access to the file is required")
+            if file._state.db != self.db or (record._state.db is not None and record._state.db != self.db):
+                raise ValueError("File attachment target must use the file's database.")
+            target = generic_target(record)
+            with transaction.atomic(using=self.db):
+                self._lock_target(target)
+                file = type(file).system_queryset(lock=("self",)).using(self.db).get(pk=file.pk)
+                return self._attach(file, target, label=label)
 
     def has_record_arm(self, target: GenericTarget) -> bool:
         """Whether record-scoped files read and write through this target type's attachments.
@@ -849,7 +911,9 @@ class FileAttachmentManager[AttachmentT: FileAttachment](_FileAttachmentManagerB
         target_model = target.content_type.model_class()
         if target_model is None:
             raise ValueError("File attachment target model is unavailable.")
-        target_model._base_manager.select_for_update(of=row_lock_paths(target_model)).get(pk=target.object_id)
+        target_model._base_manager.db_manager(self.db).select_for_update(of=row_lock_paths(target_model)).get(
+            pk=target.object_id
+        )
 
     def _attach(self, file: Any, target: GenericTarget, *, label: str = "") -> AttachmentT:
         """Get or insert one edge under the ambient actor, after its verb locked the target.
@@ -866,7 +930,7 @@ class FileAttachmentManager[AttachmentT: FileAttachment](_FileAttachmentManagerB
         return attachment
 
 
-def _mime_row(file_model: type[Any], mime_type: str) -> Any | None:
+def _mime_row(file_model: type[Any], mime_type: str, *, using: str | None = None) -> Any | None:
     """Return the taxonomy row for one MIME string, if catalogued.
 
     Shared by ``FileManager.draft`` (the begin-time hint) and ``File.finalize``
@@ -876,4 +940,4 @@ def _mime_row(file_model: type[Any], mime_type: str) -> Any | None:
     if not mime_type:
         return None
     mime_model = file_model.mime_type.field.related_model
-    return mime_model._default_manager.filter(mime_type=mime_type.strip().lower()).first()
+    return mime_model._default_manager.db_manager(using).filter(mime_type=mime_type.strip().lower()).first()

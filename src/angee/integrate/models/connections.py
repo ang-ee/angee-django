@@ -14,8 +14,10 @@ from django.db import models, transaction
 from django.db.models import Q
 from django.utils import timezone
 from rebac import (
+    database_context,
     system_context,
 )
+from rebac.database import write_alias
 from strawberry_django.descriptors import model_property
 
 from angee.base.fields.encrypted import EncryptedField
@@ -606,9 +608,11 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
         extra keys remain permitted here.
         """
 
-        with system_context(reason="integrate.credential.material"):
-            with transaction.atomic():
-                row: Credential = type(self).objects.lock_if_supported().get(pk=self.pk)
+        using = write_alias(type(self), using=self._state.db, instance=self)
+        manager = type(self).objects.db_manager(using, hints={"instance": self})
+        with database_context(using), system_context(reason="integrate.credential.material"):
+            with transaction.atomic(using=using):
+                row: Credential = manager.lock_if_supported().get(pk=self.pk)
                 material = dict(row.reveal())
                 for key, value in changes.items():
                     if value is None:
@@ -617,8 +621,8 @@ class Credential(AuditMixin, AngeeDataModel, concrete=True):
                         material[key] = value
                 # EncryptedField's descriptor is not modeled by django-stubs.
                 row.material = self.encode_material(material)
-                row.save(update_fields=["material", "updated_at"])
-            self.refresh_from_db(fields=["material", "updated_at"])
+                row.save(using=using, update_fields=["material", "updated_at"])
+            self.refresh_from_db(using=using, fields=["material", "updated_at"])
 
     def replace_material(self, material: Mapping[str, Any]) -> None:
         """Re-enter this credential's secret(s) under the kind handler's validation.

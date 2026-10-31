@@ -18,7 +18,7 @@ from django.core.exceptions import (
     ValidationError,
 )
 from django.core.files.base import File as DjangoFile
-from django.db import IntegrityError, models, router, transaction
+from django.db import IntegrityError, models, transaction
 from django.db.models.deletion import ProtectedError
 from django.db.models.signals import post_save
 from django.urls import reverse
@@ -28,11 +28,13 @@ from rebac import (
     NoActorResolvedError,
     PermissionDenied,
     current_actor,
+    database_context,
     system_context,
     to_object_ref,
     to_subject_ref,
 )
 from rebac.backends import backend as rebac_backend
+from rebac.database import write_alias
 
 from angee.base.fields.state import StateField
 from angee.base.identity import public_subject_ref
@@ -78,13 +80,15 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
     def _grant_dedup_reach(self, owner_id: Any) -> None:
         """Grant a dedup-hit file read reach to the requested ingest owner."""
 
-        with transaction.atomic():
-            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        with database_context(using), transaction.atomic(using=using):
+            locked = type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
             if locked.visibility != FileVisibility.INHERITED:
                 raise exceptions.UploadConflict("identical bytes already exist")
             if owner_id is None or str(locked.owner_id or "") == str(owner_id):
                 return
-            user = get_user_model().objects.get(pk=owner_id)
+            user = get_user_model().objects.db_manager(using).get(pk=owner_id)
             locked.grant_record_access("viewer", user)
 
     @staticmethod
@@ -178,16 +182,20 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
 
         if not metadata:
             return
-        rows = type(self).objects.db_manager(hints={"instance": self}).all()
+        rows = (
+            type(self)
+            .objects.db_manager(write_alias(type(self), using=self._state.db, instance=self), hints={"instance": self})
+            .all()
+        )
         actor = self.actor()
         if actor is not None:
             rows = rows.with_actor(actor)
-        with transaction.atomic(using=rows.db):
+        with database_context(rows.db), transaction.atomic(using=rows.db):
             locked = rows.lock_if_supported().get(pk=self.pk)
             merged = self.merged_metadata(locked.metadata, metadata)
             if merged != locked.metadata:
                 locked.metadata = merged
-                locked.save(update_fields=["metadata", "updated_at"])
+                locked.save(using=locked._state.db, update_fields=["metadata", "updated_at"])
             self.metadata = merged
             self.updated_at = locked.updated_at
 
@@ -203,7 +211,9 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         if self.folder_id:
             folder_model = type(self).folder.field.related_model
             folder = (
-                folder_model._base_manager.db_manager(hints={"instance": self})
+                folder_model._base_manager.db_manager(
+                    write_alias(type(self), using=self._state.db, instance=self), hints={"instance": self}
+                )
                 .filter(
                     pk=self.folder_id,
                 )
@@ -228,6 +238,8 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
     def set_visibility(self, value: FileVisibility | str) -> Self:
         """Narrow with file write, or widen with drive share, retaining all grants."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         try:
             visibility = FileVisibility(value)
         except ValueError as error:
@@ -235,15 +247,15 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         actor = self.actor() or current_actor()
         if actor is None:
             raise PermissionDenied("File visibility requires an acting user.")
-        with transaction.atomic():
-            locked = type(self).system_queryset(lock=("self",)).select_related("drive").get(pk=self.pk)
+        with database_context(using), transaction.atomic(using=using):
+            locked = type(self).system_queryset(lock=("self",)).using(using).select_related("drive").get(pk=self.pk)
             resource = locked.drive if visibility == FileVisibility.INHERITED else locked
             permission = "share" if visibility == FileVisibility.INHERITED else "write"
             if not resource.with_actor(actor).has_access(permission):
                 raise PermissionDenied("You cannot change file visibility.")
             if locked.visibility != visibility:
                 locked.visibility = visibility
-                locked.sudo(reason="storage.file.set_visibility").save(update_fields=["visibility"])
+                locked.sudo(reason="storage.file.set_visibility").save(using=using, update_fields=["visibility"])
             self.visibility = locked.visibility
         return self
 
@@ -259,10 +271,15 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         drive_field = type(self).drive.field
         if drive_field.is_cached(self):
             return self.drive.storage
-        with system_context(reason="storage.file.storage"):
+        with (
+            database_context(write_alias(type(self), using=self._state.db, instance=self)),
+            system_context(reason="storage.file.storage"),
+        ):
             drive_field.set_cached_value(
                 self,
-                drive_field.related_model._base_manager.select_related("backend").get(pk=self.drive_id),
+                drive_field.related_model._base_manager.db_manager(self._state.db, hints={"instance": self})
+                .select_related("backend")
+                .get(pk=self.drive_id),
             )
             return self.drive.backend.storage
 
@@ -382,12 +399,15 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         (``UPLOAD_TOKEN_MAX_AGE``).
         """
 
-        nonce = secrets.token_urlsafe(24)
-        envelope = dict(self.upload_envelope or {})
-        envelope.update(nonce=nonce, used=False)
-        type(self)._base_manager.filter(pk=self.pk).update(upload_envelope=envelope)
-        self.upload_envelope = envelope
-        return signing.dumps({"file": str(self.sqid), "nonce": nonce}, salt=UPLOAD_TOKEN_SALT)
+        with database_context(write_alias(type(self), using=self._state.db, instance=self)):
+            nonce = secrets.token_urlsafe(24)
+            envelope = dict(self.upload_envelope or {})
+            envelope.update(nonce=nonce, used=False)
+            type(self)._base_manager.db_manager(write_alias(type(self), using=self._state.db, instance=self)).filter(
+                pk=self.pk
+            ).update(upload_envelope=envelope)
+            self.upload_envelope = envelope
+            return signing.dumps({"file": str(self.sqid), "nonce": nonce}, salt=UPLOAD_TOKEN_SALT)
 
     def receive_bytes(self, body: Reader[bytes]) -> None:
         """Stream a proxied request body into this row's backend key.
@@ -399,25 +419,29 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         error marks the row FAILED and removes the partial object.
         """
 
-        self._authorize_push()
-        self._consume_upload_token()
-        max_bytes = int(settings.ANGEE_STORAGE_PROXY_UPLOAD_MAX_BYTES)
-        storage = self.storage
-        wrapper = DjangoFile(CappedReader(body, max_bytes=max_bytes), name=self.storage_path)
-        try:
-            saved_path = storage.save(self.storage_path, wrapper)
-        except BodyTooLarge as error:
-            storage.discard(self.storage_path, context="proxy.too_large")
-            self._fail(reason="too_large")
-            raise exceptions.UploadTooLarge(f"proxy upload exceeds {max_bytes} bytes") from error
-        except Exception:
-            self._fail(reason="proxy_error")
-            raise
-        if saved_path and saved_path != self.storage_path:
-            # The backend rewrote the key (e.g. a name collision); trust it.
-            self.storage_path = saved_path
-            with system_context(reason="storage.upload.proxy_path"):
-                self.save(update_fields=["storage_path"])
+        with database_context(write_alias(type(self), using=self._state.db, instance=self)):
+            self._authorize_push()
+            self._consume_upload_token()
+            max_bytes = int(settings.ANGEE_STORAGE_PROXY_UPLOAD_MAX_BYTES)
+            storage = self.storage
+            wrapper = DjangoFile(CappedReader(body, max_bytes=max_bytes), name=self.storage_path)
+            try:
+                saved_path = storage.save(self.storage_path, wrapper)
+            except BodyTooLarge as error:
+                storage.discard(self.storage_path, context="proxy.too_large")
+                self._fail(reason="too_large")
+                raise exceptions.UploadTooLarge(f"proxy upload exceeds {max_bytes} bytes") from error
+            except Exception:
+                self._fail(reason="proxy_error")
+                raise
+            if saved_path and saved_path != self.storage_path:
+                # The backend rewrote the key (e.g. a name collision); trust it.
+                self.storage_path = saved_path
+                with system_context(reason="storage.upload.proxy_path"):
+                    self.save(
+                        using=write_alias(type(self), using=self._state.db, instance=self),
+                        update_fields=["storage_path"],
+                    )
 
     def finalize(self, *, expected_hash: str = "", expected_size: int | None = None) -> Self:
         """Verify the bytes at this row's key and publish it READY.
@@ -431,96 +455,105 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         the actor can read.
         """
 
-        if self.upload_state == UploadState.READY:
-            return self
-        if self.upload_state == UploadState.FAILED:
-            raise exceptions.UploadConflict("upload already failed")
-        if not self.has_access("write"):
-            raise exceptions.UploadDenied("write access to the file is required")
+        using = write_alias(type(self), using=self._state.db, instance=self)
 
-        storage = self.storage
-        try:
-            stream = storage.open(self.storage_path, "rb")
-        except OSError as error:
-            raise exceptions.UploadTargetNotFound("the bytes are not visible yet") from error
-        try:
-            actual_hash, actual_size, head = sha256_stream(stream, capture_head=MIME_SNIFF_BYTES)
-        finally:
-            with contextlib.suppress(OSError):
-                stream.close()
-
-        if expected_hash and _normalized_hash(expected_hash) != actual_hash:
-            storage.discard(self.storage_path, context="finalize.mismatch")
-            self._fail(reason="hash_mismatch")
-            raise exceptions.UploadConflict("the bytes do not match the declared hash")
-        if expected_size is not None and int(expected_size) != actual_size:
-            storage.discard(self.storage_path, context="finalize.mismatch")
-            self._fail(reason="size_mismatch")
-            raise exceptions.UploadConflict("the bytes do not match the declared size")
-
-        duplicate = (
-            type(self)
-            ._base_manager.filter(drive_id=self.drive_id, content_hash=actual_hash, upload_state=UploadState.READY)
-            .exclude(pk=self.pk)
-            .first()
-        )
-        if duplicate is not None:
-            self._yield_to_duplicate(duplicate, storage=storage)
-
-        self.content_hash = actual_hash
-        self.size_bytes = actual_size
-        self.mime_type = _mime_row(type(self), detect_mime(head, self.filename)) or _mime_row(type(self), FALLBACK_MIME)
-        self.upload_state = cast(UploadState, UploadState.READY)
-        updated_at = timezone.now()
-        try:
-            with transaction.atomic():
-                claimed = (
-                    type(self)
-                    ._base_manager.filter(pk=self.pk, upload_state=UploadState.DRAFT)
-                    .update(
-                        content_hash=self.content_hash,
-                        size_bytes=self.size_bytes,
-                        mime_type=self.mime_type,
-                        upload_state=UploadState.READY,
-                        updated_at=updated_at,
-                    )
-                )
-        except IntegrityError as error:
-            # A concurrent finalize for the same bytes won the dedup constraint.
-            winner = (
-                type(self)
-                ._base_manager.filter(drive_id=self.drive_id, content_hash=actual_hash)
-                .exclude(pk=self.pk)
-                .first()
-            )
-            if winner is not None:
-                self._yield_to_duplicate(winner, storage=storage)
-            self._fail(reason="duplicate")
-            raise exceptions.UploadConflict("identical bytes already exist") from error
-        if not claimed:
-            self.refresh_from_db()
+        with database_context(using):
             if self.upload_state == UploadState.READY:
                 return self
             if self.upload_state == UploadState.FAILED:
                 raise exceptions.UploadConflict("upload already failed")
-            raise exceptions.UploadConflict("upload is no longer awaiting bytes")
-        self.updated_at = updated_at
-        self._emit_saved(
-            update_fields=("content_hash", "size_bytes", "mime_type", "upload_state", "updated_at"),
-        )
-        self._emit_finalized()
-        return self
+            if not self.has_access("write"):
+                raise exceptions.UploadDenied("write access to the file is required")
+
+            storage = self.storage
+            try:
+                stream = storage.open(self.storage_path, "rb")
+            except OSError as error:
+                raise exceptions.UploadTargetNotFound("the bytes are not visible yet") from error
+            try:
+                actual_hash, actual_size, head = sha256_stream(stream, capture_head=MIME_SNIFF_BYTES)
+            finally:
+                with contextlib.suppress(OSError):
+                    stream.close()
+
+            if expected_hash and _normalized_hash(expected_hash) != actual_hash:
+                storage.discard(self.storage_path, context="finalize.mismatch")
+                self._fail(reason="hash_mismatch")
+                raise exceptions.UploadConflict("the bytes do not match the declared hash")
+            if expected_size is not None and int(expected_size) != actual_size:
+                storage.discard(self.storage_path, context="finalize.mismatch")
+                self._fail(reason="size_mismatch")
+                raise exceptions.UploadConflict("the bytes do not match the declared size")
+
+            duplicate = (
+                type(self)
+                ._base_manager.db_manager(using)
+                .filter(drive_id=self.drive_id, content_hash=actual_hash, upload_state=UploadState.READY)
+                .exclude(pk=self.pk)
+                .first()
+            )
+            if duplicate is not None:
+                self._yield_to_duplicate(duplicate, storage=storage)
+
+            self.content_hash = actual_hash
+            self.size_bytes = actual_size
+            self.mime_type = _mime_row(type(self), detect_mime(head, self.filename), using=using) or _mime_row(
+                type(self), FALLBACK_MIME, using=using
+            )
+            self.upload_state = cast(UploadState, UploadState.READY)
+            updated_at = timezone.now()
+            try:
+                with database_context(using), transaction.atomic(using=using):
+                    claimed = (
+                        type(self)
+                        ._base_manager.db_manager(using)
+                        .filter(pk=self.pk, upload_state=UploadState.DRAFT)
+                        .update(
+                            content_hash=self.content_hash,
+                            size_bytes=self.size_bytes,
+                            mime_type=self.mime_type,
+                            upload_state=UploadState.READY,
+                            updated_at=updated_at,
+                        )
+                    )
+            except IntegrityError as error:
+                # A concurrent finalize for the same bytes won the dedup constraint.
+                winner = (
+                    type(self)
+                    ._base_manager.db_manager(using)
+                    .filter(drive_id=self.drive_id, content_hash=actual_hash)
+                    .exclude(pk=self.pk)
+                    .first()
+                )
+                if winner is not None:
+                    self._yield_to_duplicate(winner, storage=storage)
+                self._fail(reason="duplicate")
+                raise exceptions.UploadConflict("identical bytes already exist") from error
+            if not claimed:
+                self.refresh_from_db(using=using)
+                if self.upload_state == UploadState.READY:
+                    return self
+                if self.upload_state == UploadState.FAILED:
+                    raise exceptions.UploadConflict("upload already failed")
+                raise exceptions.UploadConflict("upload is no longer awaiting bytes")
+            self.updated_at = updated_at
+            self._emit_saved(
+                update_fields=("content_hash", "size_bytes", "mime_type", "upload_state", "updated_at"),
+            )
+            self._emit_finalized()
+            return self
 
     def _authorize_push(self) -> None:
         """Require an authenticated file writer, including record-derived writers."""
 
-        actor = current_actor()
-        user_id = actor_user_id(actor)
-        if actor is None or user_id is None:
-            raise exceptions.UploadDenied("an authenticated user is required")
-        allowed = rebac_backend().check_access(subject=actor, action="write", resource=to_object_ref(self))
-        if not allowed.allowed:
-            raise exceptions.UploadDenied("write access to the file is required")
+        with database_context(write_alias(type(self), using=self._state.db, instance=self)):
+            actor = current_actor()
+            user_id = actor_user_id(actor)
+            if actor is None or user_id is None:
+                raise exceptions.UploadDenied("an authenticated user is required")
+            allowed = rebac_backend().check_access(subject=actor, action="write", resource=to_object_ref(self))
+            if not allowed.allowed:
+                raise exceptions.UploadDenied("write access to the file is required")
 
     def _consume_upload_token(self) -> None:
         """Spend the one-shot proxy token atomically, failing closed on reuse.
@@ -529,9 +562,15 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         relies on its single-writer serialization instead.
         """
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         nonce = getattr(self, "_upload_nonce", None)
-        with system_context(reason="storage.upload.consume_token"), transaction.atomic():
-            locked = type(self)._base_manager.select_for_update().filter(pk=self.pk).first()
+        with (
+            database_context(using),
+            system_context(reason="storage.upload.consume_token"),
+            transaction.atomic(using=using),
+        ):
+            locked = type(self)._base_manager.db_manager(using).select_for_update().filter(pk=self.pk).first()
             if locked is None:
                 raise exceptions.UploadTargetNotFound("file not found")
             if locked.upload_state != UploadState.DRAFT:
@@ -543,7 +582,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
                 raise exceptions.UploadDenied("upload token already used")
             envelope["used"] = True
             locked.upload_envelope = envelope
-            locked.save(update_fields=["upload_envelope"])
+            locked.save(using=locked._state.db, update_fields=["upload_envelope"])
         self.upload_envelope = locked.upload_envelope
 
     def _yield_to_duplicate(self, duplicate: File, *, storage: StorageBackend) -> None:
@@ -570,39 +609,43 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         to keep the zed ``delete`` permission live.
         """
 
-        del keep_parents
-        if using is not None and using != self._state.db:
-            raise ValueError("File deletion must use the file's database.")
-        if self.is_trashed:
-            return 0, {}
-        if not self.has_access("delete"):
-            raise PermissionDenied(f"Denied: cannot delete {self._meta.label} {self.public_id}")
-        self.trash()
-        return 1, {self._meta.label: 1}
+        with database_context(write_alias(type(self), using=self._state.db, instance=self)):
+            del keep_parents
+            if using is not None and using != self._state.db:
+                raise ValueError("File deletion must use the file's database.")
+            if self.is_trashed:
+                return 0, {}
+            if not self.has_access("delete"):
+                raise PermissionDenied(f"Denied: cannot delete {self._meta.label} {self.public_id}")
+            self.trash()
+            return 1, {self._meta.label: 1}
 
     def purge_if_unretained(self) -> bool:
         """Discard an unused acquisition only while references and direct shares retain none."""
 
-        self.require_access("delete")
-        rows = type(self).objects.db_manager(hints={"instance": self})
-        with transaction.atomic(using=rows.db):
-            if not rows.filter(pk=self.pk).exists():
-                return False
-            try:
-                locked = self.lock_for_record_access(using=rows.db)
-            except type(self).DoesNotExist:
-                return False
-            if locked.updated_at != self.updated_at or locked.owner_id != self.owner_id:
-                return False
-            if locked.attachments.exists():
-                return False
-            if type(locked).get_rebac_grantable() and locked.direct_record_access():
-                return False
-            try:
-                locked.purge()
-            except ProtectedError:
-                return False
-        return True
+        with database_context(write_alias(type(self), using=self._state.db, instance=self)):
+            self.require_access("delete")
+            rows = type(self).objects.db_manager(
+                write_alias(type(self), using=self._state.db, instance=self), hints={"instance": self}
+            )
+            with database_context(rows.db), transaction.atomic(using=rows.db):
+                if not rows.filter(pk=self.pk).exists():
+                    return False
+                try:
+                    locked = self.lock_for_record_access(using=rows.db)
+                except type(self).DoesNotExist:
+                    return False
+                if locked.updated_at != self.updated_at or locked.owner_id != self.owner_id:
+                    return False
+                if locked.attachments.exists():
+                    return False
+                if type(locked).get_rebac_grantable() and locked.direct_record_access():
+                    return False
+                try:
+                    locked.purge()
+                except ProtectedError:
+                    return False
+            return True
 
     def purge(self) -> None:
         """Really delete the row and discard unreferenced backend bytes after commit.
@@ -614,28 +657,33 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         space, never serve stale content under a live row.
         """
 
-        storage = self.storage
-        key = self.storage_path
-        using = router.db_for_write(type(self), instance=self)
-        drive_id = self.drive_id
-        model = type(self)
-        super().delete(using=using)
+        using = write_alias(type(self), using=self._state.db, instance=self)
+        with database_context(using):
+            storage = self.storage
+            key = self.storage_path
+            drive_id = self.drive_id
+            model = type(self)
+            super().delete(using=using)
 
-        def discard_unreferenced() -> None:
-            if not model.system_queryset().using(using).filter(drive_id=drive_id, storage_path=key).exists():
-                storage.discard(key, context="purge")
+            def discard_unreferenced() -> None:
+                if not model.system_queryset().using(using).filter(drive_id=drive_id, storage_path=key).exists():
+                    storage.discard(key, context="purge")
 
-        transaction.on_commit(discard_unreferenced, using=using)
+            transaction.on_commit(discard_unreferenced, using=using)
 
     def _fail(self, *, reason: str) -> None:
         """Transition this row to FAILED, recording why for audit surfaces."""
 
-        envelope = dict(self.upload_envelope or {})
-        envelope["failure_reason"] = reason
-        self.upload_envelope = envelope
-        self.upload_state = cast(UploadState, UploadState.FAILED)
-        with system_context(reason=f"storage.upload.failed.{reason}"):
-            self.save(update_fields=["upload_envelope", "upload_state", "updated_at"])
+        with database_context(write_alias(type(self), using=self._state.db, instance=self)):
+            envelope = dict(self.upload_envelope or {})
+            envelope["failure_reason"] = reason
+            self.upload_envelope = envelope
+            self.upload_state = cast(UploadState, UploadState.FAILED)
+            with system_context(reason=f"storage.upload.failed.{reason}"):
+                self.save(
+                    using=write_alias(type(self), using=self._state.db, instance=self),
+                    update_fields=["upload_envelope", "upload_state", "updated_at"],
+                )
 
     def _emit_finalized(self) -> None:
         """Fire ``file_finalized`` for downstream addons once the row commits."""
@@ -643,6 +691,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         actor = current_actor()
         transaction.on_commit(
             lambda: file_finalized.send(sender=type(self), instance=self, actor=actor),
+            using=write_alias(type(self), using=self._state.db, instance=self),
         )
 
     def _emit_saved(self, *, update_fields: tuple[str, ...]) -> None:
