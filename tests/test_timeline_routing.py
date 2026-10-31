@@ -105,7 +105,10 @@ class CallbackRoutingContract(TransactionTestCase):
             default_run = self._run("default")
             run = self._run("producer")
         self.assertEqual(default_run.pk, run.pk)
-        with self.settings(ANGEE_TIMELINE_KINDS=["angee.workflows.timeline.timeline_kinds"]):
+        with self.settings(
+            ANGEE_TIMELINE_KINDS=["angee.workflows.timeline.timeline_kinds"],
+            DATABASE_ROUTERS=["tests.test_workflows_refactor_routing.ProducerRouter"],
+        ):
             with database_context("producer"), actor_context(self.users["producer"]):
                 timeline = Timeline(self.records["producer"], self.users["producer"])
             with (
