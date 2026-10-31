@@ -35,7 +35,7 @@ description: "Declares and loads an addon's master, install and demo data: pypro
 - Runtime code reaches a seeded row with `Resource.objects.resolve(handle, model=…)` (`managers.py:146`)
   or re-imports one with `load_xref` (`managers.py:248`); tests take the concrete ledger from
   `angee.resources.testing` (`src/angee/resources/testing/__init__.py:1-12`).
-- Shared catalogues exist: `integrate.Vendor` (`src/angee/integrate/models.py:1464`), `money.Currency`
+- Shared catalogues exist: `integrate.Vendor` (`src/angee/integrate/models/integrations.py`), `money.Currency`
   (`src/angee/money/models.py:80`); contribute rows with `adopt`.
 - Owner-verb adapters exist: `WorkflowDefinitionResource`, `TriggerResource` (`src/angee/workflows/resources.py:68,124`);
   non-row declarations use `ResourceEntryKind` (`src/angee/resources/kinds.py:16`).

@@ -593,7 +593,7 @@ data through REBAC, never a queryset bypass.
   [the public identity boundary](../../src/angee/base/identity.py) before reaching
   REBAC, and outputs encode the PK there. Signed tokens are transport too: a
   download token carries its issuing actor's public subject, and
-  [`FileManager.for_download_token`](../../src/angee/storage/models.py)
+  [`FileManager.for_download_token`](../../src/angee/storage/managers.py)
   re-checks that actor's `read` on every request. Tableless role anchors keep
   named IDs. Changing a public prefix or codec must never change grants.
 - **Container inheritance belongs to the resource and scope owners.** A
@@ -805,7 +805,7 @@ data through REBAC, never a queryset bypass.
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
   const-backed relationships, so per-row `create` gates remain authoritative.
   Compose that path for ordinary factories, as
-  [`AgentSessionManager.start`](../../src/angee/agents/models.py) does.
+  [`AgentSessionManager.start`](../../src/angee/agents/models/sessions.py) does.
   Manual factories needing an explicit relationship preflight call native
   `rebac.check_new`; prepared rows use the manager's native `insert` path and
   retain the verified actor on the instance.
@@ -1930,7 +1930,7 @@ bridge advisory lock as polling and delivery settlement.
   references.
 - **Bridge scheduling follows the final MTI kind.** A child capability may
   extend another bridge (a public Feed extends Channel); the
-  [`Integration.concrete_type`](../../src/angee/integrate/models.py) identity
+  [`Integration.concrete_type`](../../src/angee/integrate/models/integrations.py) identity
   selects the one bridge row to schedule and route. Parent-scoped message access
   stays on the declared Channel relation; child access inherits through its
   REBAC parent arrow.
@@ -1986,7 +1986,7 @@ bridge advisory lock as polling and delivery settlement.
   before the subject and keeps these database-only hooks in its transaction;
   UI cancellation, failures and timeouts use the same terminal writer. Bridge
   cycles compose this contract through
-  [`SyncCycleBridge`](../../src/angee/workflows_integrate/sync.py), while
+  [`SyncCycleBridge`](../../src/angee/workflows_integrate/models.py), while
   integrate retains scheduling, queue tokens, advisory locks and dispatch
   compare-and-set. Consumer bridges supply scope locks and an input snapshot;
   they do not create another subject lifecycle receiver. Run-owned auxiliary

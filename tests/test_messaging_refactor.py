@@ -70,7 +70,10 @@ def test_thread_name_population_retains_selected_set(channel):
 def test_email_selection_and_sender_stay_on_declared_connected_channel(channel):
     with system_context(reason="test.messaging.outbound_email"):
         channel = make_integration(
-            "billing", model=type(channel), backend_class="email", lifecycle="connected",
+            "billing",
+            model=type(channel),
+            backend_class="email",
+            lifecycle="connected",
             config={"from_email": "Billing <billing@example.test>"},
         )
         selected = type(channel).objects.filter(pk=channel.pk).outbound_email()
@@ -78,3 +81,41 @@ def test_email_selection_and_sender_stay_on_declared_connected_channel(channel):
         assert channel.outbound_sender() == ("Billing", "billing@example.test")
         channel.pause()
         assert not selected.all().exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_catalogue_factory_preserves_declared_source_metadata():
+    from django.apps import apps
+
+    with system_context(reason="tests.messaging.catalogue"):
+        rows = apps.get_model("messaging", "MessageSubtype").objects
+        assert rows.resolve("") is None
+        source = rows.resolve("source_event", name="Source event", description="Retained", internal=True)
+        replay = rows.resolve("source_event", name="Changed", description="Changed", internal=False)
+        assert source.pk == replay.pk
+        assert (replay.name, replay.description, replay.internal) == ("Source event", "Retained", True)
+        builtin = rows.resolve("comment", name="Ignored", description="Ignored")
+        assert (builtin.name, builtin.description) == ("Comment", "Discussion comment")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_native_attachment_factory_is_idempotent_and_preserves_envelope(channel, tmp_path):
+    from django.apps import apps
+
+    with system_context(reason="tests.messaging.attachment_factory"):
+        message = apps.get_model("messaging", "Message").objects.create(
+            channel=channel,
+            external_id="attachment-factory",
+            platform="email",
+        )
+        from tests.test_messaging import _storage_drive
+
+        drive = _storage_drive(tmp_path, owner=channel.owner)
+        file = apps.get_model("storage", "File").objects.create(title="Retained file", drive=drive)
+        rows = apps.get_model("messaging", "Part").objects
+        first = rows.attach_file(message, file, name="source.bin")
+        again = rows.attach_file(message, file, name="changed.bin", position=99)
+        assert first.pk == again.pk
+        assert (again.name, again.position, again.type) == ("source.bin", 1, "application/octet-stream")
+        assert again.disposition == rows.model.Disposition.ATTACHMENT
+        assert again.role == rows.model.PartRole.BODY

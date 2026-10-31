@@ -14,6 +14,7 @@ from rebac.actors import is_sudo
 from angee.graphql.publishing import change_published
 from angee.workflows import runner as runner_module
 from angee.workflows.managers import StepRunQuerySet
+from angee.workflows.models import runs as runs_module
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.steps import Retryable, RetryPolicy, StepMode, Superseded
@@ -707,7 +708,7 @@ def test_running_io_sibling_records_result_on_failed_run_without_planning(
             ctx.heartbeat()
             ctx.begin_effect()
             if publication_failure:
-                monkeypatch.setattr(runner_module, "publish_change", failed_publication)
+                monkeypatch.setattr(runs_module, "publish_change", failed_publication)
             return ctx.done({"value": 41})
 
     register_step(RecoverableBranch)
@@ -727,7 +728,7 @@ def test_running_io_sibling_records_result_on_failed_run_without_planning(
     assert len(sent) == observed["deliveries"]
     assert not StepRun.system_queryset().filter(run=run, node_key="join").exists()
 
-    monkeypatch.setattr(runner_module, "publish_change", original_publish)
+    monkeypatch.setattr(runs_module, "publish_change", original_publish)
     failed = StepRun.system_queryset().get(run=run, node_key="failed")
     StepRun.objects.retry_step(failed, actor=actor)
     run_until(run)

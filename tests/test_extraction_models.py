@@ -131,6 +131,13 @@ def evidence(drive, monkeypatch):
         yield retain, defaults
 
 
+def test_retained_inference_admission_refuses_unrequested_work(evidence):
+    retain, _values = evidence
+    row = retain()
+    assert row.inference_admission(allow_inference=False, identity_mapping={}) == "unchanged"
+    assert row.retained_inference_parts() == row.document_parts()
+
+
 def test_retention_preserves_sources_parts_pages_and_typed_missing_values(evidence):
     retain, values = evidence
     image = PageCarrier(source_position=0, page_position=0, width=40, height=60, dpi=100)
@@ -185,8 +192,10 @@ def test_inference_retry_returns_its_revision_before_head_comparison(evidence):
     ctx = SimpleNamespace(
         actor=values["actor"],
         input=InferEvidenceInput(
-            base_extraction_id=str(base.sqid), base_revision=base.revision,
-            target_model="storage.File", target_id=str(values["target"].sqid),
+            base_extraction_id=str(base.sqid),
+            base_revision=base.revision,
+            target_model="storage.File",
+            target_id=str(values["target"].sqid),
         ),
         idempotency_key="retry-attempt",
         load=lambda model, public_id: base if model is Extraction else values["target"],
@@ -495,8 +504,11 @@ def test_schema_error_does_not_disclose_rejected_document_values(evidence):
 
 def test_missing_claim_path_does_not_disclose_document_values_in_tracebacks(evidence):
     retain, values = evidence
-    result = replace(values["result"], value={"documents": [], "private": "protected source content"},
-                     claims={"/absent": [{"part_position": 0, "start": 0, "end": 4}]})
+    result = replace(
+        values["result"],
+        value={"documents": [], "private": "protected source content"},
+        claims={"/absent": [{"part_position": 0, "start": 0, "end": 4}]},
+    )
     with pytest.raises(ValidationError) as raised:
         retain(result=result)
     assert "protected source content" not in "".join(format_exception(raised.value))

@@ -4,7 +4,7 @@ from typing import Any
 
 from angee.integrate.models import Bridge
 from angee.integrate.testing.integration import Integration
-from angee.workflows_integrate.sync import SyncCycleBridge
+from angee.workflows_integrate.models import SyncCycleBridge
 
 
 class SyncCycleTestBridge(SyncCycleBridge, Bridge, Integration):

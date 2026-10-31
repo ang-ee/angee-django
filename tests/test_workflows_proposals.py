@@ -43,7 +43,7 @@ def test_foreign_key_public_id_and_null_and_declared_method_without_updated_at(t
     _, reviewer, target, related, _ = targets
     decision = ask(targets, {"fields": {"parent": {"set": None if null else related.sqid}, "name": {"set": "After"}},
                              "record": {"call": "confirm"}})
-    decision = Decision.objects.decide(decision, actor=reviewer, chosen=["apply"])
+    decision = decision.decide(actor=reviewer, chosen=["apply"])
     assert apply_proposals(decision, actor=reviewer) == "applied"
     target.refresh_from_db()
     assert target.parent_id == (None if null else related.pk)
@@ -78,7 +78,7 @@ def test_multiple_rejects_overlapping_field_changes_when_answering(targets, oper
 def test_missing_action_link_raises_validation_error(targets):
     _, reviewer, *_ = targets
     decision = ask(targets, {"fields": {"name": {"set": "After"}}})
-    decision = Decision.objects.decide(decision, actor=reviewer, chosen=["apply"])
+    decision = decision.decide(actor=reviewer, chosen=["apply"])
     # A detached retained concern can no longer apply its proposed write.
     from rebac import system_context
 

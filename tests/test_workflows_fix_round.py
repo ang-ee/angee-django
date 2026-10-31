@@ -14,6 +14,7 @@ from angee.graphql.publishing import change_published
 from angee.workflows import managers
 from angee.workflows import runner as runner_module
 from angee.workflows.managers import StepRunQuerySet, WorkflowRunQuerySet
+from angee.workflows.models import runs as runs_module
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.steps import Retryable, RetryPolicy, Step, StepMode, Superseded
@@ -405,6 +406,7 @@ def test_artifacts_commit_only_with_successful_attempt_evidence(execution, regis
         return original_publish(run, **kwargs)
 
     monkeypatch.setattr(managers, "publish_change", publish)
+    monkeypatch.setattr(runs_module, "publish_change", publish)
     monkeypatch.setattr(runner_module, "publish_change", publish)
 
     class Evidence(Echo):

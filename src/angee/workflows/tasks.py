@@ -4,7 +4,7 @@ from celery import shared_task
 from django.apps import apps
 from rebac import SubjectRef
 
-from angee.jobs.locks import LockKey, task_lock
+from angee.base.locks import LockKey, task_lock
 from angee.workflows.runner import runner
 
 
@@ -33,7 +33,8 @@ def cancel(run_id: int, actor: str) -> None:
 def wake_records(content_type_id: int, object_id: int) -> int:
     """Wake changed-record waiters after the source transaction releases its locks."""
     return runner.wake_records(
-        content_type_id=content_type_id, object_id=object_id,
+        content_type_id=content_type_id,
+        object_id=object_id,
     )
 
 

@@ -13,7 +13,7 @@ from django.apps import apps
 from django.conf import settings
 from rebac import system_context
 
-from angee.graphql.publishing import change_published
+from angee.base.signals import change_published
 from angee.jobs.enqueue import celery_app
 from angee.workflows.runner import runner
 from angee.workflows.states import StepRunStatus
@@ -89,8 +89,12 @@ def load_workflow(
         ledger = apps.get_model("resources", "Resource")
         return ledger.objects.load_xref(document_or_xref, model=model, actor=actor, allow_non_dev=allow_non_dev)
     return model.objects.install_definition(
-        key=key, name=name or key, draft=document_or_xref,
-        publish=publish, subject_model=subject_model, actor=actor,
+        key=key,
+        name=name or key,
+        draft=document_or_xref,
+        publish=publish,
+        subject_model=subject_model,
+        actor=actor,
     )
 
 
@@ -116,8 +120,10 @@ def start_run(workflow: Any, *, actor: Any, **kwargs: Any) -> Any:
 
 def decide(decision: Any, *, actor: Any, chosen: Sequence[str]) -> Any:
     """Submit the caller's observed revision through the real decisions owner."""
-    return type(decision).objects.decide(
-        decision.pk, actor=actor, revision=decision.revision, chosen=chosen,
+    return decision.decide(
+        actor=actor,
+        revision=decision.revision,
+        chosen=chosen,
     )
 
 

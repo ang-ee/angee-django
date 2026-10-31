@@ -1531,12 +1531,6 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
             super().restore()
             return self
 
-    @classmethod
-    def removed_for(cls, actor: Any, *, queue: Any = None, parent: Any = None) -> models.QuerySet[Any]:
-        """Compatibility entrypoint for external compositions; selection belongs to the queryset."""
-
-        return cls.objects.removed_for(actor, queue=queue, parent=parent)
-
     def accept(self, stage: Stage | None = None, *, expected_revision: int | None = None) -> Any:
         """Leave triage for a same-queue, non-system stage, idempotently."""
 

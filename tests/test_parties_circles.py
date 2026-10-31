@@ -383,7 +383,7 @@ def _name(link: Any, name: str) -> None:
 
 
 def _resolved_owner(handle: Any) -> Any:
-    Handle.objects.resolve(handle)
+    handle.resolve()
     handle.refresh_from_db()
     return handle.party_id
 

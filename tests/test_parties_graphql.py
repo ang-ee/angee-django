@@ -626,3 +626,21 @@ def test_party_statements_group_only_by_axes_the_party_reader_may_read() -> None
     sdl = str(_schema("public"))
     assert "HANDLE__VALUE" not in sdl
     assert "SUBJECT__DISPLAY_NAME" in sdl
+
+
+@pytest.mark.django_db(transaction=True)
+def test_merge_metadata_follows_parent_and_person_projection(composed_tables: None) -> None:
+    del composed_tables
+    admin = _platform_admin("party-merge-fields-admin")
+    with system_context(reason="parties.merge_fields.seed"):
+        person = Person.objects.create(display_name="Readable person", created_by=admin)
+    data = _data(execute_schema(
+        _schema("public"),
+        """query MergeFields($id: String!) {
+          parent: parties_by_pk(id: $id) { merge_scalar_fields }
+          person: people_by_pk(id: $id) { merge_scalar_fields }
+        }""",
+        variables={"id": person.sqid}, user=admin,
+    ))
+    assert data["parent"]["merge_scalar_fields"] == list(person.merge_common_scalar_fields)
+    assert data["person"]["merge_scalar_fields"] == list(person.merge_scalar_fields)

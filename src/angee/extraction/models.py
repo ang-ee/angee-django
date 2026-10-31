@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import replace
-from typing import Any
+from typing import Any, Literal
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -87,8 +87,7 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
     schema_id = models.CharField(max_length=255, editable=False)
     schema_digest = models.CharField(max_length=64, editable=False)
     schema = models.JSONField(editable=False)
-    profile = ImplClassField(ExtractionProfile, editable=False
-    )
+    profile = ImplClassField(ExtractionProfile, editable=False)
     model = models.ForeignKey(
         "agents.InferenceModel", null=True, blank=True, on_delete=models.PROTECT, related_name="extraction_evidence"
     )
@@ -400,8 +399,7 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
     def document_parts(self) -> tuple[DocumentPart, ...]:
         """Return retained raw carriers without rereading or preparing source bytes."""
         return tuple(
-            row.document_part()
-            for row in self.parts.select_related("source", "carrier_file").order_by("position")
+            row.document_part() for row in self.parts.select_related("source", "carrier_file").order_by("position")
         )
 
     def authority_carrier_positions(self, current: Extraction) -> dict[int, int]:
@@ -472,13 +470,42 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
             and self.outcome.get("code") == ExtractionErrorCode.IDENTITY_CORRESPONDENCE_REQUIRED
         )
 
+    def inference_admission(
+        self,
+        *,
+        allow_inference: bool,
+        identity_mapping: Mapping[str, str],
+    ) -> Literal["correspondence_required", "unchanged", "correspondence", "infer"]:
+        """Choose the retained candidate's next act without source IO or mutation.
+
+        A held candidate not yet read by the mapping model still owes inference;
+        correspondence is then judged on the inferred candidate.
+        """
+
+        profile = self.get_profile_impl()()
+        corresponding = self.awaiting_correspondence and not (
+            allow_inference
+            and not identity_mapping
+            and ExtractionRole.MAPPING not in self.used_model_roles
+            and profile.inference_required(self.result, self.unresolved_reasons)
+        )
+        if corresponding and not identity_mapping:
+            return "correspondence_required"
+        if not self.awaiting_correspondence and (
+            not allow_inference or not profile.inference_required(self.result, self.unresolved_reasons)
+        ):
+            return "unchanged"
+        return "correspondence" if corresponding else "infer"
+
+    def retained_inference_parts(self) -> tuple[DocumentPart, ...]:
+        """Return retained inference carriers, refusing a held acquisition source."""
+
+        return () if self.outcome.get("code") == "source_hold" else self.document_parts()
+
     @property
     def failed_at_inference(self) -> bool:
         """Whether the retained failure is explicitly attributed to inference."""
-        return (
-            self.outcome["kind"] == ExtractionStatus.FAILED
-            and self.outcome.get("stage") == "inference"
-        )
+        return self.outcome["kind"] == ExtractionStatus.FAILED and self.outcome.get("stage") == "inference"
 
     @property
     def corrections(self) -> tuple[CorrectionRef, ...]:
@@ -625,7 +652,10 @@ class ExtractionPart(RetainedEvidence, AngeeDataModel, concrete=True):
         )
         part = carrier.read(self.carrier_file)
         if (part.source_position, part.source_page, part.kind, part.content_hash) != (
-            self.source.position, self.source_page, self.kind, self.content_hash
+            self.source.position,
+            self.source_page,
+            self.kind,
+            self.content_hash,
         ):
             raise ValidationError("The retained part carrier differs from its evidence row.")
         return replace(part, metadata=self.metadata)

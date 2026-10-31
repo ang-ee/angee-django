@@ -161,7 +161,9 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
     def failure_stream(self) -> SyncStream:
         return self
 
-    def sync_failures(self, *, open_only: bool = False) -> tuple[SyncFailure, ...]:
+    def sync_failures(
+        self, *, open_only: bool = False, kind: SyncFailureKind | None = None,
+    ) -> tuple[SyncFailure, ...]:
         """Read stream and linked failures through their owning row permissions."""
         actor, unscoped = self.effective_actor(strict=True)
         links = self.links.all()
@@ -178,7 +180,7 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
         for link in links:
             link.stream = self
             rows.extend(link.failures(open_only=open_only))
-        return tuple(rows)
+        return tuple(row for row in rows if kind is None or row.kind == kind)
 
     class Meta:
         abstract = True
