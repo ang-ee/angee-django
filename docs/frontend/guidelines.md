@@ -1875,11 +1875,13 @@ children absent for the session with the ref each lacks;
 over their own draft and persistence callbacks, with the page band outside
 `SettingsShell` so it reaches the layout host.
 
-View-as is a memory-only, read-only preview: IAM supplies the viewed identity,
-real identity and permitted people. Compose `useRuntimeViewAs` at shared write
-owners so permitted actions remain visible but disabled, including keyboard,
-submit and upload paths. The app resets actor-bound queries on enter and exit;
-change subscriptions stay closed during preview because WebSockets retain their
+View-as is a memory-only, read-only preview. IAM supplies the viewed and real
+identity through the shared auth query. [ViewAsPicker](../../packages/ui/src/chrome/ViewAs.tsx)
+reads authorized candidates when the user menu mounts it; candidate loading does
+not gate authentication. Compose `useRuntimeViewAs` at shared write owners so
+permitted actions remain visible but disabled, including keyboard, submit and
+upload paths. The app resets actor-bound queries on enter and exit; change
+subscriptions stay closed during preview because WebSockets retain their
 handshake actor. See [the provider](../../packages/app/src/providers/view-as.ts).
 
 `FormView` treats an existing record as read-only when its resource has no update

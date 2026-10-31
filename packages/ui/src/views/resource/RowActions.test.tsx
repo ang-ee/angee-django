@@ -93,7 +93,7 @@ describe("declared row actions", () => {
   });
   test("preview leaves row verbs visible but disables pointer and keyboard activation", () => {
     render(<AppRuntimeProvider runtime={{ auth: { user: { id: "person", name: "Person" }, status: "authenticated", hasRole: () => false,
-      viewAs: { viewAs: { userId: "person" }, currentUser: null, realUser: null, viewablePeople: [], enter: vi.fn(), exit: vi.fn() },
+      viewAs: { viewAs: { userId: "person" }, currentUser: null, realUser: null, enter: vi.fn(), exit: vi.fn() },
     } }}><ActionsHarness action={defaultAction()} /></AppRuntimeProvider>);
     const button = withinRow("row-a");
     expect(button.hasAttribute("disabled")).toBe(true);

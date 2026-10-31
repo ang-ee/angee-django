@@ -106,7 +106,7 @@ test("reorder handles compose native drag/drop, isolate lists and retain externa
   expect(readDndPayload<string>(dataTransfer)?.type).toBe("demo.record");
   writeDndPayload(dataTransfer, payload);
   view.rerender(<AppRuntimeProvider runtime={{ auth: { user: null, status: "authenticated", hasRole: () => false,
-    viewAs: { viewAs: { userId: "person" }, currentUser: null, realUser: null, viewablePeople: [], enter: vi.fn(), exit: vi.fn() },
+    viewAs: { viewAs: { userId: "person" }, currentUser: null, realUser: null, enter: vi.fn(), exit: vi.fn() },
   } }}><ToastProvider><RowsListView scope="local" rows={rows} columns={columns} onReorder={onReorder} /></ToastProvider></AppRuntimeProvider>);
   const blockedHandles = screen.getAllByRole("button", { name: "Reorder row" });
   const calls = onReorder.mock.calls.length;

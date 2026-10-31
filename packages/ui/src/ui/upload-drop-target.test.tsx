@@ -18,7 +18,7 @@ describe("UploadDropTarget", () => {
   test("preview retains the surface but prevents file drops", () => {
     const onFiles = vi.fn();
     render(<AppRuntimeProvider runtime={{ auth: { user: null, status: "authenticated", hasRole: () => false,
-      viewAs: { viewAs: { userId: "person" }, currentUser: null, realUser: null, viewablePeople: [], enter: vi.fn(), exit: vi.fn() },
+      viewAs: { viewAs: { userId: "person" }, currentUser: null, realUser: null, enter: vi.fn(), exit: vi.fn() },
     } }}><UploadDropTarget onFiles={onFiles}><span>Body</span></UploadDropTarget></AppRuntimeProvider>);
     const target = screen.getByText("Body").parentElement!;
     expect(target.hasAttribute("data-file-drop-disabled")).toBe(true);

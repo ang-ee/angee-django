@@ -28,6 +28,7 @@ import { containersFromChildren, useContainer, useDrawers, type ContainerScope }
 import { createRouteHref } from "./route-href";
 import { createAngeeI18nInstance } from "./i18n";
 import { ViewAsBanner, ViewAsPicker } from "../chrome/ViewAs";
+import { createUiTestProviders } from "../testing";
 
 function wrapperFor(runtime: Partial<AppRuntime>) {
   return ({ children }: { children: ReactNode }) =>
@@ -47,15 +48,18 @@ test("preview UI consumes auth identity, focuses entry and restores the picker o
   const currentUser = { id: "responder-1", name: "Morgan" };
   const exit = vi.fn();
   const viewAs = { viewAs: { userId: currentUser.id }, realUser, currentUser,
-    viewablePeople: [currentUser], enter: vi.fn(), exit };
+    enter: vi.fn(), exit };
   const auth: RuntimeAuthState = { user: currentUser, status: "authenticated", hasRole: () => false, viewAs };
   const { result } = renderHook(() => useRuntimeViewAs(), { wrapper: wrapperFor({ auth }) });
   expect(result.current).toBe(viewAs);
-  const children = <><ViewAsBanner /><ViewAsPicker /></>;
+  const providers = createUiTestProviders({
+    dataProvider: { custom: async () => ({ data: { viewable_people: [currentUser] } }) },
+  });
+  const children = <providers.Provider><ViewAsBanner /><ViewAsPicker /></providers.Provider>;
   const rendered = render(createElement(AppRuntimeProvider, { runtime: { auth }, children }));
   expect(screen.getByRole("status").textContent).toContain("Previewing as Morgan");
   expect(screen.getByRole("status").textContent).toContain("Signed in as Alex");
-  expect(screen.getByRole("combobox", { name: "Preview as a person: Morgan" })).toBeTruthy();
+  expect(await screen.findByRole("combobox", { name: "Preview as a person: Morgan" })).toBeTruthy();
   const exitButton = screen.getByRole("button", { name: "Exit preview" });
   expect(document.activeElement).toBe(exitButton);
   fireEvent.click(exitButton);
@@ -67,6 +71,7 @@ test("preview UI consumes auth identity, focuses entry and restores the picker o
   await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Preview as a person" })));
   expect(screen.queryByRole("status")).toBeNull();
   rendered.unmount();
+  providers.clearClients();
 });
 
 describe("useWidget", () => {

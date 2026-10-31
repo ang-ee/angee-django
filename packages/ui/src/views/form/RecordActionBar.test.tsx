@@ -216,7 +216,7 @@ describe("RecordActionBar", () => {
     renderActionBar(<AppRuntimeProvider runtime={{ auth: {
       user: { id: "person", name: "Person" }, status: "authenticated", hasRole: () => false,
       viewAs: { viewAs: { userId: "person" }, currentUser: { id: "person", name: "Person" }, realUser: null,
-        viewablePeople: [], enter: vi.fn(), exit: vi.fn() },
+        enter: vi.fn(), exit: vi.fn() },
     } }}>
       <RecordActionBar record={record} applyPatch={vi.fn()} reload={vi.fn()}
         actions={[{ id: "allowed", label: "Allowed verb", run }, { id: "forbidden", label: "Forbidden verb", run, visibleWhen: () => false }]}

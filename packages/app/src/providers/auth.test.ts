@@ -26,16 +26,17 @@ const currentUser = {
 };
 
 describe("Angee app auth provider", () => {
-  test("console IAM supplies the viewed identity, real identity and permitted people", async () => {
+  test("console IAM supplies the viewed and real identity without enumerating preview candidates", async () => {
     const viewed = { ...currentUser, id: "person-2", username: "grace", firstName: "Grace", lastName: "Hopper", roleRefs: [] };
     const identityRequest = vi.fn(async (document) => {
       expect(document).toBe(AngeeViewAsIdentityDocument);
-      return { current_user: viewed, real_user: currentUser, viewable_people: [{ id: viewed.id, name: "Grace Hopper" }] } as never;
+      expect(JSON.stringify(document)).not.toContain("viewable_people");
+      return { current_user: viewed, real_user: currentUser } as never;
     });
     const provider = createAngeeAuthProviderFromRequest(async () => ({ current_user: viewed }) as never, { identityRequest });
     await expect(provider.getIdentity?.()).resolves.toMatchObject({
       id: viewed.id, name: "Grace Hopper", roles: [],
-      realUser: { id: currentUser.id }, viewablePeople: [{ id: viewed.id, name: "Grace Hopper" }],
+      realUser: { id: currentUser.id },
     });
     const anonymous = createAngeeAuthProviderFromRequest(async () => ({ current_user: null }) as never, { identityRequest });
     await expect(anonymous.getIdentity?.()).resolves.toBeNull();
@@ -273,7 +274,7 @@ describe("Angee app auth provider", () => {
     expect(request).toHaveBeenLastCalledWith(AngeeCurrentUserDocument, { refs });
 
     // When the console read follows, it asks and the public read asks about nothing.
-    const identityRequest = vi.fn(async () => ({ current_user: { ...currentUser, permitted: refs }, real_user: null, viewable_people: [] }));
+    const identityRequest = vi.fn(async () => ({ current_user: { ...currentUser, permitted: refs }, real_user: null }));
     const withConsole = createAngeeAuthProviderFromRequest(request as never, { requires: refs, identityRequest: identityRequest as never });
     await expect(withConsole.getIdentity?.()).resolves.toMatchObject({ permitted: refs, realUser: null });
     expect(request).toHaveBeenLastCalledWith(AngeeCurrentUserDocument, { refs: [] });
