@@ -1,10 +1,6 @@
-"""Native discovery entrypoint for foundation model declarations.
+"""Foundation model package, inert outside Django's model-loading phase.
 
-The foundation currently provides only abstract capabilities. Addons import
-those capabilities from their declaring modules. Concrete or composed source
-declarations added to this app must be imported here for native discovery.
+Addons import abstract capabilities from their declaring modules. BaseConfig's
+native import_models hook exposes the addressable scope contracts for compiler
+discovery after Django starts loading models.
 """
-
-from angee.base.models.scope import DefaultedScopeMixin, NullableScopeMixin
-
-__all__ = ["DefaultedScopeMixin", "NullableScopeMixin"]
