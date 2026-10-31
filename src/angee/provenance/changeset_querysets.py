@@ -35,7 +35,7 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T], NativeChangesetQueryS
         for table, content_type in content_types.items():
             predicate |= Q(
                 activity="merge", origin_content_type=content_type,
-                origin_object_id=str(record._get_pk_val(table._meta)),
+                origin_object_id__in=[str(key) for key in record._history_table_keys(table)],
             )
         return predicate
 
@@ -84,8 +84,21 @@ class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T], NativeChangesetQueryS
                             include(table, column, history.order_by().values_list(column, flat=True))
             if merges:
                 content_types = ContentType.objects.db_manager(self.db).get_for_models(*tables)
+                lineage = (type(record), *record._meta.get_parent_list())
                 for table, content_type in content_types.items():
-                    include(table, table._meta.pk.attname, merges.get(content_type.pk, ()))
+                    origin_ids = merges.get(content_type.pk, ())
+                    if not origin_ids:
+                        continue
+                    if table in lineage:
+                        include(table, table._meta.pk.attname, origin_ids)
+                        continue
+                    for column in record.history_identity_columns()[table]:
+                        keys = set(table._base_manager.using(self.db).filter(pk__in=origin_ids)
+                                   .values_list(column, flat=True))
+                        keys.update(get_history_manager_for_model(table).using(self.db)
+                                    .filter(**{f"{table._meta.pk.attname}__in": origin_ids})
+                                    .values_list(column, flat=True))
+                        include(table, column, keys)
             return ids
 
         documents = (
