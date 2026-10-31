@@ -1111,6 +1111,14 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   and ownership is never a stored tuple. Change it through `transfer_ownership`;
   bulk release belongs only to an owning verb that already authorized it. See the
   [example notes](../../examples/src/example/notes/permissions.zed).
+- **Provider scope participation:** compose `NullableScopeMixin` for nullable
+  organizational scope without an implicit default, or `DefaultedScopeMixin`
+  when a selected provider may default an omitted scope on creation. Choose one
+  variant per row. These neutral
+  [contracts](../../src/angee/base/models/scope.py) add no fields without a provider.
+  A provider contributes through native abstract-target `extends`; its relation,
+  default source and access policy remain provider-owned. Scope participation is
+  independent of `OwnerMixin` and never implies transferable user authority.
 - **Delegated field gates:** a definition that delegates to a parent re-declares
   the parent's field gates through that relation, as enforced for ownership by
   [the base checks](../../src/angee/base/checks.py). Re-save a fresh, unreloaded

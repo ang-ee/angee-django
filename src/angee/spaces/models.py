@@ -25,12 +25,13 @@ from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.hierarchy import HierarchyMixin
 from angee.base.models.ownership import OwnerMixin
+from angee.base.models.scope import NullableScopeMixin
 from angee.messaging.models import AudienceMember, NotificationPolicy, ThreadAudienceMixin
 from angee.parties.mixins import MembershipDecisionMixin
 from angee.spaces.managers import GroupManager, MembershipManager, ThreadSpaceManager
 
 
-class Group(ThreadAudienceMixin, HierarchyMixin, OwnerMixin, AngeeDataModel, concrete=True):
+class Group(NullableScopeMixin, ThreadAudienceMixin, HierarchyMixin, OwnerMixin, AngeeDataModel, concrete=True):
     """A shared group with one canonical roster and an unscoped parent tree."""
 
     sqid_prefix = "grp_"

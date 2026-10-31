@@ -41,6 +41,7 @@ from angee.base.models.identity import instance_from_public_id
 from angee.base.models.merge_references import MergePolicy
 from angee.base.models.ownership import OwnerMixin
 from angee.base.models.refs import RecordRefMixin
+from angee.base.models.scope import NullableScopeMixin
 from angee.base.permissions import actor_user_id
 from angee.base.refs import RecordRef, generic_pointer_model
 from angee.graphql.mixins import ChangeBroadcastMixin
@@ -947,6 +948,7 @@ class ChatterHistory(ModelHistory):
 
 
 class Thread(
+    NullableScopeMixin,
     ChangeBroadcastMixin, SourceCopyMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel, concrete=True
 ):
     """An aggregation of related messages — an email conversation or a social post.
