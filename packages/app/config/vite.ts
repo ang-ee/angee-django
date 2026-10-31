@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { dirname, join, matchesGlob, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { build, defineConfig, mergeConfig, type Plugin, type UserConfig } from "vite";
+import { build, defineConfig, mergeConfig, type Plugin, type UserConfig, type ViteDevServer } from "vite";
+import { generateWebRuntime, type WebCodegenInputs } from "@angee/app/web-codegen";
 import {
-  assertThemeCatalogue,
   resolveThemeOptions,
   type AppearanceBootstrapPayload,
   type ThemeDefinition,
@@ -141,6 +141,7 @@ function angeePackagesAt(cwd: string): AngeePackageSets {
 const PREBUNDLE_SKIP_DIRS = new Set([
   "node_modules",
   ".git",
+  ".jj",
   ".vite",
   ".cache",
   ".turbo",
@@ -235,22 +236,19 @@ export function angeePrebundleForce(webRoot: string, packages: string[]): boolea
 export function angeePrebundleForcePlugin(webRoot: string, packages: string[]): Plugin {
   return {
     name: "angee:prebundle-force",
-    config(_config, { command }) {
-      if (command !== "serve") return undefined;
-      const source = consumeAngeePrebundleSource(webRoot, packages);
-      return {
-        optimizeDeps: {
-          force: source.changed,
-          // `force` is excluded from Vite's optimizer config hash. Vite does
-          // hash the names of native optimizer plugins separately, so this
-          // no-op plugin gives linked source a cache identity without changing
-          // resolution, transforms, or output.
-          rolldownOptions: {
-            plugins: [{ name: `angee:prebundle-source:${source.signature}` }],
-          },
-        },
-      };
+    config(_config, { command, isPreview }) {
+      if (command !== "serve" || isPreview) return undefined;
+      return { optimizeDeps: angeePrebundleOptimizerConfig(webRoot, packages) };
     },
+  };
+}
+
+function angeePrebundleOptimizerConfig(webRoot: string, packages: string[]) {
+  const source = consumeAngeePrebundleSource(webRoot, packages);
+  return {
+    force: source.changed,
+    // Vite excludes force from the optimizer hash but hashes plugin names.
+    rolldownOptions: { plugins: [{ name: `angee:prebundle-source:${source.signature}` }] },
   };
 }
 
@@ -289,20 +287,15 @@ export async function defineAngeeWebViteConfig({
   appearance,
   ...overrides
 }: AngeeWebViteConfig): Promise<UserConfig> {
-  const angeePackages = angeePackagesAt(webRoot);
-  const appearancePayload = await appearanceBuildPayload(gqlRuntimeDir, appearance);
+  const appearancePlugin = angeeAppearancePlugin();
   const base = defineConfig({
     root: webRoot,
     plugins: [
-      angeeAppearancePlugin(appearancePayload),
+      angeeWebCodegenPlugin({ webRoot, gqlRuntimeDir, appearance, appearancePlugin, prebundleAngeePackages }),
+      appearancePlugin,
       preloadSchemaMetadata(),
       react(),
       tailwindcss(),
-      // Only an actually included built package set needs an optimizer cache
-      // signature, consumed on `serve` by `angeePrebundleForcePlugin`.
-      ...(prebundleAngeePackages && angeePackages.built.length > 0
-        ? [angeePrebundleForcePlugin(webRoot, angeePackages.built)]
-        : []),
     ],
     // The alias for this project's generated typed operations, pointing at the
     // project's OWN `runtime/gql/<name>/` tree (the web package generates it via
@@ -325,18 +318,6 @@ export async function defineAngeeWebViteConfig({
         "@codemirror/view",
         "@codemirror/language",
       ],
-    },
-    // Built package outputs are dependency bundles. Linked TypeScript package
-    // entrypoints are application source: leave them in Vite's transform/HMR
-    // pipeline so addon asset imports such as `?url` keep their native meaning.
-    // Vite's startup scanner stops at excluded bare imports. Scan the installed
-    // package entries directly as well as the host HTML so their import() trees
-    // contribute npm dependencies before first use, without loading them in the
-    // browser or maintaining a second dependency inventory.
-    optimizeDeps: {
-      entries: angeePackages.entries.length > 0 ? ["**/*.html", ...angeePackages.entries] : undefined,
-      include: prebundleAngeePackages ? angeePackages.built : undefined,
-      exclude: [...(prebundleAngeePackages ? angeePackages.source : angeePackages.all), ...angeePackages.codemirror],
     },
     server: {
       host: true,
@@ -385,6 +366,124 @@ export async function defineAngeeWebViteConfig({
   return mergeConfig(base, overrides);
 }
 
+/** Vite owns generation scheduling, input watches, errors and module invalidation. */
+function angeeWebCodegenPlugin({
+  webRoot,
+  gqlRuntimeDir,
+  appearance,
+  appearancePlugin,
+  prebundleAngeePackages,
+}: Pick<AngeeWebViteConfig, "webRoot" | "gqlRuntimeDir" | "appearance" | "prebundleAngeePackages"> & {
+  webRoot: string;
+  appearancePlugin: ReturnType<typeof angeeAppearancePlugin>;
+}): Plugin {
+  const runtimeDir = dirname(gqlRuntimeDir);
+  let inputs: WebCodegenInputs = { files: [], globs: [], directories: [], excluded: [] };
+  let discovering = inputs;
+  let server: ViteDevServer | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let running: Promise<void> | undefined;
+  let dirty = false;
+  let closed = false;
+  const watched = new Set<string>();
+  const watchInputs = (next: WebCodegenInputs) => {
+    discovering = next;
+    if (!server) return;
+    const added = next.directories.filter((directory) => !watched.has(directory));
+    for (const directory of added) watched.add(directory);
+    // Vite deliberately ignores actual node_modules. Linked authored packages
+    // arrive as canonical source directories; installed dependency changes use
+    // the operator dependency restart and the next cold generation pass.
+    server.watcher.add(added);
+  };
+  const generate = async () => {
+    // Invalidation and relative-import loading belong to Vite's SSR module graph.
+    // Native import() is used only before a server exists (CLI/startup/build).
+    server?.environments.ssr?.moduleGraph.invalidateAll();
+    const generated = await generateWebRuntime({
+      webRoot,
+      runtimeDir,
+      onInputs: watchInputs,
+      ...(server ? { loadThemeModule: (entry: string) => server!.ssrLoadModule(entry) } : {}),
+    });
+    const payload = appearanceBuildPayload(gqlRuntimeDir, appearance, generated.themes);
+    inputs = generated.inputs;
+    discovering = inputs;
+    appearancePlugin.update(payload);
+    const module = server?.environments.client.moduleGraph.getModuleById(RESOLVED_VIRTUAL_APPEARANCE);
+    if (module) server!.environments.client.moduleGraph.invalidateModule(module);
+  };
+  const regenerate = () => {
+    if (closed || running) return;
+    running = (async () => {
+      do {
+        dirty = false;
+        try {
+          await generate();
+          if (!closed) server?.ws.send({ type: "full-reload" });
+        } catch (error) {
+          if (!closed && server) {
+            const failure = error instanceof Error ? error : new Error(String(error));
+            server.config.logger.error(`[angee:web-codegen] ${failure.stack ?? failure.message}`);
+            server.ws.send({ type: "error", err: {
+              message: failure.message, stack: failure.stack ?? "", plugin: "angee:web-codegen",
+            } });
+          }
+        }
+      } while (dirty && !closed);
+    })().finally(() => { running = undefined; });
+  };
+  const changed = (event: string, file: string) => {
+    if (closed || !["add", "change", "unlink"].includes(event)) return;
+    const absolute = resolve(file).replaceAll("\\", "/");
+    if (absolute.split("/").some((part) => part === ".jj" || part === ".git")) return;
+    const matches = (declared: WebCodegenInputs) => !declared.excluded.some((glob) => matchesGlob(absolute, glob))
+      && (declared.files.includes(absolute) || declared.globs.some((glob) => matchesGlob(absolute, glob)));
+    if (!matches(inputs) && !matches(discovering)) return;
+    dirty = true;
+    if (!running) {
+      clearTimeout(timer);
+      timer = setTimeout(regenerate, 25);
+    }
+  };
+  return {
+    name: "angee:web-codegen",
+    enforce: "pre",
+    async config(config, env) {
+      // Preview serves the completed distribution and must work without runtime
+      // manifests, source themes, schemas or even a source package.json.
+      if (env.isPreview) return;
+      await generate();
+      const packages = angeePackagesAt(webRoot);
+      const prebundle = prebundleAngeePackages && packages.built.length > 0 && env.command === "serve"
+        ? angeePrebundleOptimizerConfig(webRoot, packages.built)
+        : {};
+      const defaults = { optimizeDeps: {
+        // Linked source stays in Vite's native transform/HMR graph; scanning its
+        // entries discovers dependencies across lazy import boundaries.
+        entries: packages.entries.length > 0 ? ["**/*.html", ...packages.entries] : undefined,
+        include: prebundleAngeePackages ? packages.built : undefined,
+        exclude: [...(prebundleAngeePackages ? packages.source : packages.all), ...packages.codemirror],
+        ...prebundle,
+      } };
+      // Native config hooks may mutate the current config. Merge once in the
+      // same order as the public factory: defaults first, host overrides last.
+      config.optimizeDeps = mergeConfig(defaults, { optimizeDeps: config.optimizeDeps }).optimizeDeps;
+    },
+    configureServer(value) {
+      server = value;
+      watchInputs(inputs);
+      server.watcher.on("all", changed);
+    },
+    async closeBundle() {
+      closed = true;
+      clearTimeout(timer);
+      server?.watcher.off("all", changed);
+      await running;
+    },
+  };
+}
+
 // Generated metadata is fetched as data, so start its download with the entry
 // script. Match the source path, not Vite's configurable output asset name.
 function preloadSchemaMetadata(): Plugin {
@@ -426,15 +525,15 @@ interface ThemeCatalogueFile {
   themes: Array<{
     id: string;
     optionsVersion?: number | null;
-    headlessEntry?: string;
     defaultTokens?: Record<"shared" | "light" | "dark", Record<string, string>>;
   }>;
 }
 
-async function appearanceBuildPayload(
+function appearanceBuildPayload(
   gqlRuntimeDir: string,
   raw: AngeeWebViteConfig["appearance"],
-): Promise<AppearanceBootstrapPayload> {
+  definitions: readonly ThemeDefinition<unknown>[],
+): AppearanceBootstrapPayload {
   const colorScheme = raw?.colorScheme ?? "system";
   if (colorScheme !== "light" && colorScheme !== "dark" && colorScheme !== "system") {
     throw new Error(`Unsupported host appearance color scheme ${JSON.stringify(colorScheme)}.`);
@@ -462,16 +561,8 @@ async function appearanceBuildPayload(
   let normalizedOptions = raw?.options;
   let tokenLayers = selectedTheme?.defaultTokens ?? { shared: {}, light: {}, dark: {} };
   if (raw?.options && selectedTheme) {
-    if (typeof selectedTheme.headlessEntry !== "string") {
-      throw new Error(`Theme ${JSON.stringify(themeId)} is missing its generated headless entry.`);
-    }
-    const entry = resolve(dirname(catalogPath), selectedTheme.headlessEntry);
-    const themeModule = await importNodeModule(pathToFileURL(entry).href);
-    const definitions = assertThemeCatalogue(themeModule.themes as readonly ThemeDefinition<unknown>[]);
     const definition = definitions.find((candidate) => candidate.id === themeId);
-    if (!definition) {
-      throw new Error(`Theme ${JSON.stringify(themeId)} is missing from ${selectedTheme.headlessEntry}.`);
-    }
+    if (!definition) throw new Error(`Theme ${JSON.stringify(themeId)} is missing its generated definition.`);
     const resolvedOptions = resolveThemeOptions(definition, raw.options);
     normalizedOptions = { version: resolvedOptions.version, value: resolvedOptions.value };
     tokenLayers = resolvedOptions.tokens;
@@ -502,30 +593,27 @@ async function appearanceBuildPayload(
   };
 }
 
-async function importNodeModule(specifier: string): Promise<{ themes?: unknown }> {
-  // Vite's config runner rewrites lexical import() calls through its module
-  // transport, which may close while an async user config is still resolving.
-  // Keep canonical generated file URLs on Node's native ESM loader.
-  const load = Function("specifier", "return import(specifier)") as (value: string) => Promise<{ themes?: unknown }>;
-  return load(specifier);
-}
-
-function angeeAppearancePlugin(payload: AppearanceBootstrapPayload): Plugin {
+function angeeAppearancePlugin(): Plugin & { update(payload: AppearanceBootstrapPayload): void } {
+  let payload: AppearanceBootstrapPayload | undefined;
   let bootstrap: Promise<string> | undefined;
   return {
     name: "angee:appearance",
+    update(next) {
+      payload = next;
+      bootstrap = undefined;
+    },
     resolveId(id) {
       return id === VIRTUAL_APPEARANCE ? RESOLVED_VIRTUAL_APPEARANCE : undefined;
     },
     load(id) {
+      if (id !== RESOLVED_VIRTUAL_APPEARANCE || !payload) return;
       const { tokenLayers: _tokenLayers, ...appearance } = payload.host;
-      return id === RESOLVED_VIRTUAL_APPEARANCE
-        ? `export const appearance = ${JSON.stringify(appearance)}; export default appearance;`
-        : undefined;
+      return `export const appearance = ${JSON.stringify(appearance)}; export default appearance;`;
     },
     transformIndexHtml: {
       order: "pre",
       async handler() {
+        if (!payload) return;
         bootstrap ??= appearanceBootstrapScript(payload);
         return [{
           tag: "script",

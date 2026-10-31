@@ -1,0 +1,1096 @@
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
+import { createHash } from "node:crypto";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { generate } from "@graphql-codegen/cli";
+import {
+  defineAngeeSchemaMetadata,
+  lineReadSelectionPaths,
+  resourceReadSelectionPaths,
+  schemaFieldMetadataFromAngeeSchemaMetadata,
+} from "@angee/metadata/headless";
+import {
+  GraphQLID,
+  GraphQLObjectType,
+  buildSchema,
+  getNamedType,
+  isRequiredArgument,
+  parse,
+  parseType,
+  print,
+  validate,
+} from "graphql";
+import {
+  assertThemeCatalogue,
+  compileThemeCss,
+  resolveThemeOptions,
+  serializableThemeMetadata,
+} from "@angee/ui/theme-runtime";
+
+import { assertShellSettings } from "@angee/app/shell-runtime";
+
+const AGGREGATE_MEASURE_OPERATORS = ["sum", "avg", "min", "max"];
+const DELETE_PREVIEW_SELECTION =
+  "total_deleted_count has_blockers refusals " +
+  "deleted { label count } updated { label count } blocked { label count } " +
+  "root { label object_label object_id " +
+  "children { label object_label object_id " +
+  "children { label object_label object_id } } }";
+const SCALARS = {
+  DateTime: "string",
+  Date: "string",
+  BigInt: "string",
+  Decimal: "string",
+  JSON: "@angee/ui#JsonValue",
+};
+const ADDON_ENTRY_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx"];
+
+/** Generate the composed frontend once; callers own scheduling and lifecycle. */
+export async function generateWebRuntime({
+  webRoot = process.cwd(),
+  runtimeDir = path.resolve(webRoot, "../runtime"),
+  loadThemeModule = importThemeModule,
+  onInputs,
+} = {}) {
+  webRoot = path.resolve(webRoot);
+  runtimeDir = path.resolve(runtimeDir);
+  const inputs = codegenInputs(runtimeDir, onInputs);
+  inputs.file(path.join(runtimeDir, "web", "manifest.json"));
+  inputs.file(path.join(webRoot, "package.json"));
+  inputs.glob(path.join(runtimeDir, "schemas"), "*.graphql");
+  inputs.glob(path.join(runtimeDir, "schemas"), "*.metadata.json");
+  const manifest = readManifest(runtimeDir);
+  assertShellSettings(manifest.deployment?.shell ?? {});
+  const addonSources = addonSourceDirectories(runtimeDir, webRoot, manifest, inputs);
+  const externalEntries = Array.isArray(manifest.codegen) ? manifest.codegen : [];
+  const djangoSchemas = schemaNamesFor(runtimeDir);
+  const documentRoots = documentRootsFor(webRoot, manifest, addonSources);
+  for (const root of documentRoots) {
+    for (const name of djangoSchemas) {
+      for (const file of documentFiles(name)) inputs.glob(root, `**/${file}`);
+    }
+    for (const entry of externalEntries) inputs.glob(root, `**/${entry.documents}`);
+  }
+  for (const entry of externalEntries) {
+    inputs.file(path.join(runtimeDir, "schemas", "external", `${entry.schema}.graphql`));
+    inputs.file(path.resolve(webRoot, "node_modules", entry.package, entry.sdl));
+    inputs.file(path.resolve(webRoot, "node_modules", entry.package, "package.json"));
+  }
+  const installedThemes = await loadInstalledThemes(addonSources, loadThemeModule, inputs);
+  for (const name of djangoSchemas) {
+    const schemaPath = path.join(runtimeDir, "schemas", `${name}.graphql`);
+    await runCodegen(name, schemaPath, runtimeDir, documentGlobs(name, documentRoots), false);
+    buildOperationDocuments(name, runtimeDir);
+  }
+  // Preferred live SDL is watched even while the committed fallback is in use.
+  for (const entry of externalEntries) {
+    const liveSchema = path.join(runtimeDir, "schemas", "external", `${entry.schema}.graphql`);
+    const schemaPath = existsSync(liveSchema)
+      ? liveSchema
+      : path.resolve(webRoot, "node_modules", entry.package, entry.sdl);
+    const documents = documentRoots.map((root) => `${root}/**/${entry.documents}`);
+    await runCodegen(entry.schema, schemaPath, runtimeDir, documents, entry.types === true);
+  }
+  emitThemeArtifacts(runtimeDir, installedThemes, inputs);
+  emitAppModule(runtimeDir, manifest, djangoSchemas, addonSources, installedThemes);
+  return { inputs: inputs.snapshot(), themes: installedThemes.definitions };
+}
+
+function importThemeModule(entry) {
+  return import(pathToFileURL(entry).href);
+}
+
+// Resolve workspace links, including an absent input beneath an existing link.
+function sourcePath(file) {
+  if (existsSync(file)) return realpathSync(file);
+  const parent = path.dirname(file);
+  return parent === file ? file : path.join(sourcePath(parent), path.basename(file));
+}
+
+function codegenInputs(runtimeDir, onInputs) {
+  const outputRoot = sourcePath(runtimeDir);
+  const excluded = [
+    path.join(outputRoot, "gql", "**"),
+    ...["app.ts", "themes.css", "themes.catalog.json"].map((file) => path.join(outputRoot, "web", file)),
+  ].map(slash).sort();
+  const files = new Set();
+  const globs = new Set();
+  const directories = new Set();
+  const snapshot = () => ({ files: [...files].sort(), globs: [...globs].sort(), directories: [...directories].sort(), excluded });
+  const directory = (value) => {
+    // Watch the closest existing directory so creation of a missing tree is seen.
+    while (!existsSync(value) && path.dirname(value) !== value) value = path.dirname(value);
+    directories.add(value);
+  };
+  return {
+    snapshot,
+    file(value) {
+      const file = sourcePath(path.resolve(value));
+      files.add(file);
+      directory(path.dirname(file));
+      onInputs?.(snapshot());
+    },
+    glob(root, pattern) {
+      const absolute = sourcePath(path.resolve(root));
+      globs.add(slash(path.join(absolute, pattern)));
+      directory(absolute);
+      onInputs?.(snapshot());
+    },
+  };
+}
+
+function readManifest(runtimeDir) {
+  const manifestPath = path.join(runtimeDir, "web", "manifest.json");
+  if (!existsSync(manifestPath)) {
+    throw new Error(`Missing frontend runtime manifest: ${manifestPath}`);
+  }
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  if (manifest?.schema !== 1) {
+    throw new Error(`Unsupported frontend runtime manifest schema in ${manifestPath}`);
+  }
+  return manifest;
+}
+
+function schemaNamesFor(runtimeDir) {
+  // The SDL on disk is the source of truth for which schemas exist: the Django
+  // `schema` command emits `runtime/schemas/<name>.graphql`; external owners'
+  // live SDL lives in the `external/` subdirectory, which this scan skips.
+  const schemaDir = path.join(runtimeDir, "schemas");
+  if (!existsSync(schemaDir)) return [];
+  return readdirSync(schemaDir)
+    .filter((name) => name.endsWith(".graphql"))
+    .map((name) => name.slice(0, -".graphql".length))
+    .sort();
+}
+
+function addonSourceDirectories(runtimeDir, webRoot, manifest, inputs) {
+  const packages = Array.isArray(manifest.addonPackages) ? manifest.addonPackages : [];
+  return new Map(
+    packages.map((pkg) => [pkg.package, addonSourceDirectory(runtimeDir, webRoot, pkg, inputs)]),
+  );
+}
+
+function addonSourceDirectory(runtimeDir, webRoot, pkg, inputs) {
+  const sourceRoot = typeof pkg.sourceRoot === "string" ? pkg.sourceRoot : "src";
+  const candidates = [];
+  if (typeof pkg.root === "string" && pkg.root.length > 0) {
+    candidates.push(path.resolve(runtimeDir, "web", pkg.root, sourceRoot));
+  }
+  candidates.push(path.resolve(webRoot, "node_modules", pkg.package, sourceRoot));
+  const uniqueCandidates = [...new Set(candidates)];
+  for (const candidate of uniqueCandidates) {
+    const root = path.resolve(candidate, path.relative(sourceRoot, "."));
+    inputs.file(path.join(root, "package.json"));
+    for (const extension of ADDON_ENTRY_EXTENSIONS) inputs.file(path.join(candidate, `index${extension}`));
+  }
+  const sourceDir = uniqueCandidates.find((candidate) =>
+    ADDON_ENTRY_EXTENSIONS.some((extension) =>
+      existsSync(path.join(candidate, `index${extension}`)),
+    ),
+  );
+  if (!sourceDir) {
+    const expected = uniqueCandidates
+      .map((candidate) => `${candidate}/index.{ts,tsx,js,jsx}`)
+      .join(" or ");
+    throw new Error(`Missing web addon entry for ${pkg.package}: expected ${expected}`);
+  }
+  return { source: sourceDir, root: path.resolve(sourceDir, path.relative(sourceRoot, ".")) };
+}
+
+function documentRootsFor(webRoot, manifest, addonSources) {
+  const roots = Array.isArray(manifest.documentRoots) ? manifest.documentRoots : [];
+  return roots
+    .flatMap((entry) => {
+      const addonSource =
+        entry?.kind === "package" && typeof entry.package === "string"
+          ? addonSources.get(entry.package)?.source
+          : undefined;
+      if (addonSource) return [slash(addonSource)];
+      if (!entry || typeof entry.path !== "string" || entry.path.length === 0) {
+        return [];
+      }
+      return [slash(path.resolve(webRoot, entry.path))];
+    })
+    .sort();
+}
+
+function schemaIsLive(sdlPath) {
+  // A schema is live when its SDL declares a Subscription root — the schema's
+  // own contract, not a guess from its name.
+  return buildSchema(readFileSync(sdlPath, "utf8")).getSubscriptionType() != null;
+}
+
+function emitAppModule(runtimeDir, manifest, schemaNames, addonSources, installedThemes) {
+  const addonPackages = Array.isArray(manifest.addonPackages) ? manifest.addonPackages : [];
+  // `runtime/web/app.ts` imports the concrete source directory selected from the
+  // settings-derived manifest root or the host node_modules fallback.
+  const addonImports = addonPackages.map((pkg, index) => {
+    const entry = addonEntryImport(runtimeDir, addonSources.get(pkg.package).source);
+    return `import addon${index} from ${JSON.stringify(entry)};`;
+  });
+  const themeImports = installedThemes.packages.map((pkg, index) => {
+    const entry = relativeRuntimeImport(runtimeDir, pkg.entry);
+    return `import { themes as canonicalThemes${index} } from ${JSON.stringify(entry)};`;
+  });
+  const schemaImports = [];
+  const schemaEntries = schemaNames.map((name, index) => {
+    // Metadata is bulk generated data, not code: a URL import lets the browser
+    // parse JSON instead of inlining it into the entry chunk or a dev sourcemap.
+    schemaImports.push(
+      `import schema${index}MetadataUrl from ${JSON.stringify(`../schemas/${name}.metadata.json?url&no-inline`)};`,
+      `import { operationDocuments as schema${index}Documents } from ${JSON.stringify(`../gql/${name}/actions`)};`,
+    );
+    const sdlPath = path.join(runtimeDir, "schemas", `${name}.graphql`);
+    const lines = [
+      `    ${JSON.stringify(name)}: {`,
+      `      url: "/graphql/${name}/",`,
+      `      metadata: schema${index}Metadata,`,
+      `      operationDocuments: schema${index}Documents,`,
+    ];
+    if (schemaIsLive(sdlPath)) lines.push("      live: true,");
+    lines.push("    },");
+    return lines.join("\n");
+  });
+  const addonValues = composedAddonValues(addonPackages, manifest.deployment).join(", ");
+  const body = [
+    "// Generated composed web runtime - do not edit by hand.",
+    "// Vite dev/build regenerates this file; `manage.py compose` emits the manifest it reads.",
+    "",
+    [...addonImports, ...themeImports, ...schemaImports].join("\n"),
+    "",
+    `export const composedAddons = [${addonValues}] as const;`,
+    `export const composedThemeDefinitions = [${installedThemes.packages.map((_pkg, index) => `...canonicalThemes${index}`).join(", ")}].sort((left, right) => left.id.localeCompare(right.id));`,
+    // Only an addon package contributes themes; the deployment layer never does.
+    `const contributedThemeDefinitions = [${addonPackages.map((_pkg, index) => `addon${index}`).join(", ")}].flatMap((addon) => (addon.themes ?? []).map((entry) => "definition" in entry ? entry.definition : entry)).sort((left, right) => left.id.localeCompare(right.id));`,
+    "if (contributedThemeDefinitions.length !== composedThemeDefinitions.length || contributedThemeDefinitions.some((definition, index) => definition !== composedThemeDefinitions[index])) {",
+    "  throw new Error(\"Composed theme contributions must reference their package's canonical ./themes definitions in id order.\");",
+    "}",
+    "",
+    "async function fetchSchemaMetadata(url: string): Promise<unknown> {",
+    "  const response = await fetch(url);",
+    '  if (!response.ok) throw new Error(`Failed to load schema metadata from ${url}: ${response.status} ${response.statusText}`);',
+    // createApp validates the parsed wire metadata at its existing normalization boundary.
+    "  return await response.json();",
+    "}",
+    "",
+    "export async function loadComposedSchemas() {",
+    `  const [${schemaNames.map((_name, index) => `schema${index}Metadata`).join(", ")}] = await Promise.all([`,
+    ...schemaNames.map((_name, index) => `    fetchSchemaMetadata(schema${index}MetadataUrl),`),
+    "  ]);",
+    "  return {",
+    schemaEntries.join("\n"),
+    "  } as const;",
+    "}",
+    "",
+  ].join("\n");
+  const outPath = path.join(runtimeDir, "web", "app.ts");
+  mkdirSync(path.dirname(outPath), { recursive: true });
+  writeFileSync(outPath, body);
+  console.log(
+    `composed web runtime: ${addonPackages.length} addon(s), ${schemaNames.length} schema(s)`,
+  );
+}
+
+/**
+ * Attach the composer's addon ancestry to each manifest as web ids, then append
+ * the deployment's ANGEE_UI layer, which depends on every composed addon.
+ */
+function composedAddonValues(addonPackages, deployment) {
+  const indexByApp = new Map(addonPackages.map((pkg, index) => [pkg.app, index]));
+  const values = addonPackages.map((pkg, index) => {
+    const ancestors = (pkg.dependsOn ?? []).map((app) => {
+      const ancestor = indexByApp.get(app);
+      if (ancestor === undefined) throw new Error(`${pkg.package} depends on ${app}, which has no web package in the manifest.`);
+      return `addon${ancestor}.id`;
+    });
+    return ancestors.length ? `{ ...addon${index}, dependsOn: [${ancestors.join(", ")}] }` : `addon${index}`;
+  });
+  if (deployment) {
+    const everyAddon = addonPackages.map((_pkg, index) => `addon${index}.id`).join(", ");
+    values.push(`{ id: "deployment", ...${JSON.stringify(deployment)}, dependsOn: [${everyAddon}] }`);
+  }
+  return values;
+}
+
+async function loadInstalledThemes(addonSources, loadThemeModule, inputs) {
+  const packages = [];
+  const owners = new Map();
+  const definitions = [];
+  for (const [packageName, { root: packageRoot }] of [...addonSources.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    const manifestPath = path.join(packageRoot, "package.json");
+    const packageManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const exported = packageExport(packageManifest.exports, "./themes");
+    if (!exported) continue;
+    const entry = path.resolve(packageRoot, exported);
+    inputs.file(entry);
+    if (!entry.startsWith(`${packageRoot}${path.sep}`) || !existsSync(entry)) {
+      throw new Error(`${packageName} exports ./themes from an invalid or missing path: ${exported}`);
+    }
+    const sources = collectHeadlessSources(entry, packageRoot, new Set(), inputs);
+    const module = await loadThemeModule(sourcePath(entry));
+    if (!Array.isArray(module.themes)) throw new Error(`${packageName} ./themes must export an array named themes.`);
+    const packageDefinitions = assertThemeCatalogue(module.themes);
+    for (const definition of packageDefinitions) {
+      const previous = owners.get(definition.id);
+      if (previous) throw new Error(`Duplicate installed theme id ${JSON.stringify(definition.id)} from ${previous} and ${packageName}.`);
+      owners.set(definition.id, packageName);
+      definitions.push(definition);
+    }
+    packages.push({ packageName, packageRoot, entry, sources, definitions: packageDefinitions });
+  }
+  definitions.sort((left, right) => left.id.localeCompare(right.id));
+  packages.sort((left, right) => left.definitions[0]?.id.localeCompare(right.definitions[0]?.id ?? "") ?? left.packageName.localeCompare(right.packageName));
+  return { packages, definitions };
+}
+
+function emitThemeArtifacts(runtimeDir, installedThemes, inputs) {
+  const imports = [];
+  const fingerprintSources = new Map();
+  for (const pkg of installedThemes.packages) {
+    for (const source of pkg.sources) {
+      fingerprintSources.set(
+        `headless:${pkg.packageName}:${slash(path.relative(pkg.packageRoot, source))}`,
+        source,
+      );
+    }
+    for (const definition of pkg.definitions) {
+      for (const stylesheet of definition.stylesheets ?? []) {
+        const absolute = path.resolve(path.dirname(pkg.entry), stylesheet);
+        inputs.file(absolute);
+        if (!absolute.startsWith(`${pkg.packageRoot}${path.sep}`) || !existsSync(absolute)) {
+          throw new Error(`Theme ${definition.id} references missing stylesheet ${stylesheet}.`);
+        }
+        fingerprintSources.set(
+          `stylesheet:${definition.id}:${slash(path.relative(pkg.packageRoot, absolute))}`,
+          absolute,
+        );
+        const stylesheetSource = readFileSync(absolute, "utf8");
+        for (const asset of stylesheetAssets(stylesheetSource, absolute, pkg.packageRoot, definition.id, inputs)) {
+          fingerprintSources.set(
+            `asset:${definition.id}:${slash(path.relative(pkg.packageRoot, asset))}`,
+            asset,
+          );
+        }
+        const relative = slash(path.relative(path.join(runtimeDir, "web"), absolute));
+        imports.push(`@import ${JSON.stringify(relative.startsWith(".") ? relative : `./${relative}`)};`);
+      }
+    }
+  }
+  const css = [...imports.sort(), imports.length ? "" : null, compileThemeCss(installedThemes.definitions)]
+    .filter((line) => line !== null)
+    .join("\n");
+  const metadata = installedThemes.definitions.map((definition) => ({
+    ...serializableThemeMetadata(definition),
+    defaultTokens: resolveThemeOptions(definition).tokens,
+  }));
+  const headlessEntries = new Map(
+    installedThemes.packages.flatMap((pkg) =>
+      pkg.definitions.map((definition) => [
+        definition.id,
+        relativeRuntimeImport(runtimeDir, pkg.entry),
+      ]),
+    ),
+  );
+  const catalogueThemes = metadata.map((theme) => ({
+    ...theme,
+    headlessEntry: headlessEntries.get(theme.id),
+  }));
+  const fingerprintHash = createHash("sha256")
+    .update(css)
+    .update(JSON.stringify(metadata))
+    .update(readFileSync(fileURLToPath(import.meta.url)))
+    .update(readFileSync(fileURLToPath(import.meta.resolve("@angee/ui/theme-runtime"))));
+  for (const [key, source] of [...fingerprintSources.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    fingerprintHash.update(key).update(readFileSync(source));
+  }
+  const fingerprint = fingerprintHash.digest("hex");
+  const webRuntime = path.join(runtimeDir, "web");
+  mkdirSync(webRuntime, { recursive: true });
+  writeFileSync(path.join(webRuntime, "themes.css"), css);
+  writeFileSync(path.join(webRuntime, "themes.catalog.json"), `${JSON.stringify({ schema: 1, fingerprint, themes: catalogueThemes }, null, 2)}\n`);
+}
+
+function collectHeadlessSources(entry, packageRoot, seen, inputs) {
+  const absolute = path.resolve(entry);
+  inputs.file(absolute);
+  if (seen.has(absolute)) return seen;
+  if (!absolute.startsWith(`${packageRoot}${path.sep}`) || !existsSync(absolute)) {
+    throw new Error(`Headless theme source escapes its package or is missing: ${absolute}`);
+  }
+  seen.add(absolute);
+  const source = readFileSync(absolute, "utf8");
+  const imports = /(?:import|export)\s+(?:[^"']*?\s+from\s+)?["'](\.[^"']+)["']/g;
+  for (const match of source.matchAll(imports)) {
+    const specifier = match[1];
+    if (!specifier.endsWith(".mjs")) {
+      throw new Error(`Headless theme source ${absolute} must use explicit .mjs for relative import ${specifier}.`);
+    }
+    collectHeadlessSources(path.resolve(path.dirname(absolute), specifier), packageRoot, seen, inputs);
+  }
+  return seen;
+}
+
+function stylesheetAssets(source, stylesheet, packageRoot, themeId, inputs) {
+  if (/@import\s/i.test(source)) {
+    throw new Error(`Theme ${themeId} stylesheet ${stylesheet} must declare additional stylesheets through the theme definition.`);
+  }
+  const assets = [];
+  const urls = /url\(\s*(["']?)([^"')]+)\1\s*\)/gi;
+  for (const match of source.matchAll(urls)) {
+    const reference = match[2].trim();
+    if (reference.startsWith("data:") || reference.startsWith("#")) continue;
+    if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|\/)/i.test(reference)) {
+      throw new Error(`Theme ${themeId} stylesheet may reference only bundled relative assets: ${reference}.`);
+    }
+    const asset = path.resolve(path.dirname(stylesheet), reference.split(/[?#]/, 1)[0]);
+    inputs.file(asset);
+    if (!asset.startsWith(`${packageRoot}${path.sep}`) || !existsSync(asset)) {
+      throw new Error(`Theme ${themeId} stylesheet asset escapes its package or is missing: ${reference}.`);
+    }
+    assets.push(asset);
+  }
+  return assets;
+}
+
+function packageExport(exports, name) {
+  if (!exports || typeof exports !== "object") return undefined;
+  const value = exports[name];
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return undefined;
+  return typeof value.import === "string" ? value.import : typeof value.default === "string" ? value.default : undefined;
+}
+
+function relativeRuntimeImport(runtimeDir, entry) {
+  const relative = slash(path.relative(path.join(runtimeDir, "web"), entry));
+  return relative.startsWith(".") ? relative : `./${relative}`;
+}
+
+function addonEntryImport(runtimeDir, sourceDir) {
+  const entryBase = path.join(sourceDir, "index");
+  const extension = ADDON_ENTRY_EXTENSIONS.find((candidate) => existsSync(`${entryBase}${candidate}`));
+  const relative = slash(
+    path.relative(path.join(runtimeDir, "web"), `${entryBase}${extension}`),
+  );
+  return relative.startsWith(".") ? relative : `./${relative}`;
+}
+
+async function runCodegen(name, schemaPath, runtimeDir, documents, types) {
+  if (!existsSync(schemaPath)) {
+    throw new Error(`Missing GraphQL SDL for schema ${name}: ${schemaPath}`);
+  }
+  const codegenConfig = {
+    scalars: SCALARS,
+    enumsAsTypes: true,
+    skipTypename: true,
+    useTypeImports: true,
+  };
+  const generates = {
+    [slash(path.join(runtimeDir, "gql", name, path.sep))]: {
+      preset: "client",
+      presetConfig: { fragmentMasking: false },
+      config: codegenConfig,
+    },
+  };
+  // An external schema may also need a bare `typescript` types module (the
+  // operator console re-exports named daemon types, which the client preset
+  // does not surface as standalone exports).
+  if (types) {
+    generates[slash(path.join(runtimeDir, "gql", name, "types.ts"))] = {
+      plugins: ["typescript"],
+      config: codegenConfig,
+    };
+  }
+  await generate(
+    { schema: slash(schemaPath), documents, ignoreNoDocuments: true, generates },
+    true,
+  );
+}
+
+function documentFiles(name) {
+  return name === "public"
+    ? ["documents.public.ts"]
+    : ["documents.ts", `documents.${name}.ts`];
+}
+
+function documentGlobs(name, roots) {
+  return roots.flatMap((root) => documentFiles(name).map((file) => `${root}/**/${file}`));
+}
+
+function buildOperationDocuments(name, runtimeDir) {
+  const sdlPath = path.join(runtimeDir, "schemas", `${name}.graphql`);
+  const metadataPath = path.join(runtimeDir, "schemas", `${name}.metadata.json`);
+  const outPath = path.join(runtimeDir, "gql", name, "actions.ts");
+  const schema = buildSchema(readFileSync(sdlPath, "utf8"));
+  const metadata = readSchemaMetadata(metadataPath);
+  const index = schemaFieldMetadataFromAngeeSchemaMetadata(metadata);
+  const actions = actionFields(schema);
+  const names = actions.map((action) => action.name);
+  const aggregateResources = aggregateFields(index.resources);
+  const deletePreviewResources = deletePreviewFields(index.resources);
+  const groupResources = groupFields(index.resources);
+  const saveResources = saveFields(index);
+  const union = names.length > 0 ? names.map((n) => JSON.stringify(n)).join(" | ") : "never";
+  const aggregateUnion = aggregateResources.length > 0
+    ? aggregateResources.map((resource) => JSON.stringify(resource.modelLabel)).join(" | ")
+    : "never";
+  const deletePreviewUnion = deletePreviewResources.length > 0
+    ? deletePreviewResources.map((resource) => JSON.stringify(resource.modelLabel)).join(" | ")
+    : "never";
+  const groupUnion = groupResources.length > 0
+    ? groupResources.map((resource) => JSON.stringify(resource.modelLabel)).join(" | ")
+    : "never";
+  const saveUnion = saveResources.length > 0
+    ? saveResources.map((resource) => JSON.stringify(resource.modelLabel)).join(" | ")
+    : "never";
+  const documents = actions.map((action) => {
+    const ast = JSON.stringify(validatedDocument(schema, actionDocument(action), action.name), null, 2);
+    return `  ${JSON.stringify(action.name)}: ${ast} as ActionDocument<${JSON.stringify(action.name)}>,`;
+  });
+  const aggregateDocuments = aggregateResources.map((resource) => {
+    const ast = JSON.stringify(
+      validatedDocument(
+        schema,
+        aggregateDocument(resource.aggregateRoot, resource.filterType, resource.measures),
+        resource.aggregateRoot,
+      ),
+      null,
+      2,
+    );
+    return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as AggregateDocument,`;
+  });
+  const deletePreviewDocuments = deletePreviewResources.map((resource) => {
+    const ast = JSON.stringify(
+      validatedDocument(schema, deletePreviewDocument(resource.deletePreviewRoot), resource.deletePreviewRoot),
+      null,
+      2,
+    );
+    return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as DeletePreviewDocument,`;
+  });
+  const groupDocuments = groupResources.map((resource) => {
+    const ast = JSON.stringify(validatedDocument(schema, groupDocument(resource), resource.groupsRoot), null, 2);
+    return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as GroupDocument,`;
+  });
+  const saveDocuments = saveResources.map((resource) => {
+    const ast = JSON.stringify(validatedDocument(schema, saveDocument(resource), resource.saveRoot), null, 2);
+    return `  ${JSON.stringify(resource.modelLabel)}: ${ast} as SaveDocument,`;
+  });
+  const body = [
+    `// Generated from runtime/schemas/${name}.graphql - do not edit by hand.`,
+    "// From the web host: `pnpm --config.verify-deps-before-run=false exec angee-web-codegen --runtime ../runtime --web-root .`.",
+    "//",
+    "// Eligible ActionResult mutation fields, plus authored",
+    "// aggregate, group, delete-preview, and save operation documents.",
+    "",
+    "import type { TypedDocumentNode } from \"@graphql-typed-document-node/core\";",
+    "",
+    "export interface ActionResult {",
+    "  ok: boolean;",
+    "  message: string;",
+    "  id: string | null;",
+    "  validation_errors: Record<string, string[]> | null;",
+    "}",
+    "",
+    "export type ActionVariables = Record<string, unknown>;",
+    "",
+    `export type ActionFieldName = ${union};`,
+    "",
+    "export type ActionDocument<",
+    "  TField extends ActionFieldName = ActionFieldName,",
+    "> = TypedDocumentNode<Record<TField, ActionResult>, ActionVariables>;",
+    "",
+    "export const actionDocuments: {",
+    "  readonly [Field in ActionFieldName]: ActionDocument<Field>;",
+    "} = {",
+    ...documents,
+    "};",
+    "",
+    `export type AggregateResource = ${aggregateUnion};`,
+    "",
+    "export interface AggregateVariables {",
+    "  where?: Record<string, unknown>;",
+    "}",
+    "",
+    "export type AggregateDocument = TypedDocumentNode<",
+    "  Record<string, { aggregate: Record<string, unknown> }>,",
+    "  AggregateVariables",
+    ">;",
+    "",
+    "export const aggregateDocuments: {",
+    "  readonly [Resource in AggregateResource]: AggregateDocument;",
+    "} = {",
+    ...aggregateDocuments,
+    "};",
+    "",
+    `export type DeletePreviewResource = ${deletePreviewUnion};`,
+    "",
+    "export interface DeletePreviewVariables {",
+    "  id: string;",
+    "  confirm?: boolean;",
+    "}",
+    "",
+    "export interface DeletePreviewGroup {",
+    "  label: string;",
+    "  count: number;",
+    "}",
+    "",
+    "export interface DeletePreviewNode {",
+    "  label: string;",
+    "  object_label: string;",
+    "  object_id: string | null;",
+    "  children: DeletePreviewNode[];",
+    "}",
+    "",
+    "export interface DeletePreview {",
+    "  total_deleted_count: number;",
+    "  has_blockers: boolean;",
+    "  deleted: DeletePreviewGroup[];",
+    "  updated: DeletePreviewGroup[];",
+    "  blocked: DeletePreviewGroup[];",
+    "  refusals: string[];",
+    "  root: DeletePreviewNode;",
+    "}",
+    "",
+    "export type DeletePreviewDocument = TypedDocumentNode<",
+    "  Record<string, DeletePreview>,",
+    "  DeletePreviewVariables",
+    ">;",
+    "",
+    "export const deletePreviewDocuments: {",
+    "  readonly [Resource in DeletePreviewResource]: DeletePreviewDocument;",
+    "} = {",
+    ...deletePreviewDocuments,
+    "};",
+    "",
+    `export type GroupResource = ${groupUnion};`,
+    "",
+    "export interface GroupVariables {",
+    "  group_by: readonly Record<string, unknown>[];",
+    "  where?: Record<string, unknown>;",
+    "  having?: Record<string, unknown>;",
+    "  order_by?: readonly Record<string, unknown>[];",
+    "  limit?: number;",
+    "  offset?: number;",
+    "}",
+    "",
+    "export type GroupDocument = TypedDocumentNode<",
+    "  Record<string, { key: Record<string, unknown>; aggregate: Record<string, unknown> }[] | number>,",
+    "  GroupVariables",
+    ">;",
+    "",
+    "export const groupDocuments: {",
+    "  readonly [Resource in GroupResource]: GroupDocument;",
+    "} = {",
+    ...groupDocuments,
+    "};",
+    "",
+    `export type SaveResource = ${saveUnion};`,
+    "",
+    "export interface SaveVariables {",
+    "  pk: string;",
+    "  patch?: Record<string, unknown>;",
+    "  lines?: readonly Record<string, unknown>[];",
+    "}",
+    "",
+    "export type SaveDocument = TypedDocumentNode<",
+    "  Record<string, Record<string, unknown>>,",
+    "  SaveVariables",
+    ">;",
+    "",
+    "export const saveDocuments: {",
+    "  readonly [Resource in SaveResource]: SaveDocument;",
+    "} = {",
+    ...saveDocuments,
+    "};",
+    "",
+    "// One object shaped as @angee/refine's SchemaOperationDocuments — the single",
+    "// symbol the composed web runtime imports per schema.",
+    "export const operationDocuments = {",
+    "  actions: actionDocuments,",
+    "  aggregates: aggregateDocuments,",
+    "  deletePreviews: deletePreviewDocuments,",
+    "  groups: groupDocuments,",
+    "  saves: saveDocuments,",
+    "};",
+    "",
+  ].join("\n");
+  mkdirSync(path.dirname(outPath), { recursive: true });
+  writeFileSync(outPath, body);
+  console.log(
+    `operation documents [${name}]: ` +
+      `${names.length} action(s), ` +
+      `${aggregateResources.length} aggregate query(ies), ` +
+      `${deletePreviewResources.length} delete-preview mutation(s), ` +
+      `${groupResources.length} group query(ies), ` +
+      `${saveResources.length} save mutation(s)`,
+  );
+}
+
+function actionFields(schema) {
+  const mutation = schema.getMutationType();
+  if (!mutation) return [];
+  const fields = mutation.getFields();
+  return Object.keys(fields)
+    .flatMap((name) => {
+      const field = fields[name];
+      const returned = getNamedType(field.type);
+      if (!(returned instanceof GraphQLObjectType) || returned.name !== "ActionResult") {
+        return [];
+      }
+      if (field.args.length === 0) return [];
+      const requiredArgs = field.args.filter(isRequiredArgument);
+      // Every argument required, or one required ID target (whatever its name: the
+      // hook's `idArgument` names it) beside optional arguments.
+      if (
+        requiredArgs.length !== field.args.length &&
+        !(requiredArgs.length === 1 && requiredArgs[0].type.ofType === GraphQLID)
+      ) {
+        return [];
+      }
+      return [{
+        name,
+        args: field.args.map((arg) => ({
+          name: arg.name,
+          type: String(arg.type),
+          defaultValue: arg.astNode?.defaultValue,
+        })),
+      }];
+    })
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function deletePreviewFields(resources) {
+  return resources
+    .flatMap((resource) => {
+      const modelLabel = resource?.modelLabel;
+      const deletePreviewRoot = resource?.roots?.deletePreview;
+      if (
+        typeof modelLabel !== "string" ||
+        typeof deletePreviewRoot !== "string" ||
+        deletePreviewRoot === ""
+      ) {
+        return [];
+      }
+      return [{ modelLabel, deletePreviewRoot }];
+    })
+    .sort((left, right) => left.modelLabel.localeCompare(right.modelLabel));
+}
+
+function aggregateFields(resources) {
+  return resources
+    .flatMap((resource) => {
+      const modelLabel = resource?.modelLabel;
+      const aggregateRoot = resource?.roots?.aggregate;
+      const filterType = resource?.typeNames?.filter;
+      if (
+        typeof modelLabel !== "string" ||
+        typeof aggregateRoot !== "string" ||
+        aggregateRoot === "" ||
+        typeof filterType !== "string" ||
+        filterType === ""
+      ) {
+        return [];
+      }
+      return [{
+        modelLabel,
+        aggregateRoot,
+        filterType,
+        measures: Array.isArray(resource?.aggregateMeasures)
+          ? resource.aggregateMeasures
+          : [],
+      }];
+    })
+    .sort((left, right) => left.modelLabel.localeCompare(right.modelLabel));
+}
+
+function groupFields(resources) {
+  return resources
+    .flatMap((resource) => {
+      const modelLabel = resource?.modelLabel;
+      const groupsRoot = resource?.roots?.groups;
+      const groupsCountRoot = resource?.roots?.groupsCount;
+      const filterType = resource?.typeNames?.filter;
+      const groupByType = resource?.typeNames?.groupBySpec;
+      const groupOrderType = resource?.typeNames?.groupOrder;
+      const havingType = resource?.typeNames?.having;
+      const keyFields = groupKeyFields(resource);
+      if (typeof groupsRoot !== "string" || groupsRoot === "") {
+        return [];
+      }
+      const missing = [
+        ["roots.groupsCount", groupsCountRoot],
+        ["typeNames.having", havingType],
+        ["modelLabel", modelLabel],
+        ["typeNames.filter", filterType],
+        ["typeNames.groupBySpec", groupByType],
+        ["typeNames.groupOrder", groupOrderType],
+      ]
+        .filter(([, value]) => typeof value !== "string" || value === "")
+        .map(([field]) => field);
+      if (keyFields.length === 0) missing.push("query.axes");
+      if (missing.length > 0) {
+        const resourceName =
+          typeof modelLabel === "string" && modelLabel !== ""
+            ? modelLabel
+            : "<unknown>";
+        throw new Error(
+          `Grouped resource ${resourceName} is missing required ${missing.join(", ")}`,
+        );
+      }
+      return [{
+        modelLabel,
+        groupsRoot,
+        groupsCountRoot,
+        filterType,
+        groupByType,
+        groupOrderType,
+        havingType,
+        keyFields,
+        measures: Array.isArray(resource?.aggregateMeasures)
+          ? resource.aggregateMeasures
+          : [],
+      }];
+    })
+    .sort((left, right) => left.modelLabel.localeCompare(right.modelLabel));
+}
+
+function saveFields(index) {
+  return index.resources
+    .flatMap((resource) => {
+      const modelLabel = resource?.modelLabel;
+      const saveRoot = resource?.roots?.save;
+      const lines = resource?.linesResource;
+      if (
+        typeof modelLabel !== "string" ||
+        typeof saveRoot !== "string" ||
+        saveRoot === "" ||
+        !lines ||
+        typeof lines.field !== "string" ||
+        lines.field === ""
+      ) {
+        return [];
+      }
+      const patchType = resource?.typeNames?.updateInput;
+      const linesInputType = lines.inputType;
+      return [{
+        modelLabel,
+        saveRoot,
+        arguments: resource.saveArguments ?? [],
+        // The `<res>_set_input` parent patch type and `<res>_lines_insert_input`
+        // line type name the save mutation's `patch`/`lines` arguments; either is
+        // omitted from the operation when the schema does not expose it.
+        patchType: nonEmptyString(patchType),
+        linesInputType: nonEmptyString(linesInputType),
+        linesField: lines.field,
+        selection: selectionFields(
+          resourceReadSelectionPaths(index.labels[modelLabel], index, lines.field),
+        ),
+        linesSelection: selectionFields(lineReadSelectionPaths(lines, index)),
+      }];
+    })
+    .sort((left, right) => left.modelLabel.localeCompare(right.modelLabel));
+}
+
+// Convert shared dotted scalar paths to one GraphQL selection tree. GraphQL's
+// own parser and validator remain the syntax/type authority.
+function selectionFields(paths) {
+  const root = new Map();
+  for (const path of paths) {
+    let current = root;
+    for (const segment of path.split(".")) {
+      const name = assertGraphQLName(segment);
+      if (!current.has(name)) current.set(name, new Map());
+      current = current.get(name);
+    }
+  }
+  return renderSelectionTree(root);
+}
+
+function renderSelectionTree(tree) {
+  return [...tree.entries()].map(([name, children]) =>
+    children.size === 0
+      ? name
+      : `${name} { ${renderSelectionTree(children).join(" ")} }`,
+  );
+}
+
+function saveDocument(resource) {
+  const variables = ["$pk: ID!"];
+  const args = ["pk: $pk"];
+  for (const { name, type } of [...resource.arguments].sort((left, right) => left.name.localeCompare(right.name))) {
+    variables.push(`$${assertGraphQLName(name)}: ${print(parseType(type))}`);
+    args.push(`${name}: $${name}`);
+  }
+  if (resource.patchType) {
+    variables.push(`$patch: ${assertGraphQLName(resource.patchType)}`);
+    args.push("patch: $patch");
+  }
+  if (resource.linesInputType) {
+    variables.push(`$lines: [${assertGraphQLName(resource.linesInputType)}!]`);
+    args.push("lines: $lines");
+  }
+  const linesSelection =
+    resource.linesSelection.length > 0
+      ? ` ${assertGraphQLName(resource.linesField)} { ${resource.linesSelection.join(" ")} }`
+      : "";
+  return parse(
+    `mutation ${actionOperationName(resource.saveRoot)}(${variables.join(", ")}) { ` +
+      `${resource.saveRoot}(${args.join(", ")}) { ` +
+      `${resource.selection.join(" ")}${linesSelection} } }`,
+    { noLocation: true },
+  );
+}
+
+function nonEmptyString(value) {
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+function readSchemaMetadata(metadataPath) {
+  try {
+    return defineAngeeSchemaMetadata(
+      JSON.parse(readFileSync(metadataPath, "utf8")),
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid schema metadata ${metadataPath}: ${message}`);
+  }
+}
+
+function validatedDocument(schema, document, owner) {
+  const errors = validate(schema, document);
+  if (errors.length > 0) {
+    throw new Error(
+      `Generated operation for "${owner}" does not validate: ${errors
+        .map((error) => error.message)
+        .join("; ")}`,
+    );
+  }
+  return document;
+}
+
+function actionDocument(action) {
+  // The full in-band ActionResult surface: `id` lets the client deep-link to a
+  // record the verb created, and `validation_errors` carries the field-keyed
+  // (or non-field) domain-failure reasons the settle owner surfaces.
+  const variables = action.args
+    .map((arg) => `$${assertGraphQLName(arg.name)}: ${arg.type}${arg.defaultValue ? ` = ${print(arg.defaultValue)}` : ""}`)
+    .join(", ");
+  const argumentsList = action.args
+    .map((arg) => `${assertGraphQLName(arg.name)}: $${assertGraphQLName(arg.name)}`)
+    .join(", ");
+  return parse(
+    `mutation ${actionOperationName(action.name)}(${variables}) { ` +
+      `${action.name}(${argumentsList}) { ok message id validation_errors } }`,
+    { noLocation: true },
+  );
+}
+
+function aggregateDocument(root, filterType, measures) {
+  return parse(
+    `query ${actionOperationName(root)}($where: ${assertGraphQLName(filterType)}) { ` +
+      `${root}(where: $where) { aggregate { ${aggregateSelection(measures)} } } }`,
+    { noLocation: true },
+  );
+}
+
+function groupDocument(resource) {
+  return parse(
+    `query ${actionOperationName(resource.groupsRoot)}(` +
+      `$group_by: [${assertGraphQLName(resource.groupByType)}!]!, ` +
+      `$where: ${assertGraphQLName(resource.filterType)}, ` +
+      `$having: ${assertGraphQLName(resource.havingType)}, ` +
+      `$order_by: [${assertGraphQLName(resource.groupOrderType)}!], ` +
+      "$limit: Int, $offset: Int) { " +
+      `${assertGraphQLName(resource.groupsRoot)}(` +
+      "group_by: $group_by, where: $where, having: $having, order_by: $order_by, " +
+      "limit: $limit, offset: $offset" +
+      `) { key { ${groupKeySelection(resource.keyFields)} } ` +
+      `aggregate { ${aggregateSelection(resource.measures)} } } ` +
+      `totalCount: ${assertGraphQLName(resource.groupsCountRoot)}(` +
+      "group_by: $group_by, where: $where, having: $having) }",
+    { noLocation: true },
+  );
+}
+
+function deletePreviewDocument(root) {
+  return parse(
+    `mutation ${actionOperationName(root)}($id: ID!, $confirm: Boolean) { ` +
+      `${root}(id: $id, confirm: $confirm) { ${DELETE_PREVIEW_SELECTION} } }`,
+    { noLocation: true },
+  );
+}
+
+function groupKeyFields(resource) {
+  const seen = new Set();
+  const fields = [];
+  for (const dimension of Object.values(resource?.query?.axes ?? {})) {
+    if (!dimension.server) continue;
+    addGroupKeyField(fields, seen, dimension.server.key, false);
+    addGroupKeyField(fields, seen, dimension.server.labelKey, false);
+    for (const extraction of dimension?.extractions ?? []) {
+      addGroupKeyField(fields, seen, extraction?.key, false);
+      addGroupKeyField(fields, seen, extraction?.rangeKey, true);
+    }
+  }
+  return fields;
+}
+
+function addGroupKeyField(fields, seen, name, range) {
+  if (typeof name !== "string" || name === "") return;
+  const key = `${range ? "range" : "value"}:${name}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  fields.push({ name: assertGraphQLName(name), range });
+}
+
+function groupKeySelection(fields) {
+  return fields
+    .map((field) => field.range ? `${field.name} { from to }` : field.name)
+    .join(" ");
+}
+
+function aggregateSelection(measures) {
+  const fieldsByOp = new Map();
+  for (const measure of measures) {
+    if (!measure || measure.op === "count") continue;
+    const op = measure.op;
+    if (!AGGREGATE_MEASURE_OPERATORS.includes(op)) {
+      throw new Error(`Unsupported aggregate measure op in metadata: ${op}`);
+    }
+    const field = assertGraphQLName(measure.input ?? measure.field);
+    const fields = fieldsByOp.get(op) ?? [];
+    if (!fields.includes(field)) fields.push(field);
+    fieldsByOp.set(op, fields);
+  }
+  return [
+    "count",
+    ...AGGREGATE_MEASURE_OPERATORS.flatMap((op) => {
+      const fields = fieldsByOp.get(op);
+      return fields && fields.length > 0
+        ? [`${op} { ${fields.join(" ")} }`]
+        : [];
+    }),
+  ].join(" ");
+}
+
+function actionOperationName(field) {
+  return `Angee${field[0].toUpperCase()}${field.slice(1)}`;
+}
+
+function assertGraphQLName(name) {
+  if (typeof name !== "string" || !/^[_A-Za-z][_0-9A-Za-z]*$/.test(name)) {
+    throw new Error(`Invalid GraphQL field name in operation document metadata: ${name}`);
+  }
+  return name;
+}
+
+function slash(value) {
+  return value.replaceAll(path.sep, "/");
+}

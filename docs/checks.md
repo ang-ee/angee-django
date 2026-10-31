@@ -18,9 +18,16 @@ Never initialize a stack under a source checkout.
 Use the environment's `uv` and the repository's locked Python dependencies.
 Use the owning stack's existing JS install for materialized source slots;
 never `pnpm install` inside a slot or a nested package. A standalone CI checkout
-installs its own repository workspace instead. Dependency changes update the
-owning manifests and lockfiles through their normal workflow; verification
-must not silently change them.
+installs its own repository workspace instead. Ordinary JS installation uses
+`pnpm install --frozen-lockfile`. Author dependency changes with native
+`pnpm install --lockfile-only --no-frozen-lockfile` at that same owner before
+installing. Fresh stacks author an absent lock once; existing lock drift fails.
+Instance frontend jobs keep their lock on the mounted project through pnpm
+`--lockfile-dir /opt/angee-project`; pnpm owns the resulting modules/store layout
+and package-local links. When intentionally changing instance workspace
+membership, run native lock authoring in its declared image/workspace environment
+with that same flag, then retain the project lock. Verification must not silently
+change manifests or lockfiles.
 
 Commands below using `python -m` invoke the selected environment's modules; this
 is a portable convention, not a claim that ordinary tool entrypoints are broken.
@@ -224,17 +231,18 @@ without the runtime dependencies cannot run these commands directly.
 
 After a model change, run native compose and author
 required native history before provision. Compose emits GraphQL SDL through its
-capability integration; then run the host web
-package's codegen **before** checking addon fragments. From the stack
+capability integration. Vite dev and build await shared `@angee/app` generation
+automatically; preview serves the built output. Standalone addon fragment checks
+do not start Vite, so invoke the framework CLI **before** checking them. From the stack
 root, for the default `web_path=web`:
 
 ```sh
-pnpm --config.verify-deps-before-run=false --dir web run codegen
+pnpm --config.verify-deps-before-run=false --dir web exec angee-web-codegen --runtime ../runtime --web-root .
 ```
 
-Use the rendered `web_path` if customized. Root test/typecheck scripts do not
-implicitly perform codegen. After a manifest/dependency change, synchronize at
-the stack's dependency owner before codegen; never install in the source slot.
+Use the rendered `web_path` if customized and adjust `--runtime` relative to it.
+Root test/typecheck scripts do not implicitly perform codegen. After a
+manifest/dependency change, synchronize at the stack's dependency owner before codegen; never install in the source slot.
 
 ## Frontend Packages And Addon Fragments
 

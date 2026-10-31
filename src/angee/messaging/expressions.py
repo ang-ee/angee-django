@@ -34,7 +34,9 @@ class AttachedFileSkipReason(models.Func):
         )
 
     def as_sql(
-        self, compiler: SQLCompiler, connection: BaseDatabaseWrapper, **extra_context: Any,
+        self, compiler: SQLCompiler, connection: BaseDatabaseWrapper,
+        function: str | None = None, template: str | None = None, arg_joiner: str | None = None,
+        **extra_context: Any,
     ) -> _AsSqlType:
         identity_expression, readable_expression = self.get_source_expressions()
         identity, identity_params = compiler.compile(identity_expression)

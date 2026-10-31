@@ -209,8 +209,8 @@ materializes its framework sources and boots the complete stack.
    running while it restarts them
    ([Restart the running stack](#restart-the-running-stack)). The rendered manifest declares the consolidated framework
    source plus optional external sources; `angee dev` materializes them, cuts the
-   `src` workspace, and runs the composed host at the stack root against those
-   worktrees.
+   `src` workspace, and runs the composed host at the stack root against its
+   slots.
 
 For a host without `angee.jobs`, or one using separately managed workers, set
 the stack template input `enable_celery=false`. This omits worker services and
@@ -324,7 +324,7 @@ To put a Claude Code agent to work on the framework itself:
    `{"flavor": "dev"}`. The seeded *Framework Dev Agent* under Agents →
    Templates shows the reference shape.
 3. **Provision** the record: the operator cuts the agent its own src workspace
-   (worktrees on a `<stack>/<agent>` branch) and builds its container — a
+   (slots on a `<stack>/<agent>` branch) and builds its container — a
    few minutes the first time.
 4. Work with it in the **Chat** on its session page, or hands-on inside the
    same workspace over `docker compose exec` (the dev flavor ships the
@@ -378,8 +378,12 @@ owns the commands.
 
 A jj workspace is a second working copy of the source. It does not create an
 isolated running host or database: run web checks and browser verification in
-the stack's `src` workspace after merging the bookmark there. The operator does
-not manage jj yet, so do not create workspaces with `angee ws create`.
+the stack's `src` workspace after merging the bookmark there. A stack rendered
+with the defaults cuts its `src` workspaces as git worktrees, so do not create
+workspaces with `angee ws create` there. A stack rendered with `slot_mode: jj`
+cuts them as jj workspaces instead: there `angee ws create` makes them, and the
+operator's workspace verbs sync and publish them
+([Templates](../../templates/README.md#cut-workspace-slots-as-jj-workspaces)).
 
 ### Restart the running stack
 
@@ -409,11 +413,13 @@ angee --root "$ANGEE_ROOT" restart django celery-worker
   application**. The stack's restart job is `ANGEE_OPERATOR_RESTART_JOB` in its
   `angee.yaml`. The job runs, then its downstream jobs, then every service that
   waits on them restarts. On a dev stack that sequence is:
-  - `deps` runs `pnpm install`;
+  - `deps` authors an absent lock once on a fresh generated host, then runs
+    `pnpm install --frozen-lockfile`;
   - `py-sync` stops its declared held Django/workers and installs native packages;
   - `compose` holds the same Python consumers and emits verified model and capability artifacts;
   - `provision` performs native history checks, migrations and idempotent hooks;
-  - schema/codegen jobs consume those artifacts;
+  - `operator-schema` exports the daemon SDL; frontend dev/build waits for its
+    inputs and Vite awaits shared generation before serving or bundling;
   - successful chained recovery reapplies held and dependent services once.
 
   A direct `compose` run holds Django and the workers so their serving leases

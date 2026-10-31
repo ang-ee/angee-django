@@ -60,7 +60,7 @@ _angee:
     process- or Docker-mode manifest against the framework source slot and the
     optional external slots its `src` workspace materializes under
     workspaces/src/. `angee dev` owns the whole bring-up: caches, the src
-    workspace cut, dependency installation, provision/codegen, and boot.
+    workspace cut, dependency installation, provision, and frontend boot.
     PostgreSQL and Redis are bundled as per-stack containers by default;
     `postgres_mode: external` and `redis_mode: external` point the stack at
     servers it does not run.
@@ -183,6 +183,22 @@ sources_home:
   default: ""
   help: Absolute directory holding one shared git cache per repository (e.g. ~/Work/sources, spelled out); empty = per-stack caches under sources/.
 
+# jj workspace slots (templates/README.md). Each default renders nothing: the
+# operator's vcs default is git, and the src template's slot_mode default is
+# worktree. `stack update --template` applies vcs from angee 0.26.0, pinning
+# each existing slot's recorded vcs first.
+vcs:
+  type: str
+  default: git
+  choices: [git, jj]
+  help: Version control of workspace slots that name no mode (the src workspace's .work); jj makes each a jj workspace of its source's store.
+
+slot_mode:
+  type: str
+  default: worktree
+  choices: [worktree, jj]
+  help: How src workspaces cut their code slots, through workspace_defaults — git worktrees of the source caches, or jj workspaces of them.
+
 framework_path:
   type: path
   default: "workspaces/src/angee"
@@ -191,7 +207,7 @@ framework_path:
 web_path:
   type: str
   default: "web"
-  help: Path to the project's Vite web package, relative to `project_path`. Its package owns the `dev` and `codegen` scripts for the composed project's generated GraphQL operation types.
+  help: Path to the project's Vite web package, relative to `project_path`. Its `dev` and `build` scripts use Vite, which awaits generation of the composed project's GraphQL operation types.
 
 runtime_mode:
   type: str

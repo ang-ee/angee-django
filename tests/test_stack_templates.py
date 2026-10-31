@@ -44,6 +44,7 @@ DEV_STACK_GITIGNORE = DEV_TEMPLATE.with_name(".gitignore.jinja")
 DEV_PACKAGE_TEMPLATE = DEV_TEMPLATE.with_name("package.json.jinja")
 DEV_TEMPLATES_SYMLINK = DEV_TEMPLATE.with_name("templates")
 SHARED_BODY = ROOT / "templates" / "stacks" / "_shared" / "stack-body.yaml.jinja"
+SRC_WORKSPACE_COPIER = ROOT / "templates" / "workspaces" / "src" / "copier.yml"
 SHARED_AGENTS = ROOT / "templates" / "stacks" / "_shared" / "AGENTS.md.jinja"
 PROJECT_COPIER = ROOT / "templates" / "projects" / "web" / "copier.yml"
 PROJECT_AGENTS_TEMPLATE = ROOT / "templates" / "projects" / "web" / "template" / "AGENTS.md.jinja"
@@ -429,6 +430,8 @@ def _render_dev_stack(
     work_state_repo: str = "",
     work_state_ref: str = "main",
     sources_home: str = "",
+    vcs: str = "git",
+    slot_mode: str = "worktree",
     celery_queues: str = "",
     enable_celery: bool = True,
     enable_ollama: bool = False,
@@ -506,8 +509,10 @@ def _render_dev_stack(
         "db_pool_max_size": str(db_pool_max_size),
         "db_pool_timeout": str(db_pool_timeout),
         "sources_home": sources_home,
+        "slot_mode": slot_mode,
         "storybook_port": "6006",
         "ui_port": "5173",
+        "vcs": vcs,
         "web_path": "web",
         "work_state_source": work_state_source,
         "work_state_repo": work_state_repo,
@@ -523,6 +528,8 @@ def _render_dev_docker_stack(
     ingress_domain: str = "localhost",
     ingress_aliases: str = "",
     operator_home: str = "",
+    vcs: str = "git",
+    slot_mode: str = "worktree",
 ) -> dict[str, Any]:
     """Render the Docker-mode framework-dev stack with every dev input present."""
 
@@ -532,6 +539,8 @@ def _render_dev_docker_stack(
         ingress_domain=ingress_domain,
         ingress_aliases=ingress_aliases,
         operator_home=operator_home,
+        vcs=vcs,
+        slot_mode=slot_mode,
         _runtime_mode="docker",
     )
 
@@ -793,6 +802,12 @@ def test_local_project_uses_installed_metadata_for_addon_discovery() -> None:
     for framework in ("source", "baked"):
         command = _render_local_stack(framework=framework)["jobs"]["frontend-build"]["command"][-1]
         subprocess.run(["sh", "-n", "-c", command], check=True, timeout=10)
+        assert command.index("pnpm config set packages") < command.index(
+            "if [ ! -f /opt/angee-project/pnpm-lock.yaml ]"
+        )
+        assert "pnpm install --lockfile-only --no-frozen-lockfile --lockfile-dir /opt/angee-project" in command
+        assert "pnpm install --frozen-lockfile --lockfile-dir /opt/angee-project" in command
+        assert "codegen" not in command
         settings = _render_project_settings(framework=framework, framework_source_path="sources/angee")
         assert "ANGEE_ADDON_DIRS" not in settings
         assert settings["COMPOSE_OUTPUT_DIR"] == "{BASE_DIR}/runtime"
@@ -1109,11 +1124,11 @@ def test_dev_stack_declares_generated_graphql_type_dependencies() -> None:
 
 
 def test_dev_stack_has_explicit_lifecycle_job_graph() -> None:
-    """Composition and codegen are offline; only provision waits for the database."""
+    """SDL producers precede Vite; only provision waits for the database."""
     for render in (_render_dev_stack, _render_dev_docker_stack):
         stack = render(celery_queues="reports")
         jobs = stack["jobs"]
-        assert set(jobs) == {"deps", "py-sync", "compose", "provision", "operator-schema", "codegen"}
+        assert set(jobs) == {"deps", "py-sync", "compose", "provision", "operator-schema"}
         assert jobs["py-sync"]["holds"] == ["django", "celery-worker", "celery-queues"]
         assert jobs["compose"]["holds"] == ["django", "celery-worker", "celery-queues"]
         assert jobs["py-sync"]["depends_on"] == ["deps"]
@@ -1126,7 +1141,8 @@ def test_dev_stack_has_explicit_lifecycle_job_graph() -> None:
             ["compose", "postgres"] if jobs["provision"]["runtime"] == "container" else ["compose"]
         )
         assert jobs["operator-schema"]["depends_on"] == ["operator", "compose"]
-        assert jobs["codegen"]["depends_on"] == ["deps", "compose", "operator-schema"]
+        assert "--frozen-lockfile" in " ".join(jobs["deps"]["command"])
+        assert {"deps", "compose", "operator-schema"} <= set(stack["services"]["frontend"]["after"])
         assert stack["services"]["django"]["after"] == ["provision"]
         assert stack["services"]["celery-worker"]["after"][0] == "provision"
         sync = jobs["py-sync"]
@@ -1343,7 +1359,7 @@ def test_dev_stack_keeps_the_process_only_frontend_services() -> None:
     assert "storybook" in stack["services"]
     assert "caddy" not in stack["services"]
     assert stack["services"]["frontend"]["command"] == ["pnpm", "--dir", "web", "dev"]
-    assert stack["services"]["frontend"]["after"] == ["django", "operator", "codegen"]
+    assert stack["services"]["frontend"]["after"] == ["django", "operator", "deps", "compose", "operator-schema"]
 
     # Storybook runs in the STACK workspace (deps installed the monorepo
     # storybook package as a member) — a private install inside a slot would fork
@@ -1513,6 +1529,93 @@ def test_dev_stack_shares_one_machine_wide_cache_per_repository() -> None:
     assert "<project_name>/<workspace>" in copier["project_name"]["help"]
 
 
+@pytest.mark.parametrize("render", [_render_dev_stack, _render_dev_docker_stack])
+def test_dev_stack_renders_vcs_and_slot_mode_only_when_they_name_jj(render: Any) -> None:
+    """`vcs` and `slot_mode` default to what the stack rendered before they existed.
+
+    `git` and `worktree` render no key: the manifest's `vcs` defaults to git in the
+    operator, and the src template's own `slot_mode` default is worktree, so an
+    existing stack re-renders unchanged and an operator older than `vcs` still
+    loads it. `vcs: jj` makes every slot that names no mode (the src workspace's
+    `.work`) a jj workspace; `slot_mode: jj` reaches the src template's code slots
+    through workspace_defaults, so every src workspace, the declared one included,
+    takes it without a per-workspace input.
+    """
+
+    bare = {"workspaces/src": {"inputs": {"branch_prefix": "app"}}}
+    unset = render(vcs="", slot_mode="")
+    for default in (render(), render(vcs="git", slot_mode="worktree")):
+        assert default == unset
+        assert "vcs" not in default
+        assert default["workspace_defaults"] == bare
+        assert default["workspaces"]["src"] == {"template": "workspaces/src"}
+
+    vcs_only = render(vcs="jj")
+    assert vcs_only["vcs"] == "jj"
+    assert vcs_only["workspace_defaults"] == bare
+
+    slot_only = render(slot_mode="jj")
+    assert "vcs" not in slot_only
+    assert slot_only["workspace_defaults"] == {
+        "workspaces/src": {"inputs": {"branch_prefix": "app", "slot_mode": "jj"}}
+    }
+    assert slot_only["workspaces"]["src"] == {"template": "workspaces/src"}
+
+    both = render(vcs="jj", slot_mode="jj")
+    assert both["vcs"] == "jj"
+    assert both["workspace_defaults"] == slot_only["workspace_defaults"]
+    # Apart from the two keys, a jj stack is the git stack.
+    assert {key: value for key, value in both.items() if key not in {"vcs", "workspace_defaults"}} == {
+        key: value for key, value in unset.items() if key != "workspace_defaults"
+    }
+
+
+def test_dev_stack_slot_mode_sits_beside_the_work_state_binding() -> None:
+    """slot_mode joins workspace_defaults; the declared src workspace binds only work state."""
+
+    wired = _render_dev_stack(
+        work_state_source="work-angee",
+        work_state_repo="git@github.com:ang-ee/work-angee.git",
+        vcs="jj",
+        slot_mode="jj",
+    )
+    assert wired["vcs"] == "jj"
+    assert wired["workspace_defaults"] == {
+        "workspaces/src": {"inputs": {"branch_prefix": "app", "work_state_source": "work-angee", "slot_mode": "jj"}}
+    }
+    assert wired["workspaces"]["src"] == {"template": "workspaces/src", "inputs": {"work_state_source": "work-angee"}}
+    # The work-state source stays a plain git source: vcs makes its slot a jj
+    # workspace of the cache; the source record itself names no VCS.
+    assert wired["sources"]["work-angee"] == {
+        "kind": "git",
+        "repo": "git@github.com:ang-ee/work-angee.git",
+        "default_ref": "main",
+        "cache_path": "sources/work/work-angee",
+    }
+
+
+def test_vcs_and_slot_mode_are_dev_stack_questions_matching_the_src_template() -> None:
+    """Only the framework-dev stack asks; its slot_mode choices are the src template's."""
+
+    dev = yaml.safe_load(DEV_COPIER.read_text(encoding="utf-8"))
+    src = yaml.safe_load(SRC_WORKSPACE_COPIER.read_text(encoding="utf-8"))
+
+    assert {key: dev["vcs"][key] for key in ("type", "default", "choices")} == {
+        "type": "str",
+        "default": "git",
+        "choices": ["git", "jj"],
+    }
+    assert {key: dev["slot_mode"][key] for key in ("type", "default", "choices")} == src["slot_mode"]
+    assert src["_angee"]["inputs"]["slot_mode"]["default"] == dev["slot_mode"]["default"] == "worktree"
+
+    # The local instance declares no git source and no workspace, so neither
+    # input would govern anything it renders.
+    local = yaml.safe_load(LOCAL_COPIER.read_text(encoding="utf-8"))
+    assert "vcs" not in local
+    assert "slot_mode" not in local
+    assert "vcs" not in _render_local_stack()
+
+
 def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
     """Docker mode keeps the framework roster with containerized lifecycle jobs."""
 
@@ -1523,7 +1626,7 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
     assert stack["sources"]["framework"]["path"] == "workspaces/src/angee"
     assert stack["workspaces"]["src"] == {"template": "workspaces/src"}
 
-    assert set(stack["jobs"]) == {"deps", "py-sync", "compose", "provision", "operator-schema", "codegen"}
+    assert set(stack["jobs"]) == {"deps", "py-sync", "compose", "provision", "operator-schema"}
     operator_svc = stack["services"]["operator"]
     assert operator_svc["runtime"] == "container"
     assert operator_svc["image"] == "ghcr.io/ang-ee/angee-operator:latest"
@@ -1540,7 +1643,7 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
     assert "operator_schema" not in django_command
     assert stack["jobs"]["provision"]["depends_on"] == ["compose", "postgres"]
     assert stack["jobs"]["operator-schema"]["depends_on"] == ["operator", "compose"]
-    assert stack["jobs"]["codegen"]["depends_on"] == ["deps", "compose", "operator-schema"]
+    assert "codegen" not in stack["jobs"]
     assert django["env"]["DATABASE_URL"] == "postgres://angee:${secret.db-password}@postgres:5432/angee"
     assert django["env"]["ANGEE_OPERATOR_URL"] == "http://operator:9000"
     assert django["ready"] == DJANGO_READY
@@ -1560,7 +1663,7 @@ def test_dev_stack_docker_mode_is_containerized_framework_dev() -> None:
     assert "runtime/schemas" not in frontend_command
     assert "codegen" not in frontend_command
     assert frontend["ready"] == FRONTEND_READY
-    assert frontend["after"] == ["django", "codegen"]
+    assert frontend["after"] == ["django", "deps", "compose", "operator-schema"]
     assert frontend["ports"] == ["${ports.ui}:5173"]
     assert "ANGEE_UI_ALLOWED_HOSTS" not in frontend["env"]
 
@@ -1627,7 +1730,7 @@ def test_readiness_is_owned_by_long_running_http_and_django_services() -> None:
     for name in ("celery-worker", "celery-queues"):
         assert framework["services"][name]["after"] == ["provision", "redis"]
         assert instance["services"][name]["after"] == ["provision", "redis"]
-    assert framework["services"]["frontend"]["after"] == ["django", "codegen"]
+    assert framework["services"]["frontend"]["after"] == ["django", "deps", "compose", "operator-schema"]
     assert framework["services"]["storybook"]["after"] == ["deps"]
     for name in ("playwright-server", "playwright-mcp"):
         assert framework["services"][name]["after"] == ["frontend"]
@@ -1884,7 +1987,7 @@ def test_serve_modes_cover_both_flavors_and_runtimes() -> None:
             assert "--allowed-origin" in " ".join(stack["services"]["operator"]["command"])
             assert '--forwarded-allow-ips "$$TRUSTED_PROXY_CIDR"' in command
             if flavor == "framework":
-                assert stack["jobs"]["frontend-build"]["depends_on"] == ["codegen"]
+                assert stack["jobs"]["frontend-build"]["depends_on"] == ["deps", "compose", "operator-schema"]
                 assert "pnpm --dir web build" in " ".join(stack["jobs"]["frontend-build"]["command"])
         elif flavor == "framework":
             assert "runserver" in command
@@ -2299,6 +2402,42 @@ def test_stack_install_roots_compose_the_shared_pnpm_policy() -> None:
         assert "pnpm config set packages" in command
         assert "--json --location project" in command
         assert "> pnpm-workspace.yaml" not in command
+
+
+@pytest.mark.parametrize("render", [_render_dev_stack, _render_dev_docker_stack])
+@pytest.mark.parametrize("state", ["cold", "warm", "author-fails", "drift"])
+def test_js_dependencies_author_only_an_absent_lock_and_fail_closed(tmp_path: Path, render, state: str) -> None:
+    command = render()["jobs"]["deps"]["command"][-1]
+    output = tmp_path / "calls"
+    pnpm = tmp_path / "pnpm"
+    pnpm.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >>"$PROBE_OUTPUT"\n'
+        'if [ "$2" = --lockfile-only ]; then\n'
+        '  [ "$PROBE_STATE" != author-fails ] || exit 7\n'
+        '  : >pnpm-lock.yaml\n'
+        'fi\n'
+        '[ "$PROBE_STATE" != drift ] || exit 9\n'
+    )
+    pnpm.chmod(0o755)
+    corepack = tmp_path / "corepack"
+    corepack.write_text("#!/bin/sh\nexit 0\n")
+    corepack.chmod(0o755)
+    retained = state in {"warm", "drift"}
+    lockfile = tmp_path / "pnpm-lock.yaml"
+    if retained:
+        lockfile.write_text("existing lock")
+    result = subprocess.run(
+        ["/bin/sh", "-c", command], cwd=tmp_path,
+        env={"PATH": str(tmp_path), "PROBE_OUTPUT": str(output), "PROBE_STATE": state},
+        capture_output=True, text=True, check=False,
+    )
+    expected = [] if retained else ["install --lockfile-only --no-frozen-lockfile"]
+    if state != "author-fails":
+        expected.append("install --frozen-lockfile")
+    assert output.read_text().splitlines() == expected
+    assert result.returncode == {"author-fails": 7, "drift": 9}.get(state, 0), result.stderr
+    if retained:
+        assert lockfile.read_text() == "existing lock"
 
 
 def test_py_sync_cold_bootstrap_needs_only_native_uv(tmp_path: Path) -> None:

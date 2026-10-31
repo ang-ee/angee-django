@@ -130,7 +130,7 @@ wires declarations only; the reference example throughout is `examples/src/examp
    (`django_compose.declarations.resolve_integrations`). **Owner rule:**
    [Autoconfig](../../../docs/composer.md#autoconfig) owns merge semantics; settings loading never imports models.
 
-   
+
 
 5. **Register test models.** Framework addons add `testing/__init__.py` and `testing/models.py`: one
    concrete subclass per abstract source model (`abstract = False`, `app_label = "<label>"`, `db_table =
