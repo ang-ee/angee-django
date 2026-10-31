@@ -1,14 +1,14 @@
 """Django config for the Angee money addon.
 
 Money uses ``ready()`` for the process-local reference-currency settings check.
-Its value field registers its GraphQL scalar at field-module import.
+Its value field registers its GraphQL scalar when GraphQL is enabled.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 
-from django.apps import AppConfig
+from django.apps import AppConfig, apps
 from django.core import checks
 
 _CHECKS_REGISTERED = False
@@ -25,6 +25,13 @@ class MoneyConfig(AppConfig):
 
         super().ready()
         _register_checks()
+        if apps.is_installed("angee.graphql"):
+            from decimal import Decimal
+
+            from angee.graphql.field_types import register_field_type
+            from angee.money.fields import MoneyField
+
+            register_field_type(MoneyField, Decimal)
 
 
 def _register_checks() -> None:

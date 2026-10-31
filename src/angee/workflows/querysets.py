@@ -19,6 +19,7 @@ from django.db.models.functions import Concat, Least, Now, RowNumber
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import (
+    database_context,
     generic_target,
     system_context,
 )
@@ -383,13 +384,13 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
 
     def dispatch(self) -> None:
         """Send unlocked ready rows after refreshing their delivery timestamp."""
-        with transaction.atomic(using=self.db), system_context(reason="workflows.dispatch"):
+        with database_context(self.db), transaction.atomic(using=self.db), system_context(reason="workflows.dispatch"):
             ready = self.filter(status=StepRunStatus.READY).exclude(run__status__in=RunStatus.terminal_values())
             selected = ready.order_by("pk").lock_if_supported(no_key=True, skip_locked=True)
             selected_ids = list(selected.values_list("pk", flat=True))
             ready.filter(pk__in=selected_ids).update(dispatched_at=Now(), updated_at=Now())
             for pk in selected_ids:
-                enqueue_task("workflows.execute", kwargs={"step_run_id": pk}, using=self.db)
+                enqueue_task("workflows.execute", kwargs={"step_run_id": pk, "using": self.db}, using=self.db)
 
     def count_redispatch(self) -> int:
         """Count a tick redelivery without changing status or publishing a change."""

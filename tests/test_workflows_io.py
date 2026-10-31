@@ -651,7 +651,7 @@ def test_failed_fork_preserves_open_siblings_until_retry(execution, register_ste
     terminal = WorkflowRun.system_queryset().get(pk=run.pk)
     assert terminal.status == RunStatus.FAILED
     assert sent[deliveries_before_failure:] == [
-        ("workflows.wake_run", {"kwargs": {"run_id": run.pk}, "queue": None, "expires": None}),
+        ("workflows.wake_run", {"kwargs": {"run_id": run.pk, "using": run._state.db}, "queue": None, "expires": None}),
     ]
     assert runner.execute(sibling.pk) is False
     assert runner.tick() == {

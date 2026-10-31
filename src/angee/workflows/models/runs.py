@@ -16,7 +16,8 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import DatabaseError, OperationalError, models, transaction
 from django.db.models.functions import Now
 from django.utils.functional import cached_property
-from rebac import system_context, to_subject_ref
+from rebac import database_context, system_context, to_subject_ref
+from rebac.database import write_alias
 
 from angee.base.exceptions import exception_text
 from angee.base.fields.state import StateField
@@ -255,7 +256,12 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
                     rows.cancel_abandoned(run.pk)
 
                 transaction.on_commit(cancel_children, using=self._state.db, robust=True)
-            enqueue_task("workflows.wake_run", kwargs={"run_id": run.pk}, robust=True, using=self._state.db)
+            enqueue_task(
+                "workflows.wake_run",
+                kwargs={"run_id": run.pk, "using": self._state.db},
+                robust=True,
+                using=self._state.db,
+            )
         with _record_failure("run change publication", using=self._state.db):
             run.refresh_from_db(using=self._state.db)
             publish_change(run, action="update", update_fields=None)
@@ -473,11 +479,13 @@ class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
         Robust delivery failures are logged without interrupting other callbacks.
         """
         run = self
-        actor = run.require_access("write", actor)
-        if actor is None:
-            raise PermissionDenied("Deferred cancellation requires an actor.")
-        payload = {"run_id": run.pk, "actor": str(to_subject_ref(actor))}
-        enqueue_task("workflows.cancel", kwargs=payload, robust=True, using=run._state.db)
+        using = write_alias(type(run), using=run._state.db, instance=run)
+        with database_context(using):
+            actor = run.require_access("write", actor)
+            if actor is None:
+                raise PermissionDenied("Deferred cancellation requires an actor.")
+            payload = {"run_id": run.pk, "actor": str(to_subject_ref(actor)), "using": using}
+            enqueue_task("workflows.cancel", kwargs=payload, robust=True, using=using)
 
     def reopen(self) -> None:
         """Clear a locked run's terminal facts and replan retained step rows."""

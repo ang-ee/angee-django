@@ -6,7 +6,6 @@ from typing import Any
 
 from django.db import models
 
-from angee.graphql.field_types import register_field_type
 from angee.scheduling.recurrence import Recurrence
 
 _DEFAULT_MAX_LENGTH = 255
@@ -39,6 +38,3 @@ class RecurrenceField(models.CharField):
 
         super().validate(value, model_instance)
         Recurrence(value).validate()
-
-
-register_field_type(RecurrenceField, str)

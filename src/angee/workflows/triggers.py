@@ -17,6 +17,7 @@ from django.db.models.signals import post_save
 from django.utils.text import capfirst
 from rebac import (
     ObjectRef,
+    database_context,
     generic_target,
     system_context,
     to_subject_ref,
@@ -305,10 +306,15 @@ class TriggerSource(ImplBase):
             records = created_batch
         else:
             records = (record,)
+        using = record._state.db
         try:
-            with transaction.atomic(), system_context(reason="workflows.source_dispatch"):
+            with (
+                database_context(using),
+                transaction.atomic(using=using),
+                system_context(reason="workflows.source_dispatch"),
+            ):
                 cls.validate_model(model)
-                targets = [(item, generic_target(item)) for item in records]
+                targets = [(item, generic_target(item, using=using)) for item in records]
                 groups: dict[type[Model], set[Hashable]] = {}
                 for _item, target in targets:
                     target_model = target.content_type.model_class()
@@ -316,7 +322,7 @@ class TriggerSource(ImplBase):
                     groups.setdefault(target_model, set()).add(target.object_id)
                 present: set[tuple[type[Model], Hashable]] = set()
                 for target_model, keys in sorted(groups.items(), key=lambda item: item[0]._meta.label_lower):
-                    rows = target_model._default_manager.order_by("pk").select_for_update(
+                    rows = target_model._default_manager.db_manager(using).order_by("pk").select_for_update(
                         no_key=True,
                         of=row_lock_paths(target_model),
                     )
@@ -327,10 +333,10 @@ class TriggerSource(ImplBase):
                 records = tuple(
                     item for item, target in targets if (target.content_type.model_class(), target.object_id) in present
                 )
-                events = apps.get_model("workflows", "TriggerEvent").objects
+                events = apps.get_model("workflows", "TriggerEvent").objects.db_manager(using)
                 for source in cls.registered():
                     events.record_changes(model, records, source=source.key)
-                apps.get_model("workflows", "StepWatch").objects.record_changes(records)
+                apps.get_model("workflows", "StepWatch").objects.db_manager(using).record_changes(records)
         except Exception:
             logger.exception("Workflow source capture failed.")
 

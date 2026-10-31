@@ -121,7 +121,9 @@ def test_cancellation_waits_for_commit_and_duplicate_delivery_changes_nothing(ta
         assert cancellations(sent) == []
         target.refresh_from_db()
         assert target.status == "running"
-    assert cancellations(sent) == [{"run_id": target.pk, "actor": str(to_subject_ref(actor))}]
+    assert cancellations(sent) == [
+        {"run_id": target.pk, "actor": str(to_subject_ref(actor)), "using": target._state.db}
+    ]
     tasks.cancel(**cancellations(sent)[0])
     target.refresh_from_db()
     assert target.status == "canceled"

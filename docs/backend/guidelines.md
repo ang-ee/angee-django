@@ -1592,13 +1592,13 @@ open fresh evaluator scopes for authorization and change-feed reads.
   a recursive metadata serializer or turn descriptions into persistent models. Do not restore a separate snapshot/merge
   pipeline that reconstructs partial resource descriptions or validates
   selections independently of the composed schema.
-- **A custom model value field registers its GraphQL wire type when its field
-  module imports.** Call `angee.graphql.field_types.register_field_type()` beside
-  the field declaration. `GraphQLConfig.ready()` imports schema declarations to
-  discover publishers before later app `ready()` callbacks run. Deferring final
-  schema construction does not defer those declarations, so registration from a
-  later callback remains unsupported and can leave Strawberry's exact-class
-  `auto` lookup unconfigured.
+- **Register custom model value fields in the owning app's `ready()` callback
+  when GraphQL is enabled.** Guard the import and call to
+  `angee.graphql.field_types.register_field_type()` with
+  `django.apps.apps.is_installed("angee.graphql")`. Keep neutral field modules free of
+  GraphQL imports. GraphQL schema declarations load lazily in the composer's
+  ready-phase schema integration, after every app-ready callback, so Strawberry's
+  exact-class `auto` mapping is available regardless of app ordering.
 - **Change events read through the row unless the model declares another read
   anchor.** A target-derived child or polymorphic edge may implement
   `change_read_resource()` and return the `ObjectRef` whose `read` permission

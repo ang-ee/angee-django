@@ -19,16 +19,17 @@ TOOL_GRANT_RESOURCE_TYPE = "agents/tool_grant"
 TOOL_ROLE_RELATION = "role"
 """Stored tool-bundle relation resolved through ToolRole.effective_member."""
 
-def tool_grant_ref(server_sqid: str, tool_name: str) -> ObjectRef:
+def tool_grant_ref(server_sqid: str, tool_name: str, *, using: str | None = None) -> ObjectRef:
     """Resolve one public server/tool key to its model-backed grant object.
 
+    ``using`` selects their catalogue namespace; omission retains native routing.
     The server sqid and tool name remain catalogue/API keys. The persisted tool
     row owns authorization identity, so grant writers and runtime checkers resolve
     that boundary once and store its primary key.
     """
 
     tool_model = apps.get_model("agents", "MCPTool")
-    grant_ids = tool_grant_ids(server_sqid, (tool_name,))
+    grant_ids = tool_grant_ids(server_sqid, (tool_name,), using=using)
     try:
         grant_id = grant_ids[tool_name]
     except KeyError as error:
@@ -36,16 +37,18 @@ def tool_grant_ref(server_sqid: str, tool_name: str) -> ObjectRef:
     return ObjectRef(TOOL_GRANT_RESOURCE_TYPE, grant_id)
 
 
-def tool_grant_ids(server_sqid: str, tool_names: Iterable[str]) -> dict[str, str]:
-    """Resolve public catalogue keys to primary-key authorization identities."""
+def tool_grant_ids(
+    server_sqid: str, tool_names: Iterable[str], *, using: str | None = None
+) -> dict[str, str]:
+    """Resolve catalogue keys on ``using`` or the native manager router."""
 
-    return apps.get_model("agents", "MCPTool").objects.authorization_ids(server_sqid, tool_names)
+    return apps.get_model("agents", "MCPTool").objects.db_manager(using).authorization_ids(server_sqid, tool_names)
 
 
-def builtin_mcp_server(*, create: bool = False) -> Any:
-    """Historical catalogue import; the native server manager owns adoption."""
+def builtin_mcp_server(*, create: bool = False, using: str | None = None) -> Any:
+    """Historical catalogue import; select ``using`` through the native server manager."""
 
-    return apps.get_model("agents", "MCPServer").objects.builtin(create=create)
+    return apps.get_model("agents", "MCPServer").objects.db_manager(using).builtin(create=create)
 
 
 def sync_builtin_tool_catalogue() -> int:

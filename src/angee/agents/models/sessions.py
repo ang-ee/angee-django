@@ -362,13 +362,13 @@ class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
             turn.refresh_from_db(using=using)
 
     def enqueue_execution(self, *, expires: datetime | None = None, robust: bool = False) -> None:
-        """Deliver this session's queued execution after its producer transaction commits."""
+        """Carry this session's database into execution after its producer transaction commits."""
 
         using = write_alias(type(self), using=self._state.db, instance=self)
 
         enqueue_task(
             "agents.run_session",
-            kwargs={"session_id": self.pk},
+            kwargs={"session_id": self.pk, "using": using},
             expires=expires,
             robust=robust,
             using=using,

@@ -26,13 +26,15 @@ def run_records(run: Any) -> list[RecordIdentity]:
     Timeline invalidation owns the audited system context for these relation reads.
     """
 
+    using = run._state.db
+    content_types = apps.get_model("contenttypes", "ContentType").objects.db_manager(using)
     seen: set[tuple[int, Any]] = set()
     records: list[RecordIdentity] = []
 
     def add(content_type_id: int, object_id: Any) -> None:
         if (content_type_id, object_id) in seen:
             return
-        content_type = apps.get_model("contenttypes", "ContentType").objects.get_for_id(content_type_id)
+        content_type = content_types.get_for_id(content_type_id)
         model = content_type.model_class()
         if model is None:
             return
@@ -48,12 +50,16 @@ def run_records(run: Any) -> list[RecordIdentity]:
         add(content_type_id, object_id)
     if run.parent_step_id:
         parent_run_id = (
-            apps.get_model("workflows", "StepRun").objects
-            .filter(pk=run.parent_step_id).values_list("run_id", flat=True).first()
+            apps.get_model("workflows", "StepRun")
+            .objects.db_manager(using)
+            .filter(pk=run.parent_step_id)
+            .values_list("run_id", flat=True)
+            .first()
         )
         if parent_run_id:
-            run_type = apps.get_model("contenttypes", "ContentType").objects.get_for_model(
-                apps.get_model("workflows", "WorkflowRun"), for_concrete_model=False,
+            run_type = content_types.get_for_model(
+                apps.get_model("workflows", "WorkflowRun"),
+                for_concrete_model=False,
             )
             add(run_type.pk, parent_run_id)
     return records
@@ -91,9 +97,16 @@ class RunKind(TimelineKind):
         return rows.filter(status=RunStatus.WAITING, pk__in=steps.values("run_id"))
 
     def targets(self, row: Any) -> Iterable[models.Model]:
-        return (row,) if row._meta.label == RUN_MODEL else apps.get_model(
-            "workflows", "WorkflowRun",
-        ).objects.filter(pk=row.run_id)
+        return (
+            (row,)
+            if row._meta.label == RUN_MODEL
+            else apps.get_model(
+                "workflows",
+                "WorkflowRun",
+            )
+            .objects.db_manager(row._state.db, hints={"instance": row})
+            .filter(pk=row.run_id)
+        )
 
     def records(self, run: Any) -> Iterable[RecordIdentity]:
         return run_records(run)

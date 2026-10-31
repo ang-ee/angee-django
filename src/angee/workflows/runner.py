@@ -14,10 +14,10 @@ from typing import TYPE_CHECKING, Any
 from celery.exceptions import SoftTimeLimitExceeded
 from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import OperationalError, connections, transaction
+from django.db import OperationalError, connections, router, transaction
 from django.db.models.functions import Now
 from django.utils import timezone
-from rebac import actor_context, generic_target, system_context
+from rebac import actor_context, database_context, generic_target, system_context
 from rebac.actors import is_sudo
 
 from angee.base.exceptions import exception_text
@@ -56,87 +56,88 @@ class Runner:
     def step_model(self) -> Any:
         return apps.get_model("workflows", "StepRun")
 
-    def execute(self, step_run_id: int) -> bool:
+    def execute(self, step_run_id: int, *, using: str | None = None) -> bool:
         """Claim once; DATABASE bodies share the claim transaction, IO bodies do not."""
         from angee.workflows.context import StepContext
 
-        steps = self.step_model.system_queryset()
-        using = steps.db
-        run_id = (
-            steps.filter(
-                pk=step_run_id,
-                status=StepRunStatus.READY,
+        using = router.db_for_write(self.step_model) if using is None else using
+        with database_context(using):
+            steps = self.step_model.system_queryset().using(using)
+            run_id = (
+                steps.filter(
+                    pk=step_run_id,
+                    status=StepRunStatus.READY,
+                )
+                .values_list("run_id", flat=True)
+                .first()
             )
-            .values_list("run_id", flat=True)
-            .first()
-        )
-        if run_id is None:
-            return False
-        try:
-            with (
-                self.run_model.objects.db_manager(using)
-                .select_related("version", "run_as")
-                .hold(run_id, skip_locked=True) as run
-            ):
-                if run is None:
-                    return False
-                with system_context(reason="workflows.execute.claim"):
-                    step_run = (
-                        self.step_model.objects.db_manager(using)
-                        .filter(pk=step_run_id)
-                        .lock_if_supported(no_key=True)
-                        .get()
-                    )
-                    step_run.run = run
-                    if run.is_terminal:
+            if run_id is None:
+                return False
+            try:
+                with (
+                    self.run_model.objects.db_manager(using)
+                    .select_related("version", "run_as")
+                    .hold(run_id, skip_locked=True) as run
+                ):
+                    if run is None:
                         return False
-                ctx = None
-                try:
-                    with system_context(reason="workflows.claim"):
-                        attempt = self.step_model.objects.db_manager(using).claim(step_run)
-                        if attempt is None:
+                    with system_context(reason="workflows.execute.claim"):
+                        step_run = (
+                            self.step_model.objects.db_manager(using)
+                            .filter(pk=step_run_id)
+                            .lock_if_supported(no_key=True)
+                            .get()
+                        )
+                        step_run.run = run
+                        if run.is_terminal:
                             return False
-                        step = step_run.step
-                        actor = run.run_as
-                        node = run.version.definition.node(step_run.node_key)
-                    ctx = StepContext(
-                        run=run,
-                        step_run=step_run,
-                        step=step,
-                        attempt=attempt,
-                        actor=actor,
-                        input=step.parse_input(step_run.input),
-                        config=step.parse_config(node.config),
-                        now=attempt.started_at,
-                    )
-                    if step.mode == StepMode.DATABASE:
-                        settlement = self._run_body(ctx)
-                    else:
-                        # The run lock owns this claim transaction. Leave it before
-                        # any IO body executes.
-                        settlement = None
-                except Superseded:
-                    raise
-                except Exception as failure:
-                    settlement = self._failure(failure)
+                    ctx = None
+                    try:
+                        with system_context(reason="workflows.claim"):
+                            attempt = self.step_model.objects.db_manager(using).claim(step_run)
+                            if attempt is None:
+                                return False
+                            step = step_run.step
+                            actor = run.run_as
+                            node = run.version.definition.node(step_run.node_key)
+                        ctx = StepContext(
+                            run=run,
+                            step_run=step_run,
+                            step=step,
+                            attempt=attempt,
+                            actor=actor,
+                            input=step.parse_input(step_run.input),
+                            config=step.parse_config(node.config),
+                            now=attempt.started_at,
+                        )
+                        if step.mode == StepMode.DATABASE:
+                            settlement = self._run_body(ctx)
+                        else:
+                            # The run lock owns this claim transaction. Leave it before
+                            # any IO body executes.
+                            settlement = None
+                    except Superseded:
+                        raise
+                    except Exception as failure:
+                        settlement = self._failure(failure)
+                    if settlement is None:
+                        with _record_failure("run change publication", using=run._state.db):
+                            publish_change(run, action="update", update_fields=None)
+                    if settlement is not None:
+                        run.advance(
+                            step_run,
+                            settlement,
+                            records=ctx.pending_records if ctx is not None else None,
+                            notes=ctx.pending_notes if ctx is not None else None,
+                        )
                 if settlement is None:
-                    with _record_failure("run change publication", using=run._state.db):
-                        publish_change(run, action="update", update_fields=None)
-                if settlement is not None:
-                    run.advance(
-                        step_run,
-                        settlement,
-                        records=ctx.pending_records if ctx is not None else None,
-                        notes=ctx.pending_notes if ctx is not None else None,
-                    )
-            if settlement is None:
-                assert ctx is not None
-                if connections[run._state.db].in_atomic_block:
-                    raise RuntimeError("An IO step cannot execute inside an enclosing transaction.")
-                return self._settle_io(ctx, self._run_body(ctx))
-            return True
-        except Superseded:
-            return False
+                    assert ctx is not None
+                    if connections[run._state.db].in_atomic_block:
+                        raise RuntimeError("An IO step cannot execute inside an enclosing transaction.")
+                    return self._settle_io(ctx, self._run_body(ctx))
+                return True
+            except Superseded:
+                return False
 
     @staticmethod
     def _failure(failure: Exception) -> _AttemptRecord:
@@ -170,7 +171,7 @@ class Runner:
                 if isinstance(settlement, Fail):
                     failed()
                     if database:
-                        transaction.set_rollback(True)
+                        transaction.set_rollback(True, using=ctx.run._state.db)
                 return _AttemptRecord.from_settlement(settlement)
         except Superseded:
             raise
@@ -252,10 +253,13 @@ class Runner:
 
     def record(self, step_run: Any, record: Any, *, label: str, operation: str, actor: Any) -> Any:
         """Stage an actor-readable canonical reference while the attempt is live."""
-        readable = type(record).objects.with_actor(actor)
+        using = step_run._state.db
+        if record._state.db is not None and record._state.db != using:
+            raise PermissionDenied("Read access to the step record is required.")
+        readable = type(record).objects.db_manager(using, hints={"instance": record}).with_actor(actor)
         if not readable.filter(pk=record.pk).exists():
             raise PermissionDenied("Read access to the step record is required.")
-        target = generic_target(record)
+        target = generic_target(record, using=using)
         if operation not in RecordOperation.values:
             raise ValidationError("Unknown step record operation.")
         with self._fenced(step_run) as current:
@@ -281,12 +285,14 @@ class Runner:
             "pruned": self.run_model.objects.prune(),
         }
 
-    def wake_runs(self, run_id: Any = None) -> int:
+    def wake_runs(self, run_id: Any = None, *, using: str | None = None) -> int:
         """After-commit delivery and tick recovery share the existing wake transition."""
-        candidates = self.step_model.objects.terminal_runs()
-        if run_id is not None:
-            candidates = candidates.filter(awaited_run_id=run_id)
-        return self._each_candidate(candidates, self._wake)
+        using = router.db_for_write(self.step_model) if using is None else using
+        with database_context(using):
+            candidates = self.step_model.objects.db_manager(using).terminal_runs()
+            if run_id is not None:
+                candidates = candidates.filter(awaited_run_id=run_id)
+            return self._each_candidate(candidates, self._wake)
 
     def wake_decisions(self, decision_id: Any = None) -> int:
         """Signal and sweep share the run-lock owner and commit-time dispatch."""

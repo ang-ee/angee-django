@@ -112,7 +112,8 @@ def test_grant_advertisement_shares_one_accessible_lookup(monkeypatch: pytest.Mo
 
     calls: list[SubjectRef] = []
 
-    def accessible(agent: SubjectRef) -> frozenset[str]:
+    def accessible(agent: SubjectRef, *, using: str | None = None) -> frozenset[str]:
+        assert using is None
         calls.append(agent)
         return frozenset({"mcp_one.read_sessions"})
 

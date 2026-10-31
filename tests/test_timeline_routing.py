@@ -132,7 +132,8 @@ class CallbackRoutingContract(TransactionTestCase):
             cancellations = [call for call in send.call_args_list if call.args[0] == "workflows.cancel"]
             self.assertEqual(len(cancellations), 1)
             self.assertEqual(
-                cancellations[0].kwargs["kwargs"], {"run_id": run.pk, "actor": f"auth/user:{self.users['producer'].pk}"}
+                cancellations[0].kwargs["kwargs"],
+                {"run_id": run.pk, "actor": f"auth/user:{self.users['producer'].pk}", "using": "producer"},
             )
         default_run.refresh_from_db(using="default")
         self.assertFalse(default_run.is_terminal)
@@ -140,11 +141,11 @@ class CallbackRoutingContract(TransactionTestCase):
         self.assertFalse(self.Record._base_manager.using("producer").filter(pk=22).exists())
 
 
-def test_native_producer_callback_routing(tmp_path: Path):
+def write_callback_addon(tmp_path: Path, *, depends_on=("angee.workflows",)):
     addon = tmp_path / "addons" / "example" / "callback_routing"
     addon.mkdir(parents=True)
     (addon / "__init__.py").touch()
-    write_addon_distribution(addon, "example.callback_routing", depends_on=("angee.workflows",))
+    write_addon_distribution(addon, "example.callback_routing", depends_on=depends_on)
     (addon / "models.py").write_text(
         "from django.db import models\n"
         "from angee.base.models.base import AngeeDataModel\n"
@@ -163,6 +164,11 @@ def test_native_producer_callback_routing(tmp_path: Path):
     (addon / "autoconfig.py").write_text(
         'SETTINGS = {"DATABASES.producer": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}\n'
     )
+    return addon
+
+
+def test_native_producer_callback_routing(tmp_path: Path):
+    write_callback_addon(tmp_path)
     run_composed_tests(
         tmp_path,
         "tests.test_timeline_routing.CallbackRoutingContract",

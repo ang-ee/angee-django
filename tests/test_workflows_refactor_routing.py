@@ -84,7 +84,7 @@ class RoutedSessionContract(TransactionTestCase):
                 self.assertEqual(turn._state.db, "producer")
             self.assertEqual(len(sent), 1)
             self.assertEqual(sent[0][0], "agents.run_session")
-            self.assertEqual(sent[0][1]["kwargs"], {"session_id": session.pk})
+            self.assertEqual(sent[0][1]["kwargs"], {"session_id": session.pk, "using": "producer"})
             self.assertEqual(sent[0][1]["expires"], deadline)
             with transaction.atomic(using="producer"), actor_context(owner), changeset(fresh=True, using="producer"):
                 session.cancel_active_turn()

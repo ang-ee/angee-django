@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import decimal
 from typing import Any
 
 from django.apps import apps
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
-
-from angee.graphql.field_types import register_field_type
 
 
 class MoneyField(models.DecimalField):
@@ -123,6 +120,3 @@ class MoneyField(models.DecimalField):
         if related is None or isinstance(related, str):
             return None
         return related
-
-
-register_field_type(MoneyField, decimal.Decimal)
