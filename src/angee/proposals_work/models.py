@@ -10,6 +10,7 @@ from django.db import models, router, transaction
 from django_compose.models import Composable
 from rebac import database_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
+from rebac.database import write_alias
 
 
 class RoundQuestionsQueue(Composable, extends="proposals.Round"):
@@ -29,10 +30,15 @@ class RoundQuestionsQueue(Composable, extends="proposals.Round"):
     def setup_values(cls, *, clarification_queue: Any = None, **values: Any) -> dict[str, Any]:
         """Consume the native queue choice before admitting responders."""
 
-        return {
-            **super().setup_values(**values),
-            **({"clarification_queue_id": clarification_queue.pk} if clarification_queue is not None else {}),
-        }
+        result = super().setup_values(**values)
+        if clarification_queue is not None:
+            queue_model = apps.get_model("work", "Queue")
+            if not isinstance(clarification_queue, queue_model) or clarification_queue.pk is None:
+                raise ValidationError({"clarification_queue": "Choose a saved queue."})
+            if clarification_queue._state.db not in (None, write_alias(cls)):
+                raise ValidationError({"clarification_queue": "Choose a queue from the round's database."})
+            result["clarification_queue_id"] = clarification_queue.pk
+        return result
 
     @classmethod
     def setup_complete_condition(cls, actor: Any) -> models.Q:

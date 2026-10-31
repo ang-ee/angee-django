@@ -69,7 +69,7 @@ class RoundTemplate(BaseModel):
                 if project is None:
                     raise ValidationError({name: "A milestone requires a target project."})
                 matches = list(
-                    apps.get_model("projects", "Milestone").system_queryset().filter(
+                    apps.get_model("projects", "Milestone").system_queryset().using(project._state.db).filter(
                         project=project,
                         name=milestone_name,
                     )[:2]

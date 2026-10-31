@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, TypedDict, cast
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import models, router, transaction
+from django.db import models, transaction
 from django.db.models.expressions import Combinable
 from django.db.models.functions import JSONObject, Lower
 from django.db.models.lookups import Exact
@@ -499,25 +499,34 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
         self, user: User, party: Party | None = None, track: bool = False, follow: bool = False
     ) -> Proposal:
         """Create the unique shell and optionally its owning track, idempotently."""
-        if not self.has_access("write"):
-            raise PermissionDenied("Round write access is required.")
-        actor = instance_actor(self)
-        with transaction.atomic():
-            locked = type(self).objects.sudo(reason="proposals.round.admit").lock_if_supported().get(pk=self.pk)
-            with system_context(reason="proposals.round.admit.shell"):
-                proposal_model = apps.get_model("proposals", "Proposal")
-                proposal = proposal_model._base_manager.filter(round=locked, responder=user).first()
-                if proposal is None:
-                    proposal = proposal_model(round=locked, responder=user, party=party)
-                    proposal.save()
-                elif proposal.retired_at is not None:
-                    raise ValidationError({"responder": "A retired responder cannot be admitted again."})
-                elif party is not None and proposal.party_id != party.pk:
-                    raise ValidationError({"party": "The shell has a different party."})
-                if track:
-                    proposal.create_track()
-                if follow and getattr(user, "kind", None) == "person":
-                    locked.message_subscribe(user=user)
+        if self.pk is None:
+            raise ValidationError("A saved round is required for admission.")
+        using = write_alias(type(self), using=self._state.db, instance=self)
+        if any(row._state.db not in (None, using) for row in (user, *(() if party is None else (party,)))):
+            raise ValidationError("Admission references must belong to the round's database.")
+        with database_context(using):
+            if not self.has_access("write"):
+                raise PermissionDenied("Round write access is required.")
+            actor = instance_actor(self)
+            with transaction.atomic(using=using):
+                locked = (
+                    type(self).objects.db_manager(using)
+                    .sudo(reason="proposals.round.admit").lock_if_supported().get(pk=self.pk)
+                )
+                with system_context(reason="proposals.round.admit.shell"):
+                    proposal_model = apps.get_model("proposals", "Proposal")
+                    proposal = proposal_model._base_manager.using(using).filter(round=locked, responder=user).first()
+                    if proposal is None:
+                        proposal = proposal_model(round=locked, responder=user, party=party)
+                        proposal.save(using=using)
+                    elif proposal.retired_at is not None:
+                        raise ValidationError({"responder": "A retired responder cannot be admitted again."})
+                    elif party is not None and proposal.party_id != party.pk:
+                        raise ValidationError({"party": "The shell has a different party."})
+                    if track:
+                        proposal.create_track()
+                    if follow and getattr(user, "kind", None) == "person":
+                        locked.message_subscribe(user=user)
         return proposal.with_actor(actor)
 
     def remove_responder(self, user: User, expected_revision: int | None = None) -> dict[str, Any]:
@@ -868,8 +877,9 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Persist coherent round policy, serializing requester changes with shell admission."""
 
-        using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
-        with transaction.atomic(using=using):
+        using = write_alias(type(self), using=kwargs.get("using") or self._state.db, instance=self)
+        kwargs["using"] = using
+        with database_context(using), transaction.atomic(using=using):
             fields = kwargs.get("update_fields")
             requester_write = fields is None or bool({"requester_party", "requester_party_id"}.intersection(fields))
             if not self._state.adding and requester_write and "requester_party_id" in self.__dict__:
@@ -889,7 +899,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             previous = (
                 {}
                 if self._state.adding or not boundaries
-                else type(self).system_queryset().filter(pk=self.pk).values(
+                else type(self).system_queryset().using(using).filter(pk=self.pk).values(
                     *(f"{name}_id" for name in boundaries),
                 ).get()
             )
@@ -902,7 +912,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             if changed_ids:
                 project = self.target_project()
                 valid = set() if project is None else set(
-                    apps.get_model("projects", "Milestone").system_queryset()
+                    apps.get_model("projects", "Milestone").system_queryset().using(using)
                     .filter(
                         pk__in=changed_ids.values(),
                         project_id=project.pk,
@@ -915,7 +925,10 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             if self.pk is not None and not self._state.adding:
                 # Opening-policy immutability depends on the committed lifecycle state.
                 with system_context(reason="proposals.round.opening_policy"):
-                    persisted = type(self)._base_manager.filter(pk=self.pk).values("status", "opening_policy").first()
+                    persisted = (
+                        type(self)._base_manager.using(using).filter(pk=self.pk)
+                        .values("status", "opening_policy").first()
+                    )
                 if persisted is not None and persisted["status"] == RoundStatus.COLLECTING:
                     self.allow_immutable_save("opening_policy")
             super().save(*args, **kwargs)
@@ -1698,85 +1711,89 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
     def create_track(self) -> Project:
         """Create one ownerless, item-owning project with its own bound drive."""
 
-        actor = instance_actor(self)
-        _, unscoped = self.effective_actor(strict=True)
-        if not self.has_access("write"):
-            raise PermissionDenied("Proposal write access is required.")
-        if self.pk is None:
-            raise ValidationError("A saved proposal is required.")
-        project_model = apps.get_model("projects", "Project")
-        with transaction.atomic():
-            round_model = apps.get_model("proposals", "Round")
-            locked_round = (
-                round_model.objects.sudo(reason="proposals.proposal.create_track.round")
-                .lock_if_supported()
-                .get(pk=self.round_id)
-            )
-            locked = (
-                type(self)
-                .objects.sudo(reason="proposals.proposal.create_track")
-                .lock_if_supported()
-                .filter(round_id=locked_round.pk, pk=self.pk)
-                .order_by("pk")
-                .get()
-            )
-            if not unscoped and not locked.with_actor(actor).has_access("write"):
+        using = write_alias(type(self), using=self._state.db, instance=self)
+        with database_context(using):
+            actor = instance_actor(self)
+            _, unscoped = self.effective_actor(strict=True)
+            if not self.has_access("write"):
                 raise PermissionDenied("Proposal write access is required.")
-            if locked.track_id is not None:
-                track = locked.track
-                assert track is not None
-            else:
-                track = project_model(
-                    title=f"{locked_round.name} — proposal track",
-                    body="Private proposal delivery track.",
-                    lead_id=locked.responder_id or locked_round.facilitator_id,
-                    owns_items=True,
+            if self.pk is None:
+                raise ValidationError("A saved proposal is required.")
+            project_model = apps.get_model("projects", "Project")
+            with transaction.atomic(using=using):
+                round_model = apps.get_model("proposals", "Round")
+                locked_round = (
+                    round_model.objects.db_manager(using).sudo(reason="proposals.proposal.create_track.round")
+                    .lock_if_supported()
+                    .get(pk=self.round_id)
                 )
-                with actor_context(_TRACK_SYSTEM_ACTOR), system_context(reason="proposals.proposal.create_track"):
-                    track.save(ownerless=True)
-                locked.track = track
-                locked.allow_immutable_save("track_id")
-                with actor_context(actor) if actor is not None else nullcontext():
-                    locked.sudo(reason="proposals.proposal.create_track.link")
-                    try:
-                        locked.save(update_fields=("track", "updated_at"))
-                    finally:
-                        if actor is None:
-                            locked.unsudo()
-                        else:
-                            locked.with_actor(actor)
-                if (
-                    locked_round.status == RoundStatus.OPENED
-                    and locked_round.opening_policy
-                    in {
-                        RoundOpeningPolicy.DRAFTS_AND_TRACKS,
-                        RoundOpeningPolicy.ANSWERS_AND_TRACKS,
-                    }
-                    and locked.disclosed_at is not None
-                ):
-                    locked._publish_track_locked()
-            with system_context(reason="proposals.proposal.track_drive"):
-                track = project_model.system_queryset().get(pk=track.pk)
-                drive_model = apps.get_model("storage", "Drive")
-                slug = f"proposal-{locked.pk}"
-                drive = drive_model._base_manager.filter(
-                    slug=slug,
-                    project_bindings__project=track,
-                ).first()
-                if drive is None:
-                    with actor_context(_TRACK_SYSTEM_ACTOR):
-                        drive = drive_model.objects.create_on_default_backend(
-                            slug=slug,
-                            name=track.title,
-                            owns_items=True,
+                locked = (
+                    type(self)
+                    .objects.db_manager(using).sudo(reason="proposals.proposal.create_track")
+                    .lock_if_supported()
+                    .filter(round_id=locked_round.pk, pk=self.pk)
+                    .order_by("pk")
+                    .get()
+                )
+                if not unscoped and not locked.with_actor(actor).has_access("write"):
+                    raise PermissionDenied("Proposal write access is required.")
+                if locked.track_id is not None:
+                    track = locked.track
+                    assert track is not None
+                else:
+                    track = project_model(
+                        title=f"{locked_round.name} — proposal track",
+                        body="Private proposal delivery track.",
+                        lead_id=locked.responder_id or locked_round.facilitator_id,
+                        owns_items=True,
+                    )
+                    with actor_context(_TRACK_SYSTEM_ACTOR), system_context(reason="proposals.proposal.create_track"):
+                        track.save(using=using, ownerless=True)
+                    locked.track = track
+                    locked.allow_immutable_save("track_id")
+                    with actor_context(actor) if actor is not None else nullcontext():
+                        locked.sudo(reason="proposals.proposal.create_track.link")
+                        try:
+                            locked.save(using=using, update_fields=("track", "updated_at"))
+                        finally:
+                            if actor is None:
+                                locked.unsudo()
+                            else:
+                                locked.with_actor(actor)
+                    if (
+                        locked_round.status == RoundStatus.OPENED
+                        and locked_round.opening_policy
+                        in {
+                            RoundOpeningPolicy.DRAFTS_AND_TRACKS,
+                            RoundOpeningPolicy.ANSWERS_AND_TRACKS,
+                        }
+                        and locked.disclosed_at is not None
+                    ):
+                        locked._publish_track_locked()
+                with system_context(reason="proposals.proposal.track_drive"):
+                    track = project_model.system_queryset().using(using).get(pk=track.pk)
+                    drive_model = apps.get_model("storage", "Drive")
+                    slug = f"proposal-{locked.pk}"
+                    drive = drive_model._base_manager.using(using).filter(
+                        slug=slug,
+                        project_bindings__project=track,
+                    ).first()
+                    if drive is None:
+                        with actor_context(_TRACK_SYSTEM_ACTOR):
+                            drive = drive_model.objects.db_manager(using).create_on_default_backend(
+                                slug=slug,
+                                name=track.title,
+                                owns_items=True,
+                            )
+                        drive = drive_model.system_queryset().using(using).get(pk=drive.pk)
+                        apps.get_model("projects", "ProjectBinding").objects.db_manager(using).bind(
+                            project=track, target=drive,
                         )
-                    drive = drive_model.system_queryset().get(pk=drive.pk)
-                    apps.get_model("projects", "ProjectBinding").objects.bind(project=track, target=drive)
-        if actor is not None:
-            track.with_actor(actor)
-        _copy_persisted_state(self, locked, ("track", "track_published_at", "updated_at", "updated_by"))
-        self._state.fields_cache["track"] = track
-        return track
+            if actor is not None:
+                track.with_actor(actor)
+            _copy_persisted_state(self, locked, ("track", "track_published_at", "updated_at", "updated_by"))
+            self._state.fields_cache["track"] = track
+            return track
 
     def publish_track(self, expected_revision: int | None = None) -> Project:
         """Publish the private track to this Round's responders, idempotently."""

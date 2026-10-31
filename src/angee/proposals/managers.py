@@ -60,75 +60,85 @@ class RoundManager[T: Round](_RoundManagerBase[T]):
         target_field = {"projects.project": "project", "projects.task": "task"}.get(target._meta.label_lower)
         if target_field is None:
             raise ValidationError({"target": "Choose a project or task."})
-        actor = current_actor()
-        resource_type = model_resource_type(self.model)
-        if actor is None:
-            raise MissingActorError(f"Creating {resource_type or self.model._meta.label_lower} requires an actor.")
-        if resource_type is None or not check_new(
-            subject=actor,
-            action="create",
-            resource_type=resource_type,
-            relationships={target_field: (to_subject_ref(target),)},
-        ).allowed:
-            raise PermissionDenied(f"Denied: {actor} cannot create {resource_type or self.model._meta.label_lower}")
-        with transaction.atomic():
-            type(target).system_queryset(lock=("self",)).get(pk=target.pk)
-            candidate = self.model(**{target_field: target}, facilitator=facilitator, team=team)
-            project = candidate.target_project()
-            values = round_template.round_values(project)
-            setup_values = self.model.setup_values(**(configuration or {}))
-            if requester_party is not None:
-                setup_values["requester_party_id"] = requester_party.pk
-            rows = self.sudo(reason="proposals.round.provision").filter(
-                **{target_field: target},
-                name=round_template.name,
-                closed_at__isnull=True,
-            )
-            round = rows.first()
-            if round is None:
-                round = self.model(
+        if target.pk is None:
+            raise ValidationError({"target": "A saved project or task is required."})
+        using = write_alias(self.model, using=self._db or target._state.db, instance=target)
+        responders = tuple(responders)
+        references = (target, facilitator, *responders, *(() if team is None else (team,)),
+                      *(() if requester_party is None else (requester_party,)))
+        if any(row._state.db not in (None, using) for row in references):
+            raise ValidationError("Provisioning references must belong to the selected database.")
+        owner = self.db_manager(using)
+        with database_context(using):
+            actor = current_actor()
+            resource_type = model_resource_type(self.model)
+            if actor is None:
+                raise MissingActorError(f"Creating {resource_type or self.model._meta.label_lower} requires an actor.")
+            if resource_type is None or not check_new(
+                subject=actor,
+                action="create",
+                resource_type=resource_type,
+                relationships={target_field: (to_subject_ref(target),)},
+            ).allowed:
+                raise PermissionDenied(f"Denied: {actor} cannot create {resource_type or self.model._meta.label_lower}")
+            with transaction.atomic(using=using):
+                target = type(target).system_queryset(lock=("self",)).using(using).get(pk=target.pk)
+                candidate = self.model(**{target_field: target}, facilitator=facilitator, team=team)
+                project = candidate.target_project()
+                values = round_template.round_values(project)
+                setup_values = self.model.setup_values(**(configuration or {}))
+                if requester_party is not None:
+                    setup_values["requester_party_id"] = requester_party.pk
+                rows = owner.sudo(reason="proposals.round.provision").filter(
                     **{target_field: target},
-                    facilitator=facilitator,
-                    team=team,
-                    **values,
-                    **setup_values,
+                    name=round_template.name,
+                    closed_at__isnull=True,
                 )
-                round.sudo(reason="proposals.round.provision").save()
-            elif not round.with_actor(actor).has_access("write"):
-                raise PermissionDenied("Round write access is required to resume provisioning.")
-            elif any(getattr(round, name) != value for name, value in values.items()) or (
-                round.facilitator_id != facilitator.pk or round.team_id != (team.pk if team else None)
-            ):
-                raise ValidationError({"template": "The existing round has different settings."})
-            else:
-                changed = []
-                for name, value in setup_values.items():
-                    previous = getattr(round, name)
-                    if previous == value:
-                        continue
-                    if previous is not None:
-                        raise ValidationError({"round": "The existing round has different setup choices."})
-                    setattr(round, name, value)
-                    changed.append(name)
-                if changed:
-                    round.save(update_fields=(*changed, "updated_at"))
-            topic_model = apps.get_model("proposals", "Topic")
-            with system_context(reason="proposals.round.provision.topics"):
-                topics = {topic.key: topic for topic in topic_model._base_manager.filter(round=round)}
-                if set(topics) - {topic.key for topic in round_template.topics}:
-                    raise ValidationError({"template": "The existing round has different topic keys."})
-                rank = None
-                for topic in round_template.topics:
-                    rank = FractionalRankField.get_append_rank(rank)
-                    values = dict(name=topic.name, hint=topic.hint, sort_order=rank)
-                    existing = topics.get(topic.key)
-                    if existing is None:
-                        topic_model.objects.create(round=round, key=topic.key, **values)
-                    elif any(getattr(existing, key) != value for key, value in values.items()):
-                        raise ValidationError({"template": "The existing topic differs from the template."})
-            round.sudo(reason="proposals.round.provision.admission")
-            for responder in responders:
-                round.admit(responder, track=round_template.tracks)
+                round = rows.first()
+                if round is None:
+                    round = self.model(
+                        **{target_field: target},
+                        facilitator=facilitator,
+                        team=team,
+                        **values,
+                        **setup_values,
+                    )
+                    round.sudo(reason="proposals.round.provision").save(using=using)
+                elif not round.with_actor(actor).has_access("write"):
+                    raise PermissionDenied("Round write access is required to resume provisioning.")
+                elif any(getattr(round, name) != value for name, value in values.items()) or (
+                    round.facilitator_id != facilitator.pk or round.team_id != (team.pk if team else None)
+                ):
+                    raise ValidationError({"template": "The existing round has different settings."})
+                else:
+                    changed = []
+                    for name, value in setup_values.items():
+                        previous = getattr(round, name)
+                        if previous == value:
+                            continue
+                        if previous is not None:
+                            raise ValidationError({"round": "The existing round has different setup choices."})
+                        setattr(round, name, value)
+                        changed.append(name)
+                    if changed:
+                        round.save(using=using, update_fields=(*changed, "updated_at"))
+                topic_model = apps.get_model("proposals", "Topic")
+                with system_context(reason="proposals.round.provision.topics"):
+                    topics = {topic.key: topic for topic in topic_model._base_manager.using(using).filter(round=round)}
+                    if set(topics) - {topic.key for topic in round_template.topics}:
+                        raise ValidationError({"template": "The existing round has different topic keys."})
+                    rank = None
+                    for topic in round_template.topics:
+                        rank = FractionalRankField.get_append_rank(rank)
+                        values = dict(name=topic.name, hint=topic.hint, sort_order=rank)
+                        existing = topics.get(topic.key)
+                        if existing is None:
+                            topic_model.objects.db_manager(using).create(round=round, key=topic.key, **values)
+                        elif any(getattr(existing, key) != value for key, value in values.items()):
+                            raise ValidationError({"template": "The existing topic differs from the template."})
+                round.sudo(reason="proposals.round.provision.admission")
+                for responder in responders:
+                    round.admit(responder, track=round_template.tracks)
         return round.with_actor(actor)
 
     def for_track(self, project_id: Any, *, lock: bool = False) -> T | None:

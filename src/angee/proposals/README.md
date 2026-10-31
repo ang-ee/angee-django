@@ -10,3 +10,9 @@
 - [ProposalStatements](web/src/proposal-statements.tsx) is the separate statement presentation for a host tab. It receives the same readable proposal rows, renders one card per row, and saves the responder's own statement with the proposal revision. Hosts supply section headings through props and composer wording through proposals vocabulary. The [comparison read](web/src/comparison-data.ts) projects the permissions and revisions used by both surfaces; its server result determines disclosure.
 
 Rows and donor behavior live in `models.py`; `managers.py` owns provisioning and message capture, `querysets.py` owns chainable scopes and guarded collection writes, and `choices.py` owns lifecycle and audience vocabulary. Historical model imports remain direct aliases to those canonical owners.
+
+Provisioning selects its database from an explicitly bound manager or the saved
+target. Milestones, topics, responder shells, private tracks and their drive
+bindings remain on that database; replay and rollback use the same transaction.
+Saved related inputs from another database are refused before their primary
+keys are used. This does not grant admission or replace the existing policies.
