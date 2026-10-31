@@ -10,7 +10,6 @@ from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
-from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.schema import (
     BridgeTypeMixin,
     CredentialType,
@@ -57,7 +56,7 @@ class NotionMutation:
     def sync_notion_connection(self, info: strawberry.Info, id: PublicID) -> ActionResult:
         """Queue one resumable import from the saved connection."""
         connection = authorized_action_target(info, NotionConnection, id, "write")
-        queue_bridge_sync(connection)
+        connection.request_sync()
         return ActionResult(ok=True, message="Queued Notion synchronization.")
 
 

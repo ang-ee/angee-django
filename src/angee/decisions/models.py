@@ -1,19 +1,43 @@
 """One question, its immutable proposal, and its final verdict."""
 
-from collections.abc import Iterable
+from __future__ import annotations
+
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 from django.conf import settings
-from django.db import models
+from django.contrib.auth import get_user_model
+from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
+from django.db import models, router, transaction
+from django.db.models import F
+from django.db.models.functions import Now
 from django.utils.text import capfirst
-from rebac import system_context
+from pydantic import JsonValue, TypeAdapter
+from rebac import actor_context, current_actor, database_context, system_context, to_subject_ref
+from rebac.actors import is_sudo
 
 from angee.base.models.append_only import AppendOnlyModel
-from angee.base.models.base import AngeeDataModel
+from angee.base.models.base import AngeeDataModel, AngeeModel
 from angee.base.models.derived import DerivedFrom
 from angee.base.models.locks import OptimisticLockMixin
+from angee.base.permissions import actor_user_id, require_rebac_queryset
 from angee.base.refs import RecordRef, record_view_refs
+from angee.base.signals import publish_change
+from angee.decisions.contracts import DecisionProposal
 from angee.decisions.managers import DecisionManager, DecisionRecordManager
+from angee.decisions.signals import decision_answered
+
+
+def _user(actor: Any, *, using: str, active: bool = True) -> Any:
+    identity = actor_user_id(to_subject_ref(actor if actor is not None else current_actor()))
+    if identity is None:
+        raise PermissionDenied("An active user is required.")
+    users = get_user_model().system_queryset().using(using).filter(pk=identity)
+    user = (users.filter(is_active=True) if active else users).first()
+    if user is None:
+        raise PermissionDenied("An active user is required.")
+    return user
+
 
 
 class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=True):
@@ -88,8 +112,109 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
     def __str__(self) -> str:
         return self.kind_label
 
-    def decide(self, *, actor: Any, chosen: list[str], revision: int | None = None, values: Any = None) -> Any:
-        return type(self).objects.decide(self, actor=actor, chosen=chosen, revision=revision, values=values)
+    def withdraw(self, *, actor: Any) -> Any:
+        """An authorized asking owner withdraws a question in a named system context."""
+        if not is_sudo():
+            raise PermissionDenied("Withdrawal requires the authorized asking owner's system context.")
+        # Cleanup must still close a retired principal's retained questions.
+        actor = actor if actor is not None else current_actor()
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        withdrawing = _user(actor, using=using, active=False) if actor is not None else None
+        rows = type(self).objects.db_manager(using)
+        with database_context(using), transaction.atomic(using=using), system_context(reason="decisions.withdraw"):
+            row = rows.filter(pk=self.pk).lock_if_supported().get()
+            if row.is_open:
+                rows.filter(pk=self.pk).open().owner_update(
+                    verdict=[],
+                    answered_by=withdrawing,
+                    answered_at=Now(),
+                    revision=F("revision") + 1,
+                    updated_at=Now(),
+                )
+                row.refresh_from_db()
+                publish_change(row, action="update", update_fields=None)
+                decision_answered.send(sender=type(row), decision=row)
+        return row.with_actor(withdrawing) if withdrawing is not None else row
+
+    def decide(
+        self,
+        *,
+        actor: Any,
+        chosen: Sequence[str],
+        revision: int | None = None,
+        values: object = None,
+    ) -> Any:
+        """Record one final verdict. Proposal actions belong to the asker."""
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        answering = _user(actor, using=using)
+        rows = type(self).objects.db_manager(using)
+        with database_context(using), transaction.atomic(using=using):
+            with system_context(reason="decisions.decide"):
+                row = rows.filter(pk=self.pk).lock_if_supported().get()
+                row.require_access("act", answering)
+                if revision is not None:
+                    row.require_revision(revision)
+                if not row.is_open:
+                    raise ValidationError({"revision": "The decision has changed; reload it."})
+                try:
+                    values = TypeAdapter(dict[str, dict[str, JsonValue]]).validate_python(
+                        {} if values is None else values
+                    )
+                    links = {link.record_public_id: link for link in row.records.with_actor(answering).all()}
+                    selected = DecisionProposal.model_validate(row.proposal).choose(
+                        chosen,
+                        values=values,
+                        record_models={
+                            identity: model
+                            for identity, link in links.items()
+                            if identity in values and (model := link.content_type.model_class()) is not None
+                        },
+                    )
+                except ValueError as error:
+                    raise ValidationError({"chosen": str(error)}) from error
+                try:
+                    for alternative in selected:
+                        for identity, actions in alternative.actions.items():
+                            if identity not in values:
+                                continue
+                            link = links.get(identity)
+                            reference = link.record if link is not None else None
+                            if reference is None:
+                                raise ValueError("The record for a chosen action is missing or inaccessible.")
+                            record = (
+                                require_rebac_queryset(actions.target_model(reference)).using(using)
+                                .with_actor(answering)
+                                .for_write()
+                                .get(
+                                    pk=reference.pk,
+                                )
+                            )
+                            assert isinstance(record, AngeeModel)
+                            record.require_access("write", answering)
+                            with actor_context(answering):
+                                actions.resolve(record, context={"actor": answering}, values=values[identity])
+                except (ValueError, ObjectDoesNotExist) as error:
+                    raise ValidationError({"values": str(error)}) from error
+                row.validate_verdict(selected, actor=answering)
+                if (
+                    not rows.filter(pk=self.pk, revision=row.revision)
+                    .open()
+                    .owner_update(
+                        verdict=[alternative.key for alternative in selected],
+                        answered_by=answering,
+                        answered_at=Now(),
+                        verdict_values=values or None,
+                        revision=F("revision") + 1,
+                        updated_at=Now(),
+                    )
+                ):
+                    raise ValidationError({"revision": "The decision has changed; reload it."})
+                row.refresh_from_db()
+                publish_change(row, action="update", update_fields=None)
+            answered = row.with_actor(answering)
+            with actor_context(answering):
+                decision_answered.send(sender=type(row), decision=answered)
+        return answered
 
     def validate_verdict(self, chosen: tuple[Any, ...], *, actor: Any) -> None:
         """Allow composed policy to refuse an answer before its verdict is retained."""

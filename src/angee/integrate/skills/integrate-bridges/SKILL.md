@@ -180,7 +180,7 @@ session exits within one wake on stop, shutdown and lost lock.
 
 - Declaration knobs `cursor`, `reconcile_interval`, `absence_threshold`, `tombstone_retention`, `config` seed the first generation only; a changed `direction`/`snapshot` opens a new baseline and a changed `kind` is refused (`src/angee/integrate/README.md:56-65`).
 - A declared snapshot without `reconcile_interval` closes after its baseline; a missing interval alone never means read-once ([Integration and worker contracts](../../../../../docs/backend/guidelines.md#integration-and-worker-contracts) "Read-once requires a snapshot source and closure").
-- Advisory locks are process-local on SQLite: `claim_account` is serialized by the lock, not the database (`src/angee/integrate/backends/base.py`, `src/angee/jobs/locks.py:207`).
+- Advisory locks are process-local on SQLite: `claim_account` is serialized by the lock, not the database (`src/angee/integrate/backends/base.py`, `src/angee/base/locks.py`).
 - A child capability's second intent axis (live desire) is unset by generic lifecycle verbs; the reconciler selects on lifecycle and closes it ([Integrate pitfalls](references/pitfalls.md) "An Integration child's second intent axis").
 - A latching `runtime_status=ERROR` gate must be cleared by the repair verb itself ([Integrate pitfalls](references/pitfalls.md) "A latching gate needs a reset").
 
