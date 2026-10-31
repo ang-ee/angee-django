@@ -90,5 +90,3 @@ def _requested_by_viewer_filter(queryset: models.QuerySet[Any]) -> models.Expres
         default=models.Value(False),
         output_field=models.BooleanField(),
     )
-
-

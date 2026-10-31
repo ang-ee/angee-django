@@ -44,4 +44,3 @@ class DashboardQuerySet[DashboardT: Dashboard](
 
 class DashboardWidgetQuerySet[WidgetT: DashboardWidget](ArchiveQuerySet[WidgetT], AngeeHistoryQuerySet[WidgetT]):
     """Archive scopes layered over dashboard widget reads."""
-

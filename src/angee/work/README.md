@@ -58,4 +58,3 @@ keeps their configuration there and their work here.
 Operational stages use the `wst_` public-ID prefix. Their integer primary keys,
 foreign keys, and history pointers remain unchanged. Earlier `stg_` Work stage
 URLs are intentionally unsupported after this upgrade.
-

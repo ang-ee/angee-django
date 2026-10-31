@@ -425,4 +425,3 @@ def validate_dashboard_queries(snapshot: Mapping[str, Any]) -> None:
                 or not 5 <= refresh["seconds"] <= 3_600
             ):
                 _invalid_query(f"{path}.source.refresh.seconds", "interval must be from 5 to 3600 seconds")
-
