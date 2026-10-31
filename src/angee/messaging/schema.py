@@ -62,9 +62,6 @@ from angee.integrate.live import PairingProjection, PairingState
 from angee.integrate.schema import BridgeTypeMixin
 from angee.messaging import connect
 from angee.messaging.managers import (
-    ChannelQuerySet,
-    MessageQuerySet,
-    ThreadQuerySet,
     message_subtype_options,
     strip_null_bytes,
 )
@@ -72,6 +69,7 @@ from angee.messaging.models import Message as MessageModel
 from angee.messaging.models import Part as PartModel
 from angee.messaging.models import Thread as ThreadModel
 from angee.messaging.models import ThreadedModelMixin, chatter_record
+from angee.messaging.querysets import ChannelQuerySet, MessageQuerySet, ThreadQuerySet
 from angee.parties.schema import HandleType, PartyType
 from angee.storage.schema import FileType
 from angee.tags.schema import TaggedNode, tags_input_extensions
@@ -190,7 +188,7 @@ class MessagingPairingQuery:
             queryset=Channel.objects.of_concrete_type(),
             reason="messaging.graphql.channel_pairing",
         )
-        return _pairing_result(connect.channel_pairing, channel)
+        return _pairing_result(channel.pairing)
 
 
 @strawberry.type
@@ -204,7 +202,7 @@ class MessagingPairingMutation:
         with action_target(
             Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.resume_channel_pairing"
         ) as channel:
-            _pairing_result(connect.resume_channel_pairing, channel)
+            _pairing_result(channel.resume_pairing)
         return ActionResult(ok=True, message="Channel connection started.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
@@ -215,7 +213,7 @@ class MessagingPairingMutation:
         with action_target(
             Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.submit_channel_password"
         ) as channel:
-            _pairing_result(connect.submit_channel_password, channel, password)
+            _pairing_result(channel.submit_pairing_password, password)
         return ActionResult(ok=True, message="Password submitted.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
@@ -225,7 +223,7 @@ class MessagingPairingMutation:
         with action_target(
             Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.skip_channel_password"
         ) as channel:
-            _pairing_result(connect.skip_channel_password, channel)
+            _pairing_result(channel.skip_pairing_password)
         return ActionResult(ok=True, message="Password skipped.")
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
@@ -245,7 +243,7 @@ class MessagingPairingMutation:
         with action_target(
             Channel, id, queryset=Channel.objects.of_concrete_type(), reason="messaging.graphql.disconnect_channel"
         ) as channel:
-            _pairing_result(connect.disconnect_channel, channel)
+            _pairing_result(channel.disconnect_pairing)
         return ActionResult(ok=True, message="Disconnected channel.")
 
 

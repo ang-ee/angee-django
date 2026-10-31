@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from angee.messaging.inbox import MessageInbox
-from angee.messaging.managers import _MESSAGE_ORDER
+from angee.messaging.querysets import _MESSAGE_ORDER
 
 
 @dataclass(frozen=True)

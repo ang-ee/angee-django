@@ -133,6 +133,9 @@ def activity_catalog(composed_tables: None) -> None:
 
     del composed_tables
     with system_context(reason="tests.projects.activity_catalog"):
+        from angee.resources.testing.models import Resource
+
+        Resource.objects.load_xref("angee.projects.activity_done", model=messaging_models.MessageSubtype)
         projects_models.ActivityType.objects.create(key="todo", name="To do", glyph="circle-check")
         projects_models.ActivityType.objects.create(key="call", name="Call", glyph="phone")
 

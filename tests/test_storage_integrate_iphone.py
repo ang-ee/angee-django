@@ -103,8 +103,8 @@ def queued_mounts(monkeypatch: pytest.MonkeyPatch) -> list[Mount]:
 
     queued: list[Mount] = []
     monkeypatch.setattr(
-        storage_integrate_connect,
-        "queue_bridge_sync",
+        Mount,
+        "request_sync",
         lambda mount, **_kwargs: queued.append(mount),
     )
     return queued
