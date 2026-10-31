@@ -9,6 +9,7 @@ import pytest
 import strawberry
 import strawberry_django
 from django.contrib.auth.models import Group
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
 from django.test.utils import isolate_apps
 from graphql import GraphQLInputObjectType
@@ -304,7 +305,7 @@ def test_scalar_fk_projection_preserves_identity_nullability_and_only_hint() -> 
             app_label = "projection_test"
 
     class Row(models.Model):
-        target = models.ForeignKey(Target, null=True, on_delete=models.CASCADE)
+        target = models.ForeignKey(Target, null=True, on_delete=models.CASCADE, db_column="target_ref")
         class Meta:
             app_label = "projection_test"
 
@@ -325,12 +326,40 @@ def test_scalar_fk_projection_preserves_identity_nullability_and_only_hint() -> 
     expected = str(require_public_id(Target, 7))
     assert result.data == {"row": {"target": expected, "required": expected}}
     fields = get_object_definition(ScalarReferenceType, strict=True).fields
-    assert all(field.store.only == ["target_id"] for field in fields)
+    assert all(field.store.only == ["target"] for field in fields)
+    # Native Django resolves the relation name to the same FK column as its
+    # attname, including a custom database-column spelling; no target join/load.
+    assert str(Row.objects.only("target").query) == str(Row.objects.only("target_id").query)
+    assert '"target_ref"' in str(Row.objects.only("target").query)
     optional = next(field for field in fields if field.python_name == "target")
     required = next(field for field in fields if field.python_name == "required")
     assert optional.base_resolver(Row(target_id=None)) is None
     with pytest.raises(ValueError, match="unexpectedly unset"):
         required.base_resolver(Row(target_id=None))
+
+
+@isolate_apps()
+@pytest.mark.parametrize("nullable", [False, True])
+def test_scalar_fk_projection_rejects_non_primary_target_field(nullable: bool) -> None:
+    from angee.graphql.ids import public_id_field
+
+    class Target(models.Model):
+        code = models.CharField(max_length=40, unique=True)
+        class Meta:
+            app_label = "projection_test"
+
+    class Row(models.Model):
+        target = models.ForeignKey(Target, to_field="code", null=True, on_delete=models.CASCADE)
+        class Meta:
+            app_label = "projection_test"
+
+    @strawberry_django.type(Row)
+    class NaturalKeyReferenceType:
+        target: strawberry.ID | None = public_id_field("target", nullable=nullable)
+
+    field = get_object_definition(NaturalKeyReferenceType, strict=True).fields[0]
+    with pytest.raises(ImproperlyConfigured, match="must target a primary key"):
+        field.base_resolver(Row(target_id="natural-key"))
 
 
 @isolate_apps()
