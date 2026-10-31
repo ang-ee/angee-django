@@ -34,8 +34,8 @@ class BaseConfig(AppConfig):
         from angee.base.models.scope import DefaultedScopeMixin, NullableScopeMixin
 
         assert self.models_module is not None
-        self.models_module.DefaultedScopeMixin = DefaultedScopeMixin
-        self.models_module.NullableScopeMixin = NullableScopeMixin
+        setattr(self.models_module, "DefaultedScopeMixin", DefaultedScopeMixin)
+        setattr(self.models_module, "NullableScopeMixin", NullableScopeMixin)
 
     def compose_provision(self, context: ProvisionContext) -> None:
         """Synchronize the selected database after its native migrations complete."""
