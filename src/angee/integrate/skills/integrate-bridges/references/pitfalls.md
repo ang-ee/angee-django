@@ -7,7 +7,7 @@ to the `jobs-tasks` skill.
 - **Querying every ancestor of a bridge queues the same connection twice.** The
   [final-MTI scheduling rule](../../../../../../docs/backend/guidelines.md#integration-and-worker-contracts)
   selects the one row through
-  [`Integration.concrete_type`](../../../../../../src/angee/integrate/models.py);
+  [`Integration.concrete_type`](../../../../../../src/angee/integrate/models/__init__.py);
   a scheduler that walks the parent kinds (Channel and its public Feed child)
   enqueues both. Keep parent-scoped message access on the declared Channel
   relation instead of re-querying by kind.

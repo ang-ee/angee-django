@@ -3,11 +3,13 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from django.db import connection, models
+from django.db import DEFAULT_DB_ALIAS, connections, models
 
 
 @contextmanager
-def model_tables(test_models: tuple[type[models.Model], ...]) -> Iterator[None]:
+def model_tables(
+    test_models: tuple[type[models.Model], ...], *, using: str = DEFAULT_DB_ALIAS,
+) -> Iterator[None]:
     """Create and drop only tables that Django's test setup cannot discover.
 
     Function-scoped models are declared after the session database is created;
@@ -18,6 +20,7 @@ def model_tables(test_models: tuple[type[models.Model], ...]) -> Iterator[None]:
     Django owns their creation and flush; this helper never clears existing tables.
     """
 
+    connection = connections[using]
     existing = set(connection.introspection.table_names())
     missing = []
     for model in test_models:

@@ -724,7 +724,8 @@ def test_final_metadata_includes_only_allowlisted_input_only_fields() -> None:
     assert metadata_module.readable_model_field_names(schema.angee_resources[0]) == frozenset({"id", "name"})
 
 
-def test_final_scalar_id_fk_keeps_django_relation_semantics() -> None:
+@pytest.mark.parametrize("label", [False, True])
+def test_final_scalar_id_fk_keeps_django_relation_semantics(label: bool) -> None:
     """A scalar ID relation remains a relation while rejecting sub-selections."""
 
     @strawberry_django.type(ResourceChild, name="FinalScalarRelationChildType")
@@ -742,7 +743,7 @@ def test_final_scalar_id_fk_keeps_django_relation_semantics() -> None:
         filterable=["id", "name", "parent"],
         sortable=["name"],
         aggregatable=["id"],
-        groupable=["parent"],
+        groupable=["parent", *(["parent__name"] if label else [])],
         insert=False,
         update=False,
         delete=False,
@@ -771,7 +772,7 @@ def test_final_scalar_id_fk_keeps_django_relation_semantics() -> None:
     assert parent.relation_model_label == "tests.ResourceParent"
     assert parent.relation_object is False
     assert metadata.query.axes["owner"].field == "owner"
-    assert metadata.query.axes["owner"].server.label_key == "parent__name"
+    assert metadata.query.axes["owner"].server.label_key == ("parent__name" if label else None)
 
 
 def test_final_custom_public_id_alias_is_metadata_identity() -> None:
@@ -1015,7 +1016,8 @@ def test_final_input_projection_maps_aliases_defaults_and_author_allowlist() -> 
     ) == ("required_alias",)
 
 
-def test_hasura_nested_relation_group_dimension_matches_group_key_contract() -> None:
+@pytest.mark.parametrize("label", [False, True])
+def test_hasura_nested_relation_group_dimension_matches_group_key_contract(label: bool) -> None:
     """A nested FK dimension uses the aggregate builder's attname key and relation shape."""
 
     @strawberry_django.type(ResourceGrandchild)
@@ -1038,7 +1040,7 @@ def test_hasura_nested_relation_group_dimension_matches_group_key_contract() -> 
         filterable=["id", "child", "child__parent"],
         sortable=["child"],
         aggregatable=["id"],
-        groupable=["child", "child__parent"],
+        groupable=["child", "child__parent", *(["child__name"] if label else [])],
         get_queryset=lambda info: ResourceGrandchild.objects.all(),
         write_backend=write_backend,
         id_decode=lambda value: value,
@@ -1065,9 +1067,8 @@ def test_hasura_nested_relation_group_dimension_matches_group_key_contract() -> 
     assert nested.drill == DataQueryDrill(kind="identity", field="child.parent", value_key="child__parent_id")
     assert group_key is not None
     assert nested.server.key in group_key.fields  # type: ignore[attr-defined]
-    # The relation label fallback resolves the related model's preferred
-    # display column even without a node surface (donor/scalar-id axes).
-    assert metadata.query.axes["child"].server.label_key == "child__name"
+    # A label must be an authored executable scalar group axis.
+    assert metadata.query.axes["child"].server.label_key == ("child__name" if label else None)
 
 
 def test_hasura_relation_axis_has_one_server_identity_and_drill() -> None:

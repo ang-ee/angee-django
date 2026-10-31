@@ -69,9 +69,7 @@ from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode, IntegrationManager
 from angee.integrate.oauth import flow, state
 from angee.integrate.oauth.errors import PROVIDER_UNAVAILABLE, OAuthFlowError
-from angee.integrate.oauth.registrations import OAuthRegistrationExtension
-from angee.integrate.queue import queue_bridge_sync
-from angee.integrate.registry import models_with
+from angee.integrate.oauth.registrations import OAuthRegistrationExtension, operation_registration_slugs
 from angee.integrate.states import ConflictKeep, StreamState, SyncFailure, SyncFailureKind, SyncFailureStatus
 
 logger = logging.getLogger(__name__)
@@ -490,8 +488,11 @@ class ConnectIntegrationResult:
         if started is None:
             return cls(integration=target, attached=True)
         return cls(
-            integration=target, authorize_url=started.authorize_url, state=started.state,
-            mode=started.mode, redirect_uri=started.redirect_uri,
+            integration=target,
+            authorize_url=started.authorize_url,
+            state=started.state,
+            mode=started.mode,
+            redirect_uri=started.redirect_uri,
         )
 
 
@@ -763,8 +764,12 @@ class ConnectionMutation:
             integration = _concrete_integration_target(info, user, resource, id)
             oauth_client = integration.connect_oauth_client(capfirst(str(integration._meta.verbose_name)))
             started = _connect.connect_integration_target(
-                integration, oauth_client, user=user, request=get_request(info),
-                redirect_uri=redirect_uri, next_path=next,
+                integration,
+                oauth_client,
+                user=user,
+                request=get_request(info),
+                redirect_uri=redirect_uri,
+                next_path=next,
             )
             return ConnectIntegrationResult.from_connection(integration, started)
         except OAuthFlowError as error:
@@ -840,7 +845,9 @@ class ConnectionMutation:
                 oauth_client, code=code, state_token=state, redirect_uri=redirect_uri
             )
             Integration.objects.attach_completed_connect(
-                result.integration_id, result.user, result.credential,
+                result.integration_id,
+                result.user,
+                result.credential,
                 exposed_model_labels=_exposed_model_labels(info),
             )
         except OAuthFlowError as error:
@@ -959,7 +966,7 @@ class IntegrateCredentialMutation:
         ) as credential:
             try:
                 credential.refresh_now()
-            except OAuthFlowError as error:
+            except IntegrationError as error:
                 return ActionResult(ok=False, message=error.public_message)
             except ValueError:
                 return ActionResult(ok=False, message="The credential cannot be refreshed; reconnect it.")
@@ -1066,7 +1073,12 @@ class IntegrationConnectionMixin:
     def can_connect(self) -> bool:
         """Project the model's owner-scoped OAuth Connect admission."""
 
-        return bool(cast(Any, self).can_connect(write_access="write" in held_permissions(cast(Any, self), ("write",))))
+        return bool(
+            cast(Any, self).can_connect(
+                write_access="write" in held_permissions(cast(Any, self), ("write",)),
+                ready_slugs=operation_registration_slugs(),
+            )
+        )
 
     @strawberry_django.field(
         only=[
@@ -1151,7 +1163,7 @@ class IntegrationOAuthMixin:
     def is_oauth_connectable(self) -> bool:
         """Read public registration readiness without resolving protected relations."""
 
-        return bool(cast(Any, self).is_oauth_connectable())
+        return bool(cast(Any, self).is_oauth_connectable(ready_slugs=operation_registration_slugs()))
 
 
 @strawberry.type
@@ -1190,11 +1202,16 @@ class IntegrationLabelMixin(IntegrationConnectionMixin):
 class BridgeSyncStatusMixin:
     """Project live sync status shared by all ``Bridge`` child resources."""
 
-    @strawberry_django.field(only=["id"], prefetch_related=[Prefetch(
-        "sync_streams",
-        queryset=SyncStream.objects.filter(state=StreamState.OPEN).prefetch_related(_OPEN_FAILURE_LINKS),
-        to_attr="open_sync_streams",
-    )])
+    @strawberry_django.field(
+        only=["id"],
+        prefetch_related=[
+            Prefetch(
+                "sync_streams",
+                queryset=SyncStream.objects.filter(state=StreamState.OPEN).prefetch_related(_OPEN_FAILURE_LINKS),
+                to_attr="open_sync_streams",
+            )
+        ],
+    )
     def open_failure_count(self) -> int:
         """Retained item failures remain visible after a run finishes."""
 
@@ -1451,7 +1468,8 @@ class RecordLinkType(AngeeNode):
         return cast(str | None, cast(Any, self).source_url)
 
     @strawberry_django.field(
-        only=["stream_id", "external_key", "source_payload"], select_related=["stream__integration"],
+        only=["stream_id", "external_key", "source_payload"],
+        select_related=["stream__integration"],
     )
     def source_label(self) -> str:
         """Connector-owned human label, shared by record sources and failures."""
@@ -1566,10 +1584,7 @@ def _authorized_failure(
         if linked.stream_id != epoch.pk:
             raise ValidationError("The failure link does not belong to the selected stream.")
         owner = linked
-    for failure in owner.failures():
-        if failure.slot == slot:
-            return failure
-    raise ValidationError("The retained sync failure no longer exists.")
+    return owner.failure_at(slot)
 
 
 @strawberry.type
@@ -1843,11 +1858,7 @@ class IntegrationActionMutation:
 
         queued = 0
         with action_target(Integration, id, reason="integrate.graphql.sync_integration") as integration:
-            now = timezone.now()
-            for model in models_with(base=Bridge):
-                for bridge in model._default_manager.of_concrete_type().filter(pk=integration.pk).order_by("pk"):
-                    queue_bridge_sync(bridge, now=now)
-                    queued += 1
+            queued = integration.request_sync(now=timezone.now())
         if queued == 0:
             return ActionResult(ok=True, message="No bridges to sync.")
         return ActionResult(ok=True, message=f"Queued {queued} bridge sync(s).")

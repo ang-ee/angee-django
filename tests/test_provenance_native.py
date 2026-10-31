@@ -114,7 +114,7 @@ settings.configure(
     DATABASES={name: {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
                for name in ("default", "secondary")},
     DATABASE_ROUTERS=[StorageRouter()],
-    ANGEE_CHANGESET_MODEL="native_capture.Changeset",
+    PROVENANCE_CHANGESET_MODEL="native_capture.Changeset",
     SECRET_KEY="native-capture-test",
     USE_TZ=True,
 )

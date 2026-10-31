@@ -23,8 +23,8 @@ from rebac import (
 )
 
 import tests.test_agents_graphql  # noqa: F401 -- register related models before native database setup
+from angee.base.signals import mute_changes
 from angee.graphql.deletion import DeletePreview
-from angee.graphql.publishing import mute_changes
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.messaging.testing.models import Channel
 from tests import test_messaging as messaging_models
@@ -2623,6 +2623,7 @@ def test_record_chatter_post_with_attachment(composed_tables: None, tmp_path: Pa
     ]
 
 
+@pytest.mark.usefixtures("activity_catalog")
 def test_record_chatter_follow_toggle(composed_tables: None) -> None:
     """The custom record follower mutation mirrors Odoo's follow/unfollow contract."""
 

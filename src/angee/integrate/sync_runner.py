@@ -10,7 +10,8 @@ from django.apps import apps
 from django.db import transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from rebac import system_context
+from rebac import database_context, system_context
+from rebac.database import write_alias
 
 from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.models import Bridge
@@ -23,14 +24,16 @@ def run_bridge_sync_job(
     timestamp: str | datetime | None = None,
     *,
     require_queue_token: bool = False,
+    using: str | None = None,
 ) -> dict[str, Any]:
-    """Run one concrete bridge sync job through the shared lock/lifecycle path."""
+    """Run the producer alias or native model write router through the shared lock/lifecycle path."""
 
     now = _parse_timestamp(timestamp)
     model = _bridge_model(model_label)
-    with system_context(reason="integrate.bridge_sync_job"), ExitStack() as locks:
-        with transaction.atomic():
-            bridge = model._default_manager.lock_if_supported().get(pk=pk)
+    using = write_alias(model, using=using)
+    with database_context(using), system_context(reason="integrate.bridge_sync_job"), ExitStack() as locks:
+        with transaction.atomic(using=using):
+            bridge = model._default_manager.db_manager(using).lock_if_supported().get(pk=pk)
             if not bridge.discovery_ready:
                 return {"ok": False, "items": 0, "skipped": True, "reason": "connection-not-ready"}
             if require_queue_token and not bridge.sync_queue_token_matches(now):

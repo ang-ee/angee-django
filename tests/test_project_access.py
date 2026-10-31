@@ -128,6 +128,7 @@ def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
 
     projects = Path(apps.get_app_config("projects").path, "permissions.extends.zed").read_text()
     messaging = Path(apps.get_app_config("messaging").path, "permissions.zed").read_text()
+    knowledge = Path(apps.get_app_config("projects_knowledge").path, "permissions.extends.zed").read_text()
 
     for definition in (
         "storage/drive",
@@ -135,10 +136,13 @@ def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
         "storage/file",
         "integrate/integration",
         "messaging/thread",
-        "knowledge/vault",
-        "knowledge/record_binding",
     ):
         assert f"definition {definition}" in projects
+    for definition in ("knowledge/vault", "knowledge/record_binding", "projects/project_binding", "projects/task"):
+        assert f"definition {definition}" in knowledge
+    assert "permission read_granted = project->read" in knowledge
+    assert "permission target_read = task->read + project->read" in knowledge
+    assert "permission target_share = vault->share" in knowledge
     assert "relation channel: messaging/channel // rebac:field=channel" in messaging
     assert "relation thread: messaging/thread // rebac:field=thread" in messaging
 

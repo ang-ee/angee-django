@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.http import HttpRequest
+from django.test.utils import CaptureQueriesContext
 
 from angee.iam import identity as identity_module
 from angee.iam.identity import (
     user_display_label,
+    user_display_labels,
     user_from_public_id,
     user_principal,
     user_public_id,
@@ -76,3 +79,26 @@ def test_user_principal_rejects_encoded_relay_id() -> None:
 
     with pytest.raises(ValueError, match="User principal"):
         user_principal(encoded_id)
+
+
+@pytest.mark.django_db
+def test_mixed_principal_and_public_labels_share_one_batch() -> None:
+    """Canonical grants and public input share native identity decoding and one read."""
+
+    users = [get_user_model().objects.create_user(
+        username=f"batch-{index}", first_name=f"Person {index}",
+    ) for index in range(3)]
+    ids = (users[0].pk, str(users[1].pk), users[2].public_id, users[0].public_id, "bad-public-id")
+    request = HttpRequest()
+    with CaptureQueriesContext(connection) as queries:
+        labels = user_display_labels(ids, request=request)
+    assert labels == {
+        users[0].pk: "Person 0", str(users[1].pk): "Person 1",
+        users[2].public_id: "Person 2", users[0].public_id: "Person 0", "bad-public-id": None,
+    }
+    # Native system elevation records one audit event alongside the batched read.
+    assert len(queries) == 2
+    assert sum(query["sql"].lstrip().upper().startswith("SELECT") for query in queries) == 1
+    with CaptureQueriesContext(connection) as repeated:
+        assert user_display_labels(reversed(ids), request=request) == labels
+    assert not repeated

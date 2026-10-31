@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import nullcontext
 from typing import Any, ClassVar, Self, TypeVar
 
@@ -15,6 +15,7 @@ from rebac import (
     RelationshipTuple,
     SubjectRef,
     delete_relationship,
+    system_context,
     to_object_ref,
     write_relationships,
 )
@@ -26,12 +27,18 @@ from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type, resource_id_attr
 
 from angee.base.managers import AngeeManager, AngeeUnscopedManager
+from angee.base.models.children import OwnedChildrenMixin
 from angee.base.models.identity import PublicIdentity, SqidMixin
 from angee.base.models.inputs import InputExtensionsMixin
 from angee.base.models.merge_references import MergeContractMixin, named_in_relationships, references
 from angee.base.models.timestamps import TimestampMixin
 from angee.base.models.transitions import StateTransitionsMixin
-from angee.base.permissions import DirectRecordAccess, declared_grants, declared_rebac_definition, instance_actor
+from angee.base.permissions import (
+    DirectRecordAccess,
+    declared_grants,
+    declared_rebac_definition,
+    require_record_access,
+)
 from angee.base.querysets import row_lock_paths
 from angee.base.signals import record_access_revoked
 
@@ -39,6 +46,7 @@ _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
 class AngeeModel(
+    OwnedChildrenMixin,
     InputExtensionsMixin,
     StateTransitionsMixin,
     MergeContractMixin,
@@ -54,6 +62,16 @@ class AngeeModel(
 
     _angee_base: ClassVar[models.Manager[Self]] = AngeeUnscopedManager()
     """Unfiltered tracked writes for Django's relation and base-manager paths."""
+
+    def save_children(
+        self, field: str, rows: Iterable[tuple[str | None, dict[str, Any], dict[str, Any]]], *,
+        replace: bool = True, **kwargs: Any,
+    ) -> None:
+        """Authorize owned replacements; nested creation retains its create authority."""
+        if replace:
+            self.require_access("write")
+        with system_context(reason="base.save_children"):
+            super().save_children(field, rows, replace=replace, **kwargs)
 
     def retained(self) -> bool:
         """Whether a live or historical reference, or a stored grant, names this row.
@@ -330,23 +348,8 @@ class AngeeModel(
         return None
 
     def require_access(self, permission: str, actor: Any = None) -> Any:
-        """Authorize and return the explicit, pinned, or ambient actor, in that order.
-
-        The resolved requester is retained as the instance binding. Missing actors
-        are denied in every strict mode unless an explicit sudo scope is active.
-        A concrete requester always clears instance sudo and scopes the check.
-        """
-
-        actor = actor or instance_actor(self)
-        if actor is None:
-            if self.is_sudo() or is_sudo():
-                return None
-            raise PermissionDenied(f"Denied: {permission!r} requires an actor.")
-        self.with_actor(actor)
-        if not self.has_access(permission):
-            target = self._meta.label if self._state.adding else to_object_ref(self)
-            raise PermissionDenied(f"Denied: the current actor lacks {permission!r} on {target}.")
-        return actor
+        """Apply the foundation's actor-binding access gate."""
+        return require_record_access(self, permission, actor)
 
     @classmethod
     def check(cls, **kwargs: Any) -> list[checks.CheckMessage]:

@@ -27,6 +27,16 @@ class BaseConfig(AppConfig):
     # migrations, content types, and the test-model schema all retain ``base``.
     label = "base"
 
+    def import_models(self) -> None:
+        """Expose scope declarations during native model discovery, not identity imports."""
+
+        super().import_models()
+        from angee.base.models.scope import DefaultedScopeMixin, NullableScopeMixin
+
+        assert self.models_module is not None
+        setattr(self.models_module, "DefaultedScopeMixin", DefaultedScopeMixin)
+        setattr(self.models_module, "NullableScopeMixin", NullableScopeMixin)
+
     def compose_provision(self, context: ProvisionContext) -> None:
         """Synchronize the selected database after its native migrations complete."""
 

@@ -1066,7 +1066,7 @@ def _run_probe_command(tmp_path: Path, manage_source: str) -> subprocess.Complet
         call_command("rebac", "sync", verbosity=0)
         sys.argv = [str(target / "manage.py"), "captureprobe"]
         runpy.run_path(sys.argv[0], run_name="__main__")
-        Changeset = apps.get_model(settings.ANGEE_CHANGESET_MODEL)
+        Changeset = apps.get_model(settings.PROVENANCE_CHANGESET_MODEL)
         context = Changeset._base_manager.get()
         history = apps.get_model("notes", "Note").history.get()
         assert history.changeset_id == context.pk

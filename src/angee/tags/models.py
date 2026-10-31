@@ -4,8 +4,7 @@ A :class:`Tag` is one label in a vocabulary; a :class:`TagAssignment` is the
 polymorphic edge attaching a tag to a record of a taggable type: a
 ``content_type``/``object_id`` pair with a
 :class:`~django.contrib.contenttypes.fields.GenericForeignKey` ``target``, stored
-at :func:`rebac.generic_target`. Tags depend on nothing but ``angee.iam`` and
-reach every taggable model without a FK back to it.
+at :func:`rebac.generic_target`. Tags reach every taggable model without a FK back to it.
 
 **Scope.** Tags are reference vocabulary readable by every non-anonymous actor
 through the native ``authenticated`` permission; tag administrators curate it.
@@ -34,7 +33,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from operator import attrgetter
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
@@ -53,6 +52,7 @@ from angee.base.models.merge import MergeableMixin
 from angee.base.models.merge_references import MergePolicy
 from angee.base.models.refs import RecordRefMixin
 from angee.base.models.roles import role_anchor
+from angee.base.models.scope import DefaultedScopeMixin
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
 from angee.base.permissions import declared_rebac_definition
 from angee.base.querysets import MergeableQuerySet
@@ -72,8 +72,15 @@ class TagQuerySet[TagT: Tag](
 TagManager = AngeeHistoryManager.from_queryset(TagQuerySet)
 
 
-class Tag(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel, concrete=True):
+class Tag(DefaultedScopeMixin, HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel, concrete=True):
     """One label in a vocabulary shared by every non-anonymous actor."""
+
+    hasura_filterable_fields: ClassVar[tuple[str, ...]] = ("id", "name", "attention", "is_archived")
+    hasura_sortable_fields: ClassVar[tuple[str, ...]] = ("name", "created_at", "updated_at")
+    hasura_aggregatable_fields: ClassVar[tuple[str, ...]] = ("id",)
+    hasura_groupable_fields: ClassVar[tuple[str, ...]] = ("attention", "is_archived")
+    hasura_insertable_fields: ClassVar[tuple[str, ...]] = ("name", "color", "attention", "is_archived")
+    hasura_updatable_fields: ClassVar[tuple[str, ...]] = hasura_insertable_fields
 
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 

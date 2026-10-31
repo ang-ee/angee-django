@@ -10,3 +10,10 @@ class PortfolioConfig(AppConfig):
 
     default = True
     name = "angee.portfolio"
+
+    def ready(self) -> None:
+        """Connect report projection hooks after model population."""
+
+        from angee.portfolio.signals import connect
+
+        connect()

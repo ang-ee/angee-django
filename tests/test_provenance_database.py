@@ -21,7 +21,8 @@ settings.configure(
     INSTALLED_APPS=['django.contrib.contenttypes', 'django.contrib.auth', 'rebac',
                     'simple_history', 'angee.base', 'angee.provenance', 'angee.provenance.testing'],
     SECRET_KEY='actual-storage-alias-test', AUTH_USER_MODEL='auth.User',
-    ANGEE_CHANGESET_MODEL='provenance.Changeset', ANGEE_MERGE_GUARDS=[],
+    PROVENANCE_CHANGESET_MODEL='provenance.Changeset', ANGEE_MERGE_GUARDS=[],
+    PROVENANCE_POLICY='angee.provenance.contrib.angee.policy.AngeePolicy',
     REBAC_LOCAL_BACKEND_STORAGE='registry', DATABASE_ROUTERS=[DefaultRouter()],
     DATABASES={alias: {'ENGINE':'django.db.backends.sqlite3', 'NAME':':memory:'}
                for alias in ('default', 'selected')},

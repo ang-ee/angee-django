@@ -11,7 +11,7 @@ pytestmark = [pytest.mark.entrypoint_boundaries, pytest.mark.django_db(transacti
 
 @pytest.mark.parametrize("opened", [False, True])
 def test_disabled_storage_required_fails_closed(settings, opened):
-    settings.ANGEE_CHANGESET_MODEL = ""
+    settings.PROVENANCE_CHANGESET_MODEL = ""
     with changeset(fresh=True) if opened else nullcontext():
         assert current_changeset() is None
         with pytest.raises(ChangesetRequired):
@@ -31,8 +31,18 @@ def test_strictness_is_only_storage_policy(settings, monkeypatch):
 
 
 def test_generic_context_has_no_host_default_model(settings):
-    del settings.ANGEE_CHANGESET_MODEL
+    del settings.PROVENANCE_CHANGESET_MODEL
     assert changeset_model_label() == ""
     assert current_changeset() is None
     with pytest.raises(ChangesetRequired):
         current_changeset(required=True)
+
+
+def test_historical_swappable_alias_cannot_select_different_runtime_storage(settings):
+    from angee.provenance.checks import check_changeset_storage
+
+    settings.PROVENANCE_CHANGESET_MODEL = "provenance.Changeset"
+    settings.ANGEE_CHANGESET_MODEL = "another.Changeset"
+    assert [error.id for error in check_changeset_storage()] == ["provenance.E005"]
+    settings.ANGEE_CHANGESET_MODEL = settings.PROVENANCE_CHANGESET_MODEL
+    assert check_changeset_storage() == []

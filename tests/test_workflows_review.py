@@ -146,7 +146,7 @@ def test_multiple_choices_receive_the_set_and_route_done(review):
     _, people, _, _ = review
     run, step = start_review(review, input={"multiple": True})
     decision = questions(step)[0]
-    Decision.objects.decide(decision, actor=people[0], chosen=["reject", "approve"])
+    decision.decide(actor=people[0], chosen=["reject", "approve"])
     run_until(run)
     assert run.outcome == "done" and run.output["chosen"] == ["approve", "reject"]
 
@@ -159,7 +159,7 @@ def test_choose_is_applied_on_workflow_resume(review):
     run, step = start_review(review, input={"choose": True})
     decision = questions(step)[0]
     values = {public_id_of(question.review_subject): {"name": "Answerer's value"}}
-    Decision.objects.decide(decision, actor=people[0], chosen=["approve"], values=values)
+    decision.decide(actor=people[0], chosen=["approve"], values=values)
     question.review_subject.refresh_from_db()
     assert question.review_subject.name != "Answerer's value"
     assert Decision.system_queryset().get(pk=decision.pk).verdict_values == values
@@ -378,7 +378,7 @@ def test_concrete_action_owner_applies_child_fields_with_canonical_concern(compo
     ), actor=actor)
     concern = decision.records.with_actor(actor).get()
     assert type(concern.record) is MtiParent
-    decision = Decision.objects.decide(decision, actor=reader, chosen=["confirm"])
+    decision = decision.decide(actor=reader, chosen=["confirm"])
     with pytest.raises(PermissionDenied):
         apply_proposals(decision, actor=reader)
     record.refresh_from_db()
@@ -401,3 +401,21 @@ def test_action_model_must_share_the_concerned_identity(composed_tables, model):
                 "actions": {public_id_of(record): {"model": model, "fields": {"detail": {"set": "After"}}}},
             }]),
         )
+
+
+def test_requesting_workflow_filter_keeps_first_request_identity(review):
+    actor, _people, _sent, question = review
+    run, step = start_review(review)
+    decision = questions(step)[0]
+    later_workflow = load_workflow(
+        {"nodes": {"review": {"step": "question"}}, "results": [{"from": "review"}]},
+        key="later-request", actor=actor,
+    )
+    later = WorkflowRun.objects.start(later_workflow, actor=actor, subject=question.review_subject)
+    with system_context(reason="workflows.retained_request_identity"):
+        StepRun.objects.filter(run=later).update(decision=decision)
+        rows = Decision.objects.filter(pk=decision.pk)
+        expression = Decision.hasura_filter_expressions["requesting_workflow_key"](rows)
+        matches = rows.alias(_requesting_key=expression)
+        assert matches.filter(_requesting_key=run.version.workflow.key).exists()
+        assert not matches.filter(_requesting_key=later_workflow.key).exists()

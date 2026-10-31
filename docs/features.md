@@ -78,7 +78,7 @@ actually unique to your product.
 - **Knowledge** — a server-backed, permissioned, Obsidian-shape knowledge base:
   pages, typed properties, wikilink/embed edges, canvases. "Index, don't grep" —
   every change becomes queryable rows. Knowledge provides a retrieval seam;
-  [`knowledge_graph_pgvector`](../src/angee/knowledge_graph_pgvector/README.md)
+  [`knowledge_graph_pgvector`](../examples/src/angee/knowledge_graph_pgvector/README.md)
   is a skeleton plugin using lexical search, with no embeddings. Vector and
   graph retrieval remain future work.
 - **Integrate** — third-party systems: a vendor catalogue, accounts, stateless

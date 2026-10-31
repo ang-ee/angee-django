@@ -74,15 +74,27 @@ class PartCarrier(BaseModel):
 
     @classmethod
     def retain(cls, part: DocumentPart, *, actor: Any, drive_id: str = "") -> PartCarrier:
+        """Retain one protected carrier using the canonical acquisition factory."""
+
+        return cls.retain_with_status(part, actor=actor, drive_id=drive_id)[0]
+
+    @classmethod
+    def retain_with_status(cls, part: DocumentPart, *, actor: Any, drive_id: str = "") -> tuple[PartCarrier, Any, bool]:
         """Retain text and structured values under the storage owner's permissions."""
-        file = apps.get_model("storage.File").objects.ingest_bytes(
+        file, created = apps.get_model("storage.File").objects.get_or_ingest_bytes(
             json.dumps(asdict(part), ensure_ascii=False).encode(),
             filename="extraction-part.json",
             owner_id=actor_user_id(to_subject_ref(actor)),
             drive_id=drive_id,
         )
-        return cls(source_position=part.source_position, source_page=part.source_page, kind=part.kind,
-                   file_id=str(file.sqid), content_hash=str(file.content_hash))
+        carrier = cls(
+            source_position=part.source_position,
+            source_page=part.source_page,
+            kind=part.kind,
+            file_id=str(file.sqid),
+            content_hash=str(file.content_hash),
+        )
+        return carrier, file, created
 
     def restore(self, ctx: Any) -> DocumentPart:
         """Read the envelope only after rechecking its file authority and digest."""
@@ -233,9 +245,7 @@ def prepare_pages(
                                 raise ValidationError("A PDF page requires positive dimensions.")
                             scale = min(dpi / 72, max_edge / max(dimensions))
                             with closing(page.render(scale=scale)) as bitmap:
-                                pages.append(
-                                    _raster(bitmap.to_pil(), row, position, number, dpi, max_edge, actor)
-                                )
+                                pages.append(_raster(bitmap.to_pil(), row, position, number, dpi, max_edge, actor))
         elif mime.startswith("image/"):
             with Image.open(io.BytesIO(content)) as image:
                 pages.append(_raster(image, row, position, 0, dpi, max_edge, actor))
@@ -275,7 +285,11 @@ def _raster(
 
 
 def _text_part(
-    source: int, page: int, text: str, method: str, *,
+    source: int,
+    page: int,
+    text: str,
+    method: str,
+    *,
     kind: ExtractionPartKind = cast(ExtractionPartKind, ExtractionPartKind.NATIVE_TEXT),
     **metadata: Any,
 ) -> DocumentPart:

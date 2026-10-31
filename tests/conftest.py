@@ -63,7 +63,8 @@ from angee.posts.models import Feed as AbstractFeed
 from angee.posts.models import FeedFollow as AbstractFeedFollow
 from angee.posts.models import PostMetrics as AbstractPostMetrics
 from angee.posts.models import Quota as AbstractQuota
-from angee.projects.models import DriveProjects, FolderProjects, VaultProjects
+from angee.projects.models import DriveProjects, FolderProjects
+from angee.projects_knowledge.models import VaultProjects
 from angee.proposals.models import DriveProposalAccess, FileProposalAccess
 from angee.spaces.models import VaultSpace
 from angee.storage.models import Backend as AbstractStorageBackend
@@ -133,6 +134,9 @@ def activity_catalog(composed_tables: None) -> None:
 
     del composed_tables
     with system_context(reason="tests.projects.activity_catalog"):
+        from angee.resources.testing.models import Resource
+
+        Resource.objects.load_xref("angee.projects.activity_done", model=messaging_models.MessageSubtype)
         projects_models.ActivityType.objects.create(key="todo", name="To do", glyph="circle-check")
         projects_models.ActivityType.objects.create(key="call", name="Call", glyph="phone")
 

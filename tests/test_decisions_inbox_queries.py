@@ -122,8 +122,7 @@ def test_inbox_user_relations_embed_names_and_withhold_restricted_fields(inbox):
     """Embedded people show their name to every reader; their restricted fields follow IAM's gates."""
     requester, reviewer, _outsider, _subject, decision = inbox
     issuer = requester
-    Decision.objects.decide(
-        decision.pk, actor=reviewer, revision=decision.revision, chosen=["accept"],
+    decision.decide(actor=reviewer, revision=decision.revision, chosen=["accept"],
     )
     schema = addon_schema(decision_schema.schemas, "console")
     document = """query($id: String!) {

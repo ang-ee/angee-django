@@ -94,9 +94,9 @@ def test_workflow_operator_deferred_cancel_rechecks_the_workflow_grant(
     workflow, run, author, _starter, operator, other = operator_run
     _admin, sent = execution
     with pytest.raises(PermissionDenied):
-        WorkflowRun.objects.cancel_on_commit(run, other)
+        run.cancel_on_commit(other)
     with transaction.atomic():
-        WorkflowRun.objects.cancel_on_commit(run, operator)
+        run.cancel_on_commit(operator)
         assert cancellations(sent) == []
     assert len(cancellations(sent)) == 1
     if revoke_before_delivery:

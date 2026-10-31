@@ -216,6 +216,21 @@ Use these owners instead of maintaining another contract in an addon:
   that Angee exposes but does not own, pass an explicit sqid public identity
   decoder to the resource instead of creating source-addon migration state. A
   raw primary-key compatibility path must be explicit and source-test-only.
+- Resource field axes may explicitly delegate to composed model declarations:
+  ``filterable=...`` consumes ``hasura_filterable_fields``, and the same convention
+  applies to sortable, aggregatable, groupable, writable, insertable and updatable.
+  The Hasura adapter gathers directly declared MRO contributions. An authored
+  sequence, including ``()``, remains authoritative; ``None`` preserves native
+  editable-field defaults. Missing delegated declarations mean an empty list.
+  Readability alone never grants write admission. Tag retains its historical
+  readable-field contributions to filter/group axes in its own resource bridge;
+  this compatibility rule is not a generic resource-builder fallback. Other axes
+  explicitly consume the Tag model/ARP scope donor's complete declarations.
+- Scalar FK projections that disclose identity independently of target readability
+  compose ``public_id_field("relation", nullable=...)`` from the GraphQL identity
+  owner. Native ``only`` preserves deferred-column optimization; nullable/required
+  output stays explicit. Use ``actor_scoped_public_id`` when target readability
+  must redact the reference, or ``actor_scoped_to_one`` for a target node.
 - Management commands stay thin. They parse CLI arguments, load settings/context,
   and call the owner. Command modules should not contain reusable business logic,
   import generated runtime models directly, or duplicate resource/composer/schema
@@ -593,7 +608,7 @@ data through REBAC, never a queryset bypass.
   [the public identity boundary](../../src/angee/base/identity.py) before reaching
   REBAC, and outputs encode the PK there. Signed tokens are transport too: a
   download token carries its issuing actor's public subject, and
-  [`FileManager.for_download_token`](../../src/angee/storage/models.py)
+  [`FileManager.for_download_token`](../../src/angee/storage/managers.py)
   re-checks that actor's `read` on every request. Tableless role anchors keep
   named IDs. Changing a public prefix or codec must never change grants.
 - **Container inheritance belongs to the resource and scope owners.** A
@@ -737,8 +752,8 @@ data through REBAC, never a queryset bypass.
   `Thread.grant_reader` / `revoke_reader` remain shares governed by `share`.
   Team and record audiences are read live through the messaging contracts;
   they are not copied into followers. See
-  [`ThreadedModelMixin`](../../src/angee/messaging/models.py) and
-  [`ThreadNotificationManager`](../../src/angee/messaging/managers.py).
+  [`ThreadedModelMixin`](../../src/angee/messaging/models/threads.py) and
+  [`ThreadNotificationManager`](../../src/angee/messaging/managers/notifications.py).
 - **Posture is data, not schema.** `permissions.extends.zed` declares addon-owned
   capability permissions and unions existing permission arms; deployment-specific
   narrowable defaults still ship as seeded tuples. Platform-wide tuple-driven visibility
@@ -805,7 +820,7 @@ data through REBAC, never a queryset bypass.
 - Native REBAC `create`/`insert` evaluates the unsaved candidate's field- and
   const-backed relationships, so per-row `create` gates remain authoritative.
   Compose that path for ordinary factories, as
-  [`AgentSessionManager.start`](../../src/angee/agents/models.py) does.
+  [`AgentSessionManager.start`](../../src/angee/agents/models/sessions.py) does.
   Manual factories needing an explicit relationship preflight call native
   `rebac.check_new`; prepared rows use the manager's native `insert` path and
   retain the verified actor on the instance.
@@ -1057,7 +1072,7 @@ other existing rows keep their normal update order. A record task uses its own
 `RecordRefMixin` subject and declared `projects/task` permission arms; chatter is
 an independent capability.
 
-The [Changeset](../../src/angee/provenance/models.py) owns atomic pre-boundary
+The [Changeset](../../src/angee/provenance/models/changesets.py) owns atomic pre-boundary
 revert and deterministic lossless export. Closing a boundary writes one bookkeeping
 row; `document()` computes and records the hash through the one hash owner.
 Closure publishes a change; committed projections read history independently
@@ -1111,6 +1126,14 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   and ownership is never a stored tuple. Change it through `transfer_ownership`;
   bulk release belongs only to an owning verb that already authorized it. See the
   [example notes](../../examples/src/example/notes/permissions.zed).
+- **Provider scope participation:** compose `NullableScopeMixin` for nullable
+  organizational scope without an implicit default, or `DefaultedScopeMixin`
+  when a selected provider may default an omitted scope on creation. Choose one
+  variant per row. These neutral
+  [contracts](../../src/angee/base/models/scope.py) add no fields without a provider.
+  A provider contributes through native abstract-target `extends`; its relation,
+  default source and access policy remain provider-owned. Scope participation is
+  independent of `OwnerMixin` and never implies transferable user authority.
 - **Delegated field gates:** a definition that delegates to a parent re-declares
   the parent's field gates through that relation, as enforced for ownership by
   [the base checks](../../src/angee/base/checks.py). Re-save a fresh, unreloaded
@@ -1235,8 +1258,8 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   Bounded diagnostics and persisted model labels use `DiagnosticTextField` and
   `ModelLabelField` from [`angee.base.fields`](../../src/angee/base/fields/__init__.py), so
   instance saves and queryset writes share their storage rules.
-  [`MessageSubtype.model_label`](../../src/angee/messaging/models.py) and
-  [`ThreadNotification.failure_reason`](../../src/angee/messaging/models.py)
+  [`MessageSubtype.model_label`](../../src/angee/messaging/models/messages.py) and
+  [`ThreadNotification.failure_reason`](../../src/angee/messaging/models/notifications.py)
   compose these field owners. A deployment crossing the
   [upgrade cutoff](#migration-history) must preflight
   unknown/colliding subtype labels and retained diagnostics before canonicalizing
@@ -1592,13 +1615,13 @@ open fresh evaluator scopes for authorization and change-feed reads.
   a recursive metadata serializer or turn descriptions into persistent models. Do not restore a separate snapshot/merge
   pipeline that reconstructs partial resource descriptions or validates
   selections independently of the composed schema.
-- **A custom model value field registers its GraphQL wire type when its field
-  module imports.** Call `angee.graphql.field_types.register_field_type()` beside
-  the field declaration. `GraphQLConfig.ready()` imports schema declarations to
-  discover publishers before later app `ready()` callbacks run. Deferring final
-  schema construction does not defer those declarations, so registration from a
-  later callback remains unsupported and can leave Strawberry's exact-class
-  `auto` lookup unconfigured.
+- **Register custom model value fields in the owning app's `ready()` callback
+  when GraphQL is enabled.** Guard the import and call to
+  `angee.graphql.field_types.register_field_type()` with
+  `self.apps.is_installed("angee.graphql")`. Keep neutral field modules free of
+  GraphQL imports. GraphQL schema declarations load lazily in the composer's
+  ready-phase schema integration, after every app-ready callback, so Strawberry's
+  exact-class `auto` mapping is available regardless of app ordering.
 - **Change events read through the row unless the model declares another read
   anchor.** A target-derived child or polymorphic edge may implement
   `change_read_resource()` and return the `ObjectRef` whose `read` permission
@@ -1930,7 +1953,7 @@ bridge advisory lock as polling and delivery settlement.
   references.
 - **Bridge scheduling follows the final MTI kind.** A child capability may
   extend another bridge (a public Feed extends Channel); the
-  [`Integration.concrete_type`](../../src/angee/integrate/models.py) identity
+  [`Integration.concrete_type`](../../src/angee/integrate/models/integrations.py) identity
   selects the one bridge row to schedule and route. Parent-scoped message access
   stays on the declared Channel relation; child access inherits through its
   REBAC parent arrow.
@@ -1986,7 +2009,7 @@ bridge advisory lock as polling and delivery settlement.
   before the subject and keeps these database-only hooks in its transaction;
   UI cancellation, failures and timeouts use the same terminal writer. Bridge
   cycles compose this contract through
-  [`SyncCycleBridge`](../../src/angee/workflows_integrate/sync.py), while
+  [`SyncCycleBridge`](../../src/angee/workflows_integrate/models.py), while
   integrate retains scheduling, queue tokens, advisory locks and dispatch
   compare-and-set. Consumer bridges supply scope locks and an input snapshot;
   they do not create another subject lifecycle receiver. Run-owned auxiliary

@@ -52,7 +52,7 @@ class EvidenceReference(BaseModel):
 
 
 def _readable(
-    refs: Sequence[EvidenceReference], actor: Any, *, permission: str, standing: bool
+    refs: Sequence[EvidenceReference], actor: Any, *, permission: str, standing: bool, using: str | None = None,
 ) -> dict[EvidenceReference, Any]:
     """Resolve the records ``actor`` holds ``permission`` on, one scoped query per model.
 
@@ -78,7 +78,7 @@ def _readable(
         found = instances_from_public_ids(
             model,
             ids,
-            queryset=require_rebac_queryset(model).with_actor(actor).with_action(permission),
+            queryset=require_rebac_queryset(model).using(using).with_actor(actor).with_action(permission),
         )
         resolved.update(
             (
@@ -96,10 +96,11 @@ def readable_evidence(
     actor: Any,
     *,
     permission: str = "read",
+    using: str | None = None,
 ) -> list[EvidenceReference]:
     """Return the references whose records ``actor`` may read, in their stored order."""
 
-    readable = _readable(refs, actor, permission=permission, standing=False)
+    readable = _readable(refs, actor, permission=permission, standing=False, using=using)
     return [
         ref
         for ref in refs
@@ -112,10 +113,11 @@ def readable_evidence_records(
     actor: Any,
     *,
     permission: str = "read",
+    using: str | None = None,
 ) -> list[tuple[EvidenceReference, models.Model]]:
     """Return readable references with their already batched records, in stored order."""
 
-    readable = _readable(refs, actor, permission=permission, standing=False)
+    readable = _readable(refs, actor, permission=permission, standing=False, using=using)
     result = []
     for ref in refs:
         normalized = EvidenceReference(model=ref.model.lower(), id=ref.id, pointer=ref.pointer)
@@ -129,6 +131,7 @@ def readable_records(
     actors: Sequence[Any],
     *,
     permission: str = "read",
+    using: str | None = None,
 ) -> list[Any]:
     """Admit references only when every actor holds ``permission`` on every record."""
 
@@ -140,7 +143,7 @@ def readable_records(
     }
     records: dict[EvidenceReference, Any] = {}
     for actor in actors:
-        records = _readable(refs, actor, permission=permission, standing=True)
+        records = _readable(refs, actor, permission=permission, standing=True, using=using)
         if set(records) != wanted:
             raise PermissionDenied("Every participant requires the declared permission on every referenced record.")
     return [records[ref] for ref in sorted(wanted, key=lambda ref: (ref.model, ref.id, ref.pointer))]

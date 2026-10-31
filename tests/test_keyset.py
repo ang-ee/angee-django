@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from django.core import signing
 from django.db import models
+from django.db.models.functions import Substr
 from rebac import SubjectRef
 
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder
@@ -65,3 +66,29 @@ def test_malformed_signed_cuts_have_one_error_contract(value: object, pk_field: 
     signer = signing.Signer(salt="keyset-test")
     with pytest.raises(InvalidKeysetCursor):
         KeysetOrder("created_at").unsign(signer.sign_object(value), signer, pk_field)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("system_query_tables")
+def test_mixed_tie_breakers_preserve_forward_reverse_and_around_windows() -> None:
+    """Pages and signed boundaries use the same complete multi-column ordering."""
+
+    rows = [SystemQueryThing._base_manager.create(name=name) for name in ("a2", "b0", "a1", "b1", "a1", "c0")]
+    SystemQueryThing._base_manager.update(created_at=datetime(2026, 1, 1, tzinfo=UTC))
+    queryset = SystemQueryThing.objects.with_actor(SubjectRef.of("iam/user", "reader")).annotate(
+        band=Substr("name", 1, 1),
+    )
+    order = KeysetOrder("created_at", tie_breakers=("band", "-name"))
+    options = {"order": order, "cursor_scope": ("mixed-ties",), "limit": 2}
+    expected = [rows[index].pk for index in (0, 4, 2, 3, 1, 5)]
+    first = queryset.keyset_page(**options)
+    second = queryset.keyset_page(before_cursor=first.older_cursor, **options)
+    third = queryset.keyset_page(before_cursor=second.older_cursor, **options)
+    assert [row.pk for page in (first, second, third) for row in page.rows] == expected
+    assert [row.pk for row in queryset.keyset_page(after_cursor=third.newer_cursor, **options).rows] == expected[2:4]
+    anchor = queryset.get(pk=expected[3])
+    around = queryset.keyset_page(order=order, cursor_scope=("mixed-ties",), around=anchor, limit=3)
+    assert [row.pk for row in around.rows] == expected[2:5]
+    bounded = queryset.keyset_page(through_cursor=second.older_cursor, **{**options, "limit": 10})
+    assert [row.pk for row in bounded.rows] == expected[:4]
+    assert bounded.has_older_than_through is True

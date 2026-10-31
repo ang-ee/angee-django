@@ -762,7 +762,7 @@ class CommentReplyTests(TransactionTestCase):
                     other = MCPServer.objects.create(name="Other server")
                     ledger.objects.filter(source_addon="angee.agents", xref="mcp_angee").update(target_id=other.sqid)
                 with actor_context(self.admin):
-                    result = provision_agent(self.agent.sqid)
+                    result = provision_agent(self.agent)
                 self.assertFalse(result.ok)
                 self.assertIn("external server" if failure == "external_server" else "another record", result.message)
                 after = Agent.system_queryset().get(pk=self.agent.pk)
@@ -986,7 +986,7 @@ class CommentReplyTests(TransactionTestCase):
         with actor_context(self.admin):
             self.agent.with_actor(self.admin).resource_reader = False
             self.agent.save(update_fields=("resource_reader", "updated_at"))
-            self.assertTrue(provision_agent(self.agent.sqid).ok)
+            self.assertTrue(provision_agent(self.agent).ok)
             sync_builtin_tool_catalogue()
         run, session = self.waiting_run()
         toolset = AngeeToolset(session, ToolGrantAccess(self.agent.principal_subject()), str(self.server.sqid))
@@ -1011,7 +1011,7 @@ class CommentReplyTests(TransactionTestCase):
                 instance=self.agent,
                 source="reader-policy",
             )
-            self.assertTrue(provision_agent(self.agent.sqid).ok)
+            self.assertTrue(provision_agent(self.agent).ok)
             self.assertIn(RESOURCE_READER_ROLE, set(containers_of(self.agent.user)))
             resource.import_data(rows, dry_run=False, raise_errors=True, use_transactions=True, actor=self.admin)
             self.agent.refresh_from_db()

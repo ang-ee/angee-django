@@ -1,11 +1,13 @@
 # Provenance
 
-The addon owns write attribution, retained history, typed statements and their
-serving surfaces. Addons opting into these capabilities declare `angee.provenance`
+The addon composes native `django-provenance` attribution, capture, replay and
+typed statement engines with Angee permission, identity and serving policies. Addons opting into these capabilities declare `angee.provenance`
 as a dependency and compose its model mixins. The model foundation has no
 provenance dependency.
 
-[`context.py`](context.py) owns logical boundaries and commit-aware persistence.
+[`context.py`](context.py), [`history.py`](history.py) and [`querysets.py`](querysets.py)
+retain historical import paths for the native `django_provenance` owners.
+Its context module owns logical boundaries and commit-aware persistence.
 Its native transaction adapter tracks the identity of an `on_commit` callback
 in Django's callback queue: savepoint rollback removes that callback, while
 release retains it. This lets the next captured write recreate a rolled-back
@@ -17,8 +19,10 @@ Angee model or permission policy. The explicit
 [`contrib/angee/`](contrib/angee/) adapters supply guarded writes, replay and
 Angee document scopes. Angee models import `HistoryMixin` from
 `angee.provenance.contrib.angee.history` and compose a captured manager when they
-declare a custom queryset. [`models.py`](models.py) owns persisted attribution;
-[`managers.py`](managers.py) owns claims and changeset queries. No captured write
+declare a custom queryset. [`models/changesets.py`](models/changesets.py) adapts native abstract storage;
+[`models/principals.py`](models/principals.py) owns rule and seed principals.
+[`managers.py`](managers.py) adapts native claims and
+[`changeset_querysets.py`](changeset_querysets.py) adds protected document/merge identities. No captured write
 grants an authorization bypass.
 
 [`statements.py`](statements.py) owns Angee's retained assertion models, source
@@ -33,8 +37,10 @@ The [permission schema](permissions.zed) owns direct access. Other actor types
 contribute additive permission fragments from their own addons. Attribution never
 grants access to touched records; history reads follow those records' permissions.
 
-Storage follows Django's swappable-model convention, with the default owned by
-[addon autoconfig](autoconfig.py). Consumer history-FK migrations
+Runtime storage is selected by `PROVENANCE_CHANGESET_MODEL`, with the default
+owned by [addon autoconfig](autoconfig.py). `ANGEE_CHANGESET_MODEL` remains the
+historical Django swappable-migration identity and must point to the same model;
+a disagreement fails the system check. Existing consumer history-FK migrations
 must depend on `migrations.swappable_dependency(settings.ANGEE_CHANGESET_MODEL)`.
 Django's `makemigrations` owns the initial schema; see the
 [runtime migration policy](../../../docs/composer.md#addon-owned-runtime-migrations).
@@ -56,6 +62,17 @@ Strict mode refuses a captured write without an open boundary
 
 `current_changeset()` is optional; `required=True` refuses unavailable storage.
 The configured storage owner supplies actor, reason and strict-mode policy.
+`changeset(using=alias)` binds a unit of work to that database and refuses a
+conflicting capture; an unbound boundary records on each actual capture destination.
+`PROVENANCE_POLICY` selects the native boundary adapter, defaulting to
+[`AngeePolicy`](contrib/angee/policy.py). It resolves SubjectRef principals and
+retains real REBAC operation gates; classification or attribution grants no authority.
+Angee uses native capture-only mixins so its record and trash owners retain removal
+admission. Its explicit storage/document callbacks preserve historical tables,
+column identity, JSON bytes and in-place current statement row identities.
+The addon retains its simple-history fork dependency for the native
+`get_instance(using=...)` snapshot-routing contract; the generic library also
+supports plain simple-history independently.
 
 A boundary stores one changeset row per writing thread and actor under its
 shared facts: Django connections are per thread, so a worker started with
@@ -111,6 +128,14 @@ line per changeset linking to Activity) and `useRecordHistory` for
 pages that count or embed the same entries, such as integrate's link history
 drill-down and the notes example's Activity shortcut.
 
+Angee historical bases retain their established changeset-only attribution shape.
+`ModelHistory` supplies native `ChangesetAttribution` and requires
+`use_base_model_db=True`: the actual table alias proves source identity, including
+existing history on nondefault databases. Adoption adds no `source_database`
+column, inferred migration default or backfill, and preserves retained document
+fields, bytes and digests. Standalone native history retains its explicit source
+identity field for separately routed storage.
+
 `Changeset.document()` exports deterministic canonical JSON of a closed changeset
 for a trusted archive caller under a system boundary. It includes native history
 rows indexed by `touched` and excludes its own `hash`, which this export computes
@@ -125,3 +150,8 @@ boundary; direct schema and MCP tool execution opens its own boundary. The
 factory receives Strawberry's sync flag so asynchronous teardown uses the
 changeset owner's thread-sensitive close path. Handled execution errors mark the
 boundary failed while preserving successful statements.
+
+`Aspect[Subject]` and `StatementRecords[Subject]` retain the native owning-model
+callback type. Model-bound candidate methods keep their specific subject
+signatures; a declaration can combine them with ordinary callback-free aspects.
+The protected apply callback retains its existing keyword member/value contract.

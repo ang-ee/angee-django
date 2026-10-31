@@ -357,7 +357,7 @@ _AGENT_SESSION_RESOURCE = hasura_model_resource(
     filterable=["id", "agent", "user", "status", "updated_at"],
     sortable=["title", "status", "created_at", "updated_at"],
     aggregatable=["id"],
-    groupable=["agent", "user", "status"],
+    groupable=["agent", "agent__name", "user", "user__first_name", "status"],
     insert=False,
     update=False,
     write_backend=AngeeHasuraWriteBackend(AgentSessionModel),
@@ -373,7 +373,7 @@ _AGENT_TURN_RESOURCE = hasura_model_resource(
     filterable=["id", "session", "index", "status", "updated_at"],
     sortable=["session", "index", "status", "created_at", "updated_at"],
     aggregatable=["id", "index"],
-    groupable=["session", "status"],
+    groupable=["session", "session__title", "status"],
     insert=False,
     update=False,
     delete=False,
@@ -615,25 +615,33 @@ class AgentActionMutation:
     def provision_agent(self, id: PublicID) -> ActionResult:
         """Render the agent into an operator workspace and service."""
 
-        return provisioning.provision_agent(id)
+        target = resolve_action_target(Agent, id, reason="agents.graphql.provision_agent")
+        result = provisioning.provision_agent(target)
+        return ActionResult(ok=result.ok, message=result.message)
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def reprovision_agent(self, id: PublicID) -> ActionResult:
         """Recreate the agent service over its existing workspace."""
 
-        return provisioning.reprovision_agent(id)
+        target = resolve_action_target(Agent, id, reason="agents.graphql.reprovision_agent")
+        result = provisioning.reprovision_agent(target)
+        return ActionResult(ok=result.ok, message=result.message)
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def adopt_agent(self, id: PublicID) -> ActionResult:
         """Record the conflicting instance as the agent's own, keeping its container as it is."""
 
-        return provisioning.adopt_agent(id)
+        target = resolve_action_target(Agent, id, reason="agents.graphql.adopt_agent")
+        result = provisioning.adopt_agent(target)
+        return ActionResult(ok=result.ok, message=result.message)
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)
     def replace_agent(self, id: PublicID) -> ActionResult:
         """Destroy the conflicting instance, then provision the agent afresh."""
 
-        return provisioning.replace_agent(id)
+        target = resolve_action_target(Agent, id, reason="agents.graphql.replace_agent")
+        result = provisioning.replace_agent(target)
+        return ActionResult(ok=result.ok, message=result.message)
 
     @strawberry.mutation(permission_classes=[AgentChatEndpointPermission])
     def agent_chat_endpoint(self, info: strawberry.Info, id: PublicID) -> AgentChatEndpoint:
@@ -660,7 +668,9 @@ class AgentActionMutation:
     def deprovision_agent(self, id: PublicID) -> ActionResult:
         """Tear down the agent's operator workspace and service."""
 
-        return provisioning.deprovision_agent(id)
+        target = resolve_action_target(Agent, id, reason="agents.graphql.deprovision_agent")
+        result = provisioning.deprovision_agent(target)
+        return ActionResult(ok=result.ok, message=result.message)
 
 
 _CONSOLE_TYPES: list[object] = [

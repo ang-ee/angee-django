@@ -12,13 +12,13 @@ from typing import Any
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db.models import CharField, Q, QuerySet, Value
+from django.db.models import CharField, QuerySet, Value
 from django.db.models.functions import Coalesce, Concat, NullIf, Trim
 from django.http import HttpRequest
 from rebac import system_context
 from rebac.resources import model_resource_type
 
-from angee.base.models.identity import instance_from_public_id, public_id_for
+from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for
 
 
 def group_subject_type() -> str:
@@ -112,33 +112,23 @@ def user_display_labels(
         return labels
 
     user_model = get_user_model()
+    # Role grants carry canonical primary keys; public input carries model-owned
+    # identifiers. Turn only canonical keys into public ids through that owner,
+    # then let its batch resolver decode and retrieve the whole set once.
     pk = user_model._meta.pk
-    public_lookup = getattr(user_model, "public_id_lookup", None)
-    lookup = Q()
-    if pk is not None:
-        pk_values = []
-        for user_id in missing:
+    public_ids: dict[str, str] = {}
+    for user_id in missing:
+        public_id = str(user_id)
+        if pk is not None:
             try:
-                pk_values.append(pk.to_python(user_id))
+                canonical = pk.to_python(user_id)
             except TypeError, ValueError, ValidationError:
-                continue
-        if pk_values:
-            lookup |= Q(**{f"{pk.name}__in": pk_values})
-    if callable(public_lookup):
-        for user_id in missing:
-            try:
-                lookup |= Q(**public_lookup(str(user_id)))
-            except TypeError, ValueError:
-                continue
-
-    fetched: dict[str, str] = {}
-    users = user_label_queryset().filter(lookup) if lookup else []
-    for user in users:
-        label = user_label(user)
-        fetched[str(user.pk)] = label
-        public_id = getattr(user, "sqid", None)
-        if public_id:
-            fetched[str(public_id)] = label
+                pass
+            else:
+                public_id = public_id_for(user_model, canonical)
+        public_ids[str(user_id)] = public_id
+    users = instances_from_public_ids(user_model, public_ids.values(), queryset=user_label_queryset())
+    fetched = {key: user_label(users[value]) for key, value in public_ids.items() if value in users}
 
     for user_id in missing:
         fetched_label = fetched.get(str(user_id))
@@ -173,27 +163,18 @@ def user_principal(principal_id: str) -> Any:
     """Return the user addressed by a role-grant principal id."""
 
     user_model = get_user_model()
-    lookups: list[dict[str, Any]] = []
-    pk = user_model._meta.pk
-    if pk is not None:
-        lookups.append({pk.name: principal_id})
-    public_lookup = getattr(user_model, "public_id_lookup", None)
-    if callable(public_lookup):
-        lookups.append(public_lookup(principal_id))
-
-    tried: set[tuple[tuple[str, Any], ...]] = set()
     with system_context(reason="iam.identity.principal"):
-        for lookup in lookups:
-            key = tuple(sorted(lookup.items()))
-            if key in tried:
-                continue
-            tried.add(key)
-            try:
-                user = user_model._default_manager.filter(**lookup).first()
-            except TypeError, ValueError:
-                continue
+        try:
+            canonical = user_model._meta.pk.to_python(principal_id)
+        except TypeError, ValueError, ValidationError:
+            canonical = None
+        if canonical is not None:
+            user = user_model._default_manager.filter(pk=canonical).first()
             if user is not None:
                 return user
+        user = instance_from_public_id(user_model, principal_id)
+        if user is not None:
+            return user
     raise ValueError(f"User principal {principal_id!r} was not found.")
 
 

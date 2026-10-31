@@ -60,7 +60,7 @@ class SearchVaultTests(TransactionTestCase):
         self.assertEqual(len(page_queries), 1, page_queries)
 
     def test_vault_work_cap_applies_even_without_matches(self):
-        with actor_context(self.reader), patch("angee.knowledge.models.MAX_SEARCH_VAULTS", 2), \
+        with actor_context(self.reader), patch("angee.knowledge.models.vaults.MAX_SEARCH_VAULTS", 2), \
                 patch.object(LexicalRetrievalBackend, "search_many",
                              wraps=LexicalRetrievalBackend.search_many) as lexical, \
                 patch.object(ReverseRetrieval, "search_many", side_effect=AssertionError("Vault cap exceeded")):

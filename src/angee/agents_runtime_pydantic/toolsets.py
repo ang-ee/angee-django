@@ -9,19 +9,17 @@ pydantic-ai's toolset contract. Remote servers keep pydantic-ai's MCP transport.
 from __future__ import annotations
 
 import asyncio
-import inspect
 from collections import defaultdict
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any
 
 from asgiref.sync import sync_to_async
-from django.core.exceptions import ImproperlyConfigured
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError, ValidationError
 from fastmcp.tools import Tool as FastMCPTool
 from fastmcp.tools import ToolResult
-from fastmcp.tools.function_tool import FunctionTool
 from mcp.types import TextContent
 from pydantic_ai.exceptions import ModelRetry
 from pydantic_ai.mcp import MCPToolset
@@ -34,7 +32,7 @@ from pydantic_ai.toolsets import (
 )
 from pydantic_ai.toolsets.wrapper import WrapperToolset
 from pydantic_core import SchemaValidator, core_schema
-from rebac import PermissionDenied, SubjectRef, actor_context
+from rebac import PermissionDenied, SubjectRef, actor_context, database_context
 from rebac.backends import backend
 
 from angee.agents.constants import BUILTIN_MCP_ANGEE
@@ -45,7 +43,7 @@ from angee.agents.grants import (
     tool_grant_ref,
 )
 from angee.base.serialization import canonical_json, json_safe
-from angee.mcp.graphql import _CompiledTool
+from angee.mcp.graphql import actor_tool_read_only
 from angee.mcp.server import mcp_server
 
 MAX_TOOL_RESULT_CHARS = 32_000
@@ -67,6 +65,7 @@ class ToolGrantAccess:
     """Share one advertisement lookup and fresh per-call checks across toolsets."""
 
     agent: SubjectRef
+    using: str | None = None
     _granted_task: asyncio.Task[frozenset[str]] | None = field(default=None, init=False, repr=False)
 
     async def granted_ids(self) -> frozenset[str]:
@@ -74,7 +73,7 @@ class ToolGrantAccess:
 
         if self._granted_task is None:
             self._granted_task = asyncio.create_task(
-                sync_to_async(_accessible_tool_grant_ids, thread_sensitive=True)(self.agent)
+                sync_to_async(_accessible_tool_grant_ids, thread_sensitive=True)(self.agent, using=self.using)
             )
         return await self._granted_task
 
@@ -85,6 +84,7 @@ class ToolGrantAccess:
             self.agent,
             server_sqid,
             tool_name,
+            using=self.using,
         )
         if not allowed:
             raise PermissionDenied(f"Agent may not use tool {tool_name!r}.")
@@ -117,20 +117,23 @@ class AngeeToolset(AbstractToolset[Any]):
         granted = await self.access.granted_ids()
         server_sqid = self.server_sqid
         if server_sqid is None:
-            server_sqid = await sync_to_async(lambda: str(builtin_mcp_server().sqid), thread_sensitive=True)()
+            server_sqid = await sync_to_async(
+                lambda: str(builtin_mcp_server(using=self.access.using).sqid), thread_sensitive=True,
+            )()
         server = await sync_to_async(mcp_server, thread_sensitive=True)()
         tools: dict[str, ToolsetTool[Any]] = {}
         registered_tools = sorted(await server.list_tools(), key=lambda item: item.name)
         grant_ids = await sync_to_async(tool_grant_ids, thread_sensitive=True)(
             server_sqid,
             tuple(tool.name for tool in registered_tools),
+            using=self.access.using,
         )
         for registered in registered_tools:
             name = registered.name
             grant_id = grant_ids.get(name)
             if grant_id not in granted:
                 continue
-            _assert_in_process_compatible(registered)
+            actor_tool_read_only(registered)
             annotations = registered.annotations
             assert annotations is not None and annotations.readOnlyHint is not None
             tools[name] = _AngeeToolsetTool(
@@ -166,7 +169,7 @@ class AngeeToolset(AbstractToolset[Any]):
         try:
             if self.server_sqid is None:
                 self.server_sqid = await sync_to_async(
-                    lambda: str(builtin_mcp_server().sqid), thread_sensitive=True
+                    lambda: str(builtin_mcp_server(using=self.access.using).sqid), thread_sensitive=True
                 )()
             await self.access.check(self.server_sqid, name)
         except PermissionDenied as error:
@@ -207,6 +210,7 @@ class ToolGrantToolset(WrapperToolset[Any]):
         grant_ids = await sync_to_async(tool_grant_ids, thread_sensitive=True)(
             self.server_sqid,
             tools,
+            using=self.access.using,
         )
         return {
             name: tool
@@ -239,8 +243,8 @@ def toolsets_for_session(session: Any) -> list[Any]:
         if tool.enabled:
             selected[tool.server_id][tool.name] = bool(tool.requires_approval)
 
-    access = ToolGrantAccess(agent.principal_subject())
-    builtin = builtin_mcp_server()
+    access = ToolGrantAccess(agent.principal_subject(), using=session._state.db)
+    builtin = builtin_mcp_server(using=session._state.db)
     native: Any = AngeeToolset(session, access, str(builtin.sqid))
     native_approvals = frozenset(
         name for name, required in selected.get(builtin.pk, {}).items() if required
@@ -272,69 +276,38 @@ def toolsets_for_session(session: Any) -> list[Any]:
     return toolsets
 
 
-def _accessible_tool_grant_ids(agent: SubjectRef) -> frozenset[str]:
+def _accessible_tool_grant_ids(agent: SubjectRef, *, using: str | None = None) -> frozenset[str]:
     """Return accessible ids from the canonical MCP tool catalogue."""
 
-    return frozenset(
-        backend().accessible(
-            subject=agent,
-            action="use",
-            resource_type=TOOL_GRANT_RESOURCE_TYPE,
+    with database_context(using) if using is not None else nullcontext():
+        return frozenset(
+            backend().accessible(
+                subject=agent,
+                action="use",
+                resource_type=TOOL_GRANT_RESOURCE_TYPE,
+            )
         )
-    )
 
 
-def _tool_access_allowed(agent: SubjectRef, server_sqid: str, tool_name: str) -> bool:
+def _tool_access_allowed(
+    agent: SubjectRef, server_sqid: str, tool_name: str, *, using: str | None = None
+) -> bool:
     """Return the fresh per-call ``use`` decision for one canonical grant ref."""
 
-    return (
-        backend()
-        .check_access(
-            subject=agent,
-            action="use",
-            resource=tool_grant_ref(server_sqid, tool_name),
-        )
-        .allowed
-    )
-
-
-def _assert_in_process_compatible(tool: FastMCPTool) -> None:
-    """Assert a built-in tool declares actor posture and no request-only context.
-
-    ``Tool.run`` is invoked outside a FastMCP request, so ``Context`` injection and
-    ``get_access_token()`` cannot work here. Registration authors must instead use
-    the ambient REBAC actor. GraphQL tools derive actor posture from their root
-    operation type; other builtins declare it through ``readOnlyHint``.
-    """
-
-    annotations = tool.annotations
-    if isinstance(tool, _CompiledTool):
-        if tool.op_type not in {"query", "mutation"}:
-            raise ImproperlyConfigured(
-                f"GraphQL MCP tool {tool.name!r} has invalid operation type {tool.op_type!r}."
+    with database_context(using) if using is not None else nullcontext():
+        return (
+            backend()
+            .check_access(
+                subject=agent,
+                action="use",
+                resource=tool_grant_ref(server_sqid, tool_name, using=using),
             )
-        if annotations is None or annotations.readOnlyHint is not (tool.op_type == "query"):
-            raise ImproperlyConfigured(
-                f"GraphQL MCP tool {tool.name!r} readOnlyHint disagrees with its {tool.op_type} operation."
-            )
-    elif annotations is None or annotations.readOnlyHint is None:
-        raise ImproperlyConfigured(
-            f"Non-GraphQL built-in MCP tool {tool.name!r} must explicitly declare "
-            "ToolAnnotations.readOnlyHint."
+            .allowed
         )
-    if not isinstance(tool, FunctionTool):
-        return
-    signature = inspect.signature(tool.fn)
-    for parameter in signature.parameters.values():
-        if (
-            getattr(parameter.annotation, "__name__", "") == "Context"
-            or type(parameter.default).__name__ == "_CurrentContext"
-        ):
-            raise ImproperlyConfigured(f"Built-in MCP tool {tool.name!r} depends on request-scoped FastMCP Context.")
-    target = inspect.unwrap(tool.fn)
-    code = getattr(target, "__code__", None)
-    if code is not None and "get_access_token" in code.co_names:
-        raise ImproperlyConfigured(f"Built-in MCP tool {tool.name!r} calls request-scoped get_access_token().")
+
+
+# Historical import used by runtime acceptance tests; MCP owns the contract.
+_assert_in_process_compatible = actor_tool_read_only
 
 
 def _tool_result_value(result: ToolResult) -> Any:

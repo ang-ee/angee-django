@@ -39,6 +39,7 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.mcp.graphql import DEFAULT_QUERY_LIMIT, MAX_QUERY_LIMIT, _CompiledTool, register_graphql_tools
 from angee.mcp.resource_tools import (
     RESOURCE_READER_TOOL_TAG,
+    _resource_projections,
     check_resource_tool_specs,
     register_resource_tools,
     resource_tool_specs,
@@ -79,21 +80,27 @@ def _resource(name: str) -> DataResourceMetadata:
     """Return one resource declaration whose roots are named by ``name``."""
 
     fields = (
-        DataResourceFieldMetadata(name="id", kind="scalar", scalar="ID", readable=True),
+        DataResourceFieldMetadata(name="id", model_field_name="id", kind="scalar", scalar="ID", readable=True),
         DataResourceFieldMetadata(
             name="title",
+            model_field_name="title",
             kind="scalar",
             scalar="String",
             readable=True,
         ),
         DataResourceFieldMetadata(
             name="body",
+            model_field_name="body",
             kind="scalar",
             scalar="String",
             readable=True,
         ),
-        DataResourceFieldMetadata(name="secret", kind="scalar", scalar="String", readable=True),
-        DataResourceFieldMetadata(name="optional_secret", kind="scalar", scalar="String", readable=True),
+        DataResourceFieldMetadata(
+            name="secret", model_field_name="secret", kind="scalar", scalar="String", readable=True
+        ),
+        DataResourceFieldMetadata(
+            name="optional_secret", model_field_name="optional_secret", kind="scalar", scalar="String", readable=True
+        ),
     )
     return DataResourceMetadata(
         model=ResourceToolProbe,
@@ -185,6 +192,24 @@ def test_generated_resource_names_projections_and_order(monkeypatch: pytest.Monk
     assert all("secret" not in spec.fields for spec in specs)
     assert all(spec.tags == frozenset({RESOURCE_READER_TOOL_TAG}) for spec in specs)
 
+
+
+def test_projection_uses_finalized_model_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Wire aliases retain their backing field's summary and redaction policy."""
+
+    resource = _resource("probes")
+    aliases = {"body": "content", "secret": "credential", "optional_secret": "optional_credential"}
+    resource = replace(resource, fields=tuple(
+        replace(field, name=aliases.get(field.name, field.name)) for field in resource.fields
+    ))
+    monkeypatch.setattr(
+        "angee.mcp.resource_tools.gated_read_fields",
+        lambda model: frozenset({"secret", "optional_secret"}),
+    )
+    summary, detail, _search = _resource_projections(resource)
+
+    assert summary == ("sqid", "title", "optional_credential")
+    assert detail == ("sqid", "title", "content", "optional_credential")
 
 def test_generated_query_limits_and_search_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
     """The compiler advertises/enforces <=50 and maps search to a Hasura where expression."""

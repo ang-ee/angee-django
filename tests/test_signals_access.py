@@ -29,7 +29,7 @@ from strawberry_django.fields.types import field_type_map
 from angee.base.models.audit import AuditMixin
 from angee.base.models.timestamps import TimestampMixin
 from angee.base.serialization import json_safe
-from angee.base.signals import send_created_batch
+from angee.base.signals import ModelChange, send_created_batch
 from angee.base.testing.packages import write_addon_distribution
 from angee.graphql import access, publishing
 from angee.graphql.access import ChangeReadGate
@@ -155,7 +155,11 @@ def test_publisher_parent_views_are_explicit(
             fields=(SimpleNamespace(readable=True, model_field_name="name"),),
         )) == frozenset({"name"})
         sent = []
-        monkeypatch.setattr(publishing, "_send_change", lambda model, payload: sent.append((model, payload)))
+        monkeypatch.setattr(
+            publishing.change_published, "send_robust",
+            lambda sender, payload: sent.append((sender, payload)) or [],
+        )
+        monkeypatch.setattr(publishing, "_queue_transport", lambda model, payload: None)
         with model_tables((Parent, Child)):
             publishing.connect_publishers(Child, readable_fields=("name",), include_parents=include_parents)
             try:
@@ -263,7 +267,7 @@ def test_readable_fields_provider_resolves_only_for_observable_partial_updates(
     publishing.publish_change(group, action="create", update_fields=None, readable_fields=readable_fields)
     publishing.publish_change(group, action="update", update_fields=None, readable_fields=readable_fields)
     publishing.publish_change(group, action="delete", update_fields=None, readable_fields=readable_fields)
-    publishing._on_save(Group, group, raw=True, update_fields=("name",), readable_fields=readable_fields)
+    post_save.send(sender=Group, instance=group, raw=True, created=False, update_fields=("name",))
     with publishing.mute_changes():
         publishing.publish_change(
             group,
@@ -340,15 +344,15 @@ def test_commit_broadcast_failure_is_logged_without_escaping(
     assert "Transport unavailable" in caplog.text
 
 
-def test_change_signal_receiver_sees_broadcast_payload(
+def test_change_signal_observation_and_wire_projection_share_occurrence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A dispatch-uid receiver sees the same payload the GraphQL broadcast emits."""
+    """Local native observations and transport projections retain one occurrence."""
 
-    payloads: list[ChangePayload] = []
+    payloads: list[ModelChange] = []
     broadcasts: list[tuple[type[models.Model], dict[str, Any]]] = []
 
-    def receiver(sender: type[models.Model], payload: ChangePayload, **kwargs: object) -> None:
+    def receiver(sender: type[models.Model], payload: ModelChange, **kwargs: object) -> None:
         del kwargs
         assert sender is Group
         payloads.append(payload)
@@ -370,7 +374,13 @@ def test_change_signal_receiver_sees_broadcast_payload(
         publishing.change_published.disconnect(dispatch_uid="tests.change_signal_receiver_sees_broadcast_payload")
 
     assert len(payloads) == 1
-    assert broadcasts == [(Group, payloads[0].as_message())]
+    assert len(broadcasts) == 1
+    assert broadcasts[0][0] is Group
+    wire = broadcasts[0][1]
+    assert wire["occurrence_id"] == payloads[0].occurrence_id
+    assert wire["changed_fields"] == list(payloads[0].changed_fields)
+    assert wire["changed_values"] == {"name": "reviewers"}
+    assert payloads[0].changed_values == {"name": "reviewers"}
 
 
 def test_publish_change_keeps_silent_rows_local(
@@ -389,10 +399,10 @@ def test_publish_change_keeps_silent_rows_local(
         def broadcasts_changes(self) -> bool:
             return False
 
-    payloads: list[ChangePayload] = []
+    payloads: list[ModelChange] = []
     broadcasts: list[dict[str, Any]] = []
 
-    def receiver(sender: type[models.Model], payload: ChangePayload, **kwargs: object) -> None:
+    def receiver(sender: type[models.Model], payload: ModelChange, **kwargs: object) -> None:
         del sender, kwargs
         payloads.append(payload)
 
@@ -412,7 +422,7 @@ def test_publish_change_keeps_silent_rows_local(
 
     assert len(payloads) == 1
     assert payloads[0].instance == row
-    assert not payloads[0].broadcasts
+    assert payloads[0].broadcasts  # Requested by the owner; the GraphQL policy vetoes transport.
     assert broadcasts == []
 
 
@@ -421,10 +431,10 @@ def test_publish_change_marks_sync_ingestion_and_still_broadcasts(
 ) -> None:
     """Rows saved inside sync ingestion still broadcast with an internal flag."""
 
-    payloads: list[ChangePayload] = []
+    payloads: list[ModelChange] = []
     broadcasts: list[dict[str, Any]] = []
 
-    def receiver(sender: type[models.Model], payload: ChangePayload, **kwargs: object) -> None:
+    def receiver(sender: type[models.Model], payload: ModelChange, **kwargs: object) -> None:
         del sender, kwargs
         payloads.append(payload)
 
@@ -453,12 +463,12 @@ def test_publish_change_robust_receivers_log_and_continue(
 
     calls: list[str] = []
 
-    def failing_receiver(sender: type[models.Model], payload: ChangePayload, **kwargs: object) -> None:
+    def failing_receiver(sender: type[models.Model], payload: ModelChange, **kwargs: object) -> None:
         del sender, payload, kwargs
         calls.append("failing")
         raise RuntimeError("receiver exploded")
 
-    def later_receiver(sender: type[models.Model], payload: ChangePayload, **kwargs: object) -> None:
+    def later_receiver(sender: type[models.Model], payload: ModelChange, **kwargs: object) -> None:
         del sender, payload, kwargs
         calls.append("later")
 
@@ -466,7 +476,7 @@ def test_publish_change_robust_receivers_log_and_continue(
     publishing.change_published.connect(failing_receiver, dispatch_uid="tests.publish_change.failing")
     publishing.change_published.connect(later_receiver, dispatch_uid="tests.publish_change.later")
     try:
-        with caplog.at_level(logging.ERROR, logger="angee.graphql.publishing"):
+        with caplog.at_level(logging.ERROR, logger="angee.base.signals"):
             publishing.publish_change(Group(id=10, name="ops"), action="update", update_fields=("name",))
     finally:
         publishing.change_published.disconnect(dispatch_uid="tests.publish_change.failing")
@@ -550,9 +560,10 @@ def test_prebuilt_publishers_do_not_build_schemas_on_first_partial_save(
         ]
     )
 
-    payloads: list[ChangePayload] = []
+    payloads: list[ModelChange] = []
+    broadcasts: list[dict[str, Any]] = []
 
-    def receiver(sender: type[models.Model], payload: ChangePayload, **kwargs: object) -> None:
+    def receiver(sender: type[models.Model], payload: ModelChange, **kwargs: object) -> None:
         del sender, kwargs
         payloads.append(payload)
 
@@ -560,7 +571,7 @@ def test_prebuilt_publishers_do_not_build_schemas_on_first_partial_save(
         monkeypatch.setattr(publishing, "_publisher_model_labels", publishing._publisher_model_labels)
         projection = schemas.render_publishers()
         monkeypatch.setattr(schemas, "build", lambda *args: pytest.fail("write rebuilt schema"))
-        monkeypatch.setattr(publishing, "_broadcast", lambda model, event: None)
+        monkeypatch.setattr(publishing, "_broadcast", lambda model, event: broadcasts.append(event))
         monkeypatch.setattr(publishing.transaction, "on_commit", lambda callback, **kwargs: callback())
         publishing.disconnect_publishers(ReadyPublished)
         publishing.change_published.connect(
@@ -583,7 +594,8 @@ def test_prebuilt_publishers_do_not_build_schemas_on_first_partial_save(
         assert [payload.model for payload in payloads] == ["auth.ReadyPublished"] * 2
         assert [payload.action for payload in payloads] == ["create", "update"]
         assert payloads[0].changed_values is None
-        assert payloads[1].changed_values == {"code": "second", "name": "updated"}
+        assert payloads[1].changed_values == {"code": "second", "name": "updated", "secret": "still hidden"}
+        assert broadcasts[1]["changed_values"] == {"code": "second", "name": "updated"}
         assert tuple(sorted(schemas._builds)) == ("internal", "public")
 
 

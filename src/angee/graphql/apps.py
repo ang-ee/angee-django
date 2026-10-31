@@ -47,8 +47,9 @@ class GraphQLConfig(AppConfig):
 
         from angee.graphql import field_types  # noqa: F401
         from angee.graphql.checks import check_graphql_schemas
-        from angee.graphql.publishing import connect_change_publishers
+        from angee.graphql.publishing import connect_change_adapter, connect_change_publishers
 
+        connect_change_adapter()
         checks.register(check_settings, checks.Tags.models)
 
         checks.register(check_graphql_schemas)

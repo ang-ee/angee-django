@@ -272,12 +272,16 @@ class AngeeQuerySet(
         if around is not None and before_cursor is None and after_cursor is None:
             # Bound the first window around an already authorized record. The
             # domain resolves a message/date; this owner only handles tuple order.
-            newer = list(self.filter(order.after(order.position(around))).order_by(order.field, "pk")[: limit // 2])
+            newer = list(
+                self.filter(order.after(order.position(around))).order_by(*order.ordering).reverse()[: limit // 2]
+            )
             upper = order.position(newer[-1] if newer else around)
             window = window.exclude(order.after(upper))
         ascending = after_cursor is not None
-        ordering = (order.field, "pk") if ascending else (f"-{order.field}", "-pk")
-        selected = list(window.order_by(*ordering)[: limit + 1])
+        window = window.order_by(*order.ordering)
+        if ascending:
+            window = window.reverse()
+        selected = list(window[: limit + 1])
         has_more = len(selected) > limit
         rows = selected[:limit]
         if ascending:
@@ -298,7 +302,7 @@ class AngeeQuerySet(
         # Re-fetch the bounded identities through the original queryset so callers
         # retain a composable queryset instead of inheriting this method's probe list.
         return KeysetPage(
-            rows=self.filter(pk__in=[row.pk for row in rows]).order_by(f"-{order.field}", "-pk"),
+            rows=self.filter(pk__in=[row.pk for row in rows]).order_by(*order.ordering),
             count=count,
             older_cursor=order.sign(rows[-1], signer),
             newer_cursor=order.sign(rows[0], signer),

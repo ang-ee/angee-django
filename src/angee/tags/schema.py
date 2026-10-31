@@ -31,7 +31,12 @@ from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
 
 from angee.base.refs import canonical_link_path
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
+from angee.graphql.data.hasura import (
+    AngeeHasuraWriteBackend,
+    declared_hasura_resource_fields,
+    declared_hasura_write_relation_fields,
+    hasura_model_resource,
+)
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.tags.models import Tag as TagModel
@@ -175,47 +180,28 @@ def tags_input_extensions(resource: Any) -> list[type]:
     return donors
 
 
-_TAG_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(Tag, "hasura_readable_fields")
-_TAG_EXTENSION_INSERT_FIELDS = declared_hasura_resource_fields(Tag, "hasura_insertable_fields")
-_TAG_EXTENSION_UPDATE_FIELDS = declared_hasura_resource_fields(Tag, "hasura_updatable_fields")
-_TAG_EXTENSION_WRITE_FIELDS = tuple(dict.fromkeys((*_TAG_EXTENSION_INSERT_FIELDS, *_TAG_EXTENSION_UPDATE_FIELDS)))
-_TAG_EXTENSION_PUBLIC_ID_FIELDS = tuple(
-    name for name in _TAG_EXTENSION_WRITE_FIELDS if Tag._meta.get_field(name).is_relation
-)
-
-_TAG_FILTERABLE_FIELDS = (
-    "id",
-    "name",
-    "attention",
-    "is_archived",
-    *_TAG_EXTENSION_READ_FIELDS,
-)
-_TAG_GROUPABLE_FIELDS = (
-    "attention",
-    "is_archived",
-    *_TAG_EXTENSION_READ_FIELDS,
-)
-_TAG_BASE_WRITABLE_FIELDS = (
-    "name",
-    "color",
-    "attention",
-    "is_archived",
-)
+# Historical tag donors used readable fields as filter/group contributions.
+# Keep that Tag-specific extension contract alongside explicit query declarations.
+_TAG_READABLE_CONTRIBUTIONS = declared_hasura_resource_fields(Tag, "hasura_readable_fields")
 
 _TAG_RESOURCE = hasura_model_resource(
     TagType,
     model=Tag,
     name="tags",
     get_queryset=lambda info: Tag.objects.canonical(),
-    filterable=list(_TAG_FILTERABLE_FIELDS),
-    sortable=["name", "created_at", "updated_at"],
-    aggregatable=["id"],
-    groupable=list(_TAG_GROUPABLE_FIELDS),
-    insertable=[*_TAG_BASE_WRITABLE_FIELDS, *_TAG_EXTENSION_INSERT_FIELDS],
-    updatable=[*_TAG_BASE_WRITABLE_FIELDS, *_TAG_EXTENSION_UPDATE_FIELDS],
+    filterable=tuple(dict.fromkeys((
+        *declared_hasura_resource_fields(Tag, "hasura_filterable_fields"), *_TAG_READABLE_CONTRIBUTIONS,
+    ))),
+    sortable=...,
+    aggregatable=...,
+    groupable=tuple(dict.fromkeys((
+        *declared_hasura_resource_fields(Tag, "hasura_groupable_fields"), *_TAG_READABLE_CONTRIBUTIONS,
+    ))),
+    insertable=...,
+    updatable=...,
     write_backend=AngeeHasuraWriteBackend(
         Tag,
-        public_id_fields=_TAG_EXTENSION_PUBLIC_ID_FIELDS,
+        public_id_fields=declared_hasura_write_relation_fields(Tag),
     ),
     id_column="sqid",
 )

@@ -85,3 +85,18 @@ def test_user_factory_preserves_explicit_manager_database(factory: str) -> None:
     with pytest.raises(ConnectionDoesNotExist):
         getattr(users, factory)("explicit-database", "explicit-db@example.com", **options)
     assert not User.system_queryset().filter(username="explicit-database").exists()
+
+
+@pytest.mark.django_db
+def test_seed_factory_owns_passwordless_name_collisions() -> None:
+    """Protocols provide a seed; IAM owns sanitation, suffixes and non-login flags."""
+
+    first = User.objects.create_user_from_seed("a/b", fallback="fallback", first_name="First")
+    second = User.objects.create_user_from_seed("a/b", fallback="fallback", first_name="Second")
+    assert (first.username, second.username) == ("a-b", "a-b-1")
+    assert first.email == second.email == ""
+    assert not first.has_usable_password() and not second.has_usable_password()
+    assert not first.is_staff and not first.is_superuser
+    with pytest.raises(ConnectionDoesNotExist):
+        User.objects.db_manager("missing-seed-database").create_user_from_seed("do-not-create", fallback="fallback")
+    assert not User._base_manager.filter(username="do-not-create").exists()

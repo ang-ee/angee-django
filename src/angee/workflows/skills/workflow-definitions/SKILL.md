@@ -24,7 +24,7 @@ The reference example is `examples/src/example/notes` (steps, rows, trigger, tes
 | `src/angee/workflows/steps.py` | `Step` (:226), `StepMode` (:40), `RetryPolicy` (:48), settlements `Done`/`Wait`/`NextPage`/`Fail`/`Ask` (:84,:113,:147,:160,:185), `resolve_step` (:358) | module docstring |
 | `src/angee/workflows/context.py` | `StepContext` (:24): `subject_for_update` :73, `load` :87, `watch` :116, `ask` :129, `record` :162, `start_run` :178 | docstrings |
 | `src/angee/workflows/decision_steps.py` | `apply_proposals` (:19), `DecisionStep` (:73), built-in `AskDecision` (:110) | docstrings |
-| `src/angee/workflows/definition.py`, `models.py`, `managers.py` | `Definition` (:274), `WorkflowExtension` (:147); `Workflow` (:145), `WorkflowVersion` (:220), `Trigger` (:872); `WorkflowManager.install_definition` (:363), `save_draft` (:277), `publish` (:309), `WorkflowRunManager.start` (:584) | [README](../../README.md) |
+| `src/angee/workflows/definition.py`, `models/`, `querysets.py`, `managers.py` | `Definition` (:274), `WorkflowExtension` (:147); `Workflow` (:145), `WorkflowVersion` (:220), `Trigger` (:872); `WorkflowManager.install_definition` (:363), `save_draft` (:277), `publish` (:309), `WorkflowRunManager.start` (:584) | [README](../../README.md) |
 | `src/angee/workflows/resources.py` | `WorkflowDefinitionResource` (:68), `TriggerResource` (:121), `WorkflowExtensionResourceKind` (:21) | docstrings |
 | `src/angee/workflows/triggers.py`, `subjects.py` | `TriggerSource` (:187), `RecordChangedOptIn` (:178), `TriggerGrantTarget` (:72), `RecordChanged` (:389); `RunSubject` (:10) | docstrings |
 | `src/angee/workflows/testing/` | `register_steps` :53, `load_workflow` :70, `publish_draft` :97, `start_run` :110, `decide` :117, `run_until` :124, `RunFactory` :147 (`drivers.py`); fixtures `register_step`, `execution`, `run_factory` (`fixtures.py:37,27,48`) | `testing/__init__.py` docstring |
@@ -132,8 +132,14 @@ The reference example is `examples/src/example/notes` (steps, rows, trigger, tes
    class Note(RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel):
        @classmethod
        def record_changed_grant_targets(cls, trigger: Any) -> tuple[TriggerGrantTarget, ...]:
-           return (TriggerGrantTarget(ObjectRef("notes/role", "trigger_editor"), "member", "effective_member",
-                                      ObjectRef("angee/role", "admin")),)
+           return (
+               TriggerGrantTarget(
+                   ObjectRef("notes/role", "trigger_editor"),
+                   "member",
+                   "effective_member",
+                   ObjectRef("angee/role", "admin"),
+               ),
+           )
    ```
 
    The trigger row (`110_workflows.trigger.yaml`) names `workflow: example.notes.note_publish`, `source: record_changed`,
@@ -196,6 +202,6 @@ and a decision test answers through `decide` and resumes the step.
 
 <!--
 Docs: docs/backend/guidelines.md #workflow-execution, #workflow-contracts, #rebac; docs/glossary.md #backend, #workflows, #decisions; docs/checks.md #choose-the-working-directory, #python-and-composition-contracts, #source-addon-test-models, #browser-verification, #what-ci-actually-runs; docs/composer.md #autoconfig.
-Code: src/angee/workflows/{README.md, steps.py:1-376, models.py:145-260,872-895, managers.py:363-405, resources.py, autoconfig.py, pyproject.toml, apps.py, context.py:20-110, decision_steps.py:1-100, subjects.py, triggers.py:175-200,429-436, definition.py:147,181,274, maps.py:13-52, awaits.py:15-61, testing/__init__.py, testing/drivers.py, testing/fixtures.py, testing/models.py:1-30}; src/angee/decisions/README.md; examples/src/example/notes/{pyproject.toml, autoconfig.py, steps.py, models.py:22-45, resources/demo/100_workflows.workflow.yaml, 110_workflows.trigger.yaml, tests/test_workflow_steps.py:1-70}; tests/workflow_steps.py:1-80; tests/test_workflows_testing.py:1-60; tests/test_composed_note_workflow.py; tests/settings.py:56-101.
+Code: src/angee/workflows/{README.md, steps.py:1-376, models/, querysets.py, managers.py:363-405, resources.py, autoconfig.py, pyproject.toml, apps.py, context.py:20-110, decision_steps.py:1-100, subjects.py, triggers.py:175-200,429-436, definition.py:147,181,274, maps.py:13-52, awaits.py:15-61, testing/__init__.py, testing/drivers.py, testing/fixtures.py, testing/models.py:1-30}; src/angee/decisions/README.md; examples/src/example/notes/{pyproject.toml, autoconfig.py, steps.py, models.py:22-45, resources/demo/100_workflows.workflow.yaml, 110_workflows.trigger.yaml, tests/test_workflow_steps.py:1-70}; tests/workflow_steps.py:1-80; tests/test_workflows_testing.py:1-60; tests/test_composed_note_workflow.py; tests/settings.py:56-101.
 Mismatches: none found for the cited surfaces; no doc lists the YAML node keys (step/next/input/config/body/results/when) — derived from the notes rows and Definition.
 -->

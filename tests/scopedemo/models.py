@@ -14,7 +14,7 @@ from typing import Any, cast
 
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
-from rebac import app_settings, current_actor, is_anonymous_actor, to_subject_ref
+from rebac import RebacMixin, app_settings, current_actor, is_anonymous_actor, to_subject_ref
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 
@@ -219,3 +219,10 @@ class SharedDoc(AngeeDataModel):
         abstract = False
         app_label = "scopedemo"
         rebac_resource_type = "scopedemo/shared_doc"
+
+
+class NativeAttachmentTarget(RebacMixin):
+    """A native library row for generic attachment-lock coverage."""
+
+    class Meta:
+        rebac_resource_type = "scopedemo/native_attachment_target"

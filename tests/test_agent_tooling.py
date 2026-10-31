@@ -45,7 +45,6 @@ from rebac.backends import backend
 from rebac.models import active_relationship_model
 from rebac.relationships import write_relationships
 
-from angee.agents import grants as grants_module
 from angee.agents import provisioning
 from angee.agents.grants import (
     TOOL_GRANT_RESOURCE_TYPE,
@@ -96,6 +95,7 @@ def _registered_server(*functions: tuple[Any, bool]) -> FastMCP:
             Tool.from_function(
                 function,
                 annotations=ToolAnnotations(readOnlyHint=read_only),
+                meta={"angee": {"execution_context": "actor"}},
             )
         )
     return server
@@ -112,7 +112,8 @@ def test_grant_advertisement_shares_one_accessible_lookup(monkeypatch: pytest.Mo
 
     calls: list[SubjectRef] = []
 
-    def accessible(agent: SubjectRef) -> frozenset[str]:
+    def accessible(agent: SubjectRef, *, using: str | None = None) -> frozenset[str]:
+        assert using is None
         calls.append(agent)
         return frozenset({"mcp_one.read_sessions"})
 
@@ -425,13 +426,15 @@ def test_builtin_catalogue_sync_is_deterministic_and_seeds_reader_bundle(
         Tool.from_function(
             query_records,
             annotations=ToolAnnotations(readOnlyHint=True),
+            meta={"angee": {"execution_context": "actor"}},
             tags={RESOURCE_READER_TOOL_TAG},
         )
     )
     registry.add_tool(
-        Tool.from_function(write_records, annotations=ToolAnnotations(readOnlyHint=False))
+        Tool.from_function(write_records, annotations=ToolAnnotations(readOnlyHint=False),
+                           meta={"angee": {"execution_context": "actor"}})
     )
-    monkeypatch.setattr(grants_module, "mcp_server", lambda: registry)
+    monkeypatch.setattr("angee.agents.managers.mcp_server", lambda: registry)
 
     assert sync_builtin_tool_catalogue() == 2
     assert sync_builtin_tool_catalogue() == 2
@@ -497,7 +500,7 @@ def test_production_reader_grant_path_advertises_and_executes_generated_tool(
     monkeypatch.setattr(GraphQLSchemas, "from_discovery", classmethod(lambda cls: schemas))
     registry = FastMCP(name="production-reader-path")
     register_resource_tools(registry)
-    monkeypatch.setattr(grants_module, "mcp_server", lambda: registry)
+    monkeypatch.setattr("angee.agents.managers.mcp_server", lambda: registry)
     monkeypatch.setattr(toolsets_module, "mcp_server", lambda: registry)
 
     async def execute_probe(
@@ -529,7 +532,7 @@ def test_production_reader_grant_path_advertises_and_executes_generated_tool(
         ).get_tools
     )(_native_context())
 
-    result = provisioning.provision_agent(agent.sqid)
+    result = provisioning.provision_agent(agent)
     assert result.ok is True
     native = AngeeToolset(
         session,
@@ -622,6 +625,7 @@ def test_native_tool_error_mapping_ceiling_and_context_constraint(
     request_tool = Tool.from_function(
         request_bound,
         annotations=ToolAnnotations(readOnlyHint=True),
+        meta={"angee": {"execution_context": "request"}},
     )
     with pytest.raises(Exception, match="request-scoped FastMCP Context"):
         _assert_in_process_compatible(request_tool)
@@ -658,6 +662,7 @@ def test_graphql_read_hint_cannot_override_structural_mutation_posture(
         description="A mutation carrying an untrusted read hint.",
         parameters={"type": "object", "properties": {}},
         annotations=ToolAnnotations(readOnlyHint=True),
+            meta={"angee": {"execution_context": "actor"}},
         schema_name="console",
         op_type="mutation",
         document="mutation { ignored }",

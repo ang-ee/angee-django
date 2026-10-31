@@ -49,7 +49,10 @@ def test_composition_context_reads_native_composed_and_ordinary_registries(setti
             "    assert context.get_model_class_by_fullname('angee.work.models.Queue') is queue",
             "    assert context.static_names[queue] == 'angee.work.models.Queue'",
             "    assert context.parents['angee.work.models.Queue'] == 'angee.spaces.models.Group'",
-            "    assert context.parents['angee.integrate.models.Bridge'] == 'angee.integrate.models.Integration'",
+            "    from angee.integrate.models import Bridge, Integration",
+            "    bridge = f'{Bridge.__module__}.{Bridge.__name__}'",
+            "    integration = f'{Integration.__module__}.{Integration.__name__}'",
+            "    assert context.parents[bridge] == integration",
         ])], cwd=root, env=env, capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -262,7 +265,7 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         assert f"invalid.py:{line}: error:" in negative.stdout, negative.stdout
 
     (tmp_path / "disabled_storage_settings.py").write_text(
-        "from tests.typing_app.settings import *\nANGEE_CHANGESET_MODEL = ''\n"
+        "from tests.typing_app.settings import *\nPROVENANCE_CHANGESET_MODEL = ''\n"
     )
     disabled_config = tmp_path / "disabled.ini"
     disabled_config.write_text(config.read_text().replace("tests.typing_app.settings", "disabled_storage_settings"))

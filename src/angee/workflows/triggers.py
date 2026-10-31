@@ -4,56 +4,43 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Hashable
-from contextvars import Context
 from dataclasses import dataclass, field, replace
 from inspect import getattr_static
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.apps import apps
-from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, PermissionDenied, ValidationError
-from django.db import DatabaseError, transaction
-from django.db.models import F, Model, Q
-from django.db.models.functions import Now
+from django.db import transaction
+from django.db.models import Model
 from django.db.models.signals import post_save
 from django.utils.text import capfirst
 from rebac import (
     ObjectRef,
-    RelationshipTuple,
-    actor_context,
+    database_context,
     generic_target,
-    resolve_subjects,
     system_context,
-    to_object_ref,
     to_subject_ref,
-    user_subject_type,
 )
-from rebac.actors import is_sudo
 from rebac.backends import backend
-from rebac.relationships import delete_relationship, write_relationships
 from rebac.resources import model_for_resource_type
 from rebac.schema import FieldBinding
 
-from angee.base.exceptions import exception_text
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.text import ModelLabelField
 from angee.base.implementations import ImplBase, resolve_all_impl_classes
-from angee.base.managers import AngeeManager
 from angee.base.models.base import record_display_label
-from angee.base.models.identity import public_id_of
 from angee.base.permissions import effective_rebac_definition
-from angee.base.querysets import AngeeQuerySet, by_key, row_lock_paths
+from angee.base.querysets import by_key, row_lock_paths
 from angee.base.signals import connect_for_models
-from angee.iam.identity import group_subject_type, user_label
-from angee.iam.service_users import sync_service_user
+from angee.iam.identity import user_label
 
 if TYPE_CHECKING:
-    from angee.workflows.models import Trigger, TriggerEvent
+    pass
+
+from angee.workflows.querysets import TriggerEventQuerySet as TriggerEventQuerySet
 
 logger = logging.getLogger(__name__)
-TRIGGER_DRAIN_LIMIT = 100
-"""One drain examines at most 100 ledger candidates, each in its own transaction."""
 
 
 class PublisherAuthorityDenied(PermissionDenied):
@@ -92,7 +79,8 @@ class TriggerGrantTarget:
             definition = effective_rebac_definition(model)
             relation = (
                 next((item for item in definition.relations if item.name == self.relation), None)
-                if definition else None
+                if definition
+                else None
             )
             if (
                 relation is not None
@@ -130,10 +118,14 @@ class TriggerGrantTarget:
 
     def permits(self, actor: Any) -> bool:
         """Check the source-declared delegation permission at its owning resource."""
-        return bool(self.grant_permission and backend().has_access(
-            subject=to_subject_ref(actor), action=self.grant_permission,
-            resource=self.grant_resource or self.resource,
-        ))
+        return bool(
+            self.grant_permission
+            and backend().has_access(
+                subject=to_subject_ref(actor),
+                action=self.grant_permission,
+                resource=self.grant_resource or self.resource,
+            )
+        )
 
     def require_grant_access(self, actor: Any) -> None:
         """Use the target owner's REBAC permission before minting a tuple."""
@@ -146,8 +138,11 @@ class TriggerGrantTarget:
         """Refuse a published graph when its author cannot delegate this grant now."""
         if self.permits(publisher):
             return
-        detail = ("grant provenance is missing; enable the trigger again"
-                  if not self.grant_permission else "the publisher cannot delegate it")
+        detail = (
+            "grant provenance is missing; enable the trigger again"
+            if not self.grant_permission
+            else "the publisher cannot delegate it"
+        )
         raise PublisherAuthorityDenied(
             f"{version} published by {user_label(publisher)} cannot run as the workflow principal: "
             f"{self.relation} on {self.target_label(actor=publisher)} is unavailable because {detail}."
@@ -168,10 +163,12 @@ class TriggerGrantTarget:
     def from_stored(cls, value: dict[str, str]) -> TriggerGrantTarget:
         """Restore the exact tuple target that an enabled trigger contributed."""
         return cls(
-            ObjectRef(value["resource_type"], value["resource_id"]), value["relation"],
+            ObjectRef(value["resource_type"], value["resource_id"]),
+            value["relation"],
             value.get("grant_permission", ""),
             ObjectRef(value["grant_resource_type"], value["grant_resource_id"])
-            if "grant_resource_type" in value and "grant_resource_id" in value else None,
+            if "grant_resource_type" in value and "grant_resource_id" in value
+            else None,
         )
 
 
@@ -192,6 +189,7 @@ class TriggerSource(ImplBase):
     A registered subclass of a registered source refines it under another key
     and shares its native event: the base alone connects and dispatches.
     """
+
     registry_setting = "ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES"
 
     model_label: ClassVar[str] = ""
@@ -290,7 +288,11 @@ class TriggerSource(ImplBase):
 
     @classmethod
     def dispatch(
-        cls, model: Any, record: Any, *, created_batch: tuple[Any, ...] | None = None,
+        cls,
+        model: Any,
+        record: Any,
+        *,
+        created_batch: tuple[Any, ...] | None = None,
     ) -> None:
         """Capture one native save or a completed creation batch under target locks.
 
@@ -304,10 +306,15 @@ class TriggerSource(ImplBase):
             records = created_batch
         else:
             records = (record,)
+        using = record._state.db
         try:
-            with transaction.atomic(), system_context(reason="workflows.source_dispatch"):
+            with (
+                database_context(using),
+                transaction.atomic(using=using),
+                system_context(reason="workflows.source_dispatch"),
+            ):
                 cls.validate_model(model)
-                targets = [(item, generic_target(item)) for item in records]
+                targets = [(item, generic_target(item, using=using)) for item in records]
                 groups: dict[type[Model], set[Hashable]] = {}
                 for _item, target in targets:
                     target_model = target.content_type.model_class()
@@ -315,21 +322,21 @@ class TriggerSource(ImplBase):
                     groups.setdefault(target_model, set()).add(target.object_id)
                 present: set[tuple[type[Model], Hashable]] = set()
                 for target_model, keys in sorted(groups.items(), key=lambda item: item[0]._meta.label_lower):
-                    rows = target_model._default_manager.order_by("pk").select_for_update(
-                        no_key=True, of=row_lock_paths(target_model),
+                    rows = target_model._default_manager.db_manager(using).order_by("pk").select_for_update(
+                        no_key=True,
+                        of=row_lock_paths(target_model),
                     )
                     for locked in by_key(rows, sorted(keys)):
                         # Native model selection keeps a column from every MTI
                         # ancestor, as Django requires for each requested OF lock.
                         present.update((target_model, row.pk) for row in locked)
                 records = tuple(
-                    item for item, target in targets
-                    if (target.content_type.model_class(), target.object_id) in present
+                    item for item, target in targets if (target.content_type.model_class(), target.object_id) in present
                 )
-                events = apps.get_model("workflows", "TriggerEvent").objects
+                events = apps.get_model("workflows", "TriggerEvent").objects.db_manager(using)
                 for source in cls.registered():
                     events.record_changes(model, records, source=source.key)
-                apps.get_model("workflows", "StepWatch").objects.record_changes(records)
+                apps.get_model("workflows", "StepWatch").objects.db_manager(using).record_changes(records)
         except Exception:
             logger.exception("Workflow source capture failed.")
 
@@ -418,8 +425,13 @@ class RecordChanged(TriggerSource):
 
     @classmethod
     def changed(
-        cls, sender: Any, *, instance: Any, raw: bool = False,
-        created_batch: tuple[Any, ...] | None = None, **kwargs: Any,
+        cls,
+        sender: Any,
+        *,
+        instance: Any,
+        raw: bool = False,
+        created_batch: tuple[Any, ...] | None = None,
+        **kwargs: Any,
     ) -> None:
         """Ignore fixture loading and delegate all durable capture to its owner."""
         if not raw:
@@ -433,338 +445,9 @@ def check_record_changed_models(**kwargs: Any) -> list[checks.CheckMessage]:
     return [
         checks.Error(
             f"{model._meta.label} must implement record_changed_grant_targets().",
-            obj=model, id="workflows.E001",
+            obj=model,
+            id="workflows.E001",
         )
         for model in apps.get_models()
-        if issubclass(model, RecordChangedOptIn)
-        and getattr_static(model, "record_changed_grant_targets") is inherited
+        if issubclass(model, RecordChangedOptIn) and getattr_static(model, "record_changed_grant_targets") is inherited
     ]
-
-
-class TriggerEventQuerySet[T: TriggerEvent](AngeeQuerySet[T]):
-    """Pending admission is a re-armed, never-admitted ledger fact."""
-
-    def pending(self) -> Any:
-        """A later save retries a rejection; admission survives run pruning."""
-        return self.filter(Q(evaluated_at__isnull=True) | Q(changed_at__gt=F("evaluated_at")), admitted_at=None)
-
-
-_TriggerEventManagerBase = AngeeManager.from_queryset(TriggerEventQuerySet)
-
-
-class TriggerEventManager[T: TriggerEvent](_TriggerEventManagerBase[T]):
-    """Capture without compromising the transaction that changed the record."""
-
-    def record_change(self, model: Any, record: Any, *, source: str = "record_changed") -> None:
-        """Capture one source record through the same batch-aware owner."""
-        self.record_changes(model, (record,), source=source)
-
-    def record_changes(self, model: Any, records: tuple[Any, ...], *, source: str = "record_changed") -> None:
-        """Resolve a batch's source once; retain scoped, failure-isolated upserts."""
-        records = tuple(record for record in records if record.pk is not None)
-        if not records:
-            return
-        try:
-            triggers = apps.get_model("workflows", "Trigger")
-            field = triggers._meta.get_field("source")
-            if not isinstance(field, ImplClassField):
-                raise ImproperlyConfigured("Workflow trigger sources require an ImplClassField.")
-            implementation = cast(ImplClassField[TriggerSource], field).resolve_class(source)
-            try:
-                implementation.validate_model(model)
-            except ValidationError:
-                return
-            queryset = triggers.system_queryset().filter(enabled=True, source=source)
-            if not implementation.model_label:
-                queryset = queryset.filter(model_label=model._meta.label)
-            if len(records) > 1:
-                with system_context(reason="workflows.capture"):
-                    if not queryset.exists():
-                        return
-            content_type = ContentType.objects.get_for_model(model)
-        except Exception:
-            logger.exception("Workflow trigger capture failed.")
-            return
-        for record in records:
-            try:
-                with transaction.atomic(), system_context(reason="workflows.capture"):
-                    for trigger in implementation.matching_triggers(queryset, record).order_by("pk"):
-                        self.model.system_queryset().update_or_create(
-                            trigger=trigger, record_content_type=content_type, record_object_id=record.pk,
-                            defaults={"changed_at": Now()},
-                        )
-            except Exception:
-                logger.exception("Workflow trigger capture failed.")
-
-
-class TriggerQuerySet[T: Trigger](AngeeQuerySet[T]):
-    """Keep authored writes at the validating model; engine updates use explicit scope."""
-
-    def _check_bulk_write(self) -> None:
-        if not self.is_sudo():
-            raise ValidationError("Edit trigger configuration through model save().")
-
-    def update(self, **kwargs: Any) -> int:
-        """Reserve bulk transitions for the engine's explicitly elevated queryset."""
-        self._check_bulk_write()
-        return super().update(**kwargs)
-
-    def bulk_create(self, *args: Any, **kwargs: Any) -> Any:
-        """Keep signal-free insertion from bypassing server-owned activation."""
-        self._check_bulk_write()
-        return super().bulk_create(*args, **kwargs)
-
-
-_TriggerManagerBase = AngeeManager.from_queryset(TriggerQuerySet)
-
-
-class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
-    """Enablement and admission serialize on the trigger before its ledger row."""
-
-    def lock_grants(self, workflow_id: Any, *, skip_locked: bool = False) -> Any:
-        """Serialize grants shared by triggers of one workflow."""
-        workflow = apps.get_model("workflows", "Workflow")
-        rows = workflow.system_queryset().filter(pk=workflow_id).lock_if_supported(
-            no_key=True, skip_locked=skip_locked,
-        )
-        return rows.first() if skip_locked else rows.get()
-
-    def reconcile_grants(self, trigger: Any, targets: tuple[TriggerGrantTarget, ...]) -> None:
-        """Reconcile this trigger's contributed tuples without dropping shared grants."""
-        old = {TriggerGrantTarget.from_stored(value) for value in trigger.granted_targets}
-        new = set(targets)
-        workflow = apps.get_model("workflows", "Workflow").system_queryset().get(pk=trigger.workflow_id)
-        user = sync_service_user(workflow, prefix="workflow")
-        subject = to_subject_ref(user)
-        retained = {
-            TriggerGrantTarget.from_stored(value)
-            for values in self.model.system_queryset().filter(
-                workflow_id=trigger.workflow_id, enabled=True,
-            ).exclude(pk=trigger.pk).values_list("granted_targets", flat=True)
-            for value in values
-        }
-        def order(item: TriggerGrantTarget) -> tuple[str, str, str]:
-            return item.resource.resource_type, str(item.resource.resource_id), item.relation
-
-        with system_context(reason="workflows.trigger_grants"):
-            if new:
-                write_relationships([
-                    RelationshipTuple(resource=target.resource, relation=target.relation, subject=subject)
-                    for target in sorted(new, key=order)
-                ])
-            for target in sorted(old - new - retained, key=order):
-                delete_relationship(RelationshipTuple(
-                    resource=target.resource, relation=target.relation, subject=subject,
-                ))
-            stored = [target.stored() for target in sorted(new, key=order)]
-            self.model.system_queryset().filter(pk=trigger.pk).update(granted_targets=stored)
-            trigger.granted_targets = stored
-
-    def _enable_targets(self, trigger: Any, actor: Any) -> tuple[TriggerGrantTarget, ...]:
-        """Use one permission and source check for preview and enablement."""
-        trigger.workflow.require_access("write", actor)
-        trigger.validate_configuration()
-        if not trigger.workflow.published_id:
-            raise ValidationError("Publish the workflow before enabling its trigger.")
-        trigger.source_class.check_access(trigger, actor)
-        targets = tuple(trigger.source_class.grant_targets(trigger))
-        if not targets:
-            raise ValidationError("The trigger source must declare at least one grant target.")
-        if len(set(targets)) != len(targets):
-            raise ValidationError("The trigger source declared a duplicate grant target.")
-        for target in targets:
-            target.require_grant_access(actor)
-        return targets
-
-    def enable_preview(self, trigger: Any, *, actor: Any) -> TriggerEnablePreview | None:
-        """Disclose source grants and workflow run readers only to eligible enablers."""
-        if actor is None:
-            return None
-        try:
-            targets = self._enable_targets(trigger, actor)
-        except (PermissionDenied, ValidationError, ImproperlyConfigured):
-            return None
-        resource = to_object_ref(trigger.workflow)
-        readers: list[str] = []
-        for subject_type, label in ((user_subject_type(), "User"), (group_subject_type(), "Group")):
-            refs = backend().lookup_subjects(resource=resource, action="monitor", subject_type=subject_type)
-            with system_context(reason="workflows.enable_preview readers"):
-                resolved = resolve_subjects(refs)
-            readers.extend(f"{label}: {user_label(row) if subject_type == user_subject_type() else row}"
-                           for row in resolved.values())
-        return TriggerEnablePreview(
-            grants=tuple(sorted(
-                f"{target.relation_label()} on {target.target_label(actor=actor)}" for target in targets
-            )),
-            run_readers=tuple(sorted(set(readers))),
-        )
-
-    def enable(self, trigger: Any, *, actor: Any) -> Any:
-        """Require workflow write and source-declared delegation authority."""
-        if is_sudo():
-            return Context().run(self.enable, trigger, actor=actor)
-        if actor is None:
-            raise PermissionDenied("Enabling a trigger requires an acting user.")
-        trigger.workflow.require_access("write", actor)
-        with transaction.atomic(), actor_context(actor):
-            self.lock_grants(trigger.workflow_id)
-            current = self.model.system_queryset().filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
-            current.with_actor(actor)
-            targets = self._enable_targets(current, actor)
-            self.reconcile_grants(current, targets)
-            self.model.system_queryset().filter(pk=current.pk).update(
-                enabled=True, disabled_reason="",
-            )
-            current.refresh_from_db()
-            return current
-
-    def disable(self, trigger: Any, *, actor: Any) -> Any:
-        """Stop admission and release this trigger's source grants."""
-        trigger.workflow.require_access("write", actor)
-        with transaction.atomic(), system_context(reason="workflows.disable_trigger"):
-            self.lock_grants(trigger.workflow_id)
-            current = self.model.system_queryset().filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
-            current.workflow.require_access("write", actor)
-            self._disable(current, "")
-            current.refresh_from_db()
-            return current
-
-    def revoke_grant(
-        self, trigger: Any, *, actor: Any, resource_type: str, resource_id: str, relation: str,
-    ) -> Any:
-        """Revoke one contribution; disable admission when its source still needs it."""
-        if is_sudo():
-            return Context().run(
-                self.revoke_grant, trigger, actor=actor,
-                resource_type=resource_type, resource_id=resource_id, relation=relation,
-            )
-        trigger.workflow.require_access("write", actor)
-        target = TriggerGrantTarget(ObjectRef(resource_type, resource_id), relation)
-        with transaction.atomic(), actor_context(actor):
-            self.lock_grants(trigger.workflow_id)
-            current = self.model.system_queryset().filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
-            current.workflow.require_access("write", actor)
-            held = {TriggerGrantTarget.from_stored(value) for value in current.granted_targets}
-            if target not in held:
-                raise ValidationError("This trigger does not hold the selected grant.")
-            required = next(
-                (candidate for candidate in current.source_class.grant_targets(current) if candidate == target), None,
-            ) if current.enabled else None
-            if required is not None:
-                required.require_grant_access(actor)
-                reason = (
-                    f"The workflow principal's {relation} grant "
-                    "was revoked; enable this trigger again."
-                )
-                self._disable(current, reason)
-            else:
-                self.reconcile_grants(current, tuple(held - {target}))
-            current.refresh_from_db()
-            return current
-
-    def _disable(self, trigger: Any, reason: str) -> None:
-        self.model.system_queryset().filter(pk=trigger.pk).update(
-            enabled=False, disabled_reason=reason,
-        )
-        self.reconcile_grants(trigger, ())
-
-    def admit(self, event: Any) -> bool:
-        """Lock the source record, trigger, then event and recheck current policy.
-
-        Native saves already hold their record before capture. Sharing that order
-        lets domain admission hooks write it without a record/event lock cycle.
-        Busy records stay pending; deleted records proceed to a durable rejection.
-        An isolated context drops a caller's ambient bypass before actor hooks.
-        """
-        if is_sudo():
-            return Context().run(self.admit, event)
-        events = apps.get_model("workflows", "TriggerEvent")
-        with transaction.atomic():
-            event = events.system_queryset().filter(pk=event.pk).select_related(
-                "record_content_type", "trigger",
-            ).first()
-            if event is None:
-                return False
-            record_model = event.record_content_type.model_class()
-            if record_model is not None:
-                records = record_model.system_queryset().filter(pk=event.record_object_id)
-                if records.lock_if_supported(no_key=True, skip_locked=True).first() is None and records.exists():
-                    return False
-            trigger = (self.model.system_queryset().filter(pk=event.trigger_id)
-                       .lock_if_supported(no_key=True, skip_locked=True).first())
-            if trigger is None or not trigger.enabled:
-                return False
-            current = (events.objects.system_context(reason="workflows.admit").pending().filter(pk=event.pk)
-                       .lock_if_supported(no_key=True, skip_locked=True).first())
-            if current is None:
-                return False
-            try:
-                model, condition = trigger.validate_configuration()
-            except (ValidationError, ImproperlyConfigured, LookupError) as error:
-                reason = exception_text(error)
-                if self.lock_grants(trigger.workflow_id, skip_locked=True) is None:
-                    return False
-                self._disable(trigger, reason)
-                events.system_queryset().filter(pk=current.pk).update(
-                    evaluated_at=F("changed_at"), rejection=reason,
-                )
-                return False
-            except Exception:
-                logger.exception("Workflow trigger configuration failed for event %s.", current.pk)
-                return False
-            try:
-                principal = trigger.workflow.user
-                with transaction.atomic(), actor_context(principal):
-                    trigger.with_actor(principal)
-                    if current.record_content_type_id != ContentType.objects.get_for_model(model).pk:
-                        raise ValidationError("The source model changed after this event was recorded.")
-                    queryset = model.objects.with_actor(principal)
-                    record = condition(queryset).filter(pk=current.record_object_id).first()
-                    if record is None:
-                        raise PermissionDenied("The record is inaccessible or no longer matches the condition.")
-                    trigger.source_class.check_access(trigger, principal, record)
-                    trigger.admit_record(record, actor=principal)
-                    apps.get_model("workflows", "WorkflowRun").objects.start(
-                        trigger.workflow, actor=principal, subject=record, input=trigger.admission_input(record),
-                        request_key=f"trigger:{public_id_of(trigger)}:{public_id_of(record)}",
-                        trigger_event=current,
-                    )
-            except PublisherAuthorityDenied as error:
-                reason = exception_text(error)
-                if self.lock_grants(trigger.workflow_id, skip_locked=True) is None:
-                    return False
-                self._disable(trigger, reason)
-                events.system_queryset().filter(pk=current.pk).update(
-                    evaluated_at=F("changed_at"), rejection=reason,
-                )
-                return False
-            except (ValidationError, PermissionDenied) as error:
-                events.system_queryset().filter(pk=current.pk).update(
-                    evaluated_at=F("changed_at"), rejection=exception_text(error),
-                )
-                return False
-            except DatabaseError:
-                logger.exception("Workflow trigger admission will retry event %s.", current.pk)
-                return False
-            except Exception:
-                logger.exception("Workflow trigger admission failed for event %s.", current.pk)
-                return False
-            events.system_queryset().filter(pk=current.pk).update(
-                evaluated_at=F("changed_at"), admitted_at=Now(), rejection="",
-            )
-            return True
-
-    def drain(self) -> int:
-        """Examine an ordered, bounded batch; one broken event cannot stop later rows."""
-        events = apps.get_model("workflows", "TriggerEvent")
-        candidates = list(
-            events.objects.system_context(reason="workflows.drain").pending().filter(trigger__enabled=True)
-            .order_by("pk")[:TRIGGER_DRAIN_LIMIT]
-        )
-        admitted = 0
-        for event in candidates:
-            try:
-                admitted += self.admit(event)
-            except Exception:
-                logger.exception("Workflow trigger admission failed for event %s.", event.pk)
-        return admitted

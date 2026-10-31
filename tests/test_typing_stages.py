@@ -14,7 +14,7 @@ def test_stage_contract_retains_the_consumers_stage_type(tmp_path: Path) -> None
     declarations = """\
 from typing import assert_type
 from django.db.models import Model, QuerySet
-from angee.base.models.stages import Stage, StagedModelMixin
+from angee.base.models.stages import Stage, StageQuerySet, StagedModelMixin
 
 class DeliveryStage(Stage):
     class Meta:
@@ -26,6 +26,8 @@ class DeliveryRecord(StagedModelMixin[DeliveryStage]):
 
 def inspect(container: Model, record: DeliveryRecord, stages: QuerySet[DeliveryStage]) -> None:
     assert_type(DeliveryStage.for_container(container), QuerySet[DeliveryStage, DeliveryStage])
+    selected = DeliveryStage.objects.filter(name="Ready").for_container(container)
+    assert_type(selected, StageQuerySet[DeliveryStage])
     assert_type(DeliveryStage.resolve_default(container), DeliveryStage | None)
     assert_type(DeliveryStage.resolve_default_fallback(stages), DeliveryStage | None)
     assert_type(DeliveryRecord.stage_model(), type[DeliveryStage])

@@ -11,9 +11,11 @@ from pydantic import ValidationError as PydanticValidationError
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.base.models.identity import public_id_of
+from angee.base.refs import RecordRef
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
-from angee.graphql.events import ChangeRelatedRecord
+from angee.graphql import publishing
+from angee.graphql.events import ChangePayload, ChangeRelatedRecord
 from angee.workflows import schema as workflow_schema
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.maps import MapItem
@@ -66,7 +68,7 @@ def body_rows(run):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_step_change_concerns_deduplicate_run_evidence_without_loading_the_run(execution, register_step):
+def test_step_change_concerns_deduplicate_run_evidence_without_loading_the_run(execution, register_step, monkeypatch):
     """One item's publication retains sibling timelines and existing inherited views."""
     from tests.mtidemo.models import MtiChild, MtiParent
 
@@ -89,8 +91,8 @@ def test_step_change_concerns_deduplicate_run_evidence_without_loading_the_run(e
     assert "run" not in item._state.fields_cache
     with CaptureQueriesContext(connection) as captured:
         concerns = item.change_related_records()
-    expected = {ChangeRelatedRecord(run._meta.label, run.sqid)} | {
-        ChangeRelatedRecord(model._meta.label, model.public_id_from_pk(child.pk))
+    expected = {RecordRef.from_instance(run)} | {
+        RecordRef.from_model(model, child.pk)
         for model in (MtiParent, MtiChild) for child in children
     }
     assert set(concerns) == expected and len(concerns) == len(expected)
@@ -99,12 +101,23 @@ def test_step_change_concerns_deduplicate_run_evidence_without_loading_the_run(e
     assert any(sql.startswith("SELECT DISTINCT") and '"content_type_id"' in sql for sql in selects)
     assert not any(f'FROM "{run._meta.db_table}"' in sql for sql in selects)
     assert "run" not in item._state.fields_cache
-    from angee.base.refs import RecordRef
-
     with CaptureQueriesContext(connection) as captured:
         leaf_concerns = ChangeRelatedRecord.for_records(*(RecordRef.from_instance(child) for child in children))
     assert len(captured) == 0
-    assert set(leaf_concerns) == {concern for concern in expected if concern.model == MtiChild._meta.label}
+    assert set(leaf_concerns) == {
+        ChangeRelatedRecord(concern.model_label, concern.public_id)
+        for concern in expected if concern.model_label == MtiChild._meta.label
+    }
+    sent = []
+    monkeypatch.setattr(publishing, "_broadcast", lambda model, payload: sent.append(payload))
+    publishing.publish_change(item, action="update", update_fields=None)
+    assert len(sent) == 1
+    payload = ChangePayload.from_mapping(sent[0])
+    assert (payload.model, payload.id, payload.action) == (item._meta.label, item.sqid, "update")
+    expected_wire = {ChangeRelatedRecord(reference.model_label, reference.public_id) for reference in expected}
+    assert set(payload.related_records) == expected_wire
+    assert len(payload.related_records) == len(expected_wire)
+    assert "run" not in item._state.fields_cache
 
 
 def test_map_item_is_the_typed_exclusive_result_contract():

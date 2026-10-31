@@ -165,3 +165,15 @@ A channel asserts statements only through its protocol's declaration:
 its capability child. Takeout and export backends declare `SourceKind.IMPORT` and
 assert as the channel's `integration_ptr`, the same row that owns the takeout's
 `SyncStream` and observed `RecordLink`s.
+
+## Native source owners
+
+`models/channels.py` owns Channel and its webform contribution;
+`models/threads.py` owns source conversations and record chatter;
+`models/messages.py` owns messages and their content rows;
+`models/notifications.py` owns follower preferences and receipts.
+The matching `managers/` modules own factories and persistence, with
+`managers/content.py` owning content-addressed fragments, parts and quote edges.
+Selected-set predicates and projections remain in `querysets.py`.
+Public model and manager imports remain available from their package exports;
+historical history-class and queryset imports resolve to these same owners.

@@ -11,8 +11,6 @@ from django.db import models
 from django.utils.encoding import force_str
 from django_countries import Countries, countries
 
-from angee.graphql.field_types import register_field_type
-
 
 def country_choices() -> Countries:
     """Return translated ISO 3166-1 choices lazily for Django metadata."""
@@ -73,6 +71,3 @@ class CountryCodeField(models.CharField):
         value = self.to_python(getattr(model_instance, self.attname))
         setattr(model_instance, self.attname, value)
         return value
-
-
-register_field_type(CountryCodeField, str)

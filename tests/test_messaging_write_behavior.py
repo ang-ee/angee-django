@@ -13,7 +13,7 @@ from django.db import transaction
 from rebac import actor_context, system_context
 
 import tests.test_messaging  # noqa: F401 -- register the fixture model graph before database setup
-from angee.graphql.publishing import mute_changes
+from angee.base.signals import mute_changes
 from angee.messaging import delivery
 from angee.messaging.backends import DeliveryOutcome
 from angee.messaging.testing.models import Message

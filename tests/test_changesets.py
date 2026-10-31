@@ -71,7 +71,7 @@ def test_require_changeset_refuses_missing_storage_and_returns_the_open_owner(se
         require_changeset()
     with changeset(), system_context(reason="required changeset"):
         assert require_changeset() is current_changeset()
-    settings.ANGEE_CHANGESET_MODEL = ""
+    settings.PROVENANCE_CHANGESET_MODEL = ""
     with changeset(), pytest.raises(ChangesetRequired):
         require_changeset()
 

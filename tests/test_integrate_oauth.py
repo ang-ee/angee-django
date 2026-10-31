@@ -163,6 +163,8 @@ def test_non_admin_connection_projection_batches_health_and_restricts_credential
     }] * 4}
     feed_reads = [query["sql"] for query in queries if Feed._meta.db_table in query["sql"]]
     assert len(feed_reads) == 1
+    readiness_reads = [query for query in queries if f'FROM "{OAuthClient._meta.db_table}"' in query["sql"]]
+    assert len(readiness_reads) == 1
     assert "feed_backend_class" in feed_reads[0]
     assert "client_secret" not in " ".join(query["sql"] for query in queries)
     # Unexpired listing rows use only public health; no encrypted material is loaded.

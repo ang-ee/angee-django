@@ -1051,7 +1051,7 @@ def test_ollama_backend_disables_environment_proxies_for_both_sdk_clients(
     ]
 
 
-@pytest.mark.parametrize("generation_limit", [0, -1, True, "unbounded"])
+@pytest.mark.parametrize("generation_limit", [0, -1, True, "unbounded", 1.5, "1.5", float("inf")])
 def test_ollama_backend_rejects_invalid_generation_limits(generation_limit: object) -> None:
     backend = OllamaInferenceBackend(
         SimpleNamespace(credential=None, base_url="", config={"generation_limit": generation_limit})

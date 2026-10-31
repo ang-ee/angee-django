@@ -44,12 +44,12 @@ def test_deferred_cancellation_cleans_up_once_when_the_task_transitions(target, 
     run_stopping.connect(stopping)
     try:
         with transaction.atomic():
-            WorkflowRun.objects.cancel_on_commit(target, actor)
+            target.cancel_on_commit(actor)
             assert observed == [] and cancellations(sent) == []
             transaction.set_rollback(True)
         assert observed == [] and cancellations(sent) == []
         with transaction.atomic():
-            WorkflowRun.objects.cancel_on_commit(target, actor)
+            target.cancel_on_commit(actor)
             assert observed == [] and cancellations(sent) == []
         assert observed == []
         tasks.cancel(**cancellations(sent)[0])
@@ -117,11 +117,13 @@ def test_undecorated_receiver_database_failure_cannot_block_the_terminal_write(t
 def test_cancellation_waits_for_commit_and_duplicate_delivery_changes_nothing(target, execution):
     actor, sent = execution
     with transaction.atomic():
-        WorkflowRun.objects.cancel_on_commit(target, actor)
+        target.cancel_on_commit(actor)
         assert cancellations(sent) == []
         target.refresh_from_db()
         assert target.status == "running"
-    assert cancellations(sent) == [{"run_id": target.pk, "actor": str(to_subject_ref(actor))}]
+    assert cancellations(sent) == [
+        {"run_id": target.pk, "actor": str(to_subject_ref(actor)), "using": target._state.db}
+    ]
     tasks.cancel(**cancellations(sent)[0])
     target.refresh_from_db()
     assert target.status == "canceled"
@@ -186,7 +188,7 @@ def test_context_cancellation_follows_the_body_transaction(target, execution, re
 def test_outer_rollback_discards_cancellation(target, execution):
     actor, sent = execution
     with transaction.atomic():
-        WorkflowRun.objects.cancel_on_commit(target, actor)
+        target.cancel_on_commit(actor)
         transaction.set_rollback(True)
     assert cancellations(sent) == []
     target.refresh_from_db()
@@ -198,11 +200,11 @@ def test_cancellation_rechecks_the_original_requesters_permission(target, execut
     viewer = create_user("cancel-viewer")
     target.with_actor(actor).grant_record_access("reader", viewer)
     with pytest.raises(PermissionDenied):
-        WorkflowRun.objects.cancel_on_commit(target, viewer)
+        target.cancel_on_commit(viewer)
     assert cancellations(sent) == []
 
     target.with_actor(actor).grant_record_access("operator", viewer)
-    WorkflowRun.objects.cancel_on_commit(target, viewer)
+    target.cancel_on_commit(viewer)
     assert cancellations(sent)[0]["actor"] == str(to_subject_ref(viewer))
     target.with_actor(actor).revoke_record_access("operator", viewer)
     with pytest.raises(PermissionDenied):
@@ -220,7 +222,7 @@ def test_robust_delivery_failure_keeps_commit_and_later_callbacks(target, execut
 
     monkeypatch.setattr(celery_app, "send_task", unavailable)
     with transaction.atomic():
-        WorkflowRun.objects.cancel_on_commit(target, actor)
+        target.cancel_on_commit(actor)
         transaction.on_commit(lambda: observed.append("committed"))
     assert observed == ["committed"]
     assert "Task transport unavailable" in caplog.text

@@ -265,7 +265,7 @@ class IntakeAccessCase(TransactionTestCase):
     def need(self, *, email="new@example.com", party=None, name=""):
         # Like its production callers, the triage factory locks rank rows inside a transaction.
         with system_context(reason="test request setup"), transaction.atomic():
-            task = self.Need.objects._create_triage_task(queue=self.queue, title="Request", note="")
+            task = self.Task.objects.capture_triage(queue=self.queue, title="Request", note="")
             task.owner = self.owner
             task.assignee = self.writer
             task.save()
@@ -1033,9 +1033,8 @@ class NeedAccessTests(IntakeAccessCase):
             task = self.Task.objects.sudo(reason="test.intake.transfer_share").get(pk=task.pk)
             task.owner = self.writer
             task.save(update_fields=("owner",))
-        Decision = apps.get_model("decisions", "Decision")
         with self.assertRaises(PermissionDenied):
-            Decision.objects.decide(decision, actor=self.owner, chosen=["intake.approve"])
+            decision.decide(actor=self.owner, chosen=["intake.approve"])
         need.refresh_from_db()
         self.assertIsNone(need.access_verdict)
         self.assertIsNone(need.admitted_user_id)
@@ -1044,10 +1043,10 @@ class NeedAccessTests(IntakeAccessCase):
         # A new sharer is eligible even though the original question named the old one.
         with patch.object(self.Need, "apply_access_answer", side_effect=ValidationError("owner refused")):
             with self.assertRaisesMessage(ValidationError, "owner refused"):
-                Decision.objects.decide(decision, actor=self.writer, chosen=["intake.approve"])
+                decision.decide(actor=self.writer, chosen=["intake.approve"])
         decision.refresh_from_db()
         self.assertTrue(decision.is_open)
-        Decision.objects.decide(decision, actor=self.writer, chosen=["intake.approve"])
+        decision.decide(actor=self.writer, chosen=["intake.approve"])
         need.refresh_from_db()
         self.assertEqual(need.admitted_user_id, self.reader.pk)
         self.assertTrue(need.task.with_actor(self.reader).has_access("read"))

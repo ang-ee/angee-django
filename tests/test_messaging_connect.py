@@ -10,6 +10,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rebac import system_context
 
+from angee.base import locks as model_locks
 from angee.integrate import live as live_module
 from angee.integrate.constants import RUN_SESSION_TASK
 from angee.integrate.live import PairingState, session_store_path
@@ -36,8 +37,8 @@ def pairing_user(pairing_graphql: list[dict[str, Any]]) -> Any:
 def cross_process_locks(monkeypatch: pytest.MonkeyPatch) -> None:
     """Let reset and session-liveness checks trust the lock backend."""
 
-    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda: True)
-    monkeypatch.setattr(connect, "task_locks_are_cross_process", lambda: True)
+    monkeypatch.setattr(live_module, "task_locks_are_cross_process", lambda *, using=None: True)
+    monkeypatch.setattr(model_locks, "task_locks_are_cross_process", lambda *, using=None: True)
 
 
 def test_unfinished_pairing_scopes_empty_unlinked_channels_newest_first(pairing_user: Any) -> None:

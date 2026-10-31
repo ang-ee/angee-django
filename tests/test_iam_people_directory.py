@@ -279,3 +279,17 @@ def test_disclosed_audiences_reach_only_the_accounts_their_sites_reach(composed_
     assert disclosed(admin, "active_account") == set(pks)
     assert disclosed(admin, "nonstaff_account") == {viewer.pk, stranger.pk}
     assert protected(admin) == {staff.pk}
+
+
+@pytest.mark.parametrize("scope", ["directory", "colleagues", "view_as_queryset"])
+def test_user_scopes_preserve_the_selected_queryset(composed_tables: None, scope: str) -> None:
+    """Admission composes with caller selection instead of restarting at the manager."""
+
+    viewer = create_platform_admin(f"scoped-{scope}")
+    selected = _person(f"selected-{scope}")
+    _person(f"excluded-{scope}")
+    rows = User.objects.filter(pk=selected.pk).using("default")
+    admitted = getattr(rows, scope)(viewer)
+    assert list(admitted.values_list("pk", flat=True)) == [selected.pk]
+    assert not getattr(rows.none(), scope)(viewer).exists()
+    assert admitted._db == rows._db

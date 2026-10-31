@@ -43,9 +43,9 @@ through the same ambient actor.
   only for a projection, write or search the generated pair cannot express.
 - Hand-written FastMCP tools (`server.add_tool(Tool.from_function(...))`) are reserved for data no GraphQL
   operation owns (the catalogue reader `list_resources`, `src/angee/mcp/resource_tools.py:53-60`); they read
-  through model verbs and the actor-scoped querysets `ActorMiddleware` pins, set `ToolAnnotations(readOnlyHint=...)`
-  and avoid request-scoped FastMCP context (`src/angee/mcp/server.py:38-47`, asserted at
-  `src/angee/agents_runtime_pydantic/toolsets.py:302`).
+  through model verbs and the actor-scoped querysets `ActorMiddleware` pins, set `ToolAnnotations(readOnlyHint=...)` and native `meta={"angee": {"execution_context": "actor"}}`
+  and avoid request-scoped FastMCP context (`src/angee/mcp/server.py:38-47`, validated by
+  `angee.mcp.graphql.actor_tool_read_only`).
 
 ## Steps
 
@@ -128,7 +128,7 @@ through the same ambient actor.
 - A second FastMCP instance, mount or lifespan in an addon: `angee.mcp.server.mcp_server` is the process-wide owner (`src/angee/mcp/server.py:54`; [Serving](../../../../../docs/composer.md#serving)).
 - A tool registry, decorator or settings list beside `mcp_tools.register`: [MCP server](../../server.py) discovers and validates registrars through Base's optional-module reader ([composition owners](../../../../../docs/backend/guidelines.md#composition-owners)).
 - Hand-rolled CRUD readers for a console resource: generated readers already exist and the agents catalogue grants them (`src/angee/mcp/resource_tools.py:49`, `src/angee/agents/grants.py:116`; [DRY](../../../../../docs/guidelines.md#dont-repeat-yourself-dry)).
-- A list query without `limit_arg` or a page bound above `MAX_QUERY_LIMIT`: the compiler refuses the first and clamps the second (`src/angee/mcp/graphql.py:73,528`).
+- A list query without `limit_arg` or a page bound above `MAX_QUERY_LIMIT`: the compiler refuses both (`src/angee/mcp/graphql.py:73,528`).
 - Projecting owner-gated or nullable-sensitive fields in a tool every actor may call: field gates redact, the projection then fails (`examples/src/example/notes/mcp_tools.py:17-19`; [field-backed conditional access](../../../../../docs/backend/guidelines.md#rebac)).
 - A base-level `ANGEE_MCP_ACTOR_VERIFIER` default in an addon autoconfig: the catalogue owner supplies it and an empty default clobbers it (`src/angee/mcp/autoconfig.py:5-10`; [Autoconfig](../../../../../docs/composer.md#autoconfig)).
 - `get_access_token()` or FastMCP `Context` inside a tool callable: a granted tool also runs in-process through the pydantic runtime, outside any FastMCP request, which asserts both (`src/angee/mcp/server.py:41-46`, `src/angee/agents_runtime_pydantic/toolsets.py:302`).

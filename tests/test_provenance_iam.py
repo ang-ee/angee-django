@@ -16,13 +16,7 @@ def test_iam_principal_donor_is_optional_and_order_independent(order: str) -> No
 import os
 import sys
 os.environ.pop("DJANGO_SETTINGS_MODULE", None)
-from django.apps import AppConfig
 from django.conf import settings
-class BareAngee(AppConfig):
-    name = "angee"
-class BareGraphQL(AppConfig):
-    name = "angee.graphql"
-    label = "graphql"
 selected = {
     "iam-first": ["angee.iam", "angee.provenance"],
     "provenance-first": ["angee.provenance", "angee.iam"],
@@ -31,9 +25,9 @@ selected = {
 }[sys.argv[1]]
 settings.configure(
     INSTALLED_APPS=["django.contrib.contenttypes", "django.contrib.auth", "rebac", "simple_history",
-                    "__main__.BareAngee", "angee.base", "__main__.BareGraphQL", *selected],
+                    "angee.base", "angee.graphql", *selected],
     DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
-    SECRET_KEY="optional-iam-donor", ANGEE_CHANGESET_MODEL="provenance.Changeset",
+    SECRET_KEY="optional-iam-donor", PROVENANCE_CHANGESET_MODEL="provenance.Changeset",
 )
 import django
 django.setup()

@@ -5,9 +5,9 @@ from __future__ import annotations
 import dataclasses
 import types as _types
 from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping, Sequence
-from copy import copy
 from dataclasses import dataclass
 from functools import cache, partial
+from types import EllipsisType
 from typing import TYPE_CHECKING, Any, cast
 
 import strawberry
@@ -21,7 +21,6 @@ from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.functions import Cast, Concat
 from django.db.models.lookups import Exact, In
 from django.utils.module_loading import import_string
-from rebac import PermissionDenied, system_context
 from rebac.managers import RebacQuerySet
 from rebac.relation_loading import relation_actor
 from strawberry.extensions import FieldExtension
@@ -49,11 +48,11 @@ from strawberry_django_hasura import (
 from strawberry_django_hasura.filtering import filter_queryset, where_to_q
 from strawberry_django_hasura.inputs import comparison_for_python_type
 
-from angee.base.fields.ordering import FractionalRankField
 from angee.base.hooks import resolve_hooks
 from angee.base.identity import public_data_id_field
 from angee.base.models.base import AngeeModel
-from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for, public_id_of
+from angee.base.models.children import OwnedChildrenMixin
+from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for
 from angee.base.models.locks import OptimisticLockMixin, RowLockMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.permissions import declared_rebac_definition, require_rebac_queryset
@@ -76,7 +75,6 @@ from angee.graphql.data.metadata import (
     DataResourceContribution,
     DataResourcePolicy,
     attach_data_resource_contribution,
-    relation_group_by_fields,
     resource_type_name,
     resource_wire_field_name,
     resource_wire_field_names,
@@ -307,8 +305,7 @@ class AngeeHasuraWriteBackend:
                 pk,
                 queryset=self.write_target_queryset().select_for_update(of=row_lock_paths(self.model)),
             )
-            if not instance.has_access("write"):
-                raise PermissionDenied(f"Denied: cannot write {self.model._meta.label} {pk!r}")
+            instance.require_access("write")
             if expected_revision is not None:
                 instance.require_revision(expected_revision)
             patch = dict(patch)
@@ -347,115 +344,32 @@ class AngeeHasuraWriteBackend:
         return [dict(row) for row in rows]
 
     def _apply_line_diff(
-        self,
-        info: strawberry.Info,
-        parent: models.Model,
-        rows: list[dict[str, Any]],
-        *,
-        replace: bool = True,
+        self, info: strawberry.Info, parent: models.Model, rows: list[dict[str, Any]], *, replace: bool = True,
     ) -> None:
-        """Create/update/delete child lines to match ``rows`` under elevation.
-
-        A row with an ``id`` addresses an existing child (update); a row without
-        one is a new child (create). With ``replace`` (``<res>_save``) an existing
-        child no row keeps is deleted; a nested insert passes ``replace=False``
-        and only inserts. The child FK back to the parent is set here, never sent
-        by the client.
-
-        Two phases with two authorities. Relation public ids on the incoming
-        rows are decoded first, under the **caller's** actor, so a referenced row
-        the caller cannot see is rejected (never resolved by the elevation that
-        follows). Only then do the child writes run under ``system_context`` —
-        the parent write is their gate (§3.4), including for each child's
-        input-extension values, applied after its write. The elevation authorizes;
-        it does not make the writes system work, so a row-locked child's lock is
-        checked before each write (removals before any write). Reached by both
-        ``save`` and the nested ``create`` path; the parent row is locked before its
-        child set is read so concurrent saves cannot cross-delete each other's lines.
-        """
-
+        """Decode the transport input under the caller, then dispatch to the parent."""
         assert self.lines is not None
-        child_model = self.lines.model
-        back_fk_id = f"{self._line_back_fk}_id"
-        # Phase 1 — decode line relation ids under the caller's actor, before any
-        # elevation. Each entry is ``(public id | None, decoded child payload)``.
-        prepared = self._prepare_line_rows(rows)
-        # Phase 2 — child writes elevated, under a parent-row lock.
-        with system_context(reason="graphql.hasura.save.lines"):
-            self.model._default_manager.using(parent._state.db).select_for_update(
-                of=row_lock_paths(self.model),
-            ).filter(pk=parent.pk).first()
-            children = child_model._base_manager.using(parent._state.db).filter(**{self._line_back_fk: parent})
-            existing = children.in_bulk()
-            by_public_id = {public_id_of(child): child for child in existing.values()}
-            unknown = sorted({pid for pid, _ in prepared if pid is not None and pid not in by_public_id})
-            if unknown:
-                raise ValidationError(
-                    f"{child_model._meta.object_name} lines {unknown!r} are not part of "
-                    f"{self.model._meta.object_name} {public_id_of(parent)!r}; reload and retry."
-                )
-            kept_pks = {by_public_id[public_id].pk for public_id, _ in prepared if public_id is not None}
-            removed = sorted(set(existing) - kept_pks) if replace else []
-            for pk in removed:
-                child = existing[pk]
-                if isinstance(child, RowLockMixin):
-                    child.validate_row_delete()
-            if removed:
-                # Removals free their unique values (a name) for the rows that follow.
-                try:
-                    children.filter(pk__in=removed).delete()
-                except (models.ProtectedError, models.RestrictedError) as error:
-                    raise ValidationError(_line_removal_refusal(child_model, error)) from error
-            try:
-                position = child_model._meta.get_field(self.lines.position_field)
-            except FieldDoesNotExist:
-                position = None
-            if isinstance(position, FractionalRankField):
-                moving = [
-                    by_public_id[public_id]
-                    for public_id, decoded in prepared
-                    if public_id is not None and decoded.get(position.name) is not None
-                    and position.to_python(decoded[position.name]) != getattr(by_public_id[public_id], position.attname)
-                ]
-                temporary = position.get_temporary_ranks(
-                    moving, (decoded.get(position.name) for _public_id, decoded in prepared), using=children.db,
-                )
-                if moving:
-                    # Immediate uniqueness forbids cyclic swaps. Stage through
-                    # the native guarded/captured queryset, then save exact final
-                    # values through the unchanged model resolver below.
-                    staged = [copy(child) for child in moving]
-                    for child, rank in zip(staged, temporary, strict=True):
-                        setattr(child, position.attname, rank)
-                    children.bulk_update(staged, [position.name])
-            for public_id, decoded in prepared:
-                extensions = _pop_input_extensions(child_model, decoded)
-                if public_id is not None:
-                    child = by_public_id[public_id]
-                    mutation_resolvers.update(
-                        info,
-                        child,
-                        decoded,
-                        key_attr=PUBLIC_ID_FIELD_NAME,
-                        full_clean=True,
-                        pre_save_hook=_row_lock_check(child.row_lock()) if isinstance(child, RowLockMixin) else None,
-                    )
-                else:
-                    values = {**decoded, back_fk_id: parent.pk}
-                    if issubclass(child_model, RowLockMixin):
-                        _unsaved_row(child_model, values).validate_row_lock(None)
-                    # Created through the manager, so its factory invariants still apply.
-                    child = mutation_resolvers.create(
-                        info,
-                        child_model,
-                        values,
-                        key_attr=PUBLIC_ID_FIELD_NAME,
-                        full_clean=True,
-                    )
-                if extensions:
-                    if not isinstance(child, AngeeModel):
-                        raise ImproperlyConfigured(f"{child_model._meta.label} does not support input extensions.")
-                    child.apply_input_extensions(**extensions)
+        if not isinstance(parent, OwnedChildrenMixin):
+            raise ImproperlyConfigured(f"{parent._meta.label} does not support owned child sets.")
+        prepared = []
+        for identifier, values in self._prepare_line_rows(rows):
+            extensions = _pop_input_extensions(self.lines.model, values)
+            prepared.append((identifier, values, extensions))
+
+        def create(values: dict[str, Any]) -> models.Model:
+            assert self.lines is not None
+            return mutation_resolvers.create(
+                info, self.lines.model, values, key_attr=PUBLIC_ID_FIELD_NAME, full_clean=True,
+            )
+
+        def update(child: models.Model, values: dict[str, Any], validate: Callable[[models.Model], None] | None) -> Any:
+            return mutation_resolvers.update(
+                info, child, values, key_attr=PUBLIC_ID_FIELD_NAME, full_clean=True, pre_save_hook=validate,
+            )
+
+        parent.save_children(
+            self.lines.field, prepared, create=create, update=update,
+            position_field=self.lines.position_field, replace=replace,
+        )
 
     def _prepare_line_rows(self, rows: list[dict[str, Any]]) -> list[tuple[str | None, dict[str, Any]]]:
         """Decode line payloads under the caller for both fingerprinting and writes."""
@@ -560,24 +474,6 @@ class AngeeHasuraWriteBackend:
         return out
 
 
-def _line_removal_refusal(
-    child_model: type[models.Model],
-    error: models.ProtectedError | models.RestrictedError,
-) -> str:
-    """Say which kinds of record still use removed lines, counted, never naming the rows."""
-
-    blockers = error.protected_objects if isinstance(error, models.ProtectedError) else error.restricted_objects
-    counts: dict[str, int] = {}
-    for row in blockers:
-        name = str(type(row)._meta.verbose_name_plural)
-        counts[name] = counts.get(name, 0) + 1
-    used_by = ", ".join(f"{count} {name}" for name, count in sorted(counts.items()))
-    return (
-        f"Some {child_model._meta.verbose_name_plural} cannot be removed: other records use them "
-        f"({used_by}). Keep them, or remove what uses them first."
-    )
-
-
 def _pop_input_extensions(model: type[models.Model], data: dict[str, Any]) -> dict[str, Any]:
     """Pop write values whose input field names no field of ``model``.
 
@@ -594,24 +490,6 @@ def _pop_input_extensions(model: type[models.Model], data: dict[str, Any]) -> di
         return True
 
     return {name: data.pop(name) for name in [name for name in data if not is_model_field(name)]}
-
-
-def _row_lock_check(previous: Mapping[str, Any]) -> Callable[[models.Model], None]:
-    """Return the pre-save check of an elevated line update against its persisted lock."""
-
-    def validate(instance: models.Model) -> None:
-        if not isinstance(instance, RowLockMixin):
-            raise ImproperlyConfigured(f"{instance._meta.label} does not support row locks.")
-        instance.validate_row_lock(previous)
-
-    return validate
-
-
-def _unsaved_row[M: models.Model](model: type[M], values: Mapping[str, Any]) -> M:
-    """Return an unsaved row carrying a new line's concrete column values, for its lock check."""
-
-    columns = {name for field in model._meta.concrete_fields for name in (field.name, field.attname)}
-    return model(**{name: value for name, value in values.items() if name in columns})
 
 
 def _choices_wire_value(owner_model: type[models.Model], name: str, value: Any) -> Any:
@@ -1013,7 +891,7 @@ def declared_hasura_resource_fields(
     setting ``attribute`` on their source model class. The composed runtime model
     inherits those bases; this helper gathers only directly declared attributes
     from the MRO so a downstream extension can contribute without the base addon
-    importing it. Filter/sort and container-scope declarations also accept
+    importing it. Filter/sort/group and container-scope declarations also accept
     scalar/to-one ORM paths; write declarations retain concrete-field contracts.
     """
 
@@ -1029,7 +907,10 @@ def declared_hasura_resource_fields(
         for item in value:
             field = str(item)
             try:
-                if attribute in {"hasura_sortable_fields", "hasura_filterable_fields", "hasura_container_scope_fields"}:
+                if attribute in {
+                    "hasura_sortable_fields", "hasura_filterable_fields", "hasura_groupable_fields",
+                    "hasura_container_scope_fields",
+                }:
                     require_field_for_path(model, field)
                 else:
                     model._meta.get_field(field)
@@ -1038,7 +919,7 @@ def declared_hasura_resource_fields(
                     f"{cls.__module__}.{cls.__name__}.{attribute} declares invalid field {field!r} "
                     f"on {model._meta.label}."
                 ) from error
-            if attribute in ("hasura_sortable_fields", "hasura_filterable_fields"):
+            if attribute in ("hasura_sortable_fields", "hasura_filterable_fields", "hasura_groupable_fields"):
                 field = field.replace(".", "__")
             if field not in fields:
                 fields.append(field)
@@ -1377,19 +1258,19 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     *,
     model: type[models.Model],
     name: str | None = None,
-    filterable: Sequence[str],
+    filterable: Sequence[str] | EllipsisType,
     filter_expressions: Mapping[str, BaseExpression | Callable[[models.QuerySet[Any]], BaseExpression]]
     | None = None,
     record_ref_filters: tuple[str, str] | None = None,
     record_ref_requires_read: bool = False,
-    sortable: Sequence[str],
+    sortable: Sequence[str] | EllipsisType,
     sortable_aliases: Mapping[str, str | SortAlias] | None = None,
-    aggregatable: Sequence[str],
-    groupable: Sequence[str] = (),
+    aggregatable: Sequence[str] | EllipsisType,
+    groupable: Sequence[str] | EllipsisType = (),
     json_paths: Mapping[str, str] | None = None,
-    writable: Sequence[str] | None = None,
-    insertable: Sequence[str] | None = None,
-    updatable: Sequence[str] | None = None,
+    writable: Sequence[str] | EllipsisType | None = None,
+    insertable: Sequence[str] | EllipsisType | None = None,
+    updatable: Sequence[str] | EllipsisType | None = None,
     lines: HasuraLines | None = None,
     insert: bool = True,
     update: bool = True,
@@ -1418,6 +1299,13 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     write backend, and the public-id ``id`` decoder. A caller overrides any knob
     only where the resource's intent differs (REBAC-scoped reads, a custom write
     backend, a non-``pk`` identity column).
+
+    Each field axis accepts ``...`` to delegate to the composed model's matching
+    ``hasura_<axis>_fields`` declarations, collected across extension bases.
+    Authored sequences, including empty sequences, remain authoritative; ``None``
+    keeps the native writable-field default and never requests delegation.
+    A delegated axis without declarations is empty. Delegation grants no writes
+    outside the selected operation's allowlist.
 
     An ``AngeeHasuraWriteBackend`` declares relation identities once through
     ``public_id_fields``. Those fields supply the native input/filter decoders;
@@ -1466,6 +1354,16 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     seams must use new names, distinct from existing resource filters and Hasura
     boolean combinators.
     """
+
+    filterable = declared_hasura_resource_fields(model, "hasura_filterable_fields") if filterable is ... else filterable
+    sortable = declared_hasura_resource_fields(model, "hasura_sortable_fields") if sortable is ... else sortable
+    aggregatable = (
+        declared_hasura_resource_fields(model, "hasura_aggregatable_fields") if aggregatable is ... else aggregatable
+    )
+    groupable = declared_hasura_resource_fields(model, "hasura_groupable_fields") if groupable is ... else groupable
+    writable = declared_hasura_resource_fields(model, "hasura_writable_fields") if writable is ... else writable
+    insertable = declared_hasura_resource_fields(model, "hasura_insertable_fields") if insertable is ... else insertable
+    updatable = declared_hasura_resource_fields(model, "hasura_updatable_fields") if updatable is ... else updatable
 
     model_aliases, model_filter_aliases = _declared_aliases(cast(Hashable, model))
     expressions = dict(filter_expressions or {})
@@ -1518,7 +1416,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         raise ImproperlyConfigured(f"{model._meta.label} declares duplicate sortable aliases: {sorted(collisions)}.")
     sortable = tuple(dict.fromkeys((*sortable, *model_aliases)))
     sortable_aliases = {**model_aliases, **(sortable_aliases or {})}
-    active_groupable = relation_group_by_fields(node, model, tuple(groupable))
+    active_groupable = tuple(groupable)
     for axis, fields in (
         ("filterable", filterable),
         ("sortable", sortable),

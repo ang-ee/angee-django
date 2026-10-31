@@ -27,7 +27,8 @@ class ChangeKind(TimelineKind):
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
         model = apps.get_model("provenance", "Changeset")
         return (
-            model.objects.sudo(reason="provenance.record_history")
+            model.objects.db_manager(record._state.db, hints={"instance": record})
+            .sudo(reason="provenance.record_history")
             .touching(record)
             .filter(
                 state=model.State.CLOSED,
@@ -65,7 +66,10 @@ class ChangeKind(TimelineKind):
         if row.state == row.State.CLOSED:
             yield from (
                 (model, pk)
-                for model, pk in type(row).objects.filter(pk=row.pk).records_touched()
+                for model, pk in type(row)
+                .objects.db_manager(row._state.db, hints={"instance": row})
+                .filter(pk=row.pk)
+                .records_touched()
                 if self.eligible(model)
             )
 

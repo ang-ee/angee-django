@@ -36,7 +36,7 @@ def test_provenance_plugin_types_concrete_storage_without_angee_host(tmp_path: P
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
         f"COMPOSE_OUTPUT_DIR = Path({str(tmp_path / 'storage_runtime')!r})\n"
         "COMPOSE_OUTPUT_MODULE = 'storage_runtime'\n"
-        "ANGEE_CHANGESET_MODEL = os.environ.get('PROVENANCE_TYPING_STORAGE', 'storage_probe.Changeset')\n"
+        "PROVENANCE_CHANGESET_MODEL = os.environ.get('PROVENANCE_TYPING_STORAGE', 'storage_probe.Changeset')\n"
         "from django_compose.conf import configure\nconfigure(globals())\n"
     )
     config = tmp_path / "mypy.ini"
@@ -121,13 +121,13 @@ def test_provenance_plugin_keeps_protocol_without_an_installed_storage_app(tmp_p
         cwd=root, env=env, capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    source.write_text("from django.conf import settings\nsettings.ANGEE_CHANGESET_MODEL\n")
+    source.write_text("from django.conf import settings\nsettings.PROVENANCE_CHANGESET_MODEL\n")
     absent_setting = subprocess.run(
         [sys.executable, "-m", "mypy", "--config-file", str(config), str(source)],
         cwd=root, env=env, capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT,
     )
     assert absent_setting.returncode == 1, absent_setting.stdout + absent_setting.stderr
-    assert "has no attribute 'ANGEE_CHANGESET_MODEL'" in absent_setting.stdout
+    assert "has no attribute 'PROVENANCE_CHANGESET_MODEL'" in absent_setting.stdout
 
 
 def test_installed_provenance_settings_keep_their_declared_types(tmp_path: Path) -> None:
@@ -137,7 +137,7 @@ def test_installed_provenance_settings_keep_their_declared_types(tmp_path: Path)
     source = tmp_path / "consumer.py"
     source.write_text(
         "from typing import assert_type\nfrom django.conf import settings\n"
-        "assert_type(settings.ANGEE_CHANGESET_MODEL, str)\n"
+        "assert_type(settings.PROVENANCE_CHANGESET_MODEL, str)\n"
         "assert_type(settings.COMPOSE_COMMAND_CONTEXT, list[str])\n"
         "assert_type(settings.SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD, bool)\n",
     )
@@ -154,7 +154,7 @@ def test_installed_provenance_settings_keep_their_declared_types(tmp_path: Path)
         command, cwd=root, env=env, capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT,
     )
     assert positive.returncode == 0, positive.stdout + positive.stderr
-    source.write_text("from django.conf import settings\nwrong: int = settings.ANGEE_CHANGESET_MODEL\n")
+    source.write_text("from django.conf import settings\nwrong: int = settings.PROVENANCE_CHANGESET_MODEL\n")
     negative = subprocess.run(
         command, cwd=root, env=env, capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT,
     )

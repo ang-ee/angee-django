@@ -158,8 +158,8 @@ def test_due_feed_is_queued_once_as_feed(posts_tables: None, monkeypatch: pytest
         feed.save(update_fields=["next_sync_at"])
     queued: list[tuple[str, int]] = []
     monkeypatch.setattr(
-        scheduler,
-        "queue_bridge_sync",
+        Feed,
+        "request_sync",
         lambda bridge, **kwargs: queued.append((bridge._meta.label, bridge.pk)),
     )
 

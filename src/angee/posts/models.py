@@ -336,6 +336,12 @@ class ThreadPublic(Composable, extends="messaging.Thread"):
 
         abstract = True
 
+    def set_public_subject_url(self, subject_url: str) -> None:
+        """Persist this public thread's canonical URL when the source supplies it."""
+        if subject_url and self.subject_url != subject_url:
+            self.subject_url = subject_url
+            self.save(update_fields=("subject_url", "updated_at"))
+
 
 class CommentAnswered(ValidationError):
     """The comment already has an answer; a new reply is unnecessary."""
@@ -353,6 +359,34 @@ class MessagePublic(Composable, extends="messaging.Message"):
     hasura_filterable_fields: ClassVar[tuple[str, ...]] = ("is_original_post",)
 
     is_original_post = models.BooleanField(default=False)
+
+    PROVIDER_TRASH_REASON = "Hidden by the source."
+
+    def apply_public_post(self, post: Any) -> None:
+        """Apply posts-owned payload to the landed message and its thread owner."""
+        if self.is_original_post != post.is_original_post:
+            self.is_original_post = post.is_original_post
+            self.save(update_fields=("is_original_post", "updated_at"))
+        if self.thread is not None and post.is_original_post:
+            self.thread.set_public_subject_url(post.subject_url)
+
+    def apply_provider_visibility(self, *, hidden: bool) -> None:
+        """Restore only provider-stamped trash; retain independent operator removal."""
+        with system_context(reason="posts.ingest.moderation"):
+            local = self.local_metadata
+            if hidden and not self.is_trashed:
+                self.trash(reason=self.PROVIDER_TRASH_REASON)
+                local = self.local_metadata
+                assert self.trashed_at is not None
+                local["provider_hidden"] = self.trashed_at.isoformat()
+            elif not hidden and self.provider_hidden:
+                self.restore()
+                local = self.local_metadata
+            if not hidden:
+                local.pop("provider_hidden", None)
+            if local != self.local_metadata:
+                self.metadata = {**(self.metadata or {}), "local": local}
+                self.save(update_fields=("metadata", "updated_at"))
 
     @property
     def provider_hidden(self) -> bool:

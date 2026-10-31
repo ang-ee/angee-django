@@ -3,101 +3,108 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, Mapping, Sequence
-from contextlib import ExitStack, contextmanager, nullcontext
-from contextvars import ContextVar
+from collections.abc import Sequence
+from contextlib import ExitStack, nullcontext
+from contextvars import Context
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import cached_property
 from itertools import batched
 from typing import TYPE_CHECKING, Annotated, Any, cast
-from uuid import uuid4
 
 from django.apps import apps
-from django.conf import settings
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
-from django.db import DatabaseError, IntegrityError, OperationalError, connection, transaction
-from django.db.models import NOT_PROVIDED, Count, Exists, F, Max, OuterRef, Q, QuerySet, Sum, Value, Window
+from django.db import DatabaseError, IntegrityError, OperationalError, transaction
+from django.db.models import F, Max
 from django.db.models.deletion import ProtectedError, RestrictedError
-from django.db.models.functions import Concat, Least, Now, RowNumber
+from django.db.models.functions import Now
 from pydantic import Field, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
-from rebac import actor_context, generic_target, system_context, to_subject_ref
+from rebac import (
+    ObjectRef,
+    RelationshipTuple,
+    actor_context,
+    database_context,
+    generic_target,
+    resolve_subjects,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    user_subject_type,
+)
+from rebac.actors import is_sudo
+from rebac.backends import backend
+from rebac.database import write_alias
 from rebac.errors import MissingActorError, NoActorResolvedError
+from rebac.relationships import delete_relationship, write_relationships
 
+from angee.base.exceptions import exception_text
+from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.text import ModelLabelField
 from angee.base.managers import AngeeManager
-from angee.base.models.append_only import AppendOnlyQuerySet
 from angee.base.models.identity import public_id_of
 from angee.base.models.locks import StaleRevisionError, require_revision
 from angee.base.permissions import actor_user_id
-from angee.base.querysets import AngeeQuerySet, by_key, query_batch_size, row_lock_paths
-from angee.base.serialization import canonical_json_sha256, strip_null_bytes
-from angee.base.signals import bulk_updated
-from angee.graphql.events import ChangeRelatedRecord
-from angee.graphql.publishing import changes_muted, mute_changes, publish_change
+from angee.base.querysets import query_batch_size, row_lock_paths
+from angee.base.serialization import canonical_json_sha256
+from angee.iam.identity import group_subject_type, user_label
 from angee.jobs.enqueue import enqueue_task
-from angee.jobs.timeouts import task_time_budget
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.evidence import EvidenceReference, readable_records
 from angee.workflows.definition import (
-    MAP_BODY_SUFFIX,
     Body,
     Definition,
     DefinitionInvalid,
     Issue,
     SourcedWorkflowExtension,
 )
-from angee.workflows.signals import run_stopping
+from angee.workflows.querysets import (
+    RETRYABLE_SQLSTATES as RETRYABLE_SQLSTATES,
+)
+from angee.workflows.querysets import (
+    StepAttemptQuerySet as StepAttemptQuerySet,
+)
+from angee.workflows.querysets import (
+    StepRecordQuerySet as StepRecordQuerySet,
+)
+from angee.workflows.querysets import (
+    StepRunQuerySet as StepRunQuerySet,
+)
+from angee.workflows.querysets import (
+    TriggerEventQuerySet,
+    TriggerQuerySet,
+)
+from angee.workflows.querysets import (
+    WorkflowRunQuerySet as WorkflowRunQuerySet,
+)
+from angee.workflows.querysets import (
+    _record_failure as _record_failure,
+)
+from angee.workflows.querysets import (
+    _sqlstate as _sqlstate,
+)
 from angee.workflows.states import (
-    CANCELED_OUTCOME,
     INTERRUPTED_OUTCOME,
-    AttemptResult,
-    NodeKey,
     RunOrigin,
     RunRelation,
     RunStatus,
-    StepRunStatus,
     WaitingKind,
 )
-from angee.workflows.steps import StepMode, Superseded
-from angee.workflows.subjects import RunSubject
-from angee.workflows.triggers import TriggerGrantTarget, TriggerSource
+from angee.workflows.steps import Superseded
+from angee.workflows.triggers import PublisherAuthorityDenied, TriggerEnablePreview, TriggerGrantTarget, TriggerSource
 
 if TYPE_CHECKING:
-    from angee.workflows.models import (
-        StepAttempt,
-        StepRecord,
-        StepRun,
-        StepWatch,
-        Workflow,
-        WorkflowRun,
-        WorkflowVersion,
-    )
+    from angee.workflows.models import StepRun, StepWatch, Trigger, TriggerEvent, Workflow, WorkflowRun, WorkflowVersion
 
 logger = logging.getLogger(__name__)
-RETRYABLE_SQLSTATES = frozenset({"57014", "40P01", "55P03"})
+
+
 PRUNE_BATCH_LIMIT = 25
+TRIGGER_DRAIN_LIMIT = 100
+
+
 """Prune examines at most 25 roots per tick; blocked roots retry after one day."""
-_held_runs: ContextVar[set[int] | None] = ContextVar("workflows_held_runs", default=None)
-_BLOCK_ACTION: TypeAdapter[NodeKey] = TypeAdapter(NodeKey)
-
-
-def _sqlstate(error: Exception) -> str | None:
-    """Read the native database driver's SQLSTATE at one boundary."""
-    return getattr(error.__cause__, "sqlstate", None)
-
-
-@contextmanager
-def _record_failure(operation: str) -> Iterator[None]:
-    """Isolate diagnostic writes; a lost claim still aborts its execution transaction."""
-    try:
-        with transaction.atomic():
-            yield
-    except Superseded:
-        raise
-    except Exception:
-        logger.exception("Workflow %s failed.", operation)
 
 
 @dataclass(frozen=True)
@@ -164,8 +171,13 @@ class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
         for key, path, relation, item in definition.config_references():
             try:
                 with actor_context(actor) if actor is not None else nullcontext():
-                    resolved = apps.get_model("resources", "Resource").objects.resolve_config_reference(
-                        item, relation=relation,
+                    resolved = (
+                        apps.get_model("resources", "Resource")
+                        .objects.db_manager(self.db)
+                        .resolve_config_reference(
+                            item,
+                            relation=relation,
+                        )
                     )
                 # Relation paths index both objects (str) and arrays (int).
                 parent: Any = document
@@ -173,8 +185,13 @@ class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
                     parent = parent[part]
                 parent[path[-1]] = resolved
             except (
-                ValueError, LookupError, ValidationError, ImproperlyConfigured,
-                PermissionDenied, MissingActorError, NoActorResolvedError,
+                ValueError,
+                LookupError,
+                ValidationError,
+                ImproperlyConfigured,
+                PermissionDenied,
+                MissingActorError,
+                NoActorResolvedError,
             ) as error:
                 issues.append(Issue(node=key, path=list(path), code="config_reference", message=str(error)))
         return document, issues
@@ -182,16 +199,25 @@ class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
     def _resolve_awaits(self, declarations: list[tuple[str, Body, list[str | int]]], actor: Any) -> list[Issue]:
         """Resolve all awaited contracts in one read-scoped query, with per-node failures."""
         issues: list[Issue] = []
-        readable = self.model.objects.with_actor(actor) if actor is not None else self.model.system_queryset()
+        readable = (
+            self.model.objects.db_manager(self.db).with_actor(actor)
+            if actor is not None
+            else self.model.system_queryset().using(self.db)
+        )
         awaited = [(key, node, path) for key, node, path in declarations if node.step == "await_run"]
         expects_keys = {
-            expects for _, node, _ in awaited
-            if isinstance(expects := node.config.get("expects"), str) and expects
+            expects for _, node, _ in awaited if isinstance(expects := node.config.get("expects"), str) and expects
         }
-        expected_by_key = {
-            expected.key: expected for expected in
-            readable.select_related("published").filter(key__in=expects_keys, published__isnull=False)
-        } if expects_keys else {}
+        expected_by_key = (
+            {
+                expected.key: expected
+                for expected in readable.select_related("published").filter(
+                    key__in=expects_keys, published__isnull=False
+                )
+            }
+            if expects_keys
+            else {}
+        )
         for key, node, path in awaited:
             config = node.config
             expects = config.get("expects")
@@ -200,18 +226,26 @@ class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
                 continue
             expected = expected_by_key.get(expects)
             if expected is None or expected.published is None:
-                issues.append(Issue(
-                    node=key, path=[*path, "config", "expects"], code="expected_workflow",
-                    message=f"Expected workflow {expects!r} must be readable and published.",
-                ))
+                issues.append(
+                    Issue(
+                        node=key,
+                        path=[*path, "config", "expects"],
+                        code="expected_workflow",
+                        message=f"Expected workflow {expects!r} must be readable and published.",
+                    )
+                )
                 continue
             try:
                 config["outcomes"] = expected.published.definition.output_schemas
-            except (ImproperlyConfigured, ValidationError, PydanticValidationError):
-                issues.append(Issue(
-                    node=key, path=[*path, "config", "expects"], code="expected_workflow",
-                    message=f"Expected workflow {expects!r} has an invalid published contract.",
-                ))
+            except ImproperlyConfigured, ValidationError, PydanticValidationError:
+                issues.append(
+                    Issue(
+                        node=key,
+                        path=[*path, "config", "expects"],
+                        code="expected_workflow",
+                        message=f"Expected workflow {expects!r} has an invalid published contract.",
+                    )
+                )
         return issues
 
     def authoring_outcomes(
@@ -221,10 +255,12 @@ class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
         try:
             entries = _CONFIGURATIONS.validate_python(configurations)
         except PydanticValidationError as error:
-            raise ValidationError({
-                ".".join(["configurations", *(str(part) for part in issue["loc"])]): [issue["msg"]]
-                for issue in error.errors()
-            }) from error
+            raise ValidationError(
+                {
+                    ".".join(["configurations", *(str(part) for part in issue["loc"])]): [issue["msg"]]
+                    for issue in error.errors()
+                }
+            ) from error
         declarations: list[tuple[str, Body, list[str | int]]] = [
             (entry.node, entry, ["nodes", entry.node]) for entry in entries
         ]
@@ -237,43 +273,66 @@ class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
 
     def _published_dependents(self, workflow: Any, actor: Any) -> tuple[str, ...]:
         """Name readable published parents whose frozen contract names this workflow."""
-        readable = self.model.objects.with_actor(actor) if actor is not None else self.model.system_queryset()
-        parents = readable.exclude(pk=workflow.pk).filter(published__isnull=False).values_list(
-            "key", "published__document",
+        readable = (
+            self.model.objects.db_manager(self.db).with_actor(actor)
+            if actor is not None
+            else self.model.system_queryset().using(self.db)
         )
-        return tuple(sorted(
-            key for key, document in parents
-            if any(
-                node.step == "await_run" and node.config.get("expects") == workflow.key
-                for _, node, _ in Definition.model_validate(document).declarations()
+        parents = (
+            readable.exclude(pk=workflow.pk)
+            .filter(published__isnull=False)
+            .values_list(
+                "key",
+                "published__document",
             )
-        ))
+        )
+        return tuple(
+            sorted(
+                key
+                for key, document in parents
+                if any(
+                    node.step == "await_run" and node.config.get("expects") == workflow.key
+                    for _, node, _ in Definition.model_validate(document).declarations()
+                )
+            )
+        )
 
     def save_identity(
-        self, *, key: str, name: str, description: str = "", subject_model: str = "", actor: Any = None,
+        self,
+        *,
+        key: str,
+        name: str,
+        description: str = "",
+        subject_model: str = "",
+        actor: Any = None,
     ) -> Any:
         """Save an authorized identity with a canonical, version-stable subject model."""
+        owner = self.db_manager(write_alias(self.model, using=self._db))
+
         if subject_model:
             try:
                 subject_model = ModelLabelField.normalize(subject_model)
             except ValidationError as error:
-                raise DefinitionInvalid([
-                    Issue(
-                        path=["subject_model"], code="subject_model",
-                        message=f"Unknown subject model {subject_model!r}.",
-                    ),
-                ]) from error
-        with transaction.atomic():
+                raise DefinitionInvalid(
+                    [
+                        Issue(
+                            path=["subject_model"],
+                            code="subject_model",
+                            message=f"Unknown subject model {subject_model!r}.",
+                        ),
+                    ]
+                ) from error
+        with database_context(owner.db), transaction.atomic(using=owner.db):
             with system_context(reason="workflows.save_identity locate target"):
-                workflow = self.filter(key=key).first()
+                workflow = owner.filter(key=key).first()
             identity = {"name": name, "description": description, "subject_model": subject_model}
             # A new workflow asks create about the row get_or_create would insert, the candidate its save checks.
-            candidate = workflow or self.model(key=key, **identity)
+            candidate = workflow or owner.model(key=key, **identity)
             actor = candidate.require_access("write" if workflow else "create", actor)
             with actor_context(actor) if actor is not None else nullcontext():
-                workflow, _ = self.get_or_create(key=key, defaults=identity)
+                workflow, _ = owner.get_or_create(key=key, defaults=identity)
                 workflow.require_access("write", actor)
-                workflow = self.filter(pk=workflow.pk).lock_if_supported(no_key=True).get()
+                workflow = owner.filter(pk=workflow.pk).lock_if_supported(no_key=True).get()
                 if workflow.subject_model != subject_model and workflow.versions.exists():
                     raise ValidationError("The subject model cannot change after a workflow version exists.")
                 workflow.name = name
@@ -294,12 +353,14 @@ class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
     ) -> DraftSave:
         """Save one parsable registered document with optimistic concurrency."""
 
+        owner = self.db_manager(write_alias(self.model, using=self._db or workflow._state.db, instance=workflow))
+
         actor = workflow.require_access("write", actor)
         with system_context(reason="workflows.save_draft revision preflight"):
-            current = self.filter(pk=workflow.pk).values_list("draft_revision", flat=True).first()
+            current = owner.filter(pk=workflow.pk).values_list("draft_revision", flat=True).first()
         require_revision(expected=expected_revision, current=current, minimum=0)
         draft, layout = Definition.rekey(draft, keys=node_keys, layout=layout)
-        resolved, resolution_issues = self._resolved_document(draft, actor)
+        resolved, resolution_issues = owner._resolved_document(draft, actor)
         with system_context(reason="workflows.save_draft"):
             definition, issues = Definition.check(resolved, subject_model=workflow.subject_model)
             issues.extend(resolution_issues)
@@ -308,9 +369,9 @@ class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
             values = {"draft": draft, "draft_revision": F("draft_revision") + 1, "updated_at": Now()}
             if layout is not None:
                 values["layout"] = layout
-            changed = self.filter(pk=workflow.pk, draft_revision=expected_revision).update(**values)
+            changed = owner.filter(pk=workflow.pk, draft_revision=expected_revision).update(**values)
             if not changed:
-                current = self.filter(pk=workflow.pk).values_list("draft_revision", flat=True).first()
+                current = owner.filter(pk=workflow.pk).values_list("draft_revision", flat=True).first()
                 raise StaleRevisionError(expected_revision, current)
         return DraftSave(expected_revision + 1, issues)
 
@@ -324,29 +385,32 @@ class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
     ) -> PublishResult:
         """Publish as a user, or install without an actor; report readable dependents."""
 
+        owner = self.db_manager(write_alias(self.model, using=self._db or workflow._state.db, instance=workflow))
+
         actor = workflow.require_access("write", actor)
         publisher_id = actor_user_id(to_subject_ref(actor)) if actor is not None else None
         if actor is not None and publisher_id is None:
             raise ValidationError("Workflow publication requires a user-backed actor.")
-        with transaction.atomic():
+        with database_context(owner.db), transaction.atomic(using=owner.db):
             with system_context(reason="workflows.publish"):
-                current = self.filter(pk=workflow.pk).lock_if_supported(no_key=True).get()
+                current = owner.filter(pk=workflow.pk).lock_if_supported(no_key=True).get()
             require_revision(expected=expected_revision, current=current.draft_revision, minimum=0)
             published = current.published
             if extensions is None:
-                extensions = (
-                    published.definition.retained_extensions()
-                    if published is not None
-                    else ()
-                )
+                extensions = published.definition.retained_extensions() if published is not None else ()
             source = current.draft
             try:
-                source = Definition.model_validate(source).with_extensions(extensions).model_dump(
-                    mode="json", by_alias=True,
+                source = (
+                    Definition.model_validate(source)
+                    .with_extensions(extensions)
+                    .model_dump(
+                        mode="json",
+                        by_alias=True,
+                    )
                 )
             except PydanticValidationError:
                 pass
-            resolved, resolution_issues = self._resolved_document(source, actor)
+            resolved, resolution_issues = owner._resolved_document(source, actor)
             definition, issues = Definition.check(resolved, subject_model=current.subject_model)
             issues.extend(resolution_issues)
             if issues:
@@ -366,8 +430,8 @@ class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
                         content_hash=digest,
                         published_by_id=publisher_id,
                     )
-                    self.filter(pk=current.pk).update(published=version, updated_at=Now())
-            return PublishResult(version, self._published_dependents(current, actor))
+                    owner.filter(pk=current.pk).update(published=version, updated_at=Now())
+            return PublishResult(version, owner._published_dependents(current, actor))
 
     def install_definition(
         self,
@@ -384,15 +448,21 @@ class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
     ) -> Any:
         """Install a resource document through the same draft and publish verbs."""
 
-        with transaction.atomic(), actor_context(actor) if actor is not None else nullcontext():
-            workflow = self.save_identity(
+        owner = self.db_manager(write_alias(self.model, using=self._db))
+
+        with (
+            database_context(owner.db),
+            transaction.atomic(using=owner.db),
+            actor_context(actor) if actor is not None else nullcontext(),
+        ):
+            workflow = owner.save_identity(
                 key=key,
                 name=name,
                 description=description,
                 subject_model=subject_model,
                 actor=actor,
             )
-            saved = self.save_draft(
+            saved = owner.save_draft(
                 workflow,
                 draft=draft,
                 expected_revision=workflow.draft_revision,
@@ -400,7 +470,7 @@ class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
                 actor=actor,
             )
             if publish:
-                self.publish(
+                owner.publish(
                     workflow,
                     expected_revision=saved.revision,
                     actor=actor,
@@ -412,176 +482,10 @@ class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
             return workflow
 
 
-class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
-    """Own run locks and the delivery obligation every lock holder acquires."""
-
-    def for_subject(self, record: Any) -> Any:
-        """Select the canonical subject without changing this queryset's read scope."""
-        return self.filter(self.model.record_filter(record))
-
-    def about(self, records: Any, *, operations: tuple[str, ...] | None = None, ancestors: bool = True,
-              limit: int | None = None) -> Any:
-        """Runs that worked on readable records and all readable ancestors, oldest first."""
-        if not isinstance(records, (list, tuple)):
-            records = (records,)
-        subject_filter = Q(pk__in=[])
-        targets = Q(pk__in=[])
-        evidence_model = apps.get_model("workflows", "StepRecord")
-        for record in records:
-            targets |= evidence_model.record_filter(record)
-            subject_filter |= self.model.record_filter(record)
-        links = evidence_model.system_queryset().filter(targets)
-        if operations is not None:
-            links = links.filter(operation__in=operations)
-        subjects: QuerySet[WorkflowRun, Mapping[str, object]] = self.filter(subject_filter).values("pk")
-        link_runs = links.values("run_id")
-        if limit is not None:
-            subjects = self.filter(subject_filter).alias(_rank=Window(RowNumber(),
-                partition_by=["subject_content_type_id", "subject_object_id"], order_by=["-created_at", "-pk"])
-            ).filter(_rank__lte=limit).values("pk")
-            link_runs = links.values("content_type_id", "object_id", "run_id").annotate(
-                _created=Max("run__created_at"),
-            ).annotate(_rank=Window(RowNumber(), partition_by=["content_type_id", "object_id"],
-                                   order_by=[F("_created").desc(), F("run_id").desc()])
-            ).filter(_rank__lte=limit).values("run_id")
-        if not ancestors:
-            return self.filter(Q(pk__in=subjects) | Q(pk__in=link_runs)).order_by(
-                "created_at", "pk",
-            ).distinct()
-        ids = set(subjects.values_list("pk", flat=True))
-        ids.update(self.filter(pk__in=link_runs).values_list("pk", flat=True))
-        frontier = ids.copy() if ancestors else set()
-        while frontier:
-            parents = set(self.filter(pk__in=frontier).exclude(parent_step=None)
-                          .values_list("parent_step__run_id", flat=True))
-            frontier = set(self.filter(pk__in=parents).values_list("pk", flat=True)) - ids
-            ids.update(frontier)
-        return self.filter(pk__in=ids).order_by("created_at", "pk").distinct()
-
-    def working_on(self, record: Any) -> Any:
-        """Unfinished runs whose subject is ``record`` or that created or changed it.
-
-        Deleting the record cancels these; their own ancestors are not included.
-        """
-        return self.exclude(status__in=RunStatus.terminal_values()).about(
-            record, operations=("created", "changed"), ancestors=False,
-        )
-
-    def blocking(self, record: Any, action: str) -> Any:
-        """Return open runs whose pinned definition blocks an action on ``record``."""
-
-        try:
-            action = _BLOCK_ACTION.validate_python(action, strict=True)
-        except PydanticValidationError as error:
-            raise ValidationError({"action": "A workflow action must be a stable lowercase identifier."}) from error
-        target = generic_target(record)
-        model = target.content_type.model_class()
-        if model is None:
-            raise ValidationError("The blocked record model is no longer installed.")
-        token = f"{model._meta.label}:{action}"
-        # A block is policy: it holds whether or not the caller may read the run (an import's
-        # run belongs to the workflow's service user, not to the clerk posting the bill), so the
-        # open runs and their pinned definitions are read under the policy's own system scope.
-        version_model = apps.get_model("workflows", "WorkflowVersion")
-        with system_context(reason="workflows.blocking_policy"):
-            runs = (
-                self.model.objects.system_context(reason="workflows.blocking_policy")
-                .exclude(status__in=RunStatus.terminal_values())
-                .about(record, ancestors=False)
-            )
-            version_ids = set(runs.order_by().values_list("version_id", flat=True))
-            blocked = [
-                version_id
-                for version_id, document in version_model.system_queryset().filter(pk__in=version_ids)
-                .values_list("pk", "document")
-                if token in Definition.model_validate(document).blocks
-            ]
-            return self.model.system_queryset().filter(
-                pk__in=list(runs.filter(version_id__in=blocked).order_by().values_list("pk", flat=True)),
-            )
-
-    @contextmanager
-    def hold(self, run_id: int, *, skip_locked: bool = False, timeout: timedelta | None = None) -> Iterator[Any]:
-        """Lock one run and dispatch once for the outermost hold after commit.
-
-        Register at context exit. Robust callbacks log delivery failures without
-        suppressing later publications from enclosing parent/child transactions;
-        the tick recovers the durable ready rows.
-        """
-        held = _held_runs.get()
-        outermost = held is None
-        if held is None:
-            held = set()
-            token = _held_runs.set(held)
-        else:
-            token = None
-        previous = held.copy()
-        try:
-            with transaction.atomic():
-                with system_context(reason="workflows.hold"), (
-                    _database_timeout(timeout, setting="lock_timeout") if timeout is not None else nullcontext()
-                ), (transaction.atomic() if timeout is not None else nullcontext()):
-                    run = self.filter(pk=run_id).lock_if_supported(no_key=True, skip_locked=skip_locked).first()
-                if run is not None:
-                    held.add(run.pk)
-                try:
-                    yield run
-                finally:
-                    if outermost and held:
-                        ids = sorted(held)
-                        transaction.on_commit(
-                            lambda: apps.get_model("workflows", "StepRun").objects.filter(run_id__in=ids).dispatch(),
-                            robust=True,
-                        )
-        except BaseException:
-            held.clear()
-            held.update(previous)
-            raise
-        finally:
-            if token is not None:
-                _held_runs.reset(token)
-
-    @contextmanager
-    def hold_owned(self, run_id: int, *, skip_locked: bool = False, timeout: timedelta | None = None) -> Iterator[Any]:
-        """Hold an owned tree ancestor first, admitting no new child behind a held parent."""
-        with ExitStack() as stack, system_context(reason="workflows.hold_owned"):
-            root = stack.enter_context(self.hold(run_id, skip_locked=skip_locked, timeout=timeout))
-            runs = [] if root is None else [root]
-            for run in runs:
-                children = list(self.filter(parent_step__run=run, relation=RunRelation.OWNED)
-                                .order_by("pk").values_list("pk", flat=True))
-                for child_id in children:
-                    child = stack.enter_context(self.hold(child_id, skip_locked=skip_locked, timeout=timeout))
-                    if child is None:
-                        yield []
-                        return
-                    runs.append(child)
-            yield runs
-
-    def retention_candidates(self) -> Any:
-        """Return old terminal roots, letting marked blockers yield to later batches."""
-        return self.filter(
-            Q(parent_step__isnull=True) | Q(relation=RunRelation.CONTINUATION),
-            Q(prune_after__isnull=True) | Q(prune_after__lte=Now()),
-            status__in=RunStatus.terminal_values(),
-            finished_at__lt=Now() - timedelta(days=settings.ANGEE_WORKFLOW_RETENTION_DAYS),
-        )
-
-
-class StepRecordQuerySet[T: StepRecord](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
-    """Keep retained admission references immutable until their run is pruned."""
-
-    def change_related_records(self) -> tuple[ChangeRelatedRecord, ...]:
-        """Publish distinct concern identities without loading retained evidence rows."""
-        with system_context(reason="workflows.change_concerns"):
-            identities = self.order_by().values_list("content_type_id", "object_id").distinct()
-            return ChangeRelatedRecord.for_records(*(
-                self.model(content_type_id=content_type_id, object_id=object_id).record_ref
-                for content_type_id, object_id in identities
-            ))
-
-
 StepRecordManager = AngeeManager.from_queryset(StepRecordQuerySet)
+
+
+StepAttemptManager = AngeeManager.from_queryset(StepAttemptQuerySet)
 
 
 _WorkflowRunManagerBase = AngeeManager.from_queryset(WorkflowRunQuerySet)
@@ -606,6 +510,8 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
     ) -> Any:
         """Insert the pinned version, origin and sole cause together, or replay the same request."""
 
+        owner = self.db_manager(write_alias(self.model, using=self._db or workflow._state.db, instance=workflow))
+
         actor = workflow.require_access("start", actor)
         if actor is None:
             raise PermissionDenied("A run requires an actor.")
@@ -615,13 +521,22 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             raise ValidationError("A child requires an owned or continuation relation and a parent step.")
         if sum(cause is not None for cause in (parent_step, reprocess_of, trigger_event)) > 1:
             raise ValidationError("A run can have only one cause.")
-        origin = (RunOrigin.WORKFLOW if parent_step is not None else
-                  RunOrigin.REPROCESS if reprocess_of is not None else
-                  RunOrigin.TRIGGER if trigger_event is not None else RunOrigin.MANUAL)
+        origin = (
+            RunOrigin.WORKFLOW
+            if parent_step is not None
+            else RunOrigin.REPROCESS
+            if reprocess_of is not None
+            else RunOrigin.TRIGGER
+            if trigger_event is not None
+            else RunOrigin.MANUAL
+        )
         payload = {} if input is None else input
-        with transaction.atomic(), (
-            self.hold(parent_step.run_id) if parent_step is not None else nullcontext(None)
-        ) as parent, system_context(reason="workflows.start"):
+        with (
+            database_context(owner.db),
+            transaction.atomic(using=owner.db),
+            owner.hold(parent_step.run_id) if parent_step is not None else nullcontext(None) as parent,
+            system_context(reason="workflows.start"),
+        ):
             if parent_step is not None:
                 if parent is None:
                     raise ValidationError("The parent run no longer exists.")
@@ -630,7 +545,7 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
                     request_key = f"child:{parent_step.sqid}:{parent_step.page_index}"
             workflow.refresh_from_db()
             workflow.validate_subject(subject)
-            target = generic_target(subject) if subject is not None else None
+            target = generic_target(subject, using=owner.db) if subject is not None else None
             principal_id = actor_user_id(to_subject_ref(actor))
             identity = dict(
                 run_as_id=principal_id,
@@ -652,7 +567,7 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
                     raise ValidationError("request_key already identifies a different request.")
                 return run.with_actor(actor)
 
-            if request_key is not None and (existing := self.filter(request_key=request_key).first()) is not None:
+            if request_key is not None and (existing := owner.filter(request_key=request_key).first()) is not None:
                 return replay(existing)
             if parent is not None and (
                 parent.is_terminal or not parent.step_runs.fenced(parent_step).lock_if_supported(no_key=True).exists()
@@ -662,13 +577,26 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             if version is None or version.workflow_id != workflow.pk:
                 raise ValidationError("A published version of this workflow is required.")
             principal_workflow = (
-                apps.get_model("workflows", "Workflow").system_queryset().filter(user_id=principal_id).first()
-                if principal_id is not None else None
+                apps.get_model("workflows", "Workflow")
+                .system_queryset()
+                .using(owner.db)
+                .filter(user_id=principal_id)
+                .first()
+                if principal_id is not None
+                else None
             )
             if principal_workflow is not None:
-                granted = apps.get_model("workflows", "Trigger").system_queryset().filter(
-                    workflow=principal_workflow, enabled=True,
-                ).order_by("pk").values_list("granted_targets", flat=True)
+                granted = (
+                    apps.get_model("workflows", "Trigger")
+                    .system_queryset()
+                    .using(owner.db)
+                    .filter(
+                        workflow=principal_workflow,
+                        enabled=True,
+                    )
+                    .order_by("pk")
+                    .values_list("granted_targets", flat=True)
+                )
                 version.require_publisher_access(
                     TriggerGrantTarget.from_stored(value) for values in granted for value in values
                 )
@@ -676,75 +604,31 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             references = list(version.definition.input_evidence(normalized))
             if subject is not None:
                 references.append(EvidenceReference(model=subject._meta.label, id=public_id_of(subject)))
-            records = readable_records(references, (actor,))
-            targets = {generic_target(record) for record in records}
+            records = readable_records(references, (actor,), using=owner.db)
+            targets = {generic_target(record, using=owner.db) for record in records}
             try:
-                with transaction.atomic():
-                    run = self.create(
-                        version=version, input=normalized, request_key=request_key, **identity,
+                with database_context(owner.db), transaction.atomic(using=owner.db):
+                    run = owner.create(
+                        version=version,
+                        input=normalized,
+                        request_key=request_key,
+                        **identity,
                     )
             except IntegrityError:
-                existing = self.filter(request_key=request_key).first() if request_key is not None else None
+                existing = owner.filter(request_key=request_key).first() if request_key is not None else None
                 if existing is None:
                     raise
                 return replay(existing)
             evidence_model = apps.get_model("workflows", "StepRecord")
-            evidence_model.objects.bulk_create(
+            evidence_model.objects.db_manager(owner.db).bulk_create(
                 evidence_model(run=run, content_type=source.content_type, object_id=source.object_id)
                 for source in sorted(targets, key=lambda item: (item.content_type.pk, item.object_id))
             )
-            with self.hold(run.pk) as locked:
-                from angee.workflows.runner import runner
-
-                if (subject := self._lock_subject(locked)) is not None:
+            with owner.hold(run.pk) as locked:
+                if (subject := locked._lock_run_subject()) is not None:
                     subject.admit_run(locked)
-                runner.advance(locked)
+                locked.advance()
             return locked.with_actor(actor)
-
-    def _lock_subject(self, run: Any, *, required: bool = True) -> RunSubject | None:
-        """Lock an opted-in root subject after the caller has locked its run."""
-        if run.parent_step_id is not None:
-            return None
-        model = run.subject_model_class
-        if model is None or not issubclass(model, RunSubject):
-            return None
-        subject = model._default_manager.filter(pk=run.subject_object_id).select_for_update(
-            no_key=True, of=row_lock_paths(model),
-        ).first()
-        if subject is None and required:
-            raise ValidationError("The workflow run subject no longer exists.")
-        return cast(RunSubject | None, subject)
-
-    def _write_state(self, run: Any, *, status: str, outcome: str, output: Any, error: str = "",
-                     actor: Any = None) -> None:
-        self.filter(pk=run.pk).update(
-            status=status, outcome=outcome, output=strip_null_bytes(output),
-            error=error,
-            finished_at=Now() if status in RunStatus.terminal_values() else None, updated_at=Now(),
-        )
-        if status in RunStatus.terminal_values() and not run.is_terminal:
-            # The sender owns this savepoint: a receiver that poisons the
-            # transaction rolls back its cleanup, never the terminal write.
-            try:
-                with transaction.atomic():
-                    run_stopping.send_robust(sender=self.model, run=run)
-            except DatabaseError:
-                logger.exception("Workflow run cleanup left the transaction unusable; its cleanup was rolled back.")
-            decisions = apps.get_model("decisions", "Decision").objects
-            with system_context(reason="workflows.terminal.withdraw"):
-                for decision in decisions.filter(requesting_steps__run=run).open().order_by("pk"):
-                    decisions.withdraw(decision, actor=actor or run.run_as)
-            if (subject := self._lock_subject(run, required=False)) is not None:
-                subject.settle_run(self.get(pk=run.pk), status)
-            if status != RunStatus.CANCELED:
-                def cancel_children() -> None:
-                    self.cancel_abandoned(run.pk)
-
-                transaction.on_commit(cancel_children, robust=True)
-            enqueue_task("workflows.wake_run", kwargs={"run_id": run.pk}, robust=True)
-        with _record_failure("run change publication"):
-            run.refresh_from_db()
-            publish_change(run, action="update", update_fields=None)
 
     def cancel_abandoned(self, run_id: int) -> None:
         """Close unawaited owned children after the parent's terminal write commits."""
@@ -761,15 +645,16 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
     def reap_interrupted(self) -> int:
         """Settle runs left running across a process restart and close their work."""
 
+        owner = self.db_manager(write_alias(self.model, using=self._db))
+
         interrupted = 0
         with system_context(reason="workflows.reap_interrupted"):
-            candidates = list(self.filter(status=RunStatus.RUNNING).order_by("-pk").values_list("pk", flat=True))
+            candidates = list(owner.filter(status=RunStatus.RUNNING).order_by("-pk").values_list("pk", flat=True))
             for run_id in candidates:
-                with self.hold(run_id, skip_locked=True) as run:
+                with owner.hold(run_id, skip_locked=True) as run:
                     if run is None or run.status != RunStatus.RUNNING:
                         continue
-                    self._write_state(
-                        run,
+                    run._write_state(
                         status=str(RunStatus.INTERRUPTED),
                         outcome=INTERRUPTED_OUTCOME,
                         output={},
@@ -784,46 +669,22 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
         steps = children = 0
         canceled = bool(runs and not runs[0].is_terminal)
         for index, run in enumerate(runs):
-            stopped = run.stopped_at is None and (not run.is_terminal or run.status == RunStatus.FAILED)
-            if stopped:
-                self.filter(pk=run.pk).update(stopped_at=Now(), updated_at=Now())
-                run.refresh_from_db(fields=["stopped_at"])
-            transitioning = not run.is_terminal
-            if transitioning:
-                children += bool(index)
-                self._write_state(run, status=str(RunStatus.CANCELED), outcome=CANCELED_OUTCOME,
-                                  output={}, actor=actor)
-            # Cleanup locks sessions and turns before cancel_open deletes their watches.
-            changed = run.step_runs.cancel_open()
+            transitioning, changed = run._cancel_owned_work(actor=actor)
+            children += bool(index) if transitioning else 0
             steps += changed
-            if not transitioning and (changed or stopped):
-                with _record_failure("run change publication"):
-                    run.refresh_from_db()
-                    publish_change(run, action="update", update_fields=None)
         return Cancellation(canceled, steps, children)
-
-    def cancel_on_commit(self, run: Any, actor: Any) -> None:
-        """Deliver an authorized cancellation after this transaction releases its locks.
-
-        Rollback discards the request. The task calls ``cancel`` with the same
-        actor, rechecking access and terminal state under the existing owner.
-        Robust delivery failures are logged without interrupting other callbacks.
-        """
-        actor = run.require_access("write", actor)
-        if actor is None:
-            raise PermissionDenied("Deferred cancellation requires an actor.")
-        payload = {"run_id": run.pk, "actor": str(to_subject_ref(actor))}
-        enqueue_task("workflows.cancel", kwargs=payload, robust=True)
 
     def cancel(self, run: Any, *, actor: Any = None, timeout: timedelta | None = timedelta(seconds=5)) -> Cancellation:
         """Cancel open rows after DATABASE work releases its lock, retaining terminal run facts."""
 
-        if not self.model.system_queryset().filter(pk=run.pk).exists():
+        owner = self.db_manager(write_alias(self.model, using=self._db or run._state.db, instance=run))
+
+        if not owner.model.system_queryset().using(owner.db).filter(pk=run.pk).exists():
             return Cancellation(False, 0)
         actor = run.require_access("write", actor)
         try:
-            with self.hold_owned(run.pk, timeout=timeout) as runs:
-                return self._cancel_locked(runs, actor=actor or runs[0].run_as)
+            with owner.hold_owned(run.pk, timeout=timeout) as runs:
+                return owner._cancel_locked(runs, actor=actor or runs[0].run_as)
         except OperationalError as error:
             if _sqlstate(error) == "55P03":
                 raise ValidationError("The run is still running; retry cancellation.") from error
@@ -832,57 +693,79 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
     def reprocess(self, run: Any, *, actor: Any = None) -> Any:
         """Reprocess a terminal run on the current publication as its requesting operator."""
 
+        owner = self.db_manager(write_alias(self.model, using=self._db or run._state.db, instance=run))
+
         actor = run.require_access("write", actor)
-        with self.hold(run.pk) as retained:
+        with owner.hold(run.pk) as retained:
             with system_context(reason="workflows.reprocess"):
                 if not retained.is_terminal:
                     raise ValidationError("Only terminal runs can be reprocessed.")
                 workflow = retained.version.workflow
                 model = retained.subject_model_class
-                subject = model.system_queryset().get(pk=retained.subject_object_id) if model is not None else None
-            return self.start(workflow, actor=actor, subject=subject, input=retained.input, reprocess_of=retained)
-
-    def reopen(self, run: Any) -> None:
-        """Clear a locked run's terminal facts and replan retained step rows."""
-        if (subject := self._lock_subject(run)) is not None:
-            subject.admit_run(run)
-        self._write_state(run, status=str(RunStatus.RUNNING), outcome="", output={})
-        from angee.workflows.runner import runner
-
-        runner.advance(run)
+                subject = (
+                    model.system_queryset().using(owner.db).get(pk=retained.subject_object_id)
+                    if model is not None
+                    else None
+                )
+            return owner.start(workflow, actor=actor, subject=subject, input=retained.input, reprocess_of=retained)
 
     def prune(self) -> int:
         """Delete bounded old owned trees, marking protected roots for a later retry."""
+        owner = self.db_manager(write_alias(self.model, using=self._db))
+
         count = 0
         with system_context(reason="workflows.retention"):
-            candidates = list(self.retention_candidates().order_by("finished_at", "pk")
-                              .values_list("pk", flat=True)[:PRUNE_BATCH_LIMIT])
+            candidates = list(
+                owner.retention_candidates()
+                .order_by("finished_at", "pk")
+                .values_list("pk", flat=True)[:PRUNE_BATCH_LIMIT]
+            )
             for run_id in candidates:
-                with _record_failure(f"prune candidate {run_id}"), self.hold_owned(run_id, skip_locked=True) as runs:
-                    if not runs or not self.retention_candidates().filter(pk=run_id).exists():
+                with (
+                    _record_failure(f"prune candidate {run_id}", using=owner.db),
+                    owner.hold_owned(run_id, skip_locked=True) as runs,
+                ):
+                    if not runs or not owner.retention_candidates().filter(pk=run_id).exists():
                         continue
                     try:
-                        with transaction.atomic(), ExitStack() as continuation_locks:
+                        with (
+                            database_context(owner.db),
+                            transaction.atomic(using=owner.db),
+                            ExitStack() as continuation_locks,
+                        ):
                             ids = [run.pk for run in runs]
-                            if apps.get_model("decisions", "Decision").objects.filter(
-                                requesting_steps__run_id__in=ids,
-                            ).open().exists():
+                            if (
+                                apps.get_model("decisions", "Decision")
+                                .objects.db_manager(owner.db)
+                                .filter(
+                                    requesting_steps__run_id__in=ids,
+                                )
+                                .open()
+                                .exists()
+                            ):
                                 raise ProtectedError("A decision is still open.", runs)
-                            continuation_ids = self.filter(
-                                parent_step__run_id__in=ids, relation=RunRelation.CONTINUATION,
-                            ).order_by("pk").values_list("pk", flat=True)
-                            continuations = [continuation_locks.enter_context(self.hold(pk, skip_locked=True))
-                                             for pk in continuation_ids]
+                            continuation_ids = (
+                                owner.filter(
+                                    parent_step__run_id__in=ids,
+                                    relation=RunRelation.CONTINUATION,
+                                )
+                                .order_by("pk")
+                                .values_list("pk", flat=True)
+                            )
+                            continuations = [
+                                continuation_locks.enter_context(owner.hold(pk, skip_locked=True))
+                                for pk in continuation_ids
+                            ]
                             if any(run is None or not run.is_terminal for run in [*runs, *continuations]):
                                 raise ProtectedError("A descendant is still running.", runs)
-                            steps = runs[0].step_runs.model.objects.filter(run_id__in=ids)
+                            steps = runs[0].step_runs.model.objects.db_manager(owner.db).filter(run_id__in=ids)
                             # Internal wait references must not protect rows in the same deleted tree.
                             steps.update(awaited_run=None)
                             for run in reversed(runs):
-                                self.filter(pk=run.pk).delete()
+                                owner.filter(pk=run.pk).delete()
                         count += len(runs)
                     except (ProtectedError, RestrictedError) as error:
-                        self.filter(pk=run_id).update(
+                        owner.filter(pk=run_id).update(
                             prune_after=Now() + timedelta(days=1),
                             prune_reason=str(error.args[0]),
                             updated_at=Now(),
@@ -912,26 +795,29 @@ class StepWatchManager[T: StepWatch](AngeeHistoryManager[T]):
         visible to that body's later saves and rolls back with a failed body.
         Callers needing an atomic predicate use ctx.load(..., lock=True) first.
         """
+        owner = self.db_manager(write_alias(self.model, using=self._db or step_run._state.db, instance=step_run))
+
         targets = {}
         for record in records:
             TriggerSource.check_model(type(record))
             if record.pk is None:
                 raise PermissionDenied("Read access to a saved watched record is required.")
-            target = generic_target(record)
+            target = generic_target(record, using=owner.db)
             targets[(target.content_type.pk, target.object_id)] = target
         with system_context(reason="workflows.watch_register"):
             for _, target in sorted(targets.items()):
                 model = target.content_type.model_class()
                 assert model is not None
-                model._default_manager.filter(pk=target.object_id).select_for_update(
-                    no_key=True, of=row_lock_paths(model),
+                model._default_manager.db_manager(owner.db).filter(pk=target.object_id).select_for_update(
+                    no_key=True,
+                    of=row_lock_paths(model),
                 ).get()
             for record in records:
-                readable = type(record).objects.with_actor(actor)
+                readable = type(record).objects.db_manager(owner.db).with_actor(actor)
                 if not readable.filter(pk=record.pk).exists():
                     raise PermissionDenied("Read access to a saved watched record is required.")
             for target in targets.values():
-                self.get_or_create(step_run=step_run, content_type=target.content_type, object_id=target.object_id)
+                owner.get_or_create(step_run=step_run, content_type=target.content_type, object_id=target.object_id)
 
     def wait_kind(self, step_run: Any, until: datetime | None) -> WaitingKind:
         """Admit a record wait, or require the time wait's explicit deadline."""
@@ -944,13 +830,17 @@ class StepWatchManager[T: StepWatch](AngeeHistoryManager[T]):
 
     def record_changes(self, records: tuple[Any, ...]) -> None:
         """Bound the existence probe, then retain each watched target's capture."""
+        if not records:
+            return
+        owner = self.db_manager(write_alias(self.model, using=self._db or records[0]._state.db, instance=records[0]))
+
         if len(records) > 1:
             try:
                 groups: dict[int, set[Any]] = {}
                 for record in records:
-                    target = generic_target(record)
+                    target = generic_target(record, using=owner.db)
                     groups.setdefault(target.content_type.pk, set()).add(target.object_id)
-                rows = self.get_queryset()
+                rows = owner.get_queryset()
                 rows._for_write = True
                 with system_context(reason="workflows.watch_capture"):
                     for content_type_id, keys in sorted(groups.items()):
@@ -966,293 +856,32 @@ class StepWatchManager[T: StepWatch](AngeeHistoryManager[T]):
                 logger.exception("Workflow watch capture failed.")
                 return
         for record in records:
-            self.record_change(record)
+            owner.record_change(record)
 
     def record_change(self, record: Any) -> None:
         """Capture under the record lock, isolating failure from the source write."""
+        owner = self.db_manager(write_alias(self.model, using=self._db or record._state.db, instance=record))
+
         try:
             try:
-                target = generic_target(record)
+                target = generic_target(record, using=owner.db)
             except ValueError:
                 return  # Unsaved or untyped records cannot have watches.
-            with transaction.atomic(), system_context(reason="workflows.watch_capture"):
+            with (
+                database_context(owner.db),
+                transaction.atomic(using=owner.db),
+                system_context(reason="workflows.watch_capture"),
+            ):
                 model = target.content_type.model_class()
                 assert model is not None
-                rows = model._default_manager.filter(pk=target.object_id)
+                rows = model._default_manager.db_manager(owner.db).filter(pk=target.object_id)
                 if rows.select_for_update(no_key=True, of=row_lock_paths(model)).first() is None:
                     return
-                if self.filter(**target.lookups(self.model, "record")).update(pending=True):
+                if owner.filter(**target.lookups(owner.model, "record")).update(pending=True):
                     payload = {"content_type_id": target.content_type.pk, "object_id": target.object_id}
-                    enqueue_task("workflows.wake_records", kwargs=payload, robust=True)
+                    enqueue_task("workflows.wake_records", kwargs=payload, robust=True, using=owner.db)
         except Exception:
             logger.exception("Workflow watch capture failed.")
-
-
-class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
-    """Own conditional step transitions and database-clock candidate scopes."""
-
-    def _write_transition(self, **values: Any) -> int:
-        """Publish affected targets after a conditional state write, retaining its fence."""
-
-        with transaction.atomic(using=self.db):
-            keys = list(self.lock_if_supported().order_by("pk").values_list("pk", flat=True))
-            changed = sum(batch.update(**values) for batch in by_key(self, keys))
-            if changed and not changes_muted():
-                rows = self.model._base_manager.using(self.db).defer("input", "output", "state", "notes")
-                for batch in by_key(rows, keys):
-                    bulk_updated.send_robust(sender=self.model, instances=tuple(batch),
-                                            update_fields=frozenset(values), using=self.db)
-            return changed
-
-    def nodes(self) -> Any:
-        """Read declared nodes with bounded map progress, excluding item rows."""
-        return self.exclude(node_key__endswith=MAP_BODY_SUFFIX).defer("input", "output", "state").annotate(
-            _failure_reason=self.model.failure_reason_expression(),
-            _map_total=self.model.map_total_expression(),
-            _map_settled=self.model.map_settled_expression(),
-        )
-
-    def item_counts(self) -> Any:
-        """Aggregate every admitted map item without fetching its payload."""
-        return (self.filter(node_key__endswith=MAP_BODY_SUFFIX)
-                .values("node_key", "status").annotate(count=Count("pk"), attempts=Sum("attempt"))
-                .order_by("node_key", "status"))
-
-    def for_map(self, run_id: Any, node_key: Any) -> Any:
-        """Select a containing map's body rows, accepting native ORM expressions."""
-        key = Value(node_key) if isinstance(node_key, str) else node_key
-        return self.filter(run_id=run_id, node_key=Concat(key, Value(MAP_BODY_SUFFIX)))
-
-    def collect_map(self, expected_count: int) -> list[dict[str, Any]] | None:
-        """Collect ordered terminal evidence, or None while body rows remain unsettled."""
-        rows = list(self.order_by("map_index"))
-        if len(rows) != expected_count or any(row.status not in StepRunStatus.terminal_values() for row in rows):
-            return None
-        if any(row.status not in (StepRunStatus.SUCCEEDED, StepRunStatus.FAILED) for row in rows):
-            raise ValidationError("A canceled or skipped map body cannot produce a result.")
-        return [{
-            "index": row.map_index, "outcome": row.outcome,
-            **(
-                {"error": row.failure_reason or ""}
-                if row.status == StepRunStatus.FAILED else {"output": row.output}
-            ),
-        } for row in rows]
-
-    @staticmethod
-    def _cleared_wait() -> dict[str, Any]:
-        """Clear the companion columns shared by every non-waiting transition."""
-        return {"waiting_kind": None, "wait_reason": "", "wake_at": None, "deadline_at": None, "updated_at": Now()}
-
-    def dispatch(self) -> None:
-        """Send unlocked ready rows after refreshing their delivery timestamp."""
-        with transaction.atomic(), system_context(reason="workflows.dispatch"):
-            ready = self.filter(status=StepRunStatus.READY).exclude(run__status__in=RunStatus.terminal_values())
-            selected = ready.order_by("pk").lock_if_supported(no_key=True, skip_locked=True)
-            selected_ids = list(selected.values_list("pk", flat=True))
-            ready.filter(pk__in=selected_ids).update(dispatched_at=Now(), updated_at=Now())
-            for pk in selected_ids:
-                enqueue_task("workflows.execute", kwargs={"step_run_id": pk})
-
-    def count_redispatch(self) -> int:
-        """Count a tick redelivery without changing status or publishing a change."""
-        return self.filter(status=StepRunStatus.READY).update(dispatches=F("dispatches") + 1, updated_at=Now())
-
-    def claim(self, step_run: Any) -> Any:
-        """Claim a ready row, append its attempt and persist input before the body."""
-        if not connection.in_atomic_block:
-            raise RuntimeError("claim requires the caller's locked transaction.")
-        values = dict(attempt=F("attempt") + 1, idempotency_token=step_run.idempotency_token or uuid4())
-        acknowledged_by_id = step_run.retry_acknowledged_by_id
-        changed = self.filter(pk=step_run.pk, status=StepRunStatus.READY).update(**values)
-        if not changed:
-            return None
-        step_run.refresh_from_db(fields=list(values))
-        attempt = step_run.attempts.create(
-            number=step_run.attempt, page_index=step_run.page_index, acknowledged_by_id=acknowledged_by_id,
-        )
-        deadline = timedelta(seconds=settings.CELERY_TASK_TIME_LIMIT)
-        until = attempt.started_at + deadline
-        running = False
-        try:
-            with transaction.atomic():
-                step = step_run.step
-                if step.mode == StepMode.IO:
-                    deadline = step.timeout
-                    until = attempt.started_at + task_time_budget()
-                step_run.input = step_run.run.version.definition.input_for(
-                    step_run.node_key, step_run.run.input, step_run.run.step_runs.all(),
-                    map_index=step_run.map_index,
-                )
-                self.filter(pk=step_run.pk).to_running(deadline, until=until, input=step_run.input)
-            running = True
-        finally:
-            # Failed input preparation rolls back before this durable fence,
-            # allowing the caller to retain the attempt's failure.
-            if not running:
-                self.filter(pk=step_run.pk).to_running(deadline, until=until)
-            step_run.refresh_from_db(fields=[
-                "status", "deadline_at", "waiting_kind", "wake_at", "wait_reason", "dispatches",
-                "retry_acknowledged_by_id",
-            ])
-        return attempt
-
-    def to_running(self, timeout: timedelta, *, until: datetime, input: Any = NOT_PROVIDED) -> int:
-        """Persist the running fence and, when prepared, its input in one write."""
-        values = self._cleared_wait() | {
-            "deadline_at": Least(Now() + timeout, until), "status": StepRunStatus.RUNNING,
-            "dispatches": 0, "retry_acknowledged_by_id": None,
-        }
-        if input is not NOT_PROVIDED:
-            values["input"] = input
-        return self.filter(status=StepRunStatus.READY).update(**values)
-
-    def extend_deadline(self, timeout: timedelta, *, until: datetime) -> int:
-        """Extend a fenced claim from database time within the worker's IO budget."""
-        return self.update(deadline_at=Least(Now() + timeout, until), updated_at=Now())
-
-    def fenced(self, step_run: Any) -> Any:
-        """Select this still-live claim; every live attempt write uses this predicate."""
-        return self.filter(
-            pk=step_run.pk, status=StepRunStatus.RUNNING, attempt=step_run.attempt, deadline_at__gt=Now(),
-        )
-
-    def settle(self, step_run: Any, attempt: Any) -> None:
-        """Record a settlement only while its numbered claim is live."""
-        self.fenced(step_run)._record_settlement(step_run, attempt)
-
-    def expire(self, step_run: Any, attempt: Any) -> None:
-        """Recover an expired claim under the tick's run and step locks."""
-        self.expired().filter(pk=step_run.pk, attempt=step_run.attempt)._record_settlement(
-            step_run, attempt,
-        )
-
-    def _record_settlement(self, step_run: Any, attempt: Any) -> None:
-        """Persist one eligible claim and close its attempt through shared policy."""
-        with mute_changes():
-            changed = attempt.settlement.transition(self, step_run, attempt)
-        if changed != 1:
-            raise Superseded
-        if not attempt.settlement.keeps_watches:
-            step_run.watches.all().delete()
-        if step_run.attempts.filter(number=step_run.attempt).close(
-            attempt.result, attempt.diagnostic_error or attempt.error, attempt.stacktrace,
-        ) != 1:
-            raise Superseded
-        current = self.model._base_manager.using(self.db).defer("input", "output", "state", "notes").get(pk=step_run.pk)
-        bulk_updated.send_robust(sender=self.model, instances=(current,),
-                                update_fields=frozenset(("status", "decision_id")), using=self.db)
-
-    def to_waiting(
-        self, *, until: Any = None, state: Any = None, retries: int | None = None,
-        kind: WaitingKind = cast(WaitingKind, WaitingKind.TIME), reason: str = "", decision_id: Any = None,
-    ) -> int:
-        """Park running rows, preserving retries unless a failure consumed one."""
-        if kind == WaitingKind.ERROR and not reason:
-            raise ValueError("An operator wait requires its reason.")
-        return self.filter(status__in=(StepRunStatus.RUNNING, StepRunStatus.READY))._write_transition(
-            **(self._cleared_wait() | {
-                "waiting_kind": kind, "wake_at": until, "wait_reason": reason if kind == WaitingKind.ERROR else "",
-            }),
-            status=StepRunStatus.WAITING, state=F("state") if state is None else state, outcome="",
-            retries=F("retries") if retries is None else retries,
-            decision_id=F("decision_id") if decision_id is None else decision_id,
-        )
-
-    def to_ready(
-        self, *, state: Any = None, reset_retries: bool = False,
-        acknowledged_by_id: Any = None, next_page: bool = False, reset_dispatches: bool = False,
-    ) -> int:
-        """Wake waiting rows and clear wait/deadline state; delivery is commit-owned."""
-        return self.filter(
-            status__in=(StepRunStatus.WAITING, StepRunStatus.FAILED, StepRunStatus.RUNNING),
-        )._write_transition(
-            **self._cleared_wait(), status=StepRunStatus.READY, dispatched_at=Now(),
-            state=F("state") if state is None else state, retries=0 if reset_retries else F("retries"),
-            outcome="", output={}, retry_acknowledged_by_id=acknowledged_by_id,
-            dispatches=0 if reset_dispatches else F("dispatches"),
-            page_index=F("page_index") + 1 if next_page else F("page_index"),
-        )
-
-    def cancel_open(self) -> int:
-        """Cancel open steps while leaving their questions and answers intact."""
-        opened = self.exclude(status__in=StepRunStatus.terminal_values())
-        list(opened.order_by("pk").lock_if_supported(no_key=True).values_list("pk", flat=True))
-        attempts = apps.get_model("workflows", "StepAttempt")
-        attempts.objects.filter(step_run__in=opened).close(AttemptResult.SUPERSEDED)
-        apps.get_model("workflows", "StepWatch").objects.filter(step_run__in=opened).delete()
-        return opened._write_transition(
-            **self._cleared_wait(),
-            status=StepRunStatus.CANCELED,
-        )
-
-    def due(self) -> Any:
-        """Return time or record waits whose optional database deadline has arrived."""
-        return self.filter(status=StepRunStatus.WAITING,
-                           waiting_kind__in=(WaitingKind.TIME, WaitingKind.RECORD), wake_at__lte=Now())
-
-    def changed_records(self, *, content_type_id: int | None = None, object_id: Any = None) -> Any:
-        """Select each live waiter once, even when several watched records changed."""
-        watches = apps.get_model("workflows", "StepWatch")
-        pending = watches.system_queryset().filter(step_run_id=OuterRef("pk"), pending=True)
-        if content_type_id is not None:
-            pending = pending.filter(content_type_id=content_type_id, object_id=object_id)
-        return self.filter(Exists(pending), status=StepRunStatus.WAITING, waiting_kind=WaitingKind.RECORD)
-
-    def answered_decisions(self) -> Any:
-        """Wake an answered step without joining its question into the row lock."""
-        answered = apps.get_model("decisions", "Decision").system_queryset().filter(
-            pk=OuterRef("decision_id"),
-        ).exclude(verdict__isnull=True)
-        return self.filter(
-            Exists(answered),
-            status=StepRunStatus.WAITING, waiting_kind=WaitingKind.DECISION,
-            decision_id__isnull=False,
-        )
-
-    def terminal_runs(self) -> Any:
-        """Select run waiters whose protected target has reached a terminal state."""
-        return self.filter(status=StepRunStatus.WAITING, waiting_kind=WaitingKind.RUN,
-                           awaited_run__status__in=RunStatus.terminal_values())
-
-    def undispatched(self) -> Any:
-        """Return ready rows whose most recent delivery is old enough to retry."""
-        return self.filter(status=StepRunStatus.READY, dispatched_at__lte=Now() - timedelta(seconds=60))
-
-    def expired(self) -> Any:
-        """Return committed claims whose database deadline has expired."""
-        return self.filter(status=StepRunStatus.RUNNING, deadline_at__lt=Now())
-
-
-class StepAttemptQuerySet[T: StepAttempt](AngeeQuerySet[T]):
-    """Own the one-way closure of an execution attempt."""
-
-    def close(self, result: str, error: str = "", stacktrace: str = "") -> int:
-        """Close unfinished attempts once, sanitizing their diagnostic columns."""
-        return self.filter(finished_at__isnull=True).update(
-            finished_at=Now(), result=result,
-            error=error,
-            stacktrace=stacktrace, updated_at=Now(),
-        )
-
-
-@contextmanager
-def _database_timeout(timeout: timedelta, *, setting: str = "statement_timeout") -> Iterator[None]:
-    """Bound each PostgreSQL statement, flooring sub-millisecond limits to 1 ms."""
-    previous = None
-    if connection.vendor == "postgresql":
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT current_setting(%s)", [setting])
-            previous = cursor.fetchone()[0]
-            cursor.execute(
-                "SELECT set_config(%s, %s, true)",
-                [setting, str(max(1, int(timeout.total_seconds() * 1000)))],
-            )
-    try:
-        yield
-    finally:
-        if previous is not None:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT set_config(%s, %s, true)", [setting, previous])
 
 
 _StepRunManagerBase = AngeeManager.from_queryset(StepRunQuerySet)
@@ -1268,13 +897,17 @@ class StepRunManager[T: StepRun](_StepRunManagerBase[T]):
 
     def record_await(self, step_run: Any, run_id: int) -> None:
         """Retain observed-run evidence inside an already-held DATABASE claim."""
+        owner = self.db_manager(write_alias(self.model, using=self._db or step_run._state.db, instance=step_run))
+
         with system_context(reason="workflows.record_await"):
-            if self.fenced(step_run).update(awaited_run_id=run_id) != 1:
+            if owner.fenced(step_run).update(awaited_run_id=run_id) != 1:
                 raise Superseded
 
     def retry_step(self, step_run: Any, *, actor: Any = None, accept_duplicate: bool = False) -> Any:
         """Retry one failed or operator-waiting node, retaining all settled evidence."""
-        with self.run_model.objects.hold(step_run.run_id) as run:
+        owner = self.db_manager(write_alias(self.model, using=self._db or step_run._state.db, instance=step_run))
+
+        with owner.run_model.objects.db_manager(owner.db).hold(step_run.run_id) as run:
             if run is None:
                 raise ValidationError("The workflow run no longer exists.")
             actor = run.require_access("write", actor)
@@ -1291,6 +924,411 @@ class StepRunManager[T: StepRun](_StepRunManagerBase[T]):
                     acknowledged_by_id=actor_user_id(to_subject_ref(actor)) if accept_duplicate else None,
                     reset_dispatches=True,
                 )
-                self.run_model.objects.reopen(run)
+                run.reopen()
                 current.refresh_from_db()
                 return current.with_actor(actor)
+
+
+_TriggerEventManagerBase = AngeeManager.from_queryset(TriggerEventQuerySet)
+
+
+class TriggerEventManager[T: TriggerEvent](_TriggerEventManagerBase[T]):
+    """Capture without compromising the transaction that changed the record."""
+
+    def record_change(self, model: Any, record: Any, *, source: str = "record_changed") -> None:
+        """Capture one source record through the same batch-aware owner."""
+        owner = self.db_manager(write_alias(self.model, using=self._db or record._state.db, instance=record))
+
+        owner.record_changes(model, (record,), source=source)
+
+    def record_changes(self, model: Any, records: tuple[Any, ...], *, source: str = "record_changed") -> None:
+        """Resolve a batch's source once; retain scoped, failure-isolated upserts."""
+        if not records:
+            return
+        owner = self.db_manager(write_alias(self.model, using=self._db or records[0]._state.db, instance=records[0]))
+
+        records = tuple(record for record in records if record.pk is not None)
+        if not records:
+            return
+        try:
+            triggers = apps.get_model("workflows", "Trigger")
+            field = triggers._meta.get_field("source")
+            if not isinstance(field, ImplClassField):
+                raise ImproperlyConfigured("Workflow trigger sources require an ImplClassField.")
+            implementation = cast(ImplClassField[TriggerSource], field).resolve_class(source)
+            try:
+                implementation.validate_model(model)
+            except ValidationError:
+                return
+            queryset = triggers.system_queryset().using(owner.db).filter(enabled=True, source=source)
+            if not implementation.model_label:
+                queryset = queryset.filter(model_label=model._meta.label)
+            if len(records) > 1:
+                with system_context(reason="workflows.capture"):
+                    if not queryset.exists():
+                        return
+            content_type = ContentType.objects.db_manager(owner.db).get_for_model(model)
+        except Exception:
+            logger.exception("Workflow trigger capture failed.")
+            return
+        for record in records:
+            try:
+                with (
+                    database_context(owner.db),
+                    transaction.atomic(using=owner.db),
+                    system_context(reason="workflows.capture"),
+                ):
+                    for trigger in implementation.matching_triggers(queryset, record).order_by("pk"):
+                        owner.model.system_queryset().using(owner.db).update_or_create(
+                            trigger=trigger,
+                            record_content_type=content_type,
+                            record_object_id=record.pk,
+                            defaults={"changed_at": Now()},
+                        )
+            except Exception:
+                logger.exception("Workflow trigger capture failed.")
+
+
+_TriggerManagerBase = AngeeManager.from_queryset(TriggerQuerySet)
+
+
+class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
+    """Enablement and admission serialize on the trigger before its ledger row."""
+
+    def lock_grants(self, workflow_id: Any, *, skip_locked: bool = False) -> Any:
+        """Serialize grants shared by triggers of one workflow."""
+        workflow = apps.get_model("workflows", "Workflow")
+        rows = (
+            workflow.system_queryset()
+            .using(self.db)
+            .filter(pk=workflow_id)
+            .lock_if_supported(
+                no_key=True,
+                skip_locked=skip_locked,
+            )
+        )
+        return rows.first() if skip_locked else rows.get()
+
+    def reconcile_grants(self, trigger: Any, targets: tuple[TriggerGrantTarget, ...]) -> None:
+        """Reconcile this trigger's contributed tuples without dropping shared grants."""
+        owner = self.db_manager(write_alias(self.model, using=self._db or trigger._state.db, instance=trigger))
+
+        old = {TriggerGrantTarget.from_stored(value) for value in trigger.granted_targets}
+        new = set(targets)
+        workflow = apps.get_model("workflows", "Workflow").system_queryset().using(owner.db).get(pk=trigger.workflow_id)
+        user = workflow.sync_service_user()
+        subject = to_subject_ref(user)
+        retained = {
+            TriggerGrantTarget.from_stored(value)
+            for values in owner.model.system_queryset()
+            .using(owner.db)
+            .filter(
+                workflow_id=trigger.workflow_id,
+                enabled=True,
+            )
+            .exclude(pk=trigger.pk)
+            .values_list("granted_targets", flat=True)
+            for value in values
+        }
+
+        def order(item: TriggerGrantTarget) -> tuple[str, str, str]:
+            return item.resource.resource_type, str(item.resource.resource_id), item.relation
+
+        with system_context(reason="workflows.trigger_grants"):
+            if new:
+                write_relationships(
+                    [
+                        RelationshipTuple(resource=target.resource, relation=target.relation, subject=subject)
+                        for target in sorted(new, key=order)
+                    ]
+                )
+            for target in sorted(old - new - retained, key=order):
+                delete_relationship(
+                    RelationshipTuple(
+                        resource=target.resource,
+                        relation=target.relation,
+                        subject=subject,
+                    )
+                )
+            stored = [target.stored() for target in sorted(new, key=order)]
+            owner.model.system_queryset().using(owner.db).filter(pk=trigger.pk).update(granted_targets=stored)
+            trigger.granted_targets = stored
+
+    def _enable_targets(self, trigger: Any, actor: Any) -> tuple[TriggerGrantTarget, ...]:
+        """Use one permission and source check for preview and enablement."""
+        trigger.workflow.require_access("write", actor)
+        trigger.validate_configuration()
+        if not trigger.workflow.published_id:
+            raise ValidationError("Publish the workflow before enabling its trigger.")
+        trigger.source_class.check_access(trigger, actor)
+        targets = tuple(trigger.source_class.grant_targets(trigger))
+        if not targets:
+            raise ValidationError("The trigger source must declare at least one grant target.")
+        if len(set(targets)) != len(targets):
+            raise ValidationError("The trigger source declared a duplicate grant target.")
+        for target in targets:
+            target.require_grant_access(actor)
+        return targets
+
+    def enable_preview(self, trigger: Any, *, actor: Any) -> TriggerEnablePreview | None:
+        """Disclose source grants and workflow run readers only to eligible enablers."""
+        owner = self.db_manager(write_alias(self.model, using=self._db or trigger._state.db, instance=trigger))
+
+        if actor is None:
+            return None
+        try:
+            targets = owner._enable_targets(trigger, actor)
+        except PermissionDenied, ValidationError, ImproperlyConfigured:
+            return None
+        resource = to_object_ref(trigger.workflow)
+        readers: list[str] = []
+        for subject_type, label in ((user_subject_type(), "User"), (group_subject_type(), "Group")):
+            refs = backend().lookup_subjects(resource=resource, action="monitor", subject_type=subject_type)
+            with system_context(reason="workflows.enable_preview readers"):
+                resolved = resolve_subjects(refs)
+            readers.extend(
+                f"{label}: {user_label(row) if subject_type == user_subject_type() else row}"
+                for row in resolved.values()
+            )
+        return TriggerEnablePreview(
+            grants=tuple(
+                sorted(f"{target.relation_label()} on {target.target_label(actor=actor)}" for target in targets)
+            ),
+            run_readers=tuple(sorted(set(readers))),
+        )
+
+    def enable(self, trigger: Any, *, actor: Any) -> Any:
+        """Require workflow write and source-declared delegation authority."""
+        owner = self.db_manager(write_alias(self.model, using=self._db or trigger._state.db, instance=trigger))
+
+        if is_sudo():
+            return Context().run(owner.enable, trigger, actor=actor)
+        if actor is None:
+            raise PermissionDenied("Enabling a trigger requires an acting user.")
+        trigger.workflow.require_access("write", actor)
+        with database_context(owner.db), transaction.atomic(using=owner.db), actor_context(actor):
+            owner.lock_grants(trigger.workflow_id)
+            current = (
+                owner.model.system_queryset().using(owner.db).filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
+            )
+            current.with_actor(actor)
+            targets = owner._enable_targets(current, actor)
+            owner.reconcile_grants(current, targets)
+            owner.model.system_queryset().using(owner.db).filter(pk=current.pk).update(
+                enabled=True,
+                disabled_reason="",
+            )
+            current.refresh_from_db()
+            return current
+
+    def disable(self, trigger: Any, *, actor: Any) -> Any:
+        """Stop admission and release this trigger's source grants."""
+        owner = self.db_manager(write_alias(self.model, using=self._db or trigger._state.db, instance=trigger))
+
+        trigger.workflow.require_access("write", actor)
+        with (
+            database_context(owner.db),
+            transaction.atomic(using=owner.db),
+            system_context(reason="workflows.disable_trigger"),
+        ):
+            owner.lock_grants(trigger.workflow_id)
+            current = (
+                owner.model.system_queryset().using(owner.db).filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
+            )
+            current.workflow.require_access("write", actor)
+            owner._disable(current, "")
+            current.refresh_from_db()
+            return current
+
+    def revoke_grant(
+        self,
+        trigger: Any,
+        *,
+        actor: Any,
+        resource_type: str,
+        resource_id: str,
+        relation: str,
+    ) -> Any:
+        """Revoke one contribution; disable admission when its source still needs it."""
+        owner = self.db_manager(write_alias(self.model, using=self._db or trigger._state.db, instance=trigger))
+
+        if is_sudo():
+            return Context().run(
+                owner.revoke_grant,
+                trigger,
+                actor=actor,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                relation=relation,
+            )
+        trigger.workflow.require_access("write", actor)
+        target = TriggerGrantTarget(ObjectRef(resource_type, resource_id), relation)
+        with database_context(owner.db), transaction.atomic(using=owner.db), actor_context(actor):
+            owner.lock_grants(trigger.workflow_id)
+            current = (
+                owner.model.system_queryset().using(owner.db).filter(pk=trigger.pk).lock_if_supported(no_key=True).get()
+            )
+            current.workflow.require_access("write", actor)
+            held = {TriggerGrantTarget.from_stored(value) for value in current.granted_targets}
+            if target not in held:
+                raise ValidationError("This trigger does not hold the selected grant.")
+            required = (
+                next(
+                    (candidate for candidate in current.source_class.grant_targets(current) if candidate == target),
+                    None,
+                )
+                if current.enabled
+                else None
+            )
+            if required is not None:
+                required.require_grant_access(actor)
+                reason = f"The workflow principal's {relation} grant was revoked; enable this trigger again."
+                owner._disable(current, reason)
+            else:
+                owner.reconcile_grants(current, tuple(held - {target}))
+            current.refresh_from_db()
+            return current
+
+    def _disable(self, trigger: Any, reason: str) -> None:
+        self.model.system_queryset().using(self.db).filter(pk=trigger.pk).update(
+            enabled=False,
+            disabled_reason=reason,
+        )
+        self.reconcile_grants(trigger, ())
+
+    def admit(self, event: Any) -> bool:
+        """Lock the source record, trigger, then event and recheck current policy.
+
+        Native saves already hold their record before capture. Sharing that order
+        lets domain admission hooks write it without a record/event lock cycle.
+        Busy records stay pending; deleted records proceed to a durable rejection.
+        An isolated context drops a caller's ambient bypass before actor hooks.
+        """
+        owner = self.db_manager(write_alias(self.model, using=self._db or event._state.db, instance=event))
+
+        if is_sudo():
+            return Context().run(owner.admit, event)
+        events = apps.get_model("workflows", "TriggerEvent")
+        with database_context(owner.db), transaction.atomic(using=owner.db):
+            event = (
+                events.system_queryset()
+                .using(owner.db)
+                .filter(pk=event.pk)
+                .select_related(
+                    "record_content_type",
+                    "trigger",
+                )
+                .first()
+            )
+            if event is None:
+                return False
+            record_model = event.record_content_type.model_class()
+            if record_model is not None:
+                records = record_model.system_queryset().using(owner.db).filter(pk=event.record_object_id)
+                if records.lock_if_supported(no_key=True, skip_locked=True).first() is None and records.exists():
+                    return False
+            trigger = (
+                owner.model.system_queryset()
+                .using(owner.db)
+                .filter(pk=event.trigger_id)
+                .lock_if_supported(no_key=True, skip_locked=True)
+                .first()
+            )
+            if trigger is None or not trigger.enabled:
+                return False
+            current = (
+                events.objects.db_manager(owner.db)
+                .system_context(reason="workflows.admit")
+                .pending()
+                .filter(pk=event.pk)
+                .lock_if_supported(no_key=True, skip_locked=True)
+                .first()
+            )
+            if current is None:
+                return False
+            try:
+                model, condition = trigger.validate_configuration()
+            except (ValidationError, ImproperlyConfigured, LookupError) as error:
+                reason = exception_text(error)
+                if owner.lock_grants(trigger.workflow_id, skip_locked=True) is None:
+                    return False
+                owner._disable(trigger, reason)
+                events.system_queryset().using(owner.db).filter(pk=current.pk).update(
+                    evaluated_at=F("changed_at"),
+                    rejection=reason,
+                )
+                return False
+            except Exception:
+                logger.exception("Workflow trigger configuration failed for event %s.", current.pk)
+                return False
+            try:
+                principal = trigger.workflow.user
+                with database_context(owner.db), transaction.atomic(using=owner.db), actor_context(principal):
+                    trigger.with_actor(principal)
+                    if (
+                        current.record_content_type_id
+                        != ContentType.objects.db_manager(owner.db).get_for_model(model).pk
+                    ):
+                        raise ValidationError("The source model changed after this event was recorded.")
+                    queryset = model.objects.db_manager(owner.db).with_actor(principal)
+                    record = condition(queryset).filter(pk=current.record_object_id).first()
+                    if record is None:
+                        raise PermissionDenied("The record is inaccessible or no longer matches the condition.")
+                    trigger.source_class.check_access(trigger, principal, record)
+                    trigger.admit_record(record, actor=principal)
+                    apps.get_model("workflows", "WorkflowRun").objects.db_manager(owner.db).start(
+                        trigger.workflow,
+                        actor=principal,
+                        subject=record,
+                        input=trigger.admission_input(record),
+                        request_key=f"trigger:{public_id_of(trigger)}:{public_id_of(record)}",
+                        trigger_event=current,
+                    )
+            except PublisherAuthorityDenied as error:
+                reason = exception_text(error)
+                if owner.lock_grants(trigger.workflow_id, skip_locked=True) is None:
+                    return False
+                owner._disable(trigger, reason)
+                events.system_queryset().using(owner.db).filter(pk=current.pk).update(
+                    evaluated_at=F("changed_at"),
+                    rejection=reason,
+                )
+                return False
+            except (ValidationError, PermissionDenied) as error:
+                events.system_queryset().using(owner.db).filter(pk=current.pk).update(
+                    evaluated_at=F("changed_at"),
+                    rejection=exception_text(error),
+                )
+                return False
+            except DatabaseError:
+                logger.exception("Workflow trigger admission will retry event %s.", current.pk)
+                return False
+            except Exception:
+                logger.exception("Workflow trigger admission failed for event %s.", current.pk)
+                return False
+            events.system_queryset().using(owner.db).filter(pk=current.pk).update(
+                evaluated_at=F("changed_at"),
+                admitted_at=Now(),
+                rejection="",
+            )
+            return True
+
+    def drain(self) -> int:
+        """Examine an ordered, bounded batch; one broken event cannot stop later rows."""
+        owner = self.db_manager(write_alias(self.model, using=self._db))
+
+        events = apps.get_model("workflows", "TriggerEvent")
+        candidates = list(
+            events.objects.db_manager(owner.db)
+            .system_context(reason="workflows.drain")
+            .pending()
+            .filter(trigger__enabled=True)
+            .order_by("pk")[:TRIGGER_DRAIN_LIMIT]
+        )
+        admitted = 0
+        for event in candidates:
+            try:
+                admitted += owner.admit(event)
+            except Exception:
+                logger.exception("Workflow trigger admission failed for event %s.", event.pk)
+        return admitted

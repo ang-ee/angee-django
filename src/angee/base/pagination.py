@@ -53,12 +53,14 @@ class KeysetOrder:
     tie_breakers: tuple[str, ...] = ()
     """Native Django ordering terms between timestamp-desc and primary-key-desc."""
 
+    @property
+    def ordering(self) -> tuple[str, ...]:
+        """Return the native Django ordering used by both selection and cuts."""
+
+        return (f"-{self.field}", *self.tie_breakers, "-pk")
+
     def _cut(self, position: tuple[Any, ...], *, older: bool, inclusive: bool = False) -> models.Q:
-        columns = (
-            (self.field, True),
-            *((term.removeprefix("-"), term.startswith("-")) for term in self.tie_breakers),
-            ("pk", True),
-        )
+        columns = tuple((term.removeprefix("-"), term.startswith("-")) for term in self.ordering)
         if len(position) != len(columns):
             raise ValueError("Cursor does not match its declared keyset ordering.")
         predicate = models.Q(pk__in=[])
