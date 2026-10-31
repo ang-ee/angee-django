@@ -33,7 +33,6 @@ if TYPE_CHECKING:
     from angee.integrate.models.webhooks import WebhookSubscription
 
 
-
 class OAuthClientQuerySet[OAuthClientT: OAuthClient](AngeeHistoryQuerySet[OAuthClientT]):
     """REBAC-scoped reads for OAuth client registration."""
 
@@ -45,7 +44,8 @@ class OAuthClientQuerySet[OAuthClientT: OAuthClient](AngeeHistoryQuerySet[OAuthC
         """
 
         alternatives = (
-            self.model.objects.sudo(reason="integrate.oauth.environment_preference")
+            self.model.objects.db_manager(self.db)
+            .sudo(reason="integrate.oauth.environment_preference")
             .filter(
                 slug=OuterRef("slug"),
             )
@@ -139,7 +139,7 @@ class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[Integr
     def of_concrete_type(self) -> Self:
         """Keep rows whose declared final MTI kind is this queryset's model."""
 
-        return self.filter(concrete_type=ContentType.objects.get_for_model(self.model))
+        return self.filter(concrete_type=ContentType.objects.db_manager(self.db).get_for_model(self.model))
 
     def ready_for_work(self) -> Self:
         """Exclude pending or unsuccessful discovery through one admission predicate."""
@@ -225,7 +225,9 @@ class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[Integr
                 prefetches.append(
                     Prefetch(
                         path,
-                        queryset=child_model.objects.sudo(reason="integrate.integration.child_integrity"),
+                        queryset=child_model.objects.db_manager(self.db).sudo(
+                            reason="integrate.integration.child_integrity"
+                        ),
                         to_attr=integrity_attr,
                     )
                 )
@@ -233,7 +235,7 @@ class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[Integr
                     prefetches.append(
                         Prefetch(
                             path,
-                            queryset=child_model.objects.with_actor(actor),
+                            queryset=child_model.objects.db_manager(self.db).with_actor(actor),
                             to_attr=self.model.concrete_child_cache_attr(child_model, authorized=True),
                         )
                     )
@@ -299,7 +301,7 @@ class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeHistoryQuerySet[RecordLin
     def absence_eligible(self) -> Self:
         """Roots and children with absent parents may accumulate absence evidence."""
 
-        parents = self.model.objects.filter(absence_count__gt=0)
+        parents = self.model.objects.db_manager(self.db).filter(absence_count__gt=0)
         return self.filter(Q(parent__isnull=True) | Q(parent_id__in=parents.values("pk"))).exclude(
             status=LinkStatus.TOMBSTONE,
         )

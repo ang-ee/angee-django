@@ -14,13 +14,15 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import OperationalError, connection, models, transaction
+from django.db import OperationalError, connections, models, transaction
 from django.db.models import OuterRef, Subquery
 from django.utils import timezone
 from rebac import (
     PermissionDenied,
+    database_context,
     system_context,
 )
+from rebac.database import read_alias, write_alias
 
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
@@ -119,7 +121,7 @@ def _save_connected(instance: Integration, source: Any, target: Any, **kwargs: A
 
     _save_lifecycle(instance, source, target, **kwargs)
     instance.await_discovery()
-    instance.refresh_from_db()
+    instance.refresh_from_db(using=instance._state.db)
 
 
 class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeDataModel, concrete=True):
@@ -150,9 +152,11 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def declared_concrete_model(self) -> type[Integration] | None:
         """Resolve the saved final MTI kind through Django's ContentType cache."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         if self.concrete_type_id is None:
             return None
-        model = ContentType.objects.get_for_id(self.concrete_type_id).model_class()
+        model = ContentType.objects.db_manager(using).get_for_id(self.concrete_type_id).model_class()
         if model is not None:
             assert issubclass(model, Integration)
         return model
@@ -204,10 +208,12 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     ) -> ChildT | None:
         """Return one child from this row's collection cache or scoped storage."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         queryset = (
-            model.objects.with_actor(actor)
+            model.objects.db_manager(using).with_actor(actor)
             if authorized
-            else model.objects.sudo(reason="integrate.integration.child_integrity")
+            else model.objects.db_manager(using).sudo(reason="integrate.integration.child_integrity")
         )
         if type(self) not in model._meta.parents:
             parent_model = next(iter(model._meta.parents))
@@ -299,9 +305,15 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def connect_oauth_client(self, owner_label: str) -> Any:
         """Resolve the ready registration for this capability's declared connection."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         model = apps.get_model("integrate", "OAuthClient")
-        client = model.objects.sudo(reason="integrate.integration.connect_oauth_client").enabled_for_slug(
-            self.connection_oauth_slug(owner_label),
+        client = (
+            model.objects.db_manager(using)
+            .sudo(reason="integrate.integration.connect_oauth_client")
+            .enabled_for_slug(
+                self.connection_oauth_slug(owner_label),
+            )
         )
         if client is None:
             raise OAuthFlowError("oauth_client_not_connectable", 400, f"{owner_label} has no enabled OAuth client.")
@@ -311,9 +323,12 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def credential_projection_expressions(cls) -> dict[str, Any]:
         """Public health scalars from a protected credential, without a joined object."""
 
+        using = read_alias(cls)
+
         credential = (
             apps.get_model("integrate", "Credential")
-            .objects.sudo(
+            .objects.db_manager(using)
+            .sudo(
                 reason="integrate.connection.public_health",
             )
             .filter(pk=OuterRef("credential_id"))
@@ -327,9 +342,12 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def oauth_projection_expressions(cls) -> dict[str, Any]:
         """Read the vendor hint and nearest concrete selector as elevated scalars."""
 
+        using = read_alias(cls)
+
         vendor = (
             apps.get_model("integrate", "Vendor")
-            .objects.sudo(
+            .objects.db_manager(using)
+            .sudo(
                 reason="integrate.connection.public_vendor",
             )
             .filter(pk=OuterRef("vendor_id"))
@@ -342,10 +360,14 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             if not any(isinstance(field, ImplClassField) for field in model._meta.fields):
                 continue
             field = model.capability_impl_field()
-            rows = model.objects.sudo(reason="integrate.connection.public_selector").filter(pk=OuterRef("pk"))
+            rows = (
+                model.objects.db_manager(using)
+                .sudo(reason="integrate.connection.public_selector")
+                .filter(pk=OuterRef("pk"))
+            )
             selectors.append(
                 models.When(
-                    concrete_type_id=ContentType.objects.get_for_model(model).pk,
+                    concrete_type_id=ContentType.objects.db_manager(using).get_for_model(model).pk,
                     then=Subquery(rows.values(field.name)[:1]),
                 )
             )
@@ -357,11 +379,14 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def connection_vendor_slug(self) -> str:
         """Read branding used by connection selection without requiring Vendor read."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         if "_connection_vendor_slug" in self.__dict__:
             return str(self.__dict__["_connection_vendor_slug"] or "")
         vendor = apps.get_model("integrate", "Vendor")
         return str(
-            vendor.objects.sudo(reason="integrate.connection.vendor")
+            vendor.objects.db_manager(using)
+            .sudo(reason="integrate.connection.vendor")
             .values_list(
                 "slug",
                 flat=True,
@@ -372,6 +397,8 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def is_oauth_connectable(self, *, ready_slugs: Collection[str] | None = None) -> bool:
         """Use registration readiness without constructing a runtime or loading secrets."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         if (self.declared_concrete_model() or type(self)) is apps.get_model("integrate", "Integration"):
             return False
         try:
@@ -380,7 +407,13 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             return False
         if ready_slugs is not None:
             return slug in ready_slugs
-        return apps.get_model("integrate", "OAuthClient").objects.connectable().filter(slug=slug).exists()
+        return (
+            apps.get_model("integrate", "OAuthClient")
+            .objects.db_manager(using)
+            .connectable()
+            .filter(slug=slug)
+            .exists()
+        )
 
     def can_connect(
         self,
@@ -467,16 +500,20 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
 
         # The physical lock target is an integrity fact, independent of whether
         # the caller can read the child. The locked queryset retains its scope.
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         target = self
         if self.declared_concrete_model() is not type(self):
             target = copy(self).sudo(reason="integrate.connection.lock_target").concrete_capability()
-        return type(target).objects.lock_if_supported().get(pk=self.pk)
+        return type(target).objects.db_manager(using).lock_if_supported().get(pk=self.pk)
 
     def resume(self) -> None:
         """Recheck Resume admission under the integration lock before connecting."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         actor = instance_actor(self)
-        with transaction.atomic():
+        with database_context(using), transaction.atomic(using=using):
             with system_context(reason="integrate.connection.resume"):
                 row = self.lock_capability()
             if actor is not None:
@@ -484,10 +521,14 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             if not row.can_resume():
                 raise ValidationError("This integration cannot resume in its current state.")
             row.connect()
-        self.refresh_from_db()
+        self.refresh_from_db(
+            using=using,
+        )
 
     def _credential_health(self) -> Credential | None:
         """Consume optimized public facts, or fetch the same narrow elevated projection."""
+
+        using = write_alias(type(self), using=self._state.db, instance=self)
 
         if self.credential_id is None:
             return None
@@ -501,7 +542,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                 return None
             if values["expires_at"] is None or values["expires_at"] > timezone.now():
                 return cast(Credential, model(**values))
-        return model.objects.connection_health().get(pk=self.credential_id)
+        return model.objects.db_manager(using).connection_health().get(pk=self.credential_id)
 
     @property
     def is_reconnect_required(self) -> bool:
@@ -522,13 +563,15 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def connection_credential(self) -> Credential | None:
         """Load this relation with its auth dependencies once; retain Django's cache."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         field = self._meta.get_field("credential")
         if not field.is_cached(self):
             if self.credential_id is None:
                 return None
             field.set_cached_value(
                 self,
-                field.related_model._base_manager.db_manager(hints={"instance": self})
+                field.related_model._base_manager.db_manager(using, hints={"instance": self})
                 .select_related("oauth_client")
                 .get(
                     pk=self.credential_id,
@@ -566,9 +609,11 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def preview_push(self) -> tuple[tuple[Any, Any], ...]:
         """Preview each retained stream using one capability adapter lifetime."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         adapter = self.concrete_capability().capability_impl
         try:
-            streams = apps.get_model("integrate", "SyncStream").objects.current_for_bridge(self)
+            streams = apps.get_model("integrate", "SyncStream").objects.db_manager(using).current_for_bridge(self)
             return tuple((stream, preview_push(stream, adapter)) for stream in streams)
         finally:
             adapter.close()
@@ -576,10 +621,14 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def request_sync(self, *, now: datetime | None = None) -> int:
         """Queue this integration's bridge capabilities and return the dispatch count."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         timestamp = now or timezone.now()
         count = 0
         for model in models_with(base=Bridge):
-            for capability in model._default_manager.of_concrete_type().filter(pk=self.pk).order_by("pk"):
+            for capability in (
+                model._default_manager.db_manager(using).of_concrete_type().filter(pk=self.pk).order_by("pk")
+            ):
                 capability.request_sync(now=timestamp)
                 count += 1
         return count
@@ -712,12 +761,14 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         caller holds the capability lock and an atomic transaction.
         """
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         fields = dict(fields)
         credential_id = fields.pop("credential_id", _UNSET)
         if credential_id is not _UNSET:
             actor = instance_actor(self)
-            credentials = apps.get_model("integrate", "Credential").objects.for_write()
-            accounts = apps.get_model("integrate", "ExternalAccount").objects.for_write()
+            credentials = apps.get_model("integrate", "Credential").objects.db_manager(using).for_write()
+            accounts = apps.get_model("integrate", "ExternalAccount").objects.db_manager(using).for_write()
             if actor is not None:
                 credentials = credentials.with_actor(actor)
                 accounts = accounts.with_actor(actor)
@@ -725,12 +776,14 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             account_id = fields.pop("account_id", _UNSET)
             account = account_id if account_id is _UNSET or account_id is None else accounts.get(pk=account_id)
             self.concrete_capability().attach_connection(credential, account=account)
-            self.refresh_from_db()
+            self.refresh_from_db(
+                using=using,
+            )
         if "lifecycle" in fields:
             self.set_lifecycle(fields.pop("lifecycle"))
         owner_id = fields.pop("owner_id", _UNSET)
         if owner_id is not _UNSET:
-            owner = None if owner_id is None else get_user_model().objects.get(pk=owner_id)
+            owner = None if owner_id is None else get_user_model().objects.db_manager(using).get(pk=owner_id)
             self.transfer_ownership(owner)
         if "config" in fields:
             for name in self.apply_config_patch(fields.pop("config")):
@@ -740,8 +793,11 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Keep the grouping content type aligned with the row's concrete model."""
 
+        using = write_alias(type(self), using=kwargs.get("using") or self._state.db, instance=self)
+        kwargs["using"] = using
+
         if self.concrete_type_id is None or type(self) is not self._meta.apps.get_model("integrate", "Integration"):
-            content_type = ContentType.objects.get_for_model(type(self))
+            content_type = ContentType.objects.db_manager(using).get_for_model(type(self))
             changed = self.concrete_type_id != content_type.pk
             self.concrete_type = content_type
             update_fields = kwargs.get("update_fields")
@@ -823,6 +879,8 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         this row's lock. Ordinary callers always enter connection discovery.
         """
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         resolved_account = (
             (None if credential is None else credential.external_account) if account is _UNSET else account
         )
@@ -835,7 +893,11 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                     reason="unsaved integration attachment declares initial connection intent",
                 )
             return
-        with system_context(reason="integrate.connection.attach"), transaction.atomic():
+        with (
+            system_context(reason="integrate.connection.attach"),
+            database_context(using),
+            transaction.atomic(using=using),
+        ):
             row = self.lock_capability()
             derived_pk = row.credential_id if row.discovery_credential_id not in (None, row.credential_id) else None
             if discovery_generation is not None:
@@ -844,15 +906,17 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                 original_grant_id = row.discovery_credential_id
                 fields = row._set_connection_fields(credential=credential, account=resolved_account)
                 row.discovery_credential_id = original_grant_id
-                row.save(update_fields={*fields, "updated_at"})
+                row.save(using=row._state.db, update_fields={*fields, "updated_at"})
             elif credential is not None and connect_disconnected and row.lifecycle == IntegrationLifecycle.DISCONNECTED:
                 row.connect(credential=credential, account=resolved_account)
             else:
                 fields = row._set_connection_fields(credential=credential, account=resolved_account)
-                row.save(update_fields={*fields, "updated_at"})
+                row.save(using=row._state.db, update_fields={*fields, "updated_at"})
                 row.await_discovery()
-            apps.get_model("integrate", "Credential").objects.delete_unattached_derived(derived_pk)
-        self.refresh_from_db()
+            apps.get_model("integrate", "Credential").objects.db_manager(using).delete_unattached_derived(derived_pk)
+        self.refresh_from_db(
+            using=using,
+        )
 
     @transition(
         lifecycle,
@@ -923,17 +987,27 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def await_discovery(self) -> None:
         """Invalidate the previous result and dispatch one durable discovery attempt."""
 
-        with system_context(reason="integrate.connection.await"), transaction.atomic():
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        with (
+            system_context(reason="integrate.connection.await"),
+            database_context(using),
+            transaction.atomic(using=using),
+        ):
             row = self.lock_capability()
             source_lost = (
                 row.discovery_generation > 0 and row.discovery_credential_id is None and row.credential_id is not None
             )
             if row.discovery_credential_id is not None and row.credential_id != row.discovery_credential_id:
                 derived_pk = row.credential_id
-                credential = apps.get_model("integrate", "Credential").objects.get(pk=row.discovery_credential_id)
+                credential = (
+                    apps.get_model("integrate", "Credential")
+                    .objects.db_manager(using)
+                    .get(pk=row.discovery_credential_id)
+                )
                 fields = row._set_connection_fields(credential=credential, account=row.account)
-                row.save(update_fields={*fields, "updated_at"})
-                type(credential).objects.delete_unattached_derived(derived_pk)
+                row.save(using=row._state.db, update_fields={*fields, "updated_at"})
+                type(credential).objects.db_manager(using).delete_unattached_derived(derived_pk)
             if row.discovery_credential_id is None and not source_lost:
                 row.discovery_credential_id = row.credential_id
             row.discovery_generation += 1
@@ -942,6 +1016,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             row.discovery_retry_at = timezone.now()
             row.prepare_connection_discovery()
             row.save(
+                using=row._state.db,
                 update_fields=[
                     "discovery_generation",
                     "discovery_attempts",
@@ -949,7 +1024,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                     "discovery_retry_at",
                     "discovery_credential",
                     "updated_at",
-                ]
+                ],
             )
             if source_lost:
                 row.finish_discovery(
@@ -959,7 +1034,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                 )
             elif row.requires_connection_discovery and row.lifecycle == IntegrationLifecycle.DISCONNECTED:
                 row.discovery_retry_at = None
-                row.save(update_fields=["discovery_retry_at", "updated_at"])
+                row.save(using=row._state.db, update_fields=["discovery_retry_at", "updated_at"])
             elif not row.requires_connection_discovery:
                 row.finish_discovery(credential_pk=row.credential_id, generation=row.discovery_generation)
             elif row.credential_id is None:
@@ -976,17 +1051,23 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                         "integration_pk": row.pk,
                         "credential_pk": row.credential_id,
                         "generation": row.discovery_generation,
+                        "using": using,
                     },
                     expires=DISCOVERY_TASK_EXPIRES,
                     robust=True,
+                    using=using,
                 )
-        self.refresh_from_db()
+        self.refresh_from_db(
+            using=using,
+        )
 
     def retry_discovery(self) -> None:
         """Retry connection discovery, resetting the bounded attempt budget."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         actor = instance_actor(self)
-        with transaction.atomic():
+        with database_context(using), transaction.atomic(using=using):
             with system_context(reason="integrate.connection.retry"):
                 row = self.lock_capability()
             if actor is not None:
@@ -994,7 +1075,9 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             if not row.can_retry_discovery():
                 raise ValidationError("This integration cannot retry discovery in its current state.")
             row.await_discovery()
-        self.refresh_from_db()
+        self.refresh_from_db(
+            using=using,
+        )
 
     def discovery_is_pending(self, credential_pk: int | None, *, generation: int) -> bool:
         """Fence both credential replacement and rotation on the same credential row."""
@@ -1006,7 +1089,13 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
     def defer_discovery(self, *, credential_pk: int, generation: int, retry_after: timedelta) -> bool:
         """Retain a provider deadline unless this generation exhausted its attempts."""
 
-        with system_context(reason="integrate.connection.defer"), transaction.atomic():
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        with (
+            system_context(reason="integrate.connection.defer"),
+            database_context(using),
+            transaction.atomic(using=using),
+        ):
             row = self.lock_capability()
             if not row.discovery_is_pending(credential_pk, generation=generation):
                 return False
@@ -1019,8 +1108,10 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
             else:
                 assert row.discovery_retry_at is not None  # discovery_is_pending checked the persisted deadline.
                 row.discovery_retry_at = max(row.discovery_retry_at, timezone.now() + retry_after)
-                row.save(update_fields=["discovery_retry_at", "updated_at"])
-        self.refresh_from_db()
+                row.save(using=row._state.db, update_fields=["discovery_retry_at", "updated_at"])
+        self.refresh_from_db(
+            using=using,
+        )
         return True
 
     def apply_discovery(self, discovery: ConnectionDiscovery) -> None:
@@ -1044,7 +1135,13 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         never in the adapter's network phase.
         """
 
-        with system_context(reason="integrate.connection.finish"), transaction.atomic():
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        with (
+            system_context(reason="integrate.connection.finish"),
+            database_context(using),
+            transaction.atomic(using=using),
+        ):
             row = self.lock_capability()
             if not row.discovery_is_pending(credential_pk, generation=generation):
                 return False
@@ -1054,13 +1151,17 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                 if result.credential is not None:
                     if credential_pk is None:
                         raise IntegrationError("No credential is attached.")
-                    source = apps.get_model("integrate", "Credential").objects.get(pk=credential_pk)
+                    source = apps.get_model("integrate", "Credential").objects.db_manager(using).get(pk=credential_pk)
                     derived = result.credential
-                    credential = type(source).objects.create_local_credential(
-                        source.user,
-                        kind=derived.kind,
-                        name=derived.name,
-                        material=dict(derived.material),
+                    credential = (
+                        type(source)
+                        .objects.db_manager(using)
+                        .create_local_credential(
+                            source.user,
+                            kind=derived.kind,
+                            name=derived.name,
+                            material=dict(derived.material),
+                        )
                     )
                     row.attach_connection(
                         credential,
@@ -1070,7 +1171,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                     )
             row.discovery_retry_at = None
             row.discovery_completed_at = timezone.now() if error is None else None
-            row.save(update_fields=["discovery_retry_at", "discovery_completed_at", "updated_at"])
+            row.save(using=row._state.db, update_fields=["discovery_retry_at", "discovery_completed_at", "updated_at"])
             status = IntegrationRuntimeStatus.ERROR if error else IntegrationRuntimeStatus.OK
             row.report_status(cast(IntegrationRuntimeStatus, status), error or "")
             row.connection_discovery_finished(succeeded=error is None)
@@ -1079,26 +1180,38 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                     lambda: discovery_finished.send(sender=type(row), instance=row),
                     robust=True,
                 )
-        self.refresh_from_db()
+        self.refresh_from_db(
+            using=using,
+        )
         return True
 
     def attach_credential(self, credential: Any | None) -> None:
         """Route parent-addressed attachment through the concrete capability owner."""
 
-        with system_context(reason="integrate.integration.attach_credential"), transaction.atomic():
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        with (
+            system_context(reason="integrate.integration.attach_credential"),
+            database_context(using),
+            transaction.atomic(using=using),
+        ):
             self.concrete_capability().attach_connection(credential)
-        self.refresh_from_db()
+        self.refresh_from_db(
+            using=using,
+        )
 
     def run_discovery(self, *, credential_pk: int | None, generation: int) -> dict[str, Any]:
         """Discover in autocommit under the sync lock, then apply under the row fence."""
 
-        if connection.in_atomic_block:
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        if connections[using].in_atomic_block:
             raise RuntimeError("Connection discovery requires autocommit.")
         target = self.concrete_capability()
         with bridge_advisory_lock(target) as acquired:
             if not acquired:
                 return {"ok": False, "reason": "locked"}
-            with transaction.atomic():
+            with database_context(using), transaction.atomic(using=using):
                 row = target.lock_capability()
                 if not row.discovery_is_pending(credential_pk, generation=generation):
                     return {"ok": False, "reason": "stale-discovery"}
@@ -1113,7 +1226,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                     )
                     return {"ok": False, "reason": "attempt-limit"}
                 row.discovery_attempts += 1
-                row.save(update_fields=["discovery_attempts", "updated_at"])
+                row.save(using=row._state.db, update_fields=["discovery_attempts", "updated_at"])
             target = row
             try:
                 credential = row.credential
@@ -1127,7 +1240,9 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                     generation=generation,
                     discovery=discovery,
                 )
-                self.refresh_from_db()
+                self.refresh_from_db(
+                    using=using,
+                )
                 return {"ok": applied, "reason": "applied" if applied else "stale-discovery"}
             except Exception as error:  # noqa: BLE001 — provider diagnostics never become public telemetry.
                 if not isinstance(error, IntegrationError):
@@ -1149,14 +1264,18 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
                         generation=generation,
                         retry_after=max(backoff, hint) if hint is not None else backoff,
                     )
-                    self.refresh_from_db()
+                    self.refresh_from_db(
+                        using=using,
+                    )
                     return {"ok": False, "reason": "deferred" if target.discovery_pending else "attempt-limit"}
                 target.finish_discovery(
                     credential_pk=credential_pk,
                     generation=generation,
                     error=safe_integration_failure(error),
                 )
-                self.refresh_from_db()
+                self.refresh_from_db(
+                    using=using,
+                )
                 return {"ok": False, "reason": "discovery-failed"}
 
     def discover_connection(self, credential: Credential) -> ConnectionDiscovery:
@@ -1175,6 +1294,8 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         verbatim.
         """
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         raw_status = str(getattr(status, "value", status)).strip()
         normalized = IntegrationRuntimeStatus.from_value(status)
         reported_at = timezone.now()
@@ -1192,8 +1313,13 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeData
         if self.pk is None:
             return
 
-        with system_context(reason="integrate.integration.status"), transaction.atomic():
+        with (
+            system_context(reason="integrate.integration.status"),
+            database_context(using),
+            transaction.atomic(using=using),
+        ):
             self.save(
+                using=self._state.db,
                 update_fields=[
                     "last_error",
                     "last_error_at",

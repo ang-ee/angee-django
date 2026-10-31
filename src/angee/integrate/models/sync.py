@@ -12,14 +12,16 @@ from deepdiff import DeepDiff
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import connection, models, transaction
+from django.db import connections, models, transaction
 from django.db.models import Q
 from django.utils import timezone
 from rebac import (
     SubjectRef,
+    database_context,
     system_context,
     to_subject_ref,
 )
+from rebac.database import write_alias
 
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
@@ -144,7 +146,7 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
         if state is None:
             self.last_reconciled_at = timezone.now()
         self.reconcile_state = state or {}
-        self.save(update_fields=["reconcile_state", "last_reconciled_at", "updated_at"])
+        self.save(using=self._state.db, update_fields=["reconcile_state", "last_reconciled_at", "updated_at"])
 
     def resolve_applied(self, record: Any) -> None:
         """Resolve nonconflict failures for an applied replica, never an event peer."""
@@ -162,7 +164,10 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
         return self
 
     def sync_failures(
-        self, *, open_only: bool = False, kind: SyncFailureKind | None = None,
+        self,
+        *,
+        open_only: bool = False,
+        kind: SyncFailureKind | None = None,
     ) -> tuple[SyncFailure, ...]:
         """Read stream and linked failures through their owning row permissions."""
         actor, unscoped = self.effective_actor(strict=True)
@@ -352,6 +357,8 @@ class RecordLink(
         landing and live session of the source's integration, to serialize them.
         """
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         source = self.asserting_source()
         statements = [
             (reference, statement_model)
@@ -360,7 +367,7 @@ class RecordLink(
         ]
         observing = (
             type(self)
-            ._base_manager.using(self._state.db)
+            ._base_manager.using(using)
             .filter(
                 target_content_type_id=self.target_content_type_id,
                 target_object_id=self.target_object_id,
@@ -375,12 +382,12 @@ class RecordLink(
         sibling = next((link for link in observing if link.asserting_source() == source), None) if targeted else None
         if sibling is None:
             return sum(
-                statement_model.objects.db_manager(self._state.db).withdraw(source, link=self)
+                statement_model.objects.db_manager(using).withdraw(source, link=self)
                 for _reference, statement_model in statements
             )
         with system_context(reason="integrate.link_evidence_move"):
             for reference, _statement_model in statements:
-                rows = reference.rows(self).using(self._state.db).filter(asserted_by=str(source))
+                rows = reference.rows(self).using(using).filter(asserted_by=str(source))
                 if rows.exists():
                     reference.move(rows, survivor=sibling)
         return 0
@@ -398,7 +405,7 @@ class RecordLink(
     def on_sync_state_saved(self, locked: Self) -> None:
         locked.update_sync_status()
         fields = ["inbound", "outbox_state", "outbox_retry_at", "outbox_last_error", "status"]
-        locked.save(update_fields=[*fields, "updated_at"])
+        locked.save(using=locked._state.db, update_fields=[*fields, "updated_at"])
         for name in fields:
             setattr(self, name, getattr(locked, name))
 
@@ -418,8 +425,10 @@ class RecordLink(
         the same inbound problem. Conflicts still require an explicit decision;
         stream-level failures may describe distinct events and keep their slots.
         """
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         if not outbox:
-            with transaction.atomic():
+            with database_context(using), transaction.atomic(using=using):
                 locked = self._lock_sync_state()
                 for prior in locked.failures(open_only=True):
                     if (
@@ -432,7 +441,7 @@ class RecordLink(
                 return super().record_failure(
                     kind=kind, code=code, source_hash=source_hash, mapping_version=mapping_version, details=details
                 )
-        with transaction.atomic():
+        with database_context(using), transaction.atomic(using=using):
             locked = self._lock_sync_state()
             data = deepcopy(locked.outbox_last_error)
             identity = dict(kind=kind, code=code, source_hash=source_hash, mapping_version=mapping_version)
@@ -453,7 +462,9 @@ class RecordLink(
     def _transition_failure(self, slot: int | None, *, retry: bool, conflict: bool = False) -> SyncFailure:
         if slot is not None:
             return super()._transition_failure(slot, retry=retry, conflict=conflict)
-        with transaction.atomic():
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        with database_context(using), transaction.atomic(using=using):
             locked = self._lock_sync_state()
             data = locked.outbox_last_error
             locked._transition_state(data, retry=retry, conflict=conflict)
@@ -472,13 +483,15 @@ class RecordLink(
     def resolve_conflict(self, slot: int | None, keep: ConflictKeep) -> SyncFailure:
         """Fresh-read and retain the chosen side of one linked conflict."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         link = self
         if keep not in ConflictKeep.values:
             raise ValidationError("Choose remote or local changes.")
-        if connection.in_atomic_block:
+        if connections[using].in_atomic_block:
             raise RuntimeError("Conflict resolution must run outside a database transaction.")
         with system_context(reason="integrate.record.resolve_conflict"):
-            link = type(link).objects.with_sync_evidence().get(pk=link.pk)
+            link = type(link).objects.db_manager(using).with_sync_evidence().get(pk=link.pk)
             row = link.failure_at(slot)
             if row.kind != SyncFailureKind.CONFLICT:
                 raise ValidationError("Conflict resolution requires a linked conflict.")
@@ -500,17 +513,17 @@ class RecordLink(
                     raise ValidationError("Keeping local changes requires a completed writable baseline.")
                 precondition = owner.sync_precondition
                 remote = read_stream_keys(adapter, stream, tuple(keys))[0] if keep == ConflictKeep.LOCAL else None
-                with transaction.atomic():
-                    type(stream).objects.lock_current(stream, fenced_to=stream)
-                    locked = type(owner).objects.lock_if_supported().get(pk=owner.pk)
-                    current_link = type(link).objects.lock_if_supported().get(pk=link.pk)
+                with database_context(using), transaction.atomic(using=using):
+                    type(stream).objects.db_manager(using).lock_current(stream, fenced_to=stream)
+                    locked = type(owner).objects.db_manager(using).lock_if_supported().get(pk=owner.pk)
+                    current_link = type(link).objects.db_manager(using).lock_if_supported().get(pk=link.pk)
                     current = current_link.failure_at(slot)
                     if not current.is_open:
                         return current
                     if not locked.sync_precondition_matches(precondition):
                         raise RuntimeError("Record bases changed during conflict resolution; retry the choice.")
                     if remote is not None:
-                        type(locked).objects.observe(
+                        type(locked).objects.db_manager(using).observe(
                             stream,
                             locked.external_key,
                             source_payload=remote.source_payload,
@@ -525,14 +538,14 @@ class RecordLink(
                         raise ValidationError("Complete the requested stream baseline before resolving its conflict.")
                 elif not push_stream(stream, adapter, external_keys=keys).count:
                     raise ValidationError("The selected local record could not be written; its failure remains open.")
-                if type(link).objects.filter(pk__in=(link.pk, owner.pk)).open_failures():
+                if type(link).objects.db_manager(using).filter(pk__in=(link.pk, owner.pk)).open_failures():
                     raise ValidationError("The record could not be synchronized; its failure remains open.")
-                fresh = type(link).objects.get(pk=link.pk)
+                fresh = type(link).objects.db_manager(using).get(pk=link.pk)
                 return fresh.failure_at(slot)
             except Exception:
                 if resolved:
-                    fresh = type(link).objects.get(pk=link.pk)
-                    if not type(link).objects.filter(pk__in=(link.pk, owner.pk)).open_failures():
+                    fresh = type(link).objects.db_manager(using).get(pk=link.pk)
+                    if not type(link).objects.db_manager(using).filter(pk__in=(link.pk, owner.pk)).open_failures():
                         fresh.record_failure(
                             kind=row.kind,
                             code=row.code,
@@ -568,7 +581,7 @@ class RecordLink(
         with transaction.atomic():
             locked = self._lock_sync_state()
             locked.pinned = pinned
-            locked.save(update_fields=["pinned", "updated_at"])
+            locked.save(using=locked._state.db, update_fields=["pinned", "updated_at"])
             self.pinned = pinned
 
     @property

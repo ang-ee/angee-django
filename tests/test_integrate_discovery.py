@@ -96,6 +96,7 @@ def test_attachment_defers_one_captured_task_until_commit_and_rolls_back(bridge,
         assert [name for name, _ in sent_tasks] == [DISCOVERY_TASK]
         assert sent_tasks[0][1]["kwargs"] == {
             "integration_pk": bridge.pk, "credential_pk": bridge.credential_id, "generation": captured,
+            "using": "default",
         }
         sent_tasks.clear()
         with pytest.raises(RuntimeError), transaction.atomic():
@@ -301,7 +302,7 @@ def test_retry_discovery_refuses_states_outside_its_admission(bridge, state):
 
 
 def test_oauth_connect_admission_requires_the_owner_and_does_not_compete_with_retry(bridge, monkeypatch):
-    monkeypatch.setattr(type(bridge), "is_oauth_connectable", lambda row: True)
+    monkeypatch.setattr(type(bridge), "is_oauth_connectable", lambda row, **kwargs: True)
     with system_context(reason="test connect admission"):
         # A healthy attached grant uses discovery recovery, never new consent.
         bridge.config = {"discovery": "refusal"}

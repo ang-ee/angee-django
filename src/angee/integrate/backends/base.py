@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
+from rebac.database import write_alias
 
 from angee.base.implementations import ImplBase
 from angee.base.locks import LockKey
@@ -236,11 +237,13 @@ class LiveBridgeImpl(BridgeImpl):
                 f"{type(self).__name__} must define session_queue; a long-lived session on the "
                 "shared prefork queue is killed by the global time limit and starves the pool."
             )
+        using = write_alias(type(self.bridge), using=self.bridge._state.db, instance=self.bridge)
         enqueue_task(
             RUN_SESSION_TASK,
-            kwargs={"model_label": self.bridge._meta.label_lower, "pk": self.bridge.pk},
+            kwargs={"model_label": self.bridge._meta.label_lower, "pk": self.bridge.pk, "using": using},
             queue=self.session_queue,
             expires=SESSION_START_EXPIRES,
+            using=using,
         )
 
     def account_lock_key(self, external_id: str) -> LockKey:
