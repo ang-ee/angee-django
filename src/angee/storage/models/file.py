@@ -18,7 +18,7 @@ from django.core.exceptions import (
     ValidationError,
 )
 from django.core.files.base import File as DjangoFile
-from django.db import IntegrityError, models, transaction
+from django.db import DEFAULT_DB_ALIAS, IntegrityError, models, transaction
 from django.db.models.deletion import ProtectedError
 from django.db.models.signals import post_save
 from django.urls import reverse
@@ -313,6 +313,19 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         presigned = storage.presigned_get(self.storage_path, expires_in=DOWNLOAD_URL_TTL_SECONDS)
         return presigned or storage.url(self.storage_path)
 
+    def _token_identity(self) -> dict[str, str]:
+        """Retain this stored row's database in its signed proxy identity.
+
+        Default payloads retain their historical shape. Tokens issued before
+        database identity was carried identify default storage only.
+        """
+
+        identity = {"file": str(self.sqid)}
+        using = write_alias(type(self), using=self._state.db, instance=self)
+        if using != DEFAULT_DB_ALIAS:
+            identity["database"] = using
+        return identity
+
     def issue_download_token(self, actor: ActorLike | None = None) -> str:
         """Sign a reusable download token for the given or ambient actor.
 
@@ -327,7 +340,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
         if subject is None:
             raise NoActorResolvedError("an actor is required to issue a download token")
         return signing.dumps(
-            {"file": str(self.sqid), "actor": str(public_subject_ref(subject))}, salt=DOWNLOAD_TOKEN_SALT
+            {**self._token_identity(), "actor": str(public_subject_ref(subject))}, salt=DOWNLOAD_TOKEN_SALT
         )
 
     def download_url(self, request: Any | None = None) -> str:
@@ -407,7 +420,7 @@ class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, co
                 pk=self.pk
             ).update(upload_envelope=envelope)
             self.upload_envelope = envelope
-            return signing.dumps({"file": str(self.sqid), "nonce": nonce}, salt=UPLOAD_TOKEN_SALT)
+            return signing.dumps({**self._token_identity(), "nonce": nonce}, salt=UPLOAD_TOKEN_SALT)
 
     def receive_bytes(self, body: Reader[bytes]) -> None:
         """Stream a proxied request body into this row's backend key.

@@ -16,7 +16,7 @@ from django.core.exceptions import (
 )
 from django.core.files.base import ContentFile
 from django.core.files.base import File as DjangoFile
-from django.db import IntegrityError, models, transaction
+from django.db import DEFAULT_DB_ALIAS, IntegrityError, models, transaction
 from rebac import (
     GenericTarget,
     PermissionDenied,
@@ -227,8 +227,15 @@ class FolderManager[FolderT: Folder](_FolderManagerBase[FolderT]):
         """
 
         self = self.db_manager(write_alias(self.model, using=self._db or drive._state.db, instance=drive))
+        if drive._state.db != self.db:
+            raise ValueError("Drive must use the selected storage database.")
         with database_context(self.db):
             prefixes: dict[tuple[str, ...], Any | None] = cache if cache is not None else {(): None}
+            if any(
+                parent is not None and (parent._state.db != self.db or parent.drive_id != drive.pk)
+                for parent in prefixes.values()
+            ):
+                raise ValueError("Folder cache must belong to the selected drive and database.")
             prefixes.setdefault((), None)
             prefix: tuple[str, ...] = ()
             parent = prefixes[()]
@@ -574,6 +581,10 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         """
 
         self = self.db_manager(write_alias(self.model, using=self._db or drive._state.db, instance=drive))
+        if drive._state.db != self.db:
+            raise ValueError("Drive must use the selected storage database.")
+        if folder is not None and (folder._state.db != self.db or folder.drive_id != drive.pk):
+            raise ValueError("Folder must belong to the selected drive and database.")
         with database_context(self.db):
             path = str(storage_path).strip()
             if not path:
@@ -715,6 +726,18 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
 
         raise exceptions.ExternalDuplicate(f"identical external bytes already exist: {duplicate.sqid}") from cause
 
+    def _token_database(self, payload: object) -> str:
+        """Select only a verified signed token's configured database identity."""
+
+        if not isinstance(payload, dict):
+            raise exceptions.UploadDenied("invalid file token")
+        using = payload.get("database", DEFAULT_DB_ALIAS)
+        if not isinstance(using, str) or using not in settings.DATABASES:
+            raise exceptions.UploadDenied("invalid file token database")
+        if self._db is not None and self._db != using:
+            raise exceptions.UploadDenied("file token database does not match the selected database")
+        return using
+
     def for_upload_token(self, token: str) -> FileT:
         """Return the DRAFT row a signed proxy upload token addresses.
 
@@ -731,20 +754,25 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
             raise exceptions.UploadDenied("upload token expired") from error
         except signing.BadSignature as error:
             raise exceptions.UploadDenied("invalid upload token") from error
-        file_id = str(payload.get("file") or "")
-        nonce = str(payload.get("nonce") or "")
-        if not file_id or not nonce:
-            raise exceptions.UploadDenied("invalid upload token")
-        row = self.system_context(reason="storage.upload.proxy").select_related("drive").filter(sqid=file_id).first()
-        if row is None:
-            raise exceptions.UploadTargetNotFound("file not found")
-        if row.upload_state != UploadState.DRAFT:
-            raise exceptions.UploadConflict("file is not awaiting bytes")
-        envelope = dict(row.upload_envelope or {})
-        if envelope.get("nonce") != nonce or envelope.get("used"):
-            raise exceptions.UploadDenied("upload token already used")
-        row._upload_nonce = nonce
-        return row
+        using = self._token_database(payload)
+        self = self.db_manager(using)
+        with database_context(using):
+            file_id = str(payload.get("file") or "")
+            nonce = str(payload.get("nonce") or "")
+            if not file_id or not nonce:
+                raise exceptions.UploadDenied("invalid upload token")
+            row = (
+                self.system_context(reason="storage.upload.proxy").select_related("drive").filter(sqid=file_id).first()
+            )
+            if row is None:
+                raise exceptions.UploadTargetNotFound("file not found")
+            if row.upload_state != UploadState.DRAFT:
+                raise exceptions.UploadConflict("file is not awaiting bytes")
+            envelope = dict(row.upload_envelope or {})
+            if envelope.get("nonce") != nonce or envelope.get("used"):
+                raise exceptions.UploadDenied("upload token already used")
+            row._upload_nonce = nonce
+            return row
 
     def for_download_token(self, token: str) -> FileT:
         """Return the READY file a signed proxy download token addresses.
@@ -762,26 +790,29 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
             raise exceptions.UploadDenied("download token expired") from error
         except signing.BadSignature as error:
             raise exceptions.UploadDenied("invalid download token") from error
-        file_id = str(payload.get("file") or "")
-        actor_claim = str(payload.get("actor") or "")
-        if not file_id:
-            raise exceptions.UploadDenied("invalid download token")
-        try:
-            actor = canonical_subject_ref(actor_claim)
-        except ValueError as error:
-            raise exceptions.UploadDenied("invalid download token") from error
-        row = (
-            self.system_context(reason="storage.download.proxy")
-            .select_related("mime_type")
-            .filter(sqid=file_id, upload_state=UploadState.READY, is_trashed=False)
-            .first()
-        )
-        if row is None:
-            raise exceptions.UploadTargetNotFound("file not found")
-        row.with_actor(actor)
-        if not row.has_access("read"):
-            raise exceptions.UploadDenied("read access to the file is required")
-        return row
+        using = self._token_database(payload)
+        self = self.db_manager(using)
+        with database_context(using):
+            file_id = str(payload.get("file") or "")
+            actor_claim = str(payload.get("actor") or "")
+            if not file_id:
+                raise exceptions.UploadDenied("invalid download token")
+            try:
+                actor = canonical_subject_ref(actor_claim)
+            except ValueError as error:
+                raise exceptions.UploadDenied("invalid download token") from error
+            row = (
+                self.system_context(reason="storage.download.proxy")
+                .select_related("mime_type")
+                .filter(sqid=file_id, upload_state=UploadState.READY, is_trashed=False)
+                .first()
+            )
+            if row is None:
+                raise exceptions.UploadTargetNotFound("file not found")
+            row.with_actor(actor)
+            if not row.has_access("read"):
+                raise exceptions.UploadDenied("read access to the file is required")
+            return row
 
     def _drive_for(self, *, drive_id: str, drive_slug: str, folder_id: str = "") -> Any:
         """Return the actor-readable, unarchived drive a draft targets.

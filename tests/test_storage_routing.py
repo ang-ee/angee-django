@@ -7,16 +7,19 @@ from unittest.mock import patch
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.core import signing
 from django.core.management import call_command
 from django.db import connections, transaction
-from django.test import TransactionTestCase, override_settings
+from django.test import RequestFactory, TransactionTestCase, override_settings
 from rebac import actor_context, database_context, system_context
 
 from angee.base.testing.packages import write_addon_distribution
 from angee.provenance.context import changeset
 from angee.storage import exceptions
 from angee.storage.managers import FileAttachmentManager
-from angee.storage.signals import file_finalized
+from angee.storage.signals import create_trash_folder, file_finalized
+from angee.storage.uploads import DOWNLOAD_TOKEN_SALT, UPLOAD_TOKEN_SALT
+from angee.storage.views import download, upload
 from tests.composed_host import run_composed_tests
 
 
@@ -30,6 +33,7 @@ class StorageWriteRouter:
 class StorageRoutingContract(TransactionTestCase):
     __test__ = False
     databases = {"default", "producer"}
+    reset_sequences = True
 
     def setUp(self):
         self.root = TemporaryDirectory()
@@ -66,6 +70,27 @@ class StorageRoutingContract(TransactionTestCase):
                     )
                 )
                 self.users[alias] = user
+
+    def test_user_trash_signal_uses_producer_and_rolls_back_with_user(self):
+        Folder = apps.get_model("storage", "Folder")
+        with self.assertRaises(ValueError):
+            create_trash_folder(get_user_model(), self.users["producer"], created=True, using="default")
+        for alias in ("default", "producer"):
+            self.assertEqual(
+                Folder._base_manager.using(alias).filter(owner_id=self.users[alias].pk, smart_kind="trash").count(), 1
+            )
+        default_before = set(Folder._base_manager.using("default").values_list("pk", flat=True))
+        with self.assertRaisesRegex(RuntimeError, "rollback"):
+            with changeset(fresh=True, using="producer"), transaction.atomic(using="producer"):
+                user = get_user_model().objects.db_manager("producer").create_user(username="rolled-back-user")
+                self.assertTrue(
+                    Folder._base_manager.using("producer").filter(owner_id=user.pk, smart_kind="trash").exists()
+                )
+                raise RuntimeError("rollback")
+        with database_context("producer"), system_context(reason="tests.storage.routing.inspect"):
+            self.assertFalse(get_user_model().objects.using("producer").filter(username="rolled-back-user").exists())
+        self.assertEqual(Folder._base_manager.using("producer").count(), 1)
+        self.assertEqual(set(Folder._base_manager.using("default").values_list("pk", flat=True)), default_before)
 
     def _draft(self, alias, name="draft.txt", **kwargs):
         File = apps.get_model("storage", "File")
@@ -171,6 +196,121 @@ class StorageRoutingContract(TransactionTestCase):
         with database_context("producer"), system_context(reason="tests.storage.routing.inspect"):
             row.refresh_from_db(using="producer")
             self.assertEqual(row.metadata, {})
+
+    def test_signed_upload_token_routes_unbound_http_and_keeps_legacy_default_identity(self):
+        File = apps.get_model("storage", "File")
+        default = self._draft("default")
+        producer = self._draft("producer")
+        self.assertEqual(default.sqid, producer.sqid)
+        with changeset(fresh=True, using="default"):
+            default_token = default.issue_upload_token()
+        with changeset(fresh=True, using="producer"):
+            token = producer.issue_upload_token()
+        self.assertNotIn("database", signing.loads(default_token, salt=UPLOAD_TOKEN_SALT))
+        self.assertEqual(signing.loads(token, salt=UPLOAD_TOKEN_SALT)["database"], "producer")
+        self.assertEqual(File.objects.for_upload_token(token)._state.db, "producer")
+        with self.assertRaises(exceptions.UploadDenied):
+            File.objects.db_manager("default").for_upload_token(token)
+        for invalid in (
+            token + "tampered",
+            signing.dumps({"file": str(producer.sqid), "nonce": "n", "database": "unknown"}, salt=UPLOAD_TOKEN_SALT),
+        ):
+            with self.assertRaises(exceptions.UploadDenied):
+                File.objects.for_upload_token(invalid)
+        request = RequestFactory().put(
+            "/?token=" + token, data=b"producer upload", content_type="application/octet-stream"
+        )
+        with actor_context(self.users["producer"]), changeset(fresh=True, using="producer"):
+            response = upload(request)
+        self.assertEqual(response.status_code, 200, response.content)
+        with database_context("default"), system_context(reason="tests.storage.routing.inspect"):
+            default.refresh_from_db(using="default")
+            self.assertFalse(default.upload_envelope["used"])
+            self.assertFalse(default.storage.exists(default.storage_path))
+        with database_context("producer"), system_context(reason="tests.storage.routing.inspect"):
+            producer.refresh_from_db(using="producer")
+            self.assertTrue(producer.upload_envelope["used"])
+            with producer.storage.open(producer.storage_path, "rb") as stream:
+                self.assertEqual(stream.read(), b"producer upload")
+        # Historical unsigned-DB payloads identify default even when current writes route elsewhere.
+        legacy = signing.dumps(
+            {"file": str(default.sqid), "nonce": default.upload_envelope["nonce"]}, salt=UPLOAD_TOKEN_SALT
+        )
+        with override_settings(DATABASE_ROUTERS=[StorageWriteRouter()]):
+            self.assertEqual(File.objects.for_upload_token(legacy)._state.db, "default")
+
+    def test_signed_download_token_http_serves_only_its_database_and_rechecks_actor(self):
+        File = apps.get_model("storage", "File")
+        rows = {}
+        for alias in ("default", "producer"):
+            with changeset(fresh=True, using=alias):
+                rows[alias] = File.objects.db_manager(alias).ingest_bytes(
+                    alias.encode(), filename="token.txt", drive_slug="assets"
+                )
+        self.assertEqual(rows["default"].sqid, rows["producer"].sqid)
+        for alias in ("default", "producer"):
+            token = rows[alias].issue_download_token(self.users[alias])
+            response = download(RequestFactory().get("/?token=" + token), "cosmetic.txt")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(b"".join(response.streaming_content), alias.encode())
+            response.close()
+            if alias == "default":
+                self.assertNotIn("database", signing.loads(token, salt=DOWNLOAD_TOKEN_SALT))
+            else:
+                self.assertEqual(File.objects.for_download_token(token)._state.db, "producer")
+                with self.assertRaises(exceptions.UploadDenied):
+                    File.objects.db_manager("default").for_download_token(token)
+                with database_context("producer"), system_context(reason="tests.storage.routing.revoke"):
+                    self.drives["producer"].owner = None
+                    self.drives["producer"].save(using="producer", update_fields=["owner"])
+                response = download(RequestFactory().get("/?token=" + token), "cosmetic.txt")
+                self.assertEqual(response.status_code, 403)
+
+    def test_external_index_and_folder_path_reject_foreign_parents_before_writes(self):
+        File = apps.get_model("storage", "File")
+        Folder = apps.get_model("storage", "Folder")
+        folders = {}
+        for alias in ("default", "producer"):
+            with (
+                database_context(alias),
+                system_context(reason="tests.storage.routing.parents"),
+                changeset(fresh=True, using=alias),
+            ):
+                folders[alias] = Folder._base_manager.db_manager(alias).create(
+                    pk=1000, drive=self.drives[alias], name="existing"
+                )
+                self.assertEqual(
+                    Folder.objects.db_manager(alias).ensure_path(self.drives[alias], ("existing",)).pk, 1000
+                )
+        self.assertEqual(folders["default"].pk, folders["producer"].pk)
+        values = dict(
+            storage_path="external/key",
+            filename="external.txt",
+            content_hash=hashlib.sha256(b"external").hexdigest(),
+            size_bytes=8,
+        )
+        manager = File.objects.db_manager("producer")
+        with self.assertRaises(ValueError):
+            manager.index_external(drive=self.drives["default"], **values)
+        with self.assertRaises(ValueError):
+            manager.index_external(drive=self.drives["producer"], folder=folders["default"], **values)
+        with self.assertRaises(ValueError):
+            Folder.objects.db_manager("producer").ensure_path(self.drives["default"], ("refused",))
+        with self.assertRaises(ValueError):
+            Folder.objects.db_manager("producer").ensure_path(
+                self.drives["producer"], ("existing", "refused"), cache={("existing",): folders["default"]}
+            )
+        for alias in ("default", "producer"):
+            self.assertFalse(File._base_manager.using(alias).exists())
+            self.assertFalse(Folder._base_manager.using(alias).filter(name="refused").exists())
+        with changeset(fresh=True, using="producer"):
+            row = manager.index_external(drive=self.drives["producer"], folder=folders["producer"], **values)
+        with self.assertRaises(ValueError):
+            manager.index_external(drive=self.drives["default"], metadata={"refused": True}, **values)
+        with database_context("producer"), system_context(reason="tests.storage.routing.inspect"):
+            row.refresh_from_db(using="producer")
+            self.assertEqual(row.metadata, {})
+        self.assertFalse(File._base_manager.using("default").exists())
 
     def test_factory_io_finalize_and_callback_follow_producer(self):
         File = apps.get_model("storage", "File")
