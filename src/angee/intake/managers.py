@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING, Any
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
-from rebac import PermissionDenied, current_actor, system_context
+from django.db import models, router, transaction
+from rebac import PermissionDenied, current_actor, database_context, system_context
 
 from angee.base.exceptions import DomainError
 from angee.base.permissions import actor_user_id
@@ -63,20 +63,27 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
         values = dict(queue_id=queue.pk, title=title, note=body, due_date=due_date, estimate=estimate)
         claim_values = {"task": values, "party": party, "importance": importance}
 
-        with changeset(fresh=True), transaction.atomic():
-            created = changeset_model().objects.claim_created(
-                f"intake.file-task:{scope}",
-                idempotency_key,
-                values=claim_values,
-                model=task_model,
-                unavailable=ValidationError(
-                    {"idempotency_key": "The claimed task is unavailable."},
-                ),
+        using = self._db or queue._state.db or router.db_for_write(self.model)
+        if queue._state.db != using or party._state.db != using:
+            raise ValueError("A request, its queue and party must use the same database.")
+        with database_context(using), changeset(fresh=True, using=using), transaction.atomic(using=using):
+            created = (
+                changeset_model()
+                .objects.db_manager(using)
+                .claim_created(
+                    f"intake.file-task:{scope}",
+                    idempotency_key,
+                    values=claim_values,
+                    model=task_model,
+                    unavailable=ValidationError(
+                        {"idempotency_key": "The claimed task is unavailable."},
+                    ),
+                )
             )
             if created is not None:
-                return task_model.objects.with_actor(actor).get(pk=created.pk)
-            task = task_model.objects.with_actor(actor).create(**values, created_by_id=scope)
-            self.capture(target=task, party=party, body=body, importance=importance)
+                return task_model.objects.db_manager(using).with_actor(actor).get(pk=created.pk)
+            task = task_model.objects.db_manager(using).with_actor(actor).create(**values, created_by_id=scope)
+            self.db_manager(using).capture(target=task, party=party, body=body, importance=importance)
             require_changeset().record_created(task)
             return task
 
@@ -129,11 +136,20 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
         target_field = self.target_field(target)
         target_filter = {f"{target_field}_id": target.pk}
         actor = current_actor()
-        with transaction.atomic():
+        using = self._db or target._state.db or router.db_for_write(self.model)
+        if target._state.db != using or (party is not None and party._state.db != using):
+            raise ValueError("A request and its target must use the same database.")
+        with database_context(using), transaction.atomic(using=using):
             with system_context(reason="intake.need.capture.lookup"):
-                locked_target = type(target).objects.sudo(reason="intake.need.capture.target").locked_get(pk=target.pk)
+                locked_target = (
+                    type(target)
+                    .objects.db_manager(using)
+                    .sudo(reason="intake.need.capture.target")
+                    .locked_get(pk=target.pk)
+                )
                 existing = (
-                    self.model._base_manager.filter(
+                    self.model._base_manager.using(using)
+                    .filter(
                         **target_filter,
                         party_id=None if party is None else party.pk,
                         body=body,
@@ -160,7 +176,7 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
             # actor on the instance rather than wrapping the whole save in the
             # queryset insertion scope: that scope would also pin the nested write
             # and defeat the instance-local elevation.
-            need.with_actor(actor).save(force_insert=True, using=self.db)
+            need.with_actor(actor).save(force_insert=True, using=using)
             return need
 
     def capture_from_message(
@@ -175,15 +191,26 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
         if message.pk is None or queue.pk is None:
             raise ValidationError("A saved message and intake queue are required.")
         message_model = type(message)
-        with system_context(reason="intake.need.capture_message"), transaction.atomic():
+        using = self._db or message._state.db or router.db_for_write(self.model)
+        if message._state.db != using or queue._state.db != using:
+            raise ValueError("Message capture and its queue must use the same database.")
+        with (
+            database_context(using),
+            system_context(reason="intake.need.capture_message"),
+            transaction.atomic(using=using),
+        ):
             locked_message = (
-                message_model.objects.sudo(reason="intake.need.capture_message.message")
+                message_model.objects.db_manager(using)
+                .sudo(reason="intake.need.capture_message.message")
                 .lock_if_supported()
                 .select_related("sender", "thread__title")
                 .get(pk=message.pk)
             )
             existing = (
-                self.model._base_manager.select_related("task").filter(source_message_id=locked_message.pk).first()
+                self.model._base_manager.using(using)
+                .select_related("task")
+                .filter(source_message_id=locked_message.pk)
+                .first()
             )
             if existing is not None:
                 return existing
@@ -196,7 +223,7 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
             submission = locked_message.webform_submission()
             task = (
                 apps.get_model("projects", "Task")
-                .objects.db_manager(self.db)
+                .objects.db_manager(using)
                 .capture_triage(
                     queue=queue,
                     title=mapped.pop("title", self._message_title(locked_message)),
@@ -215,12 +242,12 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
                 updated_by_id=locked_message.updated_by_id,
             )
             need.full_clean(validate_unique=False, validate_constraints=False)
-            need.sudo(reason="intake.need.capture_message.create").save(_access_decision=True)
+            need.sudo(reason="intake.need.capture_message.create").save(using=using, _access_decision=True)
             attachment_model = apps.get_model("messaging", "ThreadAttachment")
-            attachment_model.objects.bind_source_thread(task, locked_message.thread)
+            attachment_model.objects.db_manager(using).bind_source_thread(task, locked_message.thread)
             try:
                 # Identity refusals roll back linking, never the captured evidence.
-                with transaction.atomic():
+                with transaction.atomic(using=using):
                     need.party_id = self._resolved_sender_party_id(locked_message)
                     if need.party_id is None and need.claimed_email and channel.intake_requester_domains:
                         need._link_requester(
@@ -229,14 +256,14 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
                             system_reason=f"intake.requester_domain:{channel.slug}",
                         )
                     if need.party_id is not None:
-                        need.save(_access_decision=True, update_fields=("party",))
+                        need.save(using=using, _access_decision=True, update_fields=("party",))
             except DomainError, ValidationError, PermissionDenied:
                 logger.info("Requester linking was refused for need %s; capture is retained.", need.pk)
                 need.refresh_from_db()
             # Capture owns the initial question only after identity hydration;
             # no transient actorless question needs to be withdrawn.
             need.access_decision = need._new_access_decision()
-            self.model.system_queryset().filter(pk=need.pk).update(access_decision=need.access_decision)
+            self.model.system_queryset().using(using).filter(pk=need.pk).update(access_decision=need.access_decision)
             return need
 
     @staticmethod
@@ -259,8 +286,6 @@ class NeedManager[NeedT: Need](_NeedManagerBase[NeedT]):
             return None
         if sender.party_id is None:
             party_model = apps.get_model("parties", "Party")
-            party_model.objects.suggest_for(sender)
+            party_model.objects.db_manager(sender._state.db).suggest_for(sender)
             sender.refresh_from_db(fields=("party", "party_link_confirmed"))
         return sender.party_id if sender.party_link_confirmed else None
-
-
