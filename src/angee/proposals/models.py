@@ -1956,6 +1956,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
             super().save(*args, **kwargs)
             return
         using = write_alias(type(self), using=kwargs.get("using"), instance=self)
+        kwargs["using"] = using
         with database_context(using), transaction.atomic(using=using):
             locked_round = (
                 apps.get_model("proposals", "Round")
