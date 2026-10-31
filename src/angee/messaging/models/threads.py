@@ -989,10 +989,11 @@ class Thread(
 
     def chatter_record_ref(self) -> RecordRef | None:
         """The canonical chatter host, without loading messages or the document body."""
+        survivor = self.canonical()
         attachment = (
             apps.get_model("messaging", "ThreadAttachment")
-            ._base_manager.filter(
-                thread_id=self.canonical().pk,
+            ._base_manager.using(survivor._state.db).filter(
+                thread_id=survivor.pk,
                 role="chatter",
             )
             .first()
@@ -1121,8 +1122,9 @@ class Thread(
         """
 
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
-        return attachment_model._base_manager.filter(
-            thread_id__in=self.member_threads().values("pk"),
+        members = self.member_threads()
+        return attachment_model._base_manager.using(members.db).filter(
+            thread_id__in=members.values("pk"),
             role=attachment_model.AttachmentRole.CHATTER,
         ).exists()
 

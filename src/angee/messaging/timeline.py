@@ -80,7 +80,11 @@ class ConversationKind(TimelineKind):
     def targets(self, row: Any) -> Iterable[models.Model]:
         if row._meta.label == "messaging.ThreadAttachment":
             return (row,)
-        return apps.get_model("messaging", "ThreadAttachment")._base_manager.filter(thread=row, role="source")
+        return (
+            apps.get_model("messaging", "ThreadAttachment")._base_manager
+            .db_manager(row._state.db, hints={"instance": row})
+            .filter(thread=row, role="source")
+        )
 
     def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
         return {row.pk: Presentation(
