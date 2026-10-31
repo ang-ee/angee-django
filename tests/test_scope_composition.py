@@ -10,8 +10,12 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize(("provider", "conflict"), [(False, False), (True, False), (True, True)])
-def test_scope_participation_without_optional_api_or_protection(tmp_path: Path, provider: bool, conflict: bool) -> None:
+@pytest.mark.parametrize("provider", [False, True])
+@pytest.mark.parametrize("conflict", [None, "direct", "indirect", "mixed"])
+@pytest.mark.parametrize("defaulted_first", [False, True])
+def test_scope_participation_without_optional_api_or_protection(
+    tmp_path: Path, provider: bool, conflict: str | None, defaulted_first: bool,
+) -> None:
     """Independent and external participants opt in; ordinary records stay unchanged."""
     sources = {
         "participants": '''
@@ -41,22 +45,44 @@ class External(NullableScopeMixin, concrete=True):
 class Company(Composable, concrete=True):
     class Meta:
         abstract = True
-class Nullable(Composable, extends="base.NullableScopeMixin"):
+class ScopeField(models.Model):
     company = models.ForeignKey("provider.Company", null=True, blank=True,
                                 on_delete=models.PROTECT, related_name="+")
     class Meta:
         abstract = True
-class Defaulted(Composable, extends="base.DefaultedScopeMixin"):
-    company = models.ForeignKey("provider.Company", null=True, blank=True,
-                                on_delete=models.PROTECT, related_name="+")
+class CreationDefault(ScopeField):
+    def creation_default(self):
+        return "defaulting-enabled"
+    class Meta:
+        abstract = True
+class Nullable(ScopeField, Composable, extends="base.NullableScopeMixin"):
+    class Meta:
+        abstract = True
+class Defaulted(CreationDefault, Composable, extends="base.DefaultedScopeMixin"):
     class Meta:
         abstract = True
 '''
     if conflict:
-        sources["participants"] = sources["participants"].replace(
-            "class First(NullableScopeMixin, concrete=True)",
-            "class First(NullableScopeMixin, DefaultedScopeMixin, concrete=True)",
-        )
+        nullable = "NullableScopeMixin"
+        defaulted = "DefaultedScopeMixin"
+        if conflict in {"indirect", "mixed"}:
+            sources["participants"] += """
+class NullableParent(NullableScopeMixin):
+    class Meta:
+        abstract = True
+class DefaultedParent(DefaultedScopeMixin):
+    class Meta:
+        abstract = True
+"""
+            nullable = "NullableParent"
+            if conflict == "indirect":
+                defaulted = "DefaultedParent"
+        bases = (defaulted, nullable) if defaulted_first else (nullable, defaulted)
+        sources["participants"] += f"""
+class Contradictory({", ".join(bases)}, concrete=True):
+    class Meta:
+        abstract = True
+"""
     for name, source in sources.items():
         package = tmp_path / name
         package.mkdir()
@@ -109,6 +135,8 @@ assert child._meta.parents == {{first: child._meta.get_field("first_ptr")}}
 assert set(ModelState.from_model(child).fields) == {{"first_ptr"}}
 assert "company" not in ModelState.from_model(apps.get_model("participants.Unrelated")).fields
 if {provider!r}:
+    assert apps.get_model("participants.Second")().creation_default() == "defaulting-enabled"
+    assert not hasattr(first, "creation_default")
     assert child._meta.get_field("company").model is first
     assert "company" not in ModelState.from_model(apps.get_model("provider.Company")).fields
 assert not apps.is_installed("angee.graphql")
@@ -121,6 +149,6 @@ assert not apps.is_installed("angee.iam")
     )
     if conflict:
         assert result.returncode != 0
-        assert "composes field attribute 'company' twice" in result.stderr, result.stderr
+        assert "cannot compose both NullableScopeMixin and DefaultedScopeMixin" in result.stderr, result.stderr
     else:
         assert result.returncode == 0, result.stdout + result.stderr

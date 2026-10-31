@@ -1,5 +1,8 @@
 """Provider-defined organizational scope, independent of user ownership."""
 
+from typing import Any
+
+from django.core.exceptions import ImproperlyConfigured
 from django_compose.models import Composable
 
 
@@ -26,3 +29,13 @@ class DefaultedScopeMixin(Composable):
 
     class Meta:
         abstract = True
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Reject contradictory scope semantics before an optional provider runs."""
+
+        super().__init_subclass__(**kwargs)
+        if issubclass(cls, NullableScopeMixin):
+            raise ImproperlyConfigured(
+                f"{cls.__module__}.{cls.__qualname__} cannot compose both "
+                "NullableScopeMixin and DefaultedScopeMixin."
+            )
