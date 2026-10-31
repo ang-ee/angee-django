@@ -35,7 +35,7 @@ confirmed opening verb.
 - **The full list is for people managers.** `auth/user#list` admits platform
   admins, the named readers of the whole directory (`iam/directory:main#reader`)
   or of one account (`directory_reader`), and the roles a consumer unions in.
-  `UserManager.directory` and the `users` resource's `directory` filter list
+  `UserQuerySet.directory` and the `users` resource's `directory` filter list
   their rows; the managed people list applies that filter, so it is empty,
   without an error, for anyone who manages no one. Neither reader relation
   accepts a wildcard, and the demo resources seed no directory reader.
@@ -45,7 +45,7 @@ confirmed opening verb.
   relation declared on `auth/user` makes every write to its backing rows need
   `write` on the account, so team and space rosters, whose moderators edit
   memberships, contribute no arm.
-  `UserManager.colleagues` scopes the `users` resource and the `colleagues`
+  `UserQuerySet.colleagues` scopes the `users` resource and the `colleagues`
   query. Their search and ordering use the sign-in name and email only where
   the viewer reads them.
 - **Query axes.** Gated columns are never filters, sorts or groups. The `users`

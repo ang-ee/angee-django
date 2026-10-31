@@ -12,75 +12,58 @@ active-human filtering, search, ordering, and limits.
 
 from __future__ import annotations
 
-import logging
 import secrets
 from collections.abc import Mapping
-from copy import copy
-from typing import Any, Self, cast
+from typing import Any, ClassVar, Self, cast
 
-from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
 from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, models, router, transaction
-from django.db.models import Exists, F, OuterRef, Q, TextField
-from django.db.models.functions import Cast
+from django.db import models, transaction
+from django.db.models import Q, QuerySet
 from django.utils import timezone
 from rebac import (
-    ObjectRef,
     PermissionDenied,
     SubjectRef,
-    app_settings,
-    check_new,
-    current_actor,
     database_context,
     resolve_subjects,
     system_context,
+    to_object_ref,
     to_subject_ref,
     user_subject_type,
 )
-from rebac.errors import MissingActorError
 from rebac.memberships import grant as grant_membership
 from rebac.memberships import revoke as revoke_membership
+from rebac.models import active_relationship_model
 from rebac.permissions_mixin import RebacPermissionsMixin
-from rebac.resources import model_resource_type
 from rebac.roles import ROLE_RELATION
 
-from angee.base.exceptions import DomainError
 from angee.base.fields.state import StateField
 from angee.base.identity import canonical_subject_ref
-from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeDataModel
-from angee.base.models.identity import instance_from_public_id
+from angee.base.models.identity import PublicIdentity
 from angee.base.models.locks import OptimisticLockMixin
 from angee.base.models.roles import role_anchor
-from angee.base.querysets import AngeeQuerySet
-from angee.iam.events import person_created
+from angee.iam.choices import UserAccountAction as UserAccountAction
+from angee.iam.choices import UserKind as UserKind
+from angee.iam.exceptions import AccountExists as AccountExists
+from angee.iam.exceptions import AmbiguousAccountEmail as AmbiguousAccountEmail
 from angee.iam.identity import user_label
-from angee.iam.roles import protected_account_holders
-
-VISIBLE_PEOPLE_DEFAULT_LIMIT = 20
-"""Default page size for member-facing people surfaces."""
-
-VISIBLE_PEOPLE_MAX_LIMIT = 100
-"""Upper bound a people-surface caller's ``limit`` is clamped to."""
-
-VIEWABLE_PEOPLE_MAX_LIMIT = 25
-"""Maximum preview results after SQL admission."""
+from angee.iam.managers import VIEWABLE_PEOPLE_MAX_LIMIT as VIEWABLE_PEOPLE_MAX_LIMIT
+from angee.iam.managers import VISIBLE_PEOPLE_DEFAULT_LIMIT as VISIBLE_PEOPLE_DEFAULT_LIMIT
+from angee.iam.managers import VISIBLE_PEOPLE_MAX_LIMIT as VISIBLE_PEOPLE_MAX_LIMIT
+from angee.iam.managers import UserManager as UserManager
+from angee.iam.managers import bounded_limit as bounded_limit
+from angee.iam.querysets import UserQuerySet as UserQuerySet
 
 IAMKind = role_anchor("iam/kind", name="IAMKind")
 IAMProtected = role_anchor("iam/protected", name="IAMProtected")
 
 PROTECTED_ACCOUNT_MESSAGE = "This account is protected: it is your own, staff, a superuser, or holds an elevated role."
 """Refusal shared by every account verb and by generic updates of protected accounts."""
-
-logger = logging.getLogger(__name__)
-
-
-def bounded_limit(limit: int, *, maximum: int = VISIBLE_PEOPLE_MAX_LIMIT) -> int:
-    """Clamp a people-picker limit to IAM's supported range."""
-
-    return max(1, min(int(limit), maximum))
 
 
 def _require_confirmed(confirmed: bool, message: str) -> None:
@@ -110,6 +93,23 @@ class Group(AngeeDataModel, concrete=True):
         """Return the group name used by subject-label resolution."""
 
         return self.name
+
+    def member_rows(self) -> QuerySet[Any]:
+        """Select direct membership tuples for this group's canonical identity."""
+
+        ref = to_object_ref(self)
+        return active_relationship_model().objects.using(self._state.db).filter(
+            resource_type=ref.resource_type, resource_id=ref.resource_id, relation=ROLE_RELATION,
+        ).order_by_subject()
+
+    def binding_rows(self) -> QuerySet[Any]:
+        """Select bindings addressed to this group's declared member subject set."""
+
+        subject = to_subject_ref(self)
+        return active_relationship_model().objects.using(self._state.db).filter(
+            subject_type=subject.subject_type, subject_id=subject.subject_id,
+            optional_subject_relation=subject.optional_relation,
+        ).order_by_resource()
 
     @staticmethod
     def member_subject(value: str, *, require_existing: bool = True) -> SubjectRef:
@@ -154,531 +154,6 @@ class Group(AngeeDataModel, concrete=True):
                     caveat_name=caveat_name,
                 )
             )
-
-
-class UserKind(models.TextChoices):
-    """Kind of IAM principal stored in the swappable user table."""
-
-    PERSON = "person", "Person"
-    SERVICE = "service", "Service"
-
-
-class UserAccountAction(models.TextChoices):
-    """Account verbs run on another person's account, each named by its Zed permission."""
-
-    SET_ACTIVE = "set_active", "Set active"
-    RENAME = "rename", "Rename"
-    RESET_PASSWORD = "reset_password", "Reset password"
-    ISSUE_PASSWORD = "issue_password", "Issue password"
-
-
-class AccountExists(DomainError):
-    """A person email is already claimed; never carries an account's details."""
-
-    code = "ACCOUNT_EXISTS"
-
-
-class AmbiguousAccountEmail(DomainError):
-    """Multiple person accounts claim one email; carries no account details."""
-
-    code = "ACCOUNT_EMAIL_AMBIGUOUS"
-
-
-class UserQuerySet[UserT: User](AngeeQuerySet[UserT]):
-    """Queryset vocabulary for user-row surfaces."""
-
-    def people(self) -> Self:
-        """Return login-capable human users, excluding service-account rows."""
-
-        return self.filter(kind=UserKind.PERSON)
-
-    def active_people(self) -> Self:
-        """Return active human user rows.
-
-        Activity is a restricted field (``read__is_active``), yet pickers and
-        preview offer only active people: a deliberate disclosure IAM's Zed
-        declares (``active_account``). An inactive account is absent; its state
-        is never shown. See :meth:`inactive_condition`.
-        """
-
-        actor, unscoped = self.effective_actor()
-        return self.people().exclude(self.inactive_condition(None if unscoped else actor))
-
-    def inactive_condition(self, actor: Any = None) -> Q:
-        """Match inactive accounts as IAM's Zed discloses them to ``actor`` (``active_account``).
-
-        Without an actor (a system caller) the column decides directly.
-        """
-
-        if actor is None:
-            return Q(is_active=False)
-        return ~Q(pk__in=self.model._default_manager.with_actor(actor).with_action("active_account").values("pk"))
-
-    def search_users(self, search: str) -> Self:
-        """Filter users by the fields exposed by IAM identity pickers.
-
-        The restricted sign-in name and email match only where the actor reads
-        them, so a search never probes a field the actor cannot see.
-        """
-
-        term = search.strip()
-        if not term:
-            return cast(Self, self)
-        return cast(
-            Self,
-            self.alias(
-                _iam_search_username=self.readable("username"),
-                _iam_search_email=self.readable("email"),
-            ).filter(
-                Q(_iam_search_username__icontains=term)
-                | Q(first_name__icontains=term)
-                | Q(last_name__icontains=term)
-                | Q(_iam_search_email__icontains=term)
-            ),
-        )
-
-    def ordered_users(self) -> Self:
-        """Order by sign-in name where the actor reads it, then by name and primary key."""
-
-        return cast(
-            Self,
-            self.alias(_iam_order_username=self.readable("username")).order_by(
-                F("_iam_order_username").asc(nulls_last=True),
-                "first_name",
-                "last_name",
-                "pk",
-            ),
-        )
-
-    def picker(self, search: str) -> Self:
-        """Apply the common active-person search and ordering pipeline."""
-
-        return self.active_people().search_users(search).ordered_users()
-
-    def protection_condition(self, actor: Any = None) -> Q:
-        """Match accounts whose authority others must not act on or assume.
-
-        Staff, superusers and effective members of IAM's ``iam/protected`` Zed
-        set — platform admins plus every elevated role a consumer unions into
-        its ``member`` permission — are protected from every actor; an actor's
-        own account is protected from that actor. Account verbs, generic
-        updates by non-administrators and view-as share this one rule. Staff is
-        a restricted field (``read__is_staff``): within the reach of preview,
-        updates and the account verbs, IAM's Zed tells ``actor`` which accounts are
-        not staff (``nonstaff_account``), and every other account counts as
-        protected, so the rule fails closed. A system caller (no actor) reads the
-        column directly.
-        """
-
-        if actor is None:
-            condition = Q(is_staff=True)
-        else:
-            nonstaff = self.model._default_manager.with_actor(actor).with_action("nonstaff_account")
-            condition = ~Q(pk__in=nonstaff.values("pk"))
-        condition |= Q(is_superuser=True)
-        holders = protected_account_holders()
-        if holders is None:
-            condition |= Q(pk__isnull=False)
-        elif holders:
-            condition |= Q(pk__in=sorted(holders))
-        subject = to_subject_ref(actor) if actor is not None else None
-        if (
-            subject is not None
-            and subject.subject_type == model_resource_type(self.model)
-            and not subject.optional_relation
-            and subject.subject_id not in {"", "*"}
-        ):
-            condition |= Q(pk=subject.subject_id)
-        return condition
-
-    def unprotected(self, actor: Any = None) -> Self:
-        """Exclude the accounts :meth:`protection_condition` protects from ``actor``."""
-
-        return cast(Self, self.exclude(self.protection_condition(actor)))
-
-    def preview_candidates(self, actor: Any) -> Self:
-        """Return the active, unprotected people ``actor`` may assume in a preview."""
-
-        return self.active_people().unprotected(actor)
-
-    def without_direct_roles(self, grant_rows: Any, role_resource_types: set[str]) -> Self:
-        """Return users without direct role memberships in the installed schema."""
-
-        user_grants = grant_rows.filter(
-            resource_type__in=role_resource_types,
-            relation=ROLE_RELATION,
-            subject_type=model_resource_type(self.model),
-            optional_subject_relation="",
-        )
-        pk = self.model._meta.pk
-        subject_lookup = pk.name if pk is not None else "pk"
-        users = self.annotate(_iam_subject_id=Cast(subject_lookup, output_field=TextField()))
-        assigned = user_grants.filter(subject_id=OuterRef("_iam_subject_id"))
-        return cast(Self, users.annotate(_iam_has_role=Exists(assigned)).filter(_iam_has_role=False))
-
-    def directory(self, actor: Any) -> Self:
-        """Return the accounts ``actor`` lists in the people directory, scoped by ``auth/user#list``.
-
-        People managers list every account; anyone else lists nobody.
-        """
-
-        return cast(Self, self.with_actor(actor).with_action("list"))
-
-    def colleagues(self, actor: Any) -> Self:
-        """Return the accounts ``actor`` is offered in pickers, scoped by ``auth/user#colleague``.
-
-        People managers are offered every account; anyone else their own and
-        the arms identity owners contribute, such as the active people whose
-        identity they read through records.
-        """
-
-        return cast(Self, self.with_actor(actor).with_action("colleague"))
-
-    def view_as_queryset(self, actor: Any) -> Self:
-        """The single admission scope used by the picker and header lookup."""
-
-        subject = to_subject_ref(actor)
-        return self.with_actor(subject).with_action("view_as").preview_candidates(subject)
-
-
-_UserManagerBase = AngeeManager.from_queryset(UserQuerySet)
-
-
-class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
-    """Manager for Angee's composed user model."""
-
-    use_in_migrations = True
-
-    @classmethod
-    def normalize_email(cls, email: str | None) -> str:
-        """Lowercase the whole address for every account kind, unlike Django.
-
-        Django lowercases only the domain. Python owns whitespace stripping and
-        Unicode lowercasing; the stored email is the key, with no SQL transform.
-        ``bulk_create`` and queryset ``update()`` bypass normalization; callers
-        writing emails through them must normalize first.
-        """
-
-        return (email or "").strip().lower()
-
-    def _person_email_matches(self, email: str | None) -> UserQuerySet[UserT]:
-        key = self.normalize_email(email)
-        people = self.system_context(reason="iam.person.email_lookup").people()
-        if not key:
-            return people.none()
-        return people.filter(email=key)
-
-    def person_for_email(self, email: str) -> UserT | None:
-        """Look up one person by email, including inactive and staff accounts.
-
-        This is a system identity lookup, never a public directory surface.
-        No match returns None; ambiguous legacy matches raise a detail-free
-        domain refusal so callers cannot confuse ambiguity with absence.
-        """
-
-        matches = list(self._person_email_matches(email).order_by("pk")[:2])
-        if len(matches) > 1:
-            raise AmbiguousAccountEmail
-        return matches[0] if matches else None
-
-    def get_by_natural_key(self, username: str | None) -> UserT:
-        """Return a user for credential checks without row-scope filtering."""
-
-        return self.system_context(reason="iam.credentials").get(**{self.model.USERNAME_FIELD: username})
-
-    def get_for_session(self, user_id: Any) -> UserT:
-        """Return the session user through the named Django-auth reload seam."""
-
-        return self.system_context(reason="iam.session").get(pk=user_id)
-
-    async def aget_by_natural_key(self, username: str | None) -> UserT:
-        """Async sibling of ``get_by_natural_key``."""
-
-        return await self.system_context(reason="iam.credentials").aget(**{self.model.USERNAME_FIELD: username})
-
-    def create_person(
-        self,
-        username: str,
-        email: str | None = None,
-        password: str | None = None,
-        *,
-        first_name: str = "",
-        last_name: str = "",
-    ) -> UserT:
-        """Create a non-staff person for the actor authorized by ``create``.
-
-        The person event and its dependent identity link commit with the account.
-        Omitting the password creates an account with no usable password.
-        """
-
-        actor, _ = self.effective_actor(strict=True)
-        resource_type = model_resource_type(self.model)
-        if actor is None:
-            raise MissingActorError(f"Creating {resource_type or self.model._meta.label_lower} requires an actor.")
-        if (
-            resource_type is None
-            or not check_new(
-                subject=actor,
-                action="create",
-                resource_type=resource_type,
-            ).allowed
-        ):
-            raise PermissionDenied(f"Denied: {actor} cannot create {resource_type or self.model._meta.label_lower}")
-        return self._create_person(
-            username,
-            email,
-            password,
-            first_name=first_name,
-            last_name=last_name,
-            actor=actor,
-            reason="iam.person.create",
-        )
-
-    def create_person_as_system(self, username: str, email: str, *, reason: str) -> UserT:
-        """Create a passwordless person for a channel-authorized system ingress.
-
-        The channel owner must require channel write and account create when
-        enabling this ingress. The caller supplies its named reason. Nested
-        writes and the person event run in the library's system context.
-        """
-
-        if not reason.strip():
-            raise ValueError("System person creation requires a named reason.")
-        if not self.normalize_email(email):
-            raise ValidationError({"email": ["An email address is required."]})
-        with system_context(reason=reason):
-            user = self._create_person(
-                username,
-                email,
-                None,
-                first_name="",
-                last_name="",
-                actor=None,
-                reason=reason,
-            )
-        logger.info("Created person account %s as system: %s", user.pk, reason)
-        return user
-
-    def _create_person(
-        self,
-        username: str,
-        email: str | None,
-        password: str | None,
-        *,
-        first_name: str,
-        last_name: str,
-        actor: SubjectRef | None,
-        reason: str,
-    ) -> UserT:
-        """Own validation, uniqueness, persistence and the transactional event."""
-
-        using = self._db or router.db_for_write(self.model)
-        with transaction.atomic(using=using):
-            if self.db_manager(using)._person_email_matches(email).exists():
-                raise AccountExists
-            user = self.model(
-                username=self.model.normalize_username(username),
-                email=self.normalize_email(email),
-                first_name=first_name,
-                last_name=last_name,
-                kind=UserKind.PERSON,
-                is_staff=False,
-                is_superuser=False,
-                is_active=True,
-            )
-            user._state.db = using
-            user.set_password(password)
-            try:
-                with transaction.atomic(using=using):
-                    with system_context(reason="iam.person.validate"):
-                        user.full_clean()
-                    user.sudo(reason=reason).save(using=using)
-            except IntegrityError, ValidationError:
-                if self.db_manager(using)._person_email_matches(email).exists():
-                    raise AccountExists from None
-                raise
-            if actor is not None:
-                user.with_actor(actor)
-            else:
-                user.unsudo()
-            person_created.send(sender=self.model, instance=user)
-        return user
-
-    def create_user(
-        self,
-        username: str,
-        email: str | None = None,
-        password: str | None = None,
-        **extra_fields: Any,
-    ) -> UserT:
-        """Create a user for trusted system paths such as bootstrap and OIDC.
-
-        Actor-requested accounts use ``create_person`` and its creation gate.
-        """
-
-        extra_fields.setdefault("is_staff", False)
-        extra_fields.setdefault("is_superuser", False)
-
-        return self._create_user(username, email, password, **extra_fields)
-
-    def create_superuser(
-        self,
-        username: str,
-        email: str | None = None,
-        password: str | None = None,
-        **extra_fields: Any,
-    ) -> UserT:
-        """Create and save a superuser."""
-
-        extra_fields.setdefault("is_staff", True)
-        extra_fields.setdefault("is_superuser", True)
-        if extra_fields.get("is_staff") is not True:
-            raise ValueError("Superuser must have is_staff=True.")
-        if extra_fields.get("is_superuser") is not True:
-            raise ValueError("Superuser must have is_superuser=True.")
-
-        return self._create_user(username, email, password, **extra_fields)
-
-    def ensure_bootstrap_admin(
-        self,
-        username: str,
-        *,
-        email: str | None = None,
-        password: str | None = None,
-    ) -> tuple[UserT, bool]:
-        """Atomically create or promote the initial admin and grant its platform role.
-
-        Uses this manager's database for the account, REBAC schema, membership
-        and audit writes. Existing usable passwords and non-empty emails survive
-        repeated provisioning. A new account requires a password; an existing
-        passwordless account receives one only when supplied.
-        """
-
-        if not username:
-            raise ValueError("bootstrap_admin requires a username.")
-        role = app_settings.REBAC_UNIVERSAL_ADMIN_ROLE
-        if not role:
-            raise ValueError("bootstrap_admin requires REBAC_UNIVERSAL_ADMIN_ROLE.")
-        using = self._db or router.db_for_write(self.model)
-        manager = self.db_manager(using)
-        with database_context(using), system_context(reason="iam.bootstrap_admin"), transaction.atomic(using=using):
-            try:
-                user = manager.system_context(reason="iam.bootstrap_admin").get(
-                    **{self.model.USERNAME_FIELD: username},
-                )
-            except self.model.DoesNotExist:
-                if not password:
-                    raise ValueError(
-                        "bootstrap_admin needs ANGEE_BOOTSTRAP_ADMIN_PASSWORD "
-                        "or --password when creating a new admin."
-                    )
-                user = manager.create_superuser(username=username, email=email, password=password)
-                created = True
-            else:
-                created = False
-                update_fields = set()
-                if email and not user.email:
-                    user.email = self.normalize_email(email)
-                    update_fields.add("email")
-                for field in ("is_active", "is_staff", "is_superuser"):
-                    if getattr(user, field) is not True:
-                        setattr(user, field, True)
-                        update_fields.add(field)
-                if password and not user.has_usable_password():
-                    user.set_password(password)
-                    update_fields.add("password")
-                if update_fields:
-                    user.save(using=using, update_fields=sorted(update_fields))
-            grant_membership(subject=user, container=ObjectRef.parse(role))
-        return user, created
-
-    def _create_user(
-        self,
-        username: str,
-        email: str | None,
-        password: str | None,
-        **extra_fields: Any,
-    ) -> UserT:
-        """Build, password-hash, and save one user."""
-
-        if not username:
-            raise ValueError("The given username must be set")
-        user = self.model(
-            username=self.model.normalize_username(username),
-            email=self.normalize_email(email),
-            **extra_fields,
-        )
-        user.set_password(password)
-        actor = current_actor()
-        user.sudo(reason="iam.user.create")
-        user.save(using=self._db)
-        if actor is not None:
-            user.with_actor(actor)
-        else:
-            user.unsudo()
-        return user
-
-    def visible_people(
-        self,
-        actor: Any,
-        *,
-        search: str = "",
-        limit: int = VISIBLE_PEOPLE_DEFAULT_LIMIT,
-    ) -> list[UserT]:
-        """Return ``actor``'s active colleagues after search, ordering, and cap."""
-
-        return list(self.colleagues(actor).picker(search)[: bounded_limit(limit)])
-
-    def visible_person_from_public_id(self, actor: Any, public_id: str) -> UserT | None:
-        """Resolve one public user id against the same colleague rows as the picker."""
-
-        return instance_from_public_id(self.model, str(public_id), queryset=self.colleagues(actor).active_people())
-
-    def viewable_people(
-        self,
-        actor: Any,
-        *,
-        search: str = "",
-        limit: int = VISIBLE_PEOPLE_DEFAULT_LIMIT,
-    ) -> list[UserT]:
-        """Return permitted preview targets, applying admission before the cap."""
-
-        bounded = bounded_limit(limit, maximum=VIEWABLE_PEOPLE_MAX_LIMIT)
-        return [copy(person) for person in self.view_as_queryset(actor).search_users(search).ordered_users()[:bounded]]
-
-    def admit_view_as(self, actor: Any, public_id: str) -> UserT | None:
-        """Admit a preview identity for both the picker and GraphQL header.
-
-        Admission uses an actor-scoped candidate. REBAC's native copy contract
-        strips its instance actor/elevation before it becomes a request identity;
-        subsequent instance checks therefore follow the preview's ambient actor.
-        """
-
-        candidate = instance_from_public_id(
-            self.model,
-            str(public_id),
-            queryset=self.view_as_queryset(actor),
-        )
-        return copy(candidate) if candidate is not None else None
-
-    def active_person_for_subject(self, subject: SubjectRef) -> UserT | None:
-        """Resolve an accountable human actor from a concrete canonical subject."""
-
-        if (
-            subject.subject_type != model_resource_type(self.model)
-            or subject.optional_relation
-            or subject.subject_id in {"", "*"}
-        ):
-            return None
-        try:
-            return (
-                self.system_context(reason="iam.subject.active_person")
-                .active_people()
-                .filter(pk=subject.subject_id)
-                .first()
-            )
-        except TypeError, ValueError, ValidationError:
-            return None
 
 
 class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDataModel, concrete=True):
@@ -977,6 +452,31 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         if update_fields:
             self.save(update_fields=[*sorted(update_fields), "updated_at"], expected_revision=expected_revision)
 
+    @staticmethod
+    def service_identity_values(*, username: str, name: str) -> dict[str, Any]:
+        """The user facts derived from a service-owning record."""
+
+        return {"username": username, "first_name": name, "last_name": "", "email": "", "kind": UserKind.SERVICE}
+
+    def update_service_identity(self, *, username: str, name: str) -> None:
+        """Persist only changed service identity facts through native User.save."""
+
+        values = self.service_identity_values(username=username, name=name)
+        changed = {field for field, value in values.items() if getattr(self, field) != value}
+        for field in changed:
+            setattr(self, field, values[field])
+        if changed:
+            self.save(using=self._state.db, update_fields=changed)
+
+    def deactivate_service(self) -> None:
+        """Retain a deleted service owner's identity while preventing further use."""
+
+        if self.kind != UserKind.SERVICE:
+            raise ValidationError("Only service accounts can be deactivated by a service owner.")
+        if self.is_active:
+            self.is_active = False
+            self.save(using=self._state.db, update_fields={"is_active"})
+
     def update_preferences(self, preferences: Mapping[str, Any]) -> None:
         """Replace this user's private UI preference object."""
 
@@ -1001,3 +501,49 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
         """Return the user's short display name."""
 
         return self.first_name
+
+
+class ServiceUserMixin(PublicIdentity, models.Model):
+    """A saved row's stable non-login user relation and synchronization.
+
+    Participants declare a stable ``service_user_prefix``. The default native
+    relation is nullable, protected and named after the participant; a native
+    abstract-field override retains distinct reverse names or editability.
+    Its public id supplies the stable key and its label supplies the user name.
+    """
+
+    service_user_prefix: ClassVar[str]
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="%(class)s",
+    )
+    """Non-login user authenticating, authorizing and attributing this row's actions."""
+
+    class Meta:
+        abstract = True
+
+    def sync_service_user(self) -> User:
+        """Synchronize the linked principal after this row's own write admission."""
+
+        if self.pk is None:
+            raise ValueError("The service owner must be saved before syncing its user.")
+        owner_rows = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self})
+        using = owner_rows.db
+        with database_context(using), system_context(reason="iam.service_user.link"), transaction.atomic(using=using):
+            owner = owner_rows.select_for_update().get(pk=self.pk)
+            user = get_user_model().objects.db_manager(using).ensure_service_user(
+                username=f"{self.service_user_prefix}-{self.public_id}", name=str(owner), user_id=owner.user_id,
+            )
+            if owner.user_id != user.pk:
+                owner_rows.filter(pk=self.pk).update(user_id=user.pk)
+            self.user = user
+            return user
+
+    def deactivate_service_user(self) -> None:
+        """Retain attribution when native deletion removes this service owner."""
+
+        if self.user_id is None:
+            return
+        using = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
+        with database_context(using), system_context(reason="iam.service_user.deactivate"):
+            user = get_user_model().objects.using(using).get(pk=self.user_id)
+            user.deactivate_service()

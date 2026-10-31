@@ -59,8 +59,9 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.sharing import authorized_record_access
 from angee.graphql.subscriptions import changes
 from angee.graphql.view_as import ViewAs
+from angee.iam.choices import UserAccountAction
 from angee.iam.identity import user_display_label, user_label
-from angee.iam.models import VISIBLE_PEOPLE_DEFAULT_LIMIT, UserAccountAction
+from angee.iam.managers import VISIBLE_PEOPLE_DEFAULT_LIMIT
 from angee.iam.models import Group as GroupModel
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import is_platform_admin
@@ -70,6 +71,7 @@ from angee.iam.roles import (
 from angee.iam.roles import (
     IAMGrantRow,
     IAMRoleRow,
+    OverviewInfo,
     validate_subject,
 )
 from angee.iam.roles import assignment_subject_labels as _assignment_subject_labels_owner
@@ -81,9 +83,6 @@ from angee.iam.roles import (
 )
 from angee.iam.roles import (
     group_members as _group_members_owner,
-)
-from angee.iam.roles import (
-    iam_overview as _iam_overview_owner,
 )
 from angee.iam.roles import (
     permission_conditions as _permission_conditions_owner,
@@ -581,7 +580,7 @@ def _principal_access(subject: str) -> IAMPrincipalAccessType:
 def _iam_overview(peek_limit: int) -> IAMOverviewType:
     """Return IAM dashboard facts independent of paginated list rows."""
 
-    return cast(IAMOverviewType, _iam_overview_owner(peek_limit))
+    return cast(IAMOverviewType, OverviewInfo.build(peek_limit))
 
 
 def _admin_relationship_queryset(info: strawberry.Info) -> QuerySet[Any]:

@@ -46,7 +46,6 @@ from angee.base.permissions import effective_rebac_definition
 from angee.base.querysets import AngeeQuerySet, by_key, row_lock_paths
 from angee.base.signals import connect_for_models
 from angee.iam.identity import group_subject_type, user_label
-from angee.iam.service_users import sync_service_user
 
 if TYPE_CHECKING:
     from angee.workflows.models import Trigger, TriggerEvent
@@ -534,7 +533,7 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
         old = {TriggerGrantTarget.from_stored(value) for value in trigger.granted_targets}
         new = set(targets)
         workflow = apps.get_model("workflows", "Workflow").system_queryset().get(pk=trigger.workflow_id)
-        user = sync_service_user(workflow, prefix="workflow")
+        user = workflow.sync_service_user()
         subject = to_subject_ref(user)
         retained = {
             TriggerGrantTarget.from_stored(value)
