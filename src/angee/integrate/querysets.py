@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Self, cast
 
+from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections, models
 from django.db.models import OuterRef, Prefetch, Q, Subquery
@@ -12,6 +13,7 @@ from django.utils import timezone
 
 from angee.base.lineage import concrete_child_accessor, concrete_child_models
 from angee.base.models.ownership import OwnerQuerySet
+from angee.base.refs import generic_pointer_target
 from angee.integrate.choices import (
     IntegrationLifecycle,
     IntegrationRuntimeStatus,
@@ -283,6 +285,16 @@ class SyncStreamQuerySet[SyncStreamT: SyncStream](AngeeHistoryQuerySet[SyncStrea
 
 class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeHistoryQuerySet[RecordLinkT]):
     """Load comparison evidence for a bounded collection of replica identities."""
+
+    def current_for_bridge(self, bridge: models.Model) -> Self:
+        """Keep this selection within the bridge's current stream generations."""
+        streams = apps.get_model("integrate", "SyncStream").objects.db_manager(self.db).current_for_bridge(bridge)
+        return self.filter(stream__in=streams)
+
+    def for_target(self, target: models.Model) -> Self:
+        """Select the canonical generic pointer identity owned by the target."""
+        content_type, object_id = generic_pointer_target(target)
+        return self.filter(target_content_type=content_type, target_object_id=str(object_id))
 
     def absence_eligible(self) -> Self:
         """Roots and children with absent parents may accumulate absence evidence."""

@@ -223,6 +223,36 @@ class RecordLink(
     presentation_related: ClassVar[tuple[str, ...]] = ("stream__integration",)
 
     @property
+    def aggregate_root(self) -> RecordLink:
+        """The applied aggregate root whose compound children share its evidence."""
+        parent = self.parent
+        return parent if parent is not None else self
+
+    @property
+    def applied_snapshot(self) -> Any | None:
+        """The pinned application snapshot for this identity's aggregate."""
+        return self.aggregate_root.applied_base
+
+    def application_count(self) -> int:
+        """Count distinct retained applications of this identity's aggregate root."""
+        root = self.aggregate_root
+        return root.history.using(root._state.db).exclude(applied_at=None).values("applied_at").distinct().count()
+
+    def resolve_target(self) -> models.Model | None:
+        """Resolve fresh internal evidence through Django's native base-manager pointer.
+
+        Unlike an ordinary cached relation read, source reconciliation must see
+        current target facts. Missing model classes and missing rows retain the
+        same empty evidence meaning. This does not confer actor-facing admission.
+        """
+        if not self.record_ref.model_label:
+            return None
+        reference = self.record_ref_field()
+        if reference.is_cached(self):
+            reference.delete_cached_value(self)
+        return self.target
+
+    @property
     def statement_source_label(self) -> str:
         """Name the connection and stream retaining this remote statement evidence."""
 
