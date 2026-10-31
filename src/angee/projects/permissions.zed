@@ -70,7 +70,7 @@ definition projects/task {
     permission withheld = nil
     // A trashed task is concealed from everyone but its direct removal authority
     // (project writers, its owner) and administrators, its managers, who keep every
-    // verb (as on knowledge pages). The authority is a positive
+    // verb (as on retained records). The authority is a positive
     // arm beside the exclusion: no exclusion holds another, which rebac's named
     // grant scan cannot compile, and none crosses the subject arrow.
     permission concealed = trashed->conceal
@@ -161,10 +161,9 @@ definition projects/project_binding {
     relation folder: storage/folder // rebac:field=target
     relation integration: integrate/integration // rebac:field=target
     relation thread: messaging/thread // rebac:field=target
-    relation vault: knowledge/vault // rebac:field=target
     relation admin: angee/role // rebac:const=admin
 
-    permission target_share = drive->share + folder->write + integration->write + thread->share + vault->share
+    permission target_share = drive->share + folder->write + integration->write + thread->share
     permission create = project->share & target_share
     permission read = project->read + admin->member
     permission write = nil

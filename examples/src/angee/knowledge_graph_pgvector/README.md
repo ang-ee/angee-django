@@ -1,12 +1,12 @@
-# knowledge_graph_pgvector (plugin skeleton)
+# Knowledge retrieval extension example
 
-A **semantic-retrieval plugin** for the knowledge addon. Its job here is to prove
+An explicit development/test example for the knowledge addon. Its job is to prove
 that graph-RAG / pgvector capability bolts onto `angee.knowledge` through its
-declared seams alone — **with zero edits to the knowledge addon**. The bundled
+declared seams alone — **with zero edits to the knowledge addon**. It implements lexical search only; no embeddings, vector index or semantic ranking are provided. The bundled
 backend is a lexical stub; the real embedding model, its backfill, and the ANN
 index are this plugin's responsibility (see *Out of scope*).
 
-It is intentionally **not** in any project's `INSTALLED_APPS` — it is the
+It is excluded from the framework meta-distribution and installed only as a development/test dependency. Its historical distribution, import, app and SDL identities are preserved for explicit consumers. It is intentionally **not** in any project's `INSTALLED_APPS` — it is the
 template/contract for a real semantic backend, verified by
 `tests/test_knowledge_plugin.py`.
 

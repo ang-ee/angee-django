@@ -1,0 +1,13 @@
+build-system = { requires = ["hatch-angee>=1.1,<2"], build-backend = "hatch_angee" }
+
+[project]
+name = "angee-projects-knowledge"
+version = "3.0.0"
+description = "Compose project setup and binding authority with Knowledge vaults and pages"
+dependencies = ["angee-projects>=3,<4", "angee-knowledge>=3,<4", "django-compose>=0.1.0.dev1,<0.2"]
+dynamic = ["entry-points"]
+
+[tool.angee]
+
+[tool.angee.platform]
+category = "Productivity"

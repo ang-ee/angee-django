@@ -63,7 +63,8 @@ from angee.posts.models import Feed as AbstractFeed
 from angee.posts.models import FeedFollow as AbstractFeedFollow
 from angee.posts.models import PostMetrics as AbstractPostMetrics
 from angee.posts.models import Quota as AbstractQuota
-from angee.projects.models import DriveProjects, FolderProjects, VaultProjects
+from angee.projects.models import DriveProjects, FolderProjects
+from angee.projects_knowledge.models import VaultProjects
 from angee.proposals.models import DriveProposalAccess, FileProposalAccess
 from angee.spaces.models import VaultSpace
 from angee.storage.models import Backend as AbstractStorageBackend

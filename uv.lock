@@ -50,6 +50,7 @@ members = [
     "angee-portfolio",
     "angee-posts",
     "angee-projects",
+    "angee-projects-knowledge",
     "angee-proposals",
     "angee-proposals-work",
     "angee-provenance",
@@ -149,7 +150,6 @@ dependencies = [
     { name = "angee-integrate-vcs" },
     { name = "angee-jobs" },
     { name = "angee-knowledge" },
-    { name = "angee-knowledge-graph-pgvector" },
     { name = "angee-knowledge-integrate-notion" },
     { name = "angee-mcp" },
     { name = "angee-messaging" },
@@ -167,6 +167,7 @@ dependencies = [
     { name = "angee-portfolio" },
     { name = "angee-posts" },
     { name = "angee-projects" },
+    { name = "angee-projects-knowledge" },
     { name = "angee-proposals" },
     { name = "angee-proposals-work" },
     { name = "angee-provenance" },
@@ -208,6 +209,7 @@ postgres = [
 [package.dev-dependencies]
 dev = [
     { name = "angee-django-stubs", extra = ["compatible-mypy"] },
+    { name = "angee-knowledge-graph-pgvector" },
     { name = "angee-mypy" },
     { name = "daphne" },
     { name = "django-zed-rebac", extra = ["caveats"] },
@@ -249,7 +251,6 @@ requires-dist = [
     { name = "angee-integrate-vcs", editable = "src/angee/integrate_vcs" },
     { name = "angee-jobs", editable = "src/angee/jobs" },
     { name = "angee-knowledge", editable = "src/angee/knowledge" },
-    { name = "angee-knowledge-graph-pgvector", editable = "src/angee/knowledge_graph_pgvector" },
     { name = "angee-knowledge-integrate-notion", editable = "src/angee/knowledge_integrate_notion" },
     { name = "angee-mcp", editable = "src/angee/mcp" },
     { name = "angee-messaging", editable = "src/angee/messaging" },
@@ -267,6 +268,7 @@ requires-dist = [
     { name = "angee-portfolio", editable = "src/angee/portfolio" },
     { name = "angee-posts", editable = "src/angee/posts" },
     { name = "angee-projects", editable = "src/angee/projects" },
+    { name = "angee-projects-knowledge", editable = "src/angee/projects_knowledge" },
     { name = "angee-proposals", editable = "src/angee/proposals" },
     { name = "angee-proposals-work", editable = "src/angee/proposals_work" },
     { name = "angee-provenance", editable = "src/angee/provenance" },
@@ -305,6 +307,7 @@ provides-extras = ["postgres"]
 [package.metadata.requires-dev]
 dev = [
     { name = "angee-django-stubs", extras = ["compatible-mypy"], specifier = "==6.1.2.post3" },
+    { name = "angee-knowledge-graph-pgvector", editable = "examples/src/angee/knowledge_graph_pgvector" },
     { name = "angee-mypy", specifier = "==2.1.0" },
     { name = "daphne", specifier = ">=4.0" },
     { name = "django-zed-rebac", extras = ["caveats"], git = "https://github.com/ang-ee/django-zed-rebac.git?rev=f43f0773f2c2a86a6882aeb1b46b34b8c19a0d13" },
@@ -873,7 +876,7 @@ requires-dist = [
 [[package]]
 name = "angee-knowledge-graph-pgvector"
 version = "3.0.0"
-source = { editable = "src/angee/knowledge_graph_pgvector" }
+source = { editable = "examples/src/angee/knowledge_graph_pgvector" }
 dependencies = [
     { name = "angee-knowledge" },
     { name = "angee-mcp" },
@@ -1230,6 +1233,7 @@ dependencies = [
     { name = "angee-intake" },
     { name = "angee-portfolio" },
     { name = "angee-projects" },
+    { name = "angee-projects-knowledge" },
     { name = "angee-proposals" },
     { name = "angee-proposals-work" },
     { name = "angee-web" },
@@ -1241,6 +1245,7 @@ requires-dist = [
     { name = "angee-intake", editable = "src/angee/intake" },
     { name = "angee-portfolio", editable = "src/angee/portfolio" },
     { name = "angee-projects", editable = "src/angee/projects" },
+    { name = "angee-projects-knowledge", editable = "src/angee/projects_knowledge" },
     { name = "angee-proposals", editable = "src/angee/proposals" },
     { name = "angee-proposals-work", editable = "src/angee/proposals_work" },
     { name = "angee-web", editable = "src/angee/web" },
@@ -1303,7 +1308,6 @@ dependencies = [
     { name = "angee-base" },
     { name = "angee-iam" },
     { name = "angee-integrate" },
-    { name = "angee-knowledge" },
     { name = "angee-messaging" },
     { name = "angee-parties" },
     { name = "angee-provenance" },
@@ -1320,7 +1324,6 @@ requires-dist = [
     { name = "angee-base", editable = "src/angee/base" },
     { name = "angee-iam", editable = "src/angee/iam" },
     { name = "angee-integrate", editable = "src/angee/integrate" },
-    { name = "angee-knowledge", editable = "src/angee/knowledge" },
     { name = "angee-messaging", editable = "src/angee/messaging" },
     { name = "angee-parties", editable = "src/angee/parties" },
     { name = "angee-provenance", editable = "src/angee/provenance" },
@@ -1329,6 +1332,23 @@ requires-dist = [
     { name = "angee-tags", editable = "src/angee/tags" },
     { name = "angee-timeline", editable = "src/angee/timeline" },
     { name = "angee-web", editable = "src/angee/web" },
+    { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
+]
+
+[[package]]
+name = "angee-projects-knowledge"
+version = "3.0.0"
+source = { editable = "src/angee/projects_knowledge" }
+dependencies = [
+    { name = "angee-knowledge" },
+    { name = "angee-projects" },
+    { name = "django-compose" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "angee-knowledge", editable = "src/angee/knowledge" },
+    { name = "angee-projects", editable = "src/angee/projects" },
     { name = "django-compose", specifier = ">=0.1.0.dev1,<0.2" },
 ]
 

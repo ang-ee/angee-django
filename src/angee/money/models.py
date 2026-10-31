@@ -153,21 +153,16 @@ class Currency(ResourceLoadMixin, ArchiveMixin, AngeeDataModel, concrete=True):
         )
         if canonical_source.pk == canonical_target.pk:
             return amount
-        return (
-            amount
-            * rates.rate_for(
-                canonical_target,
-                on_date,
-                context=context,
-                reference_currency=reference_currency,
-            )
-            / rates.rate_for(
-                canonical_source,
-                on_date,
-                context=context,
-                reference_currency=reference_currency,
-            )
+        target_rate = rates.rate_for(
+            canonical_target, on_date, context=context, reference_currency=reference_currency,
         )
+        source_rate = rates.rate_for(
+            canonical_source, on_date, context=context, reference_currency=reference_currency,
+        )
+        if any(not rate.is_finite() or rate <= 0 for rate in (source_rate, target_rate)):
+            raise ValidationError("Exchange rates must be finite and positive.")
+        return amount * target_rate / source_rate
+
 
 
 class CurrencyRateQuerySet[RateT: CurrencyRate](ArchiveQuerySet[RateT], AngeeHistoryQuerySet[RateT]):

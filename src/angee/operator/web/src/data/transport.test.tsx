@@ -88,6 +88,17 @@ afterEach(() => {
 });
 
 describe("OperatorTransportProvider bearer lifetime", () => {
+  test("nested consumers reuse the host bearer when they unmount", () => {
+    const view = renderTransport(
+      <OperatorTransportProvider>{null}</OperatorTransportProvider>,
+    );
+    expect(operatorToken.get()).toBe("first-token");
+    expect(createOperatorClient).toHaveBeenCalledTimes(1);
+    view.rerender(<OperatorTransportProvider>{null}</OperatorTransportProvider>);
+    expect(operatorToken.get()).toBe("first-token");
+    expect(createOperatorClient).toHaveBeenCalledTimes(1);
+  });
+
   test("keeps the bearer while a new translator and a page commit together", () => {
     const seen: (string | null)[] = [];
     const view = renderTransport();

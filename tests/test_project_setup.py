@@ -533,5 +533,6 @@ class DenormalizedDashboardVisibilityCase(DashboardVisibilityCase):
 def test_project_setup_contracts(tmp_path: Path, storage: str, group: str):
     case = ("Denormalized" if storage == "denormalized" else "") + group
     run_composed_tests(
-        tmp_path, f"tests.test_project_setup.{case}", app=("angee.intake", "angee.proposals_work", "angee.dashboards"),
+        tmp_path, f"tests.test_project_setup.{case}",
+        app=("angee.intake", "angee.proposals_work", "angee.dashboards", "angee.projects_knowledge"),
     )
