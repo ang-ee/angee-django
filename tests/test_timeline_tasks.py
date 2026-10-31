@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from rebac import actor_context
 
 from angee.graphql.publishing import mute_changes
@@ -73,3 +75,30 @@ def test_record_without_task_capability_has_an_empty_task_timeline(comment_recor
     data = read_timeline(record, comment_record.writer)
     assert data["timeline"]["entries"] == data["timeline"]["kinds"] == []
     assert data["timeline"]["needs_me"] == data["timeline_attention"] == 0
+
+
+def test_presentation_hydrates_native_task_rows_for_the_explicit_actor(comment_record, monkeypatch) -> None:
+    record, author, writer = comment_record.record, comment_record.author, comment_record.writer
+    with actor_context(writer):
+        task = Task.objects.schedule(record.with_actor(writer), title="Review this exact task", assignee=author)
+    native_queryset, native_present = TaskKind.queryset, TaskKind.present
+
+    def queryset(kind, target, actor):
+        assert target is record and actor is author
+        return native_queryset(kind, target, actor)
+
+    def present(kind, rows):
+        rows = list(rows)
+        assert [row.pk for row in rows] == [task.pk]
+        assert all(not any(name.startswith("_timeline_") for name in vars(row)) for row in rows)
+        with CaptureQueriesContext(connection) as relation_reads:
+            result = native_present(kind, rows)
+        assert list(relation_reads) == []
+        return result
+
+    monkeypatch.setattr(TaskKind, "queryset", queryset)
+    monkeypatch.setattr(TaskKind, "present", present)
+    with actor_context(comment_record.outsider):
+        entry, = timeline_entries(record, author)
+    assert entry.title == task.title and entry.actor == author.get_username()
+    assert entry.needs_me

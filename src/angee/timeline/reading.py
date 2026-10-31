@@ -10,7 +10,7 @@ from typing import Any
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.db.models.functions import Cast
-from rebac import to_subject_ref
+from rebac import database_context, to_subject_ref
 
 from angee.base.models.identity import public_id_for
 from angee.base.pagination import KeysetOrder, keyset_signer
@@ -77,7 +77,7 @@ class Timeline:
 
     def __init__(self, record: models.Model, actor: Any):
         self.record = record
-        self.actor = to_subject_ref(actor) if actor is not None else None
+        self.actor = actor
         self.kinds = tuple(kind for kind in timeline_kinds() if kind.eligible(type(record)))
         self.branches = {}
         self.content_types = {}
@@ -142,7 +142,7 @@ class Timeline:
         selected_kinds = sorted(set(kinds)) if kinds else sorted(kind.id for kind in self.kinds)
         signer = keyset_signer(
             [self.record._state.db, self.record._meta.label_lower, str(self.record.pk),
-             str(self.actor), selected_kinds, needs_me],
+             str(to_subject_ref(self.actor) if self.actor is not None else None), selected_kinds, needs_me],
             salt="angee.timeline",
         )
         # Every union branch explicitly projects its native key as bigint.
@@ -164,10 +164,15 @@ class Timeline:
         ids: dict[str, set[int]] = {}
         for row in selected:
             ids.setdefault(row["_timeline_kind"], set()).add(row["_timeline_pk"])
-        hydrated = {kind: self.branches[kind].filter(pk__in=pks).in_bulk() for kind, pks in ids.items()}
+        owners = {kind.id: kind for kind in self.kinds}
+        hydrated: dict[str, dict[int, models.Model]] = {}
+        for kind, pks in ids.items():
+            using = self.branches[kind].db
+            with database_context(using):
+                hydrated[kind] = (owners[kind].queryset(self.record, self.actor)
+                    .using(using).order_by().filter(pk__in=pks).in_bulk())
         children = self._children(ids)
         record_type, record_pk = generic_pointer_target(self.record)
-        owners = {kind.id: kind for kind in self.kinds}
         displays = {kind: owners[kind].present(rows.values()) for kind, rows in hydrated.items()}
         entries = []
         for row in selected:
