@@ -53,6 +53,21 @@ class IphoneBackupMountBackend(LocalFolderMountBackend):
         self._backup_reader: IosBackup | None = None
         self._blob_by_path: dict[str, Path] = {}
 
+    def close(self) -> None:
+        """Release the cycle's manifest connection and cached physical paths."""
+
+        try:
+            if self._backup_reader is not None:
+                self._backup_reader.close()
+        finally:
+            self._backup_reader = None
+            self._blob_by_path.clear()
+            self._entry_mime_types.clear()
+            self.observed_paths.clear()
+            self.scan_errors = 0
+            self._root = None
+            super().close()
+
     @property
     def backup(self) -> IosBackup:
         """Return the one manifest reader shared by this backend instance."""

@@ -44,7 +44,6 @@ from angee.graphql import records
 from angee.graphql.data.resource_fields import is_archive_field, is_trash_field
 from angee.graphql.views import graphql_endpoint
 from angee.storage import exceptions
-from angee.storage import models as storage_models
 from angee.storage.models import FileManager, UploadState
 from angee.storage.signals import file_finalized
 from angee.storage_integrate.backends import LocalFolderBackend
@@ -1367,7 +1366,7 @@ def test_backend_storage_cache_is_bounded(
 
     del transactional_db
 
-    monkeypatch.setattr(storage_models, "_STORAGE_CACHE_MAX_SIZE", 2)
+    monkeypatch.setattr("angee.storage.models.backend._STORAGE_CACHE_MAX_SIZE", 2)
     Backend._storage_cache.clear()
     with system_context(reason="test storage setup"):
         backends = [

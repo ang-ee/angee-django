@@ -62,3 +62,13 @@ navigation, and the shared explorer keeps its mounted tree and selection.
 Folders compose the native hierarchy and transferable ownership, scoped to their
 drive. Files, folders and FileAttachment edges retain changeset history; a merge
 can restore an attachment's former target without moving the file's bytes.
+
+Native row declarations live in `models/`; factories and chainable scopes live in
+`managers.py` and `querysets.py`. Existing `angee.storage.models` imports remain
+explicit exports. File metadata merges and dedup reach belong to the File row.
+`get_or_ingest_bytes` and `get_or_ingest_stream` return `(file, created)`;
+`created` identifies this attempt's inserted winner, not exclusive future use.
+Automatic acquisition cleanup uses the native grant lock and honors direct
+sharing, committed row edits, attachments and protected references through
+`purge_if_unretained`; a creation flag alone never
+authorizes removal of a shared carrier.

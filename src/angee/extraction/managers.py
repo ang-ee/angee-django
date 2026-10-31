@@ -354,8 +354,89 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
         envelope.extend((sources, pages, parts, mapping, retirement))
         if strip_null_bytes(envelope) != envelope:
             raise ValidationError("Retained evidence cannot contain null characters.")
+        existing = self.model._base_manager.filter(reuse_key=values["reuse_key"]).first()
+        if existing is not None:
+            existing.require_request_digest(values["outcome"]["request_digest"])
+            return existing
+        created_files = []
+        verified_parts = []
+        try:
+            if base is None:
+                if part_carriers and len(part_carriers) != len(parts):
+                    raise ValidationError("Each evidence part requires its matching carrier.")
+                file_model = self.model._meta.apps.get_model("storage.File")
+                first_file_id = next((source["file_id"] for source in sources if source["file_id"]), None)
+                drive_id = str(file_model._base_manager.get(pk=first_file_id).drive.sqid) if first_file_id else ""
+                with system_context(reason="prepare authorized extraction carriers"):
+                    for position, part in enumerate(parts):
+                        if part_carriers:
+                            carrier = part_carriers[position]
+                            file = file_model._base_manager.get(sqid=carrier.file_id)
+                        else:
+                            carrier, file, created = PartCarrier.retain_with_status(
+                                DocumentPart(**part),
+                                actor=actor,
+                                drive_id=drive_id,
+                            )
+                            if created:
+                                created_files.append(file)
+                        recovered = carrier.read(file)
+                        if dict(asdict(recovered), metadata=recovered.metadata or {}) != part:
+                            raise ValidationError("The part carrier differs from the retained evidence.")
+                        verified_parts.append((file.pk, carrier.content_hash))
+            return self._retain_prepared(
+                values,
+                sources,
+                pages,
+                parts,
+                base,
+                mapping,
+                retirement,
+                correction=correction,
+                verified_parts=verified_parts,
+            )
+        finally:
+            with system_context(reason="discard unused extraction acquisitions"):
+                for file in created_files:
+                    file.purge_if_unretained()
+
+    def _retain_prepared(
+        self,
+        values: dict[str, Any],
+        sources: list[dict[str, Any]],
+        pages: list[dict[str, Any]],
+        parts: list[dict[str, Any]],
+        base: Any,
+        mapping: Any,
+        retirement: Any,
+        *,
+        correction: bool = False,
+        verified_parts: Sequence[tuple[Any, str]] = (),
+    ) -> Any:
         lineage_model = self.model._meta.apps.get_model("extraction.ExtractionLineage")
         with transaction.atomic(), system_context(reason="retain authorized extraction snapshot"):
+            if base is None:
+                registry = self.model._meta.apps
+                for source in sources:
+                    if source["file_id"] is not None:
+                        file_source = (
+                            registry.get_model("storage.File").objects.lock_if_supported().get(pk=source["file_id"])
+                        )
+                        digest = file_source.content_hash
+                    else:
+                        part_source = (
+                            registry.get_model("messaging.Part")
+                            .objects.lock_if_supported()
+                            .get(
+                                pk=source["message_part_id"],
+                            )
+                        )
+                        fragment = part_source.fragment
+                        if fragment is None:
+                            raise ValidationError("The source changed during carrier preparation.")
+                        digest = fragment.hash
+                    if str(digest) != source["content_hash"]:
+                        raise ValidationError("The source changed during carrier preparation.")
             lineage = lineage_model.objects.filter(identity=values["lineage_identity"]).first()
             if lineage is None:
                 try:
@@ -367,8 +448,7 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
             lineage = lineage_model.objects.lock_if_supported().get(pk=lineage.pk)
             existing = self.model._base_manager.filter(reuse_key=values["reuse_key"]).first()
             if existing is not None:
-                if existing.outcome["request_digest"] != values["outcome"]["request_digest"]:
-                    raise ValidationError("This request key already owns different evidence.")
+                existing.require_request_digest(values["outcome"]["request_digest"])
                 return existing
             previous = lineage.head
             if values["outcome"]["kind"] == ExtractionStatus.FAILED and (mapping or retirement):
@@ -424,27 +504,13 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
                     part["carrier_file_id"] = retained.carrier_file_id
                     part["carrier_digest"] = retained.carrier_digest
             else:
-                if part_carriers and len(part_carriers) != len(parts):
-                    raise ValidationError("Each evidence part requires its matching carrier.")
                 file_model = self.model._meta.apps.get_model("storage.File")
-                first_file_id = next((source["file_id"] for source in sources if source["file_id"]), None)
-                drive_id = (
-                    str(file_model._base_manager.select_related("drive").get(pk=first_file_id).drive.sqid)
-                    if first_file_id
-                    else ""
-                )
-                for position, part in enumerate(parts):
-                    carrier = (
-                        part_carriers[position]
-                        if part_carriers
-                        else PartCarrier.retain(DocumentPart(**part), actor=actor, drive_id=drive_id)
-                    )
-                    file = file_model._base_manager.get(sqid=carrier.file_id)
-                    recovered = carrier.read(file)
-                    if dict(asdict(recovered), metadata=recovered.metadata or {}) != part:
-                        raise ValidationError("The part carrier differs from the retained evidence.")
+                for part, (file_pk, digest) in zip(parts, verified_parts, strict=True):
+                    file = file_model._base_manager.select_for_update().get(pk=file_pk)
+                    if str(file.content_hash) != digest or file.is_trashed or str(file.upload_state) != "ready":
+                        raise ValidationError("The prepared part carrier changed before retention.")
                     part["carrier_file_id"] = file.pk
-                    part["carrier_digest"] = carrier.content_hash
+                    part["carrier_digest"] = digest
             values["lineage"] = lineage
             values.pop("lineage_identity", None)
             extraction = self.model(

@@ -24,6 +24,7 @@ from angee.base.models.base import AngeeModel
 from angee.base.models.identity import SqidMixin, public_id_of
 from angee.base.querysets import AngeeQuerySet
 from angee.base.schemas.forms import relation_positions
+from angee.base.serialization import canonical_json_sha256
 from angee.resources.entries import (
     GRANT_KIND,
     ROW_KIND,
@@ -46,6 +47,7 @@ from angee.resources.loader import (
 )
 from angee.resources.mixins import ResourceLoadMixin
 from angee.resources.signals import pre_load
+from angee.resources.validators import normalize_xref
 from angee.resources.widgets import is_xref, resolve_xref, split_xref
 
 if TYPE_CHECKING:
@@ -95,7 +97,10 @@ class ResourceQuerySet[LedgerT: Resource](AngeeQuerySet[LedgerT]):
             prefix, separator, _encoded = public_id.partition("_")
             if separator:
                 identity = SqidField(
-                    real_field_name="id", prefix=f"{prefix}_", min_length=sqid.min_length, alphabet=sqid.alphabet,
+                    real_field_name="id",
+                    prefix=f"{prefix}_",
+                    min_length=sqid.min_length,
+                    alphabet=sqid.alphabet,
                 )
                 value = identity.public_id_to_value(public_id)
                 if value is not None:
@@ -114,7 +119,8 @@ class ResourceQuerySet[LedgerT: Resource](AngeeQuerySet[LedgerT]):
         label = model_label.lower()
         index = installed_components("angee.addons")
         owners = [
-            config.name for config in apps.get_app_configs()
+            config.name
+            for config in apps.get_app_configs()
             if label in {retired.lower() for retired in retired_models_for(config, index=index)}
         ]
         return self.seeded_target_keys(model_label, source_addons=owners) if owners else set()
@@ -177,19 +183,76 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
         target = self.resolve(value, model=ModelLabelField.get_model(relation["resource"]))
         return str(public_id_of(target))
 
-    def bind_instance(
-        self, *, addon: Any, xref: str, instance: models.Model, source: str, replace: bool = False,
-    ) -> None:
-        """Use the import ledger for owner-created installation identities."""
+    @staticmethod
+    def _target_values(
+        instance: models.Model,
+        *,
+        model: type[models.Model],
+        source: str,
+        tier: Any,
+        content_hash: str,
+    ) -> dict[str, Any]:
+        """Project ledger metadata once for import and owner-created binding."""
 
         if instance.pk is None:
             raise ResourceLoadError("Installation identities require a saved target.")
+        return {
+            "source_path": source,
+            "target_model": model._meta.label,
+            "content_hash": content_hash,
+            "target_id": public_id_of(instance),
+            "tier": tier,
+        }
+
+    def upsert_target(
+        self,
+        *,
+        source_addon: str,
+        xref: str,
+        instance: models.Model,
+        model: type[models.Model],
+        source: str,
+        tier: Any,
+        content_hash: str,
+    ) -> LedgerT:
+        """Retain an imported target through the ledger's compatibility invariant."""
+
+        values = self._target_values(instance, model=model, source=source, tier=tier, content_hash=content_hash)
+        with transaction.atomic(using=self.db):
+            current = self.filter(source_addon=source_addon, xref=xref).lock_if_supported().first()
+            if current is not None:
+                current.require_target_model(model)
+            ledger, _created = self.update_or_create(source_addon=source_addon, xref=xref, defaults=values)
+        return ledger
+
+    def bind_instance(
+        self,
+        *,
+        addon: Any,
+        xref: str,
+        instance: models.Model,
+        source: str,
+        replace: bool = False,
+    ) -> None:
+        """Bind owner-created identities; replacement remains an explicit owner choice."""
+
+        entry = ResourceEntry(addon=addon, tier=self.model.Tier.INSTALL, source_value=source)
+        xref = normalize_xref(xref, location=f"{entry.display} row 0")
+        defaults = self._target_values(
+            instance,
+            model=type(instance),
+            source=entry.source,
+            tier=entry.tier,
+            content_hash="",
+        )
+        identity = str(defaults["target_id"])
+        defaults["content_hash"] = f"sha256:{canonical_json_sha256({'identity': identity})}"
         with database_context(self.db), transaction.atomic(using=self.db):
-            resource = build_resource(
-                type(instance), ResourceEntry(addon=addon, tier=self.model.Tier.INSTALL, source_value=source),
-                ledger_model=self.model, addon_aliases=self._addon_aliases(apps.get_app_configs()), using=self.db,
-            )
-            resource.bind_instance(xref, instance, replace=replace)
+            operation = self.update_or_create if replace else self.get_or_create
+            ledger, _created = operation(source_addon=addon.name, xref=xref, defaults=defaults)
+            ledger.require_target_model(type(instance))
+            if str(ledger.target_id) != identity:
+                raise ResourceLoadError(f"{addon.name}.{xref} already identifies another record.")
 
     def validate_addons(
         self,
@@ -201,7 +264,8 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
 
         selected_addons = tuple(addons)
         entries, row_groups, grant_groups, kind_declarations = self._groups_for(
-            selected_addons, tiers=tiers,
+            selected_addons,
+            tiers=tiers,
         )
         self._check_xref_collisions(row_groups)
         self._import_groups(
@@ -215,7 +279,8 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
         return ValidationResult(
             checked_files=len(entries),
             checked_rows=(
-                sum(len(group.dataset) for group in row_groups) + sum(len(group.rows) for group in grant_groups)
+                sum(len(group.dataset) for group in row_groups)
+                + sum(len(group.rows) for group in grant_groups)
                 + sum(len(rows) for rows in kind_declarations.values())
             ),
         )
@@ -235,7 +300,8 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
 
         selected_addons = tuple(addons)
         entries, row_groups, grant_groups, kind_declarations = self._groups_for(
-            selected_addons, tiers=active_tiers,
+            selected_addons,
+            tiers=active_tiers,
         )
         self._check_xref_collisions(row_groups)
         return self._import_groups(
@@ -291,7 +357,11 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                 )
                 with database_context(self.db), transaction.atomic(using=self.db):
                     resource = build_resource(
-                        model, group.entry, ledger_model=self.model, addon_aliases=aliases, using=self.db,
+                        model,
+                        group.entry,
+                        ledger_model=self.model,
+                        addon_aliases=aliases,
+                        using=self.db,
                     )
                     with system_context(reason="resources.load_xref resolve existing target"):
                         resolved, _ = resource.resolve_existing(((selected.dataset, resource),))
@@ -501,9 +571,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
                 groups.extend(entry.read_groups())
             else:
                 declarations[entry.kind].extend(resolve_impl_class(ResourceEntryKind, entry.kind).read(entry))
-        return entries, tuple(groups), tuple(grant_groups), {
-            kind: tuple(rows) for kind, rows in declarations.items()
-        }
+        return entries, tuple(groups), tuple(grant_groups), {kind: tuple(rows) for kind, rows in declarations.items()}
 
     def _entries_for(
         self,
