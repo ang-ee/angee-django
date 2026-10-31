@@ -7,6 +7,7 @@ import types as _types
 from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache, partial
+from types import EllipsisType
 from typing import TYPE_CHECKING, Any, cast
 
 import strawberry
@@ -1257,19 +1258,19 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     *,
     model: type[models.Model],
     name: str | None = None,
-    filterable: Sequence[str],
+    filterable: Sequence[str] | EllipsisType,
     filter_expressions: Mapping[str, BaseExpression | Callable[[models.QuerySet[Any]], BaseExpression]]
     | None = None,
     record_ref_filters: tuple[str, str] | None = None,
     record_ref_requires_read: bool = False,
-    sortable: Sequence[str],
+    sortable: Sequence[str] | EllipsisType,
     sortable_aliases: Mapping[str, str | SortAlias] | None = None,
-    aggregatable: Sequence[str],
-    groupable: Sequence[str] = (),
+    aggregatable: Sequence[str] | EllipsisType,
+    groupable: Sequence[str] | EllipsisType = (),
     json_paths: Mapping[str, str] | None = None,
-    writable: Sequence[str] | None = None,
-    insertable: Sequence[str] | None = None,
-    updatable: Sequence[str] | None = None,
+    writable: Sequence[str] | EllipsisType | None = None,
+    insertable: Sequence[str] | EllipsisType | None = None,
+    updatable: Sequence[str] | EllipsisType | None = None,
     lines: HasuraLines | None = None,
     insert: bool = True,
     update: bool = True,
@@ -1298,6 +1299,13 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     write backend, and the public-id ``id`` decoder. A caller overrides any knob
     only where the resource's intent differs (REBAC-scoped reads, a custom write
     backend, a non-``pk`` identity column).
+
+    Each field axis accepts ``...`` to delegate to the composed model's matching
+    ``hasura_<axis>_fields`` declarations, collected across extension bases.
+    Authored sequences, including empty sequences, remain authoritative; ``None``
+    keeps the native writable-field default and never requests delegation.
+    A delegated axis without declarations is empty. Delegation grants no writes
+    outside the selected operation's allowlist.
 
     An ``AngeeHasuraWriteBackend`` declares relation identities once through
     ``public_id_fields``. Those fields supply the native input/filter decoders;
@@ -1346,6 +1354,16 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     seams must use new names, distinct from existing resource filters and Hasura
     boolean combinators.
     """
+
+    filterable = declared_hasura_resource_fields(model, "hasura_filterable_fields") if filterable is ... else filterable
+    sortable = declared_hasura_resource_fields(model, "hasura_sortable_fields") if sortable is ... else sortable
+    aggregatable = (
+        declared_hasura_resource_fields(model, "hasura_aggregatable_fields") if aggregatable is ... else aggregatable
+    )
+    groupable = declared_hasura_resource_fields(model, "hasura_groupable_fields") if groupable is ... else groupable
+    writable = declared_hasura_resource_fields(model, "hasura_writable_fields") if writable is ... else writable
+    insertable = declared_hasura_resource_fields(model, "hasura_insertable_fields") if insertable is ... else insertable
+    updatable = declared_hasura_resource_fields(model, "hasura_updatable_fields") if updatable is ... else updatable
 
     model_aliases, model_filter_aliases = _declared_aliases(cast(Hashable, model))
     expressions = dict(filter_expressions or {})

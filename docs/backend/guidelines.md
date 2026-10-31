@@ -216,6 +216,21 @@ Use these owners instead of maintaining another contract in an addon:
   that Angee exposes but does not own, pass an explicit sqid public identity
   decoder to the resource instead of creating source-addon migration state. A
   raw primary-key compatibility path must be explicit and source-test-only.
+- Resource field axes may explicitly delegate to composed model declarations:
+  ``filterable=...`` consumes ``hasura_filterable_fields``, and the same convention
+  applies to sortable, aggregatable, groupable, writable, insertable and updatable.
+  The Hasura adapter gathers directly declared MRO contributions. An authored
+  sequence, including ``()``, remains authoritative; ``None`` preserves native
+  editable-field defaults. Missing delegated declarations mean an empty list.
+  Readability alone never grants write admission. Tag retains its historical
+  readable-field contributions to filter/group axes in its own resource bridge;
+  this compatibility rule is not a generic resource-builder fallback. Other axes
+  explicitly consume the Tag model/ARP scope donor's complete declarations.
+- Scalar FK projections that disclose identity independently of target readability
+  compose ``public_id_field("relation", nullable=...)`` from the GraphQL identity
+  owner. Native ``only`` preserves deferred-column optimization; nullable/required
+  output stays explicit. Use ``actor_scoped_public_id`` when target readability
+  must redact the reference, or ``actor_scoped_to_one`` for a target node.
 - Management commands stay thin. They parse CLI arguments, load settings/context,
   and call the owner. Command modules should not contain reusable business logic,
   import generated runtime models directly, or duplicate resource/composer/schema
