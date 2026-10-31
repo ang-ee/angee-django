@@ -73,7 +73,10 @@ class ChangePayload:
     """Whether the change happened inside a sync ingestion context; not part of the wire message."""
 
     instance: models.Model | None = field(default=None, compare=False, repr=False)
-    """Source row available during synchronous local delivery, including deletes; never serialized."""
+    """Source row available during transport projection, including deletes; never serialized."""
+
+    using: str | None = None
+    """Database alias captured before local observation; never serialized."""
 
     broadcasts: bool = True
     """Whether this occurrence reaches the channel layer; local observers still receive it."""
@@ -88,6 +91,7 @@ class ChangePayload:
         readable_fields: ReadableFields = (),
         during_ingestion: bool = False,
         broadcasts: bool = True,
+        field_values: Mapping[str, Any] | None = None,
     ) -> ChangePayload:
         """Return the channel payload for a saved or deleted model instance."""
 
@@ -95,7 +99,7 @@ class ChangePayload:
         changed_values = None
         if changed_fields is not None:
             readable = readable_fields() if callable(readable_fields) else readable_fields
-            changed_values = _changed_values(instance, changed_fields, frozenset(readable))
+            changed_values = _changed_values(instance, changed_fields, frozenset(readable), field_values)
         resource_id = None
         if model_resource_type(type(instance)):
             resource_id = model_resource_id(instance)
@@ -115,6 +119,7 @@ class ChangePayload:
             during_ingestion=during_ingestion,
             instance=instance,
             broadcasts=broadcasts,
+            using=instance._state.db,
         )
 
     @classmethod
@@ -200,6 +205,7 @@ def _changed_values(
     instance: models.Model,
     changed_fields: tuple[str, ...],
     readable_fields: frozenset[str],
+    field_values: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return projected concrete-field values, including inherited columns, without relation fetches."""
 
@@ -208,7 +214,8 @@ def _changed_values(
         field = _concrete_field(instance, name)
         if field is None or not ({name, field.name, field.attname} & readable_fields):
             continue
-        values[name] = json_safe(getattr(instance, field.attname, None))
+        value = field_values.get(name) if field_values is not None else getattr(instance, field.attname, None)
+        values[name] = json_safe(value)
     return values
 
 
@@ -231,15 +238,23 @@ def _change_read_resource(instance: models.Model) -> ObjectRef | None:
 
 
 def _change_related_records(instance: models.Model) -> tuple[ChangeRelatedRecord, ...]:
-    """Return model-owned canonical parents for exact authored-query invalidation."""
+    """Project model-owned native references without widening their declared views.
+
+    Live historical hooks in ARP and framework callers still return the wire
+    value; accept those during their companion migration. New hooks return
+    ``RecordRef`` and own any explicit ``record_view_refs`` expansion themselves.
+    """
 
     resolver = getattr(instance, "change_related_records", None)
     if not callable(resolver):
         return ()
     records = tuple(resolver())
-    if any(not isinstance(record, ChangeRelatedRecord) for record in records):
-        raise TypeError("change_related_records() must return ChangeRelatedRecord values")
-    return records
+    if any(not isinstance(record, RecordRef | ChangeRelatedRecord) for record in records):
+        raise TypeError("change_related_records() must return RecordRef values")
+    return tuple(
+        ChangeRelatedRecord(record.model_label, record.public_id) if isinstance(record, RecordRef) else record
+        for record in records
+    )
 
 
 def _concrete_field(

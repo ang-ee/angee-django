@@ -83,6 +83,7 @@ def _projection(**kwargs: object) -> ResourceQueryProjection:
             DataResourceFieldMetadata(name="created", kind="scalar", scalar="DateTime"),
         ),
         identity="id",
+        representation_policies={"Channel": "display_name"},
         filter_fields=("channel", "state", "created"),
         **kwargs,
     )
@@ -384,6 +385,7 @@ def _native_operator_resource(schema):
         types=types,
         fields=(),
         identity="id",
+        representation_policies={"Channel": "display_name"},
         filter_fields=tuple(_SCALAR_OPERANDS),
         model=QueryPattern,
         filter_operators=tuple(resource_filter_lookups(QueryPattern, ("name",))),
