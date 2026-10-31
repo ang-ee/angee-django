@@ -11,6 +11,7 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, Obje
 from django.db import models
 from django.db.models import F, Q
 from django.db.models.fields.reverse_related import ManyToOneRel
+from django_provenance.base import ChangesetAttribution
 from rebac import (
     PermissionDenied,
     RebacMixin,
@@ -118,6 +119,7 @@ class ModelHistory(CaptureHistory):
                 "Angee ModelHistory requires use_base_model_db=True for Changeset and replay storage."
             )
         kwargs["use_base_model_db"] = True
+        kwargs.setdefault("bases", (ChangesetAttribution,))
         super().__init__(*args, **kwargs)
         self.bases = (*self.bases, HistoricalReferenceMixin)
 

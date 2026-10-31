@@ -128,6 +128,14 @@ line per changeset linking to Activity) and `useRecordHistory` for
 pages that count or embed the same entries, such as integrate's link history
 drill-down and the notes example's Activity shortcut.
 
+Angee historical bases retain their established changeset-only attribution shape.
+`ModelHistory` supplies native `ChangesetAttribution` and requires
+`use_base_model_db=True`: the actual table alias proves source identity, including
+existing history on nondefault databases. Adoption adds no `source_database`
+column, inferred migration default or backfill, and preserves retained document
+fields, bytes and digests. Standalone native history retains its explicit source
+identity field for separately routed storage.
+
 `Changeset.document()` exports deterministic canonical JSON of a closed changeset
 for a trusted archive caller under a system boundary. It includes native history
 rows indexed by `touched` and excludes its own `hash`, which this export computes

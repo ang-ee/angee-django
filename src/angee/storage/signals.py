@@ -18,7 +18,8 @@ from django.db import OperationalError, ProgrammingError
 from django.db.models import Model
 from django.db.models.signals import post_save
 from django.dispatch import Signal
-from rebac import system_context
+from rebac import database_context, system_context
+from rebac.database import write_alias
 
 from angee.provenance.context import changeset, current_changeset
 
@@ -42,7 +43,9 @@ def connect() -> None:
     )
 
 
-def create_trash_folder(sender: type[Model], instance: Model, created: bool, raw: bool = False, **kwargs: Any) -> None:
+def create_trash_folder(
+    sender: type[Model], instance: Model, created: bool, raw: bool = False, using: str | None = None, **kwargs: Any
+) -> None:
     """Ensure each user owns exactly one Trash smart folder."""
 
     del kwargs
@@ -53,15 +56,19 @@ def create_trash_folder(sender: type[Model], instance: Model, created: bool, raw
     except LookupError:
         # No composed concrete model (e.g. bare test settings) — nothing to own a Trash row.
         return
+    if using is not None and instance._state.db is not None and using != instance._state.db:
+        raise ValueError("Trash folder signal database must match the user database.")
+    using = write_alias(type(instance), using=using or instance._state.db, instance=instance)
     # The folder keeps history, so its insert is a captured write: a user created
     # outside any boundary (a shell, a command) gets this system boundary.
     boundary = (
-        changeset(fresh=True, activity="system", change_reason="storage.trash_folder")
-        if current_changeset() is None else nullcontext()
+        changeset(fresh=True, activity="system", change_reason="storage.trash_folder", using=using)
+        if current_changeset() is None
+        else nullcontext()
     )
     try:
-        with boundary, system_context(reason="storage.trash_folder"):
-            folder_model._base_manager.get_or_create(
+        with database_context(using), boundary, system_context(reason="storage.trash_folder"):
+            folder_model._base_manager.db_manager(using, hints={"instance": instance}).get_or_create(
                 owner_id=instance.pk,
                 smart_kind=folder_model.SmartKind.TRASH,
                 is_virtual=True,
