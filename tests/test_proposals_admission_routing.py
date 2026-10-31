@@ -61,13 +61,13 @@ class AdmissionRoutingCases(TransactionTestCase):
             ):
                 users = get_user_model().objects.db_manager(alias)
                 manager = users.create_person_as_system(
-                    username=f"admission-manager-{alias}",
-                    email=f"admission-manager-{alias}@example.test",
+                    username="admission-manager",
+                    email="admission-manager@example.test",
                     reason="tests.proposals.routing.person",
                 )
                 responder = users.create_person_as_system(
-                    username=f"admission-responder-{alias}",
-                    email=f"admission-responder-{alias}@example.test",
+                    username="admission-responder",
+                    email="admission-responder@example.test",
                     reason="tests.proposals.routing.person",
                 )
                 project = (
