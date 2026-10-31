@@ -2,8 +2,12 @@
 
 from pathlib import Path
 
-from tests.test_composed_intake_capture import run_intake_tests
+from tests.composed_host import run_composed_tests
 
 
 def test_intake_access(tmp_path: Path) -> None:
-    run_intake_tests(tmp_path, "NeedAccessTests")
+    run_composed_tests(
+        tmp_path,
+        "tests.native_intake_capture.NeedAccessTests",
+        app=("angee.intake", "angee.projects_knowledge"),
+    )

@@ -536,3 +536,25 @@ def test_stream_and_links_follow_the_integration_foreign_key_owner(composed_tabl
     for model, row in ((SyncStream, stream), (RecordLink, link)):
         assert not model.objects.with_actor(owner).filter(pk=row.pk).exists()
         assert model.objects.with_actor(other).filter(pk=row.pk).exists()
+
+
+def test_internal_record_target_resolution_refreshes_native_cache(replica):
+    """Internal reconciliation gets fresh base-manager facts, not an old GFK cache."""
+    target = MtiChild.objects.create(title="Before")
+    link = RecordLink.objects.observe(replica, "target:fresh")
+    with transaction.atomic():
+        RecordLink.objects.bind_target(link, target)
+    assert link.target.title == "Before"
+    MtiParent._base_manager.filter(pk=target.pk).update(title="After")
+    assert link.resolve_target().title == "After"
+    selected = RecordLink.objects.filter(pk=link.pk).current_for_bridge(replica.integration).for_target(target)
+    assert selected.get() == link
+
+
+def test_compound_link_uses_root_application_evidence(replica):
+    root = RecordLink.objects.observe(replica, "aggregate:root")
+    RecordLink.objects.promote(root, source_payload={}, source_hash="one", mapped_payload={})
+    child = RecordLink.objects.observe(replica, "aggregate:child", parent=root)
+    assert child.aggregate_root.pk == root.pk
+    assert child.applied_snapshot.pk == root.applied_snapshot.pk
+    assert child.application_count() == root.application_count() == 1

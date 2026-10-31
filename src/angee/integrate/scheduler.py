@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from django.apps import apps
-from django.db import connection, transaction
+from django.db import connections, transaction
 from django.utils import timezone
-from rebac import system_context
+from rebac import database_context, system_context
+from rebac.database import write_alias
 
 from angee.integrate.constants import DISCOVERY_TASK, DISCOVERY_TASK_EXPIRES
 from angee.integrate.models import Bridge
@@ -20,10 +21,13 @@ _QUEUED_RECOVERY_SECONDS = 300
 def enqueue_pending_discoveries(*, now: datetime | None = None) -> int:
     """Redispatch due discovery after broker loss, worker exit, or provider throttling."""
 
-    with system_context(reason="integrate.scheduler.discoveries"):
-        model = apps.get_model("integrate", "Integration")
+    model = apps.get_model("integrate", "Integration")
+    using = write_alias(model)
+    with database_context(using), system_context(reason="integrate.scheduler.discoveries"):
         rows = list(
-            model.objects.pending_discoveries(now=now or timezone.now()).values_list(
+            model.objects.db_manager(using)
+            .pending_discoveries(now=now or timezone.now())
+            .values_list(
                 "pk",
                 "credential_id",
                 "discovery_generation",
@@ -32,9 +36,10 @@ def enqueue_pending_discoveries(*, now: datetime | None = None) -> int:
         for pk, credential_pk, generation in rows:
             enqueue_task(
                 DISCOVERY_TASK,
-                kwargs={"integration_pk": pk, "credential_pk": credential_pk, "generation": generation},
+                kwargs={"integration_pk": pk, "credential_pk": credential_pk, "generation": generation, "using": using},
                 expires=DISCOVERY_TASK_EXPIRES,
                 robust=True,
+                using=using,
             )
     return len(rows)
 
@@ -47,22 +52,24 @@ def enqueue_due_bridges(*, now: datetime | None = None) -> dict[str, int]:
     that failure beyond this recovery boundary.
     """
 
-    if connection.in_atomic_block:
-        raise RuntimeError("enqueue_due_bridges requires autocommit.")
-
     timestamp = now or timezone.now()
     stale_before = timestamp - timedelta(seconds=_QUEUED_RECOVERY_SECONDS)
     enqueued = 0
     skipped = 0
 
-    with system_context(reason="integrate.scheduler"):
-        for model in models_with(base=Bridge):
-            due = model._default_manager.of_concrete_type().due_for_enqueue(
-                timestamp=timestamp, stale_before=stale_before
+    for model in models_with(base=Bridge):
+        using = write_alias(model)
+        if connections[using].in_atomic_block:
+            raise RuntimeError("enqueue_due_bridges requires autocommit.")
+        with database_context(using), system_context(reason="integrate.scheduler"):
+            due = (
+                model._default_manager.db_manager(using)
+                .of_concrete_type()
+                .due_for_enqueue(timestamp=timestamp, stale_before=stale_before)
             )
             due_ids = list(due.order_by("pk").values_list("pk", flat=True))
             for pk in due_ids:
-                with transaction.atomic():
+                with database_context(using), transaction.atomic(using=using):
                     bridge = due.lock_if_supported().filter(pk=pk).first()
                     if bridge is None:
                         skipped += 1
@@ -73,8 +80,8 @@ def enqueue_due_bridges(*, now: datetime | None = None) -> dict[str, int]:
                 try:
                     bridge.request_sync(now=timestamp, persist=False)
                 except Exception:
-                    with transaction.atomic():
-                        reset = model._default_manager.lock_if_supported().filter(pk=pk).first()
+                    with database_context(using), transaction.atomic(using=using):
+                        reset = model._default_manager.db_manager(using).lock_if_supported().filter(pk=pk).first()
                         if reset is not None and reset.sync_queue_token_matches(timestamp):
                             reset.reset_sync_queue(now=timestamp)
                     raise

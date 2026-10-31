@@ -12,14 +12,16 @@ from typing import TYPE_CHECKING, Any, cast
 from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import connection, models, transaction
+from django.db import connections, models, transaction
 from django.db.models import Q
 from django.utils import timezone
 from rebac import (
     PermissionDenied,
+    database_context,
     system_context,
 )
 from rebac.actors import is_sudo
+from rebac.database import write_alias
 from simple_history.signals import post_create_historical_record
 
 from angee.base.models.merge_references import references
@@ -111,10 +113,16 @@ class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAut
         settings and keeps secrets out of resource files.
         """
 
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db))
+
         synced: list[Any] = []
-        with system_context(reason="integrate.oauth_clients.seed"), transaction.atomic(using=self.db):
-            for index, entry in enumerate(self._setting_entries(entries), start=1):
-                synced.append(self._sync_setting_entry(index, entry))
+        with (
+            system_context(reason="integrate.oauth_clients.seed"),
+            database_context(bound_manager.db),
+            transaction.atomic(using=bound_manager.db),
+        ):
+            for index, entry in enumerate(bound_manager._setting_entries(entries), start=1):
+                synced.append(bound_manager._sync_setting_entry(index, entry))
         return tuple(synced)
 
     def _setting_entries(
@@ -140,13 +148,15 @@ class OAuthClientManager[OAuthClientT: OAuthClient](_OAuthClientManagerBase[OAut
     def _sync_setting_entry(self, index: int, entry: Mapping[str, Any]) -> Any:
         """Upsert one settings-authored OAuth client."""
 
-        self._validate_setting_entry(index, entry)
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db))
+
+        bound_manager._validate_setting_entry(index, entry)
         slug = str(entry["slug"])
         environment = str(entry.get("environment") or "prod")
-        defaults = {field: entry[field] for field in sorted(self.seed_fields) if field in entry}
+        defaults = {field: entry[field] for field in sorted(bound_manager.seed_fields) if field in entry}
         if "client_secret" in entry:
             defaults["client_secret"] = str(entry.get("client_secret") or "")
-        oauth_client, _created = self.update_or_create(
+        oauth_client, _created = bound_manager.update_or_create(
             slug=slug,
             environment=environment,
             defaults=defaults,
@@ -198,9 +208,15 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
     ) -> ExternalAccountT:
         """Link a verified identity and its credential in one transaction."""
 
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db))
+
         email = oauth_client.email_from_claims(claims) or ""
-        with system_context(reason="integrate.connections.connect_oauth"), transaction.atomic(using=self.db):
-            account = self.link(
+        with (
+            system_context(reason="integrate.connections.connect_oauth"),
+            database_context(bound_manager.db),
+            transaction.atomic(using=bound_manager.db),
+        ):
+            account = bound_manager.link(
                 oauth_client,
                 external_id,
                 owner=user,
@@ -211,7 +227,7 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
             )
             credential = (
                 apps.get_model("integrate", "Credential")
-                .objects.db_manager(hints={"instance": account})
+                .objects.db_manager(bound_manager.db, hints={"instance": account})
                 .upsert_for_user(
                     user,
                     oauth_client,
@@ -221,7 +237,7 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
                 )
             )
             account.credential = credential
-            account.save(update_fields=["credential", "updated_at"])
+            account.save(using=account._state.db, update_fields=["credential", "updated_at"])
         return account
 
     def link(
@@ -239,11 +255,13 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
         owner is refused before any identity update.
         """
 
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db))
+
         reason = "integrate.connections.link"
         update_values = _validated_manager_values(
-            self.model,
+            bound_manager.model,
             identity,
-            allowed=self.caller_fields,
+            allowed=bound_manager.caller_fields,
         )
         create_values = {
             "email": "",
@@ -257,8 +275,12 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
             "owner": owner,
             **update_values,
         }
-        with system_context(reason=reason), transaction.atomic(using=self.db):
-            instance, created = self.select_for_update().get_or_create(
+        with (
+            system_context(reason=reason),
+            database_context(bound_manager.db),
+            transaction.atomic(using=bound_manager.db),
+        ):
+            instance, created = bound_manager.select_for_update().get_or_create(
                 oauth_client_id=oauth_client.pk,
                 external_id=external_id,
                 defaults=create_values,
@@ -275,7 +297,7 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
                     instance.owner = owner
                     update_values["owner"] = owner
                 if update_values:
-                    instance.save(update_fields=[*update_values, "updated_at"])
+                    instance.save(using=instance._state.db, update_fields=[*update_values, "updated_at"])
 
         return instance
 
@@ -311,28 +333,39 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         their own persistence contracts. An absent user/account link is false.
         """
 
-        candidates = self.select_related("oauth_client", "external_account").select_for_update(of=("self",))
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db or user._state.db, instance=user))
+
+        candidates = bound_manager.select_related("oauth_client", "external_account").select_for_update(of=("self",))
         using = candidates.db
-        with system_context(reason="integrate.credential.disconnect"), transaction.atomic(using=using):
+        with (
+            system_context(reason="integrate.credential.disconnect"),
+            database_context(using),
+            transaction.atomic(using=using),
+        ):
             credential = candidates.filter(user=user, external_account__sqid=external_account_sqid).first()
             if credential is None:
                 return False
             account = credential.external_account
             assert account is not None
-            self.prepare_disconnect(credential)
+            bound_manager.prepare_disconnect(credential)
             type(account).objects.db_manager(using).filter(pk=account.pk).release(user)
-            deleted, _details = self.filter(pk=credential.pk).with_action("delete").delete()
+            deleted, _details = bound_manager.filter(pk=credential.pk).with_action("delete").delete()
         return deleted > 0
 
     def prepare_disconnect(self, credential: Any) -> None:
         """Validate a disconnect and schedule remote revocation after commit."""
+
+        bound_manager = self.db_manager(
+            write_alias(self.model, using=self._db or credential._state.db, instance=credential)
+        )
 
         credential.check_disconnect()
         # Revoking the source grant also releases the resource-specific material
         # it discovered. Direct attachments retain their existing PROTECT policy.
         integrations = (
             apps.get_model("integrate", "Integration")
-            .objects.filter(
+            .objects.db_manager(bound_manager.db)
+            .filter(
                 discovery_credential=credential,
             )
             .exclude(credential=credential)
@@ -347,8 +380,10 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
     def delete_unattached_derived(self, credential_pk: int | None) -> None:
         """Dispose of discovery-created material after its last attachment releases it."""
 
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db))
+
         if credential_pk is not None:
-            self.filter(
+            bound_manager.filter(
                 pk=credential_pk,
                 integrations__isnull=True,
                 discovered_integrations__isnull=True,
@@ -357,8 +392,10 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
     def live_oauth_for_user(self, user: Any, oauth_client: Any) -> Any | None:
         """Reuse a credential whenever its owner does not require fresh consent."""
 
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db or user._state.db, instance=user))
+
         with system_context(reason="integrate.connections.credential.live"):
-            row = self.filter(user=user, oauth_client=oauth_client, kind=CredentialKind.OAUTH).first()
+            row = bound_manager.filter(user=user, oauth_client=oauth_client, kind=CredentialKind.OAUTH).first()
             return row if row is not None and not row.is_reconnect_required else None
 
     def upsert_for_user(
@@ -375,28 +412,35 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
     ) -> Any:
         """Create or update one ``(user, oauth_client)`` OAuth credential (connect/login flow)."""
 
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db))
+
         handler = CredentialKind(kind).handler
-        operation_values, update_values = self._assemble_values(handler, material, fields)
+        operation_values, update_values = bound_manager._assemble_values(handler, material, fields)
         if external_account is not None:
             update_values["external_account_id"] = external_account.pk
         create_values = {
             "external_account_id": external_account.pk if external_account is not None else None,
-            **self._blank_create_values(),
+            **bound_manager._blank_create_values(),
             **operation_values,
             **update_values,
         }
         # Give the credential a human label on create (OAuth rows carry no name of their
         # own). Create-only so an admin rename, and token refreshes, are preserved.
         if not str(create_values.get("name") or ""):
-            create_values["name"] = self._oauth_credential_name(oauth_client, external_account)
-        with system_context(reason=self._REASON), transaction.atomic(using=self.db):
-            existing = self.filter(user_id=user.pk, oauth_client_id=oauth_client.pk).only("pk").first()
+            create_values["name"] = bound_manager._oauth_credential_name(oauth_client, external_account)
+        with (
+            system_context(reason=bound_manager._REASON),
+            database_context(bound_manager.db),
+            transaction.atomic(using=bound_manager.db),
+        ):
+            existing = bound_manager.filter(user_id=user.pk, oauth_client_id=oauth_client.pk).only("pk").first()
             integrations = []
             attached = False
             if existing is not None:
                 affected = (
                     apps.get_model("integrate", "Integration")
-                    .objects.filter(
+                    .objects.db_manager(bound_manager.db)
+                    .filter(
                         Q(credential_id=existing.pk) | Q(discovery_credential_id=existing.pk),
                     )
                     .order_by("pk")
@@ -406,7 +450,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
                     # then the source credential. Refresh-only writes never
                     # touch integrations and may already hold the credential lock.
                     integrations = [integration.lock_capability() for integration in affected]
-                existing = self.lock_if_supported().get(pk=existing.pk)
+                existing = bound_manager.lock_if_supported().get(pk=existing.pk)
                 # An attachment cannot commit while the credential is locked (its
                 # foreign-key check needs the row), so this read is final. A late
                 # arrival attached between the two reads; it is locked after the
@@ -426,7 +470,7 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
                 and attached
             ):
                 raise OAuthFlowError("account_switch_refused", 409)
-            instance, _created = self.update_or_create(
+            instance, _created = bound_manager.update_or_create(
                 user_id=user.pk,
                 oauth_client_id=oauth_client.pk,
                 defaults={**operation_values, **update_values},
@@ -474,7 +518,9 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         credential's identity. OAuth credentials are minted by the connect/login flow only.
         """
 
-        operation_values, update_values = self._local_credential_values(
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db or user._state.db, instance=user))
+
+        operation_values, update_values = bound_manager._local_credential_values(
             kind=kind,
             name=name,
             material=material,
@@ -483,12 +529,16 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
         create_values = {
             "oauth_client": None,
             "external_account": None,
-            **self._blank_create_values(),
+            **bound_manager._blank_create_values(),
             **operation_values,
             **update_values,
         }
-        with system_context(reason=self._REASON), transaction.atomic(using=self.db):
-            instance, _created = self.update_or_create(
+        with (
+            system_context(reason=bound_manager._REASON),
+            database_context(bound_manager.db),
+            transaction.atomic(using=bound_manager.db),
+        ):
+            instance, _created = bound_manager.update_or_create(
                 user_id=user.pk,
                 name=name,
                 oauth_client=None,
@@ -627,10 +677,14 @@ class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[Inte
     ) -> None:
         """Attach completed OAuth state only to its one owned, exposed concrete capability."""
 
+        bound_manager = self.db_manager(
+            write_alias(self.model, using=self._db or credential._state.db, instance=credential)
+        )
+
         if not integration_sqid:
             return
         with system_context(reason="integrate.integration.connect.complete"):
-            integration = self.filter(sqid=integration_sqid).first()
+            integration = bound_manager.filter(sqid=integration_sqid).first()
         if integration is None or integration.owner_id != user.pk:
             raise OAuthFlowError(INVALID_STATE, 400)
         if credential.user_id != user.pk:
@@ -642,7 +696,7 @@ class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[Inte
         try:
             # Keep the caller's ambient native write-query scope; OAuth state
             # ownership must not replace the request actor's read admission.
-            target = type(child).objects.for_write().filter(pk=child.pk).first()
+            target = type(child).objects.db_manager(bound_manager.db).for_write().filter(pk=child.pk).first()
             if target is None or target.owner_id != user.pk:
                 raise OAuthFlowError(INVALID_STATE, 400)
         except (PermissionDenied, ValueError) as error:
@@ -683,11 +737,13 @@ class WebhookSubscriptionManager[WebhookSubscriptionT: WebhookSubscription](
     ) -> None:
         """Queue one event fan-out after the current transaction commits."""
 
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db))
+
         kind_value = str(kind)
-        body = self._event_body(payload)
+        body = bound_manager._event_body(payload)
         integration_pk = getattr(integration, "pk", None)
         transaction.on_commit(
-            lambda: self._deliver_event_body(
+            lambda: bound_manager._deliver_event_body(
                 kind=kind_value, body=body, impl_app=impl_app, integration_pk=integration_pk
             ),
         )
@@ -757,11 +813,13 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         page must fail before any domain records or cursor state are applied.
         """
 
-        if not connection.in_atomic_block:
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db or stream._state.db, instance=stream))
+
+        if not connections[bound_manager.db].in_atomic_block:
             raise RuntimeError("Locking a stream requires the page transaction.")
         with system_context(reason="integrate.stream.lock_current"):
-            locked = self.filter(pk=stream.pk).lock_if_supported().get()
-            if self.filter(
+            locked = bound_manager.filter(pk=stream.pk).lock_if_supported().get()
+            if bound_manager.filter(
                 integration_id=locked.integration_id,
                 key=locked.key,
                 partition=locked.partition,
@@ -787,31 +845,37 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         flips it from inside a page.
         """
 
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db or bridge._state.db, instance=bridge))
+
         if definition.absence_threshold < 1:
             raise ValidationError("A stream absence threshold must be positive.")
-        integration_model = self.model.integration.field.related_model
+        integration_model = bound_manager.model.integration.field.related_model
         if bridge._meta.proxy or integration_model not in bridge._meta.get_parent_list():
             raise ValidationError("A stream bridge must be a concrete Integration child.")
-        with system_context(reason="integrate.stream.current"), transaction.atomic(using=self.db):
+        with (
+            system_context(reason="integrate.stream.current"),
+            database_context(bound_manager.db),
+            transaction.atomic(using=bound_manager.db),
+        ):
             cast(Any, bridge).lock_capability()
             identity = {
                 "integration_id": bridge.pk,
                 "key": definition.key,
                 "partition": definition.partition,
             }
-            stream = self.filter(**identity).order_by("-generation").first()
+            stream = bound_manager.filter(**identity).order_by("-generation").first()
             if stream is None:
-                return self.create(integration_id=bridge.pk, **definition.stream_fields())
+                return bound_manager.create(integration_id=bridge.pk, **definition.stream_fields())
             if stream.kind != definition.kind:
                 raise ValidationError("A stream's kind cannot change between declarations.")
             if stream.direction != definition.direction or stream.snapshot != definition.snapshot:
-                stream = self.bump_generation(
+                stream = bound_manager.bump_generation(
                     stream,
                     direction=definition.direction,
                     snapshot=definition.snapshot,
                 )
             change_authority = stream.authoritative != definition.authoritative
-        return self.set_authoritative(stream, definition.authoritative) if change_authority else stream
+        return bound_manager.set_authoritative(stream, definition.authoritative) if change_authority else stream
 
     def bump_generation(
         self,
@@ -827,8 +891,14 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         follow the current epoch without changing their verification marker.
         """
 
-        with system_context(reason="integrate.stream.bump_generation"), transaction.atomic(using=self.db):
-            latest = self._lock_latest(stream)
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db or stream._state.db, instance=stream))
+
+        with (
+            system_context(reason="integrate.stream.bump_generation"),
+            database_context(bound_manager.db),
+            transaction.atomic(using=bound_manager.db),
+        ):
+            latest = bound_manager._lock_latest(stream)
             if latest.pk != stream.pk:
                 return latest
             definition = replace(
@@ -837,17 +907,17 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 direction=latest.direction if direction is None else direction,
                 snapshot=latest.snapshot if snapshot is None else snapshot,
             )
-            successor = self.create(
+            successor = bound_manager.create(
                 integration_id=latest.integration_id,
                 **definition.stream_fields(),
                 generation=latest.generation + 1,
                 last_advanced_at=timezone.now() if cursor else None,
                 inbound=deepcopy(latest.inbound),
             )
-            latest.links.model.objects.filter(stream=latest).update(stream=successor)
+            latest.links.model.objects.db_manager(bound_manager.db).filter(stream=latest).update(stream=successor)
             latest.state = StreamState.CLOSED
             latest.inbound = []
-            latest.save(update_fields=["state", "inbound", "updated_at"])
+            latest.save(using=latest._state.db, update_fields=["state", "inbound", "updated_at"])
             return successor
 
     def request_resync(self, stream: Any) -> Any:
@@ -857,11 +927,17 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         transition so a concurrent bump cannot lose the request on the old row.
         """
 
-        with system_context(reason="integrate.stream.request_resync"), transaction.atomic(using=self.db):
-            latest = self._lock_latest(stream)
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db or stream._state.db, instance=stream))
+
+        with (
+            system_context(reason="integrate.stream.request_resync"),
+            database_context(bound_manager.db),
+            transaction.atomic(using=bound_manager.db),
+        ):
+            latest = bound_manager._lock_latest(stream)
             if not latest.resync_required:
                 latest.resync_required = True
-                latest.save(update_fields=["resync_required", "updated_at"])
+                latest.save(using=latest._state.db, update_fields=["resync_required", "updated_at"])
             return latest
 
     def set_authoritative(self, stream: Any, authoritative: bool) -> Any:
@@ -873,34 +949,40 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
         The caller authorizes the flip on the stream's integration.
         """
 
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db or stream._state.db, instance=stream))
+
         derivations = []
         with system_context(reason="integrate.stream.set_authoritative"):
-            with transaction.atomic(using=self.db):
-                latest = self._lock_latest(stream)
+            with database_context(bound_manager.db), transaction.atomic(using=bound_manager.db):
+                latest = bound_manager._lock_latest(stream)
                 if latest.authoritative == authoritative:
                     return latest
                 for reference in references(latest.links.model):
                     if not issubclass(reference.model, Statement):
                         continue
-                    linked = reference.model._base_manager.filter(
+                    linked = reference.model._base_manager.db_manager(bound_manager.db).filter(
                         **{f"{reference.name}__stream": latest}, superseded__isnull=True
                     )
                     subject_ids = linked.order_by("subject_id").values_list("subject_id", flat=True).distinct()
                     derivations.append((reference.model, reference.model.statement_subject_model, subject_ids))
                 latest.authoritative = authoritative
-                latest.save(update_fields=["authoritative", "updated_at"])
+                latest.save(using=latest._state.db, update_fields=["authoritative", "updated_at"])
             for statement_model, subject_model, subject_ids in derivations:
                 for chunk in batched(subject_ids.iterator(chunk_size=500), 500):
-                    for subject in subject_model._base_manager.filter(pk__in=chunk).order_by("pk"):
-                        statement_model.objects.resolve(subject=subject)
+                    for subject in (
+                        subject_model._base_manager.db_manager(bound_manager.db).filter(pk__in=chunk).order_by("pk")
+                    ):
+                        statement_model.objects.db_manager(bound_manager.db).resolve(subject=subject)
             return latest
 
     def _lock_latest(self, stream: Any) -> Any:
         """Lock the integration and its latest epoch in generation-change order."""
 
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db or stream._state.db, instance=stream))
+
         stream.integration.lock_capability()
         return (
-            self.filter(
+            bound_manager.filter(
                 integration_id=stream.integration_id,
                 key=stream.key,
                 partition=stream.partition,
@@ -920,8 +1002,14 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
     ) -> Any:
         """Persist an opaque page cursor inside the caller's apply transaction."""
 
-        with system_context(reason="integrate.stream.advance"), transaction.atomic(using=self.db):
-            locked = self.lock_current(stream)
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db or stream._state.db, instance=stream))
+
+        with (
+            system_context(reason="integrate.stream.advance"),
+            database_context(bound_manager.db),
+            transaction.atomic(using=bound_manager.db),
+        ):
+            locked = bound_manager.lock_current(stream)
             if locked.state == StreamState.CLOSED:
                 raise ValidationError("A closed stream requires a new generation before advancement.")
             locked.cursor = cursor
@@ -932,7 +1020,7 @@ class SyncStreamManager[SyncStreamT: SyncStream](_SyncStreamManagerBase[SyncStre
                 if locked.snapshot and locked.reconcile_interval is None:
                     locked.state = StreamState.CLOSED
             fields = ["cursor", "cursor_expires_at", "last_advanced_at", "phase", "state"]
-            locked.save(update_fields=[*fields, "updated_at"])
+            locked.save(using=locked._state.db, update_fields=[*fields, "updated_at"])
             for field in fields:
                 setattr(stream, field, getattr(locked, field))
             return stream
@@ -962,17 +1050,23 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         remain unchanged; ``target=None`` withdraws the projection explicitly.
         """
 
-        with system_context(reason="integrate.record.observe"), transaction.atomic(using=self.db):
-            stream = type(stream).objects.lock_current(stream)
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db or stream._state.db, instance=stream))
+
+        with (
+            system_context(reason="integrate.record.observe"),
+            database_context(bound_manager.db),
+            transaction.atomic(using=bound_manager.db),
+        ):
+            stream = type(stream).objects.db_manager(bound_manager.db).lock_current(stream)
             if stream.kind != StreamKind.RECORD_REPLICA:
                 raise ValidationError("Event feeds do not create record links.")
-            link, _ = self.lock_if_supported().get_or_create(stream=stream, external_key=external_key)
+            link, _ = bound_manager.lock_if_supported().get_or_create(stream=stream, external_key=external_key)
             if parent is not UNSET:
                 if parent is not None:
-                    parent = self.filter(pk=parent.pk).lock_if_supported().get()
+                    parent = bound_manager.filter(pk=parent.pk).lock_if_supported().get()
                     if parent.stream_id != stream.pk or parent.parent_id is not None or parent.pk == link.pk:
                         raise ValidationError("A record parent must be another root link in the same stream.")
-                    if self.filter(parent=link).exists():
+                    if bound_manager.filter(parent=link).exists():
                         raise ValidationError("A root with children cannot become a child link.")
                 parent_id = None if parent is None else parent.pk
                 if link.parent_id is not None and link.parent_id != parent_id:
@@ -997,11 +1091,12 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
             if metadata is not None:
                 link.metadata = dict(metadata)
             if target is not UNSET:
-                self._set_target(link, target)
+                bound_manager._set_target(link, target)
                 if target is None:
                     link.status = LinkStatus.WITHDRAWN
             link.update_sync_status()
             link.save(
+                using=link._state.db,
                 update_fields=[
                     "status",
                     "source_payload",
@@ -1028,10 +1123,18 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         this is not a withdrawal, the identity is still current.
         """
 
-        with system_context(reason="integrate.record.release_target"), transaction.atomic(using=self.db):
-            locked = self.filter(pk=link.pk).lock_if_supported().get()
-            self._set_target(locked, None)
-            locked.save(update_fields=["target_content_type_id", "target_object_id", "updated_at"])
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db or link._state.db, instance=link))
+
+        with (
+            system_context(reason="integrate.record.release_target"),
+            database_context(bound_manager.db),
+            transaction.atomic(using=bound_manager.db),
+        ):
+            locked = bound_manager.filter(pk=link.pk).lock_if_supported().get()
+            bound_manager._set_target(locked, None)
+            locked.save(
+                using=locked._state.db, update_fields=["target_content_type_id", "target_object_id", "updated_at"]
+            )
             link.target_content_type_id = link.target_object_id = None
             return locked
 
@@ -1056,8 +1159,14 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         it and retain a WITHDRAWN identity.
         """
 
-        with system_context(reason="integrate.record.promote"), transaction.atomic(using=self.db):
-            locked = self.filter(pk=link.pk).lock_if_supported().get()
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db or link._state.db, instance=link))
+
+        with (
+            system_context(reason="integrate.record.promote"),
+            database_context(bound_manager.db),
+            transaction.atomic(using=bound_manager.db),
+        ):
+            locked = bound_manager.filter(pk=link.pk).lock_if_supported().get()
             previous = locked.applied_base
             if mapped_payload is UNSET:
                 mapped_payload = previous.mapped_payload if previous is not None else {}
@@ -1066,7 +1175,7 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
             locked.mapping_version, locked.dependency_digest = mapping_version, dependency_digest
             locked.applied_at = timezone.now()
             if target is not UNSET:
-                self._set_target(locked, target)
+                bound_manager._set_target(locked, target)
             locked.remote_version, locked.origin, locked.status = remote_version, origin, LinkStatus.CURRENT
             if target is None:
                 locked.status = LinkStatus.WITHDRAWN
@@ -1097,17 +1206,17 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
                     application = history_instance
                     locked.applied_base = history_instance
                     # This pointer completes the application save, not a new observation.
-                    locked.save_without_historical_record(update_fields=["applied_base"])
+                    locked.save_without_historical_record(using=locked._state.db, update_fields=["applied_base"])
 
             sender = locked.history.model
             post_create_historical_record.connect(pin_application, sender=sender, weak=False)
             try:
-                locked.save(update_fields=[*fields, "updated_at"])
+                locked.save(using=locked._state.db, update_fields=[*fields, "updated_at"])
             finally:
                 post_create_historical_record.disconnect(pin_application, sender=sender)
             if application is None:
                 raise RuntimeError("Application save did not create its historical evidence.")
-            self._set_target(link, locked.target if target is UNSET else target)
+            bound_manager._set_target(link, locked.target if target is UNSET else target)
             for field in [*fields, "applied_base"]:
                 setattr(link, field, getattr(locked, field))
             return application
@@ -1128,10 +1237,14 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         Like applied_base, this completes that write without a pointer-only snapshot.
         """
 
-        if not transaction.get_connection(self.db).in_atomic_block or not is_sudo():
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db or link._state.db, instance=link))
+
+        if not transaction.get_connection(bound_manager.db).in_atomic_block or not is_sudo():
             raise PermissionDenied("Target binding requires the trusted application transaction.")
-        self._set_target(link, target)
-        link.save_without_historical_record(using=self.db, update_fields=("target_content_type", "target_object_id"))
+        bound_manager._set_target(link, target)
+        link.save_without_historical_record(
+            using=bound_manager.db, update_fields=("target_content_type", "target_object_id")
+        )
 
     def revalidate(self, link: Any, *, target: Any = UNSET) -> Any:
         """Restore a verified identity without advancing its application base.
@@ -1149,7 +1262,8 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         locked.update_sync_status()
         if [getattr(locked, name) for name in fields] != before:
             locked.save(
-                update_fields=["target_content_type", "target_object_id", "status", "tombstoned_at", "updated_at"]
+                using=locked._state.db,
+                update_fields=["target_content_type", "target_object_id", "status", "tombstoned_at", "updated_at"],
             )
         self._set_target(link, locked.target if target is UNSET else target)
         for name in fields:
@@ -1163,10 +1277,16 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
         the sweep supplies bounded child batches after marking missing roots.
         """
 
-        with system_context(reason="integrate.record.mark_absent"), transaction.atomic(using=self.db):
-            stream = type(stream).objects.lock_current(stream)
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db or stream._state.db, instance=stream))
+
+        with (
+            system_context(reason="integrate.record.mark_absent"),
+            database_context(bound_manager.db),
+            transaction.atomic(using=bound_manager.db),
+        ):
+            stream = type(stream).objects.db_manager(bound_manager.db).lock_current(stream)
             rows = (
-                self.filter(stream=stream, external_key__in=tuple(keys))
+                bound_manager.filter(stream=stream, external_key__in=tuple(keys))
                 .absence_eligible()
                 .order_by("pk")
                 .lock_if_supported()
@@ -1178,17 +1298,25 @@ class RecordLinkManager[RecordLinkT: RecordLink](_RecordLinkManagerBase[RecordLi
                     link.status = LinkStatus.UNAVAILABLE
                     if link.absence_count >= stream.absence_threshold:
                         link.status, link.tombstoned_at = LinkStatus.TOMBSTONE, timezone.now()
-                link.save(update_fields=["absence_count", "status", "tombstoned_at", "updated_at"])
+                link.save(
+                    using=link._state.db, update_fields=["absence_count", "status", "tombstoned_at", "updated_at"]
+                )
                 count += 1
             return count
 
     def tombstone(self, link: Any) -> Any:
         """Retain a confirmed remote deletion; never delete the identity."""
 
-        with system_context(reason="integrate.record.tombstone"), transaction.atomic(using=self.db):
-            locked = self.filter(pk=link.pk).lock_if_supported().get()
+        bound_manager = self.db_manager(write_alias(self.model, using=self._db or link._state.db, instance=link))
+
+        with (
+            system_context(reason="integrate.record.tombstone"),
+            database_context(bound_manager.db),
+            transaction.atomic(using=bound_manager.db),
+        ):
+            locked = bound_manager.filter(pk=link.pk).lock_if_supported().get()
             if locked.status != LinkStatus.TOMBSTONE:
                 locked.status, locked.tombstoned_at = LinkStatus.TOMBSTONE, timezone.now()
-                locked.save(update_fields=["status", "tombstoned_at", "updated_at"])
+                locked.save(using=locked._state.db, update_fields=["status", "tombstoned_at", "updated_at"])
             link.status, link.tombstoned_at = locked.status, locked.tombstoned_at
             return link

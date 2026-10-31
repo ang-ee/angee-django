@@ -9,7 +9,8 @@ from typing import Any
 from celery import shared_task
 from celery.signals import worker_shutting_down
 from django.apps import apps
-from rebac import system_context
+from rebac import database_context, system_context
+from rebac.database import write_alias
 
 from angee.base.locks import task_locks_are_cross_process
 from angee.integrate import scheduler
@@ -26,12 +27,15 @@ _shutdown = threading.Event()
 
 
 @shared_task(name=DISCOVERY_TASK, expires=DISCOVERY_TASK_EXPIRES)
-def discover_connection(integration_pk: int, credential_pk: int | None, generation: int) -> dict[str, Any]:
-    """Dispatch connection discovery through its integration owner."""
+def discover_connection(
+    integration_pk: int, credential_pk: int | None, generation: int, *, using: str | None = None
+) -> dict[str, Any]:
+    """Dispatch discovery on the producer alias, or the model write router when omitted."""
 
-    with system_context(reason="integrate.connection.discovery"):
-        model = apps.get_model("integrate", "Integration")
-        integration = model.objects.filter(pk=integration_pk).first()
+    model = apps.get_model("integrate", "Integration")
+    using = write_alias(model, using=using)
+    with database_context(using), system_context(reason="integrate.connection.discovery"):
+        integration = model.objects.db_manager(using).filter(pk=integration_pk).first()
         if integration is None:
             return {"ok": False, "reason": "missing"}
         return integration.run_discovery(credential_pk=credential_pk, generation=generation)
@@ -48,10 +52,12 @@ def _flag_shutdown(**_kwargs: Any) -> None:
     retry_backoff=True,
     retry_kwargs={"max_retries": 3},
 )
-def sync_bridge_now(model_label: str, pk: int, timestamp: str | None = None) -> dict[str, Any]:
-    """Run one queued bridge sync task."""
+def sync_bridge_now(
+    model_label: str, pk: int, timestamp: str | None = None, *, using: str | None = None
+) -> dict[str, Any]:
+    """Run queued sync on its producer; legacy payloads use model write routing."""
 
-    return run_bridge_sync_job(model_label, pk, timestamp, require_queue_token=True)
+    return run_bridge_sync_job(model_label, pk, timestamp, require_queue_token=True, using=using)
 
 
 @shared_task(
@@ -72,10 +78,10 @@ def sync_due_bridges(timestamp: int | None = None) -> None:
 
 
 @shared_task(name=RUN_SESSION_TASK, time_limit=None, soft_time_limit=None)
-def run_bridge_session(model_label: str, pk: Any) -> dict[str, Any]:
-    """Run one bridge session using its implementation's isolation policy."""
+def run_bridge_session(model_label: str, pk: Any, *, using: str | None = None) -> dict[str, Any]:
+    """Run the selected producer session with its implementation's isolation policy."""
 
-    return run_bridge_session_job(model_label, pk, stop_event=_shutdown)
+    return run_bridge_session_job(model_label, pk, stop_event=_shutdown, using=using)
 
 
 @shared_task(name=ENSURE_SESSIONS_TASK)
@@ -93,10 +99,11 @@ def ensure_bridge_sessions(timestamp: int | None = None) -> dict[str, Any]:
     del timestamp
     dispatched = 0
     starved_by_queue: dict[str, int] = {}
-    cross_process = task_locks_are_cross_process()
     with system_context(reason="integrate.ensure_bridge_sessions"):
         for model in models_with(base=Bridge):
-            for bridge in model._default_manager.live_session_candidates():
+            using = write_alias(model)
+            cross_process = task_locks_are_cross_process(using=using)
+            for bridge in model._default_manager.db_manager(using).live_session_candidates():
                 queue = bridge.reconcile_live_session(cross_process=cross_process)
                 if queue is None:
                     continue

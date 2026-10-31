@@ -9,12 +9,14 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.core.exceptions import ImproperlyConfigured
-from django.db import connection, models, transaction
+from django.db import connections, models, transaction
 from django.utils import timezone
 from django_compose.models import Composable
 from rebac import (
+    database_context,
     system_context,
 )
+from rebac.database import write_alias
 from rebac.mixins import RebacModelBase
 
 from angee.base.fields.implementation import ImplClassField
@@ -63,7 +65,8 @@ def merge_json_state(
 
     if not isinstance(instance._meta.get_field(field_name), models.JSONField):
         raise TypeError("JSON state merge requires a JSONField.")
-    with system_context(reason="integrate.json_state.merge"), transaction.atomic():
+    using = write_alias(type(instance), using=instance._state.db, instance=instance)
+    with database_context(using), system_context(reason="integrate.json_state.merge"), transaction.atomic(using=using):
         row = instance.lock_capability()
         value = getattr(row, field_name)
         document = deepcopy(value) if isinstance(value, dict) else {}
@@ -74,7 +77,7 @@ def merge_json_state(
             node = node[key]
         node.update(deepcopy(values))
         setattr(row, field_name, document)
-        row.save(update_fields=[field_name, "updated_at"])
+        row.save(using=row._state.db, update_fields=[field_name, "updated_at"])
     setattr(instance, field_name, document)
     return document
 
@@ -239,7 +242,9 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
     def live_account_lock(self, impl_key: str, external_id: str) -> Any:
         """Try to hold the account-scoped ownership lock."""
 
-        return task_lock(self.live_account_lock_key(impl_key, external_id))
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        return task_lock(self.live_account_lock_key(impl_key, external_id), using=using)
 
     def live_account_owners(
         self,
@@ -251,7 +256,9 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
     ) -> Any:
         """Return other rows that retain the same durable live-account claim."""
 
-        scope = queryset if queryset is not None else type(self).objects.all()
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        scope = queryset if queryset is not None else type(self).objects.db_manager(using).all()
         return scope.live_account_owners(
             self,
             impl_key,
@@ -262,24 +269,37 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
     def claim_live_account(self, impl_key: str, external_id: str, *, identity_key: str) -> bool:
         """Persist this row's account claim when no live sibling owns it."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         if not external_id:
             raise ValueError("A live bridge account id is required.")
         model = type(self)
-        with system_context(reason="integrate.live.account.claim"), transaction.atomic():
-            row = model.objects.sudo(reason="integrate.live.account.claim.row").lock_if_supported().get(pk=self.pk)
+        with (
+            system_context(reason="integrate.live.account.claim"),
+            database_context(using),
+            transaction.atomic(using=using),
+        ):
+            row = (
+                model.objects.db_manager(using)
+                .sudo(reason="integrate.live.account.claim.row")
+                .lock_if_supported()
+                .get(pk=self.pk)
+            )
             owners = row.live_account_owners(
                 impl_key,
                 external_id,
                 identity_key=identity_key,
-                queryset=model.objects.sudo(reason="integrate.live.account.claim.owner"),
+                queryset=model.objects.db_manager(using).sudo(reason="integrate.live.account.claim.owner"),
             )
             if owners.exists():
                 return False
             state = dict(row.subscription_state)
             state[identity_key] = external_id
             row.subscription_state = state
-            row.save(update_fields=["subscription_state", "updated_at"])
-        self.refresh_from_db()
+            row.save(using=row._state.db, update_fields=["subscription_state", "updated_at"])
+        self.refresh_from_db(
+            using=using,
+        )
         return True
 
     def update_live_state(
@@ -309,27 +329,53 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
                 self.sync_progress = progress
                 fields.append("sync_progress")
         if fields:
-            self.save(update_fields=[*fields, "updated_at"])
+            self.save(using=self._state.db, update_fields=[*fields, "updated_at"])
 
     def disconnect_live_account(self, *, identity_key: str, clear_identity: bool) -> None:
         """Disconnect under a row lock and optionally clear claim and pairing state."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         model = type(self)
-        with system_context(reason="integrate.live.account.disconnect"), transaction.atomic():
-            row = model.objects.sudo(reason="integrate.live.account.disconnect.row").lock_if_supported().get(pk=self.pk)
+        with (
+            system_context(reason="integrate.live.account.disconnect"),
+            database_context(using),
+            transaction.atomic(using=using),
+        ):
+            row = (
+                model.objects.db_manager(using)
+                .sudo(reason="integrate.live.account.disconnect.row")
+                .lock_if_supported()
+                .get(pk=self.pk)
+            )
             row.set_lifecycle(type(row).Lifecycle.DISCONNECTED)
             if clear_identity:
                 row.update_live_state(identity_key=identity_key, drop_identity=True, drop_pairing_report=True)
-        self.refresh_from_db()
+        self.refresh_from_db(
+            using=using,
+        )
 
     def release_live_account(self, *, identity_key: str, desired: Any) -> None:
         """Clear a void account claim without changing operator-owned lifecycle."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         model = type(self)
-        with system_context(reason="integrate.live.account.release"), transaction.atomic():
-            row = model.objects.sudo(reason="integrate.live.account.release.row").lock_if_supported().get(pk=self.pk)
+        with (
+            system_context(reason="integrate.live.account.release"),
+            database_context(using),
+            transaction.atomic(using=using),
+        ):
+            row = (
+                model.objects.db_manager(using)
+                .sudo(reason="integrate.live.account.release.row")
+                .lock_if_supported()
+                .get(pk=self.pk)
+            )
             row.update_live_state(identity_key=identity_key, drop_identity=True, desired=desired)
-        self.refresh_from_db()
+        self.refresh_from_db(
+            using=using,
+        )
 
     def live_pairing(self, impl: Any) -> Any:
         """Project pairing state from durable row facts and backend identity formatting."""
@@ -395,11 +441,13 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         prove another worker's liveness, so that backend trusts the stored stage.
         """
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         stage = self.SyncStage(self.sync_stage)
         if (
             stage in self.LIVE_SYNC_STAGES
             and not self.sync_is_dispatched
-            and task_locks_are_cross_process()
+            and task_locks_are_cross_process(using=using)
             and not self.is_syncing
         ):
             return self.SyncStage.FAILED
@@ -420,10 +468,16 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         settled run may reclaim the bridge when its execution owner retries it.
         """
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         if type(run_id) is not int or run_id <= 0:
             raise ValueError("A positive run identity is required.")
         expected_run_id = self.sync_run_id
-        with system_context(reason="integrate.bridge.claim_dispatch"), transaction.atomic():
+        with (
+            system_context(reason="integrate.bridge.claim_dispatch"),
+            database_context(using),
+            transaction.atomic(using=using),
+        ):
             row = self.lock_capability()
             if not row.discovery_ready:
                 return False
@@ -432,8 +486,10 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
             row.sync_run_id = run_id
             row.next_sync_at = None
             row.mark_sync_started(now=now or timezone.now())
-            row.save(update_fields=["sync_run_id", "next_sync_at", "updated_at"])
-        self.refresh_from_db()
+            row.save(using=row._state.db, update_fields=["sync_run_id", "next_sync_at", "updated_at"])
+        self.refresh_from_db(
+            using=using,
+        )
         return True
 
     def settle_dispatch(
@@ -446,7 +502,13 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
     ) -> bool:
         """Settle the expected busy dispatch once, retaining its inspection ID."""
 
-        with system_context(reason="integrate.bridge.settle_dispatch"), transaction.atomic():
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        with (
+            system_context(reason="integrate.bridge.settle_dispatch"),
+            database_context(using),
+            transaction.atomic(using=using),
+        ):
             row = self.lock_capability()
             if row.sync_run_id != run_id or not row.sync_is_dispatched:
                 return False
@@ -455,7 +517,9 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
                 row.record_sync(result, now=at)
             else:
                 row.record_sync_error(error, now=at)
-        self.refresh_from_db()
+        self.refresh_from_db(
+            using=using,
+        )
         return True
 
     def sync_lock_key(self) -> LockKey:
@@ -476,7 +540,13 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         Terminal session outcomes and a concurrent operator stop remain intact.
         """
 
-        with system_context(reason="integrate.live.interrupted"), transaction.atomic():
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        with (
+            system_context(reason="integrate.live.interrupted"),
+            database_context(using),
+            transaction.atomic(using=using),
+        ):
             row = self.lock_capability()
             if (
                 row.lifecycle != row.Lifecycle.CONNECTED
@@ -504,8 +574,16 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
     ) -> dict[str, Any]:
         """Merge telemetry under a row lock, preserving a pending queue stage."""
 
-        with transaction.atomic():
-            row = type(self).objects.sudo(reason="integrate.bridge.progress").lock_if_supported().get(pk=self.pk)
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        with database_context(using), transaction.atomic(using=using):
+            row = (
+                type(self)
+                .objects.db_manager(using)
+                .sudo(reason="integrate.bridge.progress")
+                .lock_if_supported()
+                .get(pk=self.pk)
+            )
             existing = row.sync_progress if isinstance(row.sync_progress, Mapping) else {}
             payload = dict(existing)
             queue_pending = str(row.sync_stage) == str(row.SyncStage.QUEUED)
@@ -524,7 +602,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
             if not queue_pending and str(stage) in getattr(row.SyncStage, "values", ()):
                 row.sync_stage = row.SyncStage(stage)
                 update_fields.append("sync_stage")
-            row.save(update_fields=update_fields)
+            row.save(using=row._state.db, update_fields=update_fields)
         self.sync_progress = payload
         self.sync_stage = row.sync_stage
         return payload
@@ -550,8 +628,10 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
     def mark_sync_started(self, *, now: datetime) -> bool:
         """Admit one attempt under the connection gate, preserving repeated starts."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         fields = ["last_sync_started_at", "sync_error", "sync_progress", "sync_stage"]
-        with system_context(reason="integrate.bridge.start"), transaction.atomic():
+        with system_context(reason="integrate.bridge.start"), database_context(using), transaction.atomic(using=using):
             row = self.lock_capability()
             if not row.discovery_ready:
                 return False
@@ -561,41 +641,57 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
             row.sync_stage = row.SyncStage.SYNCING
             row.sync_error = ""
             row.sync_progress = row._sync_marker(stage=row.SyncStage.SYNCING, started_at=now.isoformat())
-            row.save(update_fields=[*fields, "updated_at"])
-        self.refresh_from_db(fields=fields)
+            row.save(using=row._state.db, update_fields=[*fields, "updated_at"])
+        self.refresh_from_db(using=using, fields=fields)
         return True
 
     def claim_sync(self, *, now: datetime) -> bool:
         """Claim the next interval only after the connection is ready for work."""
 
-        with system_context(reason="integrate.bridge.claim"), transaction.atomic():
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        with system_context(reason="integrate.bridge.claim"), database_context(using), transaction.atomic(using=using):
             row = self.lock_capability()
             if not row.discovery_ready:
                 return False
             row.next_sync_at = row._next_sync_at(now=now)
-            row.save(update_fields=["next_sync_at", "updated_at"])
+            row.save(using=row._state.db, update_fields=["next_sync_at", "updated_at"])
         self.next_sync_at = row.next_sync_at
         return True
 
     def request_sync(self, *, now: datetime | None = None, persist: bool = True) -> int:
         """Admit one queued sync and dispatch its durable timestamp token."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         if self.pk is None:
             raise ValueError("Cannot queue an unsaved bridge.")
         timestamp = now or timezone.now()
         if persist:
-            with system_context(reason="integrate.bridge.request_sync"), transaction.atomic():
+            with (
+                system_context(reason="integrate.bridge.request_sync"),
+                database_context(using),
+                transaction.atomic(using=using),
+            ):
                 self.mark_sync_queued(now=timestamp)
         enqueue_task(
             "integrate.sync_bridge_now",
-            kwargs={"model_label": self._meta.label_lower, "pk": self.pk, "timestamp": timestamp.isoformat()},
+            kwargs={
+                "model_label": self._meta.label_lower,
+                "pk": self.pk,
+                "timestamp": timestamp.isoformat(),
+                "using": using,
+            },
+            using=using,
         )
         return 1
 
     def mark_sync_queued(self, *, now: datetime) -> None:
         """Persist that a worker task has been queued for this bridge."""
 
-        with system_context(reason="integrate.bridge.queue"), transaction.atomic():
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        with system_context(reason="integrate.bridge.queue"), database_context(using), transaction.atomic(using=using):
             row = self.lock_capability()
             if not row.discovery_ready:
                 raise IntegrationError("Connection discovery must finish before syncing.")
@@ -605,6 +701,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
                 row.sync_run_id = None
                 row.sync_progress = row._sync_marker(stage=self.SyncStage.QUEUED, queued_at=now.isoformat())
                 row.save(
+                    using=row._state.db,
                     update_fields=["sync_error", "sync_run_id", "sync_progress", "sync_stage", "updated_at"],
                 )
         self.sync_stage, self.sync_error, self.sync_progress = row.sync_stage, row.sync_error, row.sync_progress
@@ -613,11 +710,13 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
     def reset_sync_queue(self, *, now: datetime) -> None:
         """Make a failed queue dispatch due again for the next scheduler pass."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         self.next_sync_at = now
         self.sync_stage = self.SyncStage.IDLE
         self.sync_progress = {}
-        with transaction.atomic():
-            self.save(update_fields=["next_sync_at", "sync_progress", "sync_stage", "updated_at"])
+        with database_context(using), transaction.atomic(using=using):
+            self.save(using=self._state.db, update_fields=["next_sync_at", "sync_progress", "sync_stage", "updated_at"])
 
     @property
     def sync_queue_occurrence(self) -> str | None:
@@ -649,12 +748,18 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         holder's stage. Mirrors :meth:`merge_subscription_state`.
         """
 
-        with system_context(reason="integrate.bridge.release_sync_queue"), transaction.atomic():
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        with (
+            system_context(reason="integrate.bridge.release_sync_queue"),
+            database_context(using),
+            transaction.atomic(using=using),
+        ):
             row = self.lock_capability()
             if not row.sync_queue_token_matches(now):
                 return False
             row.sync_stage = row.SyncStage.IDLE
-            row.save(update_fields=["sync_stage", "updated_at"])
+            row.save(using=row._state.db, update_fields=["sync_stage", "updated_at"])
         self.sync_stage = self.SyncStage.IDLE
         return True
 
@@ -692,7 +797,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         """Suspend polling and cooperatively stop a live session without changing sync ownership."""
 
         self.next_sync_at = None
-        self.save(update_fields=["next_sync_at", "updated_at"])
+        self.save(using=self._state.db, update_fields=["next_sync_at", "updated_at"])
         if not self.requires_connection_discovery:
             return
         impl = self.capability_impl_class
@@ -704,10 +809,12 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
 
         now = timezone.now()
         self.next_sync_at = now if succeeded and not self.sync_is_dispatched and self._next_sync_at(now=now) else None
-        self.save(update_fields=["next_sync_at", "updated_at"])
+        self.save(using=self._state.db, update_fields=["next_sync_at", "updated_at"])
 
     def record_sync(self, result: int, *, now: datetime) -> None:
         """Persist one successful scheduler sync result and healthy status report."""
+
+        using = write_alias(type(self), using=self._state.db, instance=self)
 
         self.last_sync_completed_at = now
         self.last_sync_items = result
@@ -723,21 +830,23 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
             "items": result,
             "completed_at": now.isoformat(),
         }
-        with transaction.atomic():
+        with database_context(using), transaction.atomic(using=using):
             # Credential attachment may have started discovery during extraction.
             self.lock_capability()
             self.refresh_from_db(
+                using=using,
                 fields=[
                     "discovery_retry_at",
                     "discovery_generation",
                     "discovery_completed_at",
                     "lifecycle",
-                ]
+                ],
             )
             self.next_sync_at = self._next_sync_at(now=now)
             if self.discovery_ready:
                 self.report_status(status=IntegrationRuntimeStatus.OK)
             self.save(
+                using=self._state.db,
                 update_fields=[
                     "last_sync_summary",
                     "last_sync_completed_at",
@@ -753,20 +862,23 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
     def record_sync_error(self, error: Exception, *, now: datetime) -> None:
         """Persist one failed scheduler sync result and error status report."""
 
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
         failure = safe_integration_failure(error)
         error_message = failure.message
         self.sync_stage = self.SyncStage.FAILED
         self.sync_error = error_message
         self.sync_progress = self._sync_marker(stage=self.SyncStage.FAILED, error=error_message)
-        with transaction.atomic():
+        with database_context(using), transaction.atomic(using=using):
             self.lock_capability()
             self.refresh_from_db(
+                using=using,
                 fields=[
                     "discovery_retry_at",
                     "discovery_generation",
                     "discovery_completed_at",
                     "lifecycle",
-                ]
+                ],
             )
             self.next_sync_at = self._next_sync_at(now=now)
             if self.next_sync_at is not None and isinstance(error, IntegrationError) and error.retry_after is not None:
@@ -774,6 +886,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
             if self.discovery_ready:
                 self.report_status(status=IntegrationRuntimeStatus.ERROR, error=failure)
             self.save(
+                using=self._state.db,
                 update_fields=[
                     "next_sync_at",
                     "sync_error",
@@ -807,7 +920,13 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         nothing to the change feed.
         """
 
-        with system_context(reason="integrate.bridge.clear_sync_error"), transaction.atomic():
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        with (
+            system_context(reason="integrate.bridge.clear_sync_error"),
+            database_context(using),
+            transaction.atomic(using=using),
+        ):
             row = self.lock_capability()
             progress = row.sync_progress if isinstance(row.sync_progress, Mapping) else {}
             if not row.sync_error and row.sync_stage != row.SyncStage.FAILED and "error" not in progress:
@@ -816,6 +935,7 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
             row.sync_error = ""
             row.sync_progress = row._sync_marker()
             row.save(
+                using=row._state.db,
                 update_fields=[
                     "sync_stage",
                     "sync_error",
@@ -875,7 +995,9 @@ class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integratio
         advisory lock must cover the concrete capability's committed landing.
         """
 
-        if connection.in_atomic_block:
+        using = write_alias(type(self), using=self._state.db, instance=self)
+
+        if connections[using].in_atomic_block:
             raise IntegrationError("Inbound dispatch requires autocommit.")
         with system_context(reason="integrate.inbound.capability"):
             capability = self.concrete_capability()

@@ -54,6 +54,6 @@ def apply_access_answer(sender: Any, decision: Any, **kwargs: Any) -> None:
         return
     need = apps.get_model("intake", "Need")
     with system_context(reason="intake.answer.current_need"):
-        rows = list(need.objects.filter(access_decision=decision))
+        rows = list(need.objects.db_manager(decision._state.db).filter(access_decision=decision))
     for row in rows:
         row.with_actor(decision.answered_by).apply_access_answer(decision)

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 from rebac import system_context
 
@@ -580,7 +580,7 @@ def _cross_process_locks() -> Iterator[None]:
     import angee.integrate.models.bridges as integrate_models
 
     original = integrate_models.task_locks_are_cross_process
-    integrate_models.task_locks_are_cross_process = lambda: True
+    integrate_models.task_locks_are_cross_process = lambda **kwargs: True
     try:
         yield
     finally:
@@ -659,14 +659,14 @@ def test_request_sync_marks_queued_and_defers_task(
     enqueued: list[tuple[str, dict[str, Any]]] = []
 
     def fake_enqueue_task(task_name: str, *, kwargs: dict[str, Any], **options: Any) -> None:
-        assert options == {}
+        assert options == {"using": "default"}
         enqueued.append((task_name, kwargs))
 
     monkeypatch.setattr("angee.integrate.models.bridges.enqueue_task", fake_enqueue_task)
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("queued-bridge", model=SchedulerBridge)
 
-    bridge.request_sync( now=now)
+    bridge.request_sync(now=now)
 
     assert enqueued == [
         (
@@ -675,6 +675,7 @@ def test_request_sync_marks_queued_and_defers_task(
                 "model_label": SchedulerBridge._meta.label_lower,
                 "pk": bridge.pk,
                 "timestamp": now.isoformat(),
+                "using": "default",
             },
         )
     ]
@@ -701,8 +702,8 @@ def test_request_sync_can_enqueue_duplicate_requests(
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("queued-duplicate", model=SchedulerBridge)
 
-    bridge.request_sync( now=now)
-    bridge.request_sync( now=now)
+    bridge.request_sync(now=now)
+    bridge.request_sync(now=now)
 
     assert len(enqueued) == 2
     bridge.refresh_from_db()
@@ -727,8 +728,8 @@ def test_stale_bridge_sync_task_payload_is_skipped(
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("queued-stale", model=SchedulerBridge, config={"items": 9})
 
-    bridge.request_sync( now=first)
-    bridge.request_sync( now=second)
+    bridge.request_sync(now=first)
+    bridge.request_sync(now=second)
 
     stale = integrate_tasks.sync_bridge_now(SchedulerBridge._meta.label_lower, bridge.pk, first.isoformat())
 
@@ -757,7 +758,7 @@ def test_request_sync_inside_outer_transaction_preserves_caller(
         bridge = make_integration("queued-db-duplicate", model=SchedulerBridge)
 
     with transaction.atomic():
-        bridge.request_sync( now=now)
+        bridge.request_sync(now=now)
         assert SchedulerBridge._base_manager.filter(pk=bridge.pk).exists()
         assert enqueued == []
 
@@ -869,14 +870,15 @@ def test_enqueue_due_bridges_resets_claim_when_dispatch_fails(
 
 @pytest.mark.django_db(transaction=True)
 def test_enqueue_due_bridges_rejects_outer_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reject an outer transaction before scanning or claiming any bridges."""
+    """Reject the selected producer transaction before querying or claiming rows."""
+    monkeypatch.setattr(integrate_scheduler, "models_with", lambda *, base: (SchedulerBridge,))
 
-    def unexpected_scan(**_kwargs: Any) -> None:
-        raise AssertionError("Scheduler scanned before enforcing autocommit.")
+    def unexpected_query(*args: Any) -> None:
+        raise AssertionError("Scheduler queried before enforcing producer autocommit.")
 
-    monkeypatch.setattr(integrate_scheduler, "models_with", unexpected_scan)
-    with transaction.atomic(), pytest.raises(RuntimeError, match="requires autocommit"):
-        enqueue_due_bridges()
+    with transaction.atomic(), connection.execute_wrapper(unexpected_query):
+        with pytest.raises(RuntimeError, match="requires autocommit"):
+            enqueue_due_bridges()
 
 
 @pytest.mark.django_db(transaction=True)

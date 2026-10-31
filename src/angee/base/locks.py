@@ -181,7 +181,7 @@ class PostgresAdvisoryLockBackend:
             return bool(cursor.fetchone()[0])
 
 
-_LOCAL_BACKEND = LocalLockBackend()
+_LOCAL_BACKENDS: dict[str, LocalLockBackend] = {}
 
 
 def record_lock_key(model_label: str, pk: object, purpose: str) -> LockKey:
@@ -191,10 +191,10 @@ def record_lock_key(model_label: str, pk: object, purpose: str) -> LockKey:
 
 
 @contextmanager
-def task_lock(key: LockKey) -> Iterator[bool]:
+def task_lock(key: LockKey, *, using: str | None = None) -> Iterator[bool]:
     """Yield whether the configured backend acquired ``key`` for this task."""
 
-    handle = get_lock_backend().try_acquire(key)
+    handle = get_lock_backend(using=using).try_acquire(key)
     if handle is None:
         yield False
         return
@@ -204,27 +204,30 @@ def task_lock(key: LockKey) -> Iterator[bool]:
         handle.release()
 
 
-def task_locks_are_cross_process() -> bool:
+def task_locks_are_cross_process(*, using: str | None = None) -> bool:
     """Return whether the active lock backend's locks are visible across processes.
 
     PostgreSQL advisory locks are cross-process; SQLite uses the local backend.
     """
 
-    return get_lock_backend().cross_process
+    return get_lock_backend(using=using).cross_process
 
 
-def task_lock_is_held(key: LockKey) -> bool:
+def task_lock_is_held(key: LockKey, *, using: str | None = None) -> bool:
     """Return whether the configured backend reports ``key`` as held."""
 
-    return get_lock_backend().is_held(key)
+    return get_lock_backend(using=using).is_held(key)
 
 
-def get_lock_backend() -> LockBackend:
-    """Select the native backend for the default database."""
+def get_lock_backend(*, using: str | None = None) -> LockBackend:
+    """Select the connection-owned backend, isolating local keys by database alias."""
 
-    if connections[DEFAULT_DB_ALIAS].vendor == "postgresql":
-        return PostgresAdvisoryLockBackend()
-    return _LOCAL_BACKEND
+    alias = using or DEFAULT_DB_ALIAS
+    if connections[alias].vendor == "postgresql":
+        return PostgresAdvisoryLockBackend(alias=alias)
+    if (backend := _LOCAL_BACKENDS.get(alias)) is not None:
+        return backend
+    return _LOCAL_BACKENDS.setdefault(alias, LocalLockBackend())
 
 
 def _advisory_pair(name: str) -> tuple[int, int]:

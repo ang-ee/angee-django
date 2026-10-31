@@ -910,7 +910,7 @@ def test_ensure_bridge_sessions_reconciles_live_desire_and_routes_to_session_que
     assert sent == [
         {
             "name": RUN_SESSION_TASK,
-            "kwargs": {"model_label": channel._meta.label_lower, "pk": channel.pk},
+            "kwargs": {"model_label": channel._meta.label_lower, "pk": channel.pk, "using": "default"},
             "queue": "fake-live",
             "expires": SESSION_START_EXPIRES,
         }
@@ -1235,7 +1235,7 @@ def test_native_session_crash_is_visible_and_retried(live_tables: Any, monkeypat
 
     channel = _live_channel("fake-live-native-crash")
     monkeypatch.setattr(FakeLiveChannelBackend, "session_isolation", "process")
-    monkeypatch.setattr(session_runner, "task_locks_are_cross_process", lambda: True)
+    monkeypatch.setattr(session_runner, "task_locks_are_cross_process", lambda **kwargs: True)
 
     def crash(_host: Any) -> Any:
         assert task_lock_is_held(channel.live_session_host_lock_key())
@@ -1269,7 +1269,7 @@ def test_process_session_rejects_local_lock_backend(live_tables: Any, monkeypatc
 
     channel = _live_channel("fake-live-local-lock")
     monkeypatch.setattr(FakeLiveChannelBackend, "session_isolation", "process")
-    monkeypatch.setattr(session_runner, "task_locks_are_cross_process", lambda: False)
+    monkeypatch.setattr(session_runner, "task_locks_are_cross_process", lambda **kwargs: False)
     with pytest.raises(ImproperlyConfigured, match="cross-process task locks"):
         tasks_module.run_bridge_session(channel._meta.label_lower, channel.pk)
 
@@ -1284,8 +1284,8 @@ def test_session_host_deduplicates_startup(live_tables: Any, monkeypatch: pytest
 
     channel = _live_channel("fake-live-hosted")
     monkeypatch.setattr(FakeLiveChannelBackend, "session_isolation", "process")
-    monkeypatch.setattr(session_runner, "task_locks_are_cross_process", lambda: True)
-    monkeypatch.setattr(tasks_module, "task_locks_are_cross_process", lambda: True)
+    monkeypatch.setattr(session_runner, "task_locks_are_cross_process", lambda **kwargs: True)
+    monkeypatch.setattr(tasks_module, "task_locks_are_cross_process", lambda **kwargs: True)
     with task_lock(channel.live_session_host_lock_key()) as acquired:
         assert acquired
         assert (
@@ -1440,7 +1440,7 @@ def test_reconciler_warns_about_crashed_startup(
     with system_context(reason="test crashed startup"):
         channel.sync_stage = channel.SyncStage.DISCOVERING
         channel.save(update_fields=["sync_stage"])
-    monkeypatch.setattr(tasks_module, "task_locks_are_cross_process", lambda: True)
+    monkeypatch.setattr(tasks_module, "task_locks_are_cross_process", lambda **kwargs: True)
     monkeypatch.setattr("angee.integrate.backends.base.enqueue_task", lambda *args, **kwargs: None)
     assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 1}
     assert "active stage with no running session" in caplog.text

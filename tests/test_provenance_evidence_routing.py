@@ -50,5 +50,8 @@ def test_selected_database_does_not_waive_an_unreadable_participant(monkeypatch)
 
     monkeypatch.setattr(evidence, "instances_from_public_ids", resolve)
     with pytest.raises(PermissionDenied, match="Every participant"):
-        evidence.readable_records([reference], [SubjectRef.of("auth/user", "1"), SubjectRef.of("auth/user", "2")], using="evidence_secondary")
+        evidence.readable_records(
+            [reference], [SubjectRef.of("auth/user", "1"), SubjectRef.of("auth/user", "2")],
+            using="evidence_secondary",
+        )
     assert calls == ["evidence_secondary", "evidence_secondary"]
