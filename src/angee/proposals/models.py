@@ -30,6 +30,7 @@ from rebac import (
     actor_context,
     check_new,
     current_actor,
+    database_context,
     generic_target,
     system_context,
     to_object_ref,
@@ -37,6 +38,7 @@ from rebac import (
 )
 from rebac.actors import to_subject_ref
 from rebac.backends import backend
+from rebac.database import write_alias
 from rebac.errors import MissingActorError
 from rebac.models import active_relationship_model
 from rebac.relationships import delete_relationships
@@ -1537,43 +1539,60 @@ class ProposalManager[T: Proposal](AngeeManager[T]):
         round: Round,
         party: Party | None = None,
     ) -> T:
-        """Interpret one reply atomically and submit only after all rows succeed."""
+        """Capture on the selected database after round write and related read admission.
+
+        Explicit parties require read access; an omitted party uses the existing
+        sender-matching owner. A trusted system context remains supported.
+        """
 
         if message.pk is None or round.pk is None:
             raise ValidationError("A saved message and round are required for capture.")
-        actor = current_actor()
-        with transaction.atomic():
-            locked_round = (
-                type(round).objects.sudo(reason="proposals.capture.round").lock_if_supported().get(pk=round.pk)
-            )
-            if locked_round.status != RoundStatus.COLLECTING:
-                raise ValidationError({"round": "Replies cannot be captured after opening."})
-            locked_message = (
-                type(message).objects.sudo(reason="proposals.capture.message").lock_if_supported().get(pk=message.pk)
-            )
-            resolved_party = party or self._resolved_sender_party(locked_message)
-            if resolved_party is None:
-                raise ValidationError({"party": "Capture requires a party or a resolved sender party."})
-            interpretation = self._interpret(locked_message, locked_round)
-            payload_hash = self._payload_hash(locked_message)
-            proposal = self._locked_capture_proposal(message=locked_message, round=locked_round, party=resolved_party)
-            if proposal.state != ProposalState.DRAFT:
-                if (
-                    proposal.state == ProposalState.SUBMITTED
-                    and proposal.capture_payload_hash == payload_hash
-                    and proposal.capture_parser_version == self.CAPTURE_PARSER_VERSION
-                ):
-                    if actor is not None:
-                        proposal.with_actor(actor)
-                    return proposal
-                raise ValidationError("Captured proposal does not match the replayed interpretation.")
-
-            self._apply_interpretation(
-                proposal, message=locked_message, interpretation=interpretation, payload_hash=payload_hash
-            )
-            proposal._submit_locked(fallback_user_id=locked_message.created_by_id or locked_round.facilitator_id)
+        using = write_alias(self.model, using=self._db or round._state.db, instance=round)
+        if any(row._state.db not in (None, using) for row in (round, message, *(() if party is None else (party,)))):
+            raise ValidationError("Capture references must belong to the selected database.")
+        owner = self.db_manager(using)
+        with database_context(using):
+            actor = round.require_access("write")
+            message.require_access("read", actor=actor)
+            if party is not None:
+                party.require_access("read", actor=actor)
+            with transaction.atomic(using=using), actor_context(actor) if actor is not None else nullcontext():
+                locked_round = (
+                    type(round).objects.db_manager(using)
+                    .sudo(reason="proposals.capture.round").lock_if_supported().get(pk=round.pk)
+                )
+                if locked_round.status != RoundStatus.COLLECTING:
+                    raise ValidationError({"round": "Replies cannot be captured after opening."})
+                locked_message = (
+                    type(message).objects.db_manager(using)
+                    .sudo(reason="proposals.capture.message").lock_if_supported().get(pk=message.pk)
+                )
+                resolved_party = party or owner._resolved_sender_party(locked_message)
+                if resolved_party is None:
+                    raise ValidationError({"party": "Capture requires a party or a resolved sender party."})
+                interpretation = owner._interpret(locked_message, locked_round)
+                payload_hash = owner._payload_hash(locked_message)
+                proposal = owner._locked_capture_proposal(
+                    message=locked_message, round=locked_round, party=resolved_party,
+                )
+                if proposal.state != ProposalState.DRAFT:
+                    if not (
+                        proposal.state == ProposalState.SUBMITTED
+                        and proposal.capture_payload_hash == payload_hash
+                        and proposal.capture_parser_version == owner.CAPTURE_PARSER_VERSION
+                    ):
+                        raise ValidationError("Captured proposal does not match the replayed interpretation.")
+                else:
+                    owner._apply_interpretation(
+                        proposal, message=locked_message, interpretation=interpretation, payload_hash=payload_hash,
+                    )
+                    proposal._submit_locked(
+                        fallback_user_id=locked_message.created_by_id or locked_round.facilitator_id,
+                    )
         if actor is not None:
             proposal.with_actor(actor)
+        else:
+            proposal.unsudo()
         return proposal
 
     def _locked_capture_proposal(
@@ -1604,8 +1623,8 @@ class ProposalManager[T: Proposal](AngeeManager[T]):
         proposal = self.model(round=round, party=party, source_message=message)
         proposal.full_clean(validate_unique=False, validate_constraints=False)
         try:
-            with transaction.atomic():
-                proposal.sudo(reason="proposals.capture.create").save()
+            with transaction.atomic(using=self.db):
+                proposal.sudo(reason="proposals.capture.create").save(using=self.db)
         except IntegrityError:
             concurrent = (
                 self.sudo(reason="proposals.capture.concurrent_reload")
@@ -1641,7 +1660,7 @@ class ProposalManager[T: Proposal](AngeeManager[T]):
         topics = {
             topic.key.casefold(): topic
             for topic in apps.get_model("proposals", "Topic")
-            ._base_manager.filter(round_id=round.pk)
+            ._base_manager.using(self.db).filter(round_id=round.pk)
             .order_by("sort_order", "pk")
         }
         answers: dict[Any, str] = {}
@@ -1676,7 +1695,9 @@ class ProposalManager[T: Proposal](AngeeManager[T]):
             fields["cost"] = Decimal(str(fields["cost"])) if fields["cost"] not in (None, "") else None
         if currency_value not in (None, ""):
             currency_model = apps.get_model("money", "Currency")
-            fields["currency"] = currency_model._base_manager.get(code__iexact=str(currency_value).strip())
+            fields["currency"] = (
+                currency_model._base_manager.using(self.db).get(code__iexact=str(currency_value).strip())
+            )
         elif "cost" in fields:
             fields["currency"] = None
         for name in ("timeframe_start", "timeframe_end", "valid_until"):
@@ -1694,6 +1715,7 @@ class ProposalManager[T: Proposal](AngeeManager[T]):
         proposal.capture_parser_version = self.CAPTURE_PARSER_VERSION
         proposal.full_clean(validate_unique=False, validate_constraints=False)
         proposal.save(
+            using=self.db,
             update_fields=(
                 *fields,
                 "source_message",
@@ -1704,15 +1726,17 @@ class ProposalManager[T: Proposal](AngeeManager[T]):
         )
 
         answer_model = apps.get_model("proposals", "Answer")
-        topics = apps.get_model("proposals", "Topic")._base_manager.in_bulk(interpretation["answers"])
+        topics = apps.get_model("proposals", "Topic")._base_manager.using(self.db).in_bulk(interpretation["answers"])
         for topic_id, body in cast(Mapping[Any, str], interpretation["answers"]).items():
-            answer = answer_model._base_manager.filter(proposal_id=proposal.pk, topic_id=topic_id).first()
+            answer = (
+                answer_model._base_manager.using(self.db).filter(proposal_id=proposal.pk, topic_id=topic_id).first()
+            )
             if answer is None:
                 answer = answer_model(proposal=proposal, topic=topics[topic_id], body=body)
             else:
                 answer.body = body
             answer.full_clean(validate_unique=False, validate_constraints=False)
-            answer.sudo(reason="proposals.capture.answer").save()
+            answer.sudo(reason="proposals.capture.answer").save(using=self.db)
 
     def _resolved_sender_party(self, message: Message) -> Party | None:
         """Resolve the sender through the parties-owned handle matching seam."""
@@ -1722,7 +1746,7 @@ class ProposalManager[T: Proposal](AngeeManager[T]):
         handle = message.sender
         assert handle is not None
         if handle.party_id is None:
-            apps.get_model("parties", "Party").objects.suggest_for(handle)
+            apps.get_model("parties", "Party").objects.db_manager(self.db).suggest_for(handle)
             # Matching may assign the party through another Handle instance.
             handle.refresh_from_db(fields=["party"])
         return handle.party
@@ -1931,15 +1955,16 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
         if not self._state.adding:
             super().save(*args, **kwargs)
             return
-        with transaction.atomic():
+        using = write_alias(type(self), using=kwargs.get("using"), instance=self)
+        with database_context(using), transaction.atomic(using=using):
             locked_round = (
                 apps.get_model("proposals", "Round")
-                .objects.sudo(reason="proposals.proposal.create.round")
+                .objects.db_manager(using).sudo(reason="proposals.proposal.create.round")
                 .lock_if_supported()
                 .get(pk=self.round_id)
             )
             if (
-                not type(locked_round).system_queryset()
+                not type(locked_round).system_queryset().using(using)
                 .filter(
                     type(locked_round).admission_condition(),
                     pk=locked_round.pk,
@@ -2119,20 +2144,29 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
         return self
 
     def identify_party(self, party: Party) -> Self:
-        """Set the external identity once under Round-first row locks."""
+        """Identify a readable party after proposal write admission, under Round-first locks."""
 
         if self.pk is None or party.pk is None:
             raise ValidationError("A saved proposal and party are required.")
-        with transaction.atomic():
+        using = write_alias(type(self), using=self._state.db, instance=self)
+        if party._state.db not in (None, using):
+            raise ValidationError({"party": "The party must belong to the proposal database."})
+        with database_context(using):
+            actor = self.require_access("write")
+            party.require_access("read", actor=actor)
+        with (
+            database_context(using), transaction.atomic(using=using),
+            actor_context(actor) if actor is not None else nullcontext(),
+        ):
             round_model = apps.get_model("proposals", "Round")
             locked_round = (
-                round_model.objects.sudo(reason="proposals.proposal.identify.round")
+                round_model.objects.db_manager(using).sudo(reason="proposals.proposal.identify.round")
                 .lock_if_supported()
                 .get(pk=self.round_id)
             )
             locked = (
                 type(self)
-                .objects.sudo(reason="proposals.proposal.identify")
+                .objects.db_manager(using).sudo(reason="proposals.proposal.identify")
                 .lock_if_supported()
                 .filter(round_id=locked_round.pk, pk=self.pk)
                 .order_by("pk")
@@ -2144,7 +2178,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataM
             else:
                 locked.party = party
                 locked.allow_immutable_save("party_id")
-                locked.save(update_fields=("party", "updated_at"))
+                locked.save(using=using, update_fields=("party", "updated_at"))
         _copy_persisted_state(self, locked, ("party", "updated_at", "updated_by"))
         return self
 

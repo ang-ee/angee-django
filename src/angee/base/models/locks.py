@@ -12,6 +12,7 @@ from django.db import DatabaseError, models, router, transaction
 from django.db.models import F
 from rebac import (
     RebacMixin,
+    database_context,
     system_context,
 )
 from rebac.actors import is_sudo
@@ -44,26 +45,35 @@ class ImmutableFieldsMixin(models.Model):
         self._allowed_immutable_fields = allowed
 
     def save(self, *args: Any, **kwargs: Any) -> None:
-        """Persist after comparing immutable facts with the committed row."""
+        """Compare immutable facts and save on the same selected native write database."""
 
         allowed = set(getattr(self, "_allowed_immutable_fields", set()))
         try:
-            if self.pk is not None and not self._state.adding:
-                declared = dict.fromkeys(
-                    name for base in type(self).__mro__ for name in base.__dict__.get("immutable_fields", ())
-                )
-                checked = tuple(name for name in declared if name not in allowed and name in self.__dict__)
-                if checked:
-                    # Compare committed identities without loading unrelated deferred columns.
-                    with system_context(reason=f"{self._meta.label_lower}.immutable_fields"):
-                        persisted = type(self)._base_manager.filter(pk=self.pk).values(*checked).first()
-                    if persisted is not None:
-                        changed = [name for name in checked if persisted[name] != getattr(self, name)]
-                        if changed:
-                            raise ValidationError(
-                                {name.removesuffix("_id"): "This identity or receipt is immutable." for name in changed}
+            using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+            kwargs["using"] = using
+            with database_context(using):
+                if self.pk is not None and not self._state.adding:
+                    declared = dict.fromkeys(
+                        name for base in type(self).__mro__ for name in base.__dict__.get("immutable_fields", ())
+                    )
+                    checked = tuple(name for name in declared if name not in allowed and name in self.__dict__)
+                    if checked:
+                        # Compare committed identities without loading unrelated deferred columns.
+                        with system_context(reason=f"{self._meta.label_lower}.immutable_fields"):
+                            persisted = (
+                                type(self)._base_manager.db_manager(using, hints={"instance": self})
+                                .filter(pk=self.pk).values(*checked).first()
                             )
-            super().save(*args, **kwargs)
+                        if persisted is not None:
+                            changed = [name for name in checked if persisted[name] != getattr(self, name)]
+                            if changed:
+                                raise ValidationError(
+                                    {
+                                        name.removesuffix("_id"): "This identity or receipt is immutable."
+                                        for name in changed
+                                    }
+                                )
+                super().save(*args, **kwargs)
         finally:
             self._allowed_immutable_fields = set()
 
