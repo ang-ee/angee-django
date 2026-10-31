@@ -99,9 +99,9 @@ test("enter/exit reset observed reads, remove inactive data and mutations, and s
     fireEvent.click(screen.getByRole("button", { name: "User menu" }));
     fireEvent.click(await screen.findByLabelText("Preview as a person"));
     await screen.findByRole("option", { name: "Target peer" });
-    expect(screen.queryByRole("option", { name: "Person", exact: true })).toBeNull();
+    expect(screen.queryByRole("option", { name: /^Person$/ })).toBeNull();
     await act(async () => { releaseCandidates(); });
-    expect(screen.queryByRole("option", { name: "Person", exact: true })).toBeNull();
+    expect(screen.queryByRole("option", { name: /^Person$/ })).toBeNull();
     expect(screen.getByRole("option", { name: "Target peer" })).toBeTruthy();
     expect(candidateActors.at(-1)).toBe("person");
     fireEvent.click(screen.getByRole("button", { name: "User menu" }));
