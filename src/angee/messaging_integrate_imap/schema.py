@@ -29,7 +29,6 @@ from angee.messaging_integrate_imap.backend import (
 from angee.messaging_integrate_imap.connect import (
     ImapConnectError,
     connect_imap_channel,
-    update_imap_channel_credential,
 )
 
 Channel = apps.get_model("messaging", "Channel")
@@ -195,7 +194,10 @@ class MessagingImapMutation:
             _imap_errors(),
             action_target(Channel, id, reason="messaging_integrate_imap.graphql.update_credential") as channel,
         ):
-            update_imap_channel_credential(channel, username=username, password=password)
+            try:
+                channel.update_imap_credential(username=username, password=password)
+            except ValueError as error:
+                raise ImapConnectError(str(error)) from error
         return ActionResult(ok=True, message="Credential updated.")
 
 

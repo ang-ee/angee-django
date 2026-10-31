@@ -737,8 +737,8 @@ data through REBAC, never a queryset bypass.
   `Thread.grant_reader` / `revoke_reader` remain shares governed by `share`.
   Team and record audiences are read live through the messaging contracts;
   they are not copied into followers. See
-  [`ThreadedModelMixin`](../../src/angee/messaging/models.py) and
-  [`ThreadNotificationManager`](../../src/angee/messaging/managers.py).
+  [`ThreadedModelMixin`](../../src/angee/messaging/models/threads.py) and
+  [`ThreadNotificationManager`](../../src/angee/messaging/managers/notifications.py).
 - **Posture is data, not schema.** `permissions.extends.zed` declares addon-owned
   capability permissions and unions existing permission arms; deployment-specific
   narrowable defaults still ship as seeded tuples. Platform-wide tuple-driven visibility
@@ -1235,8 +1235,8 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   Bounded diagnostics and persisted model labels use `DiagnosticTextField` and
   `ModelLabelField` from [`angee.base.fields`](../../src/angee/base/fields/__init__.py), so
   instance saves and queryset writes share their storage rules.
-  [`MessageSubtype.model_label`](../../src/angee/messaging/models.py) and
-  [`ThreadNotification.failure_reason`](../../src/angee/messaging/models.py)
+  [`MessageSubtype.model_label`](../../src/angee/messaging/models/messages.py) and
+  [`ThreadNotification.failure_reason`](../../src/angee/messaging/models/notifications.py)
   compose these field owners. A deployment crossing the
   [upgrade cutoff](#migration-history) must preflight
   unknown/colliding subtype labels and retained diagnostics before canonicalizing

@@ -50,7 +50,6 @@ from angee.base.serialization import strip_null_bytes
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
-from angee.messaging import managers as messaging_managers
 from angee.messaging.backends import (
     ManualChannelBackend,
     ParsedHandle,
@@ -61,6 +60,7 @@ from angee.messaging.backends import (
 )
 from angee.messaging.events import message_ingested
 from angee.messaging.managers import derived_part_name, normalize_subject
+from angee.messaging.managers import messages as messaging_managers
 from angee.messaging.models import ThreadedModelMixin
 from angee.messaging.testing.models import (
     Channel,

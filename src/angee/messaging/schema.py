@@ -28,6 +28,7 @@ from strawberry import auto
 from strawberry_django.utils.requests import get_request
 
 from angee.base.models.identity import instance_from_public_id
+from angee.base.serialization import strip_null_bytes
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,
@@ -63,7 +64,6 @@ from angee.integrate.schema import BridgeTypeMixin
 from angee.messaging import connect
 from angee.messaging.managers import (
     message_subtype_options,
-    strip_null_bytes,
 )
 from angee.messaging.models import Message as MessageModel
 from angee.messaging.models import Part as PartModel
