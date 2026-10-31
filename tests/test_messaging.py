@@ -1225,6 +1225,7 @@ def test_threaded_model_rejects_system_message_updates(composed_tables: None) ->
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
 def test_threaded_model_post_notifies_matching_followers(composed_tables: None) -> None:
     """Posting fans out delivery rows to inbox and email followers matching the subtype.
 

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from django.apps import apps
 from django.core.exceptions import ValidationError
 
 from angee.integrate_iphone.backup import BackupError, IosBackup
-from angee.storage_integrate.connect import provision_mount
 from angee.storage_integrate.models import MountMode
 from angee.storage_integrate.mounts import validate_local_folder_root
 from angee.storage_integrate_iphone.mounts import IphoneBackupMountBackend
@@ -31,7 +31,7 @@ def create_iphone_backup_mount(
         messages = error.messages if isinstance(error, ValidationError) else [str(error)]
         raise ValidationError({"path": messages}) from error
     backup.close()
-    return provision_mount(
+    return apps.get_model("storage_integrate", "Mount").objects.provision(
         user,
         name=name,
         root=root,

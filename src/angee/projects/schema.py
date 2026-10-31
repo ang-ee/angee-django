@@ -33,7 +33,7 @@ from angee.graphql.data.hasura import (
     row_annotations,
 )
 from angee.graphql.ids import PublicID, instance_for_id, optional_public_id
-from angee.graphql.inputs import InputReference, input_values
+from angee.graphql.inputs import input_values
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import RecordPointerType, actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
@@ -181,7 +181,6 @@ class ProjectSetupInput:
     """Project-owned setup facts, extended additively by installed addons."""
 
     milestones: list[ProjectMilestoneSetupInput]
-    vault_template: PublicID = strawberry.field(metadata={InputReference: InputReference("knowledge.Vault")})
 
 
 @strawberry.input

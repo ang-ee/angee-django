@@ -706,7 +706,6 @@ class Project(
         self,
         *,
         milestones: list[dict[str, Any]] | None = None,
-        vault_template: Any = None,
     ) -> None:
         """Terminal cooperative hook; contributors consume their own named inputs.
 
@@ -735,34 +734,13 @@ class Project(
         assert first is not None  # The validated template contains at least one milestone.
         if self.current_milestone_id is None:
             self.set_current_milestone(first)
-        binding_model = apps.get_model("projects", "ProjectBinding")
-        vault_model = apps.get_model("knowledge", "Vault")
-        content_type = ContentType.objects.db_manager(self._state.db).get_for_model(vault_model)
-        if not binding_model.objects.using(self._state.db).filter(project=self, content_type=content_type).exists():
-            if vault_template is None:
-                raise ValidationError({"vault_template": "Choose a vault template."})
-            vault = vault_model.objects.db_manager(self._state.db).create_from(
-                vault_template,
-                name=self.title,
-                idempotency_key=f"project:{self.pk}",
-            )
-            binding_model.objects.db_manager(self._state.db).bind(project=self, target=vault)
 
     @classmethod
     def setup_complete_condition(cls, actor: Any) -> Q:
         """Compose readable setup evidence; optional addons add their own acts."""
 
         milestones = apps.get_model("projects", "Milestone").objects.with_actor(actor).scoped()
-        bindings = apps.get_model("projects", "ProjectBinding").objects.with_actor(actor).scoped()
-        return Q(models.Exists(milestones.filter(pk=models.OuterRef("current_milestone_id")))) & Q(
-            models.Exists(
-                bindings.filter(
-                    project_id=models.OuterRef("pk"),
-                    content_type__app_label="knowledge",
-                    content_type__model="vault",
-                )
-            ),
-        )
+        return Q(models.Exists(milestones.filter(pk=models.OuterRef("current_milestone_id"))))
 
     @classmethod
     def setup_state_expression(cls, actor: Any) -> models.expressions.BaseExpression:
@@ -2122,14 +2100,6 @@ class IntegrationProjects(ProjectBindingsMixin, Composable, extends="integrate.I
 
 class ThreadProjects(ProjectBindingsMixin, Composable, extends="messaging.Thread"):
     """Projects-owned reverse collection for messaging-thread bindings."""
-
-
-    class Meta:
-        abstract = True
-
-
-class VaultProjects(ProjectBindingsMixin, Composable, extends="knowledge.Vault"):
-    """Projects-owned reverse collection for knowledge-vault bindings."""
 
 
     class Meta:

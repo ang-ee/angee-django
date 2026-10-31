@@ -61,6 +61,16 @@ class FeedFollowManager[FollowT: FeedFollow](_FeedFollowManagerBase[FollowT]):
 class PostMetricsManager[MetricsT: PostMetrics](AngeeManager[MetricsT]):
     """Owns the one-to-one engagement-counter upsert for a message."""
 
+    def reply_counts(self, *, channel: Any, platform: str, external_ids: list[str]) -> dict[str, int]:
+        """Snapshot known reply counts once for selected source-message identities.
+
+        Missing metrics stay absent so providers can distinguish an unseen post
+        from a measured zero without decoding the metrics owner's relation path.
+        """
+        return dict(self.filter(
+            message__channel_id=channel.pk, message__platform=platform, message__external_id__in=external_ids,
+        ).values_list("message__external_id", "reply_count"))
+
     def upsert(self, *, message: Any, metrics: Any, created_by_id: Any = None) -> MetricsT:
         """Write the rolled-up engagement counters for ``message`` (idempotent).
 

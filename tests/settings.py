@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     "angee.uom",
     "angee.messaging",
     "angee.projects",
+    "angee.projects_knowledge",
     "angee.portfolio",
     "angee.proposals",
     "angee.messaging_integrate_slack",

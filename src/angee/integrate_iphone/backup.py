@@ -73,11 +73,30 @@ class IosBackup:
         """Return the backup-relative ``<fileID[:2]>/<fileID>`` blob location."""
 
         file_id = self.blob_id(domain, relative_path)
+        try:
+            return self._blob_location(file_id)
+        except BackupError as error:
+            raise BackupError(f"Manifest file id for {domain}/{relative_path} is not a SHA1 digest.") from error
+
+    @staticmethod
+    def _blob_location(file_id: str) -> PurePosixPath:
+        """Validate one manifest file identity and project its physical shard."""
+
         if len(file_id) != 40 or any(character not in string.hexdigits for character in file_id):
-            raise BackupError(
-                f"Manifest file id for {domain}/{relative_path} is not a SHA1 digest."
-            )
+            raise BackupError("Manifest file id is not a SHA1 digest.")
         return PurePosixPath(file_id[:2], file_id)
+
+    def has_sqlite_file(self, domain: str, relative_path: str) -> bool:
+        """Probe only SQLite's fixed header; missing or unreadable blobs are absent."""
+
+        blob = self.blob_path(domain, relative_path)
+        if blob is None:
+            return False
+        try:
+            with blob.open("rb") as stream:
+                return is_sqlite_header(stream.read(SQLITE_HEADER_LENGTH))
+        except OSError:
+            return False
 
     def blob_id(self, domain: str, relative_path: str) -> str:
         """Return one file's manifest id or its deterministic fallback id."""
@@ -113,9 +132,11 @@ class IosBackup:
             )
         for raw_file_id, raw_domain, raw_relative_path in cursor:
             file_id = str(raw_file_id)
-            if len(file_id) != 40 or any(character not in string.hexdigits for character in file_id):
+            try:
+                relative_blob = self._blob_location(file_id)
+            except BackupError:
                 continue
-            blob = self.path / file_id[:2] / file_id
+            blob = self.path / relative_blob
             if not blob.is_file():
                 continue
             yield ManifestFile(

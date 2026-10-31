@@ -47,7 +47,7 @@ def pairing_graphql(
     }
     sent: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "angee.integrate.impl.enqueue_task",
+        "angee.integrate.backends.base.enqueue_task",
         lambda name, *, kwargs, queue=None, expires=None, **_: sent.append(
             {"name": name, "kwargs": kwargs, "queue": queue, "expires": expires}
         ),
@@ -102,8 +102,8 @@ def test_channel_pairing_bounds_arbitrary_backend_value_error(
     channel = _live_channel("msg-pairing-error")
     secret = "provider-secret-value"
     monkeypatch.setattr(
-        messaging_schema.connect,
-        "channel_pairing",
+        type(channel),
+        "pairing",
         lambda _channel: (_ for _ in ()).throw(ValueError(secret)),
     )
 

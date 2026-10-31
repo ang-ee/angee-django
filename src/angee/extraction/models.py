@@ -433,6 +433,12 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
             for row in self.sources.order_by("position")
         )
 
+    def require_request_digest(self, digest: str) -> None:
+        """Refuse reuse of a request identity for different retained evidence."""
+
+        if self.outcome.get("request_digest") != digest:
+            raise ValidationError("This request key already owns different evidence.")
+
     def require_target(self, target: Any) -> None:
         """Reject reinterpretation of retained evidence against another target."""
         if self.target != target:

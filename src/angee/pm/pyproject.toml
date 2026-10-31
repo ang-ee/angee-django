@@ -5,7 +5,7 @@ name = "angee-pm"
 version = "3.0.0"
 description = "Project-management suite: projects, teams, intake, proposals and portfolio arranged as one rail app"
 keywords = ["pm", "projects", "work", "suite"]
-dependencies = ["angee-intake>=3,<4", "angee-portfolio>=3,<4", "angee-projects>=3,<4", "angee-proposals>=3,<4", "angee-proposals-work>=3,<4", "angee-work>=3,<4", "angee-web>=3,<4"]
+dependencies = ["angee-intake>=3,<4", "angee-portfolio>=3,<4", "angee-projects>=3,<4", "angee-projects-knowledge>=3,<4", "angee-proposals>=3,<4", "angee-proposals-work>=3,<4", "angee-work>=3,<4", "angee-web>=3,<4"]
 dynamic = ["entry-points"]
 
 [tool.angee]

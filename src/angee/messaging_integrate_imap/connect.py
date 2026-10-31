@@ -79,13 +79,8 @@ def update_imap_channel_credential(channel: Any, *, username: str, password: str
     update — connect it again instead.
     """
 
-    credential = channel.credential
-    if credential is None:
-        raise ImapConnectError("This channel has no credential; connect it again.")
-    if credential.kind != CredentialKind.BASIC_AUTH:
-        raise ImapConnectError("Only a username/password IMAP login can be re-entered here.")
     try:
-        credential.replace_material({"username": str(username).strip(), "password": str(password)})
+        channel.update_imap_credential(username=username, password=password)
     except ValueError as error:
         raise ImapConnectError(str(error)) from error
 

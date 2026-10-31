@@ -24,6 +24,7 @@ from datetime import datetime, timedelta
 from typing import Any, ClassVar
 
 from django.apps import apps
+from django.core.exceptions import ValidationError
 
 from angee.integrate.errors import IntegrationError
 from angee.integrate.http import HttpClientMixin
@@ -37,6 +38,10 @@ from angee.provenance.statements import (
 INLINE_MEDIA_PREFIXES = ("image/", "video/", "audio/")
 
 logger = logging.getLogger(__name__)
+
+
+class PairingActionError(ValueError):
+    """A safe, actionable live-channel pairing precondition failure."""
 
 
 class DeliveryUncertain(IntegrationError):
@@ -239,6 +244,15 @@ class ChannelBackend(BridgeImpl, HttpClientMixin):
     identified integration declares ``SourceKind.IMPORT``. A transport that only lands
     messages keeps ``None``: its channel asserts nothing and is refused as a source.
     """
+
+    @classmethod
+    def outbound_email_configured(cls) -> bool:
+        """Whether this declared backend currently offers outbound email."""
+        return False
+
+    def outbound_sender(self) -> tuple[str, str]:
+        """Return a validated default sender when this backend supports email."""
+        raise ValidationError("Select a connected email channel.")
 
     @classmethod
     def reconciles_delivery(cls) -> bool:

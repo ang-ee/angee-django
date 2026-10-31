@@ -98,7 +98,7 @@ def test_start_races_with_in_process_deprovision(session: AgentSession, winner: 
 
     def deprovision() -> Any:
         with actor_context(user):
-            return provisioning.deprovision_agent(agent.sqid)
+            return provisioning.deprovision_agent(agent)
 
     def start() -> Any:
         return AgentSession.objects.start(agent, user=user, context={}, actor=user)

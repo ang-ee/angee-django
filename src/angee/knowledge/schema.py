@@ -269,16 +269,7 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
         materializing it inside an actor-scoped resolver would fail.
         """
 
-        rows = (
-            Link._default_manager.filter(
-                target_page_id=cast(Any, self).pk,
-                is_resolved=True,
-                source_page__is_trashed=False,
-            )
-            .scoped()
-            .annotate(source_title=F("source_page__title"))
-            .order_by("source_title", "sqid")
-        )
+        rows = Link.objects.backlinks_to(cast(Any, self))
         return [
             BacklinkType(
                 page=require_public_id(Page, row.source_page_id),

@@ -94,8 +94,9 @@ export interface OperatorConnection {
   token: string;
   restartJob: string | null;
 }
+const INITIAL_OPERATOR_STATE: OperatorConnectionState = { kind: "loading" };
 const OperatorConnectionContext = createContext<OperatorConnection | null>(null);
-const OperatorConnectionStateContext = createContext<OperatorConnectionState>({ kind: "loading" });
+const OperatorConnectionStateContext = createContext<OperatorConnectionState | null>(null);
 
 export interface OperatorTransportProviderProps {
   children: ReactNode;
@@ -104,6 +105,11 @@ export interface OperatorTransportProviderProps {
 export function OperatorTransportProvider({
   children,
 }: OperatorTransportProviderProps): ReactNode {
+  const parent = useContext(OperatorConnectionStateContext);
+  return parent ? children : <OperatorTransportOwner>{children}</OperatorTransportOwner>;
+}
+
+function OperatorTransportOwner({ children }: OperatorTransportProviderProps): ReactNode {
   const t = useOperatorT();
   const queryClient = useQueryClient();
   const connectionQuery = useAuthoredQuery(OperatorConnectionQuery, undefined, {
@@ -184,7 +190,7 @@ export function OperatorTransportProvider({
 }
 
 export function useOperatorConnectionState(): OperatorConnectionState {
-  return useContext(OperatorConnectionStateContext);
+  return useContext(OperatorConnectionStateContext) ?? INITIAL_OPERATOR_STATE;
 }
 
 /** The daemon connection (endpoint + bearer) for non-GraphQL transports (log sockets). */

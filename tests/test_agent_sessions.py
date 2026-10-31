@@ -529,7 +529,7 @@ def test_start_requires_an_available_in_process_runtime(
 def test_deprovision_closes_sessions(session: AgentSession) -> None:
     turn = session.post("Open during deprovision")
     session.claim_turn()
-    result = provisioning.deprovision_agent(session.agent.sqid)
+    result = provisioning.deprovision_agent(session.agent)
     session.refresh_from_db()
     turn.refresh_from_db()
     session.agent.refresh_from_db()
@@ -542,7 +542,7 @@ def test_start_refuses_an_agent_fetched_before_deprovisioning(session: AgentSess
     """A stale ready instance cannot open a session after teardown closed them."""
 
     stale_agent = Agent.objects.get(pk=session.agent_id)
-    result = provisioning.deprovision_agent(stale_agent.sqid)
+    result = provisioning.deprovision_agent(stale_agent)
     assert result.ok
     assert stale_agent.can_chat
 
@@ -771,13 +771,30 @@ def test_start_cannot_assign_another_session_user(session: AgentSession) -> None
         AgentSession.objects.start(session.agent, user=stranger, context={}, actor=session.user)
 
 
+def test_selected_queryset_close_keeps_other_sessions_open(session: AgentSession) -> None:
+    selected_turn = session.post("Close this conversation")
+    other = AgentSession.objects.start(session.agent, user=session.user, context={})
+    other_turn = other.post("Keep this conversation")
+
+    AgentSession.objects.filter(pk=session.pk).close_as_system(reason="test.selected_session_close")
+
+    session.refresh_from_db()
+    selected_turn.refresh_from_db()
+    other.refresh_from_db()
+    other_turn.refresh_from_db()
+    assert session.status == SessionStatus.CLOSED
+    assert selected_turn.status == TurnStatus.CANCELED
+    assert other.status == SessionStatus.IDLE
+    assert other_turn.status == TurnStatus.PENDING
+
+
 def test_deprovision_closes_sessions_of_another_person(session: AgentSession) -> None:
     session.post("A historical session of another person")
     other = get_user_model().objects.create_user(username="historical-session-user")
     with system_context(reason="test historical session user"):
         AgentSession.objects.filter(pk=session.pk).update(user=other)
 
-    result = provisioning.deprovision_agent(session.agent.sqid)
+    result = provisioning.deprovision_agent(session.agent)
 
     assert result.ok
     with system_context(reason="test deprovisioned session"):

@@ -56,3 +56,9 @@ owns native parser dependencies. Decision-backed corrections require the expecte
 caller-owned `CorrectionBinding` with exact authority and parent revisions; [`ExtractionManager`](managers.py) owns revision and reviewed
 authority validation. [`schema.py`](schema.py) exposes read-only evidence through
 the framework resource owner and actor-scoped relations.
+
+Carrier creation and verified reads precede lineage allocation. The short
+retention transaction rechecks carrier row identity, digest and READY state
+before retaining references. Failed or racing allocations dispose only newly
+created, still-unretained acquisitions through storage's locked removal owner;
+deduplicated and protected carriers survive.
