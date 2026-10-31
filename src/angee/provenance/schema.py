@@ -290,8 +290,11 @@ def _attribution(changeset: Any, actor: SubjectRef | None, source_kind: str | No
 def _actor_projections(changesets: Iterable[Any]) -> dict[str, tuple[SubjectRef, str | None]]:
     """Resolve each page actor's stored source kind once."""
 
-    actors = {row.actor_ref: SubjectRef.parse(row.actor_ref) for row in changesets if row.actor_ref}
-    return {value: (actor, StatementSourceMixin.source_kind_for(actor)) for value, actor in actors.items()}
+    actors = {row.actor_ref: (SubjectRef.parse(row.actor_ref), row._state.db) for row in changesets if row.actor_ref}
+    return {
+        value: (actor, StatementSourceMixin.source_kind_for(actor, using=using))
+        for value, (actor, using) in actors.items()
+    }
 
 
 def _reference_value(model_field: models.Field[Any, Any], value: Any) -> Any:
@@ -344,7 +347,11 @@ class RecordHistory:
     def changesets(self) -> models.QuerySet[Any]:
         """The record's changesets, newest first; ordering is the changeset owner's."""
 
-        return Changeset.objects.sudo(reason="provenance.record_history").touching(self.record)
+        return (
+            Changeset.objects.db_manager(self.record._state.db, hints={"instance": self.record})
+            .sudo(reason="provenance.record_history")
+            .touching(self.record)
+        )
 
     def entries(self, changesets: Iterable[Any]) -> list[HistoryEntryType]:
         """Project an already bounded window, also used by the combined Comments feed."""

@@ -25,7 +25,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 | `src/angee/provenance/contrib/angee/history.py` | `HistoryMixin` (:346), `ModelHistory` (:97), `HistoryDocumentMixin` (:50), `record_history` (:86) | docstrings |
 | `src/angee/provenance/contrib/angee/managers.py`, `querysets.py` | `AngeeHistoryManager` (:20), `AngeeHistoryUnscopedManager` (:24), `AngeeHistoryMergeableUnscopedManager` (:33); `AngeeHistoryQuerySet` (:16) | docstrings |
 | `src/angee/provenance/history.py`, `querysets.py`, `context.py` | native capture without Angee policy: `ModelHistory` (:132), `HistoryMixin` (:438); `changeset()` (:334), `current_changeset` (:224), `ChangesetRequired` (:28) | [README](../../README.md) |
-| `src/angee/provenance/models.py`, `managers.py` | `Changeset` (:102) with `ambient_attribution` (:188), `revert` (:370), `document` (:349); `Rule` (:78), `Seed` (:90); `ChangesetQuerySet.touching` (:30), `ChangesetManager.claim` (:134) | docstrings |
+| `src/angee/provenance/models/`, `managers.py`, `changeset_querysets.py` | protected native Changeset storage/attribution/export, rule and seed principals, native claim adaptations and document/merge query contributions | owner docstrings; generic engines live in `django_provenance` |
 | `src/angee/provenance/statements.py` | `StatementRecords` (:1424), `Aspect` (:730), `PairAspect` (:1624), `StatementsMixin` (:798), `StatementSourceMixin` (:678), `StatementLinkMixin` (:710), `SourceKind` (:664) | module docstring |
 | `src/angee/provenance/tasks.py`, `middleware.py`, `contrib/angee/context.py` | the entrypoint boundaries: `Task` (:12), `ChangesetMiddleware`, `management_context` (:25), `merge_context` (:34) | [README: Boundaries](../../README.md#boundaries) |
 | `src/angee/provenance/evidence.py`, `src/angee/base/models/derived.py` | `EvidenceReference` (:38), `EvidenceFact` (:28), `FactAuthority` (:20), `readable_records` (:127); `DerivedFrom` (:13) | docstrings |
@@ -77,7 +77,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
    [project migration history](../../../../../docs/composer.md#project-migration-history).
 
 4. **Write under the entrypoint's boundary; attribute, and open only a distinct logical write.** Attribution is ambient: the
-   changeset projects REBAC's current actor and sudo reason (`Changeset.ambient_attribution`, `models.py:188`), so domain code
+   changeset projects REBAC's current actor and sudo reason (`Changeset.ambient_attribution`, `models/changesets.py`), so domain code
    sets the actor with `actor_context`/`system_context(reason="<label>.<verb>")` and writes. A deliberately separate logical
    write (merge, revert, seed, an MCP tool call, a bridge session or stream pull) opens its own, nested inside the entrypoint's:
 
@@ -86,7 +86,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
        ...
    ```
 
-   Machine reasons use the `a.b` form so presentation stays silent (`MACHINE_REASON`, `models.py:61,215`); a human
+   Machine reasons use the `a.b` form so presentation stays silent (`MACHINE_REASON`, `models/changesets.py`); a human
    sentence passes through. Keyed creation claims first: `Changeset.objects.claim(scope, key, fingerprint=...)`.
    **Owner rule:** entrypoints own boundaries, one per unit of work; strict mode refuses a captured write without one
    ([Persistence primitives](../../../../../docs/backend/guidelines.md#persistence-primitives), "Every captured write…").
@@ -171,7 +171,7 @@ statement tables.
 - Only on integrated `src`: build, migration autodetection, permission sync, the native host proof
   (`tests/test_provenance_native.py`), the console history drill-in — [composition and schema](../../../../../docs/checks.md#composition-and-schema).
 - Loop: [slice](../../../../../.agents/skills/slice/SKILL.md#workflow). False greens: with `REBAC_STRICT_MODE` off a missing
-  boundary is never refused (`Changeset.context_required`, `models.py:195`); the generic base test plugin installs no
+  boundary is never refused (`Changeset.context_required`, `models/changesets.py`); the generic base test plugin installs no
   boundary, only the provenance fixtures do ([source-addon test models](../../../../../docs/checks.md#source-addon-test-models)).
 
 ## Pitfalls

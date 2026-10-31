@@ -34,3 +34,24 @@ def check_changeset_middleware(
             id="angee.E038",
         )
     ]
+
+
+def check_changeset_storage(
+    app_configs: Sequence[AppConfig] | None = None,
+    **kwargs: object,
+) -> list[checks.CheckMessage]:
+    """Keep the historical swappable identity aligned with native runtime storage."""
+
+    del app_configs, kwargs
+    runtime = getattr(settings, "PROVENANCE_CHANGESET_MODEL", None)
+    historical = getattr(settings, "ANGEE_CHANGESET_MODEL", None)
+    if runtime is not None and historical is not None and runtime != historical:
+        return [
+            checks.Error(
+                "PROVENANCE_CHANGESET_MODEL and the historical ANGEE_CHANGESET_MODEL alias disagree.",
+                hint=("Select runtime storage through PROVENANCE_CHANGESET_MODEL "
+                      "and set the migration alias to that value."),
+                id="provenance.E005",
+            )
+        ]
+    return []

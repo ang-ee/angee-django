@@ -262,7 +262,7 @@ def test_native_plugin_rejects_invalid_fields_relations_and_manager_methods(tmp_
         assert f"invalid.py:{line}: error:" in negative.stdout, negative.stdout
 
     (tmp_path / "disabled_storage_settings.py").write_text(
-        "from tests.typing_app.settings import *\nANGEE_CHANGESET_MODEL = ''\n"
+        "from tests.typing_app.settings import *\nPROVENANCE_CHANGESET_MODEL = ''\n"
     )
     disabled_config = tmp_path / "disabled.ini"
     disabled_config.write_text(config.read_text().replace("tests.typing_app.settings", "disabled_storage_settings"))

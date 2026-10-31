@@ -55,9 +55,9 @@ class ProvenancePlugin(Plugin):
         if isinstance(receiver, TypeVarType):
             receiver = get_proper_type(erase_to_bound(receiver))
         if isinstance(receiver, UnionType):
-            return make_simplified_union([
-                self.history_manager(ctx._replace(type=get_proper_type(item)), name=name) for item in receiver.items
-            ])
+            return make_simplified_union(
+                [self.history_manager(ctx._replace(type=get_proper_type(item)), name=name) for item in receiver.items]
+            )
         if not isinstance(receiver, Instance):
             return ctx.default_attr_type
         module = sys.modules.get(receiver.type.module_name)
@@ -139,7 +139,10 @@ class ProvenancePlugin(Plugin):
     def get_additional_deps(self, file: MypyFile) -> list[tuple[int, str, int]]:
         # Like django-stubs' get_user_model, the helper's module depends on the
         # configured model module, including generated concrete declarations.
-        if file.fullname != "angee.provenance.context" or (model := self.configured_model()) is None:
+        if (
+            file.fullname not in {"angee.provenance.context", "django_provenance.context"}
+            or (model := self.configured_model()) is None
+        ):
             return []
         return [(PRI_MYPY, model.__module__, -1)]
 
@@ -148,6 +151,9 @@ class ProvenancePlugin(Plugin):
             "angee.provenance.context.changeset_model",
             "angee.provenance.context.current_changeset",
             "angee.provenance.context.require_changeset",
+            "django_provenance.context.changeset_model",
+            "django_provenance.context.current_changeset",
+            "django_provenance.context.require_changeset",
         }:
             return partial(self.configured_changeset, fullname=fullname)
         return None
@@ -160,9 +166,9 @@ class ProvenancePlugin(Plugin):
         if symbol is None or not isinstance(symbol.node, TypeInfo):
             return ctx.default_return_type
         instance = Instance(symbol.node, [])
-        if fullname == "angee.provenance.context.changeset_model":
+        if fullname.rsplit(".", 1)[-1] == "changeset_model":
             return TypeType(instance)
-        if fullname == "angee.provenance.context.current_changeset":
+        if fullname.rsplit(".", 1)[-1] == "current_changeset":
             return make_simplified_union([instance, NoneType()])
         return instance
 
