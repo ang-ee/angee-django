@@ -1,4 +1,4 @@
-"""Tests for the jobs app's task lock abstraction."""
+"""Tests for the foundation advisory-lock owner."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ import pytest
 from django.db import connection
 from psycopg import sql
 
-from angee.jobs import locks
-from angee.jobs.locks import LocalLockBackend, LockKey, _advisory_pair, record_lock_key, task_lock, task_lock_is_held
+from angee.base import locks
+from angee.base.locks import LocalLockBackend, LockKey, _advisory_pair, record_lock_key, task_lock, task_lock_is_held
 from tests.task_lock_process import hold_postgres_advisory_lock
 
 

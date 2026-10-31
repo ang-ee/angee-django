@@ -316,6 +316,30 @@ class UserQuerySet[UserT: User](AngeeQuerySet[UserT]):
         assigned = user_grants.filter(subject_id=OuterRef("_iam_subject_id"))
         return cast(Self, users.annotate(_iam_has_role=Exists(assigned)).filter(_iam_has_role=False))
 
+    def directory(self, actor: Any) -> Self:
+        """Return the accounts ``actor`` lists in the people directory, scoped by ``auth/user#list``.
+
+        People managers list every account; anyone else lists nobody.
+        """
+
+        return cast(Self, self.with_actor(actor).with_action("list"))
+
+    def colleagues(self, actor: Any) -> Self:
+        """Return the accounts ``actor`` is offered in pickers, scoped by ``auth/user#colleague``.
+
+        People managers are offered every account; anyone else their own and
+        the arms identity owners contribute, such as the active people whose
+        identity they read through records.
+        """
+
+        return cast(Self, self.with_actor(actor).with_action("colleague"))
+
+    def view_as_queryset(self, actor: Any) -> Self:
+        """The single admission scope used by the picker and header lookup."""
+
+        subject = to_subject_ref(actor)
+        return self.with_actor(subject).with_action("view_as").preview_candidates(subject)
+
 
 _UserManagerBase = AngeeManager.from_queryset(UserQuerySet)
 
@@ -594,24 +618,6 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
             user.unsudo()
         return user
 
-    def directory(self, actor: Any) -> UserQuerySet[UserT]:
-        """Return the accounts ``actor`` lists in the people directory, scoped by ``auth/user#list``.
-
-        People managers list every account; anyone else lists nobody.
-        """
-
-        return cast(UserQuerySet[UserT], self.with_actor(actor).with_action("list"))
-
-    def colleagues(self, actor: Any) -> UserQuerySet[UserT]:
-        """Return the accounts ``actor`` is offered in pickers, scoped by ``auth/user#colleague``.
-
-        People managers are offered every account; anyone else their own and
-        the arms identity owners contribute, such as the active people whose
-        identity they read through records.
-        """
-
-        return cast(UserQuerySet[UserT], self.with_actor(actor).with_action("colleague"))
-
     def visible_people(
         self,
         actor: Any,
@@ -639,12 +645,6 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
 
         bounded = bounded_limit(limit, maximum=VIEWABLE_PEOPLE_MAX_LIMIT)
         return [copy(person) for person in self.view_as_queryset(actor).search_users(search).ordered_users()[:bounded]]
-
-    def view_as_queryset(self, actor: Any) -> UserQuerySet[UserT]:
-        """The single admission scope used by the picker and header lookup."""
-
-        subject = to_subject_ref(actor)
-        return self.with_actor(subject).with_action("view_as").preview_candidates(subject)
 
     def admit_view_as(self, actor: Any, public_id: str) -> UserT | None:
         """Admit a preview identity for both the picker and GraphQL header.

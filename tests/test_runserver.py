@@ -12,6 +12,7 @@ import pytest
 from django.apps import AppConfig, apps
 from django.core.management import get_commands
 from django.core.management.commands.runserver import Command as DjangoRunserver
+from django.db import connections
 
 from angee.server.management.commands.runserver import Command
 
@@ -162,3 +163,53 @@ print(json.dumps({"lifecycle": lifecycle, "reload_code": 3}))
     assert json.loads(result.stdout.strip().splitlines()[-1]) == {
         "lifecycle": ["startup", "shutdown"], "reload_code": 3,
     }
+
+
+@pytest.mark.parametrize("failed_check", [None, "system", "migration"])
+def test_preflight_releases_database_connections_before_serving_or_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, django_db_blocker: Any, failed_check: str | None,
+) -> None:
+    """A connection opened by startup checks never leaks into the server lifetime."""
+
+    alias = "server_preflight_probe"
+    connections.databases[alias] = {
+        **connections.databases["default"],
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": str(tmp_path / "preflight.sqlite3"),
+        "OPTIONS": {},
+        "CONN_MAX_AGE": 0,
+    }
+    database = connections[alias]
+    command = Command()
+    command.addr, command.port = "127.0.0.1", "8123"
+    served = []
+
+    def check(kind: str) -> None:
+        database.ensure_connection()
+        if kind == failed_check:
+            raise ValueError("preflight failed")
+
+    class Server:
+        def __init__(self, config: Any) -> None:
+            assert database.connection is None
+
+        def run(self) -> None:
+            served.append(True)
+
+    monkeypatch.setattr(command, "check", lambda **kwargs: check("system"))
+    monkeypatch.setattr(command, "check_migrations", lambda: check("migration"))
+    monkeypatch.setattr("angee.server.management.commands.runserver.import_string", lambda path: object())
+    monkeypatch.setattr("uvicorn.Server", Server)
+    try:
+        with django_db_blocker.unblock():
+            if failed_check:
+                with pytest.raises(ValueError, match="preflight failed"):
+                    command.inner_run()
+            else:
+                command.inner_run()
+            assert database.connection is None
+            assert served == ([] if failed_check else [True])
+    finally:
+        database.close()
+        del connections[alias]
+        connections.databases.pop(alias)

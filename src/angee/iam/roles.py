@@ -34,6 +34,8 @@ from rebac.models import active_relationship_model
 from rebac.models.relationship import RelationshipQuerySet, RelationshipRegistryQuerySet
 from rebac.resources import model_for_resource_type, model_resource_type
 from rebac.roles import ROLE_INCLUDES_RELATION, ROLE_RELATION
+from rebac.roles import ROLE_TYPE_SUFFIX as ROLE_SUFFIX
+from rebac.roles import is_role_type as is_role_type
 from rebac.schema import (
     Definition,
     Schema,
@@ -52,7 +54,6 @@ IAM_OVERVIEW_DEFAULT_PEEK_LIMIT = 6
 IAM_OVERVIEW_MAX_PEEK_LIMIT = 100
 PERMISSION_HUB_LIST_CAP = 1000
 PRIVILEGED_PERMISSION_NAMES = frozenset({"admin", "create", "write", "delete"})
-ROLE_SUFFIX = "/role"
 PROTECTED_ACCOUNTS = ObjectRef("iam/protected", "main")
 """IAM's Zed set of elevated accounts; consumers union their elevated roles into its ``member``."""
 
@@ -380,12 +381,6 @@ def role_namespace(resource_type: str) -> str:
     """Return the namespace portion of a role resource type."""
 
     return resource_type.removesuffix(ROLE_SUFFIX)
-
-
-def is_role_type(resource_type: str) -> bool:
-    """Return whether ``resource_type`` names a role resource."""
-
-    return resource_type.endswith(ROLE_SUFFIX)
 
 
 def role_label(role_id: str) -> str:
