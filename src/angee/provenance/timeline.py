@@ -27,7 +27,8 @@ class ChangeKind(TimelineKind):
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
         model = apps.get_model("provenance", "Changeset")
         return (
-            model.objects.sudo(reason="provenance.record_history")
+            model.objects.db_manager(record._state.db, hints={"instance": record})
+            .sudo(reason="provenance.record_history")
             .touching(record)
             .filter(
                 state=model.State.CLOSED,

@@ -6,20 +6,25 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from os import PathLike
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from django.apps import AppConfig, apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
-from rebac import SubjectRef, check_new, current_actor, proposed_forward_relationships, to_subject_ref
+from rebac import SubjectRef, check_new, current_actor, proposed_forward_relationships, to_object_ref, to_subject_ref
 from rebac import user_subject_type as _user_subject_type
+from rebac.actors import is_sudo
 from rebac.backends import backend
+from rebac.errors import PermissionDenied
 from rebac.managers import RebacQuerySet
 from rebac.resources import model_resource_type
 from rebac.schema import Definition, Schema, resolve_schema_path
 from rebac.schema.introspection import relation_dependencies
 from rebac.schema.parser import parse_zed
+
+if TYPE_CHECKING:
+    from rebac import RebacMixin
 
 
 def declared_grants(model: type[models.Model]) -> dict[str, str]:
@@ -151,6 +156,25 @@ def instance_actor(instance: models.Model) -> SubjectRef | None:
 
     actor = instance.actor() if isinstance(instance, RebacMixin) else None
     return actor if actor is not None else current_actor()
+
+
+def require_record_access(instance: RebacMixin, permission: str, actor: Any = None) -> Any:
+    """Authorize and return the explicit, pinned, or ambient actor, in that order.
+
+    Retain the requester as the instance binding. Missing actors are refused even
+    outside strict mode unless an explicit sudo scope applies. A concrete
+    requester always clears instance sudo and scopes the permission check.
+    """
+    actor = actor or instance_actor(instance)
+    if actor is None:
+        if instance.is_sudo() or is_sudo():
+            return None
+        raise PermissionDenied(f"Denied: {permission!r} requires an actor.")
+    instance.with_actor(actor)
+    if not instance.has_access(permission):
+        target = instance._meta.label if instance._state.adding else to_object_ref(instance)
+        raise PermissionDenied(f"Denied: the current actor lacks {permission!r} on {target}.")
+    return actor
 
 
 def actor_user_id(actor: Any) -> Any | None:

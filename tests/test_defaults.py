@@ -18,7 +18,10 @@ def test_base_defaults_do_not_install_http_or_execution_policy(tmp_path: Path, m
     assert namespace["COMPOSE_ROOTS"] == ("angee.base",)
     assert namespace["USE_TZ"] is True
     assert namespace["DEFAULT_AUTO_FIELD"] == "django.db.models.BigAutoField"
-    for name in ("ROOT_URLCONF", "ASGI_APPLICATION", "CELERY_TASK_SOFT_TIME_LIMIT", "ANGEE_CHANGESET_MODEL"):
+    for name in (
+        "ROOT_URLCONF", "ASGI_APPLICATION", "CELERY_TASK_SOFT_TIME_LIMIT",
+        "ANGEE_CHANGESET_MODEL", "PROVENANCE_CHANGESET_MODEL", "PROVENANCE_POLICY",
+    ):
         assert name not in namespace
 
 
@@ -75,5 +78,8 @@ def test_plain_native_composer_preserves_host_choices_without_capability_default
     compose_configure(namespace)
     assert namespace["ROOT_URLCONF"] == "project.urls"
     assert namespace["ASGI_APPLICATION"] == "project.asgi.application"
-    for name in ("MIDDLEWARE", "COMPOSE_INTEGRATIONS", "REBAC_BACKEND", "ANGEE_CHANGESET_MODEL"):
+    for name in (
+        "MIDDLEWARE", "COMPOSE_INTEGRATIONS", "REBAC_BACKEND",
+        "ANGEE_CHANGESET_MODEL", "PROVENANCE_CHANGESET_MODEL", "PROVENANCE_POLICY",
+    ):
         assert name not in namespace

@@ -83,6 +83,8 @@ def test_resources_root_expands_framework_dependencies(tmp_path: Path) -> None:
     assert "angee.provenance" not in installed
     assert "CELERY_TASK_SOFT_TIME_LIMIT" not in settings
     assert "ANGEE_CHANGESET_MODEL" not in settings
+    assert "PROVENANCE_CHANGESET_MODEL" not in settings
+    assert "PROVENANCE_POLICY" not in settings
 
 
 

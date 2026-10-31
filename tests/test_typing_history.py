@@ -22,7 +22,7 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
         f"COMPOSE_OUTPUT_DIR = Path({str(runtime)!r})\n"
         "COMPOSE_OUTPUT_MODULE = 'runtime'\n"
-        "ANGEE_CHANGESET_MODEL = 'typing_history.Changeset'\n"
+        "PROVENANCE_CHANGESET_MODEL = 'typing_history.Changeset'\n"
         "configure(globals())\n"
     )
     env = dict(os.environ)

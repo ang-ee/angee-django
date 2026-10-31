@@ -1057,7 +1057,7 @@ other existing rows keep their normal update order. A record task uses its own
 `RecordRefMixin` subject and declared `projects/task` permission arms; chatter is
 an independent capability.
 
-The [Changeset](../../src/angee/provenance/models.py) owns atomic pre-boundary
+The [Changeset](../../src/angee/provenance/models/changesets.py) owns atomic pre-boundary
 revert and deterministic lossless export. Closing a boundary writes one bookkeeping
 row; `document()` computes and records the hash through the one hash owner.
 Closure publishes a change; committed projections read history independently

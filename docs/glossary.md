@@ -142,12 +142,12 @@ converts it to the FK's Python type and returns no user for other subject types.
 
 **Changeset** — attribution for one logical write, owned by
 [`changeset()`](../src/angee/provenance/context.py) and stored by the
-[provenance addon](../src/angee/provenance/models.py).
+[provenance addon](../src/angee/provenance/models/changesets.py).
 
 **Action / activity** — action uses FHIR AuditEvent's C/U/D verbs; activity
 classifies the logical work, including `pull`/`push` for sync, `import` for a
 one-shot import and `seed` for seed loads. The
-[`Changeset` enums](../src/angee/provenance/models.py) own that vocabulary.
+[`Changeset` enums](../src/angee/provenance/models/changesets.py) own that vocabulary.
 
 **Write group** — an internal ephemeral identity for nested ORM dispatch. Its
 deduplication ends with the dispatch; successive writes in one changeset remain

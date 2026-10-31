@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager, nullcontext
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from typing import Any
 
 from django.core.exceptions import ValidationError
 from django.db import models, router
 
-from angee.provenance.context import _ChangesetScope, changeset, changeset_model, current_changeset
+from angee.provenance.context import changeset, changeset_model, current_changeset
 
 SERVER_COMMANDS = frozenset({"celery", "runserver", "serve", "test"})
 """Commands whose units of work own their boundaries instead of the process.
@@ -24,15 +24,20 @@ logical write and keeps the command boundary.
 
 
 def management_context(
-    command: str, argv: Sequence[str], options: Mapping[str, Any],
-) -> _ChangesetScope | nullcontext[None]:
+    command: str,
+    argv: Sequence[str],
+    options: Mapping[str, Any],
+) -> AbstractContextManager[Callable[[], None]] | nullcontext[None]:
     """Attribute command writes while servers, workers and tests own their boundaries."""
 
     del argv
     if command in SERVER_COMMANDS:
         return nullcontext()
     return changeset(
-        fresh=True, activity="system", change_reason=f"manage.{command}", process=True,
+        fresh=True,
+        activity="system",
+        change_reason=f"manage.{command}",
+        process=True,
         using=options.get("database"),
     )
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
-from itertools import groupby
 from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 from django.apps import apps
@@ -66,7 +65,12 @@ class HistoryDocumentMixin(models.Model):
 
     @classmethod
     def history_related_scopes(
-        cls, predicate: Q, root_pk: Any, *, direct: bool, using: str | None,
+        cls,
+        predicate: Q,
+        root_pk: Any,
+        *,
+        direct: bool,
+        using: str | None,
     ) -> dict[type[models.Model], Q]:
         """Predicates on owned representations admitted with this document."""
 
@@ -131,18 +135,9 @@ class ModelHistory(CaptureHistory):
 
         history = model.history.using(using)
         key = model._meta.pk.attname
-        rows = history.filter(changeset_id=changeset.pk).order_by(key, "history_id")
         seen = set()
-        for pk, grouped in groupby(rows.iterator(), key=lambda row: getattr(row, key)):
-            seen.add(pk)
-            versions = list(grouped)
-            first, last = versions[0], versions[-1]
-            timeline = history.filter(**{key: pk})
-            if timeline.filter(history_id__gt=last.history_id).exists():
-                raise ValidationError(f"{model._meta.label} {pk}: a later write prevents revert.")
-            previous = timeline.filter(history_id__lt=first.history_id).order_by("-history_id").first()
-            if previous is None and first.history_type != "+":
-                raise ValidationError(f"{model._meta.label} {pk}: the pre-boundary state is unavailable.")
+        for first, last, previous in super().changeset_states(model, changeset, using=using):
+            seen.add(getattr(first, key))
             yield first, last, previous
         # An unchanged merge survivor has no new snapshot. Its touched owner and
         # origin still define a boundary, without an artificial stamp-only save.
@@ -258,6 +253,24 @@ class ModelHistory(CaptureHistory):
             # Retained evidence can outlive a relationship target or its schema.
             # Neither grants access when native preflight cannot resolve it.
             return False
+
+    def lock_revert_subject(self, target: models.Model, *, using: str) -> None:
+        if not isinstance(target, PersistenceMixin):
+            raise ImproperlyConfigured("Protected replay requires the native persistence owner.")
+        try:
+            target.lock_subject()
+        except ObjectDoesNotExist:
+            # Deleted rows synchronize through their retained versions instead.
+            pass
+
+    def revert_removal_collector(self, first: Any, last: Any, previous: Any) -> None:
+        """Angee retained snapshots survive removal; the row owner admits live references/grants.
+
+        Native replay still authorizes every current/proposed snapshot before writes.
+        The actual removal calls that row's protected revert_removal inside the same
+        transaction, so a live-reference refusal rolls back the whole replay.
+        """
+        return None
 
     def authorize_revert(self, first: Any, last: Any, previous: Any, actor: Any) -> None:
         """Admit both the current row and the snapshot's proposed relationships."""
@@ -456,11 +469,13 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
             if not issubclass(model, HistoryDocumentMixin):
                 continue
             for representation, scope in model.history_related_scopes(
-                predicate, self.pk, direct=model in tables, using=self._state.db,
+                predicate,
+                self.pk,
+                direct=model in tables,
+                using=self._state.db,
             ).items():
                 related[representation] = related[representation] | scope if representation in related else scope
         return {**scopes, **related}
-
 
     def admitted_reverts(self, changesets: Iterable[Any]) -> frozenset[Any]:
         """Return page changeset keys belonging wholly to this history document.
