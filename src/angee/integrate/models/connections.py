@@ -22,6 +22,7 @@ from angee.base.fields.encrypted import EncryptedField
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
+from angee.base.locks import record_lock_key, task_lock
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
 from angee.base.models.implementations import ImplDefaultsMixin
@@ -44,7 +45,6 @@ from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.discovery import discovery_document as oidc_metadata_document
 from angee.integrate.oauth.errors import CLIENT_NOT_CONFIGURED, OAuthFlowError
 from angee.integrate.oauth.providers import OAuthProviderType
-from angee.jobs.locks import record_lock_key, task_lock
 
 logger = logging.getLogger(__name__)
 

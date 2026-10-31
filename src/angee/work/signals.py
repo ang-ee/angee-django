@@ -35,14 +35,7 @@ def wake_snoozed_task(sender: Any, instance: Any, **kwargs: Any) -> None:
     """Clear snooze state when a new message lands on a task chatter thread."""
 
     del sender, kwargs
-    try:
-        task_model = apps.get_model("projects", "Task")
-    except LookupError:
-        # Source-model test/profile graphs can install the addon declarations
-        # without composing the concrete Task runtime model. The chatter seam
-        # is global, so those graphs must stay a no-op rather than failing every
-        # unrelated message ingest.
-        return
+    task_model = apps.get_model("projects", "Task")
     task_model.objects.db_manager(instance._state.db).sudo(reason="work.chatter.wake").wake_from_chatter_thread(
         instance.thread_id,
     )

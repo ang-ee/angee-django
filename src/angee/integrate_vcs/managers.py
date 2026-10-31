@@ -8,7 +8,7 @@ from typing import Any
 
 from django.db import transaction
 from django.utils import timezone
-from rebac import system_context
+from rebac import database_context, system_context
 
 from angee.base.managers import AngeeManager
 from angee.integrate_vcs import registry
@@ -29,8 +29,14 @@ class RepositoryManager(AngeeManager):
         descriptor_list = list(descriptors)
         descriptors_by_name = {str(descriptor.name): descriptor for descriptor in descriptor_list}
         now = timezone.now()
-        with system_context(reason="integrate.repository.reconcile"), transaction.atomic():
-            self.bulk_create(
+        using = self._db or vcs_bridge._state.db or self.db
+        rows = self.db_manager(using)
+        with (
+            database_context(using),
+            system_context(reason="integrate.repository.reconcile"),
+            transaction.atomic(using=using),
+        ):
+            rows.bulk_create(
                 [
                     self._row_from_descriptor(vcs_bridge, descriptor, now=now)
                     for descriptor in descriptors_by_name.values()
@@ -49,24 +55,24 @@ class RepositoryManager(AngeeManager):
                     "updated_at",
                 ],
             )
-            self.filter(vcs_bridge=vcs_bridge).exclude(name__in=descriptors_by_name).delete()
+            rows.filter(vcs_bridge=vcs_bridge).exclude(name__in=descriptors_by_name).delete()
         return len(descriptor_list)
 
     def add(self, vcs_bridge: Any, descriptor: Any) -> Any:
         """Inventory one repository (no prune) — the typeahead "add this repo" path."""
 
-        with system_context(reason="integrate.repository.add"), transaction.atomic():
-            return self._upsert(vcs_bridge, descriptor)
-
-    def _upsert(self, vcs_bridge: Any, descriptor: Any) -> Any:
-        """Create or update one repository row from a host descriptor."""
-
-        repository, _created = self.update_or_create(
-            vcs_bridge_id=vcs_bridge.pk,
-            name=descriptor.name,
-            defaults=self._descriptor_values(descriptor),
-        )
-        return repository
+        using = self._db or vcs_bridge._state.db or self.db
+        with (
+            database_context(using),
+            system_context(reason="integrate.repository.add"),
+            transaction.atomic(using=using),
+        ):
+            repository, _created = self.db_manager(using).update_or_create(
+                vcs_bridge_id=vcs_bridge.pk,
+                name=descriptor.name,
+                defaults=self._descriptor_values(descriptor),
+            )
+            return repository
 
     def _row_from_descriptor(self, vcs_bridge: Any, descriptor: Any, *, now: datetime) -> Any:
         """Return an unsaved repository row projected from one host descriptor."""
@@ -101,19 +107,27 @@ class TemplateManager(AngeeManager, registry.VcsOutputManager):
     def sync_from_source(self, source: Any) -> int:
         """Walk the source for ``copier.yml`` and upsert/prune ``Template`` rows."""
 
+        using = self._db or source._state.db or self.db
+        if source._state.db is not None and source._state.db != using:
+            raise ValueError("Template reconciliation and its source must use the same database.")
+        rows = self.db_manager(using)
         repository: Any = source.repository
         vcs_bridge = repository.vcs_bridge
         descriptors = vcs_bridge.discover(source, marker="copier.yml", parse=parse_template_meta)
         descriptors_by_path = {str(descriptor.get("path", "")): descriptor for descriptor in descriptors}
         now = timezone.now()
-        with system_context(reason="integrate.template.sync"), transaction.atomic():
-            self.bulk_create(
+        with (
+            database_context(using),
+            system_context(reason="integrate.template.sync"),
+            transaction.atomic(using=using),
+        ):
+            rows.bulk_create(
                 [self._row_from_descriptor(source, descriptor, now=now) for descriptor in descriptors_by_path.values()],
                 update_conflicts=True,
                 unique_fields=["source", "path"],
                 update_fields=["name", "kind", "inputs", "updated_at"],
             )
-            self.filter(source=source).exclude(path__in=descriptors_by_path).delete()
+            rows.filter(source=source).exclude(path__in=descriptors_by_path).delete()
             source.complete_sync(now=now)
         return len(descriptors)
 

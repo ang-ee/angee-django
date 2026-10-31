@@ -15,9 +15,8 @@ from strawberry.extensions import SchemaExtension
 from strawberry_django_hasura import WriteBackend
 
 from angee.base.permissions import require_rebac_queryset
-from angee.base.signals import bulk_updated, connect_for_models
+from angee.base.signals import bulk_updated, connect_for_models, publish_bulk_update
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
-from angee.graphql.publishing import publish_bulk_update
 from angee.provenance.context import (
     changeset,
     changeset_model,

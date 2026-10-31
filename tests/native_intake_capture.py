@@ -265,7 +265,7 @@ class IntakeAccessCase(TransactionTestCase):
     def need(self, *, email="new@example.com", party=None, name=""):
         # Like its production callers, the triage factory locks rank rows inside a transaction.
         with system_context(reason="test request setup"), transaction.atomic():
-            task = self.Need.objects._create_triage_task(queue=self.queue, title="Request", note="")
+            task = self.Task.objects.capture_triage(queue=self.queue, title="Request", note="")
             task.owner = self.owner
             task.assignee = self.writer
             task.save()

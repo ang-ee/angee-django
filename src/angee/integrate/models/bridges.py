@@ -20,6 +20,7 @@ from rebac.mixins import RebacModelBase
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
+from angee.base.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
 from angee.integrate.backends.base import BridgeImpl, ConnectionDiscovery, IntegrationImpl, LiveBridgeImpl
 from angee.integrate.choices import (
     IntegrationLifecycle,
@@ -37,7 +38,6 @@ from angee.integrate.states import (
 from angee.integrate.streams import sync_bridge
 from angee.integrate.sync import SyncDispatch, bridge_progress_context, bridge_sync_context
 from angee.jobs.enqueue import enqueue_task
-from angee.jobs.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
 
 if TYPE_CHECKING:
     from angee.integrate.models.connections import Credential

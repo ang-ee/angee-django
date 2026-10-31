@@ -8,7 +8,7 @@ from contextvars import ContextVar
 from enum import StrEnum
 from typing import Any
 
-from angee.graphql.publishing import publication_ingestion_context
+from angee.base.signals import publication_ingestion_context
 
 
 class SyncDispatch(StrEnum):
