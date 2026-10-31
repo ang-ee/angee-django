@@ -43,4 +43,6 @@ def wake_snoozed_task(sender: Any, instance: Any, **kwargs: Any) -> None:
         # is global, so those graphs must stay a no-op rather than failing every
         # unrelated message ingest.
         return
-    task_model.wake_from_chatter_thread(instance.thread_id)
+    task_model.objects.db_manager(instance._state.db).sudo(reason="work.chatter.wake").wake_from_chatter_thread(
+        instance.thread_id,
+    )

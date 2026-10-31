@@ -10,6 +10,8 @@ from django.core.exceptions import ValidationError
 from django.db.models import Field
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from angee.proposals.validators import normalize_topic_key
+
 
 class TopicTemplate(BaseModel):
     """One ordered topic in a round template."""
@@ -24,10 +26,7 @@ class TopicTemplate(BaseModel):
     def normalize_key(cls, value: str) -> str:
         """Use the topic owner's case-insensitive identity."""
 
-        value = value.strip().lower()
-        if not value:
-            raise ValueError("Topic key is required.")
-        return value
+        return normalize_topic_key(value)
 
 
 class RoundTemplate(BaseModel):

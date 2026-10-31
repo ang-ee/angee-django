@@ -6,9 +6,9 @@ from typing import Any, ClassVar
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django_compose.models import Composable
-from rebac import system_context, to_object_ref, to_subject_ref
+from rebac import database_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
 
 
@@ -47,7 +47,11 @@ class RoundQuestionsQueue(Composable, extends="proposals.Round"):
         if self.clarification_queue_id is not None:
             queue_model = apps.get_model("work", "Queue")
             with system_context(reason="proposals_work.round.queue_validation"):
-                queue = queue_model._base_manager.select_related("created_by").get(pk=self.clarification_queue_id)
+                queue = (
+                    queue_model._base_manager.using(self._state.db)
+                    .select_related("created_by")
+                    .get(pk=self.clarification_queue_id)
+                )
             if queue.is_personal:
                 raise ValidationError({"clarification_queue": "Choose a non-personal queue for round questions."})
 
@@ -64,7 +68,6 @@ class RoundQuestionsQueue(Composable, extends="proposals.Round"):
 class TaskTrackQueue(Composable, extends="projects.Task"):
     """Keep unpublished track work in a responder's or round manager's queue."""
 
-
     class Meta:
         abstract = True
 
@@ -76,29 +79,40 @@ class TaskTrackQueue(Composable, extends="projects.Task"):
         partial/deferred saves. A rejected placement rolls the entire write back.
         """
 
-        with transaction.atomic():
+        using = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
             super().save(*args, **kwargs)
             if self._state.adding:
                 return
             with system_context(reason="proposals_work.task.track_queue"):
-                placement = type(self)._base_manager.values("project_id", "queue_id").get(pk=self.pk)
+                placement = type(self)._base_manager.using(using).values("project_id", "queue_id").get(pk=self.pk)
                 if placement["project_id"] is None or placement["queue_id"] is None:
                     return
                 proposal = (
                     apps.get_model("proposals", "Proposal")
-                    ._base_manager.filter(track_id=placement["project_id"], track_published_at__isnull=True)
+                    ._base_manager.using(using)
+                    .filter(track_id=placement["project_id"], track_published_at__isnull=True)
                     .select_related("round")
                     .first()
                 )
                 if proposal is None:
                     return
                 queue_model = apps.get_model("work", "Queue")
-                queue = queue_model._base_manager.select_related("owner", "created_by").get(pk=placement["queue_id"])
+                queue = (
+                    queue_model._base_manager.using(using)
+                    .select_related("owner", "created_by")
+                    .get(pk=placement["queue_id"])
+                )
                 owner = queue.owner
                 if queue.is_personal and owner is not None:
-                    if queue.owner_id == proposal.responder_id or backend().check_access(
-                        subject=to_subject_ref(owner), action="manage", resource=to_object_ref(proposal.round)
-                    ).allowed:
+                    if (
+                        queue.owner_id == proposal.responder_id
+                        or backend()
+                        .check_access(
+                            subject=to_subject_ref(owner), action="manage", resource=to_object_ref(proposal.round)
+                        )
+                        .allowed
+                    ):
                         return
                 raise ValidationError(
                     {"queue": "Unpublished track tasks require a responder or round manager personal queue."}

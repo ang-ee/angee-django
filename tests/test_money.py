@@ -404,3 +404,18 @@ def test_currency_rate_rejects_inexact_values_before_writing(
             assert rate.rate == Decimal("0.9")
         else:
             assert not CurrencyRate.objects.filter(currency=eur).exists()
+
+
+@pytest.mark.django_db
+def test_chained_rate_for_preserves_selected_rate_population() -> None:
+    """The native rate read remains available and bounded after filtering."""
+
+    usd = _make_currency("USD")
+    eur = _make_currency("EUR")
+    first = _make_rate(eur, date(2026, 1, 1), "0.9")
+    _make_rate(eur, date(2026, 2, 1), "0.8")
+    with system_context(reason="money.tests.chained"), override_settings(ANGEE_MONEY_REFERENCE_CURRENCY="USD"):
+        assert CurrencyRate.objects.filter(pk=first.pk).rate_for(eur, date(2026, 3, 1)) == Decimal("0.9")
+        with pytest.raises(CurrencyRate.DoesNotExist):
+            CurrencyRate.objects.none().rate_for(eur, date(2026, 3, 1))
+        assert CurrencyRate.objects.none().rate_for(usd, date(2026, 3, 1)) == Decimal(1)

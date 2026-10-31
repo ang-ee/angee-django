@@ -11,6 +11,10 @@ dynamic = ["entry-points"]
 [tool.angee]
 
 [[tool.angee.resources.master]]
+path = "master/020_messaging.messagesubtype.yaml"
+adopt = ["model_label", "key"]
+
+[[tool.angee.resources.master]]
 path = "master/010_projects.activitytype.yaml"
 adopt = "key"
 

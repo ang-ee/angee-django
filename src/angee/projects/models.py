@@ -122,13 +122,15 @@ class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
         actor_id = actor_user_id(actor)
         if actor_id is None:
             raise ValidationError({"idempotency_key": "Setup requires a user actor."})
-        with changeset(fresh=True), transaction.atomic():
-            locked = type(task).system_queryset(lock=("self",)).get(pk=task.pk)
+        using = self._db or task._state.db or router.db_for_write(self.model, instance=task)
+        self = self.db_manager(using)
+        with database_context(using), changeset(fresh=True), transaction.atomic(using=using):
+            locked = type(task).system_queryset(lock=("self",)).using(using).get(pk=task.pk)
             if actor is not None:
                 locked.with_actor(actor)
             if not bypass and not locked.has_access("write"):
                 raise PermissionDenied("Task write access is required for project setup.")
-            project = self.model.system_queryset(lock=("self",)).filter(converted_from=locked).first()
+            project = self.model.system_queryset(lock=("self",)).using(using).filter(converted_from=locked).first()
             if project is not None:
                 if actor is not None:
                     project.with_actor(actor)
@@ -166,8 +168,10 @@ class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
         if task.pk is None:
             raise ValidationError("A task must be saved before it can be promoted.")
         actor, bypass = task.effective_actor(strict=True)
-        with transaction.atomic():
-            locked_task = type(task).system_queryset(lock=("self",)).get(pk=task.pk)
+        using = self._db or task._state.db or router.db_for_write(self.model, instance=task)
+        self = self.db_manager(using)
+        with database_context(using), transaction.atomic(using=using):
+            locked_task = type(task).system_queryset(lock=("self",)).using(using).get(pk=task.pk)
             if not bypass and not locked_task.with_actor(actor).has_access("write"):
                 raise PermissionDenied("Write access to the task is required to promote it.")
             if expected_revision is not None:
@@ -183,9 +187,10 @@ class ProjectManager[ProjectT: Project](_ProjectManagerBase[ProjectT]):
                 lead_id=locked_task.assignee_id,
                 converted_from_id=locked_task.pk,
             )
+            project._state.db = using
             project.full_clean(validate_unique=False, validate_constraints=False)
             try:
-                with transaction.atomic():
+                with transaction.atomic(using=using):
                     if actor is None:
                         project.sudo(reason="projects.project.promote_from_task").save()
                     else:
@@ -534,7 +539,9 @@ class LinkManager[LinkT: Link](AngeeHistoryManager[LinkT]):
 
         key = generic_target(target).lookups(self.model, "target")
         values = {"title": title, "metadata": dict(metadata or {}), **fields}
-        with transaction.atomic():
+        using = self._db or target._state.db or router.db_for_write(self.model, instance=target)
+        self = self.db_manager(using)
+        with database_context(using), transaction.atomic(using=using):
             link = self.filter(url=url, **key).first()
             if link is None:
                 link = self.model(url=url, **key, **values)
@@ -716,10 +723,12 @@ class Project(
             raise ValidationError({"milestones": "Declare at least one milestone, with unique names."})
         first = None
         for item in values:
-            matches = list(milestone_model.objects.filter(project=self, name=item["name"])[:2])
+            matches = list(milestone_model.objects.using(self._state.db).filter(project=self, name=item["name"])[:2])
             if len(matches) > 1:
                 raise ValidationError({"milestones": "A template name matches multiple existing milestones."})
-            milestone = matches[0] if matches else milestone_model.objects.create(project=self, **item)
+            milestone = matches[0] if matches else milestone_model.objects.db_manager(self._state.db).create(
+                project=self, **item,
+            )
             if matches:
                 milestone.complete_setup_template(item)
             first = first or milestone
@@ -728,16 +737,16 @@ class Project(
             self.set_current_milestone(first)
         binding_model = apps.get_model("projects", "ProjectBinding")
         vault_model = apps.get_model("knowledge", "Vault")
-        content_type = ContentType.objects.get_for_model(vault_model)
-        if not binding_model.objects.filter(project=self, content_type=content_type).exists():
+        content_type = ContentType.objects.db_manager(self._state.db).get_for_model(vault_model)
+        if not binding_model.objects.using(self._state.db).filter(project=self, content_type=content_type).exists():
             if vault_template is None:
                 raise ValidationError({"vault_template": "Choose a vault template."})
-            vault = vault_model.objects.create_from(
+            vault = vault_model.objects.db_manager(self._state.db).create_from(
                 vault_template,
                 name=self.title,
                 idempotency_key=f"project:{self.pk}",
             )
-            binding_model.objects.bind(project=self, target=vault)
+            binding_model.objects.db_manager(self._state.db).bind(project=self, target=vault)
 
     @classmethod
     def setup_complete_condition(cls, actor: Any) -> Q:
@@ -800,7 +809,10 @@ class Project(
         previous: Any = None
         previous_folder_id = None
         if not self._state.adding and folder_is_written:
-            previous = type(self)._base_manager.filter(pk=self.pk).only("folder").first()
+            previous = (
+                type(self)._base_manager.using(kwargs.get("using") or self._state.db)
+                .filter(pk=self.pk).only("folder").first()
+            )
             previous_folder_id = previous.folder_id if previous is not None else None
         folder_changed = folder_is_written and (self._state.adding or previous_folder_id != self.folder_id)
         if folder_changed:
@@ -838,8 +850,9 @@ class Project(
         """Persist and announce one authorized lifecycle change in one transaction."""
 
         actor, bypass = self.effective_actor(strict=True)
-        with transaction.atomic():
-            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
+            locked = type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
             if not bypass and not locked.with_actor(actor).has_access("write"):
                 raise PermissionDenied("Write access to the project is required to change its status.")
             if expected_revision is not None:
@@ -877,8 +890,9 @@ class Project(
         """Select an eligible phase without changing planned dates or historical receipts."""
 
         actor, bypass = self.effective_actor(strict=True)
-        with transaction.atomic():
-            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
+            locked = type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
             if not bypass and not locked.with_actor(actor).has_access("write"):
                 raise PermissionDenied("Write access to the project is required to select its phase.")
             if expected_revision is not None:
@@ -1012,8 +1026,9 @@ class Milestone(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMi
         """Stamp and announce the first historical receipt, retaining it on replay."""
 
         actor, bypass = self.effective_actor(strict=True)
-        with transaction.atomic():
-            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
+            locked = type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
             if not bypass and not locked.with_actor(actor).has_access("reach"):
                 raise PermissionDenied("Reach access to the milestone is required.")
             if expected_revision is not None:
@@ -1456,7 +1471,7 @@ class Task(
             return None
         return (
             type(self)
-            ._base_manager.filter(pk=self.pk)
+            ._base_manager.using(self._state.db).filter(pk=self.pk)
             .annotate(_promoted_phase=type(self).objects.with_actor(actor).promoted_phase_expression())
             .values_list("_promoted_phase", flat=True)
             .first()
@@ -1518,7 +1533,7 @@ class Task(
             update_fields = kwargs.get("update_fields")
             structure_fields = {"project", "project_id", "milestone", "milestone_id", "parent", "parent_id"}
             if self._state.adding or update_fields is None or structure_fields.intersection(update_fields):
-                with transaction.atomic():
+                with database_context(using), transaction.atomic(using=using):
                     self._validate_structure()
                     super().save(*args, **kwargs)
                     # The persisted candidate lets REBAC evaluate every composed share arm.
@@ -1655,7 +1670,8 @@ class Task(
             reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
         except ValueError as error:
             raise ValidationError({"reason": "Choose duplicate, declined, or obsolete."}) from error
-        with transaction.atomic():
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
             self._lock_lifecycle()
             if self.status == self.TaskStatus.DROPPED and self.dropped_reason == reason_member and self.dropped_at:
                 return self
@@ -1670,7 +1686,8 @@ class Task(
     def reopen(self) -> Task:
         """Return a done or dropped task to the open state, idempotently."""
 
-        with transaction.atomic():
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
             self._lock_lifecycle()
             if (
                 self.status == self.TaskStatus.OPEN
@@ -1722,8 +1739,9 @@ class Task(
             raise ValidationError({"visibility": "Choose inherited or restricted."}) from error
         actor, bypass = self.effective_actor(strict=True)
         permission = self.visibility_permission(visibility)
-        with transaction.atomic():
-            locked = type(self).system_queryset(lock=("self",)).get(pk=self.pk)
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
+            locked = type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
             if not bypass and (
                 actor is None
                 or not backend().check_access(subject=actor, action=permission, resource=to_object_ref(locked)).allowed
@@ -1750,7 +1768,7 @@ class Task(
         their audience invariants under the same task lock.
         """
         for condition, error in self.visibility_blockers(value):
-            if type(self).system_queryset().filter(condition, pk=self.pk).exists():
+            if type(self).system_queryset().using(self._state.db).filter(condition, pk=self.pk).exists():
                 raise error()
 
     def validate_record_access_subject(self, relation: str, subject: Any) -> None:
@@ -1784,7 +1802,10 @@ class Task(
 
         yield from super().thread_audience_members()
         if self.assignee_id is not None:
-            person = apps.get_model("parties", "Person").system_queryset().filter(user_id=self.assignee_id).first()
+            person = (
+                apps.get_model("parties", "Person").system_queryset().using(self._state.db)
+                .filter(user_id=self.assignee_id).first()
+            )
             if person is not None:
                 yield AudienceMember(party_id=person.pk)
 
@@ -1814,7 +1835,7 @@ class Task(
         with system_context(reason="projects.task.validate_structure"):
             if self.milestone_id is not None:
                 milestone_model = type(self).milestone.field.related_model
-                milestone = milestone_model._base_manager.filter(pk=self.milestone_id).first()
+                milestone = milestone_model._base_manager.using(self._state.db).filter(pk=self.milestone_id).first()
                 if milestone is not None and milestone.project_id != self.project_id:
                     raise ValidationError({"milestone": "Milestone must belong to the task's project."})
 

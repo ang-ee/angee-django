@@ -27,7 +27,7 @@ from angee.base.models.hierarchy import HierarchyMixin
 from angee.base.models.ownership import OwnerMixin
 from angee.messaging.models import AudienceMember, NotificationPolicy, ThreadAudienceMixin
 from angee.parties.mixins import MembershipDecisionMixin
-from angee.spaces.managers import GroupManager, MembershipManager
+from angee.spaces.managers import GroupManager, MembershipManager, ThreadSpaceManager
 
 
 class Group(ThreadAudienceMixin, HierarchyMixin, OwnerMixin, AngeeDataModel, concrete=True):
@@ -226,6 +226,7 @@ class Membership(MembershipDecisionMixin, AuditMixin, AngeeDataModel, concrete=T
 class ThreadSpace(Composable, extends="messaging.Thread"):
     """Group audience contributed onto ``messaging.Thread`` as a same-row field."""
 
+    objects = ThreadSpaceManager()
 
     groups = models.ManyToManyField(
         "spaces.Group",

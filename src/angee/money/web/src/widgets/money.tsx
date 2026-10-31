@@ -78,7 +78,7 @@ export function formatMoney(value: MoneyWidgetValue | undefined, code: string | 
 /** The row's presentation precision for a money field, when the field names where it lives. */
 function resolveFractionDigits(row: Record<string, unknown> | undefined, path: string | undefined): number | undefined {
   if (!row || !path) return undefined;
-  const value = path.split(".").reduce<unknown>((current, key) => (current && typeof current === "object" ? (current as Record<string, unknown>)[key] : undefined), row);
+  const value = rowValueAtPath(row, path);
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 

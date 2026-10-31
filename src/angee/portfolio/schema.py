@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import Enum, EnumMeta
 from typing import Any, cast
 
 import strawberry
@@ -19,6 +20,7 @@ from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
+from angee.portfolio.models import Health
 from angee.projects.schema import (
     ConsoleProjectType,
     ProjectType,
@@ -34,8 +36,10 @@ Project = apps.get_model("projects", "Project")
 Task = apps.get_model("projects", "Task")
 User = get_user_model()
 
-UpdateHealthChoice = Update._meta.get_field("health").choices_enum
-strawberry.enum(cast(Any, UpdateHealthChoice))
+# Keep the historical transport names while both projections share one domain vocabulary.
+_HEALTH_VALUES = {member.name: member.value for member in Health}
+InitiativeHealthChoice = strawberry.enum(cast(EnumMeta, Enum("InitiativeHealth", _HEALTH_VALUES)))
+UpdateHealthChoice = strawberry.enum(cast(EnumMeta, Enum("UpdateHealth", _HEALTH_VALUES)))
 
 
 @strawberry_django.type(Product)
@@ -78,7 +82,7 @@ class InitiativeType(AuthoredRefMixin, AngeeNode):
     name: auto
     body: auto
     status: auto
-    health: auto
+    health: InitiativeHealthChoice | None  # type: ignore[valid-type]
     health_updated_at: auto
     target_date: auto
     target_date_resolution: auto
@@ -103,7 +107,7 @@ class ConsoleInitiativeType(AuthoredRefMixin, AngeeNode):
     name: auto
     body: auto
     status: auto
-    health: auto
+    health: InitiativeHealthChoice | None  # type: ignore[valid-type]
     health_updated_at: auto
     target_date: auto
     target_date_resolution: auto
@@ -132,7 +136,7 @@ class InitiativeProjectType(AuthoredRefMixin, AngeeNode):
 class PortfolioUpdateType(AuthoredRefMixin, AngeeNode):
     """GraphQL projection of one Project/Initiative health assertion."""
 
-    health: auto
+    health: UpdateHealthChoice  # type: ignore[valid-type]
     body: auto
     created_at: auto
     updated_at: auto
@@ -169,7 +173,7 @@ class ReleaseType(AuthoredRefMixin, AngeeNode):
 class ProjectPortfolioExtension:
     """Contribute portfolio placement and health onto ProjectType."""
 
-    health: auto
+    health: InitiativeHealthChoice | None  # type: ignore[valid-type]
     health_updated_at: auto
     priority: auto
     sort_order: auto
@@ -185,7 +189,7 @@ class ConsoleProjectPortfolioExtension:
     ``ProjectType``, so the same donor fields are contributed here console-only.
     """
 
-    health: auto
+    health: InitiativeHealthChoice | None  # type: ignore[valid-type]
     health_updated_at: auto
     priority: auto
     sort_order: auto

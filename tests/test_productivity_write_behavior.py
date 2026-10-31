@@ -3,38 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 import strawberry_django
 from django.core.exceptions import ValidationError
-from django.core.management import call_command
 from django.db import models
 from django.utils import timezone
 from rebac import system_context
-from rebac.backends import LocalBackend, backend, reset_backend
-from rebac.schema import parse_zed
-from rebac.testing import install_schema
 from strawberry import auto
 
 import tests.test_messaging  # noqa: F401 -- register related models before native database setup
-from angee.base.fields.state import StateField
-from angee.base.managers import AngeeManager
-from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
-from angee.base.models.merge import MergeableMixin
 from angee.base.models.stages import Stage as OrderedStage
 from angee.base.models.stages import StagedModelMixin
-from angee.base.models.trash import TrashMixin, TrashQuerySet
-from angee.base.querysets import AngeeQuerySet, MergeableQuerySet
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
-from angee.projects.models import Task as AbstractTask
 from angee.projects.testing.models import Queue, Stage, Task
-from angee.work.models import TaskWork
 from tests import test_sequence  # noqa: F401 -- register Queue's sequence target before database setup
 from tests.composed_host import run_composed_tests
 from tests.conftest import (
@@ -42,7 +28,6 @@ from tests.conftest import (
     create_platform_admin,
     execute_schema,
     result_data,
-    standalone_relation,
 )
 from tests.tables import model_tables
 
@@ -72,7 +57,8 @@ class RoutingPipelineStage(OrderedStage):
     container_field_name = "container"
     container = models.ForeignKey(RoutingStageContainer, on_delete=models.CASCADE)
 
-    class Meta:
+    class Meta(OrderedStage.Meta):
+        abstract = False
         app_label = "tests"
         constraints = [models.UniqueConstraint(
             fields=("container", "position"), name="routing_stage_container_position",
@@ -90,85 +76,7 @@ class RoutingStageRecord(StagedModelMixin[RoutingPipelineStage], models.Model):
         app_label = "tests"
 
 
-class RoutingSnoozeRecord(models.Model):
-    """Minimal native columns needed by the work-owned bulk wake operation."""
-
-    snoozed_until = models.DateTimeField(null=True)
-    snoozed_by = models.IntegerField(null=True)
-    updated_at = models.DateTimeField()
-
-    class Meta:
-        app_label = "tests"
-
-
-class CreateProject(AngeeDataModel):
-    """A project identity for the task-to-project projection."""
-
-    sqid_prefix = "cpr_"
-
-    class Meta:
-        app_label = "scopedemo"
-        rebac_resource_type = "tests/create_project"
-
-
-class CreateTaskHost(models.Model):
-    """The projects Task hand-verb contract the work donor extends through ``super()``."""
-
-    hand_actions = AbstractTask.__dict__["hand_actions"]
-    validate_action = AbstractTask.validate_action
-    # A task merges under write on each duplicate and keeps it as a redirect.
-    MERGED_PERMISSION = AbstractTask.MERGED_PERMISSION
-    retains_merged = AbstractTask.retains_merged
-
-    @classmethod
-    def action_blockers(cls, action: str) -> tuple[tuple[models.Q, Any], ...]:
-        """A stand-in task is about no record, so no record-task blocker applies."""
-
-        return ()
-
-    def post_completion(self, feedback: str = "") -> None:
-        """A stand-in task is about no record, so its completion posts nothing."""
-
-    class Meta:
-        abstract = True
-
-
-class CreateTaskQuerySet(MergeableQuerySet[Any], TrashQuerySet[Any], AngeeQuerySet[Any]):
-    """The stand-in task's operational scopes: canonical rows and the trash."""
-
-
-class CreateTask(TaskWork, CreateTaskHost, MergeableMixin, TrashMixin, AuditMixin, AngeeDataModel):
-    """Native Work donor over the lifecycle columns it projects; duplicates are retained merges, removal is trash."""
-
-    sqid_prefix = "ctk_"
-    queue = standalone_relation(TaskWork, "queue")
-    TaskStatus = AbstractTask.TaskStatus
-    TaskDroppedReason = AbstractTask.TaskDroppedReason
-    title = models.CharField(max_length=240)
-    status = StateField(choices_enum=AbstractTask.TaskStatus, default=AbstractTask.TaskStatus.OPEN)
-    done_at = models.DateTimeField(null=True, blank=True)
-    dropped_at = models.DateTimeField(null=True, blank=True)
-    dropped_reason = StateField(choices_enum=AbstractTask.TaskDroppedReason, null=True, blank=True)
-    project = models.ForeignKey(CreateProject, null=True, blank=True, on_delete=models.SET_NULL)
-    stage = models.ForeignKey(Stage, null=True, blank=True, on_delete=models.SET_NULL)
-    cycle = None
-    cycle_id = None
-    hasura_readable_fields = ()
-    hasura_filterable_fields = ()
-    hasura_sortable_fields = ()
-    hasura_aggregatable_fields = ()
-    hasura_groupable_fields = ()
-    hasura_insertable_fields = ()
-    hasura_updatable_fields = ()
-    # A trash owner's default manager carries the trash row scopes (angee.E036).
-    objects = AngeeManager.from_queryset(CreateTaskQuerySet)()
-
-    class Meta:
-        app_label = "scopedemo"
-        rebac_resource_type = "tests/create_task"
-
-
-@strawberry_django.type(CreateTask)
+@strawberry_django.type(Task)
 class CreateTaskType(AngeeNode):
     title: auto
     status: auto
@@ -182,83 +90,62 @@ class CreateStageType(AngeeNode):
 
 @pytest.fixture
 def productivity_tables(transactional_db: None) -> Iterator[None]:
-    """Create native stage and snooze rows for behavior regressions."""
-    test_models = (RoutingStageContainer, RoutingPipelineStage, RoutingStageRecord, RoutingSnoozeRecord)
+    """Create native stage rows for behavior regressions."""
+    test_models = (RoutingStageContainer, RoutingPipelineStage, RoutingStageRecord)
     with model_tables(test_models):
         yield
 
 
 @pytest.fixture
-def productivity_create_case(transactional_db: None) -> Iterator[tuple[Any, Any, Queue]]:
-    """Expose the production donors through real Hasura resources and local REBAC."""
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
-    active = backend()
-    assert isinstance(active, LocalBackend)
-    extra = parse_zed("""
-        definition tests/create_project {
-            permission create = authenticated
-            permission read = authenticated
-            permission write = authenticated
-        }
-        definition tests/create_task {
-            permission create = authenticated
-            permission read = authenticated
-            permission write = authenticated
-        }
-        """)
-    install_schema(
-        replace(active.schema(), definitions=[*active.schema().definitions, *extra.definitions]),
-        backend=active,
-    )
-    try:
-        admin = create_platform_admin("productivity-create-admin")
-        with system_context(reason="tests.productivity.create.queue"):
-            queue = Queue.objects.create(key="CREATE", name="Create", slug="create")
-        resources = [
-            hasura_model_resource(
-                node,
-                model=model,
-                name=name,
-                filterable=["id"],
-                sortable=["id"],
-                aggregatable=["id"],
-                insertable=fields,
-                update=False,
-                delete=False,
-                write_backend=AngeeHasuraWriteBackend(model, public_id_fields=relations),
-            )
-            for node, model, name, fields, relations in (
-                (
-                    CreateTaskType,
-                    CreateTask,
-                    "create_tasks",
-                    ["title", "project", "queue", "stage"],
-                    ("project", "queue", "stage"),
-                ),
-                (CreateStageType, Stage, "create_stages", ["queue", "name", "category"], ("queue",)),
+def productivity_create_case(composed_permissions: None) -> Iterator[tuple[Any, Any, Queue]]:
+    """Expose the actual production Task and Stage resources under native permissions."""
+
+    del composed_permissions
+    admin = create_platform_admin("productivity-create-admin")
+    with system_context(reason="tests.productivity.create.queue"):
+        queue = Queue.objects.create(key="CREATE", name="Create", slug="create")
+    resources = [
+        hasura_model_resource(
+            node,
+            model=model,
+            name=name,
+            filterable=["id"],
+            sortable=["id"],
+            aggregatable=["id"],
+            insertable=fields,
+            update=False,
+            delete=False,
+            write_backend=AngeeHasuraWriteBackend(model, public_id_fields=relations),
+        )
+        for node, model, name, fields, relations in (
+            (
+                CreateTaskType,
+                Task,
+                "create_tasks",
+                ["title", "project", "queue", "stage"],
+                ("project", "queue", "stage"),
+            ),
+            (CreateStageType, Stage, "create_stages", ["queue", "name", "category"], ("queue",)),
+        )
+    ]
+    schema = GraphQLSchemas(
+        [
+            SchemaAddon(
+                {
+                    "public": {
+                        "query": [resource.query for resource in resources],
+                        "mutation": [resource.mutation for resource in resources],
+                        "types": [
+                            CreateTaskType,
+                            CreateStageType,
+                            *(item for resource in resources for item in resource.types),
+                        ],
+                    }
+                }
             )
         ]
-        schema = GraphQLSchemas(
-            [
-                SchemaAddon(
-                    {
-                        "public": {
-                            "query": [resource.query for resource in resources],
-                            "mutation": [resource.mutation for resource in resources],
-                            "types": [
-                                CreateTaskType,
-                                CreateStageType,
-                                *(item for resource in resources for item in resource.types),
-                            ],
-                        }
-                    }
-                )
-            ]
-        ).build("public")
-        yield (schema, admin, queue)
-    finally:
-        reset_backend()
+    ).build("public")
+    yield (schema, admin, queue)
 
 
 def test_graphql_task_create_preserves_stage_projected_status(productivity_create_case: tuple[Any, Any, Queue]) -> None:
@@ -278,10 +165,10 @@ def test_graphql_task_create_preserves_stage_projected_status(productivity_creat
         )
     )["insert_create_tasks_one"]
     assert created["status"] == "DONE"
-    task = CreateTask.objects.as_user(actor).get(sqid=created["id"])
+    task = Task.objects.as_user(actor).get(sqid=created["id"])
     assert task.queue_id == queue.pk
     assert task.stage_id == stage.pk
-    assert task.status == AbstractTask.TaskStatus.DONE
+    assert task.status == Task.TaskStatus.DONE
     assert task.done_at is not None
     assert task.number == 1
 
@@ -360,10 +247,16 @@ def test_stage_scope_rejects_foreign_container(productivity_tables: None) -> Non
 
 
 @pytest.mark.django_db(transaction=True)
-def test_bulk_snooze_wake_clears_snooze_fields(productivity_tables: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bulk_snooze_wake_clears_snooze_fields(composed_permissions: None) -> None:
+    """Use the real Work task queryset instead of invoking a donor on a foreign model."""
+
+    del composed_permissions
     now = timezone.now()
-    row = RoutingSnoozeRecord.objects.create(snoozed_until=now, snoozed_by=7, updated_at=now)
-    assert TaskWork.wake_due_snoozes.__func__(RoutingSnoozeRecord, now=now) == 1
+    with system_context(reason="tests.productivity.wake"):
+        owner = create_platform_admin("productivity-wake-owner")
+        row = Task(title="Snoozed", snoozed_until=now, snoozed_by=owner)
+        row.sudo(reason="tests.productivity.wake.create").save(ownerless=True)
+        assert Task.objects.filter(pk=row.pk).wake_due_snoozes(now=now) == 1
     row.refresh_from_db()
     assert row.snoozed_until is None
     assert row.snoozed_by is None
