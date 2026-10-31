@@ -13,10 +13,12 @@ from rebac import actor_context, database_context, system_context
 from rebac.models import PermissionAuditEvent
 from rebac.roles import grant as grant_role
 
+from angee.base.models.identity import public_id_of
 from angee.base.signals import change_published
 from angee.base.testing.packages import write_addon_distribution
 from angee.provenance.context import changeset, current_changeset
 from angee.provenance.timeline import ChangeKind
+from angee.timeline.reading import Timeline
 from angee.workflows.testing.drivers import register_steps
 from tests.composed_host import run_composed_tests
 from tests.workflow_steps import Echo, document
@@ -97,6 +99,28 @@ class CallbackRoutingContract(TransactionTestCase):
                 subject_model=self.Record._meta.label,
             )
             return Run.objects.db_manager(alias).start(workflow, actor=self.users[alias], subject=self.records[alias])
+
+    def test_run_hydration_keeps_the_producer_when_the_ambient_database_changes(self):
+        with patch("angee.jobs.enqueue.celery_app.send_task"):
+            default_run = self._run("default")
+            run = self._run("producer")
+        self.assertEqual(default_run.pk, run.pk)
+        with self.settings(
+            ANGEE_TIMELINE_KINDS=["angee.workflows.timeline.timeline_kinds"],
+            DATABASE_ROUTERS=["tests.test_workflows_refactor_routing.ProducerRouter"],
+        ):
+            with database_context("producer"), actor_context(self.users["producer"]):
+                timeline = Timeline(self.records["producer"], self.users["producer"])
+            with (
+                CaptureQueriesContext(connections["default"]) as default_queries,
+                database_context("default"),
+                actor_context(self.users["producer"]),
+            ):
+                page = timeline.page()
+        self.assertEqual(list(default_queries), [])
+        self.assertEqual([entry.target_id for entry in page.entries], [public_id_of(run)])
+        self.assertEqual(page.entries[0].title, "Callback")
+        self.assertEqual(page.entries[0].actor, self.users["producer"].get_username())
 
     def test_actual_producer_deletion_retains_cancel_actor_and_commit_boundary(self):
         with patch("angee.jobs.enqueue.celery_app.send_task") as send:
