@@ -11,6 +11,7 @@ from angee.projects.models import Project as AbstractProject
 from angee.projects.models import ProjectBinding as AbstractProjectBinding
 from angee.projects.models import Task as AbstractTask
 from angee.projects.models import TaskRelation as AbstractTaskRelation
+from angee.projects_knowledge.models import ProjectKnowledge
 from angee.proposals.models import ProjectProposalAccess, TaskProposalAccess
 from angee.sequence.testing import (
     models as sequence_models,  # noqa: F401 -- register the queue's native sequence targets
@@ -80,7 +81,7 @@ class Link(AbstractLink):
         rebac_resource_type = "projects/link"
 
 
-class Project(ProjectPortfolio, ProjectWork, ProjectProposalAccess, AbstractProject):
+class Project(ProjectPortfolio, ProjectWork, ProjectProposalAccess, ProjectKnowledge, AbstractProject):
     """Concrete project carrying the production owners and the work team donor."""
 
     rebac_grantable = {

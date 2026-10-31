@@ -44,8 +44,9 @@ Non-GraphQL tools must explicitly declare ``ToolAnnotations.readOnlyHint``.
 Compiled GraphQL tools carry their root ``op_type`` as the structural actor-posture
 fact (their annotation must agree). Builtins also run through the in-process
 pydantic runtime, so their callable may not depend on FastMCP's request-scoped
-``Context`` or ``get_access_token``; the native toolset asserts these contracts
-when it advertises a granted tool.
+``Context`` or ``get_access_token``. Declare
+``meta={"angee": {"execution_context": "actor"}}`` for that capability;
+MCP's public actor_tool_read_only contract validates it before advertisement.
 """
 
 MOUNT_PATH = "/mcp"

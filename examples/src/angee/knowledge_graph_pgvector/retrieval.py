@@ -28,4 +28,4 @@ class PgvectorRetrievalBackend(LexicalRetrievalBackend):
     """
 
     key = "pgvector"
-    label = "Pgvector (semantic)"
+    label = "Lexical extension example (legacy pgvector key)"
