@@ -10,12 +10,11 @@ differ between them (OAuth vs OIDC protocol).
 
 from __future__ import annotations
 
-import base64
-import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
+from authlib.oauth2.rfc7636 import create_s256_code_challenge
 from django.apps import apps
 from django.http import HttpRequest
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -165,8 +164,7 @@ def pkce_challenge(code_verifier: str | None) -> str | None:
 
     if not code_verifier:
         return None
-    digest = hashlib.sha256(code_verifier.encode()).digest()
-    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    return create_s256_code_challenge(code_verifier)
 
 
 def _default_authorize_url(

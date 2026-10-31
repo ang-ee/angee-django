@@ -7,11 +7,11 @@ domain adapters own protocol parsing and ingest policy.
 
 | Concern | Owner |
 |---|---|
-| Connection, scheduling, queue admission and run telemetry | [Integration and Bridge](models.py) |
-| Epochs, cursors, snapshot closure and reconciliation policy | [SyncStream and its manager](models.py) |
-| External identity, observations, applied base, outbox and pin policy | [RecordLink and its manager/queryset](models.py) |
+| Connection, scheduling, queue admission and run telemetry | [Integration](models/integrations.py) and [Bridge](models/bridges.py) |
+| Epochs, cursors, snapshot closure and reconciliation policy | [SyncStream](models/sync.py) and [its manager](managers.py) |
+| External identity, observations, applied base, outbox and pin policy | [RecordLink](models/sync.py), [manager](managers.py) and [QuerySet](querysets.py) |
 | Inbound failure slots and retry lifecycle | [SyncStateMixin](mixins.py) and [SyncFailure](states.py) |
-| Adapter contract and bounded execution | [BridgeImpl](impl.py) and [stream driver](streams.py) |
+| Adapter contract and bounded execution | [BridgeImpl](backends/base.py) and [stream driver](streams.py) |
 | Operator actions and inspection | [Console schema](schema.py), [Streams views](web/src/IntegrationStreams.tsx) and [Integration permissions](permissions.zed) |
 
 Event feeds are append-only and compose their domain's idempotent ingest verb.
@@ -207,3 +207,9 @@ account takes only the owner its linking verb names; that verb claims an unowned
 account, and disconnect releases only the caller's ownership. Its transfer is
 admin-only because sign-in resolves an identity to its owner. A credential's
 `user` relation names whose authority it carries; it is not ownership.
+
+OAuth discovery cache lifetime is configured by integrate through the historical
+`ANGEE_OIDC_DISCOVERY_TTL` setting, shared by connect and OIDC login. Credential
+refresh uses the session advisory lock for rotating-token exclusion; provider
+exchange runs in autocommit and a short row transaction checks the original
+grant before retaining success or permanent refusal.

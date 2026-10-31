@@ -124,9 +124,13 @@ class GitHubBackend(VCSBackend):
             raise GitHubApiError("GitHub returned an unsupported file encoding", status=0)
         headers = {**self._headers(), "Accept": "application/vnd.github.raw+json"}
         response = self.http.request(
-            "GET", f"{self.api_base}{endpoint}", headers=headers,
+            "GET",
+            f"{self.api_base}{endpoint}",
+            headers=headers,
             allow_private=self.api_base != DEFAULT_API_BASE.rstrip("/"),
-            same_origin_redirects=3, max_bytes=self.max_file_bytes, timeout=HTTP_TIMEOUT_SECONDS,
+            same_origin_redirects=3,
+            max_bytes=self.max_file_bytes,
+            timeout=HTTP_TIMEOUT_SECONDS,
         )
         if response.status_code == 404:
             raise FileNotFoundError(path)
@@ -174,15 +178,8 @@ class GitHubBackend(VCSBackend):
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": "angee-integrate-github",
         }
-        credential_field = self.bridge._meta.get_field("credential")
-        if not credential_field.is_cached(self.bridge):
-            credential_field.set_cached_value(
-                self.bridge,
-                credential_field.related_model._base_manager.select_related("oauth_client").get(
-                    pk=self.bridge.credential_id
-                ),
-            )
-        credential: Any = self.bridge.credential
+        credential = self.bridge.connection_credential()
+        assert credential is not None
         headers.update(credential.auth_headers())
         return headers
 
@@ -197,13 +194,19 @@ class GitHubBackend(VCSBackend):
         allow_private = self.api_base != DEFAULT_API_BASE.rstrip("/")
         if max_bytes is None:
             response = self.http.get(
-                f"{self.api_base}{path}", headers=self._headers(),
-                allow_private=allow_private, timeout=HTTP_TIMEOUT_SECONDS,
+                f"{self.api_base}{path}",
+                headers=self._headers(),
+                allow_private=allow_private,
+                timeout=HTTP_TIMEOUT_SECONDS,
             )
         else:
             response = self.http.request(
-                "GET", f"{self.api_base}{path}", headers=self._headers(),
-                allow_private=allow_private, max_bytes=max_bytes, timeout=HTTP_TIMEOUT_SECONDS,
+                "GET",
+                f"{self.api_base}{path}",
+                headers=self._headers(),
+                allow_private=allow_private,
+                max_bytes=max_bytes,
+                timeout=HTTP_TIMEOUT_SECONDS,
             )
         if response.status_code == 404:
             raise FileNotFoundError(path)

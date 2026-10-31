@@ -34,6 +34,27 @@ class StageTone(models.TextChoices):
     PINK = "pink", "Pink"
 
 
+class StageQuerySet[StageT: Stage](models.QuerySet[StageT]):
+    """Container-scoped pipeline selections preserving the selected population."""
+
+    def for_container(self, container: models.Model | Combinable) -> Self:
+        """Return selected stages for the container in pipeline order."""
+
+        self.model.container_field()
+        stages = self
+        if isinstance(container, models.Model) and cast(Any, self)._db is None:
+            stages = self.using(container._state.db)
+            cast(Any, stages)._add_hints(instance=container)
+        return stages.filter(**{self.model.container_field_name: container}).order_by("position", "pk")
+
+
+_StageManagerBase = models.Manager.from_queryset(StageQuerySet)
+
+
+class StageManager[StageT: Stage](_StageManagerBase[StageT]):
+    """Native generic stage manager, extensible by scoped domain managers."""
+
+
 class Stage(models.Model):
     """Abstract base for one user-named stage in a container-scoped pipeline.
 
@@ -41,13 +62,17 @@ class Stage(models.Model):
     foreign key (for example ``"queue"``).  If it stores a closed semantic
     category, it also sets :attr:`category_field_name`; consumers read that
     value through :meth:`get_category` rather than assuming a field name. The
-    concrete model declares a unique constraint on its container and position;
-    omitted positions append through the shared fractional-rank field.
+    concrete model inherits ``Stage.Meta`` and declares a unique constraint on
+    its container and position; omitted positions append through the shared
+    fractional-rank field. A scoped domain manager composes StageQuerySet on
+    both its default and unfiltered base queryset, retaining any write guards.
     """
 
     container_field_name: ClassVar[str] = ""
     category_field_name: ClassVar[str] = ""
     default_stage_field_name: ClassVar[str] = "default_stage"
+
+    objects: ClassVar[StageManager[Self]] = StageManager()
 
     name = models.CharField(max_length=160)
     tone = ToneField(choices_enum=StageTone, default=StageTone.NEUTRAL)
@@ -58,6 +83,7 @@ class Stage(models.Model):
 
         abstract = True
         ordering = ("position", "name")
+        base_manager_name = "objects"
 
     def __str__(self) -> str:
         """Return the user-owned stage name."""
@@ -84,11 +110,8 @@ class Stage(models.Model):
     def for_container(cls, container: models.Model | Combinable) -> models.QuerySet[Self]:
         """Return every stage configured for ``container`` in pipeline order."""
 
-        cls.container_field()
-        stages = cls._base_manager
-        if isinstance(container, models.Model):
-            stages = stages.db_manager(container._state.db, hints={"instance": container})
-        return stages.filter(**{cls.container_field_name: container}).order_by("position", "pk")
+        stages = cast(StageQuerySet[Self], cls._base_manager.all())
+        return stages.for_container(container)
 
     @classmethod
     def resolve_default(cls, container: models.Model) -> Self | None:

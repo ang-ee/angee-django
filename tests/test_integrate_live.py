@@ -889,7 +889,7 @@ def test_ensure_bridge_sessions_reconciles_live_desire_and_routes_to_session_que
 
     sent: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        "angee.integrate.impl.enqueue_task",
+        "angee.integrate.backends.base.enqueue_task",
         lambda name, *, kwargs, queue=None, expires=None, **_: sent.append(
             {"name": name, "kwargs": kwargs, "queue": queue, "expires": expires}
         ),
@@ -928,7 +928,7 @@ def test_ensure_bridge_sessions_latches_runtime_error_until_resume(
 
     sent: list[str] = []
     monkeypatch.setattr(
-        "angee.integrate.impl.enqueue_task",
+        "angee.integrate.backends.base.enqueue_task",
         lambda name, **_: sent.append(name),
     )
     channel = _live_channel("fake-live-runtime-error")
@@ -1132,7 +1132,7 @@ def test_live_backend_requires_a_dedicated_session_queue(live_tables: Any, monke
     class QueueLessBackend(FakeLiveChannelBackend):
         session_queue = ""
 
-    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: None)
+    monkeypatch.setattr("angee.integrate.backends.base.enqueue_task", lambda *args, **kwargs: None)
     with pytest.raises(ImproperlyConfigured, match="shared prefork queue"):
         QueueLessBackend(_live_channel()).start_live()
 
@@ -1200,7 +1200,7 @@ def test_ensure_bridge_sessions_contains_unresolvable_registered_impl(
         "manual": "tests.test_integrate_live.MissingBackend",
     }
     _live_channel("fake-live-after-broken")
-    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: None)
+    monkeypatch.setattr("angee.integrate.backends.base.enqueue_task", lambda *args, **kwargs: None)
 
     assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 1}
     assert "manual" in caplog.text
@@ -1217,7 +1217,7 @@ def test_ensure_bridge_sessions_does_not_write_a_settled_live_row(
     channel = _live_channel("fake-live-settled")
     channel.refresh_from_db()
     settled_at = channel.updated_at
-    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: None)
+    monkeypatch.setattr("angee.integrate.backends.base.enqueue_task", lambda *args, **kwargs: None)
 
     assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 1}
 
@@ -1255,7 +1255,7 @@ def test_native_session_crash_is_visible_and_retried(live_tables: Any, monkeypat
     assert channel.sync_stage == channel.SyncStage.FAILED
     assert "automatic recovery" in channel.sync_progress["message"]
     sent: list[Any] = []
-    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: sent.append(kwargs))
+    monkeypatch.setattr("angee.integrate.backends.base.enqueue_task", lambda *args, **kwargs: sent.append(kwargs))
     assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 1}
     assert len(sent) == 1
 
@@ -1441,7 +1441,7 @@ def test_reconciler_warns_about_crashed_startup(
         channel.sync_stage = channel.SyncStage.DISCOVERING
         channel.save(update_fields=["sync_stage"])
     monkeypatch.setattr(tasks_module, "task_locks_are_cross_process", lambda: True)
-    monkeypatch.setattr("angee.integrate.impl.enqueue_task", lambda *args, **kwargs: None)
+    monkeypatch.setattr("angee.integrate.backends.base.enqueue_task", lambda *args, **kwargs: None)
     assert tasks_module.ensure_bridge_sessions() == {"ok": True, "dispatched": 1}
     assert "active stage with no running session" in caplog.text
 

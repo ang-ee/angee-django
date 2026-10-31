@@ -14,7 +14,7 @@ import hashlib
 import hmac
 
 from angee.integrate.http import HttpClient
-from angee.integrate.net import parse_http_url
+from angee.integrate.validators import parse_http_url
 
 SIGNATURE_HEADER = "X-Angee-Signature"
 """Header carrying the HMAC-SHA256 signature for outbound webhook bodies."""

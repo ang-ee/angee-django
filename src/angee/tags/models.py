@@ -4,8 +4,7 @@ A :class:`Tag` is one label in a vocabulary; a :class:`TagAssignment` is the
 polymorphic edge attaching a tag to a record of a taggable type: a
 ``content_type``/``object_id`` pair with a
 :class:`~django.contrib.contenttypes.fields.GenericForeignKey` ``target``, stored
-at :func:`rebac.generic_target`. Tags depend on nothing but ``angee.iam`` and
-reach every taggable model without a FK back to it.
+at :func:`rebac.generic_target`. Tags reach every taggable model without a FK back to it.
 
 **Scope.** Tags are reference vocabulary readable by every non-anonymous actor
 through the native ``authenticated`` permission; tag administrators curate it.

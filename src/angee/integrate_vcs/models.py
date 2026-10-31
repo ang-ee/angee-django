@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
 from django.apps import apps
-from django.db import models, transaction
+from django.db import models
 from django.utils import timezone
 from rebac import system_context
 
@@ -22,7 +22,7 @@ from angee.base.models.base import AngeeDataModel
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate_vcs import registry
 from angee.integrate_vcs.backend import Checkout, VCSBackend, source_path, tree_entries
-from angee.integrate_vcs.templates import parse_template_meta
+from angee.integrate_vcs.managers import RepositoryManager, TemplateManager
 
 
 class RepoVisibility(models.TextChoices):
@@ -140,85 +140,6 @@ class VcsBridge(Bridge, inherits="integrate.Integration"):
         return repository_model.objects.reconcile(self, self.backend.ls_repos(org=org))
 
 
-class RepositoryManager(AngeeManager):
-    """Manager owning the upsert/reconcile of repository rows from a host listing."""
-
-    def reconcile(self, vcs_bridge: Any, descriptors: Iterable[Any]) -> int:
-        """Upsert one repository row per descriptor and prune rows that vanished.
-
-        Bulk import for ``discoverRepositories``: prunes against the full listing,
-        so the caller must pass every repository (see ``GitHubBackend.ls_repos``
-        pagination), never a partial page.
-        """
-
-        descriptor_list = list(descriptors)
-        descriptors_by_name = {str(descriptor.name): descriptor for descriptor in descriptor_list}
-        now = timezone.now()
-        with system_context(reason="integrate.repository.reconcile"), transaction.atomic():
-            self.bulk_create(
-                [
-                    self._row_from_descriptor(vcs_bridge, descriptor, now=now)
-                    for descriptor in descriptors_by_name.values()
-                ],
-                update_conflicts=True,
-                unique_fields=["vcs_bridge", "name"],
-                update_fields=[
-                    "org",
-                    "remote",
-                    "ssh_remote",
-                    "remote_id",
-                    "default_branch",
-                    "visibility",
-                    "web_url",
-                    "archived",
-                    "updated_at",
-                ],
-            )
-            self.filter(vcs_bridge=vcs_bridge).exclude(name__in=descriptors_by_name).delete()
-        return len(descriptor_list)
-
-    def add(self, vcs_bridge: Any, descriptor: Any) -> Any:
-        """Inventory one repository (no prune) — the typeahead "add this repo" path."""
-
-        with system_context(reason="integrate.repository.add"), transaction.atomic():
-            return self._upsert(vcs_bridge, descriptor)
-
-    def _upsert(self, vcs_bridge: Any, descriptor: Any) -> Any:
-        """Create or update one repository row from a host descriptor."""
-
-        repository, _created = self.update_or_create(
-            vcs_bridge_id=vcs_bridge.pk,
-            name=descriptor.name,
-            defaults={
-                "org": descriptor.org,
-                "remote": descriptor.remote,
-                "ssh_remote": descriptor.ssh_remote,
-                "remote_id": descriptor.remote_id,
-                "default_branch": descriptor.default_branch,
-                "visibility": descriptor.visibility,
-                "web_url": descriptor.web_url,
-                "archived": descriptor.archived,
-            },
-        )
-        return repository
-
-    def _row_from_descriptor(self, vcs_bridge: Any, descriptor: Any, *, now: datetime) -> Any:
-        """Return an unsaved repository row projected from one host descriptor."""
-
-        return self.model(
-            vcs_bridge_id=vcs_bridge.pk,
-            name=descriptor.name,
-            org=descriptor.org,
-            remote=descriptor.remote,
-            ssh_remote=descriptor.ssh_remote,
-            remote_id=descriptor.remote_id,
-            default_branch=descriptor.default_branch,
-            visibility=descriptor.visibility,
-            web_url=descriptor.web_url,
-            archived=descriptor.archived,
-            created_at=now,
-            updated_at=now,
-        )
 
 
 class Repository(AuditMixin, AngeeDataModel, concrete=True):
@@ -227,7 +148,6 @@ class Repository(AuditMixin, AngeeDataModel, concrete=True):
     A plain noun: Django records the remote; the operator clones it. ``org`` groups
     the account's repositories in the browse list.
     """
-
 
     sqid_prefix = "repo_"
     vcs_bridge = models.ForeignKey(
@@ -278,7 +198,6 @@ class Source(AuditMixin, AngeeDataModel, concrete=True):
     dispatches there. The operator materializes a source from
     :meth:`materialize_spec`.
     """
-
 
     sqid_prefix = "src_"
     repository = models.ForeignKey("integrate_vcs.Repository", on_delete=models.CASCADE, related_name="sources")
@@ -332,6 +251,12 @@ class Source(AuditMixin, AngeeDataModel, concrete=True):
         known = ", ".join(cls.available_kinds()) or "none registered"
         raise ValueError(f"No output model for source kind {kind!r} (known: {known}).")
 
+    def complete_sync(self, *, now: datetime | None = None) -> None:
+        """Stamp successful output persistence inside its caller's transaction."""
+
+        self.last_synced_at = now or timezone.now()
+        self.save(update_fields=["last_synced_at", "updated_at"])
+
     def refresh(self) -> int:
         """Re-enumerate over REST into the kind's output rows; return the row count."""
 
@@ -345,7 +270,9 @@ class Source(AuditMixin, AngeeDataModel, concrete=True):
 
         repository = self.repository
         with repository.vcs_bridge.backend.materialize(
-            repository, ref=self.ref or repository.default_branch, checkout=checkout,
+            repository,
+            ref=self.ref or repository.default_branch,
+            checkout=checkout,
         ) as source:
             yield source
 
@@ -353,7 +280,8 @@ class Source(AuditMixin, AngeeDataModel, concrete=True):
         """Return deterministic marker paths within this materialized source subtree."""
 
         return tuple(
-            source_path(root, entry.path) for entry in tree_entries(root, path=self.path, recursive=True)
+            source_path(root, entry.path)
+            for entry in tree_entries(root, path=self.path, recursive=True)
             if entry.type == "blob" and entry.name == marker
         )
 
@@ -369,41 +297,6 @@ class Source(AuditMixin, AngeeDataModel, concrete=True):
         }
 
 
-class TemplateManager(AngeeManager, registry.VcsOutputManager):
-    """Manager owning the reconcile of template rows from a template source."""
-
-    def sync_from_source(self, source: Any) -> int:
-        """Walk the source for ``copier.yml`` and upsert/prune ``Template`` rows."""
-
-        repository: Any = source.repository
-        vcs_bridge = repository.vcs_bridge
-        descriptors = vcs_bridge.discover(source, marker="copier.yml", parse=parse_template_meta)
-        descriptors_by_path = {str(descriptor.get("path", "")): descriptor for descriptor in descriptors}
-        now = timezone.now()
-        with system_context(reason="integrate.template.sync"), transaction.atomic():
-            self.bulk_create(
-                [self._row_from_descriptor(source, descriptor, now=now) for descriptor in descriptors_by_path.values()],
-                update_conflicts=True,
-                unique_fields=["source", "path"],
-                update_fields=["name", "kind", "inputs", "updated_at"],
-            )
-            self.filter(source=source).exclude(path__in=descriptors_by_path).delete()
-            source.last_synced_at = now
-            source.save(update_fields=["last_synced_at", "updated_at"])
-        return len(descriptors)
-
-    def _row_from_descriptor(self, source: Any, descriptor: dict[str, Any], *, now: datetime) -> Any:
-        """Return an unsaved template row projected from one discovered descriptor."""
-
-        return self.model(
-            source_id=source.pk,
-            path=str(descriptor.get("path", "")),
-            name=str(descriptor.get("name", "")),
-            kind=str(descriptor.get("kind", "")),
-            inputs=list(descriptor.get("inputs", [])),
-            created_at=now,
-            updated_at=now,
-        )
 
 
 class Template(registry.VcsOutput, AuditMixin, AngeeDataModel, concrete=True):

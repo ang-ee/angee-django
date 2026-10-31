@@ -333,7 +333,7 @@ class WorkRemovedTaskQuery:
             if owner is None:
                 return []
             scope[name] = owner
-        rows = list(Task.removed_for(user, **scope)[: max(1, min(limit, 100))])
+        rows = list(Task.objects.removed_for(user, **scope)[: max(1, min(limit, 100))])
         labels = user_display_labels(
             (row.trashed_by_id for row in rows),
             request=get_request(info),
@@ -367,9 +367,8 @@ class WorkPeopleQuery:
             Membership.MembershipRole.MODERATOR in Membership.objects.available_roles(group=target.team)
         )
         with system_context(reason="work.project.manager_roster"):
-            seats = list(Membership._base_manager.filter(
+            seats = list(Membership.objects.confirmed().filter(
                 group_id=target.team_id, role=Membership.MembershipRole.MODERATOR,
-                is_confirmed=True, is_dismissed=False,
             ).order_by("pk")[:100])
             people = {
                 person.pk: person.user for person in Person._base_manager.filter(

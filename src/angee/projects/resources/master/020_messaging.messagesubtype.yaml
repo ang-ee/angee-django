@@ -1,0 +1,8 @@
+- xref: activity_done
+  model_label: ""
+  key: activity_done
+  name: Activity done
+  description: Activity done
+  internal: false
+  default: true
+  sequence: 50

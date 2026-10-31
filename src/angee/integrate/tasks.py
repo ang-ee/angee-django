@@ -9,14 +9,11 @@ from typing import Any
 from celery import shared_task
 from celery.signals import worker_shutting_down
 from django.apps import apps
-from django.core.exceptions import ImproperlyConfigured
 from rebac import system_context
 
 from angee.integrate import scheduler
 from angee.integrate.constants import DISCOVERY_TASK, DISCOVERY_TASK_EXPIRES, ENSURE_SESSIONS_TASK, RUN_SESSION_TASK
-from angee.integrate.impl import LiveBridgeImpl
-from angee.integrate.locks import bridge_is_locked, bridge_session_is_hosted
-from angee.integrate.models import Bridge, IntegrationRuntimeStatus
+from angee.integrate.models import Bridge
 from angee.integrate.registry import models_with
 from angee.integrate.session_runner import run_bridge_session_job
 from angee.integrate.sync_runner import run_bridge_sync_job
@@ -99,42 +96,12 @@ def ensure_bridge_sessions(timestamp: int | None = None) -> dict[str, Any]:
     cross_process = task_locks_are_cross_process()
     with system_context(reason="integrate.ensure_bridge_sessions"):
         for model in models_with(base=Bridge):
-            field = model.live_implementation_field()
-            if field is None:
-                continue
-            live_keys: list[str] = []
-            for key in field.registered_keys():
-                try:
-                    impl_class = field.resolve_class(key)
-                except AttributeError, ImportError, ImproperlyConfigured:
-                    logger.exception(
-                        "Skipping unresolvable %s live implementation key %r.",
-                        model._meta.label_lower,
-                        key,
-                    )
+            for bridge in model._default_manager.live_session_candidates():
+                queue = bridge.reconcile_live_session(cross_process=cross_process)
+                if queue is None:
                     continue
-                if issubclass(impl_class, LiveBridgeImpl):
-                    live_keys.append(key)
-            if not live_keys:
-                continue
-            bridges = model._default_manager.of_concrete_type().ready_for_work().filter(
-                **{f"{field.name}__in": live_keys},
-                lifecycle=model.Lifecycle.CONNECTED,
-                runtime_status=IntegrationRuntimeStatus.OK,
-            ).order_by("pk")
-            for bridge in bridges:
-                impl = bridge.live_impl
-                if not isinstance(impl, LiveBridgeImpl):
-                    continue
-                if cross_process and (bridge_is_locked(bridge) or bridge_session_is_hosted(bridge)):
-                    continue
-                if bridge.subscription_state.get("desired") != bridge.LiveState.LIVE:
-                    bridge.start_live()
-                else:
-                    impl.start_live()
                 dispatched += 1
-                if cross_process and bridge.sync_stage in bridge.LIVE_SYNC_STAGES:
-                    queue = impl.session_queue
+                if queue:
                     starved_by_queue[queue] = starved_by_queue.get(queue, 0) + 1
     for queue, count in sorted(starved_by_queue.items()):
         logger.warning(

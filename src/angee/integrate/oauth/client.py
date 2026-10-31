@@ -134,7 +134,12 @@ class OAuthClientProtocol:
         return self.exchange_grant("refresh_token", refresh_token=refresh_token)
 
     def exchange_identity(
-        self, *, code: str, redirect_uri: str, code_verifier: str | None = None, state: str = "",
+        self,
+        *,
+        code: str,
+        redirect_uri: str,
+        code_verifier: str | None = None,
+        state: str = "",
     ) -> tuple[dict[str, Any], dict[str, Any], str]:
         """Return refined material, userinfo and the code exchange's OIDC proof.
 
@@ -143,13 +148,17 @@ class OAuthClientProtocol:
         """
 
         tokens = self.exchange_code(
-            code=code, redirect_uri=redirect_uri, code_verifier=code_verifier, state=state,
+            code=code,
+            redirect_uri=redirect_uri,
+            code_verifier=code_verifier,
+            state=state,
         )
         id_token = str(tokens.get("id_token", "") or "")
         tokens = self.oauth_client.refine_grant(self, tokens)
         access_token = str(tokens.get("access_token", "") or "")
         claims = self.fetch_userinfo(
-            access_token, params=self.oauth_client.userinfo_params(self, access_token),
+            access_token,
+            params=self.oauth_client.userinfo_params(self, access_token),
         )
         return tokens, claims, id_token
 
@@ -217,7 +226,8 @@ class OAuthClientProtocol:
         token_endpoint = self._endpoint("token_endpoint")
         self._token_response_claims = {}
         extra = self.oauth_client.provider.token_params(
-            grant_type, _param_values(self.oauth_client, "token_param_values"),
+            grant_type,
+            _param_values(self.oauth_client, "token_param_values"),
         )
         if self._uses_json_token_request():
             return self._json_token_request(token_endpoint, grant_type, grant, extra)
@@ -396,18 +406,18 @@ class OAuthClientProtocol:
         challenge = code_challenge if getattr(self.oauth_client, "supports_pkce", False) else None
         if not challenge and not self._client_secret():
             raise OAuthFlowError(CLIENT_NOT_CONFIGURED, 400, "OAuth client needs PKCE or a client secret.")
-        query: dict[str, str] = {
+        params = {
             **_string_param_values(self.oauth_client, "authorize_param_values"),
-            "client_id": str(getattr(self.oauth_client, "client_id", "")),
             "redirect_uri": redirect_uri,
-            "response_type": "code",
             "scope": " ".join(scopes),
-            "state": state,
         }
         if challenge:
-            query["code_challenge"] = challenge
-            query["code_challenge_method"] = "S256"
-        return query
+            params.update(code_challenge=challenge, code_challenge_method="S256")
+        # Authlib owns standard authorization parameters; the endpoint merge below
+        # retains provider query keys while replacing stale standard parameters.
+        with self._session() as client:
+            url, _state = client.create_authorization_url("", state=state, **params)
+        return dict(parse.parse_qsl(parse.urlsplit(url).query))
 
     def _endpoint(self, field: str) -> str:
         """Return a configured endpoint value, or raise when the row omits it."""

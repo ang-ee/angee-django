@@ -93,7 +93,7 @@ def _enqueue_and_run_due(*, now: datetime) -> dict[str, int]:
 
     ran = 0
     errors = 0
-    original = integrate_scheduler.queue_bridge_sync
+    original = SchedulerBridge.request_sync
 
     def run_queued(bridge: SchedulerBridge, *, now: datetime | None = None, persist: bool = True) -> None:
         nonlocal ran, errors
@@ -113,11 +113,11 @@ def _enqueue_and_run_due(*, now: datetime) -> dict[str, int]:
             if not result.get("skipped"):
                 ran += 1
 
-    integrate_scheduler.queue_bridge_sync = run_queued
+    SchedulerBridge.request_sync = run_queued
     try:
         enqueue_due_bridges(now=now)
     finally:
-        integrate_scheduler.queue_bridge_sync = original
+        SchedulerBridge.request_sync = original
     return {"ran": ran, "errors": errors}
 
 
@@ -576,7 +576,7 @@ def _cross_process_locks() -> Iterator[None]:
     observe (Postgres advisory locks in deployment).
     """
 
-    import angee.integrate.models as integrate_models
+    import angee.integrate.models.bridges as integrate_models
 
     original = integrate_models.task_locks_are_cross_process
     integrate_models.task_locks_are_cross_process = lambda: True
@@ -661,7 +661,7 @@ def test_queue_bridge_sync_marks_queued_and_defers_task(
         assert options == {}
         enqueued.append((task_name, kwargs))
 
-    monkeypatch.setattr(integrate_queue, "enqueue_task", fake_enqueue_task)
+    monkeypatch.setattr("angee.integrate.models.bridges.enqueue_task", fake_enqueue_task)
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("queued-bridge", model=SchedulerBridge)
 
@@ -694,8 +694,7 @@ def test_queue_bridge_sync_can_enqueue_duplicate_requests(
     now = timezone.now()
     enqueued: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        integrate_queue,
-        "enqueue_task",
+        "angee.integrate.models.bridges.enqueue_task",
         lambda _task_name, *, kwargs, **_options: enqueued.append(kwargs),
     )
     with system_context(reason="test integrate scheduler setup"):
@@ -721,8 +720,7 @@ def test_stale_bridge_sync_task_payload_is_skipped(
     first = timezone.now()
     second = first + timedelta(seconds=5)
     monkeypatch.setattr(
-        integrate_queue,
-        "enqueue_task",
+        "angee.integrate.models.bridges.enqueue_task",
         lambda _task_name, *, kwargs, **_options: None,
     )
     with system_context(reason="test integrate scheduler setup"):
@@ -813,7 +811,7 @@ def test_enqueue_due_bridges_claims_and_queues_rows(
         assert persist is False
         enqueued.append((bridge.pk, now))
 
-    monkeypatch.setattr(integrate_scheduler, "queue_bridge_sync", fake_queue_bridge_sync)
+    monkeypatch.setattr(SchedulerBridge, "request_sync", fake_queue_bridge_sync)
     with system_context(reason="test integrate scheduler setup"):
         due = make_integration(
             "queued-due",

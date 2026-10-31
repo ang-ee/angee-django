@@ -19,19 +19,24 @@ def ready_registration_slugs() -> frozenset[str]:
 
     model = apps.get_model("integrate", "OAuthClient")
     with system_context(reason="integrate.oauth.public_readiness"):
-        rows = model.objects.preferred().only(*model.readiness_fields)
-        return frozenset(row.slug for row in rows if row.configuration_state == "ready")
+        return frozenset(row.slug for row in model.objects.ready_registrations())
 
 
-def oauth_client_is_ready(slug: str) -> bool:
-    """Reuse operation facts; callers outside GraphQL get a fresh public read."""
+def operation_registration_slugs() -> frozenset[str]:
+    """Batch owner-derived public readiness within this GraphQL operation."""
 
     operation = _ready_slugs.get()
     if operation is None:
-        return slug in ready_registration_slugs()
+        return ready_registration_slugs()
     if "ready" not in operation:
         operation["ready"] = ready_registration_slugs()
-    return slug in operation["ready"]
+    return operation["ready"]
+
+
+def oauth_client_is_ready(slug: str) -> bool:
+    """Read one registration from the GraphQL operation's owner-derived snapshot."""
+
+    return slug in operation_registration_slugs()
 
 
 class OAuthRegistrationExtension(SchemaExtension):

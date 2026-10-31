@@ -21,7 +21,6 @@ from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.schema import UserType
-from angee.integrate.queue import queue_bridge_sync
 from angee.integrate.schema import (
     BridgeSyncStatusMixin,
     CredentialType,
@@ -291,7 +290,7 @@ class VCSActionMutation:
         """Queue a refresh of every repository's sources for one VCS bridge."""
 
         with action_target(VcsBridge, id, reason="integrate.graphql.sync_vcs_bridge") as vcs:
-            queue_bridge_sync(vcs, now=timezone.now())
+            vcs.request_sync(now=timezone.now())
         return ActionResult(ok=True, message="Queued bridge sync.")
 
     @strawberry.mutation(permission_classes=_ADMIN_PERMISSION_CLASSES)

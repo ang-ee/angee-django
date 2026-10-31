@@ -27,17 +27,28 @@ from django_choices_field import IntegerChoicesField
 from django_compose.models import Composable
 from rebac import PermissionDenied, current_actor, database_context, system_context
 from rebac.actors import is_sudo
+from rebac.managers import TrackedManager
 from rebac.mixins import RebacModelBase
 
 from angee.base.fields.state import StateField
-from angee.base.managers import AngeeManager
+from angee.base.managers import AngeeManager, AngeeUnscopedManager
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
-from angee.base.models.locks import ImmutableFieldsMixin, RowLockMixin, RowLockQuerySet
+from angee.base.models.locks import (
+    ImmutableFieldsMixin,
+    RowLockMixin,
+    RowLockQuerySet,
+    _RowLockBaseManager,
+    _RowLockBaseQuerySet,
+)
 from angee.base.models.stages import Stage as StagePrimitive
 from angee.base.models.stages import StagedModelMixin
+from angee.base.models.stages import StageManager as StageManagerPrimitive
+from angee.base.models.stages import StageQuerySet as StageQuerySetPrimitive
 from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.querysets import AngeeQuerySet
+from angee.projects.models import TaskManager as ProjectTaskManager
+from angee.projects.models import TaskQuerySet as ProjectTaskQuerySet
 from angee.resources.mixins import ResourceLoadMixin
 from angee.sequence.models import PeriodReset
 from angee.spaces.managers import GroupManager
@@ -127,42 +138,15 @@ class QueueManager[QueueT: Queue](GroupManager[QueueT]):
             queues._ensure_personal_membership(queue, user)
             return queue
 
-    def _ensure_personal_membership(self, queue: models.Model, user: models.Model) -> None:
+    def _ensure_personal_membership(self, queue: Queue, user: models.Model) -> None:
         """Ensure the personal queue's inherited Group roster names its owner."""
 
         party_model = apps.get_model("parties", "Party")
         membership_model = apps.get_model("spaces", "Membership")
         person = party_model.objects.db_manager(queue._state.db).for_user(user)
-        membership = membership_model._base_manager.using(queue._state.db).filter(
-            group_id=queue.pk,
-            party_id=person.pk,
-        ).first()
-        if membership is None:
-            membership = membership_model(
-                group_id=queue.pk,
-                party_id=person.pk,
-                role=membership_model.MembershipRole.OWNER,
-                confidence=1.0,
-                is_confirmed=True,
-                is_dismissed=False,
-                created_by_id=user.pk,
-                updated_by_id=user.pk,
-            )
-            membership.save(using=queue._state.db)
-            return
-        changed = False
-        desired = {
-            "role": membership_model.MembershipRole.OWNER,
-            "confidence": 1.0,
-            "is_confirmed": True,
-            "is_dismissed": False,
-        }
-        for name, value in desired.items():
-            if getattr(membership, name) != value:
-                setattr(membership, name, value)
-                changed = True
-        if changed:
-            membership.save(using=queue._state.db, update_fields=(*desired, "updated_at"))
+        membership_model.objects.db_manager(queue._state.db).provision_confirmed(
+            group=queue, party=person, role=membership_model.MembershipRole.OWNER, provisioned_by=user,
+        )
 
 
 class Queue(ImmutableFieldsMixin, Composable, metaclass=RebacModelBase, inherits="spaces.Group"):
@@ -359,11 +343,37 @@ class Queue(ImmutableFieldsMixin, Composable, metaclass=RebacModelBase, inherits
             raise ValidationError({"default_estimate": "Default estimate cannot be zero when zero is disallowed."})
 
 
-class StageQuerySet[StageT: Stage](RowLockQuerySet[StageT], AngeeQuerySet[StageT]):
-    """Keep system-stage guards on queryset mutations and direct row writes."""
+class ManualStageQuerySet[StageT: Stage](StageQuerySetPrimitive[StageT]):
+    """Work's hand-verb admission over a selected stage population."""
+
+    def for_manual_category(self, container: models.Model | Combinable, category: str) -> Self:
+        """Select hand-verb candidates without discarding the caller's filters."""
+
+        return self.for_container(container).filter(category=category, rule_owned=False)
 
 
-StageManager = AngeeManager.from_queryset(StageQuerySet)
+class StageQuerySet[StageT: Stage](ManualStageQuerySet[StageT], RowLockQuerySet[StageT], AngeeQuerySet[StageT]):
+    """Scoped stage selections with system-row mutation guards."""
+
+
+class StageBaseQuerySet[StageT: Stage](ManualStageQuerySet[StageT], _RowLockBaseQuerySet[StageT]):
+    """Unfiltered stage selections retaining system-row mutation guards."""
+
+
+_StageManagerBase = AngeeManager.from_queryset(StageQuerySet)
+
+
+class StageManager[StageT: Stage](_StageManagerBase[StageT], StageManagerPrimitive[StageT]):
+    """Actor-scoped Work stages extending the generic stage manager contract."""
+
+
+_StageBaseManagerBase = AngeeUnscopedManager.from_queryset(StageBaseQuerySet)
+
+
+class StageBaseManager[StageT: Stage](
+    _StageBaseManagerBase[StageT], _RowLockBaseManager[StageT], TrackedManager[StageT], StageManagerPrimitive[StageT],
+):
+    """Unfiltered Work stages preserving row-lock and generic stage contracts."""
 
 
 class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=True):
@@ -375,7 +385,9 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=T
     """
 
     row_lock_cascade_parent = "queue"
-    objects = StageManager()
+    objects: ClassVar[StageManager[Self]] = StageManager()
+    _angee_base: ClassVar[StageBaseManager[Self]] = StageBaseManager()
+    _base_manager: ClassVar[StageBaseManager[Self]]
 
     sqid_prefix = "wst_"
     container_field_name = "queue"
@@ -408,6 +420,7 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=T
         abstract = True
         ordering = ("queue", "position", "sqid")
         rebac_resource_type = "work/stage"
+        base_manager_name = "_angee_base"
         constraints = (
             models.UniqueConstraint(
                 fields=("queue", "position"),
@@ -513,12 +526,6 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=T
         raise ValidationError({"stage": f"Use {verb} to move a task into the system {following.category} stage."})
 
     @classmethod
-    def for_manual_category(cls, container: models.Model | Combinable, category: str) -> models.QuerySet[Self]:
-        """Return ordered category candidates available to hand verbs."""
-
-        return cls.for_container(container).filter(category=category, rule_owned=False)
-
-    @classmethod
     def resolve_default_fallback(cls, stages: models.QuerySet[Self]) -> Self | None:
         """Choose an ordinary unstarted stage when the queue has no explicit default."""
 
@@ -545,7 +552,7 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=T
             return
         if self.entry_reserved or not self.ordinary_entry_available:
             queue_model = type(self).queue.field.related_model
-            if queue_model._base_manager.filter(default_stage_id=self.pk).exists():
+            if queue_model._base_manager.using(self._state.db).filter(default_stage_id=self.pk).exists():
                 field = "rule_owned" if self.rule_owned else "category"
                 raise ValidationError({field: "The queue's default stage must allow ordinary entry."})
         # MilestoneWork owns this optional reverse relation in composed model graphs.
@@ -555,7 +562,7 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=T
             pass
         else:
             assert milestones is not None
-            mappings = milestones._base_manager.filter(active_stage_id=self.pk)
+            mappings = milestones._base_manager.using(self._state.db).filter(active_stage_id=self.pk)
             if not self.rule_owned and mappings.exists():
                 raise ValidationError({"rule_owned": "A mapped stage must remain rule-owned."})
             if (
@@ -579,6 +586,21 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=T
 
 class CycleManager[CycleT: Cycle](AngeeManager[CycleT]):
     """Own idempotent queue-cadence generation and due-cycle closure."""
+
+    def maintain_cadence(self, *, now: datetime | None = None) -> int:
+        """Maintain enabled queues and return the number of newly generated cycles."""
+
+        now = now or timezone.now()
+        as_of = timezone.localtime(now).date()
+        using = self._db or router.db_for_write(self.model)
+        self = self.db_manager(using)
+        queues = apps.get_model("work", "Queue").objects.using(using).filter(cycles_enabled=True).order_by("pk")
+        generated = 0
+        for queue in queues:
+            before = self.filter(queue=queue).count()
+            self.generate_for_queue(queue, as_of=as_of, completed_at=now)
+            generated += self.filter(queue=queue).count() - before
+        return generated
 
     @staticmethod
     def _start_on_or_before(value: date, weekday: int) -> date:
@@ -625,8 +647,13 @@ class CycleManager[CycleT: Cycle](AngeeManager[CycleT]):
         as_of = as_of or timezone.localdate()
         if window_end is not None and window_end < as_of:
             raise ValidationError({"window_end": "Cycle window end cannot precede its start."})
-        with system_context(reason="work.cycle.generate"), transaction.atomic():
-            queue = type(queue).objects.sudo(reason="work.cycle.generate.queue").lock_if_supported().get(pk=queue.pk)
+        using = self._db or queue._state.db or router.db_for_write(self.model, instance=queue)
+        self = self.db_manager(using)
+        with database_context(using), system_context(reason="work.cycle.generate"), transaction.atomic(using=using):
+            queue = (
+                type(queue).objects.db_manager(using).sudo(reason="work.cycle.generate.queue")
+                .lock_if_supported().get(pk=queue.pk)
+            )
             if not queue.cycles_enabled:
                 return ()
             cycles = list(
@@ -739,7 +766,7 @@ class Cycle(AuditMixin, AngeeDataModel, concrete=True):
             with system_context(reason="work.cycle.immutable_close"):
                 persisted = (
                     type(self)
-                    ._base_manager.filter(pk=self.pk)
+                    ._base_manager.using(self._state.db).filter(pk=self.pk)
                     .values(
                         "completed_at",
                         "uncompleted_upon_close",
@@ -772,8 +799,9 @@ class Cycle(AuditMixin, AngeeDataModel, concrete=True):
 
         if self.pk is None:
             raise ValidationError("A cycle must be saved before it can close.")
-        with system_context(reason="work.cycle.close"), transaction.atomic():
-            cycles = type(self).objects.sudo(reason="work.cycle.close.rows").lock_if_supported()
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), system_context(reason="work.cycle.close"), transaction.atomic(using=using):
+            cycles = type(self).objects.db_manager(using).sudo(reason="work.cycle.close.rows").lock_if_supported()
             locked = cycles.get(pk=self.pk)
             if locked.completed_at is not None:
                 self.completed_at = locked.completed_at
@@ -796,7 +824,7 @@ class Cycle(AuditMixin, AngeeDataModel, concrete=True):
 
             task_model = apps.get_model("projects", "Task")
             tasks = list(
-                task_model.objects.sudo(reason="work.cycle.close.tasks")
+                task_model.objects.db_manager(using).sudo(reason="work.cycle.close.tasks")
                 .lock_if_supported()
                 .filter(cycle_id=locked.pk, status=task_model.TaskStatus.OPEN)
                 .order_by("pk")
@@ -804,7 +832,7 @@ class Cycle(AuditMixin, AngeeDataModel, concrete=True):
             snapshot = sorted(str(task.sqid) for task in tasks)
             closed_at = completed_at or timezone.now()
             if tasks:
-                task_model._base_manager.filter(pk__in=[task.pk for task in tasks]).update(
+                task_model._base_manager.using(using).filter(pk__in=[task.pk for task in tasks]).update(
                     cycle_id=next_cycle.pk,
                     updated_at=closed_at,
                 )
@@ -845,40 +873,42 @@ class ProjectWork(Composable, extends="projects.Project"):
         related_name="projects",
     )
 
-    @transaction.atomic
     def admit_manager(self, user: User) -> Membership:
         """Add a team moderator and follow this project in the same transaction."""
 
-        if not self.has_access("share") or self.team_id is None:
-            raise PermissionDenied("Project share and a team are required to add a manager.")
-        team = self.team
-        if team is None:
-            raise PermissionDenied("The project's team must be readable to add a manager.")
-        if user.kind != "person":
-            raise ValidationError({"user": "Choose a person account."})
-        with system_context(reason="work.project.manager.party"):
-            party = apps.get_model("parties", "Party").objects.for_user(user)
-        membership_model = apps.get_model("spaces", "Membership")
-        membership = membership_model.objects.add_confirmed(
-            group=team,
-            party=party,
-            role=membership_model.MembershipRole.MODERATOR,
-        )
-        with system_context(reason="work.project.manager.follow"):
-            self.message_subscribe(user=user)
-        return membership
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
+            if not self.has_access("share") or self.team_id is None:
+                raise PermissionDenied("Project share and a team are required to add a manager.")
+            team = self.team
+            if team is None:
+                raise PermissionDenied("The project's team must be readable to add a manager.")
+            if user.kind != "person":
+                raise ValidationError({"user": "Choose a person account."})
+            with system_context(reason="work.project.manager.party"):
+                party = apps.get_model("parties", "Party").objects.db_manager(using).for_user(user)
+            membership_model = apps.get_model("spaces", "Membership")
+            membership = membership_model.objects.db_manager(using).add_confirmed(
+                group=team,
+                party=party,
+                role=membership_model.MembershipRole.MODERATOR,
+            )
+            with system_context(reason="work.project.manager.follow"):
+                self.message_subscribe(user=user)
+            return membership
 
-    @transaction.atomic
     def remove_manager(self, membership: Membership) -> None:
         """Dismiss one team moderator through the roster's removal owner."""
 
-        if not self.has_access("share") or self.team_id is None:
-            raise PermissionDenied("Project share and a team are required to remove a manager.")
-        if membership.group_id != self.team_id or membership.role != membership.MembershipRole.MODERATOR:
-            raise ValidationError({"membership": "Choose a manager of this project's team."})
-        if not membership.has_access("write"):
-            raise PermissionDenied("Team roster management is required.")
-        membership.dismiss()
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
+            if not self.has_access("share") or self.team_id is None:
+                raise PermissionDenied("Project share and a team are required to remove a manager.")
+            if membership.group_id != self.team_id or membership.role != membership.MembershipRole.MODERATOR:
+                raise ValidationError({"membership": "Choose a manager of this project's team."})
+            if not membership.has_access("write"):
+                raise PermissionDenied("Team roster management is required.")
+            membership.dismiss()
 
     class Meta:
         """Abstract contribution folded into the concrete project table."""
@@ -901,21 +931,22 @@ class ProjectWork(Composable, extends="projects.Project"):
 
         return super().setup_complete_condition(actor) & models.Q(team__isnull=False)
 
-    @transaction.atomic
     def sync_source_task_stage(self) -> None:
         """Apply the current project rule inside its lifecycle event transaction."""
 
-        if self.converted_from_id is None:
-            return
-        task_model = type(self).converted_from.field.related_model
-        with system_context(reason="work.project.source_task_stage"):
-            task = task_model.objects.lock_if_supported().get(pk=self.converted_from_id)
-            stage = task.rule_stage(self)
-            if stage is None or task.stage_id == stage.pk:
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
+            if self.converted_from_id is None:
                 return
-            task.stage = stage
-            with task._work_verb_write():
-                task.save(update_fields=("stage", "updated_at"))
+            task_model = type(self).converted_from.field.related_model
+            with system_context(reason="work.project.source_task_stage"):
+                task = task_model.objects.using(using).lock_if_supported().get(pk=self.converted_from_id)
+                stage = task.rule_stage(self)
+                if stage is None or task.stage_id == stage.pk:
+                    return
+                task.stage = stage
+                with task._work_verb_write():
+                    task.save(update_fields=("stage", "updated_at"))
 
 
 class MilestoneWork(Composable, extends="projects.Milestone"):
@@ -970,12 +1001,82 @@ class MilestoneWork(Composable, extends="projects.Milestone"):
             return
         project_model = type(self).project.field.related_model
         queue_id = (
-            project_model._base_manager.filter(pk=self.project_id)
+            project_model._base_manager.using(self._state.db).filter(pk=self.project_id)
             .values_list("converted_from__queue_id", flat=True)
             .first()
         )
         stage_model = type(self).active_stage.field.related_model
-        stage_model._base_manager.get(pk=self.active_stage_id).validate_rule_stage(queue_id)
+        stage_model._base_manager.using(self._state.db).get(pk=self.active_stage_id).validate_rule_stage(queue_id)
+
+
+class TaskQuerySet[TaskT: TaskWork](ProjectTaskQuerySet[TaskT]):
+    """Work selections and snooze writes within the caller's task population."""
+
+    def removed_for(self, actor: Any, *, queue: Any = None, parent: Any = None) -> Self:
+        """Select restorable trash without discarding the caller's filters."""
+
+        rows = self.with_actor(actor).with_action("restore").scoped().trashed().filter(merged_into__isnull=True)
+        if queue is not None:
+            rows = rows.filter(queue=queue)
+        if parent is not None:
+            rows = rows.filter(parent=parent)
+        return rows.order_by("-trashed_at", "-pk")
+
+    def wake_due_snoozes(self, *, now: datetime | None = None) -> int:
+        """Clear selected snoozes at their inclusive wake instant."""
+
+        now = now or timezone.now()
+        return self.filter(snoozed_until__isnull=False, snoozed_until__lte=now).update(
+            snoozed_until=None, snoozed_by=None, updated_at=now,
+        )
+
+    def wake_from_chatter_thread(self, thread_id: Any) -> int:
+        """Clear selected tasks whose chatter received activity."""
+
+        if thread_id is None:
+            return 0
+        content_type = ContentType.objects.db_manager(self.db).get_for_model(self.model)
+        attachments = apps.get_model("messaging", "ThreadAttachment")._base_manager.using(self.db).filter(
+            content_type=content_type, thread_id=thread_id, role="chatter",
+        ).values("object_id")
+        return self.filter(pk__in=models.Subquery(attachments), snoozed_until__isnull=False).update(
+            snoozed_until=None, snoozed_by=None, updated_at=timezone.now(),
+        )
+
+
+_TaskManagerBase = ProjectTaskManager.from_queryset(TaskQuerySet)
+
+
+class TaskManager[TaskT: TaskWork](_TaskManagerBase[TaskT]):
+    """Work factories layered over the canonical Projects task manager."""
+
+    def capture_triage(
+        self, *, queue: Queue, title: str, note: str, project: Any = None,
+        created_by_id: Any = None, values: dict[str, Any] | None = None,
+    ) -> TaskT:
+        """Capture one ownerless task into the queue's reserved triage entry."""
+
+        if not self.effective_actor(strict=True)[1]:
+            raise PermissionDenied("System admission is required to capture ownerless triage work.")
+        using = self._db or queue._state.db or router.db_for_write(self.model, instance=queue)
+        with database_context(using), transaction.atomic(using=using):
+            triage = apps.get_model("work", "Stage")._base_manager.using(using).filter(
+                queue_id=queue.pk, category="triage",
+            ).first()
+            if triage is None:
+                raise ValidationError({"queue": "The intake queue has no triage stage."})
+            limit = self.model.title.field.max_length
+            assert limit is not None
+            task = self.model(
+                queue=queue, stage=triage, project=project,
+                title=" ".join(str(title or "").split())[:limit] or "Captured need", note=str(note or ""),
+                created_by_id=created_by_id, updated_by_id=created_by_id, owner=None, **(values or {}),
+            )
+            task._state.db = using
+            with task._work_verb_write():
+                task.full_clean(validate_unique=False, validate_constraints=False)
+                task.sudo(reason="work.task.capture_triage").save(using=using, ownerless=True)
+            return task
 
 
 class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
@@ -1075,6 +1176,8 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
             ),
         )
 
+    objects = TaskManager()
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Track caller-authored status separately from Django row loading."""
 
@@ -1144,7 +1247,10 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         if attname in self.__dict__:
             # Assigned after being loaded deferred: the loaded value is gone
             # from the instance, so ask the row itself.
-            value = type(self)._base_manager.filter(pk=self.pk).values_list(attname, flat=True).first()
+            value = (
+                type(self)._base_manager.using(self._state.db).filter(pk=self.pk)
+                .values_list(attname, flat=True).first()
+            )
         else:
             # Still deferred means never assigned: the lazy load below IS the
             # loaded value (and no longer recurses, per _work_snapshot_loaded_values).
@@ -1225,27 +1331,28 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
             raise
         self._work_snapshot_loaded_values(fields=update_fields)
 
-    @transaction.atomic
     def start(self) -> Any:
         """Start queued work; accept triage or reopen closed work first."""
 
-        if self.queue_id is None:
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
+            if self.queue_id is None:
+                return self
+            previous, _following = self._reject_reserved_stage_transition(manual=True, lock=True)
+            category = previous.category if previous is not None else None
+            if category == "started":
+                return self
+            self.validate_action("start")
+            stage = self._stage_for_category("started")
+            Stage.validate_transition(previous, stage)
+            self.stage = stage
+            self.save(update_fields=("stage", "updated_at"))
             return self
-        previous, _following = self._reject_reserved_stage_transition(manual=True, lock=True)
-        category = previous.category if previous is not None else None
-        if category == "started":
-            return self
-        self.validate_action("start")
-        stage = self._stage_for_category("started")
-        Stage.validate_transition(previous, stage)
-        self.stage = stage
-        self.save(update_fields=("stage", "updated_at"))
-        return self
 
     def complete(self, *, feedback: str = "") -> Any:
         """Move to the first completed stage, or use the base verb without a queue."""
 
-        using = type(self)._base_manager.db_manager(self._state.db, hints={"instance": self}).db
+        using = self._state.db or router.db_for_write(type(self), instance=self)
         with database_context(using), transaction.atomic(using=using):
             if self.queue_id is None:
                 return self._base_verb("complete", feedback=feedback)
@@ -1260,46 +1367,48 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
             self.post_completion(feedback)
             return self
 
-    @transaction.atomic
     def drop(self, reason: Any) -> Any:
         """Move to duplicate/canceled according to the base dropped reason."""
 
-        try:
-            reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
-        except ValueError as error:
-            raise ValidationError({"reason": "Choose duplicate, declined, or obsolete."}) from error
-        if self.queue_id is None:
-            return self._base_verb("drop", reason_member)
-        self.validate_action("drop")
-        category = "duplicate" if reason_member == self.TaskDroppedReason.DUPLICATE else "canceled"
-        stage = self._stage_for_category(category)
-        self._reject_reserved_stage_transition(
-            target=stage, manual=True, allow_system_entry=category == "duplicate", lock=True
-        )
-        self.stage = stage
-        self.dropped_reason = reason_member
-        if category == "duplicate":
-            self._reject_direct_status_write()
-            with self._work_verb_write():
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
+            try:
+                reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
+            except ValueError as error:
+                raise ValidationError({"reason": "Choose duplicate, declined, or obsolete."}) from error
+            if self.queue_id is None:
+                return self._base_verb("drop", reason_member)
+            self.validate_action("drop")
+            category = "duplicate" if reason_member == self.TaskDroppedReason.DUPLICATE else "canceled"
+            stage = self._stage_for_category(category)
+            self._reject_reserved_stage_transition(
+                target=stage, manual=True, allow_system_entry=category == "duplicate", lock=True
+            )
+            self.stage = stage
+            self.dropped_reason = reason_member
+            if category == "duplicate":
+                self._reject_direct_status_write()
+                with self._work_verb_write():
+                    self.save(update_fields=("stage", "dropped_reason", "updated_at"))
+            else:
                 self.save(update_fields=("stage", "dropped_reason", "updated_at"))
-        else:
-            self.save(update_fields=("stage", "dropped_reason", "updated_at"))
-        return self
+            return self
 
-    @transaction.atomic
     def reopen(self) -> Any:
         """Move to the queue-owned default stage, or use the base verb without a queue."""
 
-        if self.queue_id is None:
-            return self._base_verb("reopen")
-        self.validate_action("reopen")
-        stage = self.resolve_default_stage()
-        if stage is None:
-            raise ValidationError({"stage": "Queue has no default stage."})
-        self._reject_reserved_stage_transition(target=stage, manual=True, lock=True)
-        self.stage = stage
-        self.save(update_fields=("stage", "updated_at"))
-        return self
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
+            if self.queue_id is None:
+                return self._base_verb("reopen")
+            self.validate_action("reopen")
+            stage = self.resolve_default_stage()
+            if stage is None:
+                raise ValidationError({"stage": "Queue has no default stage."})
+            self._reject_reserved_stage_transition(target=stage, manual=True, lock=True)
+            self.stage = stage
+            self.save(update_fields=("stage", "updated_at"))
+            return self
 
     @classmethod
     def hand_actions(cls) -> tuple[str, ...]:
@@ -1327,7 +1436,9 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         reserved = (stage.exit_reserved_condition("stage"), {"stage": stage.EXIT_RESERVED_MESSAGE})
 
         def lacks(category: str) -> models.Q:
-            return queued & ~Q(models.Exists(stage.for_manual_category(models.OuterRef("queue"), category)))
+            return queued & ~Q(models.Exists(
+                stage._base_manager.for_manual_category(models.OuterRef("queue"), category),
+            ))
 
         def missing(category: str) -> tuple[models.Q, Any]:
             return lacks(category), {"stage": f"Queue has no {category} stage."}
@@ -1402,111 +1513,108 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         if not is_sudo():
             self.validate_action("remove")
 
-    @transaction.atomic
     def remove(self, *, reason: str = "", expected_revision: int | None = None) -> Any:
         """Trash an unpromoted task while retaining its workflow stage."""
 
-        self._require_work_action(expected_revision, permission="delete")
-        self.trash(reason=reason)
-        return self
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
+            self._require_work_action(expected_revision, permission="delete")
+            self.trash(reason=reason)
+            return self
 
-    @transaction.atomic
     def restore(self, *, expected_revision: int | None = None) -> Any:
         """Restore the task from shared trash."""
 
-        self._require_work_action(expected_revision, permission="restore")
-        super().restore()
-        return self
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
+            self._require_work_action(expected_revision, permission="restore")
+            super().restore()
+            return self
 
     @classmethod
     def removed_for(cls, actor: Any, *, queue: Any = None, parent: Any = None) -> models.QuerySet[Any]:
-        """Return shared trash the actor may restore, excluding merge redirects."""
+        """Compatibility entrypoint for external compositions; selection belongs to the queryset."""
 
-        rows = (
-            cls._default_manager.with_actor(actor).with_action("restore").scoped()
-            .trashed().filter(merged_into__isnull=True)
-        )
-        if queue is not None:
-            rows = rows.filter(queue=queue)
-        if parent is not None:
-            rows = rows.filter(parent=parent)
-        return rows.order_by("-trashed_at", "-pk")
+        return cls.objects.removed_for(actor, queue=queue, parent=parent)
 
-    @transaction.atomic
     def accept(self, stage: Stage | None = None, *, expected_revision: int | None = None) -> Any:
         """Leave triage for a same-queue, non-system stage, idempotently."""
 
-        self._require_work_action(expected_revision)
-        if self.queue_id is None:
-            raise ValidationError({"queue": "A queued task is required for triage."})
-        target = stage or self.resolve_default_stage()
-        if target is None:
-            raise ValidationError({"stage": "Queue has no default stage."})
-        if target.queue_id != self.queue_id:
-            raise ValidationError({"stage": "Accepted stage must belong to the task's queue."})
-        self._reject_reserved_stage_transition(target=target, manual=True, lock=True)
-        if self.stage_id == target.pk:
-            if (
-                self.status == self.TaskStatus.OPEN
-                and self.done_at is None
-                and self.dropped_reason is None
-                and self.dropped_at is None
-            ):
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
+            self._require_work_action(expected_revision)
+            if self.queue_id is None:
+                raise ValidationError({"queue": "A queued task is required for triage."})
+            target = stage or self.resolve_default_stage()
+            if target is None:
+                raise ValidationError({"stage": "Queue has no default stage."})
+            if target.queue_id != self.queue_id:
+                raise ValidationError({"stage": "Accepted stage must belong to the task's queue."})
+            self._reject_reserved_stage_transition(target=target, manual=True, lock=True)
+            if self.stage_id == target.pk:
+                if (
+                    self.status == self.TaskStatus.OPEN
+                    and self.done_at is None
+                    and self.dropped_reason is None
+                    and self.dropped_at is None
+                ):
+                    return self
+                self.save(update_fields=("stage", "updated_at"))
                 return self
+            self.validate_action("accept")
+            self.stage = target
             self.save(update_fields=("stage", "updated_at"))
             return self
-        self.validate_action("accept")
-        self.stage = target
-        self.save(update_fields=("stage", "updated_at"))
-        return self
 
-    @transaction.atomic
     def return_to_triage(self) -> Any:
         """Return work to its triage-enabled queue's triage stage, idempotently."""
 
-        self.validate_action("return_to_triage")
-        stage = self._stage_for_category("triage")
-        self._reject_reserved_stage_transition(target=stage, manual=True, allow_system_entry=True, lock=True)
-        if self.stage_id == stage.pk:
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
+            self.validate_action("return_to_triage")
+            stage = self._stage_for_category("triage")
+            self._reject_reserved_stage_transition(target=stage, manual=True, allow_system_entry=True, lock=True)
+            if self.stage_id == stage.pk:
+                return self
+            self._reject_direct_status_write()
+            self.stage = stage
+            with self._work_verb_write():
+                self.save(update_fields=("stage", "updated_at"))
             return self
-        self._reject_direct_status_write()
-        self.stage = stage
-        with self._work_verb_write():
-            self.save(update_fields=("stage", "updated_at"))
-        return self
 
-    @transaction.atomic
     def decline(self, reason: Any, *, expected_revision: int | None = None) -> Any:
         """Leave triage for the canceled stage with a closed dropped reason."""
 
-        self._require_work_action(expected_revision)
-        try:
-            reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
-        except ValueError as error:
-            raise ValidationError({"reason": "Choose declined or obsolete."}) from error
-        if reason_member not in {
-            self.TaskDroppedReason.DECLINED,
-            self.TaskDroppedReason.OBSOLETE,
-        }:
-            raise ValidationError({"reason": "Choose declined or obsolete."})
-        if self.queue_id is None:
-            raise ValidationError({"queue": "A queued task is required for triage."})
-        target = self._stage_for_category("canceled")
-        previous, _following = self._reject_reserved_stage_transition(target=target, manual=True, lock=True)
-        if (
-            self.stage_id == target.pk
-            and self.status == self.TaskStatus.DROPPED
-            and self.dropped_reason == reason_member
-            and self.dropped_at is not None
-            and self.done_at is None
-        ):
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        with database_context(using), transaction.atomic(using=using):
+            self._require_work_action(expected_revision)
+            try:
+                reason_member = self.TaskDroppedReason(getattr(reason, "value", reason))
+            except ValueError as error:
+                raise ValidationError({"reason": "Choose declined or obsolete."}) from error
+            if reason_member not in {
+                self.TaskDroppedReason.DECLINED,
+                self.TaskDroppedReason.OBSOLETE,
+            }:
+                raise ValidationError({"reason": "Choose declined or obsolete."})
+            if self.queue_id is None:
+                raise ValidationError({"queue": "A queued task is required for triage."})
+            target = self._stage_for_category("canceled")
+            previous, _following = self._reject_reserved_stage_transition(target=target, manual=True, lock=True)
+            if (
+                self.stage_id == target.pk
+                and self.status == self.TaskStatus.DROPPED
+                and self.dropped_reason == reason_member
+                and self.dropped_at is not None
+                and self.done_at is None
+            ):
+                return self
+            if previous is None or previous.category != self.stage_model().StageCategory.TRIAGE:
+                raise ValidationError({"stage": "Only a task in triage can be declined."})
+            self.stage = target
+            self.dropped_reason = reason_member
+            self.save(update_fields=("stage", "dropped_reason", "updated_at"))
             return self
-        if previous is None or previous.category != self.stage_model().StageCategory.TRIAGE:
-            raise ValidationError({"stage": "Only a task in triage can be declined."})
-        self.stage = target
-        self.dropped_reason = reason_member
-        self.save(update_fields=("stage", "dropped_reason", "updated_at"))
-        return self
 
     def snooze(self, until: datetime) -> Any:
         """Snooze a triage task until an inclusive instant or new chatter activity."""
@@ -1527,49 +1635,6 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         self.snoozed_by_id = user_id
         self.save(update_fields=("snoozed_until", "snoozed_by", "updated_at"))
         return self
-
-    @classmethod
-    def wake_due_snoozes(cls, *, now: datetime | None = None) -> int:
-        """Clear snoozes whose inclusive wake instant is at or before ``now``."""
-
-        now = now or timezone.now()
-        return int(
-            cls._base_manager.filter(
-                snoozed_until__isnull=False,
-                snoozed_until__lte=now,
-            ).update(
-                snoozed_until=None,
-                snoozed_by=None,
-                updated_at=now,
-            )
-        )
-
-    @classmethod
-    def wake_from_chatter_thread(cls, thread_id: Any) -> int:
-        """Clear snooze state on the task whose chatter owns ``thread_id``."""
-
-        if thread_id is None:
-            return 0
-        task_content_type = ContentType.objects.get_for_model(cls)
-        attachment_model = apps.get_model("messaging", "ThreadAttachment")
-        task_ids = attachment_model._base_manager.filter(
-            content_type=task_content_type,
-            thread_id=thread_id,
-            role="chatter",
-        ).values("object_id")
-        snoozed_tasks = cls._base_manager.filter(
-            pk__in=models.Subquery(task_ids),
-            snoozed_until__isnull=False,
-        )
-        if not snoozed_tasks.exists():
-            return 0
-        return int(
-            snoozed_tasks.update(
-                snoozed_until=None,
-                snoozed_by=None,
-                updated_at=timezone.now(),
-            )
-        )
 
     def mark_duplicate(self, canonical: models.Model) -> Any:
         """Fold this triage task into its operational survivor through the shared owner."""
@@ -1811,10 +1876,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         if stage_id is None:
             return None
         stage_model = self.stage_model()
-        queryset = stage_model._base_manager.all()
-        sudo = getattr(queryset, "sudo", None)
-        if callable(sudo):
-            queryset = sudo(reason="work.task.loaded_stage_category")
+        queryset = stage_model._base_manager.using(self._state.db)
         return cast(str | None, queryset.filter(pk=stage_id).values_list("category", flat=True).first())
 
     def _stage_for_category(self, category: str) -> Stage:
@@ -1824,7 +1886,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         queue = self.queue
         if queue is None:
             raise ValidationError({"queue": "Choose a readable queue before selecting a stage."})
-        stage = stage_model.for_manual_category(queue, category).first()
+        stage = stage_model._base_manager.for_manual_category(queue, category).first()
         if stage is None:
             raise ValidationError({"stage": f"Queue has no {category} stage."})
         return stage
@@ -1843,15 +1905,15 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         if category == "started" and project.current_milestone_id is not None:
             milestone_model = type(project).current_milestone.field.related_model
             stage_id = (
-                milestone_model._base_manager.filter(pk=project.current_milestone_id)
+                milestone_model._base_manager.using(self._state.db).filter(pk=project.current_milestone_id)
                 .values_list("active_stage_id", flat=True)
                 .get()
             )
             if stage_id is not None:
-                stage = self.stage_model()._base_manager.get(pk=stage_id)
+                stage = self.stage_model()._base_manager.using(self._state.db).get(pk=stage_id)
                 stage.validate_rule_stage(self.queue_id)
                 return stage
-        return self.stage_model().for_container(queue).filter(category=category, rule_owned=True).first()
+        return self.stage_model()._base_manager.for_container(queue).filter(category=category, rule_owned=True).first()
 
     def _base_verb(self, name: str, *args: Any, **kwargs: Any) -> Any:
         """Delegate a task without a queue to its projects-owned lifecycle."""

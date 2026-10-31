@@ -8,8 +8,6 @@ from contextvars import ContextVar
 from enum import StrEnum
 from typing import Any
 
-from django.db import transaction
-
 from angee.graphql.publishing import publication_ingestion_context
 
 
@@ -34,7 +32,7 @@ _current_bridge_progress: ContextVar[BridgeProgressReporter | None] = ContextVar
 
 
 class BridgeProgressReporter:
-    """Persist generic progress for the bridge currently being synchronized."""
+    """Route execution-context progress to its owning bridge."""
 
     def __init__(self, bridge: Any) -> None:
         self.bridge = bridge
@@ -47,41 +45,13 @@ class BridgeProgressReporter:
         details: Mapping[str, Any] | None = None,
         **extra: Any,
     ) -> dict[str, Any]:
-        """Merge telemetry under a row lock; supplied details replace prior details.
+        """Delegate telemetry to Bridge.report_progress; supplied details replace prior details.
 
         Dispatch identity belongs to Bridge.sync_run_id, independently of this
         payload. A progress report preserves a queued stage until work starts.
         """
 
-        with transaction.atomic():
-            row = (
-                type(self.bridge)
-                .objects.sudo(reason="integrate.bridge.progress")
-                .lock_if_supported()
-                .get(pk=self.bridge.pk)
-            )
-            existing = row.sync_progress if isinstance(row.sync_progress, Mapping) else {}
-            payload = dict(existing)
-            queue_pending = str(row.sync_stage) == str(row.SyncStage.QUEUED)
-            if not queue_pending:
-                payload["stage"] = str(stage)
-            if message:
-                payload["message"] = message
-            elif "message" in payload:
-                payload.pop("message")
-            if details is not None:
-                payload["details"] = dict(details)
-            payload.update(extra)
-
-            row.sync_progress = payload
-            update_fields = ["sync_progress", "updated_at"]
-            if not queue_pending and str(stage) in getattr(row.SyncStage, "values", ()):
-                row.sync_stage = str(stage)
-                update_fields.append("sync_stage")
-            row.save(update_fields=update_fields)
-        self.bridge.sync_progress = payload
-        self.bridge.sync_stage = row.sync_stage
-        return payload
+        return self.bridge.report_progress(stage, message=message, details=details, **extra)
 
 
 @contextmanager
