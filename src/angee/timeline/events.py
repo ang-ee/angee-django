@@ -11,8 +11,8 @@ from rebac import system_context
 
 from angee.base.models.merge import MergeableMixin
 from angee.base.refs import generic_pointer_model
-from angee.graphql.events import ChangePayload
-from angee.graphql.publishing import broadcast_related_records, changes_muted
+from angee.base.signals import ModelChange, changes_muted
+from angee.graphql.publishing import broadcast_related_records
 from angee.timeline.kinds import TimelineKind, timeline_kinds
 
 log = logging.getLogger(__name__)
@@ -69,7 +69,7 @@ def before_delete(sender: Any, *, instance: Any, **kwargs: Any) -> None:
     broadcast_related_records(_records(instance))
 
 
-def queue_change(sender: Any, *, payload: ChangePayload, **kwargs: Any) -> None:
+def queue_change(sender: Any, *, payload: ModelChange, **kwargs: Any) -> None:
     if payload.instance is not None and payload.action != "delete":
         previous = payload.instance.__dict__.pop("_timeline_previous_records", ())
         broadcast_related_records((*previous, *_records(payload.instance, update_fields=payload.changed_fields)))

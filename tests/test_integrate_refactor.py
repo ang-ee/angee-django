@@ -7,9 +7,9 @@ from django.db import connection
 from django.utils import timezone
 from rebac import system_context
 
+from angee.base.locks import record_lock_key, task_lock
 from angee.integrate.errors import IntegrationError
 from angee.integrate.oauth.client import OAuthClientProtocol
-from angee.jobs.locks import record_lock_key, task_lock
 from tests.conftest import Credential, make_integration
 
 pytestmark = pytest.mark.usefixtures("composed_tables")

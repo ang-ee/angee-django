@@ -890,7 +890,7 @@ def declared_hasura_resource_fields(
     setting ``attribute`` on their source model class. The composed runtime model
     inherits those bases; this helper gathers only directly declared attributes
     from the MRO so a downstream extension can contribute without the base addon
-    importing it. Filter/sort and container-scope declarations also accept
+    importing it. Filter/sort/group and container-scope declarations also accept
     scalar/to-one ORM paths; write declarations retain concrete-field contracts.
     """
 
@@ -906,7 +906,10 @@ def declared_hasura_resource_fields(
         for item in value:
             field = str(item)
             try:
-                if attribute in {"hasura_sortable_fields", "hasura_filterable_fields", "hasura_container_scope_fields"}:
+                if attribute in {
+                    "hasura_sortable_fields", "hasura_filterable_fields", "hasura_groupable_fields",
+                    "hasura_container_scope_fields",
+                }:
                     require_field_for_path(model, field)
                 else:
                     model._meta.get_field(field)
@@ -915,7 +918,7 @@ def declared_hasura_resource_fields(
                     f"{cls.__module__}.{cls.__name__}.{attribute} declares invalid field {field!r} "
                     f"on {model._meta.label}."
                 ) from error
-            if attribute in ("hasura_sortable_fields", "hasura_filterable_fields"):
+            if attribute in ("hasura_sortable_fields", "hasura_filterable_fields", "hasura_groupable_fields"):
                 field = field.replace(".", "__")
             if field not in fields:
                 fields.append(field)

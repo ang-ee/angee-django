@@ -229,15 +229,14 @@ def test_empty_concerns_are_rejected(records):
 
 
 def test_change_concerns_deduplicate_before_querying_child_models(composed_tables):
-    from angee.base.refs import RecordRef
-    from angee.graphql.events import ChangeRelatedRecord
+    from angee.base.refs import RecordRef, record_view_refs
     from tests.mtidemo.models import MtiChild, MtiParent
 
     with system_context(reason="test.batch_concerns"):
         children = [MtiChild.objects.create(title=str(index)) for index in range(3)]
         refs = [RecordRef.from_instance(MtiParent.objects.get(pk=child.pk)) for child in children]
         with CaptureQueriesContext(connection) as captured:
-            result = ChangeRelatedRecord.for_records(*refs, *refs)
+            result = record_view_refs(*refs, *refs)
     assert len(result) == 6
     assert len(captured) == 1
 
@@ -258,7 +257,7 @@ def test_relation_without_actor_scoping_is_a_contract_value_error():
 @pytest.mark.django_db(transaction=True)
 def test_admission_publishes_once_with_its_concern_records(records, monkeypatch):
     events = []
-    monkeypatch.setattr("angee.graphql.publishing._send_change", lambda model, payload: events.append(payload))
+    monkeypatch.setattr("angee.graphql.publishing._queue_transport", lambda model, payload: events.append(payload))
     already_wired = disconnect_publishers(Decision)
     connect_publishers(Decision)
     try:
@@ -335,7 +334,7 @@ def test_human_and_agent_answers_close_without_applying_proposals(records, kind)
     }
     before = vaults[0].name
     decision = admit(records, [vaults[0], drives[0]], proposal=proposal)
-    answered = Decision.objects.decide(decision.pk, actor=reviewer, revision=decision.revision, chosen=["confirm"])
+    answered = decision.decide(actor=reviewer, revision=decision.revision, chosen=["confirm"])
     assert not answered.is_open
     assert answered.answered_by_id == reviewer.pk and answered.answered_at is not None
     assert answered.verdict == ["confirm"]
@@ -353,7 +352,7 @@ def test_invalid_answers_and_record_edits_leave_the_question_open(records):
     reviewer = records[1]
     for _ in range(4):
         with pytest.raises(ValidationError):
-            Decision.objects.decide(decision.pk, actor=reviewer, revision=decision.revision, chosen=["unknown"])
+            decision.decide(actor=reviewer, revision=decision.revision, chosen=["unknown"])
     record.with_actor(reviewer).name = "Direct edit"
     record.save(update_fields={"name"})
     decision.refresh_from_db()
@@ -367,7 +366,7 @@ def test_attention_is_actor_scoped_for_unrelated_resources_and_open_record_read(
     targets = vaults if owner == "vault" else drives
     admit(records, [targets[0]])
     closed = admit(records, [targets[1]])
-    Decision.objects.decide(closed.pk, actor=reviewer, revision=closed.revision, chosen=["confirm"])
+    closed.decide(actor=reviewer, revision=closed.revision, chosen=["confirm"])
     # An actor can read a record without being allowed to read its question.
     hidden = admit(records, [targets[2]], assignees=(issuer,))
     model = type(targets[0])

@@ -93,6 +93,7 @@ from angee.messaging.managers import (
     MessageEdgeManager,
     MessageManager,
     MessageStarManager,
+    MessageSubtypeManager,
     PartManager,
     ReactionManager,
     ThreadAttachmentManager,
@@ -1885,6 +1886,8 @@ class MessageSubtype(AuditMixin, AngeeDataModel, concrete=True):
         ("record_created", "Record created", "Record created"),
         ("record_updated", "Record updated", "Record updated"),
     )
+
+    objects = MessageSubtypeManager()
 
     sqid_prefix = "mst_"
     key = models.CharField(max_length=128)

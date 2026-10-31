@@ -77,7 +77,7 @@ def _correction(original, values, reviewer, *, subject=None, binding_overrides=N
         )
 
     def resolve():
-        return Decision.objects.decide(decision.pk, actor=reviewer, revision=decision.revision, chosen=["correct"])
+        return decision.decide(actor=reviewer, revision=decision.revision, chosen=["correct"])
 
     return original, values, decision, reviewer, revise, resolve
 

@@ -11,10 +11,10 @@ from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 
 from angee.base.implementations import ImplBase
+from angee.base.locks import LockKey
 from angee.integrate.constants import RUN_SESSION_TASK, SESSION_START_EXPIRES
 from angee.integrate.live import PairingProjection, SessionLoggedOut
 from angee.jobs.enqueue import enqueue_task
-from angee.jobs.locks import LockKey
 
 if TYPE_CHECKING:
     from angee.integrate.states import StreamDefinition

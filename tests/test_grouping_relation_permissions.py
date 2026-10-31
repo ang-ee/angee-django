@@ -118,6 +118,7 @@ class GroupParent(AngeeDataModel):
 
     sqid_prefix = "grp_"
     hasura_sortable_fields = ("metric_target__rank",)
+    hasura_groupable_fields = ("target__display_name",)
     hasura_aliases = {
         "label_name": NullIf(models.F("target__display_name"), models.Value(""), output_field=models.TextField()),
         "nested_name": Coalesce(models.F("middle__target__display_name"), models.Value("fallback")),
@@ -229,7 +230,7 @@ def relation_grouping_case(transactional_db: None):
                 ],
                 aggregatable=["amount"],
                 groupable=[
-                    "target", "target__display_name",
+                    "target", *declared_hasura_resource_fields(GroupParent, "hasura_groupable_fields"),
                     "metric_target",
                     "metric_target__rank",
                     "middle",
@@ -263,7 +264,7 @@ def relation_grouping_case(transactional_db: None):
                     *declared_hasura_resource_fields(GroupParent, "hasura_sortable_fields"),
                 ],
                 aggregatable=["amount"],
-                groupable=["target", "target__display_name"],
+                groupable=["target", *declared_hasura_resource_fields(GroupParent, "hasura_groupable_fields")],
                 get_queryset=lambda info: GroupParent.objects.with_actor(alice),
                 insert=False,
                 update=False,
@@ -707,11 +708,14 @@ def test_declared_sort_alias_guards_every_hop_and_its_fallback(relation_grouping
     assert _query(case, case.alice, document) == before
 
 
+@pytest.mark.parametrize("attribute", ["hasura_sortable_fields", "hasura_groupable_fields"])
 @pytest.mark.parametrize("path", ["middle__parents__kind", "target__absent", "kind__value"])
-def test_declared_sort_paths_reject_to_many_and_unknown_fields(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
-    monkeypatch.setattr(GroupParent, "hasura_sortable_fields", (path,))
+def test_declared_scalar_paths_reject_to_many_and_unknown_fields(
+    monkeypatch: pytest.MonkeyPatch, path: str, attribute: str,
+) -> None:
+    monkeypatch.setattr(GroupParent, attribute, (path,))
     with pytest.raises(ImproperlyConfigured, match="invalid field"):
-        declared_hasura_resource_fields(GroupParent, "hasura_sortable_fields")
+        declared_hasura_resource_fields(GroupParent, attribute)
 
 
 @pytest.mark.parametrize(

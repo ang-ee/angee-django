@@ -104,7 +104,7 @@ class VcsBridge(Bridge, inherits="integrate.Integration"):
         source_model = apps.get_model("integrate_vcs", "Source")
         with system_context(reason="integrate.vcs_bridge.sync.sources"):
             sources = tuple(
-                source_model.objects.filter(repository__vcs_bridge=self)
+                source_model.objects.db_manager(self._state.db).filter(repository__vcs_bridge=self)
                 .select_related("repository", "repository__vcs_bridge")
                 .order_by("repository_id", "pk")
             )
@@ -131,13 +131,13 @@ class VcsBridge(Bridge, inherits="integrate.Integration"):
         """Inventory one repository by its host ``name`` (a picked typeahead result)."""
 
         repository_model = apps.get_model("integrate_vcs", "Repository")
-        return repository_model.objects.add(self, self.backend.get_repo(name))
+        return repository_model.objects.db_manager(self._state.db).add(self, self.backend.get_repo(name))
 
     def discover_repositories(self, *, org: str = "") -> int:
         """Inventory every repository the account exposes (bulk import; prunes vanished)."""
 
         repository_model = apps.get_model("integrate_vcs", "Repository")
-        return repository_model.objects.reconcile(self, self.backend.ls_repos(org=org))
+        return repository_model.objects.db_manager(self._state.db).reconcile(self, self.backend.ls_repos(org=org))
 
 
 
@@ -255,12 +255,14 @@ class Source(AuditMixin, AngeeDataModel, concrete=True):
         """Stamp successful output persistence inside its caller's transaction."""
 
         self.last_synced_at = now or timezone.now()
-        self.save(update_fields=["last_synced_at", "updated_at"])
+        self.save(using=self._state.db, update_fields=["last_synced_at", "updated_at"])
 
     def refresh(self) -> int:
         """Re-enumerate over REST into the kind's output rows; return the row count."""
 
-        manager = type(self).target_for_kind(self.kind)._default_manager
+        manager = type(self).target_for_kind(self.kind)._default_manager.db_manager(
+            self._state.db, hints={"instance": self},
+        )
         assert isinstance(manager, registry.VcsOutputManager)
         return manager.sync_from_source(self)
 
