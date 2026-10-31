@@ -243,3 +243,171 @@ def test_native_related_reference_projects_without_implicit_view_expansion(
     monkeypatch.setattr(events, "record_view_refs", lambda *args, **kwargs: pytest.fail("widened declared references"))
     payload = ChangePayload.from_instance(ReferencingRow(pk=8), action="update", update_fields=None)
     assert payload.related_records == (ChangeRelatedRecord("external.Record", "external_7"),)
+
+
+@isolate_apps()
+def test_resource_axes_delegate_explicitly_without_widening_authored_operations() -> None:
+    """Model contributions reach native inputs/filters only for delegated axes."""
+    class Donor(models.Model):
+        hasura_filterable_fields = ("secret",)
+        hasura_sortable_fields = ("secret",)
+        hasura_insertable_fields = ("secret",)
+        hasura_updatable_fields = ("title",)
+        class Meta:
+            abstract = True
+
+    class Row(Donor):
+        title = models.CharField(max_length=40)
+        secret = models.CharField(max_length=40)
+        hasura_filterable_fields = ("title",)
+        class Meta:
+            app_label = "projection_test"
+
+    @strawberry_django.type(Row)
+    class DelegatedRowType:
+        id: strawberry.auto
+        title: strawberry.auto
+        secret: strawberry.auto
+
+    resource = hasura_model_resource(
+        DelegatedRowType, model=Row, name="delegated_rows", filterable=..., sortable=...,
+        aggregatable=..., groupable=..., insertable=..., updatable=(), public_id_field="id",
+    )
+    update_name = get_object_definition(resource.set_input_type, strict=True).name
+    assert get_object_definition(resource.set_input_type, strict=True).fields == []
+
+    @strawberry.input(name=update_name, extend=True)
+    class UpdateExtension:
+        client_value: str | None = strawberry.UNSET
+
+    schemas = GraphQLSchemas([make_addon(schemas={"public": {
+        "query": (resource.query,), "mutation": (resource.mutation,),
+        "types": (DelegatedRowType, *resource.types), "input_extensions": (UpdateExtension,),
+    }})])
+    schema = schemas.build("public")._schema
+    insert_type = get_object_definition(resource.insert_input_type, strict=True).name
+    assert set(schema.get_type(insert_type).fields) == {"secret"}
+    assert set(schema.get_type(update_name).fields) == {"client_value"}
+    filter_name = get_object_definition(resource.filter_type, strict=True).name
+    order_name = get_object_definition(resource.order_by_type, strict=True).name
+    assert {"title", "secret"} <= set(schema.get_type(filter_name).fields)
+    assert "secret" in schema.get_type(order_name).fields
+
+
+
+@isolate_apps()
+def test_scalar_fk_projection_preserves_identity_nullability_and_only_hint() -> None:
+    from angee.graphql.ids import public_id_field, require_public_id
+
+    class Target(models.Model):
+        class Meta:
+            app_label = "projection_test"
+
+    class Row(models.Model):
+        target = models.ForeignKey(Target, null=True, on_delete=models.CASCADE)
+        class Meta:
+            app_label = "projection_test"
+
+    @strawberry_django.type(Row)
+    class ScalarReferenceType:
+        target: strawberry.ID | None = public_id_field("target", nullable=True)
+        required: strawberry.ID = public_id_field("target")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def row(self) -> ScalarReferenceType:
+            return Row(target_id=7)
+
+    schema = strawberry.Schema(query=Query)
+    result = schema.execute_sync("{ row { target required } }")
+    assert result.errors is None
+    expected = str(require_public_id(Target, 7))
+    assert result.data == {"row": {"target": expected, "required": expected}}
+    fields = get_object_definition(ScalarReferenceType, strict=True).fields
+    assert all(field.store.only == ["target_id"] for field in fields)
+    optional = next(field for field in fields if field.python_name == "target")
+    required = next(field for field in fields if field.python_name == "required")
+    assert optional.base_resolver(Row(target_id=None)) is None
+    with pytest.raises(ValueError, match="unexpectedly unset"):
+        required.base_resolver(Row(target_id=None))
+
+
+@isolate_apps()
+@pytest.mark.parametrize("axis", ["writable", "insertable", "updatable"])
+@pytest.mark.parametrize("selection,expected", [(None, {"title", "secret"}), ((), set()), (..., {"secret"})])
+def test_write_axis_native_default_empty_and_delegated_admission(
+    axis: str, selection: Any, expected: set[str],
+) -> None:
+    class Row(models.Model):
+        title = models.CharField(max_length=40)
+        secret = models.CharField(max_length=40)
+        hasura_writable_fields = ("secret",)
+        hasura_insertable_fields = ("secret",)
+        hasura_updatable_fields = ("secret",)
+        class Meta:
+            app_label = "projection_test"
+
+    @strawberry_django.type(Row)
+    class AdmissionRowType:
+        id: strawberry.auto
+        title: strawberry.auto
+        secret: strawberry.auto
+
+    resource = hasura_model_resource(
+        AdmissionRowType, model=Row, name="admission_rows", filterable=("title",), sortable=("title",),
+        aggregatable=(), public_id_field="id", **{axis: selection},
+    )
+    surface = resource.set_input_type if axis == "updatable" else resource.insert_input_type
+    assert {field.python_name for field in get_object_definition(surface, strict=True).fields} == expected
+
+
+@isolate_apps()
+def test_delegated_missing_write_declarations_deny_all_fields() -> None:
+    class Row(models.Model):
+        title = models.CharField(max_length=40)
+        class Meta:
+            app_label = "projection_test"
+
+    @strawberry_django.type(Row)
+    class UndeclaredRowType:
+        id: strawberry.auto
+        title: strawberry.auto
+
+    resource = hasura_model_resource(
+        UndeclaredRowType, model=Row, name="undeclared_rows", filterable=("title",), sortable=("title",),
+        aggregatable=(), insertable=..., updatable=..., public_id_field="id",
+    )
+    assert get_object_definition(resource.insert_input_type, strict=True).fields == []
+    assert get_object_definition(resource.set_input_type, strict=True).fields == []
+
+
+def test_tag_legacy_readable_donor_still_contributes_filter_and_group_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tag retains its historical readable-to-query extension contract locally."""
+    import importlib.util
+
+    from angee.graphql.data import hasura
+    from angee.tags import schema as tag_schema
+
+    declared = hasura.declared_hasura_resource_fields
+
+    def legacy_declarations(model: type[models.Model], attribute: str) -> tuple[str, ...]:
+        fields = declared(model, attribute)
+        # A third-party donor declares a readable ORM field, without the newer
+        # explicit filter/group declarations. Color is absent from both base axes.
+        return (*fields, "color") if model is tag_schema.Tag and attribute == "hasura_readable_fields" else fields
+
+    monkeypatch.setattr(hasura, "declared_hasura_resource_fields", legacy_declarations)
+    module_name = "angee.tags._legacy_projection_test"
+    spec = importlib.util.spec_from_file_location(module_name, tag_schema.__file__)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, module_name, module)
+    spec.loader.exec_module(module)
+    resource = module._TAG_RESOURCE
+    assert "color" in {field.python_name for field in get_object_definition(resource.filter_type, strict=True).fields}
+    assert "color" in {field.python_name for field in get_object_definition(resource.group_key_type, strict=True).fields}
+    assert resource.insertable_fields == tag_schema._TAG_RESOURCE.insertable_fields
+    assert resource.updatable_fields == tag_schema._TAG_RESOURCE.updatable_fields
