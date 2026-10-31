@@ -23,7 +23,6 @@ from rebac import (
     evaluator_scope,
     resolve_subjects,
     system_context,
-    to_object_ref,
     to_subject_ref,
     user_subject_type,
 )
@@ -582,32 +581,10 @@ def permission_hub_grant_rows(
     return rows
 
 
-def group_member_rows(
-    group: Any,
-    *,
-    limit: int | None = PERMISSION_HUB_LIST_CAP,
-) -> QuerySet[Any]:
-    """Return direct membership tuples for ``group``."""
-
-    group_ref = to_object_ref(group)
-    rows = (
-        active_relationship_model()
-        .objects.filter(
-            resource_type=group_ref.resource_type,
-            resource_id=group_ref.resource_id,
-            relation=ROLE_RELATION,
-        )
-        .order_by_subject()
-    )
-    if limit is not None:
-        rows = rows[:limit]
-    return cast(QuerySet[Any], rows)
-
-
 def group_members(group: Any) -> list[IAMGroupMemberRow]:
     """Project a group's direct members without computing effective permissions."""
 
-    rows = list(group_member_rows(group))
+    rows = list(group.member_rows()[:PERMISSION_HUB_LIST_CAP])
     subjects = [
         SubjectRef.of(str(row.subject_type), str(row.subject_id), str(row.optional_subject_relation)) for row in rows
     ]
@@ -639,15 +616,7 @@ def group_bindings(group: Any) -> list[IAMGroupBindingRow]:
     """Project tuples bound directly to a group's member subject set."""
 
     subject = to_subject_ref(group)
-    rows = list(
-        active_relationship_model()
-        .objects.filter(
-            subject_type=subject.subject_type,
-            subject_id=subject.subject_id,
-            optional_subject_relation=subject.optional_relation,
-        )
-        .order_by_resource()[:PERMISSION_HUB_LIST_CAP]
-    )
+    rows = list(group.binding_rows()[:PERMISSION_HUB_LIST_CAP])
     targets = _binding_targets(rows)
     result: list[IAMGroupBindingRow] = []
     for row in rows:
@@ -998,14 +967,6 @@ def permission_schema() -> tuple[Schema, list[Definition]]:
     schema = rebac_backend().schema()
     definitions = sorted(schema.definitions, key=lambda item: item.resource_type)
     return schema, definitions[:PERMISSION_HUB_LIST_CAP]
-
-
-def iam_overview(
-    peek_limit: int,
-) -> OverviewInfo:
-    """Return IAM dashboard facts independent of paginated list rows."""
-
-    return OverviewInfo.build(peek_limit)
 
 
 def clamped_peek_limit(value: int) -> int:

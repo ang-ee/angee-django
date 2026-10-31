@@ -15,7 +15,6 @@ from rebac.resources import model_resource_type
 
 from angee.base.signals import connect_for_models
 from angee.decisions.signals import decision_answered
-from angee.iam.service_users import deactivate_service_user
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +30,7 @@ def wake_decision(sender: Any, *, decision: Any, **kwargs: Any) -> None:
 def deactivate_workflow_principal(sender: Any, *, instance: Any, **kwargs: Any) -> None:
     """Deactivate the linked user after any workflow deletion path."""
 
-    deactivate_service_user(instance)
+    instance.deactivate_service_user()
 
 
 def revoke_deleted_trigger_grants(sender: Any, *, instance: Any, **kwargs: Any) -> None:

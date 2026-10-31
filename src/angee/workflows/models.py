@@ -33,7 +33,7 @@ from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.graphql.events import ChangeRelatedRecord
 from angee.graphql.mixins import ImplementationChoicesMixin
 from angee.graphql.schema import GraphQLSchemas
-from angee.iam.service_users import sync_service_user
+from angee.iam.models import ServiceUserMixin
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -143,7 +143,7 @@ class _NodeFailureRoute(models.Func):
         )
 
 
-class Workflow(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class Workflow(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
     """Editable identity and draft, pointing to one immutable published version.
 
     A workflow is a grant root with transferable ownership
@@ -155,6 +155,7 @@ class Workflow(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, conc
     resource_class = WorkflowDefinitionResource
     rebac_grantable = {"editor": "write", "viewer": "write", "starter": "write", "operator": "write"}
     sqid_prefix = "wfl_"
+    service_user_prefix = "workflow"
 
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
@@ -202,7 +203,7 @@ class Workflow(ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, conc
         with transaction.atomic():
             super().save(*args, **kwargs)
             if creating or (name_written and previous_name != self.name):
-                sync_service_user(self, prefix="workflow")
+                self.sync_service_user()
 
     def __str__(self) -> str:
         """Return the authored workflow name."""
