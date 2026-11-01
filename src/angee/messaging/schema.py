@@ -302,17 +302,21 @@ attach_delete_preview_metadata(
 class FragmentType(AngeeNode):
     """GraphQL projection of a content-addressed text fragment."""
 
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name, only=["text"], description=NODE_DISPLAY_NAME_DESCRIPTION
+    )
+
     kind: auto
     hash: auto
     text: auto
 
-    @strawberry.field(name="part_count")
+    @strawberry_django.field(name="part_count")
     def part_count(self) -> int:
         """How many actor-readable parts share this fragment."""
 
         return cast(Any, self).part_count()
 
-    @strawberry.field(name="message_count")
+    @strawberry_django.field(name="message_count")
     def message_count(self) -> int:
         """How many distinct messages reference this fragment through their parts."""
 
@@ -322,6 +326,10 @@ class FragmentType(AngeeNode):
 @strawberry_django.type(Part)
 class PartType(AngeeNode):
     """GraphQL projection of one message body part."""
+
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name, only=["type", "role"], description=NODE_DISPLAY_NAME_DESCRIPTION
+    )
 
     position: auto
     type: auto
@@ -338,6 +346,10 @@ class PartType(AngeeNode):
 @strawberry_django.type(MessageSubtype)
 class MessageSubtypeType(AngeeNode):
     """GraphQL projection of an Odoo-style message subtype."""
+
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name, only=["name"], description=NODE_DISPLAY_NAME_DESCRIPTION
+    )
 
     key: auto
     model_label: auto
@@ -533,6 +545,10 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
 class RecordMessageParentType(AngeeNode):
     """Minimal parent-message context shown in record chatter."""
 
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name, only=["preview"], description=NODE_DISPLAY_NAME_DESCRIPTION
+    )
+
     preview: auto
     message_type: auto
     subtype: MessageSubtypeType | None
@@ -554,6 +570,10 @@ class RecordMessageType(TrashedRefMixin, AngeeNode):
     A trashed message appears only in its moderators' removed list, where the
     trash stamps say who removed it, when and why.
     """
+
+    display_name: str = strawberry_django.field(
+        resolver=AngeeNode.display_name, only=["preview"], description=NODE_DISPLAY_NAME_DESCRIPTION
+    )
 
     direction: auto
     status: auto
