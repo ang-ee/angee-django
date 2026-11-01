@@ -376,14 +376,16 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
                 if created:
                     follows._seed_receipt(follower, attachment.thread, history_before=history_before)
                 else:
-                    updates: dict[str, Any] = {"attachment": attachment}
+                    updates: dict[str, Any] = {"attachment_id": attachment.pk}
                     if notification_policy is not None:
                         updates["notification_policy"] = notification_policy
                     if subtype_keys is not None:
                         updates["subtype_keys"] = list(subtype_keys)
-                    for field, value in updates.items():
-                        setattr(follower, field, value)
-                    follower.save(using=using, update_fields=(*updates, "updated_at"))
+                    updates = {field: value for field, value in updates.items() if getattr(follower, field) != value}
+                    if updates:
+                        for field, value in updates.items():
+                            setattr(follower, field, value)
+                        follower.save(using=using, update_fields=(*updates, "updated_at"))
             return follower
 
     def _seed_receipt(self, follower: Any, thread: Any, *, history_before: Any | None) -> None:

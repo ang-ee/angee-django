@@ -25,6 +25,10 @@ class CommentKind(TimelineKind):
                               "subtype", "message_type"),
         "messaging.ThreadAttachment": ("thread", "role"),
         "messaging.Thread": ("merged_into",),
+        "messaging.Reaction": ("message", "reaction", "handle"),
+        "messaging.MessageStar": ("message", "user"),
+        "messaging.ThreadFollower": ("thread", "attachment", "notification_policy", "subtype_keys", "last_read_message"),
+        "messaging.ThreadNotification": ("thread", "attachment", "message", "read_at", "notification_status"),
     }
 
     def eligible(self, model: type[models.Model]) -> bool:
@@ -51,7 +55,11 @@ class CommentKind(TimelineKind):
         ) for row in rows}
 
     def records(self, row: Any) -> Iterable[RecordIdentity]:
-        if row._meta.label == "messaging.Message":
+        if row._meta.label in {"messaging.Reaction", "messaging.MessageStar"}:
+            record = row.message.threaded_record_ref()
+        elif row._meta.label in {"messaging.ThreadFollower", "messaging.ThreadNotification"}:
+            record = row.thread.chatter_record_ref() if row.thread_id is not None else None
+        elif row._meta.label == "messaging.Message":
             record = row.threaded_record_ref()
         elif row._meta.label == "messaging.ThreadAttachment":
             record = row.record_ref
