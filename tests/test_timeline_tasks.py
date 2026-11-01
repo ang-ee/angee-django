@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import pytest
-from django.db import connection
+from django.contrib.contenttypes.models import ContentType
+from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
 from rebac import SubjectRef, actor_context, system_context
 
 from angee.graphql.publishing import mute_changes
 from angee.projects.testing.models import ActivityType, Task
 from angee.projects.timeline import TaskKind
+from angee.timeline import reading
+from angee.timeline.reading import Timeline
 from tests.messaging_campaign import comment_record as comment_record  # noqa: F401 - shared actor/record fixture
 from tests.test_timeline import read_timeline, timeline_entries
 
@@ -128,3 +131,46 @@ def test_task_waiting_projection_matches_filter_without_changing_scope(comment_r
         assert list(rows.annotate(waiting=rows.waiting_on_expression(actor)).values_list("waiting", flat=True)) == [
             False,
         ] * len(ids)
+
+
+@pytest.mark.parametrize("other_kind", [False, True])
+def test_shared_source_preserves_same_model_occurrences_without_parent_policy_copies(
+    comment_record, monkeypatch, other_kind,
+) -> None:
+    """A sparse non-admin source is shared, while kind identity owns self-folds."""
+    record, author, writer = comment_record.record, comment_record.author, comment_record.writer
+    assert not author.is_superuser
+    with actor_context(writer):
+        task = Task.objects.schedule(record.with_actor(writer), title="One source row", assignee=author)
+    task_type = ContentType.objects.get_for_model(Task)
+
+    class SelfFold(TaskKind):
+        id = "test.self_fold"
+
+        def fold(self, record):
+            return models.Value(task_type.pk, output_field=models.IntegerField()), models.F("pk")
+
+    kinds = (TaskKind(), SelfFold()) if other_kind else (SelfFold(),)
+    monkeypatch.setattr(reading, "timeline_kinds", lambda: kinds)
+    with CaptureQueriesContext(connection) as construction:
+        timeline = Timeline(record, author)
+    table = connection.ops.quote_name(Task._meta.db_table)
+    assert not any(f"FROM {table}" in query["sql"] for query in construction)
+    with CaptureQueriesContext(connection) as queries:
+        page = timeline.page()
+    entry, = page.entries
+    assert entry.target_id == task.sqid and entry.needs_me
+    assert entry.kind == ("projects.task" if other_kind else "test.self_fold")
+    assert [(child.kind, child.count) for child in entry.children] == (
+        [("test.self_fold", 1)] if other_kind else []
+    )
+    assert {kind.id: kind.count for kind in page.kinds} == (
+        {"projects.task": 1, "test.self_fold": 0} if other_kind else {"test.self_fold": 1}
+    )
+    assert page.needs_me == 1 and not page.has_more and page.next_before is None
+    statements = [query["sql"] for query in queries if 'WITH RECURSIVE "timeline_source" AS (' in query["sql"]]
+    assert len(statements) == 3  # page, selected-parent child groups, and whole-scope counts
+    for sql in statements:
+        assert sql.count('"timeline_source" AS (') == 1
+        assert sql.count("UNION ALL") == len(kinds) - 1
+        assert '"rebac_schemageneration"' in sql

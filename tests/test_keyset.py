@@ -92,3 +92,24 @@ def test_mixed_tie_breakers_preserve_forward_reverse_and_around_windows() -> Non
     bounded = queryset.keyset_page(through_cursor=second.older_cursor, **{**options, "limit": 10})
     assert [row.pk for row in bounded.rows] == expected[:4]
     assert bounded.has_older_than_through is True
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("system_query_tables")
+def test_projected_final_key_preserves_native_cuts_and_cursor_values() -> None:
+    """A composed relation declares its normalized key without another decoder."""
+    rows = [SystemQueryThing._base_manager.create(name=str(index)) for index in range(4)]
+    at = datetime(2026, 1, 1, tzinfo=UTC)
+    SystemQueryThing._base_manager.update(created_at=at)
+    queryset = SystemQueryThing._base_manager.annotate(projected_key=models.F("pk"))
+    native = KeysetOrder("created_at")
+    projected = KeysetOrder("created_at", key_field="projected_key")
+    signer = signing.Signer(salt="projected-key-test")
+    anchor = queryset.get(pk=rows[2].pk)
+    assert projected.ordering == ("-created_at", "-projected_key")
+    assert projected.position(anchor) == native.position(anchor)
+    token = projected.sign(anchor, signer)
+    assert token == native.sign(anchor, signer)
+    cut = projected.unsign(token, signer, SystemQueryThing._meta.pk)
+    assert list(queryset.filter(projected.before(cut)).order_by(*projected.ordering)) == list(reversed(rows[:2]))
+    assert list(queryset.filter(projected.after(cut)).order_by(*projected.ordering)) == rows[3:]

@@ -1,4 +1,4 @@
-"""Compose native source queries into one SQL UNION ALL before paging."""
+"""Read one authorized source relation for folding, counts and paging."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Any
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.db.models.functions import Cast
+from django_cte import CTE, with_cte
 from rebac import database_context, to_subject_ref
 
 from angee.base.models.identity import public_id_for
@@ -54,22 +55,29 @@ class Page:
     next_before: str | None
 
 
-def _union(branches: list[models.QuerySet], *columns: str) -> models.QuerySet:
-    """Compose already-authorized branches through Django's heterogeneous union.
+_SOURCE_COLUMNS = (
+    "_timeline_kind", "_timeline_type", "_timeline_at", "_timeline_pk",
+    "_timeline_needs", "_timeline_fold_type", "_timeline_fold_pk",
+)
 
-    REBAC querysets deliberately rebind every union operand to the first
-    queryset's policy. Here each kind owns a different policy (record-gated
-    history/chatter alongside independently readable targets). Preserve those
-    eagerly scoped operands with Django's native QuerySet, then project only
-    the common columns. No actor or model policy is applied across the union.
-    Clear inherited ordering on the combined result; callers order by its
-    projected columns.
+
+def _native(rows: models.QuerySet, *columns: str) -> models.QuerySet:
+    """Project a heterogeneous relation without inventing one model's policy.
+
+    Each source operand already owns its eager read scope. REBAC queryset
+    combinations rebind operands to the first model's policy, and a CTE's
+    default manager belongs to that same arbitrary model. Native Django owns
+    both synthetic relations; source predicates and their witnesses stay inside.
     """
-    first, *rest = [rows.values(*columns) for rows in branches]
-    native = models.QuerySet[models.Model](
-        model=first.model, query=first.query.clone(), using=first.db,
+    return models.QuerySet[models.Model](
+        model=rows.model, query=rows.query.clone(), using=rows.db,
     ).values(*columns)
-    return native.union(*rest, all=True).order_by()
+
+
+def _union(branches: list[models.QuerySet], *columns: str) -> models.QuerySet:
+    """Combine independently authorized source projections in native Django."""
+    first, *rest = [rows.values(*columns) for rows in branches]
+    return _native(first, *columns).union(*rest, all=True).order_by()
 
 
 class Timeline:
@@ -84,8 +92,6 @@ class Timeline:
         self.folding = set()
         for kind in self.kinds:
             rows = kind.queryset(record, actor).order_by()
-            if not rows.exists():
-                continue
             content_type = ContentType.objects.get_for_model(rows.model)
             self.content_types[kind.id] = content_type.pk
             fold = kind.fold(record)
@@ -96,6 +102,7 @@ class Timeline:
             )
             self.branches[kind.id] = rows.annotate(
                 _timeline_kind=models.Value(kind.id, output_field=models.CharField()),
+                _timeline_type=models.Value(content_type.pk, output_field=models.IntegerField()),
                 _timeline_at=kind.at,
                 _timeline_pk=Cast("pk", output_field=models.BigIntegerField()),
                 _timeline_needs=kind.waiting_on_expression(rows, actor),
@@ -104,40 +111,47 @@ class Timeline:
             )
 
     @cached_property
-    def lines(self) -> dict[str, models.QuerySet]:
-        result = {}
-        for kind, rows in self.branches.items():
-            if kind not in self.folding:
-                result[kind] = rows
-                continue
-            parents = models.Q(pk__in=[])
-            for parent_kind, parent_rows in self.branches.items():
-                targets = parent_rows.filter(pk=models.OuterRef("_timeline_fold_pk"))
-                if parent_kind == kind:
-                    targets = targets.exclude(pk=models.OuterRef("pk"))
-                parents |= models.Q(_timeline_fold_type=self.content_types[parent_kind]) & models.Q(
-                    models.Exists(targets),
-                )
-            result[kind] = rows.filter(~parents)
-        return result
+    def source(self) -> CTE | None:
+        """One statement-local source population, retaining every kind's policy."""
+        if not self.branches:
+            return None
+        return CTE(_union(list(self.branches.values()), *_SOURCE_COLUMNS), name="timeline_source")
+
+    def _source_rows(self) -> models.QuerySet:
+        assert self.source is not None
+        return _native(self.source.queryset(), *_SOURCE_COLUMNS).order_by()
+
+    @cached_property
+    def lines(self) -> models.QuerySet | None:
+        if self.source is None:
+            return None
+        if not self.folding:
+            return with_cte(self.source, select=self._source_rows())
+        parents = self._source_rows().filter(
+            _timeline_type=models.OuterRef("_timeline_fold_type"),
+            _timeline_pk=models.OuterRef("_timeline_fold_pk"),
+        ).exclude(
+            _timeline_kind=models.OuterRef("_timeline_kind"),
+            _timeline_pk=models.OuterRef("_timeline_pk"),
+        )
+        return with_cte(self.source, select=self._source_rows().filter(~models.Exists(parents)))
 
     @cached_property
     def counts(self) -> dict[str, tuple[int, int]]:
-        if not self.lines:
+        if self.lines is None:
             return {}
-        branches = [rows.values("_timeline_kind").annotate(
-            _timeline_count=models.Count("pk", distinct=True),
-            _timeline_waiting=models.Count("pk", distinct=True, filter=models.Q(_timeline_needs=True)),
-        ) for rows in self.lines.values()]
-        return {row["_timeline_kind"]: (row["_timeline_count"], row["_timeline_waiting"])
-                for row in _union(branches, "_timeline_kind", "_timeline_count", "_timeline_waiting")}
+        rows = self.lines.values("_timeline_kind").annotate(
+            _timeline_count=models.Count("_timeline_pk", distinct=True),
+            _timeline_waiting=models.Count("_timeline_pk", distinct=True, filter=models.Q(_timeline_needs=True)),
+        )
+        return {row["_timeline_kind"]: (row["_timeline_count"], row["_timeline_waiting"]) for row in rows}
 
     def attention(self) -> int:
         return sum(waiting for _, waiting in self.counts.values())
 
     def page(self, *, kinds: list[str] | None = None, needs_me: bool = False,
              before: str | None = None, limit: int = 25) -> Page:
-        order = KeysetOrder("_timeline_at", tie_breakers=("_timeline_kind",))
+        order = KeysetOrder("_timeline_at", tie_breakers=("_timeline_kind",), key_field="_timeline_pk")
         selected_kinds = sorted(set(kinds)) if kinds else sorted(kind.id for kind in self.kinds)
         signer = keyset_signer(
             [self.record._state.db, self.record._meta.label_lower, str(self.record.pk),
@@ -146,18 +160,17 @@ class Timeline:
         )
         # Every union branch explicitly projects its native key as bigint.
         anchor = order.unsign(before, signer, models.BigIntegerField()) if before is not None else None
-        branches = []
-        for kind, rows in self.lines.items():
-            if kinds and kind not in kinds:
-                continue
+        rows = self.lines
+        if rows is not None:
+            if kinds:
+                rows = rows.filter(_timeline_kind__in=kinds)
             if needs_me:
                 rows = rows.filter(_timeline_needs=True)
             if anchor is not None:
                 rows = rows.filter(order.before(anchor))
-            branches.append(rows.values("_timeline_kind", "_timeline_at", "_timeline_pk", "_timeline_needs"))
-        selected = list(_union(
-            branches, "_timeline_kind", "_timeline_at", "_timeline_pk", "_timeline_needs",
-        ).order_by("-_timeline_at", "_timeline_kind", "-_timeline_pk")[:limit + 1]) if branches else []
+        selected = list(rows.values(
+            "_timeline_kind", "_timeline_at", "_timeline_pk", "_timeline_needs",
+        ).order_by("-_timeline_at", "_timeline_kind", "-_timeline_pk")[:limit + 1]) if rows is not None else []
         more = len(selected) > limit
         selected = selected[:limit]
         ids: dict[str, set[int]] = {}
@@ -199,21 +212,23 @@ class Timeline:
         )
 
     def _children(self, ids: dict[str, set[int]]) -> dict[tuple[int, int], list[KindCount]]:
-        if not ids or not self.folding:
+        if not ids or not self.folding or self.source is None:
             return {}
-        scope = models.Q(pk__in=[])
+        scope = models.Q(_timeline_pk__in=[])
         for kind, pks in ids.items():
             scope |= models.Q(_timeline_fold_type=self.content_types[kind], _timeline_fold_pk__in=pks)
-        # Selected parents are readable top-level lines already. Only a line's
-        # self-reference needs excluding; rechecking every parent repeats the page query.
-        branches = [rows.filter(scope).exclude(pk__in=ids.get(kind, ()))
-                    .values("_timeline_fold_type", "_timeline_fold_pk", "_timeline_kind")
-                    .annotate(_timeline_count=models.Count("pk", distinct=True))
-                    for kind, rows in self.branches.items() if kind in self.folding]
+        # Selected parents are already readable. Keep each child's own source
+        # policy and exclude selected self occurrences without another union.
+        selected = models.Q(_timeline_pk__in=[])
+        for kind, pks in ids.items():
+            selected |= models.Q(_timeline_kind=kind, _timeline_pk__in=pks)
+        rows = with_cte(self.source, select=self._source_rows().filter(
+            scope, _timeline_kind__in=sorted(self.folding),
+        ).exclude(selected)).values(
+            "_timeline_fold_type", "_timeline_fold_pk", "_timeline_kind",
+        ).annotate(_timeline_count=models.Count("_timeline_pk", distinct=True)).order_by("_timeline_kind")
         result: dict[tuple[int, int], list[KindCount]] = {}
-        for row in _union(
-            branches, "_timeline_fold_type", "_timeline_fold_pk", "_timeline_kind", "_timeline_count",
-        ).order_by("_timeline_kind"):
+        for row in rows:
             key = row["_timeline_fold_type"], row["_timeline_fold_pk"]
             result.setdefault(key, []).append(KindCount(row["_timeline_kind"], row["_timeline_count"]))
         return result
