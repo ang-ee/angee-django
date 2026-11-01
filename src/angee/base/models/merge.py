@@ -258,7 +258,7 @@ class MergeableMixin(AngeeModel):
         model = type(survivor)
         using = survivor._state.db
         with ExitStack() as contexts:
-            pre_merge.send(sender=model, survivor=survivor, merged=tuple(merged), join=join, contexts=contexts)
+            pre_merge.send(sender=model, survivor=survivor, join=join, contexts=contexts)
             self.validate_merge(merged)
             self.merge_fields(merged, **options)
             moving = [

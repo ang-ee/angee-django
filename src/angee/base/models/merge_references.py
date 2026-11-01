@@ -28,7 +28,9 @@ from angee.base.models.append_only import AppendOnlyModel
 from angee.base.models.audit import AuditMixin
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.timestamps import auto_now_stamps
+from angee.base.querysets import query_batch_size
 from angee.base.refs import generic_pointer_model, generic_pointer_target
+from angee.base.signals import bulk_updated
 
 
 class MergePolicy(StrEnum):
@@ -248,7 +250,32 @@ class Reference:
             with transaction.atomic(using=using):
                 # A hierarchy's ``parent`` is re-pointed by its model's ``merge_contract``
                 # above (the path and cycle owner), never by this bulk update.
-                rows.update(**target, **auto_now_stamps(self.model, timezone.now()))
+                values = {**target, **auto_now_stamps(self.model, timezone.now())}
+                observed = bulk_updated.has_listeners(self.model) and callable(
+                    getattr(self.model, "change_batch_targets", None)
+                )
+                pending = rows.order_by("pk")
+                while True:
+                    previous = ()
+                    if observed:
+                        # Reserve the native update's shared assignment parameters.
+                        size = query_batch_size(pending) - len(values)
+                        if size < 1:
+                            raise ValueError("The reference move query leaves no room for its update.")
+                        previous = tuple(pending.only("pk", *self.columns)[:size])
+                    if observed and not previous:
+                        break
+                    keys = [row.pk for row in previous]
+                    batch = rows.filter(pk__in=keys) if observed else rows
+                    batch.update(**values)
+                    if not observed:
+                        break
+                    current = tuple(self.model._base_manager.using(using).filter(pk__in=keys).order_by("pk"))
+                    bulk_updated.send_robust(
+                        sender=self.model, instances=current, previous_instances=previous,
+                        update_fields=frozenset(values), using=using,
+                    )
+                    pending = rows.filter(pk__gt=previous[-1].pk).order_by("pk")
         except IntegrityError as error:
             # A rule the field sets above cannot express (an expression constraint)
             # still refuses the merge instead of failing it.

@@ -104,8 +104,11 @@ The Pages group continues to link to each page's reader. Binding change effects
 identify both the knowledge owner and canonical target (including inherited
 record views). Record-scoped binding reads register those parent interests;
 Page/Markdown changes still revalidate the content projection. Merge retargets
-use the native `pre_merge` lifecycle to observe both previous and new binding
-scopes after the move, under the same transaction and subscriber read gates.
+use native bounded reference-move observations. Sparse previous
+reference columns and each bounded persisted batch feed the binding-owned bulk
+projection, which expands inherited identities once and carries old/current
+scopes in one identity-only event per Binding. Distinct source read gates,
+collision handling, history and the surrounding transaction remain native.
 
 Pages are trashable through the shared `trash_record` / `restore_record` verbs,
 authorized by page `delete`. Trashing a page trashes the untrashed pages below it
