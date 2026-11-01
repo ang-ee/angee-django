@@ -3413,3 +3413,58 @@ def test_from_counts_ignores_target_type_to_avoid_double_counting_root(composed_
     assert channel_counts[str(Channel._meta.verbose_name_plural)] == 1
     # The MTI Integration parent is derived from the target, still counted once.
     assert guarded.total_deleted_count == 1 + 1 + 2
+
+
+@pytest.mark.parametrize("selection", ["error error_code", "error error_code message { id preview }"])
+def test_record_post_resolves_only_selected_payload_owners(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch, selection: str,
+) -> None:
+    """An acknowledgment never reads transcript, roster, counts or suggestions."""
+    admin = _platform_admin("msg-selected-post")
+    with system_context(reason="test.messaging.selected_payload.seed"):
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Selected response")
+    schema = _schema()
+
+    def unselected(_context: Any) -> Any:
+        pytest.fail("Unselected thread projection was evaluated")
+
+    for name in ("page", "followers", "self_follower", "unread_count", "message_has_error_counter",
+                 "removed_message_count"):
+        monkeypatch.setattr(messaging_schema._RecordThreadContext, name, property(unselected))
+    monkeypatch.setattr(messaging_models.ThreadedTicket, "message_suggested_recipients", unselected)
+    result = _data(execute_schema(
+        schema,
+        "mutation Selected($model: String!, $id: ID!) { post_record_message(input: {"
+        "model_label: $model, record_id: $id, body: \"Accepted only.\"}) {" + selection + "} }",
+        {"model": ticket._meta.label, "id": ticket.sqid}, request=_request(admin),
+    ))["post_record_message"]
+    assert result["error_code"] is None
+    if "message" in result:
+        assert result["message"]["preview"] == "Accepted only."
+
+
+def test_record_message_feed_revalidates_current_parent_scope(composed_tables: None) -> None:
+    """Retained chatter IDs partition by the same authorized parent and kind filter."""
+    admin = _platform_admin("msg-record-feed")
+    with system_context(reason="test.messaging.record_feed.seed"):
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Retained window")
+        other = messaging_models.ThreadedTicket.objects.create(title="Other conversation")
+        comment = ticket.message_post("Visible comment")
+        note = ticket.message_log("Filtered note")
+        foreign = other.message_post("Other parent")
+    result = _data(execute_schema(
+        _schema(),
+        """
+        query Retained($model: String!, $id: ID!, $ids: [ID!]!) {
+          record_message_feed_revalidate(input: { model_label: $model, record_id: $id,
+            message_types: ["comment"] }, ids: $ids) {
+            messages { id preview }
+            absent_ids
+          }
+        }
+        """,
+        {"model": ticket._meta.label, "id": ticket.sqid, "ids": [comment.sqid, note.sqid, foreign.sqid]},
+        request=_request(admin),
+    ))["record_message_feed_revalidate"]
+    assert result["messages"] == [{"id": comment.sqid, "preview": "Visible comment"}]
+    assert result["absent_ids"] == [note.sqid, foreign.sqid]

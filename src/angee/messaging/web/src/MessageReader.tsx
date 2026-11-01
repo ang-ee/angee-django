@@ -28,6 +28,8 @@ const STAR_MODELS = ["messaging.MessageStar", "messaging.Message"];
 
 export interface MessageReaderProps {
   message: MessageReaderData;
+  /** The host Query adopts this projection before derived reads reconcile. */
+  acceptResponse?: (message: Pick<MessageReaderData, "id" | "starred">) => Promise<void>;
   /** The attachment shown beside the body. The host owns where this lives: route or local state. */
   previewPartId?: string | null;
   /** An attachment chip asks the host to preview a part; Close passes null. A host that
@@ -51,6 +53,7 @@ export interface MessageReaderProps {
  */
 export function MessageReader({
   message,
+  acceptResponse,
   previewPartId,
   onPreviewPartChange,
   activePartId,
@@ -62,7 +65,13 @@ export function MessageReader({
   const t = useMessagingT();
   const channelLabel = useMessageChannelLabel();
   const recordHref = useResourceRecordHrefLookup();
-  const [setStarred, starState] = useAuthoredMutation(SetMessageStarredDocument, { invalidateModels: STAR_MODELS });
+  const [setStarred, starState] = useAuthoredMutation(SetMessageStarredDocument, {
+    invalidateModels: STAR_MODELS,
+    records: [{ model: "messaging.Message", id: message.id, action: "update" }],
+    acceptResponse: acceptResponse ? async (data) => {
+      if (data?.set_inbox_message_starred) await acceptResponse(data.set_inbox_message_starred);
+    } : undefined,
+  });
   const [starError, setStarError] = React.useState<string>();
   const recipientLabels = { TO: t("message.to"), CC: t("message.cc"), BCC: t("message.bcc") };
   const sender = senderDisplayName(message.sender, t("message.unknownSender"));
