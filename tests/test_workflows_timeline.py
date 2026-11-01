@@ -6,9 +6,18 @@ from unittest.mock import patch
 import pytest
 from django.core.exceptions import ValidationError
 from django.db import connection
+from django.db.models import Value
 from django.db.models.functions import Now
 from django.test.utils import CaptureQueriesContext
-from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import (
+    RelationshipTuple,
+    actor_context,
+    generic_target,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.querysets import DecisionQuerySet
@@ -175,6 +184,37 @@ def test_about_uses_separate_indexed_identity_queries(review):
     assert 'JOIN "test_workflows_step_record"' not in sql
     assert '"content_type_id"' in sql and '"subject_content_type_id"' in sql
 
+
+def test_nonrecursive_about_preserves_subject_evidence_and_caller_scope(execution):
+    actor, _sent = execution
+    reader = create_user("about-reader")
+    target = vault_for(actor, name="About target")
+    other = vault_for(actor, name="Other subject")
+    workflow = load_workflow({"nodes": {"entry": {"step": "echo"}}}, key="about-membership", actor=actor)
+    direct = start_run(workflow, actor=actor, subject=target, request_key="about-direct")
+    linked = start_run(workflow, actor=actor, subject=other, request_key="about-linked")
+    unrelated = start_run(workflow, actor=actor, subject=other, request_key="about-unrelated")
+    hidden = start_run(workflow, actor=actor, subject=target, request_key="about-hidden")
+    with system_context(reason="test about retained evidence"):
+        evidence = [StepRecord.objects.create(
+            run=run, step_run=StepRun.system_queryset().get(run=run), operation="changed",
+            **generic_target(target).lookups(StepRecord, "record"),
+        ) for run in (linked, hidden)]
+    write_relationships([
+        RelationshipTuple(to_object_ref(target), "viewer", to_subject_ref(reader)),
+        *(RelationshipTuple(to_object_ref(run), "reader", to_subject_ref(reader))
+          for run in (direct, linked, unrelated)),
+    ])
+    rows = WorkflowRun.objects.with_actor(reader)
+    assert set(rows.about(target, ancestors=False).values_list("pk", flat=True)) == {direct.pk, linked.pk}
+    assert not rows.filter(pk=hidden.pk).exists()
+    assert not StepRecord.objects.with_actor(reader).filter(pk=evidence[1].pk).exists()
+    assert rows.about(other, ancestors=False).filter(pk=unrelated.pk).exists()
+    for operations, expected in (("created", {direct.pk}), ("changed", {direct.pk, linked.pk})):
+        selected = rows.about(target, ancestors=False, operations=(operations,))
+        assert set(selected.values_list("pk", flat=True)) == expected
+    selected = rows.annotate(kept=Value("kept")).exclude(pk=direct.pk).about(target, ancestors=False)
+    assert list(selected.values_list("pk", "kept")) == [(linked.pk, "kept")]
 
 def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trigger_setup, register_step):
     actor, _, record, _ = trigger_setup
