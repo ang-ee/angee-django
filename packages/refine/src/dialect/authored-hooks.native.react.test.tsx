@@ -680,7 +680,7 @@ test("complete response-backed acceptance avoids rereading its exact typed cache
       mutation: useAuthoredMutation(MUTATION, {
         invalidateModels: ["notes.Note"],
         acceptResponse: async (data, variables) => {
-          if (data) await accept(DOCUMENT, variables, (current) => current ? { ...current, notes: data.notes } : undefined);
+          if (data) return accept(DOCUMENT, variables, (current) => current ? { ...current, notes: data.notes } : undefined);
         },
       }),
     };
@@ -707,7 +707,7 @@ test("background refresh failure remains a native read error after accepted comp
         invalidateModels: ["notes.Note"],
         acceptResponse: async (data, variables) => {
           if (!data) throw new Error("Accepted response missing.");
-          await accept(DOCUMENT, variables, data);
+          return accept(DOCUMENT, variables, data);
         },
       }),
     };

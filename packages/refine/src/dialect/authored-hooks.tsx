@@ -23,6 +23,7 @@ import {
   useReconcileMutationResponse,
   type MutationReconciliationOptions,
   type MutationExecutionOptions,
+  type QueryDataAcceptance,
 } from "../query-invalidation";
 import {
   useStableArray,
@@ -164,12 +165,12 @@ export function useSetAuthoredQueryData(): <TDocument extends AuthoredDocument>(
   variables: AuthoredVariables<TDocument> | undefined,
   data: DocumentData<TDocument> | ((current: DocumentData<TDocument> | undefined) => DocumentData<TDocument> | undefined),
   options?: AuthoredOperationOptions & { complete?: boolean },
-) => Promise<void> {
+) => Promise<QueryDataAcceptance | undefined> {
   const accept = useAcceptQueryData();
   const activeProvider = useActiveDataProviderName();
   return useCallback(async (document, variables, data, options) => {
     const queryKey = authoredQueryKey(document, variables, options?.dataProviderName ?? activeProvider ?? "default");
-    await accept(queryKey, data, { complete: options?.complete });
+    return accept(queryKey, data, { complete: options?.complete });
   }, [activeProvider, accept]);
 }
 
@@ -204,10 +205,11 @@ export interface AuthoredMutationOptions<
   /**
    * Explicit response-backed completion: accept authoritative returned values at
    * their native query owner before resolving, then refresh derived reads in the
-   * background. Omit to retain completion after awaited refresh. Rejected reads
+   * background. Return the exact setter evidence to exclude a complete native
+   * projection; void proves no exclusion. Omit to retain awaited refresh. Rejected reads
    * remain native Query errors and follow the existing read error policy.
    */
-  acceptResponse?: (data: TData | undefined, variables: TVariables) => void | Promise<void>;
+  acceptResponse?: MutationReconciliationOptions<TData | undefined, TVariables>["acceptResponse"];
   /** Optional domain-level success guard before invalidating registered reads. */
   shouldInvalidate?: (data: TData | undefined, variables: TVariables) => boolean;
   /**

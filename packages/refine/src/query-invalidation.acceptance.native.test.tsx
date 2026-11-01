@@ -144,3 +144,59 @@ test.each([true, false])("exact fallback respects no-effects response completene
     expect(observer.getCurrentResult().data?.title).toBe(complete ? "accepted" : "authoritative");
   } finally { provider.setEnabled(false); stop(); }
 });
+
+
+test.each([true, false])("overlapping acceptance callbacks exclude only returned exact evidence (A returns evidence=%s)", async (returnEvidence) => {
+  const client = createClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  const aKey = ["concurrent-A"];
+  const bKey = ["concurrent-B"];
+  client.setQueryData(aKey, { title: "before A" });
+  client.setQueryData(bKey, { title: "before B" });
+  const readA = vi.fn(async () => ({ title: "canonical A" }));
+  let releaseReadB!: () => void;
+  const readB = vi.fn(() => new Promise<{ title: string }>((resolve) => { releaseReadB = () => resolve({ title: "canonical B" }); }));
+  const observers = [
+    new QueryObserver(client, { queryKey: aKey, queryFn: readA, meta: { angeeModels: ["notes.Note"], angeeRecords: [{ model: "notes.Note", id: "A" }] } }),
+    new QueryObserver(client, { queryKey: bKey, queryFn: readB, meta: { angeeModels: ["notes.Note"], angeeRecords: [{ model: "notes.Note", id: "B" }] } }),
+  ];
+  const stops = observers.map((observer) => observer.subscribe(() => undefined));
+  const provider = createAngeeChangeLiveProvider(undefined, [], { queryClient: client });
+  const wrapper = ({ children }: { children: ReactNode }) => <Provider queryClient={client} liveProvider={provider}>{children}</Provider>;
+  const hook = renderHook(() => useReconcileMutationResponse(), { wrapper });
+  let acceptedA!: () => void;
+  const aAccepted = new Promise<void>((resolve) => { acceptedA = resolve; });
+  let resumeA!: () => void;
+  const aHeld = new Promise<void>((resolve) => { resumeA = resolve; });
+  let completionA!: Promise<void>;
+  try {
+    act(() => { completionA = hook.result.current.batch(async (reconciliation) => {
+      await hook.result.current(undefined, undefined, { reconciliation, invalidateModels: ["notes.Note"],
+        acceptResponse: async () => {
+          const evidence = await acceptQueryData(client, aKey, { title: "accepted A" });
+          acceptedA();
+          await aHeld;
+          return returnEvidence ? evidence : undefined;
+        },
+      });
+      await hook.result.current(undefined, undefined, { reconciliation, queryKeys: [aKey] });
+    }); });
+    await aAccepted;
+    await act(async () => { await hook.result.current.batch(async (reconciliation) => {
+      await hook.result.current(undefined, undefined, { reconciliation,
+        records: [{ model: "notes.Note", id: "B" }],
+        acceptResponse: () => acceptQueryData(client, bKey, { title: "accepted B" }),
+      });
+      await hook.result.current(undefined, undefined, { reconciliation, queryKeys: [bKey] });
+    }); });
+    expect(readA).not.toHaveBeenCalled();
+    expect(readB).not.toHaveBeenCalled();
+    await act(async () => { resumeA(); await completionA; });
+    expect(readA).toHaveBeenCalledTimes(returnEvidence ? 0 : 1);
+    // B completed during A's asynchronous callback. Its marker is not evidence
+    // of an A-owned adoption, so A's later broad effect still reconciles B.
+    expect(readB).toHaveBeenCalledOnce();
+    expect(observers[1]!.getCurrentResult().fetchStatus).toBe("fetching");
+    await act(async () => { releaseReadB(); });
+    expect(client.getQueryData(bKey)).toEqual({ title: "canonical B" });
+  } finally { provider.setEnabled(false); stops.forEach((stop) => stop()); }
+});

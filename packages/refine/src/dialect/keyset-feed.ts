@@ -11,7 +11,7 @@ import {
   type UseInfiniteQueryResult,
 } from "@tanstack/react-query";
 import { useCallback } from "react";
-import { useAcceptQueryData, type AuthoredLiveChange } from "../query-invalidation";
+import { useAcceptQueryData, type QueryDataAcceptance, type AuthoredLiveChange } from "../query-invalidation";
 import { useDataProvider } from "@refinedev/core";
 import type { DocumentData } from "../typed-document";
 import type { AuthoredDocument, AuthoredVariables } from "./authored-hooks";
@@ -329,7 +329,7 @@ export function useAuthoredKeysetFeed<
   /** Discard loaded history and explicitly fetch the first page, including disabled/static feeds. */
   restart: () => Promise<void>;
   /** Adopt full returned rows in native pages; never manufacture pagination facts. */
-  acceptResponse: (rows: readonly TRow[], options?: KeysetFeedAcceptance) => Promise<void>;
+  acceptResponse: (rows: readonly TRow[], options?: KeysetFeedAcceptance) => Promise<QueryDataAcceptance | undefined>;
 } {
   const client = useQueryClient();
   const accept = useAcceptQueryData();
@@ -379,7 +379,7 @@ export function useAuthoredKeysetFeed<
   }, [actor, client, queryHash, refetch]);
   const acceptResponse = useCallback(async (rows: readonly TRow[], acceptance: KeysetFeedAcceptance = {}) => {
     if (!actor) throw new Error("Keyset feed acceptance requires an actor.");
-    await accept<InfiniteData<KeysetFeedPage<TRow, TMetadata>, KeysetFeedCursor>>(
+    return accept<InfiniteData<KeysetFeedPage<TRow, TMetadata>, KeysetFeedCursor>>(
       queryKey, (current) => {
         if (!current?.pages.length) throw new Error("Load the keyset head before accepting rows.");
         const replacements = new Map(rows.map((row) => [row.id, row]));

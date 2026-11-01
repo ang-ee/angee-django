@@ -177,6 +177,8 @@ export {
   type MutationReconciliationOptions,
   type MutationReconciliationScope,
   type MutationExecutionOptions,
+  type QueryDataAcceptance,
+  type QueryDataAcceptanceResult,
 } from "./query-invalidation";
 export {
   stableKey,
