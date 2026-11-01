@@ -321,3 +321,74 @@ def test_mixed_relation_defaults_follow_each_target_owner(api):
         assert public_impl_defaults(
             MixedDefaultSource, {"plain": "ordinary-default", "protected": "hidden-default"}
         ) == {"plain": str(ordinary.pk)}
+
+
+@pytest.mark.django_db
+def test_admin_graphql_gate_uses_native_role_reach_and_authenticated_session(api):
+    """Native role membership gates fields without any Django superuser shortcut."""
+    from contextlib import nullcontext
+
+    import strawberry
+    from django.contrib.auth import get_user_model
+    from django.contrib.auth.models import AnonymousUser
+    from django.test import RequestFactory, override_settings
+    from rebac import ObjectRef
+
+    from angee.iam.graphql.access import ADMIN_PERMISSION_CLASSES, PlatformAdminPermission, RolePermission
+    from angee.iam.permissions import is_authenticated, is_platform_admin
+
+    backend().set_schema(parse_zed("""definition auth/user {}
+    definition angee/role {
+      relation member: auth/user
+      permission effective_member = member
+    }"""))
+    role = ObjectRef("angee/role", "admin")
+    granted = SubjectRef.of("auth/user", "role-holder")
+    unrelated = SubjectRef.of("auth/user", "unrelated")
+    with system_context(reason="native admin role fixture"):
+        write_relationships([RelationshipTuple(role, "member", granted)])
+
+    class ConfiguredRolePermission(RolePermission):
+        role_ref = role
+
+    @strawberry.type
+    class AdminQuery:
+        @strawberry.field(permission_classes=ADMIN_PERMISSION_CLASSES)
+        def admin(self) -> str:
+            return "admin result"
+
+        @strawberry.field(permission_classes=[ConfiguredRolePermission])
+        def role_member(self) -> str:
+            return "role result"
+
+    schema = strawberry.Schema(query=AdminQuery)
+    assert ADMIN_PERMISSION_CLASSES == [PlatformAdminPermission]
+    user = get_user_model()(username="role-holder", is_superuser=False)
+    superuser = get_user_model()(username="unrelated", is_superuser=True)
+    assert is_authenticated(user)
+    assert not is_authenticated(AnonymousUser())
+    request = RequestFactory().get("/graphql")
+    for actor, session_user, allowed in (
+        (None, user, False),
+        (unrelated, user, False),
+        (unrelated, superuser, False),
+        (granted, AnonymousUser(), False),
+        (granted, user, True),
+    ):
+        request.user = session_user
+        with actor_context(actor) if actor is not None else nullcontext():
+            result = schema.execute_sync("{admin}", context_value={"request": request})
+        if allowed:
+            assert result.errors is None
+            assert result.data == {"admin": "admin result"}
+        else:
+            assert result.errors[0].message == "Platform admin permission required."
+            assert result.errors[0].extensions == {"code": "PERMISSION_DENIED"}
+    with actor_context(granted):
+        assert schema.execute_sync("{roleMember}").data == {"roleMember": "role result"}
+        with override_settings(REBAC_UNIVERSAL_ADMIN_ROLE=None):
+            assert is_platform_admin(user) is False
+    with actor_context(unrelated):
+        result = schema.execute_sync("{roleMember}")
+        assert result.errors[0].message == "Role permission required."
+        assert result.errors[0].extensions == {"code": "PERMISSION_DENIED"}

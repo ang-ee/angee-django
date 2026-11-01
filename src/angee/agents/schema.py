@@ -30,13 +30,13 @@ from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
 from angee.graphql.subscriptions import changes
+from angee.iam.graphql.access import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
+from angee.iam.graphql.access import PlatformAdminPermission
 from angee.iam.graphql.actions import action_target, authorized_permission_target, resolve_action_target, session_user
 from angee.iam.graphql.capabilities import permissions_field
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.identity import public_subject_ref
-from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
-from angee.iam.permissions import PlatformAdminPermission
 from angee.iam.schema import UserType
 from angee.integrate.connect import connect_integration_target
 from angee.integrate.oauth.errors import OAuthFlowError

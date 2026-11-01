@@ -1,11 +1,12 @@
-"""REBAC read gating for GraphQL schema surfaces and change payloads."""
+"""Native role admission and REBAC read gates for GraphQL surfaces."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
-from typing import Any
+from typing import Any, ClassVar
 
+import strawberry
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
@@ -15,10 +16,57 @@ from rebac.field_visibility import check_field_access, gated_read_fields
 from rebac.resources import model_resource_type
 from rebac.schema import Definition
 from rebac.schema.walker import field_gated_actions
+from strawberry.permission import BasePermission
+from strawberry_django.auth.utils import get_current_user
 
 from angee.base.models.identity import instance_from_public_id
 from angee.graphql.events import ChangeEvent, ChangePayload
-from angee.iam.permissions import effective_rebac_definition, require_rebac_queryset
+from angee.iam.permissions import (
+    current_actor_has_role,
+    effective_rebac_definition,
+    is_platform_admin,
+    require_rebac_queryset,
+)
+
+
+class RolePermission(BasePermission):
+    """Allow actors that reach ``role_ref`` through ``effective_member``."""
+
+    role_ref: ClassVar[ObjectRef | None] = None
+
+    message = "Role permission required."
+    error_extensions = {"code": "PERMISSION_DENIED"}
+
+    def has_permission(
+        self,
+        source: Any,
+        info: strawberry.Info,
+        **kwargs: Any,
+    ) -> bool:
+        """Return whether the current actor reaches the configured role."""
+
+        del source, kwargs
+        return self.role_ref is not None and current_actor_has_role(self.role_ref)
+
+
+class PlatformAdminPermission(RolePermission):
+    """Allow only actors that reach IAM's const-backed platform admin role."""
+
+    message = "Platform admin permission required."
+
+    def has_permission(
+        self,
+        source: Any,
+        info: strawberry.Info,
+        **kwargs: Any,
+    ) -> bool:
+        """Return whether the request user has platform-admin reach."""
+
+        del source, kwargs
+        return is_platform_admin(get_current_user(info))
+
+
+ADMIN_PERMISSION_CLASSES: list[type[BasePermission]] = [PlatformAdminPermission]
 
 
 def actor_can_read(resource: ObjectRef) -> bool:

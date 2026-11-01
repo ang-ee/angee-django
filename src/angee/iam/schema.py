@@ -53,6 +53,7 @@ from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID
 from angee.graphql.subscriptions import changes
 from angee.iam.choices import UserAccountAction
+from angee.iam.graphql.access import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.graphql.access import ActorSelfChangeReadGate
 from angee.iam.graphql.actions import authorized_permission_target, session_user
 from angee.iam.graphql.capabilities import permission_expression
@@ -64,7 +65,6 @@ from angee.iam.identity import public_subject_ref, user_display_label, user_labe
 from angee.iam.managers import VISIBLE_PEOPLE_DEFAULT_LIMIT
 from angee.iam.models import Group as GroupModel
 from angee.iam.models.base import ProtectedModel
-from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import is_platform_admin
 from angee.iam.roles import (
     IAM_OVERVIEW_DEFAULT_PEEK_LIMIT as _IAM_OVERVIEW_DEFAULT_PEEK_LIMIT,
