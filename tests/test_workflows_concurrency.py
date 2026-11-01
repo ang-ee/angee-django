@@ -1055,7 +1055,12 @@ def test_io_settlement_stops_at_deadline_when_step_row_stays_locked(execution, r
             finish_body.set()
             release.set()
         holder.result(timeout=5)
-        assert pool.submit(in_connection, runner.reap).result(timeout=5) == 1
+        # Settlement uses the host clock; expiration belongs to the database clock.
+        limit = monotonic() + 5
+        while not StepRun.system_queryset().filter(pk=step_run.pk, deadline_at__lt=Now()).exists():
+            assert monotonic() < limit, "The database deadline did not expire."
+            sleep(0.02)
+        assert pool.submit(in_connection, runner.reap).result(timeout=max(0, limit - monotonic())) == 1
     assert bodies == [1]
     assert row(run).output == {"error": "The attempt deadline expired."}
     assert row(run).status == StepRunStatus.FAILED

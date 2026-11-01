@@ -17,7 +17,7 @@ class NotesQueryBudgetTests(TransactionTestCase):
     """Keep label selection and row authorization on the native query path."""
 
     def test_display_name_fetches_its_title_with_the_rows(self) -> None:
-        """A one-row or 25-row label picker has flat Notes SQL, with scope intact."""
+        """A populated label picker has flat Notes SQL, with scope intact."""
 
         call_command("rebac", "sync", verbosity=0)
         note_model = apps.get_model("notes", "Note")
@@ -39,7 +39,7 @@ class NotesQueryBudgetTests(TransactionTestCase):
         """
         table = connection.ops.quote_name(note_model._meta.db_table)
         counts = []
-        for size in (1, 25):
+        for size in (1, 2, 25):
             with CaptureQueriesContext(connection) as captured:
                 response = self.client.post(
                     "/graphql/public/",
@@ -56,7 +56,9 @@ class NotesQueryBudgetTests(TransactionTestCase):
             )
             counts.append(sum(f"FROM {table}" in item["sql"] for item in captured))
 
-        self.assertEqual(counts[0], counts[1], "Reading label titles must not add a query for each row")
+        # A singleton field guard can use native point-source preparation.
+        # Compare populations; every size above still checks exact scoped titles.
+        self.assertEqual(counts[1], counts[2], f"Reading label titles must batch across populations: {counts}")
 
     def test_audit_labels_batch_distinct_editors(self) -> None:
         """The real HTTP optimizer batches 25 distinct editors into one relation read."""
