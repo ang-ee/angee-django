@@ -5,7 +5,7 @@ import {
 } from "@angee/ui";
 import { useMemo, type ReactElement } from "react";
 
-import { DecisionStepsDocument, RecordRelatedRunsDocument, RUN_MODEL, RUN_MODELS, RunRelatedDocument, STEP_RUN_MODEL } from "./documents.console";
+import { DecisionStepsDocument, RecordRelatedRunsCountDocument, RecordRelatedRunsDocument, RUN_MODEL, RUN_MODELS, RunRelatedDocument, STEP_RUN_MODEL } from "./documents.console";
 import { enWorkflowsMessages, useWorkflowsT } from "./i18n";
 
 const DECISION_MODEL = "decisions.Decision";
@@ -117,13 +117,14 @@ function RunDecisionsGroup({ context, label }: { context: ChatterViewContext; la
   </li></>;
 }
 
-function useRecordRuns(context: ChatterViewContext) {
+function useRecordRunsScope(context: ChatterViewContext) {
   const model = context.route?.canonicalLabel ?? context.route?.modelLabel ?? "";
   const id = recordId(context);
   const records = useMemo(() => [{ model, id }], [model, id]);
-  return useAuthoredQuery(RecordRelatedRunsDocument, { records }, {
-    enabled: Boolean(model && id), models: [...RUN_MODELS], records, relatedModels: [...RUN_MODELS],
-  });
+  return {
+    variables: { records },
+    options: { enabled: Boolean(model && id), models: [...RUN_MODELS], records, relatedModels: [...RUN_MODELS] },
+  };
 }
 
 /** Runs are their own record pages and steps are theirs; every other record lists the runs that worked on it. */
@@ -139,7 +140,8 @@ export const recordRunsGroup: ContainerChild<RelatedGroupContent> = {
     label: enWorkflowsMessages["related.runs"]!,
     when: hasRuns,
     useCount: (context) => {
-      const query = useRecordRuns(context);
+      const scope = useRecordRunsScope(context);
+      const query = useAuthoredQuery(RecordRelatedRunsCountDocument, scope.variables, scope.options);
       return query.data ? query.data.record_timeline.records.flatMap((entry) => entry.runs).length : undefined;
     },
     render: (context, label) => <RecordRunsGroup key={context.view.sqid} context={context} label={label} />,
@@ -150,7 +152,8 @@ function RecordRunsGroup({ context, label }: { context: ChatterViewContext; labe
   const t = useWorkflowsT();
   const recordHref = useResourceRecordHrefLookup();
   const statuses = useEnumOptions(RUN_MODEL, "status", { casing: "upper" });
-  const query = useRecordRuns(context);
+  const scope = useRecordRunsScope(context);
+  const query = useAuthoredQuery(RecordRelatedRunsDocument, scope.variables, scope.options);
   // Newest first: the run that last worked on the record is the one a reader looks for.
   const runs = [...(query.data?.record_timeline.records.flatMap((entry) => entry.runs) ?? [])].reverse();
   return <>{label()}<li>
