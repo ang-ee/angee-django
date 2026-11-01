@@ -47,6 +47,37 @@ describe("resource invalidation targets", () => {
     });
   });
 
+  test("exact writes refresh collections and only the written detail identities", () => {
+    const metadata = schemaFieldMetadataFromDataResources([testDataResource("notes.Note")]);
+    const targets = resourceInvalidationTargets(metadata, ["notes.Note"], [
+      { model: "notes.Note", id: "note-1" },
+      { model: "notes.Note", id: "note-2" },
+      { model: "notes.Note", id: "note-1" },
+    ]);
+    expect(targets.map(refineInvalidationParams)).toEqual(["note-1", "note-2"].map((id) => ({
+      resource: "console:notes.Note", dataProviderName: "console", id,
+      invalidates: ["list", "many", "detail"],
+    })));
+  });
+
+  test("unknown related effects keep the resource fallback beside exact written records", () => {
+    const metadata = schemaFieldMetadataFromDataResources([
+      testDataResource("notes.Note"), testDataResource("catalog.Summary"),
+    ]);
+    const targets = resourceInvalidationTargets(metadata, ["notes.Note", "catalog.Summary"], [
+      { model: "notes.Note", id: "note-1" },
+    ]);
+    expect(targets.map(refineInvalidationParams)).toEqual([
+      { resource: "console:notes.Note", dataProviderName: "console", id: "note-1", invalidates: ["list", "many", "detail"] },
+      { resource: "console:catalog.Summary", dataProviderName: "console", invalidates: ["resourceAll"] },
+    ]);
+    expect(resourceInvalidationTargets(metadata, ["notes.Note"], [
+      { model: "notes.Note", id: "note-1" }, { model: "notes.Note" },
+    ]).map(refineInvalidationParams)).toEqual([
+      { resource: "console:notes.Note", dataProviderName: "console", invalidates: ["resourceAll"] },
+    ]);
+  });
+
   test("canonicalizes an authored mutation's model alias", () => {
     const [target] = resourceInvalidationTargets(
       schemaFieldMetadataFromDataResources([testDataResource("notes.Note")]),
