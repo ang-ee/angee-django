@@ -1,4 +1,4 @@
-"""Sender and party avatars cost the same per page however many rows the page shows."""
+"""Sender and party avatars batch their reads across populated pages."""
 
 from __future__ import annotations
 
@@ -75,20 +75,28 @@ def test_message_lists_the_inbox_navigator_and_same_as_pairs_batch_their_avatars
             data = result_data(execute_schema(schema, query, request=request))
         return len(queries.captured_queries), data
 
-    seed(0, 1)
-    one = {name: read(query)[0] for name, query in PAGES.items()}
-    seed(1, 3)
-    four = {name: read(query) for name, query in PAGES.items()}
-    assert {name: count for name, (count, _data) in four.items()} == one
+    counts: list[dict[str, int]] = []
+    for start, added in ((0, 1), (1, 3), (4, 4)):
+        seed(start, added)
+        pages = {name: read(query) for name, query in PAGES.items()}
+        counts.append({name: count for name, (count, _data) in pages.items()})
 
-    messages = four["messages"][1]["messages"]
-    assert {row["sender"]["party"]["id"]: row["sender"]["party"]["display_avatar"]["id"] for row in messages} == shown
-    navigator = four["inbox_navigator"][1]["inbox_navigator"]["rows"]
-    assert {row["handle"]["party"]["id"]: row["handle"]["party"]["display_avatar"]["id"] for row in navigator} == shown
-    pairs = four["same_as_pairs"][1]["same_as_pairs"]
-    assert {
-        side["id"]: side["display_avatar"]["id"]
-        for pair in pairs
-        for side in (pair["left"], pair["right"])
-        if side["display_avatar"] is not None
-    } == shown
+        messages = pages["messages"][1]["messages"]
+        assert {
+            row["sender"]["party"]["id"]: row["sender"]["party"]["display_avatar"]["id"] for row in messages
+        } == shown
+        navigator = pages["inbox_navigator"][1]["inbox_navigator"]["rows"]
+        assert {
+            row["handle"]["party"]["id"]: row["handle"]["party"]["display_avatar"]["id"] for row in navigator
+        } == shown
+        pairs = pages["same_as_pairs"][1]["same_as_pairs"]
+        assert {
+            side["id"]: side["display_avatar"]["id"]
+            for pair in pairs
+            for side in (pair["left"], pair["right"])
+            if side["display_avatar"] is not None
+        } == shown
+
+    # Singleton related prefetches can use native point-source preparation.
+    # Compare populated pages while retaining exact output checks at every size.
+    assert counts[1] == counts[2], counts
