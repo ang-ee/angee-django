@@ -30,7 +30,7 @@ from angee.knowledge import schema as knowledge_schema
 from angee.messaging.testing.models import Channel
 from angee.parties import schema as parties_schema
 from angee.provenance import schema as provenance_schema
-from angee.provenance.context import changeset
+from angee.provenance.context import changeset, current_changeset
 from angee.provenance.evidence import EvidenceReference
 from angee.provenance.statements import (
     SourceKind,
@@ -385,6 +385,34 @@ def test_history_carries_the_statements_a_changeset_asserted_for_the_record() ->
     assert {row["source"]["id"] for row in identity} == {public_id_of(person)}
     assert all(row["evidence"] == [] for row in identity)
     assert identity[-1]["values"] == {"display_name": "Ada Lovelace"}
+
+
+def test_statement_last_writer_and_capture_remain_distinct_through_replay() -> None:
+    person = create_user("statement-last-writer-history")
+    with actor_context(person), changeset(fresh=True, change_reason="Create party"):
+        party = Party.objects.create(display_name="Retained person")
+    statement_model = Party.statements.model
+    with system_context(reason="tests.statement.last_writer.fixture"):
+        statement = statement_model._base_manager.get(subject=party, aspect="identity")
+        before = statement.confidence
+        with actor_context(person), changeset(fresh=True, change_reason="Adjust confidence"):
+            statement.confidence = 0.25
+            statement.save(update_fields=["confidence"])
+            receipt = current_changeset()
+        captured = statement.history.first()
+        assert statement.changeset_id == receipt.pk
+        assert captured.changeset_id == receipt.pk
+        assert captured.history_changeset_id == receipt.pk
+        retained = dict(statement.history.filter(history_id=captured.history_id).values().get())
+        with actor_context(person):
+            inverse = receipt.with_actor(person).revert()
+        statement.refresh_from_db()
+        assert statement.confidence == before
+        assert statement.changeset_id == inverse.pk
+        inverse_snapshot = statement.history.first()
+        assert inverse_snapshot.changeset_id == inverse.pk
+        assert inverse_snapshot.history_changeset_id == inverse.pk
+        assert statement.history.filter(history_id=captured.history_id).values().get() == retained
 
 
 def test_field_provenance_decorates_a_partys_stated_field_through_the_statement_read_gate() -> None:

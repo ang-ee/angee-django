@@ -20,6 +20,7 @@ from django.db import models, router, transaction
 from django.db.models import Exists, F, OuterRef, Q
 from django.db.models.query import ModelIterable
 from django.utils import timezone
+from django_provenance.base import ChangesetAttribution
 from django_provenance.statements import Aspect as NativeAspect
 from django_provenance.statements import StatementEditMixin, StatementWriteMixin
 from django_provenance.statements import StatementLinkMixin as NativeStatementLinkMixin
@@ -63,7 +64,6 @@ from angee.provenance.evidence import (
     readable_evidence_records,
     readable_records,
 )
-from angee.provenance.history import _ChangesetHistory
 
 
 def _statement_column(model: type[models.Model], name: str) -> models.Field:
@@ -1024,7 +1024,7 @@ class StatementPairHistory(ModelHistory):
             (previous or last).instance.require_statement_write(to_subject_ref(actor))
 
 
-class Statement(MergeContractMixin, HistoryMixin, _ChangesetHistory, SqidMixin, TimestampMixin, RebacMixin):
+class Statement(MergeContractMixin, HistoryMixin, ChangesetAttribution, SqidMixin, TimestampMixin, RebacMixin):
     """Retained shadow row; its canonical subject owns admission and field gates."""
 
     class StatementSnak(models.TextChoices):
