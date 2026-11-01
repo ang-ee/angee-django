@@ -10,7 +10,7 @@ import {
   type UseActionMutationOptions,
 } from "@angee/refine";
 import {
-  useCanonicalResourceModelLabels,
+  useResourceMutationModels,
   useResourceInvalidates,
 } from "@angee/metadata";
 
@@ -216,15 +216,13 @@ export function useActionOutcomeMutation<TField extends string = string>(
   options: UseActionResultMutationOptions = {},
 ): [ActionMutate, UseActionMutationState] {
   const { dataProviderName } = options;
-  const canonicalInvalidateModels = useCanonicalResourceModelLabels(
-    options.invalidateModels,
-  );
-  const invalidates = useResourceInvalidates(canonicalInvalidateModels, options.records);
+  const { models, resourceModels } = useResourceMutationModels(options.invalidateModels);
+  const invalidates = useResourceInvalidates(resourceModels, options.records);
   return useActionMutation<TField>(field, {
     ...(options.idArgument !== undefined ? { idArgument: options.idArgument } : {}),
     ...(dataProviderName !== undefined ? { dataProviderName } : {}),
     ...(options.invalidateModels !== undefined
-      ? { invalidateModels: canonicalInvalidateModels }
+      ? { invalidateModels: models }
       : {}),
     ...(options.invalidateOnFailure ? { invalidateOnFailure: true } : {}),
     ...(options.transient ? { transient: true } : {}),

@@ -7,8 +7,8 @@ import {
   type DocumentData,
 } from "@angee/refine";
 import {
-  useCanonicalResourceModelLabels,
   useResourceInvalidates,
+  useResourceMutationModels,
 } from "@angee/metadata";
 
 /**
@@ -24,10 +24,10 @@ import {
  * `invalidates`, so the contribution inherits resource invalidation without
  * re-deriving it.
  *
- * Each `invalidateModels` entry is canonicalized at this rendered metadata edge;
- * unknown spellings warn in development and are omitted. A non-resource authored
- * read model stays on plain `useAuthoredMutation`. The canonical labels are also
- * forwarded, so authored reads registered on those exact models refetch too.
+ * Resource aliases are canonicalized at this rendered metadata edge. Authored
+ * model effects without a native CRUD resource retain their declared canonical
+ * label and stay on Refine's authored/live path. Only resource-backed effects
+ * map to native resource caches; neither set replaces the other.
  * Declared `records` narrow detail effects to their actual ids; collections still
  * reconcile membership and totals. `acceptResponse` adopts the caller's typed
  * projection before the shared Refine owner schedules those effects.
@@ -41,10 +41,8 @@ export function useAuthoredResourceMutation<TDocument extends AuthoredDocument>(
     AuthoredVariables<TDocument>
   > = {},
 ): ReturnType<typeof useAuthoredMutation<TDocument>> {
-  const canonicalInvalidateModels = useCanonicalResourceModelLabels(
-    options.invalidateModels,
-  );
-  const resourceInvalidates = useResourceInvalidates(canonicalInvalidateModels, options.records);
+  const { models, resourceModels } = useResourceMutationModels(options.invalidateModels);
+  const resourceInvalidates = useResourceInvalidates(resourceModels, options.records);
   const invalidates = React.useMemo(() => {
     const explicit = options.invalidates;
     if (typeof explicit !== "function" && typeof resourceInvalidates !== "function") {
@@ -58,7 +56,7 @@ export function useAuthoredResourceMutation<TDocument extends AuthoredDocument>(
   return useAuthoredMutation(document, {
     ...options,
     ...(options.invalidateModels !== undefined
-      ? { invalidateModels: canonicalInvalidateModels }
+      ? { invalidateModels: models }
       : {}),
     invalidates,
   });

@@ -134,6 +134,8 @@ responses update only complete selected fields in an existing cache, leave that
 query stale and request an authoritative read; they never seed a complete detail.
 Authored resource mutations compose the same lifecycle through `acceptResponse`
 and explicit `records`, retaining broad invalidation for unknown effects.
+Authored-only models retain their effects on authored reads; only exposed CRUD
+resources enter native resource invalidation.
 
 `GraphView` automatically lays out unpositioned nodes using measured sizes and
 preserves explicit positions. Layout debt: `GraphEditor` still lays out from

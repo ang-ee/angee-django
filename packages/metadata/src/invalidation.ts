@@ -39,7 +39,7 @@ export function resourceInvalidationTargets(
       dataProviderName: resource.schemaName,
     };
     const matching = records?.filter((record) =>
-      canonicalModelLabel(metadata.resources ?? [], record.model) === modelLabel);
+      canonicalModelLabel(metadata.resources ?? [], record.model, { optional: true }) === modelLabel);
     // A model-only effect deliberately retains the broad fallback. Collections
     // still reconcile for exact writes because membership/order/totals are owned
     // by their server query, not by a single returned row.
@@ -96,7 +96,14 @@ export function useResourceInvalidates<TData, TVariables>(
   const key = JSON.stringify(canonicalModelLabels);
   return useMemo(() => {
     const resolve = (effects: readonly InvalidationRecord[] | undefined) => {
-      const models = [...new Set([...canonicalModelLabels, ...(effects ?? []).map((record) => record.model)])];
+      // Authored subscriptions may observe models with no native CRUD resource.
+      // Only exposed resources enter this map; the mutation retains all effects
+      // for Refine's separate authored/live reconciliation path.
+      const resourceModels = (effects ?? []).flatMap((record) => {
+        const label = canonicalModelLabel(metadata.resources ?? [], record.model, { optional: true });
+        return label ? [label] : [];
+      });
+      const models = [...new Set([...canonicalModelLabels, ...resourceModels])];
       return resourceInvalidationTargets(metadata, models, effects).map(refineInvalidationParams);
     };
     return typeof records === "function"
@@ -104,6 +111,30 @@ export function useResourceInvalidates<TData, TVariables>(
       : resolve(records);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, metadata, records]);
+}
+
+/**
+ * Preserve authored model effects while selecting their native-resource subset.
+ * Resource aliases resolve through the emitted inventory. Other effects retain
+ * their declared canonical labels; resource metadata cannot validate authored
+ * query/subscription models. Ambiguous resource aliases still fail fast.
+ */
+export function useResourceMutationModels(modelLabels: readonly string[] | undefined): {
+  models: readonly string[];
+  resourceModels: readonly string[];
+} {
+  const metadata = useSchemaFieldMetadata();
+  const key = JSON.stringify(modelLabels ?? []);
+  return useMemo(() => {
+    const resources = new Set<string>();
+    const models = (modelLabels ?? []).map((spelling) => {
+      const resource = canonicalModelLabel(metadata.resources, spelling, { optional: true });
+      if (resource) resources.add(resource);
+      return resource ?? spelling;
+    });
+    return { models: [...new Set(models)], resourceModels: [...resources] };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, metadata]);
 }
 
 /**
