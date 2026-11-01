@@ -254,7 +254,7 @@ def test_prefetched_tree_reloads_incomplete_fields_and_content(
     tmp_path: Path,
     cache_state: str,
 ) -> None:
-    """Only complete rows and content caches can bypass the joined read."""
+    """Missing navigation batches a reload; unrequested content stays lazy until read."""
 
     message, parts = part_tree
     with system_context(reason="messaging cached content setup"), mute_changes():
@@ -278,3 +278,18 @@ def test_prefetched_tree_reloads_incomplete_fields_and_content(
         assert loaded[attachment.pk].file.filename == "note.txt"
         assert loaded[attachment.pk].file.mime_type.mime_type == "text/plain"
     assert len(queries) == (0 if cache_state == "complete" else 1)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_native_part_projection_does_not_load_unselected_content(part_tree: tuple[Message, dict[str, Part]]) -> None:
+    """Traversal reuses a narrow authorized prefetch without forcing fragments or files."""
+    message, parts = part_tree
+    with system_context(reason="test.messaging.narrow_part_navigation"):
+        message = Message._base_manager.prefetch_related(Prefetch(
+            "parts", queryset=Part._base_manager.only("message_id", "parent_id", "position", "sqid"),
+        )).get(pk=message.pk)
+    with CaptureQueriesContext(connection) as queries:
+        ordered = Part.objects.reading_order_for_message(message)
+        assert [row.pk for row in ordered] == [row.pk for row in parts.values()]
+    assert len(queries) == 0
+    assert all("fragment_id" in row.get_deferred_fields() for row in ordered)

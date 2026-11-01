@@ -10,6 +10,11 @@ stream; provenance contributes record history independently through the same own
 Record chatter responses resolve selected fields through one private
 record/role/request context. Posting and editing select only the accepted message;
 followers, suggestions, notifications and totals remain independent selections.
+The record queryset supplies membership and ordering without hydrating content.
+Native Strawberry-Django message-field annotations and prefetch hints load sender,
+capability, unread, part, reaction and star projections only when selected, before
+materializing the authorized row/window. The same field boundary serves legacy,
+keyset and retained-ID reads; Python list APIs materialize the same queryset owner.
 The conversation adopts that authoritative projection into native Query pages,
 then reconciles derived state. `record_message_feed` and its retained-ID
 revalidation root use the same parent read gate and `MessageQuerySet.record_scope`
