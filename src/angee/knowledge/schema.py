@@ -22,11 +22,13 @@ from angee.base.fields.identity import SqidField
 from angee.base.models.identity import instance_from_public_id
 from angee.base.models.locks import StaleRevisionError
 from angee.graphql.actions import ActionResult, action_guard
-from angee.iam.graphql.actions import session_user
-from angee.iam.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data.contracts import DataResourceSubtitleMetadata
-from angee.graphql.data.hasura import declared_hasura_resource_fields, declared_hasura_write_relation_fields, hasura_model_resource, public_pk_decoder
-from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
+from angee.graphql.data.hasura import (
+    declared_hasura_resource_fields,
+    declared_hasura_write_relation_fields,
+    hasura_model_resource,
+    public_pk_decoder,
+)
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import (
     PublicID,
@@ -35,10 +37,13 @@ from angee.graphql.ids import (
     require_public_id,
     to_public_id,
 )
-from angee.iam.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, ProtectedNode
-from angee.iam.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch
+from angee.iam.graphql.actions import session_user
+from angee.iam.graphql.capabilities import permission_expression, permissions_field
+from angee.iam.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, ProtectedNode
+from angee.iam.graphql.relations import actor_scoped_to_one
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.identity import user_display_label, user_label, user_public_id
 from angee.knowledge.models import (
     AmbiguousMatchError,

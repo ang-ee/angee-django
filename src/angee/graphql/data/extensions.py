@@ -1,12 +1,15 @@
 """Declared transformations at native resource construction boundaries."""
 
 from __future__ import annotations
+
 from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, fields
 from typing import Any
+
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
+
 from angee.base.hooks import resolve_hooks
 
 

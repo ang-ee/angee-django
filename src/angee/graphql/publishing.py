@@ -35,8 +35,7 @@ _INMEMORY_CHANNEL_LAYER = "channels.layers.InMemoryChannelLayer"
 _publisher_model_labels: frozenset[str] = frozenset()
 _publisher_fields: dict[type[models.Model], ReadableFields] = {}
 _explicit_readable_fields: ContextVar[tuple[models.Model, ReadableFields] | None] = ContextVar(
-    "graphql_change_readable_fields",
-    default=None,
+    "graphql_change_readable_fields", default=None,
 )
 
 
@@ -67,10 +66,8 @@ def connect_change_publishers(metadata: Mapping[str, list[str]] | None = None) -
         raise ImproperlyConfigured("GraphQL publisher metadata must be a model-to-fields mapping; run compose")
     resolved: dict[type[models.Model], frozenset[str]] = {}
     for label, fields in sorted(metadata.items()):
-        if (
-            not isinstance(label, str)
-            or not isinstance(fields, list | tuple)
-            or any(not isinstance(field, str) for field in fields)
+        if not isinstance(label, str) or not isinstance(fields, list | tuple) or any(
+            not isinstance(field, str) for field in fields
         ):
             raise ImproperlyConfigured(
                 "GraphQL publisher metadata must contain model labels and field lists; run compose"
@@ -131,14 +128,8 @@ def _check_channel_layer() -> None:
     )
 
 
-def publish_change(
-    instance: models.Model,
-    *,
-    action: str,
-    update_fields: Iterable[str] | None,
-    readable_fields: ReadableFields = (),
-    broadcast: bool = True,
-) -> None:
+def publish_change(instance: models.Model, *, action: str, update_fields: Iterable[str] | None,
+                   readable_fields: ReadableFields = (), broadcast: bool = True) -> None:
     """Compatibility adapter for explicit GraphQL publication of an owner write."""
     connect_change_adapter()
     token = _explicit_readable_fields.set((instance, readable_fields))
@@ -160,23 +151,13 @@ def _on_change_observed(sender: type[models.Model], *, payload: ModelChange, **k
     )
     fields = explicit if explicit is not None else _publisher_fields[sender]
     projected = ChangePayload.from_instance(
-        instance,
-        action=payload.action,
-        update_fields=payload.changed_fields,
-        readable_fields=fields if broadcasts else (),
-        during_ingestion=payload.during_ingestion,
-        broadcasts=broadcasts,
-        field_values=payload.changed_values,
+        instance, action=payload.action, update_fields=payload.changed_fields,
+        readable_fields=fields if broadcasts else (), during_ingestion=payload.during_ingestion,
+        broadcasts=broadcasts, field_values=payload.changed_values,
     )
-    _queue_transport(
-        sender,
-        replace(
-            projected,
-            id=payload.id,
-            occurrence_id=payload.occurrence_id,
-            using=payload.using,
-        ),
-    )
+    _queue_transport(sender, replace(
+        projected, id=payload.id, occurrence_id=payload.occurrence_id, using=payload.using,
+    ))
 
 
 def broadcast_related_records(records: Iterable[models.Model]) -> None:
@@ -199,15 +180,10 @@ def broadcast_related_records(records: Iterable[models.Model]) -> None:
             record = model(pk=reference.object_id)
             record._state.db = using
             payload = ChangePayload.from_instance(record, action="update", update_fields=None, broadcasts=False)
-            _queue_transport(
-                model,
-                replace(
-                    payload,
-                    id=reference.public_id,
-                    broadcasts=True,
-                    related_records=(ChangeRelatedRecord(reference.model_label, reference.public_id),),
-                ),
-            )
+            _queue_transport(model, replace(
+                payload, id=reference.public_id, broadcasts=True,
+                related_records=(ChangeRelatedRecord(reference.model_label, reference.public_id),),
+            ))
 
 
 def _queue_transport(model: type[models.Model], payload: ChangePayload) -> None:

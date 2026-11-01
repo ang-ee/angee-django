@@ -10,9 +10,9 @@ from uuid import uuid4
 import strawberry
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
-from angee.base.hooks import resolve_hooks
 from strawberry.scalars import JSON
 
+from angee.base.hooks import resolve_hooks
 from angee.base.models.identity import public_id_of
 from angee.base.refs import RecordRef, record_view_refs
 from angee.base.serialization import json_safe

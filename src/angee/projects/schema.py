@@ -21,18 +21,25 @@ from strawberry.scalars import JSON
 from strawberry.types import get_object_definition
 from strawberry_django.utils.gql_compat import get_field_arguments
 
-from angee.graphql import capabilities
 from angee.graphql.actions import ActionResult, action_guard
-from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
-from angee.graphql.data.hasura import SortAlias, declared_hasura_resource_fields, declared_hasura_write_relation_fields, hasura_model_resource, public_pk_decoder, row_annotations
-from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
+from angee.graphql.data.hasura import (
+    SortAlias,
+    declared_hasura_resource_fields,
+    declared_hasura_write_relation_fields,
+    hasura_model_resource,
+    public_pk_decoder,
+    row_annotations,
+)
 from angee.graphql.ids import PublicID, instance_for_id, optional_public_id
 from angee.graphql.inputs import input_values
-from angee.iam.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, ProtectedNode
 from angee.graphql.relations import RecordPointerType
-from angee.iam.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
+from angee.iam.graphql import capabilities
+from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
+from angee.iam.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, ProtectedNode
+from angee.iam.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.parties.schema import PartyType

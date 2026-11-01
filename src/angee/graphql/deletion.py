@@ -17,9 +17,11 @@ from django.db.models.deletion import (
     RestrictedError,
 )
 
+from angee.base.models.base import AngeeModel
 from angee.base.models.identity import public_id_of
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.contracts import DataResourceRoots, DataResourceTypeNames
+from angee.graphql.data.extensions import resource_extensions
 from angee.graphql.data.metadata import (
     DataResourceContribution,
     DataResourcePolicy,
@@ -28,8 +30,6 @@ from angee.graphql.data.metadata import (
     resource_wire_field_name,
 )
 from angee.graphql.ids import RECORD_NOT_FOUND_MESSAGE, require_instance_for_id
-from angee.base.models.base import AngeeModel
-from angee.graphql.data.extensions import resource_extensions
 from graphql import GraphQLError
 
 _PREVIEW_LEAF_LIMIT = 50

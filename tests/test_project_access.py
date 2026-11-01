@@ -25,11 +25,11 @@ from rebac import (
 )
 from rebac.models import active_relationship_model
 
-from angee.iam.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.iam.build import extension_source_map
+from angee.iam.graphql.capabilities import permissions_field
+from angee.iam.graphql.node import ProtectedNode
 from angee.iam.testing.permissions import emit_permissions, installed_field_owners
 from angee.messaging.testing.models import Channel, Message, Person, Thread, ThreadAttachment
 from angee.projects.testing.models import Project, ProjectBinding, Task

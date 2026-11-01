@@ -131,7 +131,7 @@ def test_reference_filter_declaration_rejects_claimed_decoder_names(name):
 @isolate_apps()
 def test_record_reference_guard_uses_the_declared_string_key_and_current_actor(composed_tables):
     """A string reference key compares typed target keys and rebinds read scope safely."""
-    class TextReference(ProtectedRecordRefMixin, models.Model):
+    class TextReference(ProtectedRecordRefMixin):
         content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
         object_id = models.CharField(max_length=63)
         target = GenericForeignKey()
@@ -259,7 +259,7 @@ def test_reference_projection_uses_registered_key_lookup(composed_tables):
         def as_sql(self, compiler, connection):
             return "0 = 1", []
 
-    class CustomReference(ProtectedRecordRefMixin, models.Model):
+    class CustomReference(ProtectedRecordRefMixin):
         content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
         object_id = ReferenceKey(max_length=63)
         target = GenericForeignKey()

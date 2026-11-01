@@ -1,7 +1,9 @@
 """IAM-owned redaction on a native Strawberry node interface."""
 
 from typing import cast
+
 import strawberry
+
 from angee.graphql.node import AngeeNode
 from angee.iam.models.base import ProtectedModel
 

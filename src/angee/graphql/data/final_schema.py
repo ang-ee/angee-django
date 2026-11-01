@@ -52,14 +52,17 @@ def final_schema_references(
     root_fields = {
         "query": schema.query_type.fields if schema.query_type is not None else {},
         "mutation": schema.mutation_type.fields if schema.mutation_type is not None else {},
-        "subscription": (schema.subscription_type.fields if schema.subscription_type is not None else {}),
+        "subscription": (
+            schema.subscription_type.fields if schema.subscription_type is not None else {}
+        ),
     }
     validated_roots = dataclasses.replace(
         roots,
         **{
             field_name: None
             for field_name, owner in _ROOT_OWNERS.items()
-            if (root_name := getattr(roots, field_name)) is not None and root_name not in root_fields[owner]
+            if (root_name := getattr(roots, field_name)) is not None
+            and root_name not in root_fields[owner]
         },
     )
     validated_type_names = dataclasses.replace(
@@ -73,6 +76,8 @@ def final_schema_references(
         },
     )
     capabilities = tuple(
-        capability for capability, field_name in _CAPABILITY_ROOTS if getattr(validated_roots, field_name) is not None
+        capability
+        for capability, field_name in _CAPABILITY_ROOTS
+        if getattr(validated_roots, field_name) is not None
     )
     return validated_roots, validated_type_names, capabilities

@@ -9,7 +9,7 @@ import pytest
 from rebac import actor_context, system_context
 from rebac.roles import grant, revoke
 
-from angee.graphql import records
+from angee.iam.graphql import records
 from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, result_data, vault_for
 
 knowledge_schema = importlib.import_module("angee.knowledge.schema")

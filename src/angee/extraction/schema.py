@@ -17,7 +17,12 @@ from angee.base.models.identity import public_id_for
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.iam.graphql.node import ProtectedNode
-from angee.iam.graphql.relations import RECORD_REFERENCE_ANNOTATIONS, RecordReferenceNode, actor_scoped_to_many, actor_scoped_to_one
+from angee.iam.graphql.relations import (
+    RECORD_REFERENCE_ANNOTATIONS,
+    RecordReferenceNode,
+    actor_scoped_to_many,
+    actor_scoped_to_one,
+)
 from angee.storage.schema import FileType
 
 Extraction = apps.get_model("extraction.Extraction")

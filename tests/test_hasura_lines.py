@@ -30,8 +30,8 @@ from rebac import (
 from strawberry import auto
 
 from angee.graphql.data.hasura import HasuraLines, hasura_model_resource
-from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.graphql.node import ProtectedNode
 from tests.conftest import SchemaAddon, create_platform_admin, create_user, execute_schema, result_data
 from tests.linesdemo.models import Document, DocumentLine, LineReceipt, PinnedLine, Product, Tag
 

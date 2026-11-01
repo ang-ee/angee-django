@@ -18,8 +18,8 @@ import tests.test_messaging  # noqa: F401 -- register related models before nati
 from angee.base.models.stages import Stage as OrderedStage
 from angee.base.models.stages import StagedModelMixin
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
-from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.graphql.node import ProtectedNode
 from angee.projects.testing.models import Queue, Stage, Task
 from tests import test_sequence  # noqa: F401 -- register Queue's sequence target before database setup
 from tests.composed_host import run_composed_tests

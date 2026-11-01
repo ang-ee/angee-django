@@ -9,8 +9,8 @@ from rebac import PermissionDenied, SubjectRef, resolve_subjects
 from rebac.resources import model_for_resource_type
 
 from angee.graphql.actions import ActionResult, action_guard
-from angee.iam.graphql.actions import authorized_permission_target
 from angee.graphql.ids import PublicID
+from angee.iam.graphql.actions import authorized_permission_target
 from angee.iam.identity import canonical_subject_ref, public_subject_ref
 from angee.iam.models.base import ProtectedModel
 from angee.iam.permissions import DirectRecordAccess

@@ -14,8 +14,8 @@ from rebac.schema.parser import parse_zed
 from angee.agents.models import Agent as AbstractAgent
 from angee.base.models import base as base_models
 from angee.base.models.identity import public_id_for
-from angee.graphql import sharing
 from angee.graphql.data import metadata
+from angee.iam.graphql import sharing
 from angee.iam.graphql.sharing import RecordAccessType
 from angee.projects.models import Task
 from angee.projects.testing.models import Project

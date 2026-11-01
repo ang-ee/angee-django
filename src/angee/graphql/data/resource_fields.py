@@ -19,11 +19,10 @@ from strawberry_django_hasura import SnakeNameConverter
 
 from angee.base.fields import ImplClassField
 from angee.base.fields.state import StatusDisplay
-from angee.base.models.trash import ARCHIVE_FLAG_FIELD, TRASH_FLAG_FIELD, ArchiveMixin
+from angee.base.models.trash import ARCHIVE_FLAG_FIELD, TRASH_FLAG_FIELD, ArchiveMixin, TrashMixin
 from angee.graphql.data import contracts as data_contract
 from angee.graphql.impl import model_impl_choices
 from angee.graphql.introspection import is_to_many_relation, surface_field_names, surface_name
-from angee.base.models.trash import TrashMixin
 from graphql import (
     GraphQLEnumType,
     GraphQLInputObjectType,

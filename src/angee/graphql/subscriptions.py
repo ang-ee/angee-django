@@ -11,8 +11,8 @@ from typing import Any
 import strawberry
 from asgiref.sync import sync_to_async
 from django.db import close_old_connections, models
-from angee.base.hooks import resolve_hook
 
+from angee.base.hooks import resolve_hook
 from angee.graphql.constants import CHANGE_GROUP_RENEW_SECONDS
 from angee.graphql.data.contracts import DataResourceRoots, DataResourceTypeNames
 from angee.graphql.data.metadata import (

@@ -14,8 +14,8 @@ from django.apps import apps
 from strawberry import auto
 
 from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
-from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 
 UomCategory = apps.get_model("uom", "UomCategory")
 Uom = apps.get_model("uom", "Uom")

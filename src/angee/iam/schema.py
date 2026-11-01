@@ -8,8 +8,6 @@ credentials, connect/disconnect) lives in ``integrate``; OIDC *login* lives in
 
 from __future__ import annotations
 
-from angee.iam.graphql.records import schemas as record_schemas
-
 from functools import partial
 from itertools import islice
 from operator import methodcaller
@@ -48,19 +46,20 @@ from strawberry_django.auth.utils import get_current_user
 from strawberry_django.utils.requests import get_request
 
 from angee.base.models.identity import instance_from_public_id
-from angee.iam.graphql.access import ActorSelfChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard
-from angee.iam.graphql.actions import authorized_permission_target, session_user
-from angee.iam.graphql.capabilities import permission_expression
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.data.pydantic_resource import hasura_pydantic_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
-from angee.iam.graphql.node import ProtectedNode
-from angee.iam.graphql.sharing import authorized_record_access
 from angee.graphql.subscriptions import changes
-from angee.iam.graphql.view_as import ViewAs
 from angee.iam.choices import UserAccountAction
+from angee.iam.graphql.access import ActorSelfChangeReadGate
+from angee.iam.graphql.actions import authorized_permission_target, session_user
+from angee.iam.graphql.capabilities import permission_expression
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.records import schemas as record_schemas
+from angee.iam.graphql.sharing import authorized_record_access
+from angee.iam.graphql.view_as import ViewAs
 from angee.iam.identity import public_subject_ref, user_display_label, user_label
 from angee.iam.managers import VISIBLE_PEOPLE_DEFAULT_LIMIT
 from angee.iam.models import Group as GroupModel

@@ -5,8 +5,8 @@ from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from rebac import to_subject_ref
 
-from angee.graphql import records
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.iam.graphql import records
 from angee.iam.identity import public_subject_ref
 from angee.workflows import schema as workflow_schema
 from angee.workflows import tasks

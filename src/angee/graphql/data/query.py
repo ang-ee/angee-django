@@ -236,8 +236,7 @@ class ResourceQueryProjection:
                 replace(
                     axis,
                     server=replace(
-                        axis.server,
-                        value_map=self.value_map(get_named_type(keys[axis.server.key].type), row_type),
+                        axis.server, value_map=self.value_map(get_named_type(keys[axis.server.key].type), row_type),
                     ),
                     extractions=tuple(extractions),
                 )
@@ -316,8 +315,7 @@ class ResourceQueryProjection:
             return ()
         target_values = (
             {getattr(item.value, "value", item.value): key for key, item in target.values.items()}
-            if isinstance(target, GraphQLEnumType)
-            else {}
+            if isinstance(target, GraphQLEnumType) else {}
         )
         mappings: list[DataQueryValueMap] = []
         for key, item in source.values.items():

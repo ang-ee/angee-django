@@ -8,18 +8,20 @@ from typing import Any
 
 from django.core.exceptions import PermissionDenied
 from django.http import HttpRequest, HttpResponse, JsonResponse
+from graphql import GraphQLError, get_operation_ast, parse
 
 from angee.base.models.identity import public_id_of
 from angee.graphql.views import AngeeGraphQLView
 from angee.iam.graphql.view_as import ViewAs
-from graphql import GraphQLError, get_operation_ast, parse
 
 logger = logging.getLogger("angee.iam.graphql.view_as")
 
 
 class IAMGraphQLView(AngeeGraphQLView):
     def dispatch(self, request: HttpRequest, *args: Any, **kwargs: Any) -> HttpResponse:
-        view = lambda request: super(IAMGraphQLView, self).dispatch(request, *args, **kwargs)
+        def view(active: HttpRequest) -> HttpResponse:
+            return super(IAMGraphQLView, self).dispatch(active, *args, **kwargs)
+
         try:
             preview = ViewAs.from_request(request)
         except PermissionDenied:

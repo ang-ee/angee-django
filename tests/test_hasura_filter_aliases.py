@@ -8,10 +8,10 @@ from django.db import models
 from django.db.models.functions import Upper
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
-from angee.iam.graphql.actions import session_user
 from angee.graphql.data.hasura import _declared_aliases, _declared_filter_expressions, hasura_model_resource
-from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.graphql.actions import session_user
+from angee.iam.graphql.node import ProtectedNode
 from angee.iam.models.base import ProtectedDataModel
 from tests.composed_host import run_composed_tests
 from tests.conftest import create_user, execute_schema, make_addon, result_data

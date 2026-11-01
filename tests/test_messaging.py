@@ -47,8 +47,8 @@ from angee.base.models.audit import AuditMixin
 from angee.base.models.identity import SqidMixin
 from angee.base.serialization import strip_null_bytes
 from angee.graphql import publishing
-from angee.iam.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
+from angee.iam.graphql.access import ChangeReadGate
 from angee.iam.models.base import ProtectedModel
 from angee.messaging.backends import (
     ManualChannelBackend,

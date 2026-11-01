@@ -1,8 +1,11 @@
 """Transport-neutral record pointer projection."""
 
 from __future__ import annotations
+
 from typing import Self
+
 import strawberry
+
 from angee.base.refs import RecordRef
 
 

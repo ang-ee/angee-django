@@ -32,13 +32,13 @@ from angee.base.models.identity import public_id_for, public_id_of
 from angee.base.refs import generic_pointer_model
 from angee.base.serialization import json_safe
 from angee.graphql.actions import ActionResult, action_guard
-from angee.iam.graphql.actions import authorized_permission_target
 from angee.graphql.data.metadata import (
     DataResourceContribution,
     DataResourcePolicy,
     attach_data_resource_contribution,
 )
 from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
+from angee.iam.graphql.actions import authorized_permission_target
 from angee.iam.identity import public_subject_ref
 from angee.iam.permissions import require_rebac_queryset
 from angee.provenance.context import changeset_model

@@ -30,7 +30,6 @@ from angee.iam.graphql.node import ProtectedNode
 from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.iam.permissions import require_rebac_queryset
 
-
 _UNCACHED = object()
 
 

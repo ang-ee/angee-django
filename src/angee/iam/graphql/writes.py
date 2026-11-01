@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import TypeVar
 
 from django.db import models
-from rebac.managers import RebacManager
 
 from angee.graphql.ids import PublicID, instance_for_id
+from angee.iam.permissions import require_rebac_queryset
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
@@ -15,8 +15,7 @@ _ModelT = TypeVar("_ModelT", bound=models.Model)
 def write_queryset(model: type[_ModelT]) -> models.QuerySet[_ModelT]:
     """Keep native row authorization while disabling field redaction for writes."""
 
-    manager = model._default_manager
-    return manager.for_write() if isinstance(manager, RebacManager) else manager.all()
+    return require_rebac_queryset(model).for_write()
 
 
 def instance_for_write(model: type[_ModelT], id: PublicID) -> _ModelT | None:

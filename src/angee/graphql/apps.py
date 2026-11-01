@@ -17,7 +17,6 @@ check_settings = partial(
         "ANGEE_GRAPHQL_RESOURCE_CONTRIBUTORS",
         "ANGEE_GRAPHQL_RESOURCE_METADATA",
         "ANGEE_GRAPHQL_CHANGE_PROJECTORS",
-        "ANGEE_GRAPHQL_CHANGE_FILTERS",
     ),
 )
 
@@ -60,7 +59,12 @@ class GraphQLConfig(AppConfig):
 
         connect_change_adapter()
         checks.register(check_settings, checks.Tags.models)
-        for name in ("ANGEE_GRAPHQL_SCHEMA_CLASS", "ANGEE_GRAPHQL_HTTP_VIEW_CLASS", "ANGEE_GRAPHQL_WS_CONSUMER_CLASS", "ANGEE_GRAPHQL_CHANGE_FILTER"):
+        for name in (
+            "ANGEE_GRAPHQL_SCHEMA_CLASS",
+            "ANGEE_GRAPHQL_HTTP_VIEW_CLASS",
+            "ANGEE_GRAPHQL_WS_CONSUMER_CLASS",
+            "ANGEE_GRAPHQL_CHANGE_FILTER",
+        ):
             checks.register(partial(check_hook, name), checks.Tags.models)
 
         checks.register(check_graphql_schemas)

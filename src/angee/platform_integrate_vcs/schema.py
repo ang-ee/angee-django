@@ -21,8 +21,8 @@ from django.apps import apps
 from strawberry import auto
 
 from angee.graphql.actions import ActionResult
-from angee.iam.graphql.actions import action_target
 from angee.graphql.ids import PublicID
+from angee.iam.graphql.actions import action_target
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 
 _Addon = apps.get_model("platform", "Addon")

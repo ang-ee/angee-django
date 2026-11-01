@@ -43,8 +43,8 @@ from angee.graphql.data.metadata import (
 from angee.graphql.data.metadata import _relation_label_axes
 from angee.graphql.data.resource_fields import final_input_only_resource_fields, resource_string_field_names
 from angee.graphql.ids import require_public_id
-from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.graphql.node import ProtectedNode
 from angee.iam.models.base import ProtectedDataModel
 from tests.conftest import (
     SchemaAddon,

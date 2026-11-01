@@ -13,8 +13,8 @@ from django.middleware.csrf import get_token
 from django.views.decorators.csrf import ensure_csrf_cookie
 from strawberry.django.views import GraphQLView
 
-from angee.graphql.schema import GraphQLSchemas
 from angee.base.hooks import resolve_hook
+from angee.graphql.schema import GraphQLSchemas
 
 logger = logging.getLogger("angee.graphql.view_as")
 

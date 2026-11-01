@@ -43,16 +43,16 @@ from strawberry.extensions import SchemaExtension
 
 from angee.base.exceptions import TransitionNotAllowed
 from angee.base.fields.state import StateField
-from angee.iam.graphql.actions import session_user
 from angee.graphql.data import hasura as hasura_data
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
-from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.schema import (
     DEFAULT_SCHEMA_NAME,
     SCHEMA_PART_KEYS,
     AngeeSchema,
     GraphQLSchemas,
 )
+from angee.iam.graphql.actions import session_user
+from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.view_as import ViewAsReadOnlyExtension
 from angee.iam.models.base import ProtectedModel
 from angee.iam.permissions import require_rebac_queryset
@@ -718,7 +718,7 @@ def test_build_schema_installs_universal_rebac_extensions() -> None:
         ]
     ).build("public")
 
-    assert schema.extensions == (
+    assert tuple(type(extension) for extension in schema.get_extensions())[:4] == (
         ViewAsReadOnlyExtension,
         RebacExtension,
         CustomExtension,
@@ -908,13 +908,12 @@ def test_unexpected_graphql_errors_log_frames_without_exception_values(caplog: p
 
 
 def test_graphql_identity_exports_public_node() -> None:
-    """The framework exposes one public node seam."""
-
-    from angee.iam.graphql.node import ProtectedNode
-
-    definition = strawberry.types.get_object_definition(ProtectedNode)
+    """Neutral identity and optional protected projection use native interfaces."""
+    from angee.graphql.node import AngeeNode
+    definition = strawberry.types.get_object_definition(AngeeNode)
     assert definition is not None
     assert definition.name == "Node"
+    assert "redacted_fields" not in {field.python_name for field in definition.fields}
 
 
 @isolate_apps()

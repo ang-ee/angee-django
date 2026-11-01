@@ -46,11 +46,11 @@ from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
 from angee.graphql.actions import ActionResult, action_guard
-from angee.iam.graphql.actions import session_user
 from angee.graphql.data.hasura import hasura_model_resource
+from angee.graphql.schema import GraphQLSchemas
+from angee.iam.graphql.actions import session_user
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import actor_scoped_to_one
-from angee.graphql.schema import GraphQLSchemas
 from angee.mcp import graphql as mcp_graphql
 from angee.mcp.graphql import ACTION_RESULT, GraphQLTool, _compile, execute_under_actor, register_graphql_tools
 from tests.conftest import SchemaAddon, create_user

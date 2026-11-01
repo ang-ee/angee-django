@@ -20,7 +20,6 @@ from django.utils.functional import cached_property
 from django.utils.module_loading import import_string
 from django_compose.components import InstalledComponents, installed_components
 from strawberry.extensions import SchemaExtension
-from strawberry_django.optimizer import DjangoOptimizerExtension
 from strawberry.schema.schema_converter import GraphQLCoreConverter
 from strawberry.tools import merge_types
 from strawberry.types.arguments import convert_argument
@@ -30,6 +29,7 @@ from strawberry.types.execution import ExecutionContext
 from strawberry.types.field import StrawberryField
 from strawberry.types.scalar import ScalarDefinition
 from strawberry.types.union import StrawberryUnion
+from strawberry_django.optimizer import DjangoOptimizerExtension
 from strawberry_django_hasura import hasura_config
 
 from angee.base.addons import addon_facts, is_angee_addon, optional_addon_module
@@ -88,7 +88,7 @@ _ROOT_TYPE_NAMES = {key: key.title() for key in SCHEMA_PART_KEYS if key not in _
 
 
 class AngeeSchema(strawberry.Schema):
-    """Strawberry schema that exposes stable REBAC denial codes."""
+    """Strawberry schema with shared resource projection and safe domain errors."""
 
     classify_error = staticmethod(classify_error)
     optimizer_extension = DjangoOptimizerExtension
@@ -209,7 +209,7 @@ class AngeeSchema(strawberry.Schema):
         error.original_error = None
 
     def _apply_expected_code(self, error: GraphQLError) -> None:
-        """Attach the code owned by a REBAC denial exception."""
+        """Attach a recognized authentication or permission error code."""
 
         classification = self.classify_error(error.original_error)
         if classification.code not in ("UNAUTHENTICATED", "PERMISSION_DENIED"):

@@ -56,7 +56,6 @@ def public_id_field(field_name: str, *, nullable: bool = False) -> Any:
     the existing scalar projection's query optimization. Non-PK ``to_field``
     relations are unsupported: their stored value is not the target's primary key.
     """
-
     def resolve(root: models.Model) -> Any:
         field = root._meta.get_field(field_name)
         if not isinstance(field, models.ForeignKey):

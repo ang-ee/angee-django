@@ -10,5 +10,8 @@ dynamic = ["entry-points"]
 
 [tool.angee]
 
+[tool.angee.graphql]
+schema = "records.schemas"
+
 [tool.angee.platform]
 category = "Foundation"

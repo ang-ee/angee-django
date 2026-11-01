@@ -38,7 +38,7 @@ class RecordRefPlainTarget(SqidMixin, models.Model):
         db_table = "test_record_ref_plain_target"
 
 
-class RecordRefTargetEdge(ProtectedRecordRefMixin, models.Model):
+class RecordRefTargetEdge(ProtectedRecordRefMixin):
     """Concrete target edge used by record-ref tests."""
 
     on_target_delete = models.CASCADE
@@ -52,7 +52,7 @@ class RecordRefTargetEdge(ProtectedRecordRefMixin, models.Model):
         db_table = "test_record_ref_target_edge"
 
 
-class RecordRefSubjectEdge(ProtectedRecordRefMixin, models.Model):
+class RecordRefSubjectEdge(ProtectedRecordRefMixin):
     """Concrete subject edge used by record-ref tests."""
 
     on_target_delete = models.PROTECT
@@ -66,7 +66,7 @@ class RecordRefSubjectEdge(ProtectedRecordRefMixin, models.Model):
         db_table = "test_record_ref_subject_edge"
 
 
-class RecordRefCustomEdge(ProtectedRecordRefMixin, models.Model):
+class RecordRefCustomEdge(ProtectedRecordRefMixin):
     """Concrete reference with independently named relation fields and columns."""
 
     kind = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+", db_column="kind_column")
@@ -79,7 +79,7 @@ class RecordRefCustomEdge(ProtectedRecordRefMixin, models.Model):
         db_table = "test_record_ref_custom_edge"
 
 
-class RecordRefNullableEdge(ProtectedRecordRefMixin, models.Model):
+class RecordRefNullableEdge(ProtectedRecordRefMixin):
     """Concrete nullable edge used by empty-reference tests."""
 
     on_target_delete = models.SET_NULL
@@ -93,7 +93,7 @@ class RecordRefNullableEdge(ProtectedRecordRefMixin, models.Model):
         db_table = "test_record_ref_nullable_edge"
 
 
-class CustomColumnEdge(ProtectedRecordRefMixin, models.Model):
+class CustomColumnEdge(ProtectedRecordRefMixin):
     """An alternate column adopter also requires native string-id conversion."""
 
     target_ct = models.ForeignKey(ContentType, null=True, blank=True, on_delete=models.CASCADE)

@@ -17,8 +17,8 @@ from angee.decisions import schema as decisions_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest, RecordActions
 from angee.decisions.testing.models import Decision
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.publishing import connect_publishers, disconnect_publishers
+from angee.iam.graphql.node import ProtectedNode
 from angee.projects.testing.models import Task
 from angee.workflows.decision_steps import apply_proposals
 from tests.conftest import addon_schema, create_platform_admin, create_user, execute_schema, result_data, vault_for

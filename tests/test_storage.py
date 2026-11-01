@@ -34,13 +34,13 @@ from rebac.actors import current_sudo_reason, to_subject_ref
 from rebac.errors import PermissionDenied
 from rebac.middleware import ActorMiddleware
 from rebac.roles import grant
-from strawberry.django.views import GraphQLView
 
 from angee.base.models.identity import public_id_of
 from angee.base.models.trash import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
-from angee.graphql import records
 from angee.graphql.data.resource_fields import is_archive_field, is_trash_field
 from angee.graphql.views import graphql_endpoint
+from angee.iam.graphql import records
+from angee.iam.graphql.views import IAMGraphQLView
 from angee.iam.permissions import DirectRecordAccess
 from angee.storage import exceptions
 from angee.storage.choices import FileVisibility
@@ -1847,7 +1847,7 @@ def test_storage_preview_does_not_mint_download_urls(
     settings.ROOT_URLCONF = "angee.storage.urls"
     row = _proxy_upload(drive, PNG_BYTES)
     admin = create_platform_admin("storage-preview-admin")
-    view = GraphQLView.as_view(schema=addon_schema(storage_schema.schemas, "public"))
+    view = IAMGraphQLView.as_view(schema_name="public", schema=addon_schema(storage_schema.schemas, "public"))
     monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
     payload = {
         "query": "query PreviewFile($id: String!) { files_by_pk(id: $id) { id url } }",

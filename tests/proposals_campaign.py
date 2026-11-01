@@ -23,8 +23,8 @@ from rebac import (
 from strawberry import Schema
 
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
-from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.graphql.node import ProtectedNode
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Milestone, Project, Task
 from angee.spaces.testing.models import Group, Membership

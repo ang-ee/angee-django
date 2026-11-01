@@ -25,15 +25,20 @@ from angee.base.models.base import record_display_label
 from angee.base.models.identity import public_id_for
 from angee.decisions.schema import DecisionType
 from angee.graphql.actions import ActionResult, action_guard
-from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
-from angee.iam.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data.hasura import declared_hasura_resource_fields, hasura_model_resource
-from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.graphql.ids import PublicID, optional_public_id, require_instance_for_id
 from angee.graphql.impl import ImplChoice
-from angee.iam.graphql.node import ProtectedNode
-from angee.iam.graphql.relations import RECORD_REFERENCE_ANNOTATIONS, RecordReferenceNode, actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
+from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
+from angee.iam.graphql.capabilities import permission_expression, permissions_field
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import (
+    RECORD_REFERENCE_ANNOTATIONS,
+    RecordReferenceNode,
+    actor_scoped_to_many,
+    actor_scoped_to_one,
+)
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.provenance.evidence import readable_evidence

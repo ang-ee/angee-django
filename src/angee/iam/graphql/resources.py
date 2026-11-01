@@ -1,18 +1,21 @@
 """Native IAM query/backend/metadata contributions to generic GraphQL resources."""
 
 from __future__ import annotations
+
 import dataclasses
-from contextlib import nullcontext
 from collections.abc import Mapping
+from contextlib import nullcontext
+
 from django.db import models
 from rebac import PermissionDenied, current_actor, system_context
 from rebac.managers import RebacQuerySet
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_for_resource_type, model_resource_type
+
+from angee.base.refs import generic_pointer_model
 from angee.graphql.data import contracts as data_contract
 from angee.graphql.data.extensions import ResourceExtensions
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
-from angee.base.refs import generic_pointer_model
 from angee.iam.graphql.access import assert_no_gated_read_fields
 from angee.iam.graphql.relations import (
     RecordReferenceNode,

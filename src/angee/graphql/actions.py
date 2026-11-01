@@ -12,9 +12,8 @@ from functools import wraps
 from typing import ParamSpec, TypeVar, cast
 
 import strawberry
-from django.core.exceptions import NON_FIELD_ERRORS, ObjectDoesNotExist, ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ObjectDoesNotExist, PermissionDenied, ValidationError
 from django.db import models, transaction
-from django.core.exceptions import PermissionDenied
 from strawberry.scalars import JSON
 from strawberry.utils.str_converters import to_camel_case
 

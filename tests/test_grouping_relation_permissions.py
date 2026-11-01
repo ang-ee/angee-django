@@ -29,16 +29,16 @@ from rebac.schema import parse_zed
 from rebac.testing import install_schema
 from strawberry import auto
 
-from angee.iam.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import (
     _declared_aliases,
     aggregate_queryset,
     declared_hasura_resource_fields,
     hasura_model_resource,
 )
+from angee.graphql.schema import GraphQLSchemas
+from angee.iam.graphql.capabilities import permissions_field
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
-from angee.graphql.schema import GraphQLSchemas
 from angee.iam.models.base import ProtectedDataModel
 from tests.conftest import (
     SchemaAddon,

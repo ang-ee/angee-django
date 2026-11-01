@@ -2,8 +2,10 @@
 
 from dataclasses import dataclass
 from typing import Any
+
 import strawberry
 from django.apps import apps
+
 from angee.graphql.inputs import InputReference
 from angee.iam.graphql.actions import authorized_permission_target
 

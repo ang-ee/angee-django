@@ -11,10 +11,10 @@ from rebac import current_actor
 from strawberry import auto
 
 from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
-from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.graphql.ids import require_instance_for_id
-from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.subscriptions import changes
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.permissions import actor_user_id
 from angee.nexus.inbox_schema import NexusInboxQuery
 from angee.parties.schema import PartyType

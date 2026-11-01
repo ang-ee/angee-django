@@ -8,8 +8,8 @@ from django.db.models.functions import Now
 from rebac import actor_context, generic_target, system_context
 
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.graphql.node import ProtectedNode
 from angee.workflows.runner import runner
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun, Trigger, TriggerEvent, WorkflowRun

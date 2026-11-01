@@ -8,23 +8,21 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Any, ParamSpec, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 import strawberry
 from django.core.exceptions import NON_FIELD_ERRORS, ImproperlyConfigured
 from django.db import models
+from graphql import GraphQLError
 from rebac import PermissionDenied, RebacMixin, system_context
 from strawberry_django.auth.utils import get_current_user
 
+from angee.graphql.actions import ActionTargetUnavailable
 from angee.graphql.ids import PublicID, instance_for_id, public_id_value
 from angee.iam.graphql.writes import instance_for_write
 from angee.iam.permissions import require_rebac_queryset
-from graphql import GraphQLError
 
 _ActionTarget = TypeVar("_ActionTarget", bound=models.Model)
-_P = ParamSpec("_P")
-
-from angee.graphql.actions import ActionTargetUnavailable
 
 
 def session_user(info: strawberry.Info) -> Any:

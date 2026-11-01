@@ -37,7 +37,6 @@ from rebac import actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.backends import backend
 from rebac.middleware import ActorMiddleware
 from rebac.roles import grant as grant_role
-from strawberry.django.views import GraphQLView
 
 from angee.agents.testing.models import Agent
 from angee.base.identity import public_data_id_field
@@ -47,8 +46,9 @@ from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.data.resource_fields import resource_field_kind, resource_field_widget
 from angee.graphql.events import ChangePayload
 from angee.graphql.schema import AngeeSchema
-from angee.iam.graphql.view_as import ViewAsReadOnlyExtension
 from angee.graphql.views import graphql_endpoint
+from angee.iam.graphql.view_as import ViewAsReadOnlyExtension
+from angee.iam.graphql.views import IAMGraphQLView
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
@@ -659,7 +659,8 @@ def test_connect_account_complete_uses_bounded_provider_error_message(
         "account": None,
         "credential": None,
         "error": (
-            "The provider could not complete authorization." if http_status == 400
+            "The provider could not complete authorization."
+            if http_status == 400
             else "The provider is temporarily unavailable. Try again later."
         ),
         "error_code": "token_exchange_failed" if http_status == 400 else "provider_unavailable",
@@ -1368,7 +1369,8 @@ def test_account_connect_schema_exposes_generic_flow_without_token_material(
         assert field in oauth_client_set
     oauth_client_oidc_extension = "\n".join(
         _sdl_block(block, "extend type OAuthClientType")
-        for block in console_sdl.split("\n\n") if block.startswith("extend type OAuthClientType")
+        for block in console_sdl.split("\n\n")
+        if block.startswith("extend type OAuthClientType")
     )
     for field in ("jwks_uri", "login_enabled", "link_on_email_match", "create_on_login"):
         assert field in oauth_client_oidc_extension
@@ -1847,7 +1849,9 @@ def test_disconnect_account_blocks_last_oidc_sign_in_method_for_passwordless_use
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
 @pytest.mark.parametrize("second_path", ("self_service", "administrator"))
 def test_competing_oidc_disconnects_keep_one_sign_in_method(
-    iam_connection_tables: None, monkeypatch: pytest.MonkeyPatch, second_path: str,
+    iam_connection_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+    second_path: str,
 ) -> None:
     """Both deletion entrypoints wait on the common user before counting accounts."""
 
@@ -1860,8 +1864,11 @@ def test_competing_oidc_disconnects_keep_one_sign_in_method(
     ]
     credentials = [
         Credential.objects.upsert_for_user(
-            user, oauth_client, CredentialKind.OAUTH,
-            {"access_token": f"race-token-{index}"}, external_account=account,
+            user,
+            oauth_client,
+            CredentialKind.OAUTH,
+            {"access_token": f"race-token-{index}"},
+            external_account=account,
         )
         for index, (oauth_client, account) in enumerate(zip(oauth_clients, accounts, strict=True))
     ]
@@ -1871,7 +1878,8 @@ def test_competing_oidc_disconnects_keep_one_sign_in_method(
         with actor_context(admin if second_path == "administrator" else user):
             if second_path == "administrator":
                 preview = integrate_schema.IntegrateCredentialMutation().delete_credential(
-                    id=credentials[1].public_id, confirm=True,
+                    id=credentials[1].public_id,
+                    confirm=True,
                 )
                 assert preview.refusals == ["This is your only sign-in method."]
                 return not preview.has_blockers
@@ -1983,8 +1991,13 @@ assert Credential.objects.using("default").count() == 3
     root = Path(__file__).resolve().parents[1]
     environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "src"), str(tmp_path)))}
     result = subprocess.run(
-        [sys.executable, "-c", script], cwd=root, env=environment,
-        text=True, capture_output=True, timeout=60, check=False,
+        [sys.executable, "-c", script],
+        cwd=root,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -2044,7 +2057,7 @@ def test_view_as_target_has_no_pinned_admitting_actor(
             assert active.user.effective_actor() == (to_subject_ref(target), False)
             return active.user.has_access("write")
 
-    view = GraphQLView.as_view(schema=AngeeSchema(query=Query))
+    view = IAMGraphQLView.as_view(schema_name="public", schema=AngeeSchema(query=Query))
     monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
     request = RequestFactory().post(
         "/graphql/public/",
@@ -2073,7 +2086,7 @@ def test_view_as_unknown_operation_uses_strawberry_bad_request(
             return "hello"
 
     schema = AngeeSchema(query=Query, extensions=[ViewAsReadOnlyExtension])
-    view = GraphQLView.as_view(schema=schema)
+    view = IAMGraphQLView.as_view(schema_name="public", schema=schema)
     monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: view)
     request = RequestFactory().post(
         "/graphql/public/",
@@ -2133,7 +2146,10 @@ def test_view_as_denial_is_audited_and_missing_admission_fails_closed(
 ) -> None:
     admin = _platform_admin("preview-denied-admin")
     monkeypatch.setattr(User._default_manager, "admit_view_as", None)
-    monkeypatch.setattr("angee.graphql.views._get_view", lambda schema_name: None)
+    monkeypatch.setattr(
+        "angee.graphql.views._get_view",
+        lambda schema_name: IAMGraphQLView.as_view(schema_name=schema_name, schema=None),
+    )
     request = RequestFactory().post(
         "/graphql/public/",
         data={"query": "query Preview { __typename }", "operationName": "Preview"},

@@ -31,10 +31,14 @@ from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
 
 from angee.base.refs import canonical_link_path
-from angee.graphql.data.hasura import declared_hasura_resource_fields, declared_hasura_write_relation_fields, hasura_model_resource
-from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
+from angee.graphql.data.hasura import (
+    declared_hasura_resource_fields,
+    declared_hasura_write_relation_fields,
+    hasura_model_resource,
+)
 from angee.graphql.ids import PublicID
 from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.tags.models import Tag as TagModel
 
 Tag = apps.get_model("tags", "Tag")

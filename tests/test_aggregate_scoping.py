@@ -14,8 +14,8 @@ from rebac.testing import install_schema
 from strawberry import auto
 
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.graphql.node import ProtectedNode
 from angee.iam.models.base import ProtectedDataModel
 from tests.conftest import SchemaAddon, execute_schema, result_data
 from tests.tables import model_tables

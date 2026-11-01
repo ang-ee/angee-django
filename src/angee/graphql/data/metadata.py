@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import dataclasses
-from angee.base.hooks import resolve_hooks
-from angee.base.models.merge import MergeableMixin
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -15,7 +13,9 @@ from django.db import models
 from strawberry_django_hasura import HasuraResource
 
 from angee.base.fields import ImplClassField
+from angee.base.hooks import resolve_hooks
 from angee.base.lineage import concrete_child_models
+from angee.base.models.merge import MergeableMixin
 from angee.base.refs import generic_pointer_model
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data import contracts as data_contract

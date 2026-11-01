@@ -39,7 +39,11 @@ def actor_can_read(resource: ObjectRef) -> bool:
 
 
 def assert_no_gated_read_fields(
-    model: type[models.Model], field_names: Iterable[str], owner: str, reason: str, *,
+    model: type[models.Model],
+    field_names: Iterable[str],
+    owner: str,
+    reason: str,
+    *,
     definition_for: Callable[[type[models.Model]], Definition | None] = effective_rebac_definition,
 ) -> None:
     if gated := sorted(
@@ -49,7 +53,9 @@ def assert_no_gated_read_fields(
 
 
 def is_gated_read_axis(
-    model: type[models.Model], axis: str, *,
+    model: type[models.Model],
+    axis: str,
+    *,
     definition_for: Callable[[type[models.Model]], Definition | None] = effective_rebac_definition,
 ) -> bool:
     """Whether a (possibly relation-leaf) group-by axis reads a field-gated column.
@@ -78,7 +84,9 @@ def is_gated_read_axis(
 
 
 def _gated_read_fields(
-    model: type[models.Model], *, definition_for: Callable[[type[models.Model]], Definition | None],
+    model: type[models.Model],
+    *,
+    definition_for: Callable[[type[models.Model]], Definition | None],
 ) -> frozenset[str]:
     """Resolve native gate declarations through the caller's policy authority."""
 
@@ -181,7 +189,7 @@ class ChangeReadGate:
         for reference in change.related_records:
             try:
                 model = apps.get_model(reference.model)
-            except (LookupError, ValueError):
+            except LookupError, ValueError:
                 continue
             scope = require_rebac_queryset(model).with_actor(self.actor).with_action("read")
             if instance_from_public_id(model, reference.id, queryset=scope) is not None:

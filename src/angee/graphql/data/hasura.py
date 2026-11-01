@@ -47,7 +47,6 @@ from strawberry_django_hasura.filtering import filter_queryset, where_to_q
 from strawberry_django_hasura.inputs import comparison_for_python_type
 
 from angee.base.hooks import resolve_hooks
-from angee.graphql.data.extensions import resource_extensions
 from angee.base.identity import public_data_id_field
 from angee.base.models.children import OwnedChildrenMixin
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for
@@ -66,6 +65,7 @@ from angee.graphql.data.contracts import (
     DataResourceRoots,
     DataResourceSubtitleMetadata,
 )
+from angee.graphql.data.extensions import resource_extensions
 from angee.graphql.data.lookups import resource_filter_lookups
 from angee.graphql.data.metadata import (
     DataResourceContribution,
@@ -122,7 +122,7 @@ class HasuraLines:
     Lines are owned parts: rows that exist only as part of their parent and are
     saved with it. Their writes are the user's writes, elevated only because the
     parent write authorizes them, so they never bypass the child's own guards. A
-    child composing :class:`~angee.iam.models.locks.RowLockMixin` has each row checked
+    child composing :class:`~angee.base.models.locks.RowLockMixin` has each row checked
     against its persisted lock before the elevated write: a line may not change a
     locked field, delete a system row, or create or turn into one. Its node must
     project the same fact as ``locked_fields``, which the metadata advertises as
@@ -201,7 +201,7 @@ class AngeeHasuraWriteBackend:
 
     Values for input-extension fields that are not model fields never reach
     strawberry-django, which would ignore them: each write persists the row,
-    then hands them to the row's :meth:`ProtectedModel.apply_input_extensions` in
+    then hands them to the row's :meth:`AngeeModel.apply_input_extensions` in
     the same transaction.
     """
 
@@ -618,9 +618,9 @@ class _RelationIDDecoder:
     def __call__(self, value: _DecodedRelationID) -> Any:
         return value.value
 
-    def resolve(self, values: Iterable[str], actor: Any) -> dict[str, _DecodedRelationID]:
+    def resolve(self, values: Iterable[str], source: models.QuerySet[Any]) -> dict[str, _DecodedRelationID]:
         transform = resource_extensions(self.model).relation_queryset
-        queryset = transform(self.model, actor) if transform is not None else self.model._default_manager.all()
+        queryset = transform(self.model, source) if transform is not None else self.model._default_manager.all()
         instances = instances_from_public_ids(self.model, values, queryset=queryset)
         return {
             value: _DecodedRelationID(self.decoder(value) if self.decoder is not None else instance.pk)
@@ -725,7 +725,7 @@ class _RelationFilterExtension(FieldExtension):
 
         prepared = adapt(where)
         if comparisons:
-            actor = source()
+            source_queryset = source()
             for name, items in comparisons.items():
                 operands = [
                     (item, field.name, getattr(item, field.name))
@@ -738,7 +738,7 @@ class _RelationFilterExtension(FieldExtension):
                     for _, _, operand in operands
                     for value in (operand if isinstance(operand, list) else [operand])
                 }
-                resolved = self.decoders[name].resolve(values, actor) if values else {}
+                resolved = self.decoders[name].resolve(values, source_queryset) if values else {}
                 missing = _DecodedRelationID(_UnresolvedRelationID())
                 for item, attribute, operand in operands:
                     setattr(

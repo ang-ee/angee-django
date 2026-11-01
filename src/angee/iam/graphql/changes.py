@@ -1,18 +1,15 @@
 """Native IAM event identity and per-subscriber filtering contributions."""
 
 from __future__ import annotations
+
 from dataclasses import replace
+
 from django.db import models
 from rebac import ObjectRef, current_actor
 from rebac.resources import model_resource_id, model_resource_type
+
 from angee.graphql.events import ChangePayload
 from angee.iam.graphql.access import ChangeReadGate
-
-
-def read_resource(change: ChangePayload) -> ObjectRef | None:
-    if change.read_resource_type is None or change.read_resource_id is None:
-        return None
-    return ObjectRef(change.read_resource_type, change.read_resource_id)
 
 
 def project(instance: models.Model, change: ChangePayload) -> ChangePayload:
