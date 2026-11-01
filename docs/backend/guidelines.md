@@ -1549,6 +1549,25 @@ open fresh evaluator scopes for authorization and change-feed reads.
 
 ### Schema lifecycle and change publication
 
+- **Registration readiness is a control, not a row event or replay contract.**
+  [`changes`](../../src/angee/graphql/subscriptions.py) emits the existing
+  [`ChangeEvent`](../../src/angee/graphql/events.py) with `action="ready"`, the
+  canonical model label and an empty id only after native Channels group
+  registration. It contains no record values, related rows or occurrence id.
+  Data events continue through the actor's `ChangeReadGate`; a direct GraphQL
+  consumer must distinguish this control before interpreting record data. Raw
+  `subscribe(..., ready=...)` callers keep their existing readiness event and
+  unfiltered payload contract. Native cancellation closes membership and lease
+  renewal. Reconcile actor-scoped snapshots after readiness/reconnect: occurrence
+  identity deduplicates delivery but supplies neither a row revision nor replay.
+- **Denied delivery cannot prove absence or revoke a session.**
+  [`ChangeReadGate`](../../src/angee/graphql/access.py) suppresses unreadable
+  rows and redacts field values; do not broadcast denied row identities to make
+  clients remove them. Authorized query/keyset results own explicit absence.
+  Native REBAC checks current grants between subscription emissions while the
+  websocket actor remains the handshake identity. Session expiry/logout and
+  actor switching follow the native auth/transport lifecycle; readiness does
+  not add continuous session validation or global permission-change delivery.
 - **Live timelines read owners; notifications invalidate reads.**
   [Timeline kinds](../../src/angee/timeline/kinds.py) contribute actor-scoped
   source querysets. The [read owner](../../src/angee/timeline/reading.py)

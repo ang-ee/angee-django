@@ -100,7 +100,15 @@ where the Pages group does. `vault` is the public vault id. The stream reads pag
 composer only when the record can be bound and that vault projects `write`.
 `RecordBindingManager.create_note` creates the page, body and binding in one
 transaction. Its changeset receipt makes a transport retry idempotent.
-The Pages group continues to link to each page's reader.
+The Pages group continues to link to each page's reader. Binding change effects
+identify both the knowledge owner and canonical target (including inherited
+record views). Record-scoped binding reads register those parent interests;
+Page/Markdown changes still revalidate the content projection. Merge retargets
+use native bounded reference-move observations. Sparse previous
+reference columns and each bounded persisted batch feed the binding-owned bulk
+projection, which expands inherited identities once and carries old/current
+scopes in one identity-only event per Binding. Distinct source read gates,
+collision handling, history and the surrounding transaction remain native.
 
 Pages are trashable through the shared `trash_record` / `restore_record` verbs,
 authorized by page `delete`. Trashing a page trashes the untrashed pages below it

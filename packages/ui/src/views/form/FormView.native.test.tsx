@@ -14,7 +14,7 @@ import { createUiTestProviders } from "../../testing";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
 import { OperationDocumentsProvider, useAuthoredQuery, type TypedDocumentNode } from "@angee/refine";
 import gql from "graphql-tag";
-import { useList, type MetaQuery } from "@refinedev/core";
+import { useList, type Fields, type MetaQuery } from "@refinedev/core";
 import { defaultWidgets, type WidgetDefinition } from "../../widgets";
 import { BoundDescriptorField, BoundFormValue } from "./BoundDescriptorField";
 import { FormView } from "./FormView";
@@ -148,6 +148,8 @@ test("a bound parent value follows native dotted child updates", async () => {
 
 async function fixture(options: {
   preview?: RuntimeViewAs;
+  selection?: Fields;
+  derivedList?: boolean;
   rootArguments?: boolean;
   resourceMetadata?: DataResourceMetadata;
   widgets?: Record<string, WidgetDefinition>;
@@ -207,7 +209,7 @@ async function fixture(options: {
   function Probe({ recordId, mountedFields, viewFields, boundFields }: { recordId: string | null; mountedFields: readonly string[]; viewFields: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[] }) {
     surface = useFormViewSave({
       resource: "notes.Note", id: recordId, isCreate: recordId === null,
-      dataResource: formResource, modelMetadata: formModel, formFields: viewFields, fieldByName, refineFields,
+      dataResource: formResource, modelMetadata: formModel, formFields: viewFields, fieldByName, refineFields: options.selection ?? refineFields,
       submit: options.submit, createSubmit: options.createSubmit, readOnlyWhen: options.readOnlyWhen, onSaved, t: (key) => key,
       acknowledgedSource,
       onFieldInteractionStart: options.onFieldInteractionStart,
@@ -219,11 +221,16 @@ async function fixture(options: {
       <BoundDescriptorField key={index} form={surface} resource="notes.Note" {...bound} />
     ))}</>;
   }
+  function DerivedList() {
+    useList({ resource: formResource.roots.list!, dataProviderName: formResource.schemaName });
+    return null;
+  }
   function Tree({ recordId = id, mountedFields = options.mountedFields ?? ["title", "body"], viewFields = fields, boundFields = options.boundFields }: { recordId?: string | null; mountedFields?: readonly string[]; viewFields?: readonly FieldDescriptor[]; boundFields?: readonly { field: DescriptorField; scope?: string; readOnly?: boolean }[] }) {
     return <Provider resources={[formResource]} dataProvider={provider} queryClient={client}>
       <RouterContextProvider router={router}><ModalsHost><ToastProvider><AppRuntimeProvider runtime={{ widgets: { ...defaultWidgets, ...options.widgets },
         ...(options.preview ? { auth: { user: options.preview.currentUser, status: "authenticated", hasRole: () => false, viewAs: options.preview } } : {}),
       }}>
+        {options.derivedList ? <DerivedList /> : null}
         {options.publicView ? (
           <FormView
             resource="notes.Note"
@@ -252,11 +259,81 @@ async function fixture(options: {
   if (!options.publicView && id !== null && options.acknowledgedSource?.values !== null) {
     await waitFor(() => expect(surface?.form.getValues("title")).toBe("First"));
   }
-  return { surface: () => surface, onSaved, getOne, update, client,
+  return { surface: () => surface, onSaved, getOne, update, getList: provider.getList, client,
     setRecord: (next: Row) => { record = next; },
     setAcknowledgedSource: (next: FormViewAcknowledgedSource) => { acknowledgedSource = next; },
     rerender: (props: Parameters<typeof Tree>[0]) => view.rerender(<Tree {...props} />) };
 }
+
+test("native save accepts its exact projection and later edits while a derived read is held", async () => {
+  const f = await fixture({ selection: ["id", "title", "body", "deadline"], derivedList: true });
+  await waitFor(() => expect(f.getList).toHaveBeenCalledTimes(1));
+  let finishWrite!: (value: { data: Row }) => void;
+  f.update.mockImplementationOnce(() => new Promise<{ data: Row }>((resolve) => { finishWrite = resolve; }));
+  let finishRead!: (value: { data: never[]; total: number }) => void;
+  f.getList.mockImplementationOnce(() => new Promise<{ data: never[]; total: number }>((resolve) => { finishRead = resolve; }));
+  edit("title", "Submitted");
+  let saving!: Promise<void>;
+  act(() => { saving = f.surface().submitForm(); });
+  await waitFor(() => expect(f.update).toHaveBeenCalledTimes(1));
+  edit("title", "Later edit");
+  const accepted = { id: "note-1", title: "Submitted", body: "Original body", deadline: "" };
+  f.setRecord(accepted);
+  await act(async () => { finishWrite({ data: accepted }); await saving; });
+  expect(f.onSaved).toHaveBeenCalledWith(accepted);
+  expect(f.surface().pending).toBe(false);
+  expect(f.surface().form.formState.defaultValues?.title).toBe("Submitted");
+  expect(f.surface().form.getValues("title")).toBe("Later edit");
+  expect(f.surface().formIsDirty).toBe(true);
+  await waitFor(() => expect(f.getList).toHaveBeenCalledTimes(2));
+  // A sufficient detail response does not need another read of that projection.
+  expect(f.getOne).toHaveBeenCalledTimes(1);
+  await act(async () => { finishRead({ data: [], total: 0 }); });
+});
+
+test("an older detail read cannot replace a complete accepted custom response", async () => {
+  const accepted = { id: "note-1", title: "Accepted", body: "Original body", deadline: "" };
+  const f = await fixture({
+    selection: ["id", "title", "body", "deadline"],
+    submit: async () => savedFormSubmitResult(accepted, "No record"),
+  });
+  let finishOldRead!: (value: { data: Row }) => void;
+  f.getOne.mockImplementationOnce(() => new Promise<{ data: Row }>((resolve) => { finishOldRead = resolve; }));
+  let reading!: Promise<Row | null>;
+  act(() => { reading = f.surface().reload(); });
+  await waitFor(() => expect(f.getOne).toHaveBeenCalledTimes(2));
+  edit("title", "Accepted");
+  await act(async () => { await f.surface().submitForm(); });
+  expect(f.surface().displayRecord?.title).toBe("Accepted");
+  await act(async () => {
+    finishOldRead({ data: { id: "note-1", title: "Old", body: "Original body", deadline: "" } });
+    await reading;
+  });
+  expect(f.surface().displayRecord?.title).toBe("Accepted");
+  expect(f.surface().form.formState.defaultValues?.title).toBe("Accepted");
+  expect(f.surface().formIsDirty).toBe(false);
+});
+
+test("a partial nested response preserves omitted fields and remains stale until its read finishes", async () => {
+  const f = await fixture({
+    selection: ["id", "title", { parent: ["id", "title"] }],
+    relationValues: true,
+    submit: async () => savedFormSubmitResult({ id: "note-1", title: "Accepted", parent: { id: "note-b" } }, "No record"),
+  });
+  let finishRead!: (value: { data: Row }) => void;
+  f.getOne.mockImplementationOnce(() => new Promise<{ data: Row }>((resolve) => { finishRead = resolve; }));
+  edit("title", "Accepted");
+  await act(async () => { await f.surface().submitForm(); });
+  await waitFor(() => expect(f.getOne).toHaveBeenCalledTimes(2));
+  expect(f.surface().displayRecord).toMatchObject({ title: "Accepted", parent: { id: "note-a", title: "Parent A" } });
+  const detail = f.client.getQueryCache().findAll().find((query) =>
+    (query.state.data as { data?: Row } | undefined)?.data?.id === "note-1");
+  expect(detail?.state.isInvalidated).toBe(true);
+  await act(async () => { finishRead({ data: {
+    id: "note-1", title: "Accepted", body: "Original body", deadline: "", parent: { id: "note-b", title: "Parent B" },
+  } }); });
+  await waitFor(() => expect(f.surface().displayRecord?.parent).toEqual({ id: "note-b", title: "Parent B" }));
+});
 
 test("dirty scalar edits keep their original saved revision across a refreshed record", async () => {
   const source: FormViewAcknowledgedSource = {

@@ -3,6 +3,7 @@ import {
   canonicalModelLabel,
   createAngeeAccessControlProvider,
   dataResourcesFromAngeeSchemaMetadata,
+  refineResourceIdentifier,
   defineAngeeSchemaMetadata,
   mergeModelLabelInventory,
   schemaFieldMetadataFromAngeeSchemaMetadata,
@@ -14,10 +15,12 @@ import {
   OperationDocumentsProvider,
   createAngeeHasuraDataProviders,
   createAngeeHasuraLiveProvider,
+  createAngeeChangeLiveProvider,
   createTanStackRouterProvider,
   retryableQueryError,
   viewAsAuth,
   type AngeeHasuraSchemaConfig,
+  type AngeeChangeLiveProvider,
   type SchemaOperationDocuments,
   type ResourceMutationOperations,
 } from "@angee/refine";
@@ -259,10 +262,9 @@ export function createApp(input: CreateAppInput): AngeeApp {
   const viewAs: ViewAsProvider = createViewAsProvider({
     changed: async (userId) => {
       // Stop live delivery before resetting/refetching any actor-bound data.
-      refineLiveProvider?.setEnabled(false);
-      resetSessionQueries(queryClient);
-      if (userId === null) refineLiveProvider?.setEnabled(true);
-      const identity = await queryClient.fetchQuery(identityQueryOptions(refineAuthProvider));
+      resetSessionQueries(queryClient, refineLiveProvider);
+      if (userId === null) refineLiveProvider.setEnabled(true);
+      const identity = await queryClient.fetchQuery(identityQueryOptions(refineAuthProvider, queryClient));
       if (userId !== null && (identity?.id !== userId || !identity.realUser)) {
         throw new Error("Preview identity was not returned.");
       }
@@ -514,7 +516,8 @@ export function createApp(input: CreateAppInput): AngeeApp {
     queryClient,
     () => {
       viewAs.reset();
-      refineLiveProvider?.setEnabled(true);
+      resetSessionQueries(queryClient, refineLiveProvider);
+      refineLiveProvider.setEnabled(true);
     },
     presenceRefs(requirements),
   );
@@ -536,7 +539,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     const searchStr = useRouterState({ select: (state) => state.location.searchStr });
     const activeRoute = useActiveRoute(routes);
     // The rail, menus and palette show what the session's identity holds; Refine fetches it into the shared entry.
-    const identity = useQuery({ ...identityQueryOptions(refineAuthProvider), enabled: false }, queryClient);
+    const identity = useQuery({ ...identityQueryOptions(refineAuthProvider, queryClient), enabled: false }, queryClient);
     const navigation = projection.navigationFor(sessionPermitted(identity.data));
     const match = projection.activeMenu(pathname, activeRoute?.name, searchStr, navigation);
     const activeMenuId = match?.item.id ?? null;
@@ -611,7 +614,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
         resources={labeledResources}
         routerProvider={routerProvider}
         options={{
-          liveMode: refineLiveProvider ? "auto" : "off",
+          liveMode: "manual",
           syncWithLocation: false,
           reactQuery: { clientConfig: queryClient },
         }}
@@ -790,7 +793,12 @@ function createLiveProviderForSchema(
   queryClient: QueryClient,
 ) {
   const schema = schemas[subscriptionSchema];
-  if (!schema?.live) return undefined;
+  const resources = schema ? dataResourcesFromAngeeSchemaMetadata(schema.metadata).map((resource) => ({
+    ...resource, resourceIdentifier: refineResourceIdentifier(resource),
+  })) : [];
+  // Local mutation scheduling and acceptance lifetime belong to the provider
+  // even when this app has no websocket transport.
+  if (!schema?.live) return createAngeeChangeLiveProvider(undefined, resources, { queryClient });
   const liveOptions = schema.live === true
     ? {
         url: schema.url,
@@ -799,7 +807,7 @@ function createLiveProviderForSchema(
   return createAngeeHasuraLiveProvider({
     ...liveOptions,
     queryClient,
-    resources: dataResourcesFromAngeeSchemaMetadata(schema.metadata),
+    resources,
   });
 }
 
@@ -832,17 +840,14 @@ function createAuthProviderForSchema(
     queryClient,
     requires,
     identityClient: schemas.console,
-    // Reset observed queries so identity and mounted views see the transition;
-    // clearing their entries would strand observers with the previous data.
-    onAuthChange: () => {
-      onAuthChange();
-      resetSessionQueries(queryClient);
-    },
+    onAuthChange,
   });
 }
 
 /** Preserve native observers while discarding data from the previous actor. */
-function resetSessionQueries(queryClient: QueryClient): void {
+function resetSessionQueries(queryClient: QueryClient, changes: AngeeChangeLiveProvider): void {
+  // Fence every old completion synchronously before any observer/cache reset.
+  changes.setEnabled(false);
   queryClient.removeQueries({ predicate: (query) => query.getObserversCount() === 0 });
   queryClient.getMutationCache().clear();
   void queryClient.resetQueries();

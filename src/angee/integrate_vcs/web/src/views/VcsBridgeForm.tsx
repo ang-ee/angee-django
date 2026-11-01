@@ -1,6 +1,6 @@
 import * as React from "react";
 import { runActionResult, useAuthoredMutation } from "@angee/refine";
-import { Action, Field, Form, registerForm, useEnumOptions, useImplConfigFields, useImplPrefill, useRecordAction, type RegisteredFormProps } from "@angee/ui";
+import { Action, Field, Form, registerForm, useEnumOptions, useImplConfigFields, useImplPrefill, useRecordAction, type RecordActionRunner, type RegisteredFormProps } from "@angee/ui";
 import { IntegrationSyncFields, useIntegrationSyncAction } from "@angee/integrate";
 
 import { useIntegrateVcsT } from "../i18n";
@@ -17,9 +17,9 @@ function VcsBridgeForm({ resource: _resource, ...props }: RegisteredFormProps): 
   const backendClassPrefill = useImplPrefill(MODEL, "backend_class", privateConfigReset);
   const implConfig = useImplConfigFields(MODEL, "backend_class");
 
-  const discoverRepositories = React.useCallback(
-    async (id: string) => {
-      const result = await discover({ vcsBridgeId: id, org: "" });
+  const discoverRepositories = React.useCallback<RecordActionRunner>(
+    async (id, context) => {
+      const result = await discover({ vcsBridgeId: id, org: "" }, { reconciliation: context.reconciliation });
       return runActionResult(result?.discover_repositories);
     },
     [discover],

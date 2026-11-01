@@ -5,10 +5,12 @@ from __future__ import annotations
 import importlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import strawberry
+from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test import RequestFactory
@@ -3413,3 +3415,261 @@ def test_from_counts_ignores_target_type_to_avoid_double_counting_root(composed_
     assert channel_counts[str(Channel._meta.verbose_name_plural)] == 1
     # The MTI Integration parent is derived from the target, still counted once.
     assert guarded.total_deleted_count == 1 + 1 + 2
+
+
+@pytest.mark.parametrize("selection", ["error error_code", "error error_code message { id preview }"])
+def test_record_post_resolves_only_selected_payload_owners(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch, selection: str,
+) -> None:
+    """An acknowledgment never reads transcript, roster, counts or suggestions."""
+    admin = _platform_admin("msg-selected-post")
+    with system_context(reason="test.messaging.selected_payload.seed"):
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Selected response")
+    schema = _schema()
+
+    def unselected(_context: Any) -> Any:
+        pytest.fail("Unselected thread projection was evaluated")
+
+    for name in ("page", "followers", "self_follower", "unread_count", "message_has_error_counter",
+                 "removed_message_count", "access"):
+        monkeypatch.setattr(messaging_schema._RecordThreadContext, name, property(unselected))
+    monkeypatch.setattr(messaging_models.ThreadedTicket, "message_suggested_recipients", unselected)
+    result = _data(execute_schema(
+        schema,
+        "mutation Selected($model: String!, $id: ID!) { post_record_message(input: {"
+        "model_label: $model, record_id: $id, body: \"Accepted only.\"}) {" + selection + "} }",
+        {"model": ticket._meta.label, "id": ticket.sqid}, request=_request(admin),
+    ))["post_record_message"]
+    assert result["error_code"] is None
+    if "message" in result:
+        assert result["message"]["preview"] == "Accepted only."
+
+
+def test_record_message_feed_revalidates_current_parent_scope(composed_tables: None) -> None:
+    """Retained chatter IDs partition by the same authorized parent and kind filter."""
+    admin = _platform_admin("msg-record-feed")
+    with system_context(reason="test.messaging.record_feed.seed"):
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Retained window")
+        other = messaging_models.ThreadedTicket.objects.create(title="Other conversation")
+        comment = ticket.message_post("Visible comment")
+        note = ticket.message_log("Filtered note")
+        foreign = other.message_post("Other parent")
+    result = _data(execute_schema(
+        _schema(),
+        """
+        query Retained($model: String!, $id: ID!, $ids: [ID!]!) {
+          record_message_feed_revalidate(input: { model_label: $model, record_id: $id,
+            message_types: ["comment"] }, ids: $ids) {
+            messages { id preview }
+            absent_ids
+          }
+        }
+        """,
+        {"model": ticket._meta.label, "id": ticket.sqid, "ids": [comment.sqid, note.sqid, foreign.sqid]},
+        request=_request(admin),
+    ))["record_message_feed_revalidate"]
+    assert result["messages"] == [{"id": comment.sqid, "preview": "Visible comment"}]
+    assert result["absent_ids"] == [note.sqid, foreign.sqid]
+
+
+@pytest.mark.parametrize("root", ["record_thread", "record_message_feed", "record_message_feed_revalidate"])
+def test_narrow_record_messages_do_not_read_content_or_viewer_state(
+    composed_tables: None, root: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Native scalar selections never invoke body, sender, permission or receipt projections."""
+    admin = _platform_admin("msg-narrow-native")
+    with actor_context(admin), system_context(reason="test.messaging.narrow_native.seed"), mute_changes():
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Narrow native projection")
+        message = ticket.message_post("A body retained in a fragment.")
+    schema = _schema()
+
+    def unselected(*_args: Any, **_kwargs: Any) -> Any:
+        pytest.fail("Unselected message dependency was evaluated")
+
+    monkeypatch.setattr(messaging_schema.MessageQuerySet, "sender_name_expression", unselected)
+    monkeypatch.setattr(messaging_schema.MessageQuerySet, "needaction_expression", unselected)
+    monkeypatch.setattr(messaging_schema._RecordThreadContext, "access", property(unselected))
+    args = 'input: { model_label: "messaging.ThreadedTicket", record_id: $id }'
+    declarations = "$id: ID!"
+    variables: dict[str, Any] = {"id": ticket.sqid}
+    if root == "record_message_feed":
+        args += ", limit: 25"
+    elif root == "record_message_feed_revalidate":
+        args += ", ids: $ids"
+        declarations += ", $ids: [ID!]!"
+        variables["ids"] = [message.sqid]
+    with CaptureQueriesContext(connection) as captured:
+        payload = _data(execute_schema(
+            schema, f"query Narrow({declarations}) {{ {root}({args}) {{ messages {{ id preview }} }} }}",
+            variables, request=_request(admin),
+        ))[root]
+    assert payload["messages"] == [{"id": message.sqid, "preview": "A body retained in a fragment."}]
+    forbidden = (messaging_models.Part, messaging_models.Fragment, messaging_models.Reaction,
+                 messaging_schema.MessageStar, messaging_schema.ThreadFollower)
+    for query in captured:
+        sql = query["sql"].lower()
+        for model in forbidden:
+            table = connection.ops.quote_name(model._meta.db_table).lower()
+            assert f"from {table}" not in sql and f"join {table}" not in sql, sql
+
+
+@pytest.mark.parametrize("root", ["record_thread", "record_message_feed", "record_message_feed_revalidate"])
+def test_selected_record_message_dependencies_have_constant_page_query_count(
+    composed_tables: None, root: str, record_property: Any,
+) -> None:
+    """Selected content, actor state and capabilities batch at every message field boundary."""
+    admin = _platform_admin("msg-full-native")
+    with actor_context(admin), system_context(reason="test.messaging.full_native.seed"), mute_changes():
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Native page projection")
+        attachment = messaging_models.ThreadAttachment.objects.ensure_for_record(ticket)
+        sender = messaging_models.Handle.objects.for_user(admin)
+        messages = []
+        for index in range(25):
+            message = messaging_models.Message.objects.create(
+                thread=attachment.thread, direction="internal", message_type="comment",
+                sender=sender, created_by=admin, preview=f"Projected {index}",
+            )
+            fragment = messaging_models.Fragment.objects.upsert(text=f"Body {index}")
+            messaging_models.Part.objects.create(
+                message=message, position=0, role="body", type="text/plain", fragment=fragment,
+            )
+            messaging_models.Reaction.objects.create(message=message, handle=sender, reaction="👍", created_by=admin)
+            messaging_schema.MessageStar.objects.create(message=message, user=admin)
+            messages.append(message)
+    schema = _schema()
+    args = 'input: { model_label: "messaging.ThreadedTicket", record_id: $id'
+    declarations = "$id: ID!, $limit: Int!"
+    if root == "record_thread":
+        args += ", message_limit: $limit }"
+    elif root == "record_message_feed":
+        args += " }, limit: $limit"
+    else:
+        args += " }, ids: $ids"
+        declarations = "$id: ID!, $ids: [ID!]!"
+    query = f"query FullPage({declarations}) {{ {root}({args}) {{" + """
+      messages {
+        id preview author_label can_edit can_delete can_trash needaction starred
+        sender { id display_name value }
+        reaction_groups { reaction count self_reacted handles { id display_name value } }
+        parts { id position role type disposition name cid fragment { id text } file { id filename } }
+      }
+    } }
+    """
+    warm_variables = {"id": ticket.sqid, "ids": [messages[0].sqid]} if root == "record_message_feed_revalidate" else {
+        "id": ticket.sqid, "limit": 1,
+    }
+    _data(execute_schema(schema, query, warm_variables, request=_request(admin)))
+    counts = []
+    for size in (1, 25):
+        variables: dict[str, Any] = {"id": ticket.sqid}
+        if root == "record_message_feed_revalidate":
+            variables["ids"] = [message.sqid for message in messages[:size]]
+        else:
+            variables["limit"] = size
+        with CaptureQueriesContext(connection) as captured:
+            payload = _data(execute_schema(schema, query, variables, request=_request(admin)))[root]
+        assert len(payload["messages"]) == size
+        for row in payload["messages"]:
+            assert row["can_edit"] and row["can_delete"] and row["can_trash"]
+            assert row["starred"] and row["author_label"]
+            assert row["reaction_groups"][0]["self_reacted"]
+            assert row["parts"][0]["fragment"]["text"].startswith("Body ")
+        counts.append(len(captured))
+        record_property(f"{root}_selected_queries_{size}", len(captured))
+    assert counts[0] == counts[1], counts
+
+
+@pytest.mark.parametrize(("root", "async_execution"), [
+    ("record_thread", False),
+    ("record_message_feed", False),
+    ("record_message_feed_revalidate", False),
+    ("record_message_feed", True),
+])
+def test_record_message_labels_load_only_their_native_dependencies(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch, root: str, async_execution: bool,
+) -> None:
+    """Label-only pages batch their dependencies and resolve safely on the async schema path."""
+    admin = _platform_admin("msg-label-native")
+    expected = {}
+    messages = []
+    with actor_context(admin), system_context(reason="test.messaging.label_native.seed"), mute_changes():
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Native label projection")
+        attachment = messaging_models.ThreadAttachment.objects.ensure_for_record(ticket)
+        subtype = messaging_schema.MessageSubtype.objects.create(key="native_labels", name="Native labels")
+        for index in range(25):
+            parent = messaging_models.Message.objects.create(
+                thread=attachment.thread, message_type="comment", direction="internal",
+                preview=f"Parent {index}", created_by=admin,
+                sent_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            )
+            message = messaging_models.Message.objects.create(
+                thread=attachment.thread, message_type="comment", direction="internal",
+                preview=f"Reply {index}", parent=parent, subtype=subtype, created_by=admin,
+                sent_at=datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=index),
+            )
+            fragment = messaging_models.Fragment.objects.upsert(text=f"Fragment {index}: " + "x" * 70)
+            part = messaging_models.Part.objects.create(
+                message=message, position=0, role="body", type="text/plain", fragment=fragment,
+            )
+            expected[message.sqid] = {
+                "display_name": str(message),
+                "parent": {"display_name": str(parent)},
+                "subtype": {"display_name": str(subtype)},
+                "parts": [{"display_name": str(part), "fragment": {"display_name": str(fragment)}}],
+            }
+            messages.append(message)
+    schema = _schema()
+    args = 'input: { model_label: "messaging.ThreadedTicket", record_id: $id'
+    declarations = "$id: ID!, $limit: Int!"
+    if root == "record_thread":
+        args += ", message_limit: $limit }"
+    elif root == "record_message_feed":
+        args += " }, limit: $limit"
+    else:
+        args += " }, ids: $ids"
+        declarations = "$id: ID!, $ids: [ID!]!"
+    # Deliberately omit preview/type/role/text/name: those selections would mask missing hints.
+    counts_selection = "part_count message_count" if async_execution else ""
+    query = f"query Labels({declarations}) {{ {root}({args}) {{ messages {{" + """
+        id display_name parent { display_name } subtype { display_name }
+        parts { display_name fragment { display_name """ + counts_selection + " } } } } }"
+
+    def deferred_read(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("A selected native label attempted a deferred model reload")
+
+    for model in (messaging_models.Message, messaging_models.Part, messaging_models.Fragment,
+                  messaging_schema.MessageSubtype):
+        monkeypatch.setattr(model, "refresh_from_db", deferred_read)
+
+    def read(size: int) -> dict[str, Any]:
+        variables: dict[str, Any] = {"id": ticket.sqid}
+        if root == "record_message_feed_revalidate":
+            variables["ids"] = [message.sqid for message in messages[:size]]
+        else:
+            variables["limit"] = size
+        request = _request(admin)
+        if async_execution:
+            with actor_context(admin):
+                result = async_to_sync(schema.execute)(
+                    query, variable_values=variables, context_value=SimpleNamespace(request=request),
+                )
+        else:
+            result = execute_schema(schema, query, variables, request=request)
+        return _data(result)[root]
+
+    read(1)  # Warm native schema/permission caches before comparing page budgets.
+    counts = []
+    for size in ((25,) if async_execution else (1, 25)):
+        with CaptureQueriesContext(connection) as captured:
+            payload = read(size)
+        assert len(payload["messages"]) == size
+        for row in payload["messages"]:
+            label = expected[row.pop("id")]
+            if async_execution:
+                fragment = row["parts"][0]["fragment"]
+                assert fragment.pop("part_count") == 1
+                assert fragment.pop("message_count") == 1
+            assert row == label
+        counts.append(len(captured))
+    if not async_execution:
+        assert counts[0] == counts[1], counts

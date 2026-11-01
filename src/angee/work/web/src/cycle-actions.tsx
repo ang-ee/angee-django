@@ -35,7 +35,7 @@ function useCloseCycleAction(): ActionDescriptor {
         if (typeof cycle !== "string" || !cycle) {
           return { ok: false, message: t("cycle.action.failed") };
         }
-        return (await close(cycle)) ?? {
+        return (await close(cycle, undefined, { reconciliation: context.reconciliation })) ?? {
           ok: false,
           message: t("cycle.action.failed"),
         };

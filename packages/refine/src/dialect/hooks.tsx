@@ -1,9 +1,8 @@
 import { useCallback, useMemo } from "react";
-import { useQueries, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { useQueries, type UseQueryResult } from "@tanstack/react-query";
 import {
   useCustomMutation,
   useDataProvider,
-  useInvalidate,
   useKeys,
   useResourceSubscription,
   type BaseRecord,
@@ -41,14 +40,13 @@ import {
   useOperationDocuments,
 } from "../operation-documents";
 import { useActiveDataProviderName } from "./data-provider-context";
-import { invalidateAuthoredQueries } from "../query-invalidation";
-import { useAuthoredQueryBatch, type AuthoredQueryOptions } from "./authored-hooks";
+import { useReconcileMutationResponse, type MutationReconciliationOptions, type MutationExecutionOptions } from "../query-invalidation";
+import { useAuthoredQueryBatch, useOperationMutation, type AuthoredQueryOptions } from "./authored-hooks";
 import type { TypedDocumentNode } from "../typed-document";
 import { graphqlDocumentIdentity } from "./wire";
 import { stableKey, useStableArray } from "../stable-deps";
 
 type Row = Record<string, unknown>;
-type InvalidateParams = Parameters<ReturnType<typeof useInvalidate>>[0];
 
 export interface ListBatchTarget extends ListQueryTarget {
   dataProviderName: string | undefined;
@@ -157,10 +155,14 @@ export type ActionArguments = Readonly<Record<string, unknown>>;
 export type ActionMutate = (
   id: string,
   arguments_?: ActionArguments,
+  execution?: MutationExecutionOptions,
 ) => Promise<ActionOutcome | undefined>;
 
-export interface UseActionMutationOptions {
+export interface UseActionMutationOptions extends MutationReconciliationOptions<ActionOutcome | undefined, Record<string, unknown>> {
   dataProviderName?: string;
+  /** One-shot secret inputs/results use the shared zero-retention mutation lifecycle. */
+  transient?: boolean;
+  errorNotification?: false;
   /** Declared record argument. Defaults to `id`; null sends only explicit arguments. */
   idArgument?: string | null;
   /**
@@ -168,8 +170,6 @@ export interface UseActionMutationOptions {
    * This metadata-free package exact-matches them and does not resolve aliases.
    */
   invalidateModels?: readonly string[];
-  /** Refine invalidation calls this action should trigger after success. */
-  invalidates?: readonly InvalidateParams[];
   /**
    * The action records its outcome even when it fails (`ok=false`) — a failed
    * provision stores the error it hit — so invalidate after a domain failure too.
@@ -554,70 +554,35 @@ export function useActionMutation<TField extends string = string>(
   const dataProviderName =
     options.dataProviderName ?? activeDataProviderName ?? "default";
   const operationDocuments = useOperationDocuments();
-  const invalidate = useInvalidate();
-  const invalidateModels = useStableArray(options.invalidateModels ?? []);
-  const invalidates = options.invalidates ?? EMPTY_INVALIDATIONS;
-  const queryClient = useQueryClient();
-  const run = useCustomMutation<BaseRecord, HttpError, Record<string, unknown>>();
-  const mutate = useCallback<ActionMutate>(
-    async (id, arguments_ = {}) => {
-      const idArgument = options.idArgument === undefined ? "id" : options.idArgument;
-      const variables = idArgument === null ? { ...arguments_ } : { ...arguments_, [idArgument]: id };
+  const reconcileMutationResponse = useReconcileMutationResponse();
+  const [run, state] = useOperationMutation<ActionOutcome, Record<string, unknown>>({
+    transient: options.transient,
+    errorNotification: options.errorNotification,
+    request: (variables) => {
       const request = actionRequest(field, variables, {
         dataProviderName,
-        document: operationDocument(
-          operationDocuments,
-          dataProviderName,
-          "actions",
-          field,
-        ),
+        document: operationDocument(operationDocuments, dataProviderName, "actions", field),
       });
-      const response = await run.mutateAsync({
-        url: "",
-        method: "post",
-        values: variables,
-        dataProviderName: request.dataProviderName,
-        meta: request.meta,
+      return { url: "", method: "post", dataProviderName: request.dataProviderName, meta: request.meta };
+    },
+    select: (data) => extractActionOutcome(data, field) ?? undefined,
+    onResponse: async (outcome, variables, execution) => {
+      const effects = !outcome || outcome.ok || options.invalidateOnFailure;
+      await reconcileMutationResponse(outcome, variables, {
+        ...(effects ? options : {}),
+        ...execution,
+        // A recorded failure may have effects, but is never accepted as success.
+        acceptResponse: outcome?.ok ? options.acceptResponse : undefined,
       });
-      const outcome =
-        extractActionOutcome(response.data, request.root) ?? undefined;
-      // A domain failure (ok=false) normally mutated nothing — skip invalidation
-      // so a failed write never refreshes caches (the same posture as the
-      // authored hooks' errorFrom gating) — unless the verb declares that its
-      // failures are recorded state.
-      if (!outcome || outcome.ok || options.invalidateOnFailure) {
-        await Promise.all([
-          ...invalidates.map((target) => invalidate(target)),
-          ...(invalidateModels.length > 0
-            ? [invalidateAuthoredQueries(queryClient, invalidateModels)]
-            : []),
-        ]);
-      }
-      return outcome;
     },
-    [
-      dataProviderName,
-      field,
-      invalidate,
-      invalidateModels,
-      invalidates,
-      operationDocuments,
-      options.idArgument,
-      options.invalidateOnFailure,
-      queryClient,
-      run.mutateAsync,
-    ],
-  );
-  return [
-    mutate,
-    {
-      fetching: run.mutation.isPending,
-      error: run.mutation.error as Error | null,
-    },
-  ];
+  });
+  const mutate = useCallback<ActionMutate>(async (id, arguments_ = {}, execution) => {
+    const idArgument = options.idArgument === undefined ? "id" : options.idArgument;
+    const variables = idArgument === null ? { ...arguments_ } : { ...arguments_, [idArgument]: id };
+    return run(variables, execution);
+  }, [run, options.idArgument]);
+  return [mutate, state];
 }
-
-const EMPTY_INVALIDATIONS: readonly InvalidateParams[] = [];
 
 function errorFromHttp(error: unknown): Error | null {
   if (!error) return null;

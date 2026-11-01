@@ -467,7 +467,7 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         message_types: tuple[str, ...] = (),
         trashed: bool = False,
     ) -> MessageQuerySet[WithAnnotations[MessageT, _MessageChronology]]:
-        """The record-gated, hydrated message scope shared by transcript windows."""
+        """The parent-authorized message population, without presentation hydration."""
 
         rows = self.using(self._db or router.db_for_read(self.model, instance=record))
         using = rows.db
@@ -483,23 +483,6 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
             rows.sudo(reason="messaging.message.for_record")
             .for_thread(attachment.thread)
             .filter(is_trashed=trashed)
-            .select_related("thread", "subtype", "sender", "channel", "parent", "parent__subtype")
-            .prefetch_related(
-                models.Prefetch("parts", queryset=apps.get_model("messaging", "Part").objects.using(using)),
-                models.Prefetch(
-                    "parts__fragment", queryset=apps.get_model("messaging", "Fragment")._base_manager.using(using)
-                ),
-                models.Prefetch(
-                    "parts__file",
-                    queryset=apps.get_model("storage", "File")._base_manager.using(using).select_related("mime_type"),
-                ),
-                models.Prefetch("reactions", queryset=apps.get_model("messaging", "Reaction").objects.using(using)),
-                models.Prefetch(
-                    "reactions__handle",
-                    queryset=apps.get_model("parties", "Handle")._base_manager.using(using),
-                ),
-                models.Prefetch("stars", queryset=apps.get_model("messaging", "MessageStar").objects.using(using)),
-            )
             .annotate(_order_at=MessageQuerySet.chronological_time())
         )
         kinds = {
@@ -518,6 +501,57 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         return queryset.distinct()
 
 
+    def record_window(
+        self,
+        record: Any,
+        *,
+        role: str = "chatter",
+        search: str = "",
+        limit: int = 50,
+        before: Any | None = None,
+        after: Any | None = None,
+        around: Any | None = None,
+        message_types: tuple[str, ...] = (),
+        trashed: bool = False,
+    ) -> tuple[MessageQuerySet[WithAnnotations[MessageT, _MessageChronology]], int]:
+        """Select bounded chatter identities while leaving the rows composable.
+
+        The same parent scope owns filtering, count and chronological cuts.
+        ID probes never hydrate content; the reader projects the resulting rows.
+        """
+
+        limit = max(1, min(int(limit or 50), 200))
+        queryset = self.record_scope(
+            record, role=role, search=search, message_types=message_types, trashed=trashed,
+        )
+        count = int(queryset.count())
+        ascending = ("_order_at", "pk")
+        descending = ("-_order_at", "-pk")
+        if around not in (None, ""):
+            anchor = self._record_message_anchor(queryset, around)
+            if anchor is None:
+                return queryset.none(), count
+            before_limit = max(1, limit // 2)
+            after_limit = max(0, limit - before_limit)
+            ids = [
+                *queryset.filter(_MESSAGE_ORDER.before(anchor, inclusive=True))
+                .order_by(*descending).values_list("pk", flat=True)[:before_limit],
+                *queryset.filter(_MESSAGE_ORDER.after(anchor))
+                .order_by(*ascending).values_list("pk", flat=True)[:after_limit],
+            ]
+        else:
+            window = queryset
+            if before not in (None, "") or after not in (None, ""):
+                anchor = self._record_message_anchor(queryset, before if before not in (None, "") else after)
+                if anchor is None:
+                    return queryset.none(), count
+                boundary = (_MESSAGE_ORDER.before(anchor) if before not in (None, "")
+                            else _MESSAGE_ORDER.after(anchor))
+                window = window.filter(boundary)
+            order = ascending if after not in (None, "") and before in (None, "") else descending
+            ids = list(window.order_by(*order).values_list("pk", flat=True)[:limit])
+        return queryset.filter(pk__in=ids).order_by(*ascending), count
+
     def for_record(
         self,
         record: Any,
@@ -531,44 +565,13 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         message_types: tuple[str, ...] = (),
         trashed: bool = False,
     ) -> tuple[list[Any], int]:
-        """Return fetched chatter messages for a record, optionally search-filtered.
+        """Materialize the native record window for existing non-GraphQL readers."""
 
-        Trashed messages never join the transcript; ``trashed=True`` returns only
-        them, for a caller that already required the record's moderation.
-        """
-
-        limit = max(1, min(int(limit or 50), 200))
-        queryset = self.record_scope(
-            record, role=role, search=search, message_types=message_types, trashed=trashed,
+        rows, count = self.record_window(
+            record, role=role, search=search, limit=limit, before=before, after=after,
+            around=around, message_types=message_types, trashed=trashed,
         )
-        count = int(queryset.count())
-        # Window and cursor on the same `(sent_at, pk)` key the feed displays by, then
-        # return the page chronological ascending so the client renders it verbatim.
-        ascending = ("_order_at", "pk")
-        descending = ("-_order_at", "-pk")
-        if around not in (None, ""):
-            anchor = self._record_message_anchor(queryset, around)
-            if anchor is None:
-                return [], count
-            before_limit = max(1, limit // 2)
-            after_limit = max(0, limit - before_limit)
-            page = [
-                *queryset.filter(_MESSAGE_ORDER.before(anchor, inclusive=True)).order_by(*descending)[:before_limit],
-                *queryset.filter(_MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:after_limit],
-            ]
-        elif before not in (None, ""):
-            anchor = self._record_message_anchor(queryset, before)
-            if anchor is None:
-                return [], count
-            page = list(queryset.filter(_MESSAGE_ORDER.before(anchor)).order_by(*descending)[:limit])
-        elif after not in (None, ""):
-            anchor = self._record_message_anchor(queryset, after)
-            if anchor is None:
-                return [], count
-            page = list(queryset.filter(_MESSAGE_ORDER.after(anchor)).order_by(*ascending)[:limit])
-        else:
-            page = list(queryset.order_by(*descending)[:limit])
-        return sorted(page, key=lambda message: message.chronological_key), count
+        return list(rows), count
 
 
     def record_window_continues(
@@ -675,6 +678,11 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
             models.Q(_read_pk__isnull=True) | _MESSAGE_ORDER.after((models.F("_read_at"), models.F("_read_pk"))),
         )
 
+    def needaction_expression(self, user: Any) -> models.Exists:
+        """Correlate the existing authorized receipt/preference predicate to one row."""
+
+        return models.Exists(self.unread_for(user).filter(pk=models.OuterRef("pk")))
+
     def explorer(self) -> MessageInbox:
         """Compose personal-inbox reads from this collection's current scope."""
 
@@ -746,24 +754,19 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
 
         return self.filter(_message_search_query(term))
 
-    def with_title_text(self) -> Self:
-        """Annotate each row's title text (its ``TITLE`` part's fragment) as ``_title_text``.
-
-        The list-scale read: one correlated subquery per row instead of a per-row
-        probe from the resolver — :meth:`Message.title` prefers the annotation.
-        """
+    def title_text_expression(self) -> models.Expression:
+        """The sparse title part's text, shared by selected fields and list projections."""
 
         part_model = apps.get_model("messaging", "Part")
         title_text = part_model._base_manager.filter(
-            message=models.OuterRef("pk"), role=part_model.PartRole.TITLE
+            message=models.OuterRef("pk"), role=part_model.PartRole.TITLE,
         ).values("fragment__text")[:1]
-        return self.annotate(
-            _title_text=Coalesce(
-                models.Subquery(title_text),
-                models.Value(""),
-                output_field=models.TextField(),
-            )
-        )
+        return Coalesce(models.Subquery(title_text), models.Value(""), output_field=models.TextField())
+
+    def with_title_text(self) -> Self:
+        """Annotate the model-owned title without a per-row content probe."""
+
+        return self.annotate(_title_text=self.title_text_expression())
 
     def sender_name_expression(self) -> models.Expression | models.Subquery:
         """Correlate the actor-readable sender identity without multiplying rows."""

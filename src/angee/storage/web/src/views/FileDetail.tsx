@@ -14,8 +14,6 @@ export interface FileDetailProps {
   /** Route identity starts the native form read independently of the preview. */
   id: string;
   filename?: string;
-  /** A write landed — refetch the browser's shared file set. */
-  onChanged: () => void;
 }
 
 /**
@@ -28,7 +26,6 @@ export interface FileDetailProps {
 export function FileDetail({
   id,
   filename,
-  onChanged,
 }: FileDetailProps): ReactElement {
   const t = useStorageT();
 
@@ -38,7 +35,6 @@ export function FileDetail({
       id={id}
       returning={[...SUBTITLE_FIELDS]}
       submitLabel={t("file.rename")}
-      onSaved={onChanged}
       // The page's command band owns the record chrome; this form is the Details section.
       hideRecordChrome
     >

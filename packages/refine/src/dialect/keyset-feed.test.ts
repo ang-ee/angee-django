@@ -397,3 +397,40 @@ describe("native message history retention", () => {
     } finally { feed.close(); }
   });
 });
+
+
+test("a retained update revalidates only changed IDs across native pages and absence refreshes fixed windows", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  const queryKey = ["targeted-feed"];
+  const rows = [message(4), message(3), message(2), message(1)];
+  let absent = false;
+  const window = vi.fn(async () => ({
+    rows: [], count: 4, older_cursor: "opaque:1", has_older: false,
+    has_more_in_window: false, has_older_than_through: false,
+  }));
+  const revalidate = vi.fn(async (ids: string[]) => ({
+    rows: rows.filter((row) => ids.includes(row.id) && !(absent && row.id === "message-3")).map((row) => ({ ...row, body: "updated" })),
+    absent_ids: absent && ids.includes("message-3") ? ["message-3"] : [],
+  }));
+  const options = keysetFeedOptions(client, { queryKey, pageSize: 2, window, revalidate, revalidateModels: ["messaging.Message"] });
+  client.setQueryData(queryKey, {
+    pages: [
+      { rows: rows.slice(0, 2), through: "opaque:3", hasOlder: true, count: 4 },
+      { rows: rows.slice(2), through: "opaque:1", hasOlder: false, count: 4 },
+    ], pageParams: [{ start: true }, "opaque:3"],
+  });
+  const meta = { angeeChanges: [{ model: "messaging.Message", id: "message-3", action: "update" }] };
+  const observer = new InfiniteQueryObserver(client, { ...options, meta });
+  const stop = observer.subscribe(() => undefined);
+  try {
+    await observer.refetch();
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(revalidate.mock.calls[0]?.[0]).toEqual(["message-3"]);
+    expect(window).not.toHaveBeenCalled();
+    expect(orderedRows(observer.getCurrentResult().data).find((row) => row.id === "message-3")?.body).toBe("updated");
+    absent = true;
+    await observer.refetch();
+    expect(window).toHaveBeenCalled();
+    expect(orderedRows(observer.getCurrentResult().data).some((row) => row.id === "message-3")).toBe(false);
+  } finally { stop(); client.clear(); }
+});

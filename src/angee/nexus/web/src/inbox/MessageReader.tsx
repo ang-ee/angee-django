@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useAuthoredQuery } from "@angee/refine";
+import { useAuthoredQuery, useSetAuthoredQueryData } from "@angee/refine";
 import { useModelMetadata, type Row } from "@angee/metadata";
 import { isStatusUpdate, MessageReader } from "@angee/messaging";
 import { senderDisplayName } from "@angee/parties";
@@ -39,6 +39,7 @@ export function InboxMessageReader({
 }) {
   const t = useNexusT();
   const view = useResourceView();
+  const acceptQuery = useSetAuthoredQueryData();
   const query = useAuthoredQuery(
     InboxMessage,
     { ...scope, id: navigation.message },
@@ -125,6 +126,11 @@ export function InboxMessageReader({
         <div className="min-h-0 flex-1 overflow-auto p-6">
           <MessageReader
             message={message}
+            acceptResponse={(accepted) => acceptQuery(InboxMessage, { ...scope, id: navigation.message }, (current) => {
+              if (current?.inbox_message.message?.id !== accepted.id) return current;
+              return { ...current, inbox_message: { ...current.inbox_message,
+                message: { ...current.inbox_message.message, starred: accepted.starred } } };
+            }, { complete: false })}
             onOpenReply={navigation.openInContext}
             activePartId={navigation.part}
             onPreviewPartChange={(partId) => {

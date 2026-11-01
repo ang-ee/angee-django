@@ -32,7 +32,10 @@ bulk_updated = Signal()
 """An owning bulk verb changed a batch of rows (instances, update_fields, using).
 
 Observers receive persisted rows without pretending they were individually saved:
-the queryset already owns history and authorization for the write.
+the queryset already owns history and authorization for the write. Native
+reference moves may also supply ``previous_instances`` containing only primary
+keys and changed reference columns; bulk target projections accept that optional
+keyword to retain previous scope identities without publishing prior values.
 """
 
 record_access_revoked = Signal()
@@ -269,6 +272,7 @@ def _on_model_delete(sender: type[Model], instance: Model, **kwargs: Any) -> Non
 
 
 def publish_bulk_update(sender: type[Model], *, instances: Iterable[Model], update_fields: Iterable[str],
+                    previous_instances: Iterable[Model] | None = None,
                     broadcast: bool = True, **kwargs: Any) -> None:
     """Project an owner's bounded batch notification without faking save signals."""
     if changes_muted():
@@ -276,7 +280,9 @@ def publish_bulk_update(sender: type[Model], *, instances: Iterable[Model], upda
     coalesce = getattr(sender, "change_batch_targets", None)
     fields: Iterable[str] | None = update_fields
     if coalesce is not None:
-        instances = coalesce(instances, update_fields=update_fields)
+        instances = coalesce(instances, update_fields=update_fields, **(
+            {"previous_instances": previous_instances} if previous_instances is not None else {}
+        ))
         fields = None
     for instance in instances:
         publish_change(instance, action="update", update_fields=fields, broadcast=broadcast)

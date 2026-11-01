@@ -1,4 +1,4 @@
-export { refineFieldsFromPaths } from "./selections";
+export { refineFieldsFromPaths, selectedFieldsPresent } from "./selections";
 export {
   listQueryMeta,
   type ListQueryFieldArgument,
@@ -7,7 +7,7 @@ export {
 } from "./list-query";
 // Story/test consumers that pair these bindings with providers returned by this
 // package must resolve Refine's provider types through the same package identity.
-export { Refine, ResourceContext, type DataProvider, type ResourceProps } from "@refinedev/core";
+export { Refine, ResourceContext, useDataProvider, type DataProvider, type ResourceProps } from "@refinedev/core";
 // Native transport reads share Refine's QueryClient without a provider-call adapter.
 export { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 export {
@@ -170,6 +170,15 @@ export {
 export {
   authoredQueryReadsAnyModel,
   invalidateAuthoredQueries,
+  acceptQueryData,
+  useAcceptQueryData,
+  useReconcileMutationResponse,
+  type AuthoredLiveChange,
+  type MutationReconciliationOptions,
+  type MutationReconciliationScope,
+  type MutationExecutionOptions,
+  type QueryDataAcceptance,
+  type QueryDataAcceptanceResult,
 } from "./query-invalidation";
 export {
   stableKey,
@@ -212,4 +221,5 @@ export {
   type KeysetFeedCursor,
   type KeysetFeedWindow,
   type KeysetFeedRevalidation,
+  type KeysetFeedAcceptance,
 } from "./dialect/keyset-feed";

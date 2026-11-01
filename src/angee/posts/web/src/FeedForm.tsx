@@ -1,8 +1,6 @@
 import * as React from "react";
-import { Field, Form, Group, registerForm, useRecordChromeContext, useResourceRecordHref, useRouteHref, type RegisteredFormProps } from "@angee/ui";
+import { useAuthoredResourceMutation, Field, Form, Group, registerForm, useRecordChromeContext, useResourceRecordHref, useRouteHref, type RegisteredFormProps } from "@angee/ui";
 import { ConnectIntegration, ConnectOAuthButton, IntegrationSyncFields } from "@angee/integrate";
-import { useAuthoredMutation } from "@angee/refine";
-import { useResourceInvalidates } from "@angee/metadata";
 
 import { usePostsT } from "./i18n";
 
@@ -43,8 +41,10 @@ export function FeedConnectAction(): React.ReactElement | null {
   const context = useRecordChromeContext();
   const href = useResourceRecordHref(FEED_MODEL);
   const routeHref = useRouteHref();
-  const invalidates = useResourceInvalidates(CONNECT_MODELS);
-  const [connect] = useAuthoredMutation(ConnectIntegration, { invalidateModels: CONNECT_MODELS, invalidates });
+  const [connect] = useAuthoredResourceMutation(ConnectIntegration, {
+    invalidateModels: CONNECT_MODELS,
+    records: (_data, input) => [{ model: FEED_MODEL, id: input.id }],
+  });
   if (!context.record || context.formReadOnly) return null;
   return <ConnectOAuthButton row={context.record}
     disabled={context.actionsBlocked}

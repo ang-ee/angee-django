@@ -6,13 +6,18 @@
 `useInvalidate` to pass `invalidationOptions` as the second argument to
 `QueryClient.invalidateQueries(filters, options)`, preserving the declared
 `cancelRefetch: false` default, explicit cancellation and `throwOnError`.
+The same patch preserves explicit delegated pessimistic updates:
+`mutationMode: "pessimistic"` with `invalidates: []` creates no optimistic state,
+so native `useUpdate.onMutate` neither cancels the entire resource nor snapshots
+it for rollback. Its caller owns exact response-time acceptance/reconciliation.
+Default, optimistic and undoable mutation policies keep their native behavior.
 Remove each repair when a released core includes it; remove the patch and its
-install-policy entry when both repairs are adopted.
+install-policy entry when all repairs are adopted.
 
 Generate the patch in a disposable workspace with native `pnpm patch` and
 `pnpm patch-commit`. Start from the published `@refinedev/core@5.0.12` tarball,
-apply the query-context hunks and the native invalidation argument correction,
-then run upstream core's `npm run build`
+apply the query-context hunks, native invalidation argument correction and
+narrow delegated pessimistic completion correction, then run upstream core's `npm run build`
 (`tsup` followed by `packages/shared/generate-declarations.js`). Obtain its
 `tsup.config.ts`, declaration/build tsconfigs and shared build helpers from the
 published core tag below. The build uses tsup 6.7.0, TypeScript 5.8.3 and the native dependency APIs

@@ -27,6 +27,7 @@ from rebac.resources import model_resource_type
 
 from angee.base.lineage import concrete_child_models
 from angee.base.models.identity import public_id_for
+from angee.base.querysets import by_key
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,8 +71,9 @@ def record_view_refs(*records: RecordRef, using: str | None = None) -> tuple[Rec
     for record in result:
         children(apps.get_model(record.model_label), {record.object_id})
     for child, ids in grouped.items():
-        present = child._base_manager.using(using).filter(pk__in=ids).values_list("pk", flat=True)
-        result.extend(RecordRef.from_model(child, pk) for pk in present)
+        rows = child._base_manager.using(using).order_by("pk")
+        for batch in by_key(rows, sorted(pk for pk in ids if pk is not None)):
+            result.extend(RecordRef.from_model(child, pk) for pk in batch.values_list("pk", flat=True))
     return tuple(dict.fromkeys(result))
 
 

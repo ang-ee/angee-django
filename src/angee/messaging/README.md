@@ -7,6 +7,29 @@ The current record owns read and post admission. Messaging contributes comments,
 its existing composer, and linked source conversations to the framework Activity
 stream; provenance contributes record history independently through the same owner.
 
+Record chatter responses resolve selected fields through one private
+record/role/request context. Posting and editing select only the accepted message;
+followers, suggestions, notifications and totals remain independent selections.
+The record queryset supplies membership and ordering without hydrating content.
+Native Strawberry-Django message-field annotations and prefetch hints load sender,
+capability, unread, part, reaction and star projections only when selected, before
+materializing the authorized row/window. The same field boundary serves legacy,
+keyset and retained-ID reads; Python list APIs materialize the same queryset owner.
+The conversation adopts that authoritative projection into native Query pages,
+then reconciles derived state. `record_message_feed` and its retained-ID
+revalidation root use the same parent read gate and `MessageQuerySet.record_scope`
+as the legacy `record_thread` fields. Signed fixed-window cuts, opaque chronology
+keys and explicit survivor/absence partitions remain owned by the keyset query.
+An accepted post inserts only into a loaded unfiltered latest scope; search and
+membership changes continue through authoritative revalidation.
+
+Chatter notifications use the existing Timeline parent-record invalidation owner,
+including reactions, follows and receipts. Private Message broadcasts remain
+disabled. An inaccessible parent's event can be withheld by the read gate;
+read-gated silence is never an absence or removal. Current-parent revalidation,
+reconnect and explicit recovery still require authoritative reads; the transport
+provides no replay or immediate revocation guarantee.
+
 Source threads and messages remain channel occurrences. A native `same_as` pair
 statement is the identity fact, and applying it folds the newer copy into the
 older through core `MergeableMixin` as a retained redirect (`merged_into`): no

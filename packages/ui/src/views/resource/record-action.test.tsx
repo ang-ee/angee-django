@@ -35,6 +35,7 @@ vi.mock("./record-chrome-context", () => ({
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   useActionMutation: dataMocks.useActionMutation,
+  useReconcileMutationResponse: () => Object.assign(async () => undefined, { batch: (run: () => Promise<unknown>) => run() }),
 }));
 
 vi.mock("./action-result-run", () => ({
@@ -46,10 +47,10 @@ vi.mock("./action-result-run", () => ({
 // there owns testing that fold. What the tests below own is which labels reach it,
 // and in what order — so the fake keeps the label visible in its output.
 vi.mock("@angee/metadata", () => ({
-  useCanonicalResourceModelLabels: (modelLabels: readonly string[] | undefined) =>
-    (modelLabels ?? []).map((modelLabel) =>
-      modelLabel === "Skill" ? "agents.Skill" : modelLabel
-    ),
+  useResourceMutationModels: (modelLabels: readonly string[] | undefined) => {
+    const models = (modelLabels ?? []).map((modelLabel) => modelLabel === "Skill" ? "agents.Skill" : modelLabel);
+    return { models, resourceModels: models };
+  },
   useResourceInvalidates: (modelLabels: readonly string[] | undefined) =>
     (modelLabels ?? []).map((modelLabel) => ({
       dataProviderName: "console",
@@ -159,6 +160,14 @@ describe("record action helpers", () => {
     );
   });
 
+  test("forwards credential-bearing action lifetime to the native mutation owner", () => {
+    renderHook(() => useActionResultMutation("submit_channel_password", { transient: true }));
+    expect(dataMocks.useActionMutation).toHaveBeenCalledWith(
+      "submit_channel_password",
+      expect.objectContaining({ transient: true }),
+    );
+  });
+
   test("uses the declared schema outside the resource view context", () => {
     renderHook(() => useRecordActionMutation("reprocess_workflow_run", { dataProviderName: "console" }));
     expect(dataMocks.useActionMutation).toHaveBeenCalledWith("reprocess_workflow_run", expect.objectContaining({ dataProviderName: "console" }));
@@ -166,9 +175,11 @@ describe("record action helpers", () => {
 
   test("passes invalidation targets to the data action owner", async () => {
     const refresh = vi.fn();
+    const afterSuccess = vi.fn();
     const { result } = renderHook(() =>
       useRecordActionMutation("refresh_source", {
         invalidateModels: ["Skill"],
+        afterSuccess,
       }),
     );
 
@@ -191,6 +202,16 @@ describe("record action helpers", () => {
     );
     expect(dataMocks.mutate).toHaveBeenCalledWith("src_1");
     expect(refresh).toHaveBeenCalledOnce();
+    expect(afterSuccess).toHaveBeenCalledOnce();
+    expect(afterSuccess).toHaveBeenCalledWith(expect.objectContaining({ record: { id: "src_1" } }), "Synced");
+  });
+
+  test.each([undefined, false, true])("keeps an uncovered record action's explicit/default refresh policy: %s", async (refreshOption) => {
+    const refresh = vi.fn();
+    const { result } = renderHook(() => useRecordActionMutation("refresh_source",
+      refreshOption === undefined ? undefined : { refresh: refreshOption }));
+    await act(async () => { await result.current[0](actionContext("src_1", { refresh })); });
+    expect(refresh).toHaveBeenCalledTimes(refreshOption === false ? 0 : 1);
   });
 
   test("settles and forwards action arguments beside the record id", async () => {
@@ -210,9 +231,11 @@ describe("record action helpers", () => {
 
   test("settles id-returning record mutations through the action-result owner", async () => {
     const refresh = vi.fn();
+    const afterSuccess = vi.fn();
     const { result } = renderHook(() =>
       useRecordActionMutation("convert_to_document", {
         linkTo: "example.Document",
+        afterSuccess,
       }),
     );
 
@@ -227,6 +250,8 @@ describe("record action helpers", () => {
     expect(dataMocks.settle).toHaveBeenCalledOnce();
     expect(dataMocks.mutate).toHaveBeenCalledWith("lead_1");
     expect(refresh).toHaveBeenCalledOnce();
+    expect(afterSuccess).toHaveBeenCalledOnce();
+    expect(afterSuccess).toHaveBeenCalledWith(expect.objectContaining({ record: { id: "lead_1" } }), "Synced");
     expect(message).toBeUndefined();
   });
 

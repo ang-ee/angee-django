@@ -130,7 +130,7 @@ export function FilePreviewFrame({
           <Card render={<section aria-label={t("file.details")} />} className="mt-4">
             <CardContent>
               <ControlBandProvider host={undefined}>
-                <FileDetail id={id} filename={file?.filename} onChanged={query.refetch} />
+                <FileDetail id={id} filename={file?.filename} />
               </ControlBandProvider>
             </CardContent>
           </Card>

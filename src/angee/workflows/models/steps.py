@@ -158,11 +158,14 @@ class StepRun(AngeeDataModel, concrete=True):
     objects = StepRunManager()
 
     @classmethod
-    def change_batch_targets(cls, instances: Iterable[Any], *, update_fields: Iterable[str]) -> Iterable[models.Model]:
+    def change_batch_targets(
+        cls, instances: Iterable[Any], *, update_fields: Iterable[str], previous_instances: Iterable[Any] = (),
+    ) -> Iterable[models.Model]:
         """Publish newly retained questions; run advancement owns run publication.
 
         Local bulk observers coalesce the step rows to their own targets. Sending
         another run change here would publish its intermediate, unadvanced state.
+        Previous reference identities do not alter these current decision targets.
         """
 
         rows = tuple(instances)

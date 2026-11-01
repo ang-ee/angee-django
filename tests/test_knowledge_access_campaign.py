@@ -2,13 +2,19 @@
 
 import pytest
 from django.contrib.contenttypes.models import ContentType
-from django.db import connection, connections, router
+from django.db import connection, connections, router, transaction
+from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
+from angee.base.refs import RecordRef
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
+from angee.base import signals as model_signals
+from angee.base.models import merge_references
+from angee.base.models.merge_references import EdgeReference, references
+from angee.knowledge.models import bindings as binding_owner
 from angee.knowledge.schema import schemas
 from angee.provenance.context import changeset, changeset_model
 from tests.conftest import (
@@ -56,6 +62,164 @@ def test_record_note_is_atomic_and_replays_the_original_binding(composed_permiss
         assert replay.pk == binding.pk
         assert Page.objects.filter(vault=vault).count() == 1
         assert MarkdownPage.objects.get(pk=binding.page_id).body == "A note\nDetails"
+
+
+def test_binding_changes_identify_the_parent_without_loading_page_content(composed_permissions):
+    owner = create_user("binding-change-owner")
+    vault = vault_for(owner, name="Notes")
+    target = vault_for(owner, name="Target")
+    with actor_context(owner):
+        page = Page.objects.create_in(vault, title="Note")
+        binding = RecordBinding.objects.upsert(page=page, target=target, role="notes")
+        reference = RecordRef.from_instance(target)
+        assert reference in binding.change_related_records()
+        for action in ("create", "delete"):
+            event = ChangePayload.from_instance(binding, action=action, update_fields=None)
+            assert (reference.model_label, reference.public_id) in {
+                (related.model, related.id) for related in event.related_records
+            }
+            visible = ChangeReadGate(RecordBinding, to_subject_ref(owner)).filter(event)
+            assert visible is not None
+            assert (reference.model_label, reference.public_id) in {
+                (related.model, related.id) for related in visible.related_records
+            }
+
+
+@pytest.mark.parametrize("rolled_back", [False, True])
+def test_binding_retarget_observes_only_old_and_new_parent_scopes_after_commit(
+    composed_permissions, monkeypatch, rolled_back,
+):
+    owner = create_user("binding-retarget-owner")
+    vault = vault_for(owner, name="Notes")
+    before_target = vault_for(owner, name="Before")
+    after_target = vault_for(owner, name="After")
+    unrelated = vault_for(owner, name="Unrelated")
+    with actor_context(owner):
+        page = Page.objects.create_in(vault, title="Moved note")
+        binding = RecordBinding.objects.upsert(page=page, target=before_target, role="notes")
+        untouched = RecordBinding.objects.upsert(page=page, target=unrelated, role="notes")
+    delivered = []
+
+    def queue_identity(instance, *, action, update_fields, **kwargs):
+        if not isinstance(instance, RecordBinding):
+            return
+        assert action == "update" and update_fields is None
+        identities = instance.change_related_records()
+        transaction.on_commit(lambda: delivered.append((instance.pk, identities)), using=instance._state.db)
+
+    monkeypatch.setattr(model_signals, "publish_change", queue_identity)
+    model_signals.connect_observers(RecordBinding)
+    reference = next(item for item in references(type(before_target)) if item.model is RecordBinding and isinstance(item, EdgeReference))
+    with TestCase.captureOnCommitCallbacks(execute=True):
+        try:
+            with changeset(), transaction.atomic(), system_context(reason="test.binding.native_retarget"):
+                reference.move(reference.rows(before_target), survivor=after_target)
+                assert delivered == []
+                if rolled_back:
+                    raise RuntimeError("Refused later in the fold")
+        except RuntimeError:
+            if not rolled_back:
+                raise
+    if rolled_back:
+        assert delivered == []
+    else:
+        assert len(delivered) == 1
+        assert delivered[0][0] == binding.pk
+        assert set(delivered[0][1]) >= {
+            RecordRef.from_instance(before_target), RecordRef.from_instance(after_target), RecordRef.from_instance(page),
+        }
+    with system_context(reason="test.binding.retarget_result"):
+        binding.refresh_from_db()
+        untouched.refresh_from_db()
+        assert binding.object_id == (before_target.pk if rolled_back else after_target.pk)
+        assert untouched.object_id == unrelated.pk
+
+
+def test_binding_native_move_batches_sparse_facts_and_resolves_lineage_once_per_batch(
+    composed_permissions, monkeypatch,
+):
+    owner = create_user("binding-batches-owner")
+    vault = vault_for(owner, name="Notes")
+    before_target = vault_for(owner, name="Before")
+    after_target = vault_for(owner, name="After")
+    with actor_context(owner):
+        for index in range(11):
+            page = Page.objects.create_in(vault, title=f"Note {index}")
+            RecordBinding.objects.upsert(page=page, target=before_target, role="notes")
+    batches = []
+    published = []
+    expansions = []
+    expand = binding_owner.record_view_refs
+
+    def record_expansion(*identities, **kwargs):
+        expansions.append(len(identities))
+        return expand(*identities, **kwargs)
+
+    def observe_batch(sender, *, instances, previous_instances, **kwargs):
+        batches.append(len(instances))
+        assert len(instances) == len(previous_instances)
+        for previous in previous_instances:
+            assert previous.get_deferred_fields() >= {"page_id", "vault_id", "created_at", "updated_at"}
+
+    def publish(instance, *, action, update_fields, **kwargs):
+        if isinstance(instance, RecordBinding):
+            assert update_fields is None
+            assert instance.get_deferred_fields() >= {"created_at", "updated_at", "role"}
+            assert instance._change_related_refs is not None
+            assert instance.change_related_records()
+            published.append(instance.pk)
+
+    refresh = RecordBinding.refresh_from_db
+
+    def reject_deferred_scope(self, *args, fields=None, **kwargs):
+        if fields is not None and set(fields) & {"content_type_id", "object_id", "page_id", "vault_id", "id"}:
+            raise AssertionError("Bulk projection reloaded a deferred identity field")
+        return refresh(self, *args, fields=fields, **kwargs)
+
+    monkeypatch.setattr(RecordBinding, "refresh_from_db", reject_deferred_scope)
+    monkeypatch.setattr(merge_references, "query_batch_size", lambda _query: 7)
+    monkeypatch.setattr(binding_owner, "record_view_refs", record_expansion)
+    monkeypatch.setattr(model_signals, "publish_change", publish)
+    model_signals.connect_observers(RecordBinding)
+    model_signals.bulk_updated.connect(observe_batch, sender=RecordBinding, weak=False)
+    reference = next(item for item in references(type(before_target)) if item.model is RecordBinding and isinstance(item, EdgeReference))
+    try:
+        with changeset(), system_context(reason="test.binding.bounded_move"):
+            reference.move(reference.rows(before_target), survivor=after_target)
+    finally:
+        model_signals.bulk_updated.disconnect(observe_batch, sender=RecordBinding)
+    assert sum(batches) == 11 and len(batches) > 1 and max(batches) <= 7
+    assert len(published) == len(set(published)) == 11
+    assert len(expansions) == len(batches)
+
+
+def test_binding_move_collapses_only_identity_collisions_and_keeps_source_gates(composed_permissions, monkeypatch):
+    owner = create_user("binding-collisions-owner")
+    vault = vault_for(owner, name="Notes")
+    before_target = vault_for(owner, name="Before")
+    after_target = vault_for(owner, name="After")
+    with actor_context(owner):
+        page = Page.objects.create_in(vault, title="Shared note")
+        removed = RecordBinding.objects.upsert(page=page, target=before_target, role="notes")
+        kept = RecordBinding.objects.upsert(page=page, target=after_target, role="notes")
+        moved = RecordBinding.objects.upsert(page=page, target=before_target, role="reference")
+    events = []
+
+    def publish(instance, *, action, update_fields, **kwargs):
+        if isinstance(instance, RecordBinding):
+            events.append((instance.pk, action, instance.change_related_records()))
+
+    monkeypatch.setattr(model_signals, "publish_change", publish)
+    model_signals.connect_observers(RecordBinding)
+    reference = next(item for item in references(type(before_target)) if item.model is RecordBinding and isinstance(item, EdgeReference))
+    with changeset(), system_context(reason="test.binding.collision_move"):
+        reference.move(reference.rows(before_target), survivor=after_target)
+    assert [(pk, action) for pk, action, _refs in events] == [(removed.pk, "delete"), (moved.pk, "update")]
+    assert set(events[-1][2]) >= {RecordRef.from_instance(before_target), RecordRef.from_instance(after_target), RecordRef.from_instance(page)}
+    with system_context(reason="test.binding.collision_result"):
+        assert not RecordBinding._base_manager.filter(pk=removed.pk).exists()
+        assert RecordBinding._base_manager.get(pk=kept.pk).object_id == after_target.pk
+        assert RecordBinding._base_manager.get(pk=moved.pk).object_id == after_target.pk
 
 
 @pytest.mark.parametrize("missing_end", ["vault", "target"])

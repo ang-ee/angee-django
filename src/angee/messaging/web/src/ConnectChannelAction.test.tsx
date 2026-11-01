@@ -99,6 +99,7 @@ describe("ConnectChannelAction", () => {
 
     expect(actionMocks.authoredOptions).toEqual({
       invalidateModels: ["messaging.Channel"],
+      transient: true,
     });
     expect(actionMocks.dialogProps).toMatchObject({
       title: "channel.demo.title",

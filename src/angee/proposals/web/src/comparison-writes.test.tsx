@@ -9,10 +9,19 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(async () => ({ data: { id: "answer-new" } })),
   update: vi.fn(async () => ({ data: { id: "answer-1", revision: 8 } })),
   visibility: vi.fn(async () => ({ set_proposal_answer_visibility: { ok: true, message: "Saved" } })),
+  scope: { reconcile: vi.fn(async () => undefined) },
+  reconcile: vi.fn(async () => undefined),
 }));
 vi.mock("@angee/metadata", () => ({
   refineResourceName: () => "resource",
   useModelMetadata: () => ({ resource: { schemaName: "console" } }),
+  useResourceInvalidates: () => [],
+}));
+vi.mock("@angee/refine", async (original) => ({
+  ...await original<typeof import("@angee/refine")>(),
+  useReconcileMutationResponse: () => Object.assign(mocks.reconcile, {
+    batch: async <T,>(run: (scope?: typeof mocks.scope) => Promise<T>) => run(mocks.scope),
+  }),
 }));
 vi.mock("@refinedev/core", () => ({
   useCreate: () => ({ mutateAsync: mocks.create, mutation: { isPending: false } }),
@@ -40,7 +49,9 @@ test("answer edit sends its observed revision, then uses the returned revision f
   }));
   expect(mocks.visibility).toHaveBeenCalledWith({
     answer: "answer-1", revision: 8, visibility: "RESPONDER",
-  });
+  }, { reconciliation: mocks.scope });
+  expect(mocks.reconcile).toHaveBeenCalledWith(expect.anything(), expect.anything(),
+    expect.objectContaining({ reconciliation: mocks.scope }));
 });
 
 test("new answers and statements use the existing resource writes", async () => {

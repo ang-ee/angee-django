@@ -1,10 +1,9 @@
 import { useCallback } from "react";
-import { useInvalidate } from "@refinedev/core";
 import {
   refineResourceIdentifier,
   refineResourceName,
   resourceOperationTarget,
-  useResourceInvalidates,
+  refineInvalidationParams,
   type DataResourceMetadata,
   type DataResourceRootMetadata,
   type ModelMetadata,
@@ -13,7 +12,9 @@ import {
   maybeOperationDocument,
   useAngeeDeletePreview,
   useOperationDocuments,
+  useReconcileMutationResponse,
   type CustomGraphQLOperationTarget,
+  type MutationExecutionOptions,
   type ListBatchTarget,
   type OperationDocumentKind,
   type UseAngeeDeletePreviewResult,
@@ -85,7 +86,7 @@ export function useDeletePreviewOperation(
 
 export interface UseDeleteWithPreviewResult extends UseAngeeDeletePreviewResult {
   available: boolean;
-  remove: (id: string) => Promise<void>;
+  remove: (id: string, execution?: MutationExecutionOptions) => Promise<void>;
 }
 
 /**
@@ -102,15 +103,20 @@ export function useDeleteWithPreview(
   const preview = useAngeeDeletePreview(operation.target, {
     document: operation.document,
   });
-  const invalidate = useInvalidate();
-  const invalidations = useResourceInvalidates(resource ? [resource.modelLabel] : undefined);
-  const remove = useCallback(async (id: string): Promise<void> => {
+  const reconcileMutationResponse = useReconcileMutationResponse();
+  const remove = useCallback(async (id: string, execution?: MutationExecutionOptions): Promise<void> => {
     if (!resource || !operation.target) {
       throw new Error("Delete preview is unavailable for this resource.");
     }
     await preview.mutate({ id, confirm: true });
-    await Promise.all(invalidations.map((target) => invalidate(target)));
-  }, [invalidate, invalidations, operation.target, preview.mutate, resource]);
+    await reconcileMutationResponse(undefined, undefined, {
+      ...execution,
+      records: [{ model: resource.modelLabel, id }],
+      invalidates: [refineInvalidationParams({
+        resource: refineResourceIdentifier(resource), dataProviderName: resource.schemaName, id,
+      })],
+    });
+  }, [operation.target, preview.mutate, reconcileMutationResponse, resource]);
   return {
     ...preview,
     available: Boolean(resource && operation.target && operation.document),

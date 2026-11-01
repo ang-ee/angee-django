@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, Self, cast
 
+from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
@@ -17,6 +19,7 @@ from rebac import (
     generic_target,
     system_context,
 )
+from rebac.field_backing import canonical_model
 
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import AngeeDataModel
@@ -25,7 +28,7 @@ from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import actor_user_id
 from angee.base.querysets import row_lock_paths
-from angee.base.refs import RecordRef
+from angee.base.refs import RecordRef, record_view_refs
 from angee.provenance.context import changeset, changeset_model, require_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -285,6 +288,62 @@ class RecordBinding(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel, co
             ),
         )
         indexes = (models.Index(fields=("content_type", "object_id", "role")),)
+
+    _change_related_refs: tuple[RecordRef, ...] | None = None
+    """Identity-only projection prepared for one bounded bulk observation."""
+
+    def _change_scope_records(self) -> tuple[RecordRef, RecordRef]:
+        model = apps.get_model("knowledge", "Page" if self.page_id is not None else "Vault")
+        owner = RecordRef.from_model(model, self.page_id if self.page_id is not None else self.vault_id)
+        return self.record_ref, owner
+
+    def change_related_records(self) -> tuple[RecordRef, ...]:
+        """Identify both ends of this edge, including their inherited record views."""
+        if self._change_related_refs is not None:
+            return self._change_related_refs
+        return record_view_refs(*self._change_scope_records(), using=self._state.db)
+
+    @classmethod
+    def change_batch_targets(
+        cls, instances: Iterable[Self], *, update_fields: Iterable[str], previous_instances: Iterable[Self] = (),
+    ) -> Iterable[Self]:
+        """Coalesce each source gate's old/current scopes, expanding lineage once.
+
+        Sparse before rows contain only the native mover's reference columns.
+        Unchanged identity fields come from the persisted current row. Every
+        emitted instance remains its own Binding gate and carries no old values.
+        """
+        rows = tuple(instances)
+        if not rows:
+            return ()
+        using = rows[0]._state.db
+        previous = {row.pk: row for row in previous_instances}
+        fields = (cls._meta.pk.attname, "content_type_id", "object_id", "page_id", "vault_id")
+        projected: list[tuple[Self, tuple[RecordRef, ...]]] = []
+        references: list[RecordRef] = []
+        for row in rows:
+            values = {name: getattr(row, name) for name in fields}
+            current = cls.from_db(using, fields, [values[name] for name in fields])
+            scopes = list(current._change_scope_records())
+            before = previous.get(row.pk)
+            if before is not None:
+                deferred = before.get_deferred_fields()
+                old_values = {name: getattr(before, name) if name not in deferred else values[name] for name in fields}
+                old = cls.from_db(using, fields, [old_values[name] for name in fields])
+                scopes.extend(old._change_scope_records())
+            identities = tuple(dict.fromkeys(scopes))
+            projected.append((current, identities))
+            references.extend(identities)
+        views: dict[tuple[str, Any], list[RecordRef]] = {}
+        for reference in record_view_refs(*references, using=using):
+            model = apps.get_model(reference.model_label)
+            canonical = canonical_model(model) or model
+            views.setdefault((canonical._meta.label, reference.object_id), []).append(reference)
+        for row, identities in projected:
+            row._change_related_refs = tuple(dict.fromkeys(
+                view for identity in identities for view in views[(identity.model_label, identity.object_id)]
+            ))
+        return tuple(row for row, _identities in projected)
 
     @classmethod
     def knowledge_owner(

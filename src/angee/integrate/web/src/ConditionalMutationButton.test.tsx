@@ -2,6 +2,7 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import * as React from "react";
+import type { ActionContext, ActionFormContext } from "@angee/ui";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -51,7 +52,7 @@ import { ConditionalMutationButton } from "./ConditionalMutationButton";
 type Declared = {
   id: string; label: React.ReactNode; placement: string; danger: boolean; primary: boolean;
   confirm?: unknown; args?: unknown;
-  run?: () => Promise<unknown>; submit?: (values: Record<string, unknown>) => Promise<unknown>;
+  run?: (context: ActionContext) => Promise<unknown>; submit?: (values: Record<string, unknown>, context: ActionFormContext) => Promise<unknown>;
 };
 
 describe("ConditionalMutationButton", () => {
@@ -98,8 +99,10 @@ describe("ConditionalMutationButton", () => {
     const declared = mocks.verbs.at(-1) as Declared;
     expect(declared).toMatchObject({ id: "pause_integration", placement: "toolbar", danger: false, primary: false });
     expect(declared.confirm).toBeUndefined();
-    await declared.run?.();
-    expect(mocks.actions.get("pause_integration")).toHaveBeenCalledWith("int_1");
+    const reconciliation = { reconcile: vi.fn(async () => undefined) };
+    await declared.run?.({ record: null, values: {}, refresh: vi.fn(), update: vi.fn(async () => null),
+      prompt: vi.fn(async () => null), reconciliation });
+    expect(mocks.actions.get("pause_integration")).toHaveBeenCalledWith("int_1", undefined, { reconciliation });
   });
 
   test("a confirmed destructive verb hands its copy and tone to the record action bar", () => {
@@ -131,8 +134,9 @@ describe("ConditionalMutationButton", () => {
     expect(declared).toMatchObject({ id: "rename_user", args });
     expect(declared.run).toBeUndefined();
     const values = { first_name: "Morgan", expected_revision: 4 };
-    await expect(declared.submit?.(values)).resolves.toEqual({ ok: true, message: "done" });
-    expect(mocks.outcomes.get("rename_user")).toHaveBeenCalledWith("int_1", values);
+    const reconciliation = { reconcile: vi.fn(async () => undefined) };
+    await expect(declared.submit?.(values, { record: null, selectedIds: [], reconciliation })).resolves.toEqual({ ok: true, message: "done" });
+    expect(mocks.outcomes.get("rename_user")).toHaveBeenCalledWith("int_1", values, { reconciliation });
     expect(mocks.actions.get("rename_user")).not.toHaveBeenCalled();
   });
 });

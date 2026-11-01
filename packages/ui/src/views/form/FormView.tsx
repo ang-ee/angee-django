@@ -364,6 +364,7 @@ function FormViewContent({ surface, ...props }: FormViewProps & {
             actions={availableDeclaredActions}
             applyPatch={applyPatch}
             reload={reload}
+            refreshQueryKey={surface.refreshQueryKey}
             deleteAction={visibleDeleteAction}
             contributedActions={
               !readOnly && recordChromeContext && menuRecordActions.length > 0 ? (

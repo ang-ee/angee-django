@@ -1,5 +1,5 @@
 import { useModelMetadata } from "@angee/metadata";
-import { useAuthoredQuery, useInvalidateAuthoredModels } from "@angee/refine";
+import { useAuthoredQuery } from "@angee/refine";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
   CollectionTreeView, EmptyState, ErrorBanner, InlineTextAction, LoadingPanel, PaneToolbar, PaneToolbarMenu,
@@ -55,10 +55,6 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
   const driveMetadata = useModelMetadata("storage.Drive");
   const driveRelation = useMemo(() => relationFieldInfoForResource("storage.Drive", driveMetadata ?? null), [driveMetadata]);
   const initialDrives = useRelationOptions(driveRelation, { enabled: !openFileId && !requestedFolder, pageSize: 1, sort: true });
-  const invalidateAuthoredModels = useInvalidateAuthoredModels();
-  const handleFolderMutation = useCallback(() => {
-    invalidateAuthoredModels(FOLDER_MODELS);
-  }, [invalidateAuthoredModels]);
   // Scope/detail reads are independent of sibling pages. They retain the requested
   // folder for actions and deep links without copying the collection's row cache.
   const getTreeRows = useCallback((rootId: string) => folderTreeRows(
@@ -96,9 +92,7 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
     { name: "prefix", label: t("drive.create.prefix"), placeholder: t("drive.create.prefixPlaceholder") },
     { name: "description", label: t("drive.create.description"), widget: "textarea" },
   ], [t]);
-  const folderActions = useFolderActions({
-    onChanged: handleFolderMutation,
-  });
+  const folderActions = useFolderActions();
   const confirm = useConfirm();
   // The action hooks return a fresh object each render; the navigator is
   // published into the shell primary pane, so its callbacks read the live

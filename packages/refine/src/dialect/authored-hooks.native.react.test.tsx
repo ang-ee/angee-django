@@ -534,7 +534,7 @@ test.each(["success", "failure"] as const)("transient %s rejects overlap without
   const settled = pending.then((data) => data, (error: unknown) => error);
   await waitFor(() => expect(result.current[1].fetching).toBe(true));
   await act(async () => {
-    await expect(result.current[0]({ id: "overlap" })).rejects.toThrow("Transient authored mutations cannot overlap another mutation.");
+    await expect(result.current[0]({ id: "overlap" })).rejects.toThrow("Transient mutations cannot overlap another mutation.");
   });
   expect(f.custom).toHaveBeenCalledTimes(1);
   expect(result.current[1].fetching).toBe(true);
@@ -568,7 +568,7 @@ test("ordinary authored mutations overlap while transient calls reject until ear
   await act(async () => { second.resolve({ data: { notes: [] } }); await secondCall; });
   rerender({ transient: true });
   await act(async () => {
-    await expect(result.current[0]({ id: "transient" })).rejects.toThrow("Transient authored mutations cannot overlap another mutation.");
+    await expect(result.current[0]({ id: "transient" })).rejects.toThrow("Transient mutations cannot overlap another mutation.");
   });
   expect(f.custom).toHaveBeenCalledTimes(2);
   await act(async () => { first.resolve({ data: { notes: [] } }); await firstCall; });
@@ -668,12 +668,10 @@ test("a transient mutation chained immediately after an ordinary mutation uses z
   expect(result.current[1].error).toBeNull();
 });
 
-test("response-backed completion accepts typed cache data before held background refresh", async () => {
-  const refreshed = deferred<{ data: Data }>();
+test("complete response-backed acceptance avoids rereading its exact typed cache entry", async () => {
   const custom = vi.fn(async () => ({ data: { notes: [{ id: "one" }] } }));
   custom.mockResolvedValueOnce({ data: { notes: [{ id: "one" }] } });
   custom.mockResolvedValueOnce({ data: { notes: [{ id: "accepted" }] } });
-  custom.mockImplementationOnce(() => refreshed.promise);
   const f = fixture(custom);
   const { result } = renderHook(() => {
     const accept = useSetAuthoredQueryData();
@@ -682,19 +680,17 @@ test("response-backed completion accepts typed cache data before held background
       mutation: useAuthoredMutation(MUTATION, {
         invalidateModels: ["notes.Note"],
         acceptResponse: async (data, variables) => {
-          if (data) await accept(DOCUMENT, variables, (current) => current ? { ...current, notes: data.notes } : undefined);
+          if (data) return accept(DOCUMENT, variables, (current) => current ? { ...current, notes: data.notes } : undefined);
         },
       }),
     };
   }, { wrapper: f.wrapper });
   await waitFor(() => expect(result.current.read.data).toBeDefined());
   await act(async () => { await result.current.mutation[0]({ id: "a" }); });
-  await waitFor(() => expect(custom).toHaveBeenCalledTimes(3));
+  expect(custom).toHaveBeenCalledTimes(2);
   expect(result.current.mutation[1].fetching).toBe(false);
-  expect(result.current.read.isFetching).toBe(true);
+  expect(result.current.read.isFetching).toBe(false);
   expect(result.current.read.data).toEqual({ notes: [{ id: "accepted" }] });
-  await act(async () => { refreshed.resolve({ data: { notes: [{ id: "refreshed" }] } }); });
-  await waitFor(() => expect(result.current.read.data).toEqual({ notes: [{ id: "refreshed" }] }));
 });
 
 test("background refresh failure remains a native read error after accepted completion", async () => {
@@ -703,12 +699,19 @@ test("background refresh failure remains a native read error after accepted comp
   custom.mockResolvedValueOnce({ data: { notes: [{ id: "accepted" }] } });
   custom.mockRejectedValueOnce(new Error("Refresh unavailable"));
   const f = fixture(custom);
-  const { result } = renderHook(() => ({
-    read: useAuthoredQuery(DOCUMENT, { id: "a" }, { models: ["notes.Note"] }),
-    mutation: useAuthoredMutation(MUTATION, {
-      invalidateModels: ["notes.Note"], acceptResponse: () => undefined,
-    }),
-  }), { wrapper: f.wrapper });
+  const { result } = renderHook(() => {
+    const accept = useSetAuthoredQueryData();
+    return {
+      read: useAuthoredQuery(OTHER, { id: "a" }, { models: ["notes.Note"] }),
+      mutation: useAuthoredMutation(MUTATION, {
+        invalidateModels: ["notes.Note"],
+        acceptResponse: async (data, variables) => {
+          if (!data) throw new Error("Accepted response missing.");
+          return accept(DOCUMENT, variables, data);
+        },
+      }),
+    };
+  }, { wrapper: f.wrapper });
   await waitFor(() => expect(result.current.read.data).toBeDefined());
   await act(async () => { await result.current.mutation[0]({ id: "a" }); });
   await waitFor(() => expect(result.current.read.error?.message).toBe("Refresh unavailable"));

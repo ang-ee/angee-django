@@ -197,6 +197,122 @@ def test_subscription_renews_its_group_lease_and_releases_it_on_close(monkeypatc
     assert renewals == 0
 
 
+def test_resolver_ready_follows_registration_and_precedes_buffered_data(monkeypatch) -> None:
+    """A held group join emits nothing; data arriving at join follows the empty control."""
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class Layer(InMemoryChannelLayer):
+        async def group_add(self, group: str, channel: str) -> None:
+            entered.set()
+            await release.wait()
+            await super().group_add(group, channel)
+            await self.send(channel, {"type": "angee.change", "payload": _payload(id="7")})
+
+    layer = Layer()
+    monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: layer)
+    monkeypatch.setattr(subscriptions, "_change_read_gate", lambda *args: object())
+    seen = []
+
+    def filter_event(gate, payload):
+        seen.append(payload.id)
+        return ChangeEvent.from_payload(payload)
+
+    monkeypatch.setattr(subscriptions, "_filter_change_event", filter_event)
+    resolver = _subscription_resolver(changes(Group, field="groupChanged"))
+
+    async def scenario() -> None:
+        with actor_context(ANON):
+            stream = resolver(object(), SimpleNamespace(context={}))
+            pending = asyncio.ensure_future(anext(stream))
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=1)
+                assert not pending.done()
+                release.set()
+                event = await asyncio.wait_for(pending, timeout=1)
+                assert (event.model, event.action, event.id) == ("auth.Group", "ready", "")
+                assert event.changed_fields is None
+                assert event.changed_values is None
+                assert event.occurrence_id is None
+                assert event.related_records == []
+                assert seen == []
+                data = await asyncio.wait_for(anext(stream), timeout=1)
+                assert (data.action, data.id) == ("update", "7")
+                assert seen == ["7"]
+            finally:
+                pending.cancel()
+                await asyncio.gather(pending, return_exceptions=True)
+                await stream.aclose()
+            assert not layer.groups.get(publishing.change_group(Group))
+            assert not any(task.get_name().startswith("angee-change-lease:") for task in asyncio.all_tasks())
+
+    asyncio.run(scenario())
+
+
+def test_resolver_readiness_never_exposes_a_denied_payload(monkeypatch) -> None:
+    """The control contains no row data and does not exempt data from the read gate."""
+
+    async def hidden_payload(model, *, ready):
+        ready.set()
+        yield _payload(id="private-row", changed_values={"name": "private-value"})
+
+    monkeypatch.setattr(subscriptions, "subscribe", hidden_payload)
+    monkeypatch.setattr(subscriptions, "_change_read_gate", lambda *args: object())
+    monkeypatch.setattr(subscriptions, "_filter_change_event", lambda *args: None)
+    resolver = _subscription_resolver(changes(Group, field="groupChanged"))
+
+    async def scenario() -> list[ChangeEvent]:
+        with actor_context(ANON):
+            return [event async for event in resolver(object(), SimpleNamespace(context={}))]
+
+    (event,) = asyncio.run(scenario())
+    assert (event.action, event.id, event.changed_values) == ("ready", "", None)
+
+
+def test_resolver_registration_failure_does_not_emit_ready(monkeypatch) -> None:
+    """A missing transport fails promptly rather than claiming readiness or hanging."""
+
+    monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: None)
+    monkeypatch.setattr(subscriptions, "_change_read_gate", lambda *args: object())
+    resolver = _subscription_resolver(changes(Group, field="groupChanged"))
+
+    async def scenario() -> None:
+        with actor_context(ANON):
+            stream = resolver(object(), SimpleNamespace(context={}))
+            try:
+                with pytest.raises(RuntimeError, match="require a channel layer"):
+                    await asyncio.wait_for(anext(stream), timeout=1)
+            finally:
+                await stream.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_resolver_cancellation_after_ready_releases_membership(monkeypatch) -> None:
+    """Disconnect while waiting for data cancels the receive and native lease."""
+
+    layer = InMemoryChannelLayer()
+    monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: layer)
+    monkeypatch.setattr(subscriptions, "_change_read_gate", lambda *args: object())
+    resolver = _subscription_resolver(changes(Group, field="groupChanged"))
+
+    async def scenario() -> None:
+        with actor_context(ANON):
+            stream = resolver(object(), SimpleNamespace(context={}))
+            assert (await asyncio.wait_for(anext(stream), timeout=1)).action == "ready"
+            pending = asyncio.ensure_future(anext(stream))
+            await asyncio.sleep(0)
+            pending.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await pending
+            await stream.aclose()
+        assert not layer.groups.get(publishing.change_group(Group))
+        assert not any(task.get_name().startswith("angee-change-lease:") for task in asyncio.all_tasks())
+
+    asyncio.run(scenario())
+
+
 def test_subscription_resolver_gates_events_through_sync_adapter(
     monkeypatch,
 ) -> None:
@@ -205,10 +321,11 @@ def test_subscription_resolver_gates_events_through_sync_adapter(
     closed_connections: list[str] = []
     thread_flags: list[bool] = []
 
-    async def subscribe(model: type[Group]):
-        """Yield one payload without touching the channel layer."""
+    async def subscribe(model: type[Group], *, ready: asyncio.Event):
+        """Yield one payload after registering without touching the channel layer."""
 
         assert model is Group
+        ready.set()
         yield _payload(id="9")
 
     class Gate:
@@ -265,7 +382,7 @@ def test_subscription_resolver_gates_events_through_sync_adapter(
     # One gate construction + one payload filter, both on the general sync executor.
     assert thread_flags == [False, False]
     assert closed_connections == ["close", "close", "close", "close"]
-    assert [event.id for event in events] == [strawberry.ID("9")]
+    assert [(event.action, event.id) for event in events] == [("ready", ""), ("update", "9")]
 
 
 def test_subscription_resolver_uses_current_actor(monkeypatch) -> None:
@@ -273,10 +390,11 @@ def test_subscription_resolver_uses_current_actor(monkeypatch) -> None:
 
     seen: list[object] = []
 
-    async def subscribe(model: type[Group]):
-        """Yield one payload without touching the channel layer."""
+    async def subscribe(model: type[Group], *, ready: asyncio.Event):
+        """Yield one payload after registering without touching the channel layer."""
 
         assert model is Group
+        ready.set()
         yield _payload(id="10")
 
     class Gate:
@@ -306,7 +424,7 @@ def test_subscription_resolver_uses_current_actor(monkeypatch) -> None:
     events = asyncio.run(scenario())
 
     assert seen == [(ANON, ANON)]
-    assert [event.id for event in events] == [strawberry.ID("10")]
+    assert [(event.action, event.id) for event in events] == [("ready", ""), ("update", "10")]
 
 
 def test_subscription_resolver_denies_without_current_actor(
@@ -316,10 +434,11 @@ def test_subscription_resolver_denies_without_current_actor(
 
     calls: list[object] = []
 
-    async def subscribe(model: type[Group]):
-        """Yield one payload without touching the channel layer."""
+    async def subscribe(model: type[Group], *, ready: asyncio.Event):
+        """Yield one payload after registering without touching the channel layer."""
 
         assert model is Group
+        ready.set()
         yield _payload(id="11")
 
     class Gate:

@@ -41,7 +41,7 @@ export function useOAuthAuthorization(): OAuthAuthorization {
     ...(metadata.resources ?? []).filter((resource) => resource.canonicalLabel === "integrate.Integration").map((resource) => resource.modelLabel),
   ], [metadata]);
   const invalidates = useResourceInvalidates(models);
-  const [complete, completion] = useAuthoredMutation(IntegrateConnectAccountComplete, { invalidateModels: models, invalidates });
+  const [complete, completion] = useAuthoredMutation(IntegrateConnectAccountComplete, { invalidateModels: models, invalidates, transient: true });
 
   const authorize = React.useCallback(async (start: OAuthAuthorizationStart, title: React.ReactNode): Promise<boolean> => {
     if (!start.authorize_url) throw new Error(t("providers.connect.startError"));

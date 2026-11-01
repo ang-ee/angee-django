@@ -33,7 +33,7 @@ function fieldString(value: unknown): string {
 export function ProvidersPage(): React.ReactElement {
   const t = useIntegrateT();
   const routeHref = useRouteHref();
-  const [connectAccountStart] = useAuthoredMutation(IntegrateConnectAccountStart);
+  const [connectAccountStart] = useAuthoredMutation(IntegrateConnectAccountStart, { transient: true });
   const { authorize } = useOAuthAuthorization();
   // Fill and persist transport endpoints from the client's discovery URL.
   const [discover] = useRecordActionMutation<ActionFieldName>(
@@ -48,7 +48,7 @@ export function ProvidersPage(): React.ReactElement {
         id,
         redirectUri: connectCallbackRedirectUri(),
         next: routeHref("integrate.accounts"),
-      });
+      }, { reconciliation: ctx.reconciliation });
       const payload = result?.connect_account_start;
       if (!payload?.authorize_url) {
         throw new Error(payload?.error ?? t("providers.connect.startError"));
