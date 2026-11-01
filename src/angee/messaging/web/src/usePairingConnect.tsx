@@ -31,6 +31,7 @@ export function usePairingConnect<
     React.useState<PairingTarget | null>(null);
   const [mutate, connectState] = useAuthoredMutation(mutation, {
     invalidateModels: [CHANNEL_MODEL],
+    transient: true,
   });
   const connect = React.useCallback(
     async (

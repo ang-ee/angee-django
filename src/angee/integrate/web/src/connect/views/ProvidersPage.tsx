@@ -33,7 +33,7 @@ function fieldString(value: unknown): string {
 export function ProvidersPage(): React.ReactElement {
   const t = useIntegrateT();
   const routeHref = useRouteHref();
-  const [connectAccountStart] = useAuthoredMutation(IntegrateConnectAccountStart);
+  const [connectAccountStart] = useAuthoredMutation(IntegrateConnectAccountStart, { transient: true });
   const { authorize } = useOAuthAuthorization();
   // Fill and persist transport endpoints from the client's discovery URL.
   const [discover] = useRecordActionMutation<ActionFieldName>(

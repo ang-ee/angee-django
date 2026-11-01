@@ -285,7 +285,11 @@ class ChangeRelatedRecordType:
 
 @strawberry.type
 class ChangeEvent:
-    """Read-gated notification that one model instance changed."""
+    """Read-gated model change, or an empty-id ``ready`` registration control.
+
+    Readiness contains no record data or occurrence identity and precedes data
+    events. It is a snapshot reconciliation boundary, not a replay guarantee.
+    """
 
     model: str
     id: strawberry.ID

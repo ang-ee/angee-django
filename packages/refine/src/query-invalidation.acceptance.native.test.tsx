@@ -73,3 +73,20 @@ test.each(["before", "during"])("actor suspension %s exact cancellation rejects 
   expect(client.getQueryData(["private-detail"])).toEqual({ secret: "current actor" });
   liveProvider.setEnabled(false);
 });
+
+
+test("repeated local-only suspension invalidates a callback captured while already suspended", async () => {
+  const client = createClient();
+  const provider = createAngeeChangeLiveProvider(undefined, [], { queryClient: client });
+  const wrapper = ({ children }: { children: ReactNode }) => <Provider queryClient={client} liveProvider={provider}>{children}</Provider>;
+  const hook = renderHook(() => useAcceptQueryData(), { wrapper });
+  act(() => { provider.setEnabled(false); hook.rerender(); });
+  const suspendedAccept = hook.result.current;
+  act(() => { provider.setEnabled(false); provider.setEnabled(true); hook.rerender(); });
+  const failure = await suspendedAccept(["private"], "old actor").catch((error: unknown) => error);
+  expect(isCancelledError(failure)).toBe(true);
+  expect(client.getQueryData(["private"])).toBeUndefined();
+  await act(async () => { await hook.result.current(["private"], "new actor"); });
+  expect(client.getQueryData(["private"])).toBe("new actor");
+  provider.setEnabled(false);
+});

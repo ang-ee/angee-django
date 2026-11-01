@@ -299,14 +299,14 @@ interface ChangeSubscription {
 }
 
 export interface AngeeChangeLiveProvider extends LiveProvider {
-  /** Retain mounted consumers while closing all upstream change subscriptions. */
+  /** Suspend/advance acceptance lifetime on every false, retaining mounted consumers. */
   setEnabled: (enabled: boolean) => void;
 }
 
 type AuthoredQueryInvalidationClient = Pick<QueryClient, "cancelQueries" | "invalidateQueries" | "getQueryCache">;
 
 export function createAngeeChangeLiveProvider(
-  client: Pick<GraphQLWsClient, "subscribe" | "on">,
+  client: Pick<GraphQLWsClient, "subscribe" | "on"> | undefined,
   resources: readonly AngeeLiveResource[],
   options: { queryClient?: AuthoredQueryInvalidationClient } = {},
 ): AngeeChangeLiveProvider {
@@ -375,6 +375,7 @@ export function createAngeeChangeLiveProvider(
     if (!subscriptions.has(changesRoot)) {
       subscriptions.set(changesRoot, entry);
       entry.start = () => {
+        if (!client) return;
         // Ignore late deliveries from a disposed subscription, even after resume.
         let active = true;
         const dispose = client.subscribe(
@@ -430,15 +431,18 @@ export function createAngeeChangeLiveProvider(
   return {
     publish,
     setEnabled(next) {
+      // Suspension is an acceptance-lifetime boundary even if no websocket is
+      // configured, or another transition already suspended delivery.
+      if (!next) liveInvalidation?.clear();
       if (next === enabled) return;
       enabled = next;
-      if (!enabled) liveInvalidation?.clear();
       subscriptions.forEach((entry) => {
         if (enabled) entry.start();
         else entry.dispose();
       });
     },
     subscribe({ channel, callback, params }) {
+      if (!client) return noopSubscription;
       const targets = changeTargetsFromSubscribeParams(
         params,
         resourcesByList,

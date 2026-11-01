@@ -33,7 +33,11 @@ def changes(
     field: str,
     read_gate: type[ChangeReadGate] | None = None,
 ) -> type:
-    """Return a subscription surface streaming read-gated changes to ``model``."""
+    """Stream a registration-ready control followed by read-gated model changes.
+
+    ``ready`` has this model's label and an empty id, with no record data. It
+    confirms group registration for snapshot reconciliation, not event replay.
+    """
 
     label = model._meta.label
     gate_type = read_gate or ChangeReadGate
@@ -58,10 +62,33 @@ def changes(
             actor,
             gate_type,
         )
-        async for payload in subscribe(model):
-            event = await sync_to_async(_filter_change_event, thread_sensitive=False)(gate, payload)
-            if event is not None:
-                yield event
+        ready = asyncio.Event()
+        async with contextlib.aclosing(subscribe(model, ready=ready)) as stream:
+            # An async generator registers only when advanced. Start its first
+            # receive before waiting, and surface registration failures promptly.
+            pending = asyncio.ensure_future(anext(stream))
+            registered = asyncio.create_task(ready.wait())
+            try:
+                await asyncio.wait((registered, pending), return_when=asyncio.FIRST_COMPLETED)
+                if not ready.is_set():
+                    await pending
+                    return
+                yield ChangeEvent(model=label, id=strawberry.ID(""), action="ready")
+                while True:
+                    try:
+                        payload = await pending
+                    except StopAsyncIteration:
+                        return
+                    event = await sync_to_async(_filter_change_event, thread_sensitive=False)(gate, payload)
+                    if event is not None:
+                        yield event
+                    pending = asyncio.ensure_future(anext(stream))
+            finally:
+                # Cancel the outstanding receive before closing the generator;
+                # its native finally releases group membership and renewal.
+                pending.cancel()
+                registered.cancel()
+                await asyncio.gather(pending, registered, return_exceptions=True)
 
     resolve.__name__ = field
     namespace = {field: strawberry.subscription(resolver=resolve, name=field)}

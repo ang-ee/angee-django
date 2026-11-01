@@ -56,6 +56,16 @@ export function recordActionId(context: ActionContext): string | undefined {
   return typeof id === "string" && id !== "" ? id : undefined;
 }
 
+/** One successful record-action completion policy, including settled actions. */
+async function completeRecordAction(
+  context: ActionContext,
+  result: ActionResult,
+  { refresh = true, afterSuccess }: Pick<UseRecordActionOptions, "refresh" | "afterSuccess">,
+): Promise<void> {
+  if (refresh) context.refresh();
+  await afterSuccess?.(context, result);
+}
+
 /** Build an `<Action run>` callback for actions that target the current record id.
  * @owner RecordActionBar
  */
@@ -67,7 +77,7 @@ export function useRecordAction(
     afterSuccess,
     defaultMessage,
     missingRecordMessage,
-    refresh = true,
+    refresh,
   } = options;
   return React.useCallback<RecordAction>(
     async (context) => {
@@ -77,8 +87,7 @@ export function useRecordAction(
         return;
       }
       const result = (await run(id, context)) ?? defaultMessage;
-      if (refresh) context.refresh();
-      await afterSuccess?.(context, result);
+      await completeRecordAction(context, result, { refresh, afterSuccess });
       return result;
     },
     [afterSuccess, defaultMessage, missingRecordMessage, refresh, run],
@@ -120,8 +129,7 @@ export function useRecordActionMutation<TField extends string = string>(
       if (settleOptions) {
         const outcome = await settleActionResult(mutateRecord);
         if (outcome?.ok) {
-          if (options?.refresh !== false) context.refresh();
-          await options?.afterSuccess?.(context, outcome.message);
+          await completeRecordAction(context, outcome.message, options ?? {});
         }
         return undefined;
       }
@@ -129,9 +137,14 @@ export function useRecordActionMutation<TField extends string = string>(
     },
     [mutate, options?.actionArguments, options?.afterSuccess, options?.refresh, settleActionResult, settleOptions],
   );
-  return [useRecordAction(run, settleOptions
-    ? { ...options, afterSuccess: undefined, refresh: false }
-    : options), state];
+  // Declared effects need not include the open record (and may be absent).
+  // Preserve the record-action refresh contract. Settled success already uses
+  // that same completion owner above; refusals must never run it.
+  return [useRecordAction(run, {
+    ...options,
+    afterSuccess: settleOptions ? undefined : options?.afterSuccess,
+    refresh: settleOptions ? false : options?.refresh,
+  }), state];
 }
 
 export interface UseActionResultMutationOptions {
@@ -143,6 +156,8 @@ export interface UseActionResultMutationOptions {
   dataProviderName?: string;
   /** The verb records its outcome even when it fails, so caches refresh after a failure too. */
   invalidateOnFailure?: boolean;
+  /** Remove credential-bearing variables and results from the settled mutation cache. */
+  transient?: UseActionMutationOptions["transient"];
   /** Explicit written records; related or unknown effects retain model fallback. */
   records?: UseActionMutationOptions["records"];
   /** Adopt an authoritative declared result before scheduling derived reads. */
@@ -212,6 +227,7 @@ export function useActionOutcomeMutation<TField extends string = string>(
       ? { invalidateModels: canonicalInvalidateModels }
       : {}),
     ...(options.invalidateOnFailure ? { invalidateOnFailure: true } : {}),
+    ...(options.transient ? { transient: true } : {}),
     ...(options.records ? { records: options.records } : {}),
     ...(options.acceptResponse ? { acceptResponse: options.acceptResponse } : {}),
     invalidates,
