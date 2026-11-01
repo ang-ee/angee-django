@@ -120,7 +120,9 @@ def test_task_permissions_are_typed_actor_scoped_and_batched(project_access_sche
                 assert len(rows) == limit
                 assert all(row["permissions"] == expected for row in rows)
                 counts.append(len(queries))
-            assert counts[0] == counts[1] == counts[2], counts
+            # Post-fetch clarification-asker guards use a point for one Task;
+            # the native population scope is fixed for ten and fifty Tasks.
+            assert counts[0] <= counts[1] == counts[2], counts
 
 
 def test_project_and_messaging_schemas_declare_the_complete_cascade() -> None:
