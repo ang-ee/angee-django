@@ -36,6 +36,7 @@ from angee.graphql.ids import PublicID, optional_public_id, require_instance_for
 from angee.graphql.impl import ImplChoice
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import (
+    RECORD_REFERENCE_ANNOTATIONS,
     RecordReferenceNode,
     actor_scoped_to_many,
     actor_scoped_to_one,
@@ -172,9 +173,11 @@ class WorkflowRunType(RecordReferenceNode):
 
     subject_model: str | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_model, only=["subject_content_type_id", "subject_object_id"],
+        annotate=RECORD_REFERENCE_ANNOTATIONS,
     )
     subject_id: PublicID | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_id, only=["subject_content_type_id", "subject_object_id"],
+        annotate=RECORD_REFERENCE_ANNOTATIONS,
     )
 
     @strawberry_django.field(only=["subject_content_type_id", "subject_object_id"], prefetch_related=["subject"])
@@ -361,9 +364,11 @@ class StepWatchType(RecordReferenceNode):
 
     record_model: str | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
+        annotate=RECORD_REFERENCE_ANNOTATIONS,
     )
     record_id: PublicID | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_id, only=["content_type_id", "object_id"],
+        annotate=RECORD_REFERENCE_ANNOTATIONS,
     )
 
 
@@ -380,9 +385,11 @@ class StepRecordType(RecordReferenceNode):
 
     record_model: str | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
+        annotate=RECORD_REFERENCE_ANNOTATIONS,
     )
     record_id: PublicID | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_id, only=["content_type_id", "object_id"],
+        annotate=RECORD_REFERENCE_ANNOTATIONS,
     )
 
 
@@ -473,9 +480,11 @@ class TriggerEventType(RecordReferenceNode):
 
     record_model: str | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_model, only=["record_content_type_id", "record_object_id"],
+        annotate=RECORD_REFERENCE_ANNOTATIONS,
     )
     record_id: PublicID | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_id, only=["record_content_type_id", "record_object_id"],
+        annotate=RECORD_REFERENCE_ANNOTATIONS,
     )
 
 
