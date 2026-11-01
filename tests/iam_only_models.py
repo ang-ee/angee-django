@@ -6,12 +6,12 @@ from rebac import RebacMixin
 from angee.base.models.children import OwnedChildrenMixin
 from angee.base.models.trash import TrashQuerySet
 from angee.base.querysets import MergeableQuerySet
-from angee.iam.managers import ProtectedManager
+from angee.iam.managers import ProtectedManager, ProtectedUnscopedManager
 from angee.iam.models import Group as AbstractGroup
 from angee.iam.models import IAMKind as AbstractKind
 from angee.iam.models import IAMProtected as AbstractProtected
 from angee.iam.models import User as AbstractUser
-from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.base import ProtectedDataModel, ProtectedPersistenceMixin
 from angee.iam.models.merge import ProtectedMergeableMixin
 from angee.iam.models.trash import ProtectedTrashMixin
 from angee.iam.querysets import ProtectedQuerySet
@@ -124,3 +124,16 @@ class MixedDefaultSource(models.Model):
 
     class Meta:
         app_label = "iam"
+
+
+class ProtectedMembership(ProtectedPersistenceMixin):
+    """Field-free IAM persistence for an aggregate-owned reference row."""
+
+    entry = models.ForeignKey(APIEntry, on_delete=models.CASCADE)
+    label = models.CharField(max_length=80)
+    objects = ProtectedManager()
+    _angee_base = ProtectedUnscopedManager()
+
+    class Meta:
+        app_label = "iam"
+        base_manager_name = "_angee_base"

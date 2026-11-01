@@ -8,6 +8,10 @@ contracts. Source declarations using native REBAC Meta options import
 protected collections and factories use `angee.iam.querysets` and
 `angee.iam.managers`. Native manager factories, configuration and database
 bindings remain with their source owners.
+Field-free models with explicitly protected querysets compose
+`ProtectedPersistenceMixin` for owner-controlled `system_queryset` reads without
+adding AngeeModel fields or native per-record authorization. Aggregate membership
+owners retain their own write admission.
 
 IAM owns schema composition, permission settings, provisioning and access
 checks. Its GraphQL, web and resource modules are contributions to those optional
