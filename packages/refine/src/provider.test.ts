@@ -712,7 +712,8 @@ describe("Angee Hasura provider defaults", () => {
     });
     await vi.advanceTimersByTimeAsync(300);
 
-    expect(invalidateQueries).toHaveBeenCalledTimes(1);
+    expect(invalidateQueries.mock.calls.filter(([filters]) => filters.refetchType === "none")).toHaveLength(1);
+    expect(invalidateQueries.mock.calls.filter(([filters]) => filters.refetchType === "active")).toHaveLength(1);
     const predicate = invalidateQueries.mock.calls.find(([filters]) => filters.refetchType === "active")?.[0]?.predicate as (query: { meta: unknown }) => boolean;
     expect(predicate({ meta: { angeeModels: ["notes.Note"] } })).toBe(true);
     for (const callback of callbacks) expect(callback).toHaveBeenCalledTimes(1);

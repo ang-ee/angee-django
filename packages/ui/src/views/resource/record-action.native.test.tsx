@@ -8,6 +8,7 @@ import { QueryObserver } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 import { createUiTestProviders } from "../../testing";
+import { ToastProvider } from "../../feedback";
 import { useRecordAction, useRecordActionMutation } from "./record-action";
 import type { ActionContext } from "../page";
 
@@ -25,7 +26,7 @@ test.each([
   const custom = vi.fn(async () => { lastSynced = "after"; return { data: { refresh_source: { ok: true, message: "Synced" } } }; });
   const client = createClient();
   const wrapper = ({ children }: { children: ReactNode }) => <Provider queryClient={client} dataProvider={{ custom }}>
-    <OperationDocumentsProvider documents={{ console: { actions: { refresh_source: "mutation Refresh($id: String!) { refresh_source(id: $id) { ok message } }" } } }}>{children}</OperationDocumentsProvider>
+    <OperationDocumentsProvider documents={{ console: { actions: { refresh_source: "mutation Refresh($id: String!) { refresh_source(id: $id) { ok message } }" } } }}><ToastProvider>{children}</ToastProvider></OperationDocumentsProvider>
   </Provider>;
   let shownLastSynced = "before";
   const refresh = vi.fn(() => { shownLastSynced = lastSynced; });
@@ -58,7 +59,7 @@ test.each([
   const provider = createAngeeChangeLiveProvider(undefined, [], { queryClient: client });
   const custom = vi.fn(async () => ({ data: { refresh_source: { ok: true, message: "Synced" } } }));
   const wrapper = ({ children }: { children: ReactNode }) => <Provider queryClient={client} liveProvider={provider} dataProvider={{ custom }}>
-    <OperationDocumentsProvider documents={{ console: { actions: { refresh_source: "mutation Refresh($id: String!) { refresh_source(id: $id) { ok message } }" } } }}>{children}</OperationDocumentsProvider>
+    <OperationDocumentsProvider documents={{ console: { actions: { refresh_source: "mutation Refresh($id: String!) { refresh_source(id: $id) { ok message } }" } } }}><ToastProvider>{children}</ToastProvider></OperationDocumentsProvider>
   </Provider>;
   const records = [{ model: "notes.Note", id: covered ? "n1" : "another-record" }];
   const hook = renderHook(() => {
@@ -135,14 +136,14 @@ test.each([
     refresh: vi.fn(), update: async () => null, prompt: async () => null });
   const settled = { A: false, B: false };
   const completions: Partial<Record<"A" | "B", Promise<unknown>>> = {};
-  const second = first === "A" ? "B" : "A";
+  const second: "A" | "B" = first === "A" ? "B" : "A";
   try {
     act(() => {
       completions.A = hook.result.current.A(context("A")).then(() => { settled.A = true; });
       completions.B = hook.result.current.B(context("B")).then(() => { settled.B = true; });
     });
     await waitFor(() => expect(custom).toHaveBeenCalledTimes(2));
-    for (const id of [first, second]) {
+    for (const id of [first, second] as const) {
       await act(async () => { transport[id].resolve({ data: { saved: { id, title: "accepted" } } }); });
       if (id === "B" && acceptedB) {
         await waitFor(() => expect(settled.B).toBe(true));

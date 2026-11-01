@@ -200,3 +200,34 @@ test.each([true, false])("overlapping acceptance callbacks exclude only returned
     expect(client.getQueryData(bKey)).toEqual({ title: "canonical B" });
   } finally { provider.setEnabled(false); stops.forEach((stop) => stop()); }
 });
+
+
+test("native numeric mutation IDs reconcile exact string row and related interests", async () => {
+  const client = createClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  const reads = [vi.fn(async () => "current"), vi.fn(async () => "current"), vi.fn(async () => "unrelated")];
+  const interests = [
+    { angeeModels: ["notes.Note"], angeeRecords: [{ model: "notes.Note", id: "42" }] },
+    { angeeModels: ["notes.Binding"], angeeRelatedModels: ["notes.Binding"], angeeRecords: [{ model: "notes.Target", id: "99" }] },
+    { angeeModels: ["notes.Note"], angeeRecords: [{ model: "notes.Note", id: "43" }] },
+  ];
+  const observers = interests.map((meta, index) => {
+    const queryKey = ["numeric-effect", index];
+    client.setQueryData(queryKey, "before");
+    return new QueryObserver(client, { queryKey, queryFn: reads[index]!, meta });
+  });
+  const stops = observers.map((observer) => observer.subscribe(() => undefined));
+  const provider = createAngeeChangeLiveProvider(undefined, [], { queryClient: client });
+  const wrapper = ({ children }: { children: ReactNode }) => <Provider queryClient={client} liveProvider={provider}>{children}</Provider>;
+  const hook = renderHook(() => useReconcileMutationResponse(), { wrapper });
+  try {
+    await act(async () => { await hook.result.current.batch(async (reconciliation) => {
+      await hook.result.current(undefined, undefined, { reconciliation, records: [
+        { model: "notes.Note", id: 42 },
+        { model: "notes.Binding", id: 7, relatedRecords: [{ model: "notes.Target", id: 99 }] },
+      ] });
+    }); });
+    expect(reads[0]).toHaveBeenCalledOnce();
+    expect(reads[1]).toHaveBeenCalledOnce();
+    expect(reads[2]).not.toHaveBeenCalled();
+  } finally { provider.setEnabled(false); stops.forEach((stop) => stop()); }
+});

@@ -513,7 +513,7 @@ test("a pane focuses a sheet field's native control in place", async () => {
 function edit(name: string, value: string) { fireEvent.change(screen.getByLabelText(name), { target: { value } }); }
 
 test("persisted state locks every field, save and patch while lifecycle cache updates remain available", async () => {
-  const f = await fixture({ readOnlyWhen: (record) => record.status === "confirmed" });
+  const f = await fixture({ selection: [...refineFields, "status"], readOnlyWhen: (record) => record.status === "confirmed" });
   edit("title", "Local edit");
   act(() => f.surface().form.setValue("status", "confirmed"));
   expect(f.surface().formReadOnly).toBe(false);

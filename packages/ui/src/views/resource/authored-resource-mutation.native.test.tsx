@@ -115,7 +115,7 @@ test("mixed resource and authored-only effects reconcile their own native keys w
     const other = useOne({ resource: resource.roots.list!, id: "note-2", dataProviderName: "console" });
     const body = useAuthoredQuery(BODY, {}, { dataProviderName: "console", models: ["notes.NoteBody"] });
     const bindings = useAuthoredQuery(BINDINGS, {}, {
-      dataProviderName: "console", records: [{ model: "notes.Target", id: "target-1" }],
+      dataProviderName: "console", models: ["notes.RecordBinding"], records: [{ model: "notes.Target", id: "target-1" }],
       relatedModels: ["notes.RecordBinding"],
     });
     const [write, state] = useAuthoredResourceMutation(WRITE, {

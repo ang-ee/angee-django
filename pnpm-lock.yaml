@@ -51,6 +51,9 @@ importers:
       '@angee/provenance':
         specifier: workspace:*
         version: link:../../../../../src/angee/provenance/web
+      '@angee/refine':
+        specifier: workspace:*
+        version: link:../../../../../packages/refine
       '@angee/ui':
         specifier: workspace:*
         version: link:../../../../../packages/ui

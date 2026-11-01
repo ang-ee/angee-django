@@ -497,7 +497,7 @@ describe("ActionFormDialog", () => {
     await waitFor(() => expect(submit).toHaveBeenCalledWith(
       { amount: "500.00", zero: 0, fallback: "Default" }, context,
     ));
-    expect(onSucceeded).toHaveBeenCalledWith(outcome);
+    expect(onSucceeded).toHaveBeenCalledWith(outcome, { reconciliation: undefined });
   });
 
   test("serializes datetime args with the picked local UTC offset", async () => {

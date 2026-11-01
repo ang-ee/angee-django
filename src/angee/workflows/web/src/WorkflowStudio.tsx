@@ -101,7 +101,7 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, init
     records: (_data, input) => [{ model: MODEL, id: input.id }],
     acceptResponse: async (data, input) => {
       if (!data) throw new Error(t("studio.saveFailed"));
-      return await acceptQuery(WorkflowStudioDocument, { id: input.id, target: input.id }, (current) => {
+      return await acceptQuery(WorkflowStudioDocument, { id: recordId, target: recordId }, (current) => {
         if (!current?.workflow_by_pk) return current;
         return { ...current, workflow_by_pk: { ...current.workflow_by_pk,
           draft_revision: data.save_workflow_draft.revision } };
@@ -113,7 +113,7 @@ function StudioSession({ recordId, initial, initialValues, initialRevision, init
     records: (_data, input) => [{ model: MODEL, id: input.id }],
     acceptResponse: async (data, input) => {
       if (!data) throw new Error(t("studio.publishFailed"));
-      return await acceptQuery(WorkflowStudioDocument, { id: input.id, target: input.id }, (current) => {
+      return await acceptQuery(WorkflowStudioDocument, { id: recordId, target: recordId }, (current) => {
         if (!current?.workflow_by_pk) return current;
         return { ...current, workflow_by_pk: { ...current.workflow_by_pk, published: {
           number: data.publish_workflow.number, document: data.publish_workflow.document,

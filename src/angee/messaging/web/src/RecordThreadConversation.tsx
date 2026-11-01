@@ -27,6 +27,7 @@ import {
   MessagingRecipientUsersDocument,
   PostRecordMessageDocument,
   RecordRemovedMessagesDocument,
+  READ_MODELS,
   RestoreRecordMessageDocument,
   SetRecordMessageReactionDocument,
   SetRecordMessageStarredDocument,
@@ -166,7 +167,7 @@ export function RecordThreadConversation({
   const acceptState = useAcceptRecordThreadState(modelLabel, recordId);
   const model = useModelMetadata(modelLabel)?.resource.canonicalLabel ?? modelLabel;
   const relatedRecords = [{ model, id: recordId }];
-  const messageEffects = (id: string, action: "create" | "update" | "delete" = "update") => [
+  const messageEffects = (id: string | number, action: "create" | "update" | "delete" = "update") => [
     { model: "messaging.Message", id, action, relatedRecords },
   ];
   const acceptMessage = async (message: RecordMessageRow | null | undefined) => {

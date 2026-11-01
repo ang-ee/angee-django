@@ -53,9 +53,10 @@ describe("resource invalidation targets", () => {
     const targets = resourceInvalidationTargets(metadata, ["notes.Note"], [
       { model: "notes.Note", id: "note-1" },
       { model: "notes.Note", id: "note-2" },
+      { model: "notes.Note", id: 0 },
       { model: "notes.Note", id: "note-1" },
     ]);
-    expect(targets.map(refineInvalidationParams)).toEqual(["note-1", "note-2"].map((id) => ({
+    expect(targets.map(refineInvalidationParams)).toEqual(["note-1", "note-2", 0].map((id) => ({
       resource: "console:notes.Note", dataProviderName: "console", id,
       invalidates: ["list", "many", "detail"],
     })));

@@ -28,7 +28,7 @@ function fixture(getOne: () => Promise<{ data: Row | null }>) {
   const renderTab = vi.fn(() => <span>Related records</span>);
   const recordExtras = vi.fn(() => <span>Record extras</span>);
   const archive = vi.fn();
-  type Transport = Parameters<typeof createAngeeChangeLiveProvider>[0];
+  type Transport = NonNullable<Parameters<typeof createAngeeChangeLiveProvider>[0]>;
   const sinks: Parameters<Transport["subscribe"]>[1][] = [];
   const subscribe: Transport["subscribe"] = (_request, sink) => { sinks.push(sink); return () => undefined; };
   const liveProvider = createAngeeChangeLiveProvider({ subscribe, on: () => () => undefined }, [resource], { queryClient: client });

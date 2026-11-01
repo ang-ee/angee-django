@@ -86,11 +86,12 @@ test("enter/exit reset observed reads, remove inactive data and mutations, and s
     fireEvent.click(screen.getByRole("button", { name: "User menu" }));
     fireEvent.click(await screen.findByLabelText("Preview as a person"));
     const personOption = await screen.findByRole("option", { name: "Person" });
-    expect(candidateActors).toEqual([null]);
+    // StrictMode remount cancels the first signal-aware transport read.
+    expect(candidateActors).toEqual([null, null]);
     // Keep an old-actor candidate refresh in flight across the identity reset.
     candidateGate = new Promise<void>((resolve) => { releaseCandidates = resolve; });
     void client.invalidateQueries({ predicate: (query) => refine.authoredQueryReadsAnyModel(query.meta, ["iam.User"]) });
-    await waitFor(() => expect(candidateActors).toHaveLength(2));
+    await waitFor(() => expect(candidateActors).toHaveLength(3));
     candidateGate = undefined;
     fireEvent.click(personOption);
     await waitFor(() => expect(preview.pending).toBe(false));

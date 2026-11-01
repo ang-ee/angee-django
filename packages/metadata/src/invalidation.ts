@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { UseInvalidateProp } from "@refinedev/core";
+import type { BaseKey, UseInvalidateProp } from "@refinedev/core";
 
 import {
   canonicalModelLabel,
@@ -16,13 +16,13 @@ export interface ResourceInvalidationTarget {
   resource: string;
   dataProviderName: string;
   /** Exact written record when the operation declares its identity. */
-  id?: string;
+  id?: BaseKey;
 }
 
 export function resourceInvalidationTargets(
   metadata: SchemaFieldMetadata,
   modelLabels: readonly string[],
-  records?: readonly { model: string; id?: string }[],
+  records?: readonly { model: string; id?: BaseKey }[],
 ): readonly ResourceInvalidationTarget[] {
   if (modelLabels.length === 0) return [];
   return modelLabels.flatMap((spelling) => {
@@ -43,8 +43,8 @@ export function resourceInvalidationTargets(
     // A model-only effect deliberately retains the broad fallback. Collections
     // still reconcile for exact writes because membership/order/totals are owned
     // by their server query, not by a single returned row.
-    if (!matching?.length || matching.some((record) => !record.id)) return [target];
-    return [...new Set(matching.flatMap((record) => record.id ? [record.id] : []))].map((id) => ({ ...target, id }));
+    if (!matching?.length || matching.some((record) => record.id === undefined)) return [target];
+    return [...new Set(matching.flatMap((record) => record.id !== undefined ? [record.id] : []))].map((id) => ({ ...target, id }));
   });
 }
 
@@ -65,7 +65,7 @@ export function refineInvalidationParams(
   };
 }
 
-type InvalidationRecord = { model: string; id?: string };
+type InvalidationRecord = { model: string; id?: BaseKey };
 type InvalidationRecords<TData, TVariables> = readonly InvalidationRecord[]
   | ((data: TData, variables: TVariables) => readonly InvalidationRecord[]);
 type InvalidationParams<TData, TVariables> = readonly UseInvalidateProp[]

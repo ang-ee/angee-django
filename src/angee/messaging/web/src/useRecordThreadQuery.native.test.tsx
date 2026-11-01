@@ -85,7 +85,7 @@ test("a follow accepts its projection while omitted thread state still reconcile
     settled = true;
   });
   expect(settled).toBe(true);
-  expect(result.current.read.data?.record_thread.is_following).toBe(true);
+  await waitFor(() => expect(result.current.read.data?.record_thread.is_following).toBe(true));
   expect(result.current.read.data?.record_thread.notifications).toHaveLength(1);
   await waitFor(() => expect(reads).toBe(2));
   await act(async () => { finishRefresh(); });

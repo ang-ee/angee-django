@@ -65,7 +65,7 @@ test.each([false, true])("dashboard accepts its snapshot before derived reads, a
     if (refused) await expect(save).rejects.toThrow("Changed elsewhere");
     else await expect(save).resolves.toMatchObject({ revision: 2, snapshot, capabilities: { canEdit: true } });
   });
-  expect(dashboard.state).toMatchObject({ status: "ready", revision: refused ? 1 : 2 });
+  await expect.poll(() => dashboard.state).toMatchObject({ status: "ready", revision: refused ? 1 : 2 });
   expect(summaryReads).toBe(refused ? 1 : 2);
   expect(custom.mock.calls.filter(([input]) => input.meta?.gqlQuery === DashboardDocument)).toHaveLength(1);
   await act(async () => { held.resolve(); });

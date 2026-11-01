@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { keys, pickDataProvider, useInvalidate, usePublish, useResourceParams, type LiveProvider } from "@refinedev/core";
+import { keys, pickDataProvider, useInvalidate, usePublish, useResourceParams, type LiveProvider, type BaseKey } from "@refinedev/core";
 import { CancelledError, matchQuery, useQueryClient, type Query, type QueryClient, type QueryKey, type Updater } from "@tanstack/react-query";
 
 import { recordValue } from "./dialect/wire";
@@ -332,10 +332,16 @@ export function useAcceptQueryData() {
 }
 
 type NativeInvalidation = Parameters<ReturnType<typeof useInvalidate>>[0];
+/** Native mutation IDs are canonicalized into live wire identities at reconciliation. */
+type MutationRecordEffect = Omit<AuthoredLiveChange, "id" | "relatedRecords"> & {
+  id?: BaseKey;
+  relatedRecords?: readonly { model: string; id: BaseKey }[];
+};
+
 type Effects<TData, TVariables, TValue> = readonly TValue[] | ((data: TData, variables: TVariables) => readonly TValue[]);
 export interface MutationReconciliationOptions<TData, TVariables> extends MutationExecutionOptions {
   acceptResponse?: (data: TData, variables: TVariables) => QueryDataAcceptanceResult | Promise<QueryDataAcceptanceResult>;
-  records?: Effects<TData, TVariables, AuthoredLiveChange>;
+  records?: Effects<TData, TVariables, MutationRecordEffect>;
   invalidateModels?: readonly string[];
   invalidates?: Effects<TData, TVariables, NativeInvalidation>;
   /** Exact read owned by a form; batches coalesce this fallback with declared effects. */
@@ -362,7 +368,11 @@ export function useReconcileMutationResponse() {
   ): Promise<void> => {
     // A captured mutation completion belongs to the actor that started it.
     if (generation !== publish?.[mutationReconciliation]?.generation) return;
-    const records = effectValues(options.records, data, variables);
+    const records: AuthoredLiveChange[] = effectValues(options.records, data, variables).map((record) => ({
+      ...record,
+      id: record.id === undefined ? undefined : String(record.id),
+      relatedRecords: record.relatedRecords?.map((related) => ({ ...related, id: String(related.id) })),
+    }));
     const changes = [...records, ...(options.invalidateModels ?? [])
       .filter((model) => !records.some((record) => record.model === model))
       .map((model) => ({ model }))];
@@ -420,7 +430,9 @@ export function useReconcileMutationResponse() {
       } else {
         await Promise.all([
           ...targets.map((target) => invalidate(target)),
-          invalidateAuthoredQueriesMatching(client, (query) => exactFallback(query) || changes.some((change) => authoredQueryReadsLiveChange(query.meta, change))),
+          ...(changes.length || options.queryKeys?.length
+            ? [invalidateAuthoredQueriesMatching(client, (query) => exactFallback(query) || changes.some((change) => authoredQueryReadsLiveChange(query.meta, change)))]
+            : []),
         ]);
       }
     })();

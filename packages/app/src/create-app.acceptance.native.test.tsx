@@ -66,7 +66,7 @@ test.each([
     begin = () => mutate({});
     login = (username) => signIn.mutateAsync({ username, password: "fixture-secret" });
     logout = () => signOut.mutateAsync({ redirectPath: false });
-    acceptCurrent = (accepted) => accept(read, {}, { accepted }, { dataProviderName: "public" });
+    acceptCurrent = async (accepted) => { await accept(read, {}, { accepted }, { dataProviderName: "public" }); };
     return <span>{identity.data?.id ?? "anonymous"}</span>;
   }
   history.replaceState(null, "", "/acceptance");

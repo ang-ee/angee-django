@@ -690,7 +690,8 @@ test("complete response-backed acceptance avoids rereading its exact typed cache
   expect(custom).toHaveBeenCalledTimes(2);
   expect(result.current.mutation[1].fetching).toBe(false);
   expect(result.current.read.isFetching).toBe(false);
-  expect(result.current.read.data).toEqual({ notes: [{ id: "accepted" }] });
+  await waitFor(() => expect(result.current.read.data).toEqual({ notes: [{ id: "accepted" }] }));
+  expect(custom).toHaveBeenCalledTimes(2);
 });
 
 test("background refresh failure remains a native read error after accepted completion", async () => {
