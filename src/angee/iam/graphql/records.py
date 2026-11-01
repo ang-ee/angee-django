@@ -1,8 +1,8 @@
 """Schema buckets for the record verbs every declaring model shares.
 
-Direct sharing (:mod:`angee.graphql.sharing`) serves records declaring
-``rebac_grantable``; trash (:mod:`angee.graphql.trash`) serves records composing
-``TrashMixin``; merge (:mod:`angee.graphql.merge`) serves records composing
+Direct sharing (:mod:`angee.iam.graphql.sharing`) serves records declaring
+``rebac_grantable``; trash (:mod:`angee.iam.graphql.trash`) serves records composing
+``TrashMixin``; merge (:mod:`angee.iam.graphql.merge`) serves records composing
 ``MergeableMixin``.
 """
 

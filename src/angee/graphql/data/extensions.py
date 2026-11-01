@@ -28,7 +28,6 @@ class ResourceExtensions:
     delete_context: Callable[[str | None], AbstractContextManager[Any]] | None = None
     validate_delete: Callable[[models.Model], None] | None = None
     preview_queryset: Callable[[type[models.Model], Any], models.QuerySet[Any]] | None = None
-    implementation_defaults: Callable[[type[models.Model], dict[str, Any]], dict[str, Any]] | None = None
 
 
 def resource_extensions(model: type[models.Model]) -> ResourceExtensions:

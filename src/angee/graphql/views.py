@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from functools import cache
 from typing import Any
 
@@ -15,8 +14,6 @@ from strawberry.django.views import GraphQLView
 
 from angee.base.hooks import resolve_hook
 from angee.graphql.schema import GraphQLSchemas
-
-logger = logging.getLogger("angee.graphql.view_as")
 
 
 class AngeeGraphQLView(GraphQLView):

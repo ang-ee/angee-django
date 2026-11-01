@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from contextlib import nullcontext
 
 from django.db import models
-from rebac import PermissionDenied, current_actor, system_context
+from rebac import PermissionDenied, RebacMixin, current_actor, system_context
 from rebac.managers import RebacQuerySet
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_for_resource_type, model_resource_type
@@ -23,15 +23,14 @@ from angee.iam.graphql.relations import (
     with_record_reference_access,
 )
 from angee.iam.graphql.writes import write_queryset
-from angee.iam.implementations import readable_impl_defaults
 from angee.iam.models.base import ProtectedModel
 from angee.iam.models.refs import ProtectedRecordRefMixin, record_edges_by_target
-from angee.iam.permissions import declared_rebac_definition, require_rebac_queryset
+from angee.iam.permissions import declared_rebac_definition, require_rebac_queryset, require_record_access
 
 
 class ProtectedHasuraWriteBackend(AngeeHasuraWriteBackend):
     def _save_locked_parent(self, info, instance, patch, line_rows, *, expected_revision):
-        instance.require_access("write")
+        require_record_access(instance, "write")
         return super()._save_locked_parent(info, instance, patch, line_rows, expected_revision=expected_revision)
 
 
@@ -64,22 +63,30 @@ def _preview_queryset(model, actor):
     return rows if actor is not None else rows.none()
 
 
+def _declaration_queryset(model):
+    if issubclass(model, ProtectedModel):
+        return model.system_queryset()
+    return require_rebac_queryset(model).system_context(reason="iam.graphql.declaration")
+
+
 def contribute(model):
-    if not issubclass(model, ProtectedModel):
-        return ResourceExtensions()
-    return ResourceExtensions(
-        aggregate_queryset=_aggregate,
-        write_queryset=write_queryset,
-        declaration_queryset=lambda model: model.system_queryset(),
-        relation_queryset=_relation_queryset,
+    common = ResourceExtensions(
         relation_expression=actor_scoped_relation_expression,
         validate_fields=_validate_fields,
         prepare_queryset=_prepare_queryset,
+    )
+    if not issubclass(model, RebacMixin):
+        return common
+    return dataclasses.replace(
+        common,
+        aggregate_queryset=_aggregate,
+        write_queryset=write_queryset,
+        declaration_queryset=_declaration_queryset,
+        relation_queryset=_relation_queryset,
         write_backend_factory=ProtectedHasuraWriteBackend,
         delete_context=lambda reason: system_context(reason=reason) if reason is not None else nullcontext(),
         validate_delete=_validate_delete,
         preview_queryset=_preview_queryset,
-        implementation_defaults=readable_impl_defaults,
     )
 
 

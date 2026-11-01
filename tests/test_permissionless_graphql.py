@@ -125,9 +125,23 @@ def test_singleton_constructor_collisions_fail(api):
 def declaration_source(model):
     return ResourceExtensions(declaration_queryset=lambda owner: owner._base_manager.all())
 
+
 def test_competing_native_resource_slots_fail():
     from django.core.exceptions import ImproperlyConfigured
+
     provider = "tests.test_permissionless_graphql.declaration_source"
     with override_settings(ANGEE_GRAPHQL_RESOURCE_CONTRIBUTORS=[provider, provider]):
         with pytest.raises(ImproperlyConfigured, match="duplicate resource slot"):
             resource_extensions(PlainEntry)
+
+
+@pytest.mark.django_db
+def test_ordinary_relation_defaults_project_public_ids_without_iam():
+    from angee.graphql.impl import public_impl_defaults
+    from tests.permissionless_app.models import PlainDefaultSource, PlainDefaultTarget
+
+    target = PlainDefaultTarget.objects.create(slug="default")
+    assert public_impl_defaults(PlainDefaultSource, {"target": "default", "label": "Kept"}) == {
+        "target": str(target.pk),
+        "label": "Kept",
+    }
