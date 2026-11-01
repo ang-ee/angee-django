@@ -105,8 +105,11 @@ class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
         links = evidence_model.system_queryset().using(self.db).filter(targets)
         if operations is not None:
             links = links.filter(operation__in=operations)
-        subjects: QuerySet[WorkflowRun, Mapping[str, object]] = self.filter(subject_filter).values("pk")
         link_runs = links.values("run_id")
+        if not ancestors and limit is None:
+            # Both membership arms use this queryset's final read scope.
+            return self.filter(subject_filter | Q(pk__in=link_runs)).order_by("created_at", "pk").distinct()
+        subjects: QuerySet[WorkflowRun, Mapping[str, object]] = self.filter(subject_filter).values("pk")
         if limit is not None:
             subjects = (
                 self.filter(subject_filter)
@@ -146,7 +149,7 @@ class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
             )
         ids = set(subjects.values_list("pk", flat=True))
         ids.update(self.filter(pk__in=link_runs).values_list("pk", flat=True))
-        frontier = ids.copy() if ancestors else set()
+        frontier = ids.copy()
         while frontier:
             parents = set(
                 self.filter(pk__in=frontier).exclude(parent_step=None).values_list("parent_step__run_id", flat=True)

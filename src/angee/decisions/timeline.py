@@ -9,6 +9,7 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
+from django.db.models.functions import Coalesce
 
 from angee.base.refs import generic_pointer_model
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, actor_label
@@ -50,10 +51,14 @@ class DecisionKind(TimelineKind):
             types.append(models.When(models.Exists(rows), then=models.Value(ContentType.objects.get_for_model(
                 rows.model,
             ).pk)))
-            ids.append(models.When(models.Exists(rows), then=models.Subquery(rows.values("pk")[:1])))
+            ids.append(models.Subquery(rows.values("pk")[:1]))
+        missing = models.Value(None, output_field=models.BigIntegerField())
+        target_id = Coalesce(*ids, missing, output_field=models.BigIntegerField()) if ids else missing
         return (
             models.Case(models.When(requested, then=models.Value(None)), *types, output_field=models.IntegerField()),
-            models.Case(models.When(requested, then=models.Value(None)), *ids, output_field=models.BigIntegerField()),
+            models.Case(
+                models.When(requested, then=missing), default=target_id, output_field=models.BigIntegerField(),
+            ),
         )
 
     def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
