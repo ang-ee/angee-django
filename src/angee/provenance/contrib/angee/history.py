@@ -11,7 +11,7 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, Obje
 from django.db import models
 from django.db.models import F, Q
 from django.db.models.fields.reverse_related import ManyToOneRel
-from django_provenance.base import ChangesetAttribution
+from django_provenance.history import HistoryAttribution
 from django_provenance.replay import HistoryScopeMixin
 from rebac import (
     PermissionDenied,
@@ -120,7 +120,7 @@ class ModelHistory(CaptureHistory):
                 "Angee ModelHistory requires use_base_model_db=True for Changeset and replay storage."
             )
         kwargs["use_base_model_db"] = True
-        kwargs.setdefault("bases", (ChangesetAttribution,))
+        kwargs.setdefault("bases", (HistoryAttribution,))
         super().__init__(*args, **kwargs)
         self.bases = (*self.bases, HistoricalReferenceMixin)
 
@@ -156,6 +156,7 @@ class ModelHistory(CaptureHistory):
                     raise ValidationError(f"{model._meta.label} {pk}: the pre-boundary state is unavailable.")
                 if timeline.filter(history_date__gt=changeset.recorded_at).exists():
                     raise ValidationError(f"{model._meta.label} {pk}: a later write prevents revert.")
+                self.require_complete_state(boundary)
                 yield boundary, boundary, boundary
 
     def redacted(
@@ -315,7 +316,7 @@ class ModelHistory(CaptureHistory):
         row = model._base_manager.using(using).filter(pk=first.instance.pk).first()
         if previous is None or previous.history_type == "-":
             if row is not None:
-                row.revert_removal(reason=f"Revert changeset {first.changeset_id}")
+                row.revert_removal(reason=f"Revert changeset {first.history_changeset_id}")
             return []
         restored = previous.instance
         if row is None:
@@ -536,18 +537,18 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
             model = apps.get_model(label)
             if model_history(model) is None:
                 raise ValidationError(f"{label}: the history owner is unavailable.")
-            rows = model.history.using(self._state.db).filter(changeset_id__in=changeset_ids)
+            rows = model.history.using(self._state.db).filter(history_changeset_id__in=changeset_ids)
             predicate = scopes.get(model)
             if predicate is None:
-                present = set(rows.values_list("changeset_id", flat=True).distinct())
+                present = set(rows.values_list("history_changeset_id", flat=True).distinct())
                 touched.update(present)
                 refused.update(present)
                 continue
-            for totals in rows.values("changeset_id").annotate(
+            for totals in rows.values("history_changeset_id").annotate(
                 total=models.Count("history_id"),
-                admitted=models.Count("history_id", filter=predicate),
+                admitted=models.Count("history_id", filter=predicate & Q(history_source_complete=True)),
             ):
-                changeset_id = totals["changeset_id"]
+                changeset_id = totals["history_changeset_id"]
                 touched.add(changeset_id)
                 if totals["total"] != totals["admitted"]:
                     refused.add(changeset_id)

@@ -196,7 +196,7 @@ def test_native_bulk_capture_can_be_unattributed_when_storage_policy_allows(sett
         row = OwnedRow.objects.create(title="unattributed stored value")
         snapshots = OwnedRow.history.bulk_history_create([row], update=True)
     assert snapshots[0].title == "unattributed stored value"
-    assert snapshots[0].changeset_id is None
+    assert snapshots[0].history_changeset_id is None
 
 
 @pytest.mark.django_db

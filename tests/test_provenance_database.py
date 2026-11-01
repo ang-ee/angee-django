@@ -148,9 +148,10 @@ with actor_context(actor), database_context('default'):
         selected_row.save(using='selected', update_fields=['title'])
         edited = context.current_changeset(required=True)
     assert edited._state.db == 'selected'
-    assert ReplayRow.history.using('selected').filter(changeset_id=edited.pk).exists()
-    version = ReplayRow.history.using('selected').filter(changeset_id=edited.pk).select_related('changeset').get()
-    assert version.changeset._state.db == 'selected'
+    assert ReplayRow.history.using('selected').filter(history_changeset_id=edited.pk).exists()
+    version = (ReplayRow.history.using('selected').filter(history_changeset_id=edited.pk)
+               .select_related('history_changeset').get())
+    assert version.history_changeset._state.db == 'selected'
     restored = version.get_instance(using='selected')
     assert restored._state.db == 'selected' and restored.counter == 7
     reverted = edited.revert()

@@ -128,13 +128,20 @@ line per changeset linking to Activity) and `useRecordHistory` for
 pages that count or embed the same entries, such as integrate's link history
 drill-down and the notes example's Activity shortcut.
 
-Angee historical bases retain their established changeset-only attribution shape.
-`ModelHistory` supplies native `ChangesetAttribution` and requires
-`use_base_model_db=True`: the actual table alias proves source identity, including
-existing history on nondefault databases. Adoption adds no `source_database`
-column, inferred migration default or backfill, and preserves retained document
-fields, bytes and digests. Standalone native history retains its explicit source
-identity field for separately routed storage.
+Angee historical bases compose native `HistoryAttribution`: `history_changeset`
+attributes capture independently of copied source fields, including a source
+`changeset`. `history_source_complete` distinguishes retained source state from
+legacy values lost by the former shared-column capture. Lossless export, diffs
+and replay refuse incomplete snapshots. ModelHistory requires
+`use_base_model_db=True`; actual table aliases retain source identity without
+adding source_database columns. Existing hosts must rename the old historical
+changeset field to history_changeset and recreate copied source changeset fields
+where declared. Mark legacy projections complete only when their source values
+were retained; never backfill lost values from current state or attribution.
+The native [capture transition](https://github.com/ang-ee/django-provenance/blob/main/docs/SPEC.md)
+owns that migration contract. Historical Python imports remain compatibility
+aliases to these native owners. Statement last-writer attribution remains its
+separate source contract.
 
 `Changeset.document()` exports deterministic canonical JSON of a closed changeset
 for a trusted archive caller under a system boundary. It includes native history

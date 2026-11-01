@@ -410,16 +410,16 @@ class RecordHistory:
                 .using(self.using)
                 .filter(
                     predicate,
-                    changeset_id__in=changeset_ids,
+                    history_changeset_id__in=changeset_ids,
                 )
                 .annotate(_angee_predecessor_id=models.Subquery(predecessor))
-                .order_by("changeset_id", key, "history_id")
+                .order_by("history_changeset_id", key, "history_id")
             )
             boundaries = []
             predecessor_ids = set()
             for (changeset_id, _pk), versions in groupby(
                 rows.iterator(),
-                key=lambda row: (row.changeset_id, getattr(row, key)),
+                key=lambda row: (row.history_changeset_id, getattr(row, key)),
             ):
                 boundary = list(versions)
                 predecessor_id = boundary[0]._angee_predecessor_id
@@ -443,12 +443,12 @@ class RecordHistory:
                 statement_model.history.using(self.using)
                 .filter(
                     predicate,
-                    changeset_id__in=changeset_ids,
+                    history_changeset_id__in=changeset_ids,
                 )
                 .order_by("history_id")
             )
             for version in versions:
-                grouped[version.changeset_id].append((statement_model, version))
+                grouped[version.history_changeset_id].append((statement_model, version))
         return dict(grouped)
 
     def _prime_statement_references(
@@ -493,7 +493,7 @@ class RecordHistory:
 
         snapshots: defaultdict[type[models.Model], dict[tuple[Any, Any | None], Any | None]] = defaultdict(dict)
         for table, _first, last, _previous in (state for states in versions.values() for state in states):
-            snapshots[table][getattr(last, table._meta.pk.attname), last.changeset_id] = last
+            snapshots[table][getattr(last, table._meta.pk.attname), last.history_changeset_id] = last
         for statement_model, version in (row for rows in statements.values() for row in rows):
             snapshots[statement_model.statement_subject_model].setdefault((version.subject_id, None), None)
 
@@ -543,7 +543,7 @@ class RecordHistory:
         if history is None:
             return []
         hidden = redactions.get(
-            (table, pk, last.changeset_id),
+            (table, pk, last.history_changeset_id),
             redactions[table, pk, None],
         )
         projected: list[HistoryFieldChangeType] = []
@@ -574,7 +574,7 @@ class RecordHistory:
         for statement_model, version in versions:
             subject_model = statement_model.statement_subject_model
             redacted = redactions.get(
-                (subject_model, version.subject_id, version.changeset_id),
+                (subject_model, version.subject_id, version.history_changeset_id),
                 redactions[subject_model, version.subject_id, None],
             )
             declaration = statement_model.statement_aspects[version.aspect]
@@ -628,12 +628,12 @@ class RecordHistory:
             for table in record.history_tables():
                 key = table._meta.pk.attname
                 redirected = "merged_into" in {field.name for field in table._meta.fields}
-                fields = ("changeset_id", key, "history_type", *(("merged_into_id",) if redirected else ()))
+                fields = ("history_changeset_id", key, "history_type", *(("merged_into_id",) if redirected else ()))
                 rows = (
                     get_history_manager_for_model(table)
                     .using(self.using)
                     .filter(
-                        changeset_id__in=changeset_ids,
+                        history_changeset_id__in=changeset_ids,
                     )
                     .values_list(*fields)
                 )

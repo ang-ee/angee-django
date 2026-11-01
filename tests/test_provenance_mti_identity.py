@@ -126,7 +126,7 @@ def test_distinct_parent_identity_scopes_statements_and_inverse_without_collidin
             parent = IdentityParent._base_manager.get(pk=11)
             parent.title = "parent changed"
             parent.save(update_fields=["title"])
-            receipt = parent.history.first().changeset
+            receipt = parent.history.first().history_changeset
         scopes = row.history_scopes()
         assert set(IdentityParent.history.filter(scopes[IdentityParent]).values_list("id", flat=True)) == {11}
         assert receipt in Changeset.objects.touching(row)
@@ -142,7 +142,7 @@ def test_distinct_parent_identity_scopes_statements_and_inverse_without_collidin
                 asserted_by=str(owner.pk),
                 source_kind=SourceKind.PERSON,
             )
-            statement_receipt = retained.history.first().changeset
+            statement_receipt = retained.history.first().history_changeset
         assert statement_receipt in Changeset.objects.touching(row)
         assert statement_receipt not in Changeset.objects.touching(decoy)
         statement_touched = set(Changeset.objects.filter(pk=statement_receipt.pk).records_touched())
@@ -157,25 +157,25 @@ def test_distinct_parent_identity_scopes_statements_and_inverse_without_collidin
                 asserted_by=str(owner.pk),
                 source_kind=SourceKind.PERSON,
             )
-            child_receipt = child_retained.history.first().changeset
+            child_receipt = child_retained.history.first().history_changeset
         assert child_receipt in Changeset.objects.touching(row)
         assert child_receipt not in Changeset.objects.touching(decoy)
         child_touched = set(Changeset.objects.filter(pk=child_receipt.pk).records_touched())
         assert (IdentityChild, row.pk) in child_touched
         assert (IdentityChild, decoy.pk) not in child_touched
-        before = list(IdentityParent.history.filter(changeset=receipt).values())
+        before = list(IdentityParent.history.filter(history_changeset=receipt).values())
         receipt.refresh_from_db()
         receipt.revert()
         parent.refresh_from_db()
         assert parent.title == "target"
-        assert list(IdentityParent.history.filter(changeset=receipt).values()) == before
+        assert list(IdentityParent.history.filter(history_changeset=receipt).values()) == before
 
         assert row.with_actor(owner).has_access("write")
         assert not row.with_actor(outsider).has_access("write")
 
         with changeset(fresh=True):
             line = IdentityLine.objects.create(parent=parent, title="owned")
-            line_receipt = line.history.first().changeset
+            line_receipt = line.history.first().history_changeset
         assert line_receipt in Changeset.objects.touching(row)
         assert line_receipt not in Changeset.objects.touching(decoy)
         line_touched = set(Changeset.objects.filter(pk=line_receipt.pk).records_touched())

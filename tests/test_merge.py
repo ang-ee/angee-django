@@ -23,7 +23,6 @@ from rebac.roles import grant as grant_role
 
 from angee.base.models import merge as merge_module
 from angee.base.models import merge_references as reference_owner
-from angee.base.signals import bulk_updated
 from angee.base.models.identity import public_id_of
 from angee.base.models.merge_references import (
     EdgeReference,
@@ -33,6 +32,7 @@ from angee.base.models.merge_references import (
     references,
 )
 from angee.base.models.refs import RecordRefMixin
+from angee.base.signals import bulk_updated
 from angee.graphql import records
 from angee.messaging.testing.models import Directory, Participant, Party, Reaction
 from angee.projects.testing.models import Link, Project, Queue, Task
@@ -145,7 +145,10 @@ def test_native_reference_move_without_batch_projection_keeps_the_single_update_
         raise AssertionError("A model without bulk target projection entered observed batching")
 
     monkeypatch.setattr(reference_owner, "query_batch_size", unexpected_batch)
-    reference = next(item for item in references(Tag) if item.model is TagAssignment and isinstance(item, ForeignKeyReference))
+    reference = next(
+        item for item in references(Tag)
+        if item.model is TagAssignment and isinstance(item, ForeignKeyReference)
+    )
     bulk_updated.connect(observe, sender=TagAssignment, weak=False)
     try:
         with changeset(), system_context(reason="test.merge.unobserved_reference"):
@@ -172,9 +175,9 @@ def test_reverting_a_merge_restores_exact_assignment_identities_and_clears_the_a
     before = set(TagAssignment._base_manager.values_list("pk", "tag_id", "content_type_id", "object_id"))
     with actor_context(curator):
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
-        boundary = Tag.history.filter(id=mobil.pk).order_by("-history_id").first().changeset
+        boundary = Tag.history.filter(id=mobil.pk).order_by("-history_id").first().history_changeset
         changed_assignments = set(
-            TagAssignment.history.filter(changeset=boundary).values_list("id", flat=True)
+            TagAssignment.history.filter(history_changeset=boundary).values_list("id", flat=True)
         )
         assert changed_assignments == {pk for pk, tag, _kind, _record in before if tag == mobil.pk}
         reverted = boundary.with_actor(curator).revert()
@@ -191,9 +194,9 @@ def test_a_second_merge_flattens_aliases_and_revert_restores_the_previous_surviv
     with actor_context(curator):
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
         Tag.objects.get(pk=phones.pk).merge(records=[public_id_of(mobile)])
-        boundary = Tag.history.filter(id=mobile.pk).order_by("-history_id").first().changeset
+        boundary = Tag.history.filter(id=mobile.pk).order_by("-history_id").first().history_changeset
         assert Tag._base_manager.get(pk=mobil.pk).merged_into_id == phones.pk
-        assert Tag.history.filter(id=mobil.pk, changeset=boundary, merged_into_id=phones.pk).exists()
+        assert Tag.history.filter(id=mobil.pk, history_changeset=boundary, merged_into_id=phones.pk).exists()
         assert Tag.objects.get(pk=mobil.pk).canonical().pk == phones.pk
         boundary.with_actor(curator).revert()
         assert Tag.objects.get(pk=mobil.pk).canonical().pk == mobile.pk
@@ -208,7 +211,7 @@ def test_a_later_survivor_write_refuses_merge_revert_before_edges_move() -> None
     mobile, mobil, ada, bob = _vocabulary(owner=curator)
     with actor_context(curator):
         survivor = Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
-        boundary = Tag.history.filter(id=mobil.pk).order_by("-history_id").first().changeset
+        boundary = Tag.history.filter(id=mobil.pk).order_by("-history_id").first().history_changeset
         survivor.name = "Mobile phones"
         survivor.save(update_fields=("name",))
         with pytest.raises(ValidationError, match="later write prevents revert"):
@@ -598,7 +601,7 @@ def test_a_reverted_stance_gets_its_recency_back_so_the_tie_break_returns_to_its
             statements._base_manager.filter(pk=older.pk).update(display_name="Ada K.", updated_at=timezone.now())
         older.refresh_from_db()
         assert min((older, newer), key=lambda row: row.sort_key()).pk == older.pk
-        redated = statements.history.filter(id=older.pk).order_by("-history_id").first().changeset
+        redated = statements.history.filter(id=older.pk).order_by("-history_id").first().history_changeset
 
         with changeset(fresh=True, change_reason="test.revert"):
             redated.revert()
