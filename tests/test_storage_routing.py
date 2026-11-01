@@ -8,6 +8,7 @@ from unittest.mock import patch
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core import signing
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.db import connections, transaction
 from django.test import RequestFactory, TransactionTestCase, override_settings
@@ -100,6 +101,40 @@ class StorageRoutingContract(TransactionTestCase):
                 drive_id=str(self.drives[alias].sqid),
                 **kwargs,
             )
+
+    def test_factory_constraint_validation_reads_hidden_rows_on_selected_alias(self):
+        File = apps.get_model("storage", "File")
+        default = self._draft("default")
+        digest = "c" * 64
+        with (
+            database_context("producer"),
+            system_context(reason="tests.storage.routing.hidden_constraint"),
+            changeset(fresh=True, using="producer"),
+        ):
+            hidden_owner = get_user_model().objects.db_manager("producer").create_user(username="hidden-owner")
+            hidden = File.objects.db_manager("producer").create(
+                drive=self.drives["producer"],
+                owner=hidden_owner,
+                filename="hidden.txt",
+                content_hash=digest,
+                storage_path="hidden/reservation",
+                visibility="record",
+            )
+        self.assertEqual(default.pk, hidden.pk)
+        self.assertFalse(hidden.with_actor(self.users["producer"]).has_access("read"))
+        with patch("angee.storage.managers.secrets.token_hex", return_value=digest):
+            with self.assertRaisesRegex(exceptions.UploadError, "invalid file request") as refused:
+                self._draft("producer", "collision.txt")
+        self.assertIsInstance(refused.exception.__cause__, ValidationError)
+        self.assertEqual(File._base_manager.using("producer").count(), 1)
+        default.refresh_from_db(using="default")
+        self.assertEqual(default.filename, "draft.txt")
+        self.assertNotEqual(default.content_hash, digest)
+        created = self._draft("producer", "fresh.txt")
+        self.assertEqual(created._state.db, "producer")
+        self.assertEqual(created.created_by_id, self.users["producer"].pk)
+        self.assertFalse(created.is_sudo())
+        self.assertEqual(created.actor(), hidden.actor())
 
     def test_draft_attachment_rollback_and_colliding_default_rows(self):
         File = apps.get_model("storage", "File")
