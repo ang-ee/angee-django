@@ -8,6 +8,7 @@ from typing import Any
 
 from django.apps import apps
 from django.db import models
+from django.db.models.query import EmptyQuerySet
 from rebac import GenericTarget, generic_target, system_context
 
 from angee.graphql.relations import with_record_reference_access
@@ -88,13 +89,22 @@ class RunKind(TimelineKind):
             models.Prefetch("step_runs", queryset=waiting, to_attr="timeline_waits"),
         )
 
-    def waiting_on(self, rows: Any, actor: Any) -> models.QuerySet:
-        decisions = apps.get_model("decisions", "Decision").objects.with_actor(actor).waiting_on(actor).scoped()
-        steps = apps.get_model("workflows", "StepRun").objects.with_actor(actor).scoped().filter(
-            status=StepRunStatus.WAITING, waiting_kind=WaitingKind.DECISION,
-            decision_id__in=decisions.values("pk"),
+    def waiting_on_expression(self, rows: Any, actor: Any) -> models.Expression:
+        """Project a readable waiting decision without rebuilding the run branch."""
+        decisions = apps.get_model("decisions", "Decision").objects.using(rows.db).waiting_on(actor)
+        if isinstance(decisions, EmptyQuerySet):
+            return models.Value(False, output_field=models.BooleanField())
+        decisions = decisions.with_actor(actor).scoped()
+        steps = (apps.get_model("workflows", "StepRun").objects.using(rows.db)
+                 .with_actor(actor).scoped().filter(
+                     run_id=models.OuterRef("pk"), status=StepRunStatus.WAITING,
+                     waiting_kind=WaitingKind.DECISION, decision_id__in=decisions.values("pk"),
+                 ))
+        return models.Case(
+            models.When(models.Q(status=RunStatus.WAITING) & models.Q(models.Exists(steps)),
+                        then=models.Value(True)),
+            default=models.Value(False), output_field=models.BooleanField(),
         )
-        return rows.filter(status=RunStatus.WAITING, pk__in=steps.values("run_id"))
 
     def targets(self, row: Any) -> Iterable[models.Model]:
         return (

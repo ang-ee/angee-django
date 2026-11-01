@@ -40,8 +40,8 @@ class DecisionKind(TimelineKind):
             models.Prefetch("assignees", queryset=get_user_model().system_queryset()),
         )
 
-    def waiting_on(self, rows: Any, actor: Any) -> models.QuerySet:
-        return rows.waiting_on(actor).scoped()
+    def waiting_on_expression(self, rows: Any, actor: Any) -> models.Expression:
+        return rows.waiting_on_expression(actor)
 
     def fold(self, record: Any) -> tuple[Any, Any]:
         types, ids = [], []
