@@ -360,8 +360,8 @@ class RecordHistory:
 
         page = list(changesets)
         ids = [changeset.pk for changeset in page]
-        versions = self._versions(ids)
-        statements = self._statement_versions(ids)
+        versions, _retained = self._versions(ids, self.scopes)
+        statement_states, statements = self._versions(ids, self.statement_scopes)
         self._prime_statement_references(statements)
         redacted = self._redactions(versions, statements)
         merges = self._merges(page)
@@ -375,13 +375,19 @@ class RecordHistory:
                 (owner := model_history(table)) is not None and owner.source_state_complete(version)
                 for table, version in statement_versions
             )
+            complete_statement_replay = all(
+                (owner := model_history(table)) is not None and owner.source_state_complete(first, last, previous)
+                for table, first, last, previous in statement_states.get(changeset.pk, ())
+            )
             available = all(delta is not None for delta in deltas)
             entries.append(HistoryEntryType(
                 **_attribution(changeset, *actors.get(changeset.actor_ref, (None, None))),
                 changes=[change for delta in deltas if delta is not None for change in delta] if available else None,
                 statements=self._statements(statement_versions, redacted) if complete_statements else None,
                 merge=merges.get(changeset.pk),
-                can_revert=available and complete_statements and changeset.pk in revertable,
+                can_revert=(
+                    available and complete_statements and complete_statement_replay and changeset.pk in revertable
+                ),
             ))
         return entries
 
@@ -399,11 +405,14 @@ class RecordHistory:
             entries=self.entries(changesets[offset : offset + limit]),
         )
 
-    def _versions(self, changeset_ids: list[Any]) -> dict[Any, list[_Version]]:
-        """Fetch selected boundaries and their predecessors once per table."""
+    def _versions[ModelT: models.Model](
+        self, changeset_ids: list[Any], scopes: dict[type[ModelT], models.Q],
+    ) -> tuple[dict[Any, list[_Version]], dict[Any, list[tuple[type[ModelT], Any]]]]:
+        """Fetch retained rows and boundary predecessors once per scoped table."""
 
         grouped: defaultdict[Any, list[_Version]] = defaultdict(list)
-        for table, predicate in self.scopes.items():
+        retained: defaultdict[Any, list[tuple[type[ModelT], Any]]] = defaultdict(list)
+        for table, predicate in scopes.items():
             key = table._meta.pk.attname
             historical = get_history_manager_for_model(table).model
             predecessor = (
@@ -412,7 +421,7 @@ class RecordHistory:
                 .order_by("-history_id")
                 .values("history_id")[:1]
             )
-            rows = (
+            rows = list(
                 get_history_manager_for_model(table)
                 .using(self.using)
                 .filter(
@@ -422,10 +431,14 @@ class RecordHistory:
                 .annotate(_angee_predecessor_id=models.Subquery(predecessor))
                 .order_by("history_changeset_id", key, "history_id")
             )
+            # Statement presentation retains its original per-table history order,
+            # independently of the grouped boundaries used for native replay facts.
+            for version in sorted(rows, key=lambda row: row.history_id):
+                retained[version.history_changeset_id].append((table, version))
             boundaries = []
             predecessor_ids = set()
             for (changeset_id, _pk), versions in groupby(
-                rows.iterator(),
+                rows,
                 key=lambda row: (row.history_changeset_id, getattr(row, key)),
             ):
                 boundary = list(versions)
@@ -436,27 +449,7 @@ class RecordHistory:
             predecessors = get_history_manager_for_model(table).using(self.using).in_bulk(predecessor_ids)
             for changeset_id, first, last, predecessor_id in boundaries:
                 grouped[changeset_id].append((table, first, last, predecessors.get(predecessor_id)))
-        return dict(grouped)
-
-    def _statement_versions(
-        self,
-        changeset_ids: list[Any],
-    ) -> dict[Any, list[tuple[type[Statement], Any]]]:
-        """Fetch every selected statement model once for the bounded page."""
-
-        grouped: defaultdict[Any, list[tuple[type[Statement], Any]]] = defaultdict(list)
-        for statement_model, predicate in self.statement_scopes.items():
-            versions = (
-                statement_model.history.using(self.using)
-                .filter(
-                    predicate,
-                    history_changeset_id__in=changeset_ids,
-                )
-                .order_by("history_id")
-            )
-            for version in versions:
-                grouped[version.history_changeset_id].append((statement_model, version))
-        return dict(grouped)
+        return dict(grouped), dict(retained)
 
     def _prime_statement_references(
         self,
