@@ -27,7 +27,8 @@ from angee.decisions.schema import DecisionType
 from angee.graphql.actions import ActionResult, action_guard
 from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
 from angee.iam.graphql.capabilities import permission_expression, permissions_field
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
+from angee.graphql.data.hasura import declared_hasura_resource_fields, hasura_model_resource
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.graphql.ids import PublicID, optional_public_id, require_instance_for_id
 from angee.graphql.impl import ImplChoice
 from angee.iam.graphql.node import ProtectedNode
@@ -614,7 +615,7 @@ _TRIGGER_RESOURCE = hasura_model_resource(
     aggregatable=["id"],
     insertable=_TRIGGER_INSERT,
     updatable=_TRIGGER_UPDATE,
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         Trigger,
         public_id_fields=tuple(
             name

@@ -27,7 +27,7 @@ description: "Declares and wires REBAC permissions for an Angee addon: permissio
 | `src/angee/iam/checks.py` | `angee.E024` (no caveats) `:37`, `angee.E045` (`owner` relation needs `OwnerMixin`) `:71` | whole file |
 | `src/angee/iam/models/ownership.py` | `angee.E022` `:134` and `angee.E027` `:171`: the `transfer` + `write__owner` gate every `OwnerMixin` model's definition carries | `OwnerMixin.check` `:91` |
 | `src/angee/iam/permissions.zed` | `auth/user` `:6`, `iam/kind` `:104`, `auth/group` `:110`, `angee/role` `:120` — the subjects every addon targets | whole file |
-| `src/angee/graphql/actions.py` | `authorized_action_target` `:240`, `authorized_permission_target` `:276` resolver preflight | `src/angee/graphql/trash.py:57` (`trash_target`) |
+| `src/angee/iam/graphql/actions.py` | `authorized_action_target` `:240`, `authorized_permission_target` `:276` resolver preflight | `src/angee/iam/graphql/trash.py:57` (`trash_target`) |
 | `src/angee/base/apps.py` | REBAC synchronization contribution to upstream provisioning | `BaseConfig.compose_provision`; explicit `ANGEE_REBAC_FORCE_OVERWRITE` setting |
 
 Parsing, sync, point checks, actor-scoped querysets and gated-field projection are
@@ -44,7 +44,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
 - Row-dependent sharing: `rebac:field={"path":…,"filters":{…}}` (notes extends `storage/file`), `rebac:const={"target_id":"shared","filters":{…}}` + `shared_reader = authenticated` (money/rate, dashboards).
 - Live user facts: `rebac:attribute={"field":…,"value":…}` on `iam/kind`; compose `iam/kind:person#active_member`, never a copy.
 - Edge seams other addons already own: `tags/tag_assignment`, `storage/file_attachment`, `knowledge/record_binding`, `messaging/thread_attachment`, `projects/task`, `decisions/decision` — each declares `target_*`/`subject_*` arms for you to union into (notes extends file).
-- Native API: `.with_actor(user)`, `.as_user(user)`, `.with_action(perm)`, `.for_write()`, `.readable(field)`, `.sudo(reason=…)`, `.system_context(reason=…)` (rebac `managers.py:719-858`), `has_access` (rebac `mixins.py:1079`), `check_new` (rebac `preflight.py:147`); Angee adds `AngeeModel.require_access` (`base.py:312`) and `rebac_grantable` + `angee.graphql.sharing` for shares.
+- Native API: `.with_actor(user)`, `.as_user(user)`, `.with_action(perm)`, `.for_write()`, `.readable(field)`, `.sudo(reason=…)`, `.system_context(reason=…)` (rebac `managers.py:719-858`), `has_access` (rebac `mixins.py:1079`), `check_new` (rebac `preflight.py:147`); Angee adds `AngeeModel.require_access` (`base.py:312`) and `rebac_grantable` + `angee.iam.graphql.sharing` for shares.
 
 ## Steps
 
@@ -134,7 +134,7 @@ Parsing, sync, point checks, actor-scoped querysets and gated-field projection a
    ```python
    target = authorized_permission_target(info, model, target_id, "delete",
                                          narrow=lambda rows: rows.trash_targets())
-   target.trash(reason=reason)                     # src/angee/graphql/trash.py:57-74
+   target.trash(reason=reason)                     # src/angee/iam/graphql/trash.py:57-74
    ```
    - Instance verbs: `self.require_access("write")`; unsaved rows: native `create` on `insert()`, or `candidate_relationships(instance, action).allows(subject, action)` (`permissions.py:180`) for a preflight on a row that is not the stored one.
    - Framework-internal writes: `with system_context(reason="<owner>.<verb>")` only for named system work (`audit.py:28` delete retention, `ownership.py:305` transfer validation). `system_grant_record_access` requires that scope (`base.py:178`).

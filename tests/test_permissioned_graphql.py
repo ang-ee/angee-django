@@ -15,9 +15,9 @@ from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.schema import IAMSchema
 from tests.iam_only_models import APIEntry
 
-@strawberry_django.type(APIEntry, fields=["name", "secret"])
+@strawberry_django.type(APIEntry, fields=["name"])
 class EntryType(ProtectedNode):
-    pass
+    secret: str | None
 
 @pytest.fixture
 def api():
@@ -31,7 +31,7 @@ def api():
       permission delete = editor
       permission read__secret = editor
     }"""))
-    resource = hasura_model_resource(EntryType, model=APIEntry, name="entries", filterable=["name"], sortable=["name"], writable=["name", "secret"])
+    resource = hasura_model_resource(EntryType, model=APIEntry, name="entries", filterable=["name"], sortable=["name"], aggregatable=["id"], writable=["name", "secret"])
     registry = GraphQLSchemas(())
     registry.__dict__["parts"] = {"public": SchemaParts(query=(resource.query,), mutation=(resource.mutation,), types=tuple([EntryType, *resource.types]))}
     yield registry
@@ -47,10 +47,10 @@ def test_protected_schema_scopes_rows_fields_writes_and_missing_actor(api):
         APIEntry.objects.create(name="Hidden")
         write_relationships([RelationshipTuple(to_object_ref(visible), "reader", actor)])
     with actor_context(actor):
-        result = schema.execute_sync('{entries{id name secret redactedFields}}')
+        result = schema.execute_sync('{entries{id name secret redacted_fields}}')
         assert not result.errors, result.errors
-        assert result.data["entries"] == [{"id": visible.public_id, "name": "Visible", "secret": None, "redactedFields": ["secret"]}]
-        denied = schema.execute_sync(f'mutation {{ update_entries_by_pk(pk: "{visible.public_id}", patch: {{name: "Denied"}}) {{id}} }}')
+        assert result.data["entries"] == [{"id": visible.public_id, "name": "Visible", "secret": None, "redacted_fields": ["secret"]}]
+        denied = schema.execute_sync(f'mutation {{ update_entries_by_pk(pk_columns: {{id: "{visible.public_id}"}}, _set: {{name: "Denied"}}) {{id}} }}')
         assert denied.errors[0].extensions["code"] == "PERMISSION_DENIED"
     missing = schema.execute_sync('{entries{id}}')
     assert missing.errors[0].extensions["code"] == "UNAUTHENTICATED"
@@ -76,3 +76,19 @@ def test_protected_change_projection_and_live_revocation(api):
         with system_context(reason="minimal protected event revoke"):
             delete_relationship(grants[0])
         assert receive(payload) is None
+
+
+@pytest.mark.django_db
+def test_lines_only_save_checks_the_parent_before_any_child_diff(api):
+    from rebac import PermissionDenied
+    from angee.graphql.data.hasura import HasuraLines
+    from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
+    from tests.iam_only_models import APILine
+    actor = SubjectRef.of("auth/user", "lines-reader")
+    with system_context(reason="minimal protected lines fixture"):
+        row = APIEntry.objects.create(name="Parent")
+        write_relationships([RelationshipTuple(to_object_ref(row), "reader", actor)])
+    writer = ProtectedHasuraWriteBackend(APIEntry, lines=HasuraLines(field="lines", model=APILine, position_field=""))
+    with actor_context(actor), pytest.raises(PermissionDenied):
+        writer.save(None, row.public_id, {}, [])
+    assert not APILine._base_manager.exists()

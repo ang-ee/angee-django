@@ -17,7 +17,8 @@ from strawberry_django.utils.requests import get_request
 from angee.graphql.actions import ActionResult, ActionSelectionInput, action_guard, many_actions
 from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
 from angee.iam.graphql.capabilities import permissions_field
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import HasuraLines, hasura_model_resource, public_pk_decoder
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.graphql.ids import PublicID, instance_for_id, optional_public_id, to_public_id
 from angee.graphql.inputs import InputReference
 from angee.iam.graphql.inputs import AuthorizedInputReference
@@ -587,7 +588,7 @@ _QUEUE_RESOURCE = hasura_model_resource(
         "default_stage": public_pk_decoder(Stage),
     },
     lines=_STAGE_LINES,
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         Queue,
         public_id_fields=("parent", "default_stage"),
         lines=_STAGE_LINES,
@@ -619,7 +620,7 @@ _STAGE_RESOURCE = hasura_model_resource(
     insertable=["queue", "name", "tone", "position", "category", "rule_owned"],
     updatable=["name", "tone", "position", "category", "rule_owned"],
     field_id_decode={"queue": public_pk_decoder(Queue)},
-    write_backend=AngeeHasuraWriteBackend(Stage, public_id_fields=("queue",)),
+    write_backend=ProtectedHasuraWriteBackend(Stage, public_id_fields=("queue",)),
 )
 
 _CYCLE_RESOURCE = hasura_model_resource(
@@ -652,7 +653,7 @@ _CYCLE_RESOURCE = hasura_model_resource(
     insert=False,
     updatable=["name"],
     delete=False,
-    write_backend=AngeeHasuraWriteBackend(Cycle),
+    write_backend=ProtectedHasuraWriteBackend(Cycle),
 )
 
 _RESOURCE_TYPES = [*_QUEUE_RESOURCE.types, *_STAGE_RESOURCE.types, *_CYCLE_RESOURCE.types]

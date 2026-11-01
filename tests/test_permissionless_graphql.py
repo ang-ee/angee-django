@@ -44,7 +44,7 @@ def test_native_crud_reference_validation_and_http(api, monkeypatch):
     created = schema.execute_sync('mutation { insert_entries_one(object: {name: "Created"}) { id name } }')
     assert not created.errors, created.errors
     pk = created.data["insert_entries_one"]["id"]
-    updated = schema.execute_sync(f'mutation {{ update_entries_by_pk(pk: "{pk}", patch: {{name: "Updated"}}) {{ id name }} }}')
+    updated = schema.execute_sync(f'mutation {{ update_entries_by_pk(pk_columns: {{id: "{pk}"}}, _set: {{name: "Updated"}}) {{ id name }} }}')
     assert not updated.errors, updated.errors
     rows = schema.execute_sync('{ entries { id name } entries_aggregate { aggregate { count } } }')
     assert not rows.errors, rows.errors
@@ -59,7 +59,7 @@ def test_native_crud_reference_validation_and_http(api, monkeypatch):
     assert json.loads(response.content)["data"]["entries"] == [{"name": "Updated"}]
     invalid = schema.execute_sync('mutation { insert_entries_one(object: {name: "' + "x"*81 + '"}) {id} }')
     assert invalid.errors[0].extensions["code"] == "VALIDATION"
-    removed = schema.execute_sync(f'mutation {{ delete_entries_by_pk(pk: "{pk}") {{ id }} }}')
+    removed = schema.execute_sync(f'mutation {{ delete_entries_by_pk(id: "{pk}") {{ id }} }}')
     assert not removed.errors, removed.errors
     assert not PlainEntry.objects.exists()
 
@@ -74,7 +74,7 @@ def test_neutral_stream_registers_and_emits_without_an_actor():
         assert ready.action == "ready"
         change = ChangePayload(model=PlainEntry._meta.label, id="1", action="update")
         layer = change_channel_layer()
-        await layer.group_send(change_group(PlainEntry), {"type": "model.change", **change.as_message()})
+        await layer.group_send(change_group(PlainEntry), {"type": "angee.change", "payload": change.as_message()})
         event = await asyncio.wait_for(anext(stream), 2)
         assert (event.id, event.action) == ("1", "update")
         await stream.aclose()

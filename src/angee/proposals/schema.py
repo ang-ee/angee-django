@@ -21,13 +21,8 @@ from angee.base.models.locks import StaleRevisionError
 from angee.graphql.actions import ActionResult, ActionSelectionInput, action_guard, many_actions
 from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
 from angee.iam.graphql.capabilities import held_permissions, permission_annotations, permissions_field
-from angee.graphql.data.hasura import (
-    AngeeHasuraWriteBackend,
-    declared_hasura_resource_fields,
-    declared_hasura_write_relation_fields,
-    hasura_model_resource,
-    public_pk_decoder,
-)
+from angee.graphql.data.hasura import declared_hasura_resource_fields, declared_hasura_write_relation_fields, hasura_model_resource, public_pk_decoder
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.inputs import InputReference
 from angee.iam.graphql.inputs import AuthorizedInputReference
@@ -912,7 +907,7 @@ _ROUND_RESOURCE = hasura_model_resource(
         "opened_by": public_pk_decoder(User),
         "closed_by": public_pk_decoder(User),
     },
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         Round,
         public_id_fields=(
             "task",
@@ -938,7 +933,7 @@ _TOPIC_RESOURCE = hasura_model_resource(
     insertable=["round", "key", "name", "hint", "sort_order"],
     updatable=["name", "hint", "sort_order"],
     field_id_decode={"round": public_pk_decoder(Round)},
-    write_backend=AngeeHasuraWriteBackend(Topic, public_id_fields=("round",)),
+    write_backend=ProtectedHasuraWriteBackend(Topic, public_id_fields=("round",)),
 )
 
 
@@ -1007,7 +1002,7 @@ def _proposal_resource(node_type: type) -> Any:
             "submitted_by": public_pk_decoder(User),
             "decided_by": public_pk_decoder(User),
         },
-        write_backend=AngeeHasuraWriteBackend(
+        write_backend=ProtectedHasuraWriteBackend(
             Proposal,
             public_id_fields=("round", "responder", "party", "source_message", "currency"),
         ),
@@ -1031,7 +1026,7 @@ _ANSWER_RESOURCE = hasura_model_resource(
         "proposal": public_pk_decoder(Proposal),
         "topic": public_pk_decoder(Topic),
     },
-    write_backend=AngeeHasuraWriteBackend(Answer, public_id_fields=("proposal", "topic")),
+    write_backend=ProtectedHasuraWriteBackend(Answer, public_id_fields=("proposal", "topic")),
 )
 
 _REVIEW_RESOURCE = hasura_model_resource(
@@ -1048,7 +1043,7 @@ _REVIEW_RESOURCE = hasura_model_resource(
         "proposal": public_pk_decoder(Proposal),
         "reviewer": public_pk_decoder(User),
     },
-    write_backend=AngeeHasuraWriteBackend(Review, public_id_fields=("proposal", "reviewer")),
+    write_backend=ProtectedHasuraWriteBackend(Review, public_id_fields=("proposal", "reviewer")),
 )
 
 _COMMON_RESOURCE_TYPES = [

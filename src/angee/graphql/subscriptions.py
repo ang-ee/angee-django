@@ -11,7 +11,7 @@ from typing import Any
 import strawberry
 from asgiref.sync import sync_to_async
 from django.db import close_old_connections, models
-from angee.base.hooks import resolve_hooks
+from angee.base.hooks import resolve_hook
 
 from angee.graphql.constants import CHANGE_GROUP_RENEW_SECONDS
 from angee.graphql.data.contracts import DataResourceRoots, DataResourceTypeNames
@@ -104,11 +104,13 @@ def _change_filters(model: type[models.Model], info: strawberry.Info, gate_type:
     """Construct declared subscription filters with healthy Django connections."""
     close_old_connections()
     try:
-        providers = resolve_hooks("ANGEE_GRAPHQL_CHANGE_FILTERS")
-        if gate_type is not None and not providers:
-            raise RuntimeError("A custom change read gate requires a declared change-filter provider.")
-        filters = tuple(provider(model, info, gate_type) for provider in providers)
-        return None if any(item is None for item in filters) else filters
+        provider = resolve_hook("ANGEE_GRAPHQL_CHANGE_FILTER")
+        if provider is None:
+            if gate_type is not None:
+                raise RuntimeError("A custom change read gate requires a declared change-filter provider.")
+            return ()
+        selected = provider(model, info, gate_type)
+        return None if selected is None else (selected,)
     finally:
         close_old_connections()
 
@@ -117,11 +119,7 @@ def _filter_change_event(filters: tuple[Callable[..., Any], ...], payload: Chang
     """Apply concrete contributors around the one native event projection."""
     close_old_connections()
     try:
-        for transform in filters:
-            payload = transform(payload)
-            if payload is None:
-                return None
-        return ChangeEvent.from_payload(payload)
+        return filters[0](payload) if filters else ChangeEvent.from_payload(payload)
     finally:
         close_old_connections()
 

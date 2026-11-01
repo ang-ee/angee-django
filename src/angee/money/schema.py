@@ -17,7 +17,8 @@ import strawberry_django
 from django.apps import apps
 from strawberry import auto
 
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.graphql.node import ProtectedNode
 
 Currency = apps.get_model("money", "Currency")
@@ -90,7 +91,7 @@ _RATE_RESOURCE = hasura_model_resource(
     groupable=["currency", "reference_currency", "source_priority", "is_archived"],
     writable=["currency", "date", "rate"],
     field_id_decode={"currency": public_pk_decoder(Currency)},
-    write_backend=AngeeHasuraWriteBackend(CurrencyRate, public_id_fields=("currency",)),
+    write_backend=ProtectedHasuraWriteBackend(CurrencyRate, public_id_fields=("currency",)),
     id_column="sqid",
 )
 

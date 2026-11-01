@@ -22,12 +22,8 @@ from strawberry_django.queryset import run_type_get_queryset
 
 from angee.graphql.actions import ActionResult, action_guard
 from angee.iam.graphql.actions import authorized_action_target, session_user
-from angee.graphql.data.hasura import (
-    AngeeHasuraWriteBackend,
-    declared_hasura_resource_fields,
-    hasura_model_resource,
-    public_pk_decoder,
-)
+from angee.graphql.data.hasura import declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.graphql.ids import PublicID, optional_public_id, require_instance_for_id
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import actor_scoped_to_one
@@ -606,7 +602,7 @@ _PARTY_RESOURCE = hasura_model_resource(
     ),
     insert=False,
     updatable=["display_name", "notes", *_PARTY_EXTENSION_UPDATE_FIELDS],
-    write_backend=AngeeHasuraWriteBackend(Party, public_id_fields=_PARTY_EXTENSION_PUBLIC_ID_FIELDS),
+    write_backend=ProtectedHasuraWriteBackend(Party, public_id_fields=_PARTY_EXTENSION_PUBLIC_ID_FIELDS),
 )
 _PERSON_RESOURCE = hasura_model_resource(
     PersonType,
@@ -669,7 +665,7 @@ _PERSON_RESOURCE = hasura_model_resource(
         *_PERSON_EXTENSION_UPDATE_FIELDS,
     ],
     delete=False,
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         Person,
         public_id_fields=_PERSON_EXTENSION_PUBLIC_ID_FIELDS,
     ),
@@ -725,7 +721,7 @@ _ORGANIZATION_RESOURCE = hasura_model_resource(
         *_ORGANIZATION_EXTENSION_UPDATE_FIELDS,
     ],
     delete=False,
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         Organization,
         public_id_fields=_ORGANIZATION_EXTENSION_PUBLIC_ID_FIELDS,
     ),
@@ -786,7 +782,7 @@ _ADDRESS_RESOURCE = hasura_model_resource(
         "is_primary",
     ],
     field_id_decode={"party": public_pk_decoder(Party)},
-    write_backend=AngeeHasuraWriteBackend(Address, public_id_fields=("party",)),
+    write_backend=ProtectedHasuraWriteBackend(Address, public_id_fields=("party",)),
     get_queryset=lambda info: Address.objects.canonical(),
 )
 _PARTY_STATEMENT_RESOURCE = hasura_model_resource(
@@ -837,7 +833,7 @@ _CIRCLE_RESOURCE = hasura_model_resource(
     insertable=["name", "description", "color", "icon", "position", "parent"],
     updatable=["name", "description", "color", "icon", "position", "parent"],
     field_id_decode={"parent": public_pk_decoder(Circle)},
-    write_backend=AngeeHasuraWriteBackend(Circle, public_id_fields=("parent",)),
+    write_backend=ProtectedHasuraWriteBackend(Circle, public_id_fields=("parent",)),
     get_queryset=lambda info: Circle.objects.all().with_member_counts(),
 )
 _CIRCLE_MEMBER_RESOURCE = hasura_model_resource(
@@ -856,7 +852,7 @@ _CIRCLE_MEMBER_RESOURCE = hasura_model_resource(
         "circle": public_pk_decoder(Circle),
         "party": public_pk_decoder(Party),
     },
-    write_backend=AngeeHasuraWriteBackend(CircleMember, public_id_fields=("circle", "party")),
+    write_backend=ProtectedHasuraWriteBackend(CircleMember, public_id_fields=("circle", "party")),
 )
 _RELATIONSHIP_KIND_RESOURCE = hasura_model_resource(
     RelationshipKindType,
@@ -884,7 +880,7 @@ _RELATIONSHIP_RESOURCE = hasura_model_resource(
         "other_party": public_pk_decoder(Party),
         "kind": public_pk_decoder(RelationshipKind),
     },
-    write_backend=AngeeHasuraWriteBackend(Relationship, public_id_fields=("party", "other_party", "kind")),
+    write_backend=ProtectedHasuraWriteBackend(Relationship, public_id_fields=("party", "other_party", "kind")),
     get_queryset=lambda info: Relationship.objects.canonical(),
 )
 _CONTACT_FOLDER_RESOURCE = hasura_model_resource(

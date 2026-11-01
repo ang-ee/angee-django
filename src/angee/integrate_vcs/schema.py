@@ -16,7 +16,8 @@ from strawberry.types import get_object_definition
 
 from angee.graphql.actions import ActionResult
 from angee.iam.graphql.actions import action_target
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.graphql.ids import PublicID
 from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.subscriptions import changes
@@ -234,7 +235,7 @@ _SOURCE_RESOURCE = hasura_model_resource(
     insertable=["repository", "kind", "ref", "path"],
     updatable=["kind", "ref", "path"],
     field_id_decode={"repository": public_pk_decoder(Repository)},
-    write_backend=AngeeHasuraWriteBackend(Source, public_id_fields=("repository",)),
+    write_backend=ProtectedHasuraWriteBackend(Source, public_id_fields=("repository",)),
 )
 _TEMPLATE_RESOURCE = hasura_model_resource(
     TemplateType,

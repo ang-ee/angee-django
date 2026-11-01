@@ -31,7 +31,7 @@ def filter_event(model, info, gate_type):
     if actor is None:
         return None
     gate = (gate_type or ChangeReadGate)(model, actor)
-    return gate.filter_payload
+    return gate.filter
 
 
 def _change_read_resource(instance: models.Model) -> ObjectRef | None:

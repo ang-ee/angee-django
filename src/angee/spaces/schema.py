@@ -12,7 +12,8 @@ from strawberry import auto
 
 from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
 from angee.iam.graphql.capabilities import permissions_field
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.graphql.ids import require_instance_for_id
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
@@ -186,7 +187,7 @@ _GROUP_RESOURCE = hasura_model_resource(
     groupable=["visibility", "parent"],
     writable=["name", "slug", "description", "visibility", "parent"],
     field_id_decode={"parent": public_pk_decoder(Group)},
-    write_backend=AngeeHasuraWriteBackend(Group, public_id_fields=("parent",)),
+    write_backend=ProtectedHasuraWriteBackend(Group, public_id_fields=("parent",)),
 )
 _MEMBERSHIP_RESOURCE = hasura_model_resource(
     SpaceMembershipType,
@@ -211,7 +212,7 @@ _MEMBERSHIP_RESOURCE = hasura_model_resource(
         "group": public_pk_decoder(Group),
         "party": public_pk_decoder(Party),
     },
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         Membership,
         public_id_fields=("group", "party"),
     ),

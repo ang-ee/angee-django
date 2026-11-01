@@ -13,7 +13,8 @@ from strawberry import auto
 
 from angee.graphql.actions import ActionResult, action_guard
 from angee.iam.graphql.actions import authorized_action_target
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import actor_scoped_to_one
@@ -285,7 +286,7 @@ def _product_resource(node_type: type) -> Any:
             "owner": public_pk_decoder(User),
             "originated_from": public_pk_decoder(Project),
         },
-        write_backend=AngeeHasuraWriteBackend(Product),
+        write_backend=ProtectedHasuraWriteBackend(Product),
     )
 
 
@@ -361,7 +362,7 @@ def _initiative_resource(node_type: type) -> Any:
             "parent": public_pk_decoder(Initiative),
             "owner": public_pk_decoder(User),
         },
-        write_backend=AngeeHasuraWriteBackend(
+        write_backend=ProtectedHasuraWriteBackend(
             Initiative,
             public_id_fields=("parent",),
         ),
@@ -386,7 +387,7 @@ _INITIATIVE_PROJECT_RESOURCE = hasura_model_resource(
         "project": public_pk_decoder(Project),
         "project__product": public_pk_decoder(Product),
     },
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         InitiativeProject,
         public_id_fields=("initiative", "project"),
     ),
@@ -402,7 +403,7 @@ _UPDATE_RESOURCE = hasura_model_resource(
     groupable=["health"],
     insert=False,
     updatable=["health", "body"],
-    write_backend=AngeeHasuraWriteBackend(Update),
+    write_backend=ProtectedHasuraWriteBackend(Update),
 )
 
 _RELEASE_RESOURCE = hasura_model_resource(
@@ -433,7 +434,7 @@ _RELEASE_RESOURCE = hasura_model_resource(
     insertable=["product", "name", "status", "target_date", "shipped_on", "notes"],
     updatable=["product", "name", "status", "target_date", "shipped_on", "notes"],
     field_id_decode={"product": public_pk_decoder(Product)},
-    write_backend=AngeeHasuraWriteBackend(Release, public_id_fields=("product",)),
+    write_backend=ProtectedHasuraWriteBackend(Release, public_id_fields=("product",)),
 )
 
 _COMMON_RESOURCE_TYPES = [

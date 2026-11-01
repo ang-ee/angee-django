@@ -21,7 +21,7 @@ class ResourceExtensions:
     relation_expression: Callable[..., Any] | None = None
     validate_fields: Callable[[type[models.Model], Iterable[str], str, str], None] | None = None
     prepare_queryset: Callable[[models.QuerySet[Any], type, bool], models.QuerySet[Any]] | None = None
-    write_backend: Callable[[Any], Any] | None = None
+    write_backend_factory: Callable[..., Any] | None = None
     delete_context: Callable[[str | None], AbstractContextManager[Any]] | None = None
     validate_delete: Callable[[models.Model], None] | None = None
     preview_queryset: Callable[[type[models.Model], Any], models.QuerySet[Any]] | None = None

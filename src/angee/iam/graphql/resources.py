@@ -32,12 +32,6 @@ class ProtectedHasuraWriteBackend(AngeeHasuraWriteBackend):
         return super()._save_locked_parent(info, instance, patch, line_rows, expected_revision=expected_revision)
 
 
-def _backend(backend):
-    if type(backend) is AngeeHasuraWriteBackend:
-        return ProtectedHasuraWriteBackend(backend.model, lines=backend.lines)
-    return backend
-
-
 def _aggregate(rows):
     return rows.scoped_for_aggregate() if isinstance(rows, RebacQuerySet) else rows
 
@@ -78,7 +72,7 @@ def contribute(model):
         relation_expression=actor_scoped_relation_expression,
         validate_fields=_validate_fields,
         prepare_queryset=_prepare_queryset,
-        write_backend=_backend,
+        write_backend_factory=ProtectedHasuraWriteBackend,
         delete_context=lambda reason: system_context(reason=reason) if reason is not None else nullcontext(),
         validate_delete=_validate_delete,
         preview_queryset=_preview_queryset,

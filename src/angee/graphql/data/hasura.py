@@ -1588,10 +1588,8 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     sortable_aliases = {**{alias: alias for alias in relation_sort_aliases.values()}, **sortable_aliases}
     if id_decode is None and id_column == "pk":
         id_decode = public_pk_decoder(model)
-    active_write_backend = write_backend or AngeeHasuraWriteBackend(model, lines=lines)
-    backend_transform = resource_extensions(model).write_backend
-    if backend_transform is not None:
-        active_write_backend = backend_transform(active_write_backend)
+    backend_factory = resource_extensions(model).write_backend_factory or AngeeHasuraWriteBackend
+    active_write_backend = write_backend or backend_factory(model, lines=lines)
     if isinstance(active_write_backend, AngeeHasuraWriteBackend):
         field_id_decode = {
             **{name: public_pk_decoder(related) for name, related in active_write_backend.public_id_fields.items()},

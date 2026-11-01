@@ -387,3 +387,12 @@ calendar.
 - Swap a dependency by updating the row and explaining why in the change.
 - Move proposed picks into a locked section before shipping code that depends on
   them.
+
+
+GraphQL's native Strawberry/Hasura/Channels owners run without IAM. Selecting IAM
+contributes native schema/view/consumer subclasses and resource/event hooks through
+callable Django settings, resolved by `angee.base.hooks`. Its optional adapters own
+REBAC SQL, field/related-read gates, protected writes, sharing and preview policy.
+The GraphQL manifest has no IAM/REBAC dependency; protected callers declare IAM
+and import its canonical GraphQL owners. The resource builder, native mutation
+resolvers, collector and change stream each remain one implementation.

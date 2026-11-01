@@ -77,3 +77,12 @@ class APIEntry(ProtectedDataModel):
     class Meta(ProtectedDataModel.Meta):
         app_label = "iam"
         rebac_resource_type = "probe/api"
+
+
+class APILine(ProtectedDataModel):
+    entry = models.ForeignKey(APIEntry, on_delete=models.CASCADE, related_name="lines")
+    text = models.CharField(max_length=80)
+
+    class Meta(ProtectedDataModel.Meta):
+        app_label = "iam"
+        rebac_resource_type = "probe/api_line"

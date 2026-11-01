@@ -1309,9 +1309,7 @@ _StatementPairManager = StatementPairManager.from_queryset(StatementPairQuerySet
 _StatementPairUnscopedManager = AngeeHistoryUnscopedManager.from_queryset(_StatementPairUnscopedQuerySet)
 
 
-class StatementPair(
-    MergeContractMixin, ProtectedTrashMixin, StatementsMixin, HistoryMixin, SqidMixin, TimestampMixin, RebacMixin
-):
+class StatementPair(ProtectedTrashMixin, StatementsMixin, HistoryMixin, SqidMixin):
     """Ordered pair subject; admission and application stay on its endpoints."""
 
     history = StatementPairHistory(inherit=True)

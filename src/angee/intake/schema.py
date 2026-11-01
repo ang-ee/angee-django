@@ -16,7 +16,8 @@ from angee.decisions.schema import DecisionType
 from angee.graphql.actions import ActionResult, action_guard
 from angee.iam.graphql.actions import authorized_permission_target
 from angee.iam.graphql.capabilities import held_permissions, permission_annotations, permissions_field
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.inputs import InputReference
 from angee.iam.graphql.inputs import AuthorizedInputReference
@@ -303,7 +304,7 @@ _NEED_RESOURCE = hasura_model_resource(
         "project": public_pk_decoder(Project),
         "source_message": public_pk_decoder(Message),
     },
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         Need,
         public_id_fields=("party", "task", "project"),
     ),

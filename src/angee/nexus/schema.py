@@ -10,7 +10,8 @@ from django.apps import apps
 from rebac import current_actor
 from strawberry import auto
 
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.graphql.ids import require_instance_for_id
 from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.subscriptions import changes
@@ -222,7 +223,7 @@ _CADENCE_RESOURCE = hasura_model_resource(
     insertable=["party", "cadence_days"],
     updatable=["cadence_days"],
     field_id_decode={"party": public_pk_decoder(Party)},
-    write_backend=AngeeHasuraWriteBackend(Cadence, public_id_fields=("party",)),
+    write_backend=ProtectedHasuraWriteBackend(Cadence, public_id_fields=("party",)),
 )
 
 _NEXUS_SCHEMA_BUCKET: dict[str, list[type]] = {

@@ -16,7 +16,7 @@ SETTINGS = {
     "ANGEE_GRAPHQL_RESOURCE_CONTRIBUTORS:append": ["angee.iam.graphql.resources.contribute"],
     "ANGEE_GRAPHQL_RESOURCE_METADATA:append": ["angee.iam.graphql.resources.enrich_metadata"],
     "ANGEE_GRAPHQL_CHANGE_PROJECTORS:append": ["angee.iam.graphql.changes.project"],
-    "ANGEE_GRAPHQL_CHANGE_FILTERS:append": ["angee.iam.graphql.changes.filter_event"],
+    "ANGEE_GRAPHQL_CHANGE_FILTER:append": ["angee.iam.graphql.changes.filter_event"],
     "COMPOSE_INTEGRATIONS:append": ["angee.iam.build.PermissionIntegration"],
     "COMPOSE_FINGERPRINT_GLOBS:append": ["pyproject.toml", "**/*.zed"],
     "COMPOSE_EXTERNAL_ARTIFACT_ROOTS:append": ["permissions"],

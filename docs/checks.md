@@ -494,3 +494,16 @@ Compiler co-development may use an explicit editable sibling checkout in a
 separate disposable check environment. Keep that local override out of committed
 requirements/locks and never apply it to a live stack environment. Normal native
 installation continues to consume the committed public release pin.
+
+
+The isolated generic API contracts run from the framework root with the existing
+Python environment and native pytest fixtures (no composed host required):
+
+```sh
+env -u DATABASE_URL python -m pytest --noconftest --ds=tests.permissionless_graphql_settings -q tests/test_permissionless_graphql.py
+env -u DATABASE_URL python -m pytest --noconftest --ds=tests.permissioned_graphql_settings -q tests/test_permissioned_graphql.py
+```
+
+These prove the no-IAM API import/CRUD/HTTP/stream contract and optional native IAM
+query/write/redaction/revocation adapters. They complement protected composed-host
+checks; they do not replace the integrated host and browser gates.
