@@ -9,11 +9,12 @@ from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
+from angee.base.testing.packages import write_addon_distribution
 from angee.iam.models.base import ProtectedDataModel
 from angee.provenance.context import changeset, current_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.statements import Aspect, SourceKind, StatementRecords, StatementsMixin
-from tests.conftest import create_user
+from tests.composed_host import run_composed_tests
 from tests.tables import model_tables
 
 
@@ -57,6 +58,8 @@ def identity_policy(composed_tables):
 
 @pytest.mark.usefixtures("identity_policy")
 def test_distinct_parent_identity_scopes_statements_and_inverse_without_colliding_children():
+    from tests.conftest import create_user
+
     class IdentityParent(StatementsMixin, HistoryMixin, ProtectedDataModel):
         title = models.CharField(max_length=80)
         owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
@@ -208,3 +211,73 @@ def test_distinct_parent_identity_scopes_statements_and_inverse_without_collidin
         assert restored.id == 21
         assert restored.owner_id == owner.pk
         assert IdentityParent._base_manager.get(pk=91).owner_id == outsider.pk
+
+
+def test_canonical_protected_child_retains_native_composed_history(tmp_path):
+    addon = tmp_path / "addons" / "mti_history"
+    addon.mkdir(parents=True)
+    (addon / "__init__.py").write_text("")
+    write_addon_distribution(addon, "mti_history", depends_on=("angee.provenance",))
+    (addon / "models.py").write_text("""
+from django.conf import settings
+from django.db import models
+from angee.iam.models.base import ProtectedDataModel, ProtectedModel
+from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
+from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
+
+class ParentQuerySet(AngeeHistoryQuerySet):
+    def named(self, title): return self.filter(title=title)
+class ParentManager(AngeeHistoryManager.from_queryset(ParentQuerySet)):
+    def __init__(self, marker):
+        super().__init__()
+        self.marker = marker
+    def factory_marker(self): return self.marker
+class ChildManager(AngeeHistoryManager):
+    def __init__(self, marker):
+        super().__init__()
+        self.marker = marker
+    def factory_marker(self): return self.marker
+
+class Parent(HistoryMixin, ProtectedDataModel, concrete=True):
+    title = models.CharField(max_length=80)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    sqid_prefix = 'mhp_'
+    objects = ParentManager('parent')
+    unscoped_objects = AngeeHistoryUnscopedManager()
+    class Meta:
+        abstract = True
+        base_manager_name = 'unscoped_objects'
+        rebac_resource_type = 'mti_history/parent'
+
+class Child(HistoryMixin, ProtectedModel, inherits='mti_history.Parent'):
+    child_key = models.IntegerField(primary_key=True)
+    detail = models.CharField(max_length=80, default='')
+    objects = ChildManager('child')
+    class Meta:
+        abstract = True
+        base_manager_name = '_angee_base'
+        rebac_resource_type = 'mti_history/child'
+""")
+    (addon / "permissions.zed").write_text("""
+// @rebac_package: mti_history
+// @rebac_schema_revision: 1
+definition mti_history/parent {
+    relation owner: auth/user // rebac:field=owner
+    permission create = authenticated
+    permission read = owner
+    permission write = owner
+}
+definition mti_history/child {
+    relation parent: mti_history/parent // rebac:field=parent_ptr
+    permission create = parent->write
+    permission read = parent->read
+    permission write = parent->write
+}
+""")
+    run_composed_tests(
+        tmp_path,
+        "tests.native_provenance_mti.CanonicalProtectedHistoryMTITests",
+        app="mti_history",
+        addon_dirs=(tmp_path / "addons",),
+    )
