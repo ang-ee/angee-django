@@ -16,6 +16,7 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.db import connection, models
 from django.test.utils import CaptureQueriesContext, isolate_apps
+from django_provenance.exceptions import ReplayRefused
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
@@ -173,6 +174,38 @@ def test_incomplete_statement_values_keep_attribution_and_independent_field_chan
     assert created["changes"] is not None
     assert created["statements"] is None
     assert created["can_revert"] is False
+
+
+def test_complete_statement_after_incomplete_predecessor_keeps_values_but_cannot_revert() -> None:
+    person = create_user("history-statement-incomplete-predecessor")
+    with actor_context(person), changeset(fresh=True, change_reason="Create party"):
+        party = Party.objects.create(display_name="Retained person")
+    statement_model = Party.statements.model
+    with system_context(reason="tests.history.statement_predecessor"):
+        statement = statement_model._base_manager.get(subject=party, aspect="identity")
+        predecessor = statement.history.first()
+        statement_model.history.filter(history_id=predecessor.history_id).update(history_source_complete=False)
+        with actor_context(person), changeset(fresh=True, change_reason="Complete statement edit"):
+            statement.confidence = 0.25
+            statement.save(update_fields=["confidence"])
+            receipt = current_changeset()
+        assert statement.history.get(history_changeset=receipt).history_source_complete
+        retained = list(statement.history.order_by("history_id").values())
+
+        edited = _history(_schema(), person, "parties.Party", party)["entries"][0]
+
+        assert edited["id"] == public_id_of(receipt)
+        assert edited["actor"] == str(public_subject_ref(to_subject_ref(person)))
+        assert edited["change_reason"] == "Complete statement edit"
+        assert edited["changes"] == []
+        assert edited["statements"][0]["values"] == {"display_name": "Retained person"}
+        assert edited["can_revert"] is False
+        with actor_context(person), pytest.raises(ReplayRefused, match="source state is incomplete"):
+            receipt.with_actor(person).revert()
+        statement.refresh_from_db()
+        assert statement.confidence == 0.25
+        assert statement.changeset_id == receipt.pk
+        assert list(statement.history.order_by("history_id").values()) == retained
 
 
 @pytest.mark.usefixtures("activity_catalog", "composed_permissions")
