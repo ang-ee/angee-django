@@ -43,7 +43,7 @@ from angee.iam.refs import named_in_relationships
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
-class ProtectedModel(RebacMixin, AngeeModel, concrete=False):
+class ProtectedModel(AngeeModel, RebacMixin, concrete=False):
     """IAM's native authorization contribution to the neutral model contract.
 
     Protected source declarations inherit this class when their Meta uses native
