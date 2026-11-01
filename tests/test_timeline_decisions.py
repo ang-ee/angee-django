@@ -5,7 +5,15 @@ from __future__ import annotations
 import pytest
 from django.db import models, transaction
 from django.utils import timezone
-from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import (
+    RelationshipTuple,
+    SubjectRef,
+    actor_context,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 
 from angee.base.models.identity import public_id_of
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
@@ -98,6 +106,40 @@ def test_unassigned_attention_uses_answer_permission_without_claiming_others_ass
     ask(people)
     assert read_timeline(subject, admin)["timeline_attention"] == 0
     assert read_timeline(subject, reviewer)["timeline_attention"] == 1
+
+
+
+def test_waiting_expression_matches_filter_without_multiplying_assignments(people) -> None:
+    requester, reviewer, second_assignee, subject = people
+    admin = create_platform_admin("waiting-projection-admin")
+    proposal = DecisionProposal(alternatives=[{"key": "done", "label": "Done", "outcome": "done"}])
+    assigned = Decision.objects.ask(DecisionRequest(
+        kind="note_review", records=(subject,), assignees=(reviewer, second_assignee),
+        requester=requester, proposal=proposal,
+    ), actor=requester)
+    unassigned = Decision.objects.ask(DecisionRequest(
+        kind="unassigned_review", records=(subject,), requester=requester, proposal=proposal,
+    ), actor=requester)
+    expected_by_actor = (
+        (requester, {assigned.pk: False, unassigned.pk: False}),
+        (reviewer, {assigned.pk: True}),
+        (second_assignee, {assigned.pk: True}),
+        (admin, {assigned.pk: False, unassigned.pk: True}),
+    )
+    for actor, expected in expected_by_actor:
+        rows = Decision.objects.with_actor(actor).filter(pk__in=(assigned.pk, unassigned.pk))
+        projected = list(rows.annotate(waiting=rows.waiting_on_expression(actor)).values_list("pk", "waiting"))
+        assert len(projected) == len(expected)
+        assert dict(projected) == expected
+        assert set(rows.waiting_on(actor).values_list("pk", flat=True)) == {
+            pk for pk, waiting in expected.items() if waiting
+        }
+    rows = Decision.objects.with_actor(admin).filter(pk__in=(assigned.pk, unassigned.pk))
+    for actor in (None, SubjectRef.of("angee/role", "admin")):
+        assert rows.waiting_on(actor).query.is_empty()
+        assert list(rows.annotate(waiting=rows.waiting_on_expression(actor)).values_list("waiting", flat=True)) == [
+            False, False,
+        ]
 
 
 def test_subscribers_read_committed_sources_at_the_change_broadcast(people, monkeypatch) -> None:

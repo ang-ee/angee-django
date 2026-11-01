@@ -8,7 +8,15 @@ import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
-from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
+from rebac import (
+    RelationshipTuple,
+    SubjectRef,
+    actor_context,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
 
 from angee.base.models.identity import public_id_of
 from angee.base.signals import bulk_updated
@@ -131,6 +139,33 @@ def test_waiting_run_folds_readable_children_and_computes_attention(review) -> N
     run_until(run)
     assert timeline_entries(subject, reviewer, kind="workflows.run")[0].detail == "Succeeded"
     assert read_timeline(subject, reviewer)["timeline_attention"] == 0
+
+
+def test_run_waiting_projection_preserves_read_scope_and_row_cardinality(review) -> None:
+    _actor, reviewers, _, question = review
+    run, _step = start_review(review)
+    reviewer = reviewers[0]
+    bystander = create_user("timeline-attention-bystander")
+    unreadable = create_user("timeline-attention-unreadable")
+    with system_context(reason="test.timeline.waiting_readers"):
+        write_relationships([
+            RelationshipTuple(to_object_ref(run), "reader", to_subject_ref(person))
+            for person in (reviewer, bystander)
+        ])
+    kind = RunKind()
+    rows = kind.queryset(question.review_subject, reviewer).filter(pk=run.pk)
+    projected = rows.annotate(waiting=kind.waiting_on_expression(rows, reviewer))
+    assert list(projected.values_list("pk", "waiting")) == [(run.pk, True)]
+    assert not projected.exclude(pk=run.pk).exists()
+    other = WorkflowRun.objects.with_actor(bystander).filter(pk=run.pk)
+    assert list(other.annotate(waiting=kind.waiting_on_expression(other, bystander))
+                .values_list("pk", "waiting")) == [(run.pk, False)]
+    hidden = WorkflowRun.objects.with_actor(unreadable).filter(pk=run.pk)
+    assert list(hidden.annotate(waiting=kind.waiting_on_expression(hidden, reviewer))) == []
+    with actor_context(reviewer):
+        for actor in (None, SubjectRef.of("auth/group", str(reviewer.pk))):
+            assert list(rows.annotate(waiting=kind.waiting_on_expression(rows, actor))
+                        .values_list("pk", "waiting")) == [(run.pk, False)]
 
 
 def test_unreadable_or_missing_run_never_hides_a_readable_question_or_change(review) -> None:

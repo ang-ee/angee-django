@@ -11,6 +11,7 @@ from typing import Any
 from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import setting_changed
 from django.db import models
+from django.db.models.expressions import BaseExpression
 from django.dispatch import receiver
 
 from angee.base.hooks import resolve_hooks
@@ -73,9 +74,13 @@ class TimelineKind(ABC):
     def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
         """Describe the selected source rows, batching any additional display dependencies."""
 
-    def waiting_on(self, rows: Any, actor: Any) -> models.QuerySet:
-        """The native subset waiting on the viewer, within the readable branch."""
-        return rows.none()
+    def waiting_on_expression(self, rows: Any, actor: Any) -> BaseExpression:
+        """Project attention on an already-readable branch without changing its rows.
+
+        Return a non-null, join-free Boolean expression; related targets retain their own
+        read gates. The branch owns its record membership and row admission.
+        """
+        return models.Value(False, output_field=models.BooleanField())
 
     def fold(self, record: models.Model) -> tuple[Any, Any] | None:
         """Content type and primary key expressions for a possible parent target."""

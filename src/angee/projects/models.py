@@ -41,7 +41,7 @@ from angee.base.models.merge import MergeableMixin
 from angee.base.models.merge_references import MergePolicy
 from angee.base.models.ownership import ItemOwnershipMixin, OwnerMixin, OwnerQuerySet
 from angee.base.models.refs import RecordRefMixin
-from angee.base.models.trash import TrashMixin, TrashQuerySet
+from angee.base.models.trash import TRASH_FLAG_FIELD, TrashMixin, TrashQuerySet
 from angee.base.permissions import actor_user_id, candidate_relationships
 from angee.base.querysets import MergeableQuerySet
 from angee.base.serialization import strip_null_bytes
@@ -377,18 +377,23 @@ class TaskQuerySet[TaskT: Task](
         ):
             return super().create_forest(rows)
 
+    def waiting_on_expression(self, actor: Any) -> models.Case | models.Value:
+        """Project open, untrashed assignment without adding a row read scope."""
+        identity = actor_user_id(to_subject_ref(actor)) if actor is not None else None
+        if identity is None:
+            return models.Value(False, output_field=models.BooleanField())
+        return models.Case(
+            models.When(
+                **{TRASH_FLAG_FIELD: False, "status": self.model.TaskStatus.OPEN, "assignee_id": identity},
+                then=models.Value(True),
+            ),
+            default=models.Value(False), output_field=models.BooleanField(),
+        )
+
     def waiting_on(self, actor: Any) -> Self:
         """Open, untrashed tasks assigned to this actor, within the caller's scope."""
-
         identity = actor_user_id(to_subject_ref(actor)) if actor is not None else None
-        return (
-            self.none()
-            if identity is None
-            else self.untrashed().filter(
-                status=self.model.TaskStatus.OPEN,
-                assignee_id=identity,
-            )
-        )
+        return self.none() if identity is None else self.filter(self.waiting_on_expression(actor))
 
     def for_record(self, record: Any, *, include_done: bool = True) -> Self:
         """Return ``record``'s tasks this queryset reads: open first, then by due date and title.

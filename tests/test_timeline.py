@@ -120,6 +120,13 @@ def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: No
     assert page["entries"][0]["detail"] == "Second edit"
     assert page["entries"][0]["children"] == []
     assert page["needs_me"] == data["timeline_attention"] == 1
+    tasks = [entry for entry in page["entries"] if entry["kind"] == "projects.task"]
+    assert len(tasks) == 1 and tasks[0]["needs_me"] is True
+    assert all(entry["needs_me"] is False for entry in page["entries"]
+               if entry["kind"] == "provenance.change")
+    attention = read_timeline(vault, owner, needsMe=True)["timeline"]
+    assert [entry["target_id"] for entry in attention["entries"]] == [tasks[0]["target_id"]]
+    assert attention["kinds"] == page["kinds"]
     one = read_timeline(vault, owner, limit=1)["timeline"]
     assert one["has_more"] and one["next_before"]
     rest = read_timeline(vault, owner, before=one["next_before"])["timeline"]
