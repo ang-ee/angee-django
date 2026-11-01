@@ -1064,39 +1064,55 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   the resource's declared `subjectField`; never construct a subject from a
   public display id. The shared package owns presentation, and IAM owns the
   generated GraphQL document adapter.
-- Live model updates ride GraphQL subscriptions through
-  refine's live provider and react-query invalidation, not a `setInterval`
-  refetch loop. Opt a model into live cross-actor refresh by declaring
-  `changes(Model, field="<model>Changed")` in its `schema.py`; local writes
-  invalidate through refine mutations, and subscription pushes invalidate the
-  affected refine resources. Authored reads receive pushes through the
-  [live coalescer](../../packages/refine/src/query-invalidation.ts): a change
-  cancels matching in-flight requests at once and one refetch per burst follows
-  within the max wait, so declare each read's `models` from the owners its
-  resolver actually reads. Refine's own resource hooks still invalidate per
-  push. Stream foreign-system state (e.g. the operator
-  daemon's `onWorkspaceStatusChange`) over its own subscriptions.
-  A dashboard widget may explicitly declare interval refresh through its
-  [refresh contract](../../packages/ui/src/dashboard/headless.ts). Its data
-  adapter forwards that interval to native Query `refetchInterval`; Query owns
-  scheduling and observer cleanup. This declaration does not authorize a
-  private polling loop in a page or addon. Use `setInterval` only for non-data
-  UI motion or rotating a short-lived credential. Foreign systems should
-  publish their own change subscriptions.
-- Authored mutation result envelopes are decoded at the hook boundary. Pass
-  `errorFrom` to `useAuthoredMutation` for `{error, error_code}` payloads; the
-  hook throws before invalidating, so pages do not repeat result-error checks or
-  accidentally refresh failed writes. Its native pending lifecycle includes
-  result validation and awaited invalidation by default. A response-backed save
-  explicitly supplies `acceptResponse`: first merge accepted fields into the
-  existing complete typed query result with `useSetAuthoredQueryData`, which
-  cancels older reads at the exact native key; then the form acknowledges its
-  accepted baseline while derived reads refresh in the background. Keep live
-  invalidation and reconnect catch-up. Partial mutation data never replaces a
-  complete read projection, and background read failures retain native Query
-  error reporting. Clear settled failures through
-  the hook's `reset`; resetting a pending mutation detaches its observer without
-  cancelling the write, so a dismissing dialog must preserve that pending state.
+- **One reconciliation owner for writes and live changes.** Opt a model into
+  cross-actor delivery with `changes(Model, field="<model>Changed")` in its
+  schema. Local mutations and subscription events enter the provider's shared
+  [reconciler](../../packages/refine/src/query-invalidation.ts): cancel earlier
+  matching reads, adopt a sufficient response at its exact native Query key,
+  then schedule affected derived reads in one bounded burst. Native Refine
+  resource keys and authored query keys stay distinct; `createApp` uses native
+  manual live mode so Refine does not schedule a second refresh per push.
+  Declare authored `models`, exact `records` and related interests from the
+  owners the resolver actually reads. Unknown effects retain model fallback.
+  Do not add a page-local invalidator, polling loop or second row cache.
+- **Registration readiness closes the initial-read race by reconciling reads.**
+  The [live provider](../../packages/refine/src/provider.ts) consumes the server's
+  `ready` control after actual model-group registration, on initial subscription,
+  reconnect and resume. It cancels loading reads and marks retained matching
+  resource/authored reads stale through the same scheduler. Controls never reach
+  user data callbacks. A websocket connection acknowledgement is too early.
+  This transport has no replay cursor, total order or row revision guarantee;
+  keep authorized scope reconciliation on readiness and delivery gaps. Generic
+  `changed_values` are not complete GraphQL projections and must not be merged
+  into cached rows by inference. Silence after deletion or revocation is not
+  authoritative absence; only the actor-scoped read owner can establish it.
+- **Mutation completion follows the returned contract.** Authored hooks decode
+  result envelopes through `errorFrom` before reconciliation, preserving domain
+  refusals and native pending/error behavior. A response-backed write supplies
+  `acceptResponse` and actually adopts the accepted projection using
+  `useSetAuthoredQueryData` or the shared resource/form adapter. Exact acceptance
+  cancels stale earlier reads before the form/composer acknowledges its baseline;
+  sufficient complete projections avoid their redundant reread while derived
+  reads reconcile in the background. An accepted partial projection declares
+  `complete: false`: retain its values as stale and revalidate that exact read.
+  Never label a partial result complete or supply an empty callback to shorten
+  pending state. Without response acceptance, existing awaited reconciliation
+  remains the mutation's completion contract. Generated record actions compose
+  that owner once; domain `afterSuccess` callbacks must not repeat its refresh.
+  Background failures retain native Query error reporting, and later user edits
+  survive acceptance. Reset settled mutation failures through the hook's `reset`;
+  resetting a pending observer does not cancel the write.
+- **External protocols retain their own completion and freshness boundaries.**
+  Operator typed snapshots and ACP output use their existing transports; command
+  acceptance is distinct from durable Integrate/Platform/job completion. Explicit
+  report reads and remote previews retain their selected scope and retry/restart
+  controls. A dashboard may declare a native Query `refetchInterval` through its
+  [refresh contract](../../packages/ui/src/dashboard/headless.ts); a protocol
+  owner may use that same native option for a durable operation or expiring
+  connection credential. This does not authorize a page-local polling engine.
+  Credential-bearing authored operations compose `transient: true` so settled
+  result and variable values leave the native mutation cache; retain only the
+  temporary values required by the owning authorization or pairing ceremony.
 - Client-side gates are UX only. The server is the authorization boundary.
 - **Presence reflects permissions; it never gates.** A menu entry (dependents and the deployment may set it like any declaration
   field) or a container child may name `requires:
@@ -1401,10 +1417,15 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **One keyset feed hook.** Compose `useAuthoredKeysetFeed` from `@angee/refine`;
   domain adapters supply documents, scopes, live interests and presentation order.
   Native Query pages own loaded history; do not introduce a second row cache.
-  Live feeds supply retained-ID revalidation; explicit remote snapshots can omit
-  it and configure native freshness/refetch options on the same owner. Use its
-  restart operation for a fresh snapshot, rather than remount keys or manual page
-  accumulation. See the [IMAP sample preview](../../src/angee/messaging_integrate_imap/README.md).
+  Live feeds supply retained-ID revalidation. Known updates to retained rows can
+  use bounded actor-scoped rereads; the result must partition every requested id
+  into a returned row or explicit absence. Unknown membership, creates, deletes,
+  readiness and incomplete partitions use fixed-window reconciliation, preserving
+  loaded cursors and retained history. Silence never removes a row. Explicit
+  remote snapshots can omit revalidation and configure native freshness/refetch
+  options on the same owner. Use its restart operation for a fresh snapshot,
+  rather than remount keys or manual page accumulation. See the
+  [IMAP sample preview](../../src/angee/messaging_integrate_imap/README.md).
 - **Enum casing is decided once.** `useEnumOptions` owns read/write casing; a
   caller that re-uppercases option values is working around the owner. Select its
   casing option for authored enum actions and retain lowercase CRUD inputs.
@@ -1890,12 +1911,14 @@ still open a creation form. Fixtures must declare the write operations they inte
 to exercise. Record locking (`readOnlyWhen`) uses the server record, not unsaved
 form values.
 
-Native form saves refresh their resource queries and authored reads of that
-model; custom commands retain their mutation owner's invalidation. Declare
-other affected models through `invalidateModels`; the
-[shared save owner](../../packages/ui/src/views/form/use-form-view-save.ts)
-resolves their resource and authored-query invalidation. A dependency between
-read models is not a reason to replace generated CRUD with a custom mutation.
+Native form saves adopt their returned resource projection before reconciling
+resource and authored reads through the shared mutation owner. Complete accepted
+projections avoid a redundant exact reread; partial projections remain stale
+until authorized recovery. Custom commands retain their own result and
+invalidation contract. Declare other affected models through `invalidateModels`;
+the [shared save owner](../../packages/ui/src/views/form/use-form-view-save.ts)
+resolves resource and authored interests. A dependency between read models is
+not a reason to replace generated CRUD with a custom mutation.
 
 A save whose normalized header and line values equal the server record sends no
 mutation. It resets the dirty-but-equivalent draft to those server values and
