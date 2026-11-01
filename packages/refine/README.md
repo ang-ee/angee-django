@@ -45,7 +45,11 @@ for partial writes so derived data remains stale. A callback that adopts no data
 must not be used as a speed switch. `records` and `relatedRecords` retain exact
 canonical row effects, with `invalidateModels` as the broad fallback.
 
-The Angee live provider owns one bounded reconciliation burst for standard local
+The Angee change provider owns local scheduling and acceptance lifetime even in
+apps without websocket transport. Every session reset synchronously suspends it
+and advances the lifetime before resetting native queries; repeated suspension
+also invalidates old callbacks. Optional transport supplies subscriptions only.
+The provider owns one bounded reconciliation burst for standard local
 mutation effects, authored interests and native resource keys. The composed app
 uses Refine manual live mode so native automatic resource invalidation does not
 run a second path. Explicit `invalidationFilters`/`invalidationOptions` retain the

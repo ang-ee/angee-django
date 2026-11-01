@@ -200,9 +200,17 @@ describe("record action helpers", () => {
       },
     );
     expect(dataMocks.mutate).toHaveBeenCalledWith("src_1");
-    expect(refresh).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledOnce();
     expect(afterSuccess).toHaveBeenCalledOnce();
     expect(afterSuccess).toHaveBeenCalledWith(expect.objectContaining({ record: { id: "src_1" } }), "Synced");
+  });
+
+  test.each([undefined, false, true])("keeps an uncovered record action's explicit/default refresh policy: %s", async (refreshOption) => {
+    const refresh = vi.fn();
+    const { result } = renderHook(() => useRecordActionMutation("refresh_source",
+      refreshOption === undefined ? undefined : { refresh: refreshOption }));
+    await act(async () => { await result.current[0](actionContext("src_1", { refresh })); });
+    expect(refresh).toHaveBeenCalledTimes(refreshOption === false ? 0 : 1);
   });
 
   test("settles and forwards action arguments beside the record id", async () => {
@@ -240,7 +248,7 @@ describe("record action helpers", () => {
     });
     expect(dataMocks.settle).toHaveBeenCalledOnce();
     expect(dataMocks.mutate).toHaveBeenCalledWith("lead_1");
-    expect(refresh).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledOnce();
     expect(afterSuccess).toHaveBeenCalledOnce();
     expect(afterSuccess).toHaveBeenCalledWith(expect.objectContaining({ record: { id: "lead_1" } }), "Synced");
     expect(message).toBeUndefined();

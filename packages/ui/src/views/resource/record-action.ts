@@ -56,6 +56,16 @@ export function recordActionId(context: ActionContext): string | undefined {
   return typeof id === "string" && id !== "" ? id : undefined;
 }
 
+/** One successful record-action completion policy, including settled actions. */
+async function completeRecordAction(
+  context: ActionContext,
+  result: ActionResult,
+  { refresh = true, afterSuccess }: Pick<UseRecordActionOptions, "refresh" | "afterSuccess">,
+): Promise<void> {
+  if (refresh) context.refresh();
+  await afterSuccess?.(context, result);
+}
+
 /** Build an `<Action run>` callback for actions that target the current record id.
  * @owner RecordActionBar
  */
@@ -67,7 +77,7 @@ export function useRecordAction(
     afterSuccess,
     defaultMessage,
     missingRecordMessage,
-    refresh = true,
+    refresh,
   } = options;
   return React.useCallback<RecordAction>(
     async (context) => {
@@ -77,8 +87,7 @@ export function useRecordAction(
         return;
       }
       const result = (await run(id, context)) ?? defaultMessage;
-      if (refresh) context.refresh();
-      await afterSuccess?.(context, result);
+      await completeRecordAction(context, result, { refresh, afterSuccess });
       return result;
     },
     [afterSuccess, defaultMessage, missingRecordMessage, refresh, run],
@@ -120,20 +129,21 @@ export function useRecordActionMutation<TField extends string = string>(
       if (settleOptions) {
         const outcome = await settleActionResult(mutateRecord);
         if (outcome?.ok) {
-          await options?.afterSuccess?.(context, outcome.message);
+          await completeRecordAction(context, outcome.message, options ?? {});
         }
         return undefined;
       }
       return runActionResult(await mutateRecord());
     },
-    [mutate, options?.actionArguments, options?.afterSuccess, settleActionResult, settleOptions],
+    [mutate, options?.actionArguments, options?.afterSuccess, options?.refresh, settleActionResult, settleOptions],
   );
-  // The mutation already reconciles affected native and authored reads. Keep
-  // domain acknowledgement callbacks, without issuing a second form refresh.
+  // Declared effects need not include the open record (and may be absent).
+  // Preserve the record-action refresh contract. Settled success already uses
+  // that same completion owner above; refusals must never run it.
   return [useRecordAction(run, {
     ...options,
     afterSuccess: settleOptions ? undefined : options?.afterSuccess,
-    refresh: false,
+    refresh: settleOptions ? false : options?.refresh,
   }), state];
 }
 

@@ -670,7 +670,7 @@ export function useFormViewSave({
               resource: identifier ?? refineResource,
               dataProviderName: dataResource.schemaName,
               id: id ?? undefined,
-              invalidates: ["detail"],
+              invalidates: ["detail" as const],
             }] : []),
         ],
       });
