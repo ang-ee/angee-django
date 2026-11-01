@@ -425,13 +425,13 @@ export function useAngeeListBatch(
         .action("list")
         .params({ ...meta, filters: [], pagination, sorters: [] })
         .get(),
-      queryFn: () =>
+      queryFn: (context) =>
         dataProvider(schemaName).getList({
           resource: resourceName,
           pagination,
           filters: [],
           sorters: [],
-          meta,
+          meta: { ...meta, get signal() { return context.signal; } },
         }),
       enabled: canQuery,
     })),
