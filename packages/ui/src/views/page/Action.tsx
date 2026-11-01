@@ -1,7 +1,7 @@
 import type { QueryKey } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { Row } from "@angee/metadata";
-import type { ActionOutcome, ListQueryFieldArgument } from "@angee/refine";
+import type { ActionOutcome, ListQueryFieldArgument, MutationExecutionOptions } from "@angee/refine";
 import type { CrudFilter } from "@refinedev/core";
 import type { Resolver } from "react-hook-form";
 
@@ -24,7 +24,7 @@ export interface ActionConfirm {
  *
  * `values` are a snapshot for the duration of `run`; `record` remains live.
  */
-export interface ActionContext {
+export interface ActionContext extends MutationExecutionOptions {
   /** The open record the action targets (`null` while creating). */
   record: Row | null;
   /** Values collected by the action's `prompt`, keyed by field name. */
@@ -47,7 +47,7 @@ export type ActionResult = string | void;
  * on and the ids selected on the invoking surface (the open record's own id on a
  * record bar; the checked rows on a list). A `relationList` arg prefills from it.
  */
-export interface ActionFormContext {
+export interface ActionFormContext extends MutationExecutionOptions {
   /** The open record the action targets, or `null` on a list/create surface. */
   record: Row | null;
   /** Public ids of the invoking model the action targets: the open record or the acted-on row. */

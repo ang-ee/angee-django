@@ -175,6 +175,8 @@ export {
   useReconcileMutationResponse,
   type AuthoredLiveChange,
   type MutationReconciliationOptions,
+  type MutationReconciliationScope,
+  type MutationExecutionOptions,
 } from "./query-invalidation";
 export {
   stableKey,

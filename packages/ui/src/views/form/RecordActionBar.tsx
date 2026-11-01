@@ -197,7 +197,7 @@ export function RecordActionBar({
       }}
       open
       onOpenChange={(open) => { if (!open) setFormAction(null); }}
-      onSucceeded={() => refreshRecordAction({ refresh: reload, refreshQueryKey }, reconcile)}
+      onSucceeded={(_outcome, execution) => refreshRecordAction({ ...execution, refresh: reload, refreshQueryKey }, reconcile)}
     />
   ) : null;
   const deleteTrigger = visibleDeleteAction !== undefined ? (

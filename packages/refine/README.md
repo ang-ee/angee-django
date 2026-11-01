@@ -53,12 +53,21 @@ The provider owns one bounded reconciliation burst for standard local
 mutation effects, authored interests and native resource keys. The composed app
 uses Refine manual live mode so native automatic resource invalidation does not
 run a second path. Explicit `invalidationFilters`/`invalidationOptions` retain the
-native caller-requested refresh policy. `useReconcileMutationResponse().batch(run)`
-collects bulk item effects and flushes in `finally`; item failures preserve their
-native error, and authentication suspension discards buffered effects and settles
-waiting completions. Form-owned exact `queryKeys` completion fallbacks join that
-batch once with declared effects; complete response acceptance excludes only the
-batch fallback, while later independent live changes still reconcile normally.
+native caller-requested refresh policy. `useReconcileMutationResponse().batch`
+passes an explicit per-command `reconciliation` collector to its callback. Forward
+it as execution metadata: `mutate(variables, { reconciliation })` for authored
+mutations, `action(id, args, { reconciliation })` for generated actions, or in
+direct reconciliation options. It is never a GraphQL variable. Native mutation
+metadata carries it only while pending and removes it on settlement.
+
+Each command independently flushes its collected effects in `finally`; item
+failures preserve their native error. Legacy commands await their own reads;
+accepted responses retain background reconciliation. Unrelated commands and the
+bounded live queue never wait for a held command's transport. Authentication
+suspension invalidates collectors and settles waiting completions. Form-owned
+exact `queryKeys` completion fallbacks join their explicit collector once with
+declared effects; complete response acceptance excludes only that command's
+fallback, while independent live changes still reconcile normally.
 Opaque custom reloads and explicit record-action `refresh: true` remain imperative.
 Foreign live providers retain native direct refresh behavior.
 

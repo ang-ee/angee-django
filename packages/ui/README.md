@@ -217,3 +217,10 @@ effects, including typed action dialogs. Complete accepted projections skip only
 their own automatic fallback. `refresh: true` requests an explicit reload;
 `refresh: false` omits default completion. Custom acknowledged sources keep their
 opaque imperative reload contract.
+
+Generic record action runners and typed action submitters receive an explicit
+`context.reconciliation` collector. Forward it when calling another mutation:
+`mutate(variables, { reconciliation: context.reconciliation })` or generated
+`action(id, args, { reconciliation: context.reconciliation })`. The shared
+record action and dialog owners establish that command's lifetime; unrelated
+commands and live changes continue independently.

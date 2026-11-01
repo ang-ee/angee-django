@@ -14,6 +14,7 @@ import {
   useOperationDocuments,
   useReconcileMutationResponse,
   type CustomGraphQLOperationTarget,
+  type MutationExecutionOptions,
   type ListBatchTarget,
   type OperationDocumentKind,
   type UseAngeeDeletePreviewResult,
@@ -85,7 +86,7 @@ export function useDeletePreviewOperation(
 
 export interface UseDeleteWithPreviewResult extends UseAngeeDeletePreviewResult {
   available: boolean;
-  remove: (id: string) => Promise<void>;
+  remove: (id: string, execution?: MutationExecutionOptions) => Promise<void>;
 }
 
 /**
@@ -103,12 +104,13 @@ export function useDeleteWithPreview(
     document: operation.document,
   });
   const reconcileMutationResponse = useReconcileMutationResponse();
-  const remove = useCallback(async (id: string): Promise<void> => {
+  const remove = useCallback(async (id: string, execution?: MutationExecutionOptions): Promise<void> => {
     if (!resource || !operation.target) {
       throw new Error("Delete preview is unavailable for this resource.");
     }
     await preview.mutate({ id, confirm: true });
     await reconcileMutationResponse(undefined, undefined, {
+      ...execution,
       records: [{ model: resource.modelLabel, id }],
       invalidates: [refineInvalidationParams({
         resource: refineResourceIdentifier(resource), dataProviderName: resource.schemaName, id,
