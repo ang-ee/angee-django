@@ -145,7 +145,7 @@ function conversationPreview(active: boolean, pending = false) {
           viewAs: active ? { userId: user.id } : null,
           currentUser: user,
           realUser: { id: "usr_admin", name: "Administrator" },
-          viewablePeople: [user], enter: vi.fn(), exit: vi.fn(), pending,
+          enter: vi.fn(), exit: vi.fn(), pending,
         },
       },
     }}>
