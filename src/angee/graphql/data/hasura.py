@@ -1461,7 +1461,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     def prepare_queryset(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
         queryset = _relation_scalar_queryset(queryset, relation_paths)
         if issubclass(node, RecordReferenceNode) or record_ref_requires_read:
-            queryset = with_record_reference_access(queryset)
+            queryset = with_record_reference_access(queryset, select=False)
         return with_filter_aliases(queryset)
 
     def prepare_filters(queryset: models.QuerySet[Any], predicate: models.Q) -> models.QuerySet[Any]:
