@@ -46,6 +46,8 @@ export function ResourceListBody<TRow extends Row = Row>({
   presentation,
   chrome,
   baseFilter,
+  records,
+  relatedModels,
   filterOptions,
   search: searchDeclaration,
   facets,
@@ -106,6 +108,8 @@ export function ResourceListBody<TRow extends Row = Row>({
     : facets;
   const resolvedLaneSource = declarations.list?.props.laneSource ?? laneSource;
   const listRenderProps = {
+    records,
+    relatedModels,
     presentation,
     chrome,
     fields,

@@ -1,4 +1,5 @@
 import * as React from "react";
+import type { AuthoredQueryOptions } from "@angee/refine";
 import type { SearchFacet } from "../resource/search/types";
 import {
   useAngeeFacets,
@@ -41,6 +42,7 @@ export function useScalarFacets<TRow extends object>(
   columns: readonly ColumnDescriptor<TRow>[],
   metadata: ModelMetadata | null,
   activeFilter?: ResourceViewFilter,
+  interests: Pick<AuthoredQueryOptions, "records" | "relatedModels"> = {},
 ): ScalarFacets {
   const t = useUiT();
   const facets = React.useMemo(
@@ -56,6 +58,7 @@ export function useScalarFacets<TRow extends object>(
     [activeFilter, facets, resource],
   );
   const facetQuery = useAngeeFacets(groupOperation.target, {
+    ...interests,
     document: groupOperation.document,
     facets: facetSpecs,
     enabled: resource !== null && facetSpecs.length > 0,

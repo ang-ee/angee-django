@@ -43,6 +43,8 @@ import type { GroupedResourceViewSurface, ResourceListResult, UseResourceViewSur
 export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   resource,
   source,
+  records,
+  relatedModels,
   columns,
   fields,
   filter,
@@ -116,6 +118,8 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   );
   const grandTotal = useAngeeAggregate(aggregateOperation.target, {
     document: aggregateOperation.document,
+    records,
+    relatedModels,
     where,
     measures: queryMeasures,
     enabled: !source && rowGroupStack.length > 0 && measures.length > 0,
@@ -214,6 +218,8 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     source ? EMPTY_ARRAY : groupScopes,
     {
       document: groupOperation.document,
+      records,
+      relatedModels,
       enabled: !source && rowGroupStack.length > 0,
     },
   );
