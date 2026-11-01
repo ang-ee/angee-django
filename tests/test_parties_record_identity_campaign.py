@@ -62,16 +62,13 @@ def test_record_follower_sql_is_bounded_and_unfollow_revokes_parent_and_child(re
         str(query.query)
         with CaptureQueriesContext(connection) as queries:
             assert list(query.values_list("pk", flat=True)) == [person.pk]
-        # Fetching guards all projected columns in one schema operation; reads
-        # of the filled result cache skip the guard. There are one shared revision read,
-        # actor sets, 23 arrows (a filed task reaches each of its declared subject
-        # types' direct holders, its removal authority's project write and its subject
-        # task's owner), and one application row SELECT.
-        assert len(queries) == 26, queries.captured_queries
-        # The application row SELECT, and the arrow source of a record task about a party.
+        # Native exact-PK inference uses a point lower bound: one shared revision
+        # read, actor sets and one application SELECT, without general arrow preparation.
+        assert len(queries) == 3, queries.captured_queries
+        # Each MTI path performs exactly one application row SELECT.
         assert sum(
             query["sql"].startswith(f'SELECT "{model._meta.db_table}".') for query in queries.captured_queries
-        ) == (2 if model is Party else 1)
+        ) == 1
     before = relationship_snapshot()
     with system_context(reason="tests.t3.unfollow"):
         record.message_unsubscribe(party=person)

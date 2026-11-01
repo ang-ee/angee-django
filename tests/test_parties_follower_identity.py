@@ -178,7 +178,7 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Both MTI paths and private intersections compile; 2/50-row SQL costs stay fixed."""
+    """MTI populations stay fixed-cost; the private Tie singleton uses a point scope."""
 
     f = followers
     with system_context(reason="tests.follower_identity.page"):
@@ -195,20 +195,20 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
         assert isinstance(local, LocalBackend)
         local.schema()
         monkeypatch.setattr(type(local), "accessible", no_enumeration)
-        for model in (Party, Person, Tie):
+        for model in (Party, Person):
             resource_type = model_resource_type(model)
             assert resource_type is not None
-            for action in ("read", "read_private") if model != Tie else ("read",):
+            for action in ("read", "read_private"):
                 scoped = model.objects.with_actor(f.reader).with_action(action).scoped()
                 # Each fresh scope reads the schema revision and expands the actor's
                 # memberships (2). Read then prepares 23 arrow sources (a filed task
                 # reaches each of its declared subject types' direct holders, its
                 # removal authority's project write and its subject task's owner);
-                # Tie prepares one Party source. Private reads need only the final row SELECT.
-                expected_queries = 4 if model == Tie else 26 if action == "read" else 3
+                # Private reads need only the final row SELECT.
+                expected_queries = 26 if action == "read" else 3
                 counts = []
                 for size in (2, 50):
-                    ids = [row.pk for row in rows[:size]] if model != Tie else [tie.pk]
+                    ids = [row.pk for row in rows[:size]]
                     query = scoped.filter(pk__in=ids).values_list("pk", flat=True)
                     sql, parameters = query.query.sql_with_params()
                     assert "SELECT" in sql and parameters
@@ -231,8 +231,19 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
                         )
                         == (2 if model is Party and action == "read" else 1)
                     )
-                    assert result == (set(ids) if action == "read" and model != Tie else set())
+                    assert result == (set(ids) if action == "read" else set())
                 assert counts[0] == counts[1]
+        # A genuine singleton uses the native point lower bound instead of
+        # preparing the generic Party source for Tie's private intersection.
+        singleton = Tie.objects.with_actor(f.reader).scoped().filter(pk__in=[tie.pk]).values_list("pk", flat=True)
+        sql, parameters = singleton.query.sql_with_params()
+        assert "SELECT" in sql and parameters
+        (tmp_path / "Tie-read-singleton.sql").write_text(f"{sql}\n-- parameters: {parameters!r}\n", encoding="utf-8")
+        with evaluator_scope(), CaptureQueriesContext(connection) as captured:
+            result = set(singleton)
+        assert len(captured) == 3, captured.captured_queries
+        assert sum(query["sql"].startswith(f'SELECT "{Tie._meta.db_table}".') for query in captured) == 1
+        assert result == set()
         for model in (Party, Person):
             # Also exercise the native public queryset, with enumeration forbidden.
             assert set(model.objects.filter(pk__in=[row.pk for row in rows]).values_list("pk", flat=True)) == {
