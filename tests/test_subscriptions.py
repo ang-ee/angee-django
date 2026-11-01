@@ -35,14 +35,15 @@ from rebac.roles import grant as grant_role
 from rebac.roles import revoke as revoke_role
 from strawberry_django.utils.requests import get_request
 
-from angee.graphql import access, publishing, subscriptions
-from angee.graphql.actions import session_user
-from angee.graphql.consumers import AngeeGraphQLWSConsumer
+from angee.graphql import publishing, subscriptions
 from angee.graphql.events import ChangeEvent, ChangePayload, ChangeRelatedRecord
 from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.graphql.schema import GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from angee.iam import schema as iam_schema
+from angee.iam.graphql import access
+from angee.iam.graphql.actions import session_user
+from angee.iam.graphql.consumers import IAMGraphQLWSConsumer
 from angee.iam.identity import user_display_label, user_label
 from angee.iam.models import UserAccountAction
 from angee.iam.schema import IAMQuery
@@ -212,7 +213,7 @@ def test_resolver_ready_follows_registration_and_precedes_buffered_data(monkeypa
 
     layer = Layer()
     monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: layer)
-    monkeypatch.setattr(subscriptions, "_change_read_gate", lambda *args: object())
+    monkeypatch.setattr(subscriptions, "_change_filters", lambda *args: object())
     seen = []
 
     def filter_event(gate, payload):
@@ -258,7 +259,7 @@ def test_resolver_readiness_never_exposes_a_denied_payload(monkeypatch) -> None:
         yield _payload(id="private-row", changed_values={"name": "private-value"})
 
     monkeypatch.setattr(subscriptions, "subscribe", hidden_payload)
-    monkeypatch.setattr(subscriptions, "_change_read_gate", lambda *args: object())
+    monkeypatch.setattr(subscriptions, "_change_filters", lambda *args: object())
     monkeypatch.setattr(subscriptions, "_filter_change_event", lambda *args: None)
     resolver = _subscription_resolver(changes(Group, field="groupChanged"))
 
@@ -274,7 +275,7 @@ def test_resolver_registration_failure_does_not_emit_ready(monkeypatch) -> None:
     """A missing transport fails promptly rather than claiming readiness or hanging."""
 
     monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: None)
-    monkeypatch.setattr(subscriptions, "_change_read_gate", lambda *args: object())
+    monkeypatch.setattr(subscriptions, "_change_filters", lambda *args: object())
     resolver = _subscription_resolver(changes(Group, field="groupChanged"))
 
     async def scenario() -> None:
@@ -294,7 +295,7 @@ def test_resolver_cancellation_after_ready_releases_membership(monkeypatch) -> N
 
     layer = InMemoryChannelLayer()
     monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: layer)
-    monkeypatch.setattr(subscriptions, "_change_read_gate", lambda *args: object())
+    monkeypatch.setattr(subscriptions, "_change_filters", lambda *args: object())
     resolver = _subscription_resolver(changes(Group, field="groupChanged"))
 
     async def scenario() -> None:
@@ -353,7 +354,7 @@ def test_subscription_resolver_gates_events_through_sync_adapter(
         return wrapper
 
     monkeypatch.setattr(subscriptions, "subscribe", subscribe)
-    monkeypatch.setattr(subscriptions, "ChangeReadGate", Gate)
+    monkeypatch.setattr("angee.iam.graphql.changes.ChangeReadGate", Gate)
     monkeypatch.setattr(
         subscriptions,
         "close_old_connections",
@@ -409,7 +410,7 @@ def test_subscription_resolver_uses_current_actor(monkeypatch) -> None:
             return ChangeEvent.from_payload(payload)
 
     monkeypatch.setattr(subscriptions, "subscribe", subscribe)
-    monkeypatch.setattr(subscriptions, "ChangeReadGate", Gate)
+    monkeypatch.setattr("angee.iam.graphql.changes.ChangeReadGate", Gate)
     surface = changes(Group, field="groupChanged")
     resolver = _subscription_resolver(surface)
 
@@ -452,7 +453,7 @@ def test_subscription_resolver_denies_without_current_actor(
             return ChangeEvent.from_payload(payload)
 
     monkeypatch.setattr(subscriptions, "subscribe", subscribe)
-    monkeypatch.setattr(subscriptions, "ChangeReadGate", Gate)
+    monkeypatch.setattr("angee.iam.graphql.changes.ChangeReadGate", Gate)
     surface = changes(Group, field="groupChanged")
     resolver = _subscription_resolver(surface)
 
@@ -566,7 +567,7 @@ def test_inmemory_channel_layer_requires_dev_or_explicit_opt_in() -> None:
 def test_ws_consumer_uses_rebac_channels_mixin() -> None:
     """The GraphQL WS consumer delegates actor setup to REBAC."""
 
-    assert issubclass(AngeeGraphQLWSConsumer, RebacChannelsConsumerMixin)
+    assert issubclass(IAMGraphQLWSConsumer, RebacChannelsConsumerMixin)
 
 
 def test_ws_query_runs_inside_actor_context() -> None:
@@ -583,7 +584,7 @@ def test_ws_query_runs_inside_actor_context() -> None:
             return current_actor() == ANON
 
     async def scenario() -> dict[str, object]:
-        application = AngeeGraphQLWSConsumer.as_asgi(schema=strawberry.Schema(query=Query))
+        application = IAMGraphQLWSConsumer.as_asgi(schema=strawberry.Schema(query=Query))
         communicator = WebsocketCommunicator(
             application,
             "/graphql",
@@ -672,7 +673,7 @@ def test_ws_queries_refresh_identity_eligibility_and_timeline_admission(composed
 
     async def scenario() -> list[dict[str, object]]:
         communicator = WebsocketCommunicator(
-            AngeeGraphQLWSConsumer.as_asgi(schema=schema),
+            IAMGraphQLWSConsumer.as_asgi(schema=schema),
             "/graphql/public/",
             subprotocols=["graphql-transport-ws"],
         )

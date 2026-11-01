@@ -9,8 +9,9 @@ from django.core.exceptions import ValidationError
 from rebac.resources import model_for_resource_type
 
 from angee.base.models.trash import TrashQuerySet
-from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
+from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.ids import PublicID
+from angee.iam.graphql.actions import authorized_permission_target
 from angee.iam.models.trash import ProtectedTrashMixin
 
 TRASH_PERMISSION = "delete"

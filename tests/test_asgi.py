@@ -16,7 +16,7 @@ from django.db.backends.signals import connection_created
 from django.urls import path
 
 from angee.graphql import asgi
-from angee.graphql.consumers import AngeeGraphQLWSConsumer
+from angee.iam.graphql.consumers import IAMGraphQLWSConsumer
 from angee.server.signals import WEB_STATEMENT_TIMEOUT_UID, connect_web_statement_timeout
 from tests.conftest import make_addon
 
@@ -104,7 +104,7 @@ def test_shared_router_validates_graphql_websocket_origins(
     settings.ALLOWED_HOSTS = ["*"]
     settings.CSRF_TRUSTED_ORIGINS = ["https://trusted.example"]
     settings.DEBUG = debug
-    route = path("graphql/test/", AngeeGraphQLWSConsumer.as_asgi(schema=strawberry.Schema(query=Query)))
+    route = path("graphql/test/", IAMGraphQLWSConsumer.as_asgi(schema=strawberry.Schema(query=Query)))
     monkeypatch.setattr("django.apps.apps.get_app_configs", lambda: [SimpleNamespace(name="routes")])
     monkeypatch.setattr(asgi, "optional_addon_module", lambda config, module, **options: SimpleNamespace(
         __name__="routes.asgi", websocket_urlpatterns=lambda: [route],

@@ -19,12 +19,12 @@ from rebac import ObjectRef, system_context
 from strawberry import auto
 from strawberry.scalars import JSON
 
-from angee.graphql.access import actor_can_read
 from angee.graphql.actions import ActionResult
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.data.pydantic_resource import hasura_pydantic_resource
 from angee.graphql.ids import PublicID
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.access import actor_can_read
+from angee.iam.graphql.node import ProtectedNode
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.platform import composed
 from angee.platform.models import Addon as AddonModel
@@ -136,7 +136,7 @@ class PlatformEdge:
 class PlatformAddon:
     """Detail projection over the persisted addon catalogue."""
 
-    id: PublicID = strawberry.field(resolver=AngeeNode.id)
+    id: PublicID = strawberry.field(resolver=ProtectedNode.id)
     name: str
     label: str = strawberry.field(resolver=_Addon.get_display_label)
     installed_version: str | None = strawberry.field(resolver=_Addon.get_installed_version)
@@ -287,7 +287,7 @@ class AddonNode:
     depended_by: list[str]
     model_labels: list[str]
 
-    id: PublicID = strawberry_django.field(resolver=AngeeNode.id, only=["id"])
+    id: PublicID = strawberry_django.field(resolver=ProtectedNode.id, only=["id"])
 
 
 # Read is gated by the model's own ``platform/addon`` REBAC scope (const-backed

@@ -97,7 +97,7 @@ class ProjectSurfaceCampaign(WorkCase):
                 self.graphql(query, {"limit": limit}, user=user)
                 with (
                     patch(
-                        "angee.graphql.capabilities.permission_annotations",
+                        "angee.iam.graphql.capabilities.permission_annotations",
                         side_effect=AssertionError("Per-record permission fallback"),
                     ),
                     CaptureQueriesContext(connection) as queries,
@@ -128,7 +128,7 @@ class ProjectSurfaceCampaign(WorkCase):
                 self.graphql(query, {"limit": limit}, user=user)
                 with (
                     patch(
-                        "angee.graphql.capabilities.permission_annotations",
+                        "angee.iam.graphql.capabilities.permission_annotations",
                         side_effect=AssertionError("Per-record permission fallback"),
                     ),
                     CaptureQueriesContext(connection) as queries,

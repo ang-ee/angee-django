@@ -15,7 +15,7 @@ from rebac import system_context
 
 from angee.base.fields.identity import SqidField
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 from angee.iam.models.base import ProtectedModel
 from tests.tables import model_tables
 
@@ -61,7 +61,7 @@ def test_angee_node_id_uses_generic_public_id_boundary_for_plain_model() -> None
     instance = _bound_sqid_model(prefix="plain")(id=13)
 
     with patch("angee.graphql.node.public_id_of", return_value="plain-13") as public_id_of:
-        assert AngeeNode.id(instance) == "plain-13"
+        assert ProtectedNode.id(instance) == "plain-13"
 
     public_id_of.assert_called_once_with(instance)
 

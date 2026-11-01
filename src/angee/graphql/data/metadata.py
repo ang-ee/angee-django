@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, TypeVar, cast
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
-from rebac.resources import model_for_resource_type, model_resource_type
 from strawberry_django_hasura import HasuraResource
 
 from angee.base.fields import ImplClassField
+from angee.base.hooks import resolve_hooks
 from angee.base.lineage import concrete_child_models
+from angee.base.models.merge import MergeableMixin
 from angee.base.refs import generic_pointer_model
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data import contracts as data_contract
@@ -41,10 +42,6 @@ from angee.graphql.introspection import (
     is_to_one_relation,
     require_field_for_path,
 )
-from angee.iam.models.base import ProtectedModel
-from angee.iam.models.merge import ProtectedMergeableMixin
-from angee.iam.models.refs import ProtectedRecordRefMixin, record_edges_by_target
-from angee.iam.permissions import declared_rebac_definition
 from graphql import GraphQLList, GraphQLNonNull, GraphQLObjectType, GraphQLSchema, get_named_type
 
 __all__ = [
@@ -162,7 +159,8 @@ def finalize_data_resources(
         for contribution in contributions:
             node_name = (
                 resource_type_name(contribution.native_resource.node_type)
-                if contribution.native_resource is not None else contribution.type_names.node
+                if contribution.native_resource is not None
+                else contribution.type_names.node
             )
             if node_name:
                 representation = _resource_record_representation(schema, node_name, declared)
@@ -317,17 +315,34 @@ def finalize_data_resources(
         )
         finalized.append(metadata)
     resources_by_model = {item.model: item for item in finalized if item.model is not None}
-    edges_by_target = record_edges_by_target(definition_for=declared_rebac_definition)
-    return tuple(
+    resources = tuple(
         dataclasses.replace(
             item,
-            grantable=_grantable_relations(item.model, resources_by_model),
             concrete_kinds=_concrete_kinds(item.model, resources_by_model),
-            record_edges=_record_edges(item.model, edges_by_target),
-            mergeable=item.model is not None and issubclass(item.model, ProtectedMergeableMixin),
+            mergeable=item.model is not None and issubclass(item.model, MergeableMixin),
             history=bool(_single_policy_value(item.model_label, by_label[item.model_label], "history")),
         )
         for item in finalized
+    )
+    for provider in resolve_hooks("ANGEE_GRAPHQL_RESOURCE_METADATA"):
+        resources = provider(resources)
+    return resources
+
+
+def _concrete_kinds(
+    model: type[models.Model] | None,
+    resources_by_model: dict[type[models.Model], data_contract.DataResourceMetadata],
+) -> tuple[str, ...]:
+    """Project the direct MTI children this schema exposes as resources, in model-label order.
+
+    A child shares its parent's primary key and public id, so a row created as one
+    of these kinds is also the parent row a relation to the parent selects.
+    """
+
+    if model is None:
+        return ()
+    return tuple(
+        resources_by_model[child].model_label for child in concrete_child_models(model) if child in resources_by_model
     )
 
 
@@ -585,7 +600,8 @@ def _finalize_data_resource(
     )
     active_record_representation = (
         _resource_record_representation(graphql_schema, type_names.node, record_representation)
-        if type_names.node is not None else None
+        if type_names.node is not None
+        else None
     )
     if record_representation is not None and type_names.node is None:
         raise ImproperlyConfigured(
@@ -645,7 +661,7 @@ def _finalize_data_resource(
     return data_contract.DataResourceMetadata(
         model=model,
         model_label=exposed_model_label,
-        resource_type=model_resource_type(model) if model is not None else None,
+        resource_type=None,
         app_label=app_label,
         model_name=model_name,
         query=query,
@@ -689,9 +705,7 @@ def _validated_context_fields(
     if not declared:
         return ()
     if node_name is None:
-        raise ImproperlyConfigured(
-            f"resource metadata for {model_label} declares context_fields without a node type."
-        )
+        raise ImproperlyConfigured(f"resource metadata for {model_label} declares context_fields without a node type.")
     resolved = final_wire_field_names(graphql_schema, node_name, declared)
     readable = {field.name for field in fields if field.readable}
     unavailable = tuple(name for name in resolved if name not in readable)
@@ -717,94 +731,6 @@ def _mutation_arguments(
         for name, argument in mutation.fields[root].args.items()
         if name in declared
     )
-
-
-def _concrete_kinds(
-    model: type[models.Model] | None,
-    resources_by_model: dict[type[models.Model], data_contract.DataResourceMetadata],
-) -> tuple[str, ...]:
-    """Project the direct MTI children this schema exposes as resources, in model-label order.
-
-    A child shares its parent's primary key and public id, so a row created as one
-    of these kinds is also the parent row a relation to the parent selects.
-    """
-
-    if model is None:
-        return ()
-    return tuple(
-        resources_by_model[child].model_label for child in concrete_child_models(model) if child in resources_by_model
-    )
-
-
-def _record_edges(
-    model: type[models.Model] | None,
-    edges_by_target: Mapping[type[models.Model], tuple[type[ProtectedRecordRefMixin], ...]],
-) -> tuple[str, ...]:
-    """Project the edge models accepting this resource's canonical type as a target.
-
-    A record carries only these edges, so a surface listing one (a record's files,
-    pages or source conversations) applies to the record types that name it. An
-    edge with roles adds ``<label>:<role>`` for each role the type carries
-    (:meth:`~angee.iam.models.refs.ProtectedRecordRefMixin.record_edge_roles`), so a surface
-    serving one role (Comments on the chatter role) gates on that entry.
-    """
-
-    if model is None:
-        return ()
-    entries: list[str] = []
-    for edge in edges_by_target.get(generic_pointer_model(model), ()):
-        entries.append(edge._meta.label)
-        entries.extend(f"{edge._meta.label}:{role}" for role in edge.record_edge_roles(model))
-    return tuple(entries)
-
-
-def _grantable_relations(
-    model: type[models.Model] | None,
-    resources_by_model: dict[type[models.Model], data_contract.DataResourceMetadata],
-) -> tuple[data_contract.GrantableRelationMetadata, ...]:
-    """Project grants through resources exposing their model's subject relation."""
-
-    if model is None or not issubclass(model, ProtectedModel):
-        return ()
-    declaration = model.get_rebac_grantable()
-    definition = declared_rebac_definition(model)
-    if not declaration or definition is None:
-        return ()
-    relations = {relation.name: relation for relation in definition.relations}
-    result: list[data_contract.GrantableRelationMetadata] = []
-    for relation_name, permission in sorted(declaration.items()):
-        relation = relations.get(relation_name)
-        if relation is None:
-            continue
-        subjects: list[data_contract.RecordAccessSubjectMetadata] = []
-        for allowed in relation.allowed_subjects:
-            if allowed.wildcard or allowed.with_caveat or allowed.id:
-                continue
-            subject_model = model_for_resource_type(allowed.type)
-            subject_resource = resources_by_model.get(subject_model) if subject_model is not None else None
-            subjects.append(
-                data_contract.RecordAccessSubjectMetadata(
-                    type=allowed.type,
-                    relation=allowed.relation or None,
-                    resource=(
-                        subject_resource.model_label
-                        if subject_resource is not None
-                        and subject_model is not None
-                        and subject_resource.subject_field is not None
-                        and (getattr(subject_model._meta, "rebac_subject_relation", "") or "")
-                        == (allowed.relation or "")
-                        else None
-                    ),
-                )
-            )
-        result.append(
-            data_contract.GrantableRelationMetadata(
-                relation=relation_name,
-                permission=permission,
-                subjects=tuple(subjects),
-            )
-        )
-    return tuple(result)
 
 
 def _projected_public_id_field(
@@ -935,7 +861,8 @@ def _resource_record_representation(schema: GraphQLSchema, node_name: str, decla
     if not isinstance(node, GraphQLObjectType):
         raise ImproperlyConfigured(f"resource metadata node type {node_name!r} is absent from the composed schema.")
     fields = tuple(
-        name for name, field in node.fields.items()
+        name
+        for name, field in node.fields.items()
         if get_named_type(field.type).name == "String"
         and not isinstance(field.type.of_type if isinstance(field.type, GraphQLNonNull) else field.type, GraphQLList)
     )

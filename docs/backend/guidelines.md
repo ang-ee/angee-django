@@ -622,7 +622,7 @@ data through REBAC, never a queryset bypass.
   [`projects.access.bind`](../../src/angee/projects/access.py) writes them
   under the actor.
 - **Declare direct sharing once.** Models declare `rebac_grantable`; the
-  [record-access API](../../src/angee/graphql/sharing.py) dispatches bulk
+  [record-access API](../../src/angee/iam/graphql/sharing.py) dispatches bulk
   grants and revocations through the model's checked methods. Addons do not
   define private share mutations. Metadata projects the grant surface and the
   subject resource's public identity field; the API converts selected public
@@ -1152,7 +1152,7 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   row from everyone but its managers — a constant `trashed` relation filtered on
   `is_trashed`, subtracted outside any recursive arm (see
   [knowledge pages](../../src/angee/knowledge/permissions.zed)). The shared
-  [`trash_record` / `restore_record`](../../src/angee/graphql/trash.py) verbs
+  [`trash_record` / `restore_record`](../../src/angee/iam/graphql/trash.py) verbs
   check the row's `delete`; metadata marks the flag `trashable` for shared views.
   A domain authority that is not `delete` (record-chatter moderation) keeps its own
   verbs and narrows the shared ones through `TrashQuerySet.trash_targets()`; a
@@ -1443,7 +1443,7 @@ open fresh evaluator scopes for authorization and change-feed reads.
 - **View-as is a server-side, read-only HTTP preview.** `X-Angee-View-As`
   carries the target user's public id. [IAM admission](../../src/angee/iam/models/__init__.py)
   checks the real actor's `view_as` permission and the target's eligibility;
-  [ViewAs](../../src/angee/graphql/view_as.py) binds both `request.user` and
+  [ViewAs](../../src/angee/iam/graphql/view_as.py) binds both `request.user` and
   the ambient actor to that target. Mutations and HTTP subscriptions fail with
   `VIEW_AS_READ_ONLY`; query database writes are rolled back. The
   [GraphQL WebSocket consumer](../../src/angee/graphql/consumers.py) retains its
@@ -1464,7 +1464,7 @@ open fresh evaluator scopes for authorization and change-feed reads.
   and the model owns optimistic locking. A host without provenance exposes no
   idempotency argument.
 - **Permission answers reuse the authorization owner.** Declare a type's
-  `permissions` through [`permissions_field(names)`](../../src/angee/graphql/capabilities.py);
+  `permissions` through [`permissions_field(names)`](../../src/angee/iam/graphql/capabilities.py);
   it reports only the declared Zed permissions held by the current actor,
   validates names at schema build and batches list evaluation in SQL.
   Server predicates compose the same owner's `held_permissions(record, names)`.
@@ -1566,7 +1566,7 @@ open fresh evaluator scopes for authorization and change-feed reads.
   renewal. Reconcile actor-scoped snapshots after readiness/reconnect: occurrence
   identity deduplicates delivery but supplies neither a row revision nor replay.
 - **Denied delivery cannot prove absence or revoke a session.**
-  [`ChangeReadGate`](../../src/angee/graphql/access.py) suppresses unreadable
+  [`ChangeReadGate`](../../src/angee/iam/graphql/access.py) suppresses unreadable
   rows and redacts field values; do not broadcast denied row identities to make
   clients remove them. Authorized query/keyset results own explicit absence.
   Native REBAC checks current grants between subscription emissions while the
@@ -2153,3 +2153,20 @@ When to run which check, which test area guards a new or extended seam, and the
 proof obligations the moved pitfalls carry belong to the `angee-tests` skill:
 [verification procedure](../../.agents/skills/angee-tests/references/environment.md#verification-procedure)
 and [seam guards](../../.agents/skills/angee-tests/references/environment.md#seam-guards).
+
+
+### Optional GraphQL protection
+
+GraphQL's schema, resources, validation, native CRUD and change transport are
+ordinary Django/Strawberry owners. IAM contributes protection through declared
+callable settings, native subclasses and resource query/backend transforms;
+`angee.iam.graphql` owns permission helpers, guarded relations, `ProtectedNode`,
+protected shared verbs and view-as. `InputReference` remains the metadata key;
+protected declarations place an `AuthorizedInputReference` subclass instance
+under that key, preserving the same final-field conversion loop.
+
+Constructor settings are optional-single hooks and reject competing declarations.
+Resource transforms have one declaring owner per native slot. IAM-only hosts keep
+the dotted GraphQL contribution paths unloaded; generic GraphQL hosts load no
+IAM/REBAC code. Schema error classification stays inside the shared sanitization
+pipeline because Strawberry processes errors before extension teardown.

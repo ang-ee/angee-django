@@ -18,8 +18,8 @@ from angee.base.fields.implementation import impl_choices_enum
 from angee.base.querysets import row_lock_paths
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.deletion import delete_by_public_id
-from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.graphql.node import ProtectedNode
 from angee.knowledge import schema as knowledge_schema
 from angee.workflows import managers as workflow_managers
 from angee.workflows import schema as workflow_schema
@@ -546,7 +546,7 @@ def test_resource_condition_reuses_expression_extensions_and_public_id_decoders(
     actor, _, record, _ = trigger_setup
 
     @strawberry_django.type(Vault)
-    class FilterVault(AngeeNode):
+    class FilterVault(ProtectedNode):
         name: str
 
     resource = hasura_model_resource(

@@ -14,8 +14,7 @@ from strawberry import auto
 from strawberry.scalars import JSON
 from strawberry_django.auth.utils import get_current_user
 
-from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
-from angee.graphql.capabilities import permission_expression, permissions_field
+from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.data.hasura import (
     declared_hasura_resource_fields,
     hasura_model_resource,
@@ -23,15 +22,17 @@ from angee.graphql.data.hasura import (
     with_filter_aliases,
 )
 from angee.graphql.ids import PublicID, require_instance_for_id
-from angee.graphql.node import AngeeNode
-from angee.graphql.relations import (
+from angee.graphql.subscriptions import changes
+from angee.iam.graphql.actions import authorized_permission_target
+from angee.iam.graphql.capabilities import permission_expression, permissions_field
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import (
     RECORD_REFERENCE_ANNOTATIONS,
     RecordReferenceNode,
     actor_scoped_to_many,
     actor_scoped_to_one,
     with_record_reference_access,
 )
-from angee.graphql.subscriptions import changes
 from angee.iam.schema import UserType
 
 Decision = apps.get_model("decisions", "Decision")
@@ -52,7 +53,7 @@ class DecisionRecordType(RecordReferenceNode):
 
 
 @strawberry_django.type(Decision)
-class DecisionType(AngeeNode):
+class DecisionType(ProtectedNode):
     @classmethod
     def get_queryset(cls, queryset: models.QuerySet, info: strawberry.Info) -> models.QuerySet:
         return with_filter_aliases(queryset)
@@ -72,7 +73,7 @@ class DecisionType(AngeeNode):
     revision: auto
     created_at: auto
     updated_at: auto
-    display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["kind"])
+    display_name: str = strawberry_django.field(resolver=ProtectedNode.display_name, only=["kind"])
     is_open: bool = strawberry_django.field(only=["verdict"])
     permissions = permissions_field(("act",))
 

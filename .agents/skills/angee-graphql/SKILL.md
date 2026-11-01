@@ -36,7 +36,7 @@ Run `angee-design` first for the owner map; `angee-models` and
 - `AngeeNode` gives every type `id`, `display_name`, `redacted_fields`; `permissions_field(names)` answers held permissions. Never re-declare them.
 - `hasura_model_resource` + `AngeeHasuraWriteBackend(model, public_id_fields=…)` + `public_pk_decoder` own list/detail/aggregate/groups/insert/update/delete roots and the resource metadata; a model never gets a hand-written CRUD root.
 - Donors other addons already ship: `TaggedNode` + `tags_input_extensions` (`tags/schema.py:116,147`), `AuthoredRefMixin` (`iam/audit.py:39`), `integration_input_extensions` (`integrate/schema.py:1631`).
-- Verbs: `ActionResult` + `action_guard` + `authorized_action_target`/`authorized_permission_target`; cascade preview via `delete_by_public_id` + `attach_delete_preview_metadata`; sharing via `angee.graphql.sharing`.
+- Verbs: `ActionResult` + `action_guard` + `authorized_action_target`/`authorized_permission_target`; cascade preview via `delete_by_public_id` + `attach_delete_preview_metadata`; sharing via `angee.iam.graphql.sharing`.
 - Live reads: `changes(Model, field=…)`; computed rows: `hasura_pydantic_resource`.
 - Upstream first: `strawberry_django.type/field` (`only`, `select_related`, `prefetch_related`, `annotate`), `extend=True`, strawberry-django-hasura and -aggregates native knobs (`docs/stack.md#backend` rows at `:55-60`).
 - Web: `graphql()` from `@angee/gql/<schema>` with `useAuthoredQuery`/`useAuthoredMutation` (`@angee/refine`), `useRecordActionMutation` (`packages/ui/src/views/resource/record-action.ts:93`); resource views read metadata and need no documents.

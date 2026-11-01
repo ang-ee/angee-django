@@ -17,8 +17,8 @@ from strawberry.types import get_object_definition
 from strawberry_django.optimizer import DjangoOptimizerExtension
 
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource
-from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.graphql.node import ProtectedNode
 from angee.iam.models.base import ProtectedDataModel
 from tests.conftest import create_platform_admin, create_user, execute_schema, make_addon, result_data
 from tests.linesdemo.models import Document, DocumentLine, Tag
@@ -26,7 +26,7 @@ from tests.scopedemo.models import SharedDoc
 
 
 @strawberry_django.type(SharedDoc)
-class WriteContractDocType(AngeeNode):
+class WriteContractDocType(ProtectedNode):
     """Use an existing model without persisting the captured envelope."""
 
     title: strawberry.auto
@@ -106,14 +106,14 @@ def test_input_donors_reach_native_create_and_update_envelopes() -> None:
 
 
 @strawberry_django.type(Tag)
-class StampTagType(AngeeNode):
+class StampTagType(ProtectedNode):
     """A recorded stamp, read as a model-backed node."""
 
     name: auto
 
 
 @strawberry_django.type(DocumentLine)
-class StampedLineType(AngeeNode):
+class StampedLineType(ProtectedNode):
     """One line of a stamped document."""
 
     label: auto
@@ -138,7 +138,7 @@ def test_write_relation_declaration_supplies_public_id_inputs(filterable: bool) 
             app_label = "write_contract"
 
     @strawberry_django.type(Reference)
-    class ReferenceType(AngeeNode):
+    class ReferenceType(ProtectedNode):
         pass
 
     resource = hasura_model_resource(
@@ -157,7 +157,7 @@ def test_write_relation_declaration_supplies_public_id_inputs(filterable: bool) 
 
 
 @strawberry_django.type(Document)
-class StampedDocumentType(AngeeNode):
+class StampedDocumentType(ProtectedNode):
     """A document whose writes carry the test-only ``stamp`` input extension."""
 
     title: auto

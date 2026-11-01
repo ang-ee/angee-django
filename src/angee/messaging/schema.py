@@ -32,17 +32,8 @@ from strawberry_django.resolvers import django_resolver
 from strawberry_django.utils.requests import get_request
 
 from angee.base.models.identity import instance_from_public_id
-from angee.graphql.actions import (
-    ActionResult,
-    ActionSelectionInput,
-    action_guard,
-    action_target,
-    authorized_permission_target,
-    resolve_action_target,
-)
-from angee.graphql.capabilities import held_permissions, permissions_field
+from angee.graphql.actions import ActionResult, ActionSelectionInput, action_guard
 from angee.graphql.data.hasura import (
-    AngeeHasuraWriteBackend,
     SortAlias,
     declared_hasura_resource_fields,
     hasura_model_resource,
@@ -50,17 +41,20 @@ from angee.graphql.data.hasura import (
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
-from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
-from angee.graphql.relations import (
+from angee.graphql.relations import RecordPointerType
+from angee.graphql.subscriptions import changes
+from angee.iam.audit import TrashedRefMixin
+from angee.iam.graphql.actions import action_target, authorized_permission_target, resolve_action_target
+from angee.iam.graphql.capabilities import held_permissions, permissions_field
+from angee.iam.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, ProtectedNode
+from angee.iam.graphql.relations import (
     RECORD_REFERENCE_ANNOTATIONS,
-    RecordPointerType,
     RecordReferenceNode,
     actor_scoped_to_many,
     actor_scoped_to_one,
     with_record_reference_access,
 )
-from angee.graphql.subscriptions import changes
-from angee.iam.audit import TrashedRefMixin
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES
 from angee.iam.schema import UserType
 from angee.integrate.live import PairingProjection, PairingState
@@ -125,7 +119,7 @@ _CHANNEL_EXTENSION_PUBLIC_ID_FIELDS = tuple(
 
 
 @strawberry_django.type(Channel)
-class ChannelType(BridgeTypeMixin, AngeeNode):
+class ChannelType(BridgeTypeMixin, ProtectedNode):
     """GraphQL projection of a connected message channel (e.g. an email account)."""
 
     @strawberry_django.field
@@ -298,11 +292,11 @@ attach_delete_preview_metadata(
 
 
 @strawberry_django.type(Fragment)
-class FragmentType(AngeeNode):
+class FragmentType(ProtectedNode):
     """GraphQL projection of a content-addressed text fragment."""
 
     display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name, only=["text"], description=NODE_DISPLAY_NAME_DESCRIPTION
+        resolver=ProtectedNode.display_name, only=["text"], description=NODE_DISPLAY_NAME_DESCRIPTION
     )
 
     kind: auto
@@ -323,11 +317,11 @@ class FragmentType(AngeeNode):
 
 
 @strawberry_django.type(Part)
-class PartType(AngeeNode):
+class PartType(ProtectedNode):
     """GraphQL projection of one message body part."""
 
     display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name, only=["type", "role"], description=NODE_DISPLAY_NAME_DESCRIPTION
+        resolver=ProtectedNode.display_name, only=["type", "role"], description=NODE_DISPLAY_NAME_DESCRIPTION
     )
 
     position: auto
@@ -343,11 +337,11 @@ class PartType(AngeeNode):
 
 
 @strawberry_django.type(MessageSubtype)
-class MessageSubtypeType(AngeeNode):
+class MessageSubtypeType(ProtectedNode):
     """GraphQL projection of an Odoo-style message subtype."""
 
     display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name, only=["name"], description=NODE_DISPLAY_NAME_DESCRIPTION
+        resolver=ProtectedNode.display_name, only=["name"], description=NODE_DISPLAY_NAME_DESCRIPTION
     )
 
     key: auto
@@ -361,7 +355,7 @@ class MessageSubtypeType(AngeeNode):
 
 
 @strawberry_django.type(Participant)
-class ParticipantType(AngeeNode):
+class ParticipantType(ProtectedNode):
     """GraphQL projection of a thread/message participant."""
 
     role: auto
@@ -381,7 +375,7 @@ class MessageReactionGroupType:
 
 
 @strawberry_django.type(Handle)
-class RecordHandleType(AngeeNode):
+class RecordHandleType(ProtectedNode):
     """Envelope identity exposed by record chatter, without party backedges."""
 
     platform: auto
@@ -400,11 +394,11 @@ class RecordMessageReactionGroupType:
 
 
 @strawberry_django.type(Message)
-class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
+class MessageType(TrashedRefMixin, TaggedNode, ProtectedNode):
     """GraphQL projection of a message; its managers see trash stamps and ``delete``."""
 
     display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name, only=["preview"], description=NODE_DISPLAY_NAME_DESCRIPTION
+        resolver=ProtectedNode.display_name, only=["preview"], description=NODE_DISPLAY_NAME_DESCRIPTION
     )
 
     @strawberry_django.field(only=["sent_at", "created_at"])
@@ -541,11 +535,11 @@ class MessageType(TrashedRefMixin, TaggedNode, AngeeNode):
 
 
 @strawberry_django.type(Message)
-class RecordMessageParentType(AngeeNode):
+class RecordMessageParentType(ProtectedNode):
     """Minimal parent-message context shown in record chatter."""
 
     display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name, only=["preview"], description=NODE_DISPLAY_NAME_DESCRIPTION
+        resolver=ProtectedNode.display_name, only=["preview"], description=NODE_DISPLAY_NAME_DESCRIPTION
     )
 
     preview: auto
@@ -563,7 +557,7 @@ def _record_parts_prefetch(info: strawberry.Info) -> models.Prefetch:
 
 
 @strawberry_django.type(Message)
-class RecordMessageType(TrashedRefMixin, AngeeNode):
+class RecordMessageType(TrashedRefMixin, ProtectedNode):
     """Record-gated message projection without generic inbox relation backedges.
 
     A trashed message appears only in its moderators' removed list, where the
@@ -571,7 +565,7 @@ class RecordMessageType(TrashedRefMixin, AngeeNode):
     """
 
     display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name, only=["preview"], description=NODE_DISPLAY_NAME_DESCRIPTION
+        resolver=ProtectedNode.display_name, only=["preview"], description=NODE_DISPLAY_NAME_DESCRIPTION
     )
 
     direction: auto
@@ -689,11 +683,11 @@ class RecordMessageType(TrashedRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Thread)
-class ThreadType(TaggedNode, AngeeNode):
+class ThreadType(TaggedNode, ProtectedNode):
     """GraphQL projection of a thread."""
 
     display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name,
+        resolver=ProtectedNode.display_name,
         only=["title__text", "modality"],
         select_related=["title"],
         description=NODE_DISPLAY_NAME_DESCRIPTION,
@@ -732,7 +726,7 @@ class ThreadType(TaggedNode, AngeeNode):
 
 
 @strawberry_django.type(Thread)
-class RecordThreadType(AngeeNode):
+class RecordThreadType(ProtectedNode):
     """Record-gated thread summary without generic inbox backedges."""
 
     platform: auto
@@ -781,7 +775,7 @@ class FollowerIdentity:
 
 
 @strawberry_django.type(ThreadFollower)
-class RecordThreadFollowerType(FollowerIdentity, AngeeNode):
+class RecordThreadFollowerType(FollowerIdentity, ProtectedNode):
     """Record-scoped follower projection without message or thread backedges."""
 
     notification_policy: auto
@@ -792,7 +786,7 @@ class RecordThreadFollowerType(FollowerIdentity, AngeeNode):
 
 
 @strawberry_django.type(ThreadNotification)
-class RecordThreadNotificationType(AngeeNode):
+class RecordThreadNotificationType(ProtectedNode):
     """Record-scoped notification projection with narrowed message context."""
 
     message: "RecordMessageParentType | None" = actor_scoped_to_one("message")
@@ -833,7 +827,7 @@ class ThreadAttachmentType(RecordReferenceNode):
 
 
 @strawberry_django.type(ThreadFollower)
-class ThreadFollowerType(FollowerIdentity, AngeeNode):
+class ThreadFollowerType(FollowerIdentity, ProtectedNode):
     """GraphQL projection of a party's thread subscription — policy plus read receipt."""
 
     thread: "ThreadType | None" = actor_scoped_to_one("thread")
@@ -850,7 +844,7 @@ class ThreadFollowerType(FollowerIdentity, AngeeNode):
 class NotificationMessagePointerType:
     """Record-readable inbox context without message bodies or generic backedges."""
 
-    id: PublicID = strawberry.field(resolver=AngeeNode.id)
+    id: PublicID = strawberry.field(resolver=ProtectedNode.id)
     message_type: auto
     subtype: MessageSubtypeType | None
     created_at: auto
@@ -866,7 +860,7 @@ class NotificationMessagePointerType:
 
 
 @strawberry_django.type(ThreadNotification)
-class ThreadNotificationType(AngeeNode):
+class ThreadNotificationType(ProtectedNode):
     """GraphQL projection of a recipient's delivery and per-item acknowledgement."""
 
     thread: "ThreadType | None" = actor_scoped_to_one("thread")
@@ -894,7 +888,7 @@ class ThreadNotificationType(AngeeNode):
 
 
 @strawberry_django.type(MessageEdge)
-class MessageEdgeType(AngeeNode):
+class MessageEdgeType(ProtectedNode):
     """GraphQL projection of a cross-message edge (quote/mention/crosspost/forward)."""
 
     kind: auto
@@ -906,7 +900,7 @@ class MessageEdgeType(AngeeNode):
 
 
 @strawberry_django.type(Reaction)
-class ReactionType(AngeeNode):
+class ReactionType(ProtectedNode):
     """GraphQL projection of an attributed reaction."""
 
     reaction: auto
@@ -915,7 +909,7 @@ class ReactionType(AngeeNode):
 
 
 @strawberry_django.type(MessageStar)
-class MessageStarType(AngeeNode):
+class MessageStarType(ProtectedNode):
     """GraphQL projection of a user's starred message marker."""
 
     message: "MessageType | None" = actor_scoped_to_one("message")
@@ -2000,7 +1994,7 @@ def _part_inbox_queryset(info: strawberry.Info) -> Any:
     return Part.objects.inbox()
 
 
-class _InboxWriteBackend(AngeeHasuraWriteBackend):
+class _InboxWriteBackend(ProtectedHasuraWriteBackend):
     """Write backend that keeps record-attached chatter off the generic mutations.
 
     The read side scopes ``threads``/``messages`` to ``.inbox()`` through
@@ -2022,7 +2016,7 @@ class _InboxWriteBackend(AngeeHasuraWriteBackend):
         return queryset.inbox()
 
 
-class _ChannelWriteBackend(AngeeHasuraWriteBackend):
+class _ChannelWriteBackend(ProtectedHasuraWriteBackend):
     """Make the generic ``delete_channels_by_pk`` a purge, not an orphan.
 
     ``delete=True`` on the channel resource is what lights the console's delete button

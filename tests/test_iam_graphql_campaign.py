@@ -17,7 +17,7 @@ from rebac import (
 from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type
 
-from angee.graphql.view_as import ViewAs
+from angee.iam.graphql.view_as import ViewAs
 from angee.spaces.testing.models import Group, Membership
 from tests.conftest import addon_schema, create_platform_admin, execute_schema, graphql_request, result_data
 from tests.iam_campaign import Person

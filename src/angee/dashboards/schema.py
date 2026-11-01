@@ -21,13 +21,13 @@ from angee.base.serialization import ASCII_JSON, canonical_json_sha256
 from angee.dashboards.exceptions import DashboardConflictError
 from angee.dashboards.models import Dashboard as DashboardModel
 from angee.dashboards.validators import widget_visibility_answers
-from angee.graphql.actions import session_user
-from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID, require_public_id, to_public_id
-from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import TrashedRefMixin
+from angee.iam.graphql.actions import session_user
+from angee.iam.graphql.capabilities import held_permissions, permission_annotations, permissions_field
+from angee.iam.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, ProtectedNode
 from angee.iam.identity import user_display_label, user_public_id
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 
@@ -52,7 +52,7 @@ class DashboardWidgetVisibilityInput:
 
 
 @strawberry_django.type(DashboardWidget)
-class DashboardWidgetType(AngeeNode):
+class DashboardWidgetType(ProtectedNode):
     widget_key: auto
     definition_ref: auto
     spec_version: auto
@@ -71,9 +71,9 @@ class DashboardWidgetType(AngeeNode):
 
 
 @strawberry_django.type(Dashboard)
-class DashboardType(TrashedRefMixin, AngeeNode):
+class DashboardType(TrashedRefMixin, ProtectedNode):
     display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name,
+        resolver=ProtectedNode.display_name,
         only=["name"],
         description=NODE_DISPLAY_NAME_DESCRIPTION,
     )

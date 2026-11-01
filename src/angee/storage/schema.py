@@ -21,24 +21,26 @@ from strawberry.scalars import JSON
 from strawberry_django.utils.requests import get_request
 
 from angee.base.models.identity import instance_from_public_id
-from angee.graphql.actions import ActionResult, action_guard, resolve_action_target
-from angee.graphql.capabilities import permissions_field
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.actions import ActionResult, action_guard
+from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import (
     PublicID,
     instance_for_id,
     require_instance_for_id,
 )
-from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
-from angee.graphql.relations import (
+from angee.graphql.subscriptions import changes
+from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
+from angee.iam.graphql.actions import resolve_action_target
+from angee.iam.graphql.capabilities import permissions_field
+from angee.iam.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, ProtectedNode
+from angee.iam.graphql.relations import (
     RECORD_REFERENCE_ANNOTATIONS,
     RecordReferenceNode,
     actor_scoped_public_id,
     with_record_reference_access,
 )
-from angee.graphql.subscriptions import changes
-from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.permissions import RolePermission
 from angee.storage import exceptions
 from angee.storage.models import File as FileModel
@@ -60,7 +62,7 @@ strawberry.enum(cast(Any, FileVisibility))
 
 
 @strawberry_django.type(MimeType)
-class MimeTypeType(AngeeNode):
+class MimeTypeType(ProtectedNode):
     """GraphQL projection of one MIME taxonomy row."""
 
     mime_type: auto
@@ -70,7 +72,7 @@ class MimeTypeType(AngeeNode):
 
 
 @strawberry_django.type(Backend)
-class BackendType(AngeeNode):
+class BackendType(ProtectedNode):
     """Admin projection of a storage backend, including its config."""
 
     slug: auto
@@ -83,7 +85,7 @@ class BackendType(AngeeNode):
 
 
 @strawberry_django.type(Drive)
-class DriveType(AngeeNode):
+class DriveType(ProtectedNode):
     """GraphQL projection of a drive."""
 
     slug: auto
@@ -106,7 +108,7 @@ def _folder_ancestors_prefetch(info: strawberry.Info) -> Prefetch:
 
 
 @strawberry_django.type(Folder)
-class FolderType(AngeeNode):
+class FolderType(ProtectedNode):
     """GraphQL projection of a folder or smart folder."""
 
     name: auto
@@ -129,7 +131,7 @@ class FolderType(AngeeNode):
 
 
 @strawberry_django.type(File)
-class FileType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
+class FileType(AuthoredRefMixin, TrashedRefMixin, ProtectedNode):
     """GraphQL projection of a file row."""
 
     permissions = permissions_field(("read", "write", "share", "delete"))
@@ -137,7 +139,7 @@ class FileType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
     ``storage.File#actions`` child declaring ``permission: "read"``."""
 
     display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name,
+        resolver=ProtectedNode.display_name,
         only=["title", "filename"],
         description=NODE_DISPLAY_NAME_DESCRIPTION,
     )
@@ -180,7 +182,7 @@ class FileAttachmentType(RecordReferenceNode):
     label: auto
     file: FileType
     display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name,
+        resolver=ProtectedNode.display_name,
         only=["label", "file_id"],
         description=NODE_DISPLAY_NAME_DESCRIPTION,
     )
@@ -314,7 +316,7 @@ class StorageAdminPermission(RolePermission):
 _STORAGE_ADMIN_CLASSES: list[type[BasePermission]] = [StorageAdminPermission]
 
 
-class FolderWriteBackend(AngeeHasuraWriteBackend):
+class FolderWriteBackend(ProtectedHasuraWriteBackend):
     """Write semantics for folders: create belongs to the manager factory."""
 
     def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
@@ -370,7 +372,7 @@ _DRIVE_RESOURCE = hasura_model_resource(
     insertable=["backend", "slug", "name", "description", "prefix", "owns_items"],
     updatable=["name", "description", "prefix", "is_archived", "owns_items"],
     field_id_decode={"backend": public_pk_decoder(Backend)},
-    write_backend=AngeeHasuraWriteBackend(Drive, public_id_fields=("backend",)),
+    write_backend=ProtectedHasuraWriteBackend(Drive, public_id_fields=("backend",)),
 )
 _FOLDER_RESOURCE = hasura_model_resource(
     FolderType,
@@ -430,7 +432,7 @@ _FILE_RESOURCE = hasura_model_resource(
         "folder": public_pk_decoder(Folder),
         "mime_type": public_pk_decoder(MimeType),
     },
-    write_backend=AngeeHasuraWriteBackend(File, public_id_fields=("folder",)),
+    write_backend=ProtectedHasuraWriteBackend(File, public_id_fields=("folder",)),
 )
 _BACKEND_RESOURCE = hasura_model_resource(
     BackendType,

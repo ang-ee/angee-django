@@ -5,15 +5,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
 import strawberry
 from asgiref.sync import sync_to_async
 from django.db import close_old_connections, models
-from rebac import current_actor
 
-from angee.graphql.access import ChangeReadGate
+from angee.base.hooks import resolve_hook
 from angee.graphql.constants import CHANGE_GROUP_RENEW_SECONDS
 from angee.graphql.data.contracts import DataResourceRoots, DataResourceTypeNames
 from angee.graphql.data.metadata import (
@@ -31,7 +30,7 @@ def changes(
     model: type[models.Model],
     *,
     field: str,
-    read_gate: type[ChangeReadGate] | None = None,
+    read_gate: type | None = None,
 ) -> type:
     """Stream a registration-ready control followed by read-gated model changes.
 
@@ -40,7 +39,7 @@ def changes(
     """
 
     label = model._meta.label
-    gate_type = read_gate or ChangeReadGate
+    gate_type = read_gate
 
     async def resolve(
         self: object,
@@ -49,19 +48,13 @@ def changes(
         """Yield read-gated change events for one subscriber."""
 
         del self
-        del info
-        actor = current_actor()
-        if actor is None:
-            return
         # The gate work stays on the general sync executor so subscriptions can
         # filter concurrently. The wrappers bracket that thread's ORM work with
         # Django's connection lifecycle because long-lived subscriptions do not
         # ride the normal request boundary.
-        gate = await sync_to_async(_change_read_gate, thread_sensitive=False)(
-            model,
-            actor,
-            gate_type,
-        )
+        filters = await sync_to_async(_change_filters, thread_sensitive=False)(model, info, gate_type)
+        if filters is None:
+            return
         ready = asyncio.Event()
         async with contextlib.aclosing(subscribe(model, ready=ready)) as stream:
             # An async generator registers only when advanced. Start its first
@@ -79,7 +72,7 @@ def changes(
                         payload = await pending
                     except StopAsyncIteration:
                         return
-                    event = await sync_to_async(_filter_change_event, thread_sensitive=False)(gate, payload)
+                    event = await sync_to_async(_filter_change_event, thread_sensitive=False)(filters, payload)
                     if event is not None:
                         yield event
                     pending = asyncio.ensure_future(anext(stream))
@@ -107,26 +100,26 @@ def changes(
     )
 
 
-def _change_read_gate(
-    model: type[models.Model],
-    actor: Any,
-    read_gate: type[ChangeReadGate] = ChangeReadGate,
-) -> ChangeReadGate:
-    """Build a read gate in a sync worker with healthy Django connections."""
-
+def _change_filters(model: type[models.Model], info: strawberry.Info, gate_type: type | None):
+    """Construct declared subscription filters with healthy Django connections."""
     close_old_connections()
     try:
-        return read_gate(model, actor)
+        provider = resolve_hook("ANGEE_GRAPHQL_CHANGE_FILTER")
+        if provider is None:
+            if gate_type is not None:
+                raise RuntimeError("A custom change read gate requires a declared change-filter provider.")
+            return ()
+        selected = provider(model, info, gate_type)
+        return None if selected is None else (selected,)
     finally:
         close_old_connections()
 
 
-def _filter_change_event(gate: ChangeReadGate, payload: Any) -> ChangeEvent | None:
-    """Filter one change payload in a sync worker with healthy Django connections."""
-
+def _filter_change_event(filters: tuple[Callable[..., Any], ...], payload: ChangePayload) -> ChangeEvent | None:
+    """Apply concrete contributors around the one native event projection."""
     close_old_connections()
     try:
-        return gate.filter(payload)
+        return filters[0](payload) if filters else ChangeEvent.from_payload(payload)
     finally:
         close_old_connections()
 

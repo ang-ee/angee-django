@@ -21,8 +21,6 @@ from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.functions import Cast, Concat
 from django.db.models.lookups import Exact, In
 from django.utils.module_loading import import_string
-from rebac.managers import RebacQuerySet
-from rebac.relation_loading import relation_actor
 from strawberry.extensions import FieldExtension
 from strawberry.types import get_object_definition
 from strawberry_django.fields.types import field_type_map
@@ -52,9 +50,9 @@ from angee.base.hooks import resolve_hooks
 from angee.base.identity import public_data_id_field
 from angee.base.models.children import OwnedChildrenMixin
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for
-from angee.base.models.locks import OptimisticLockMixin
+from angee.base.models.locks import OptimisticLockMixin, RowLockMixin
+from angee.base.models.refs import RecordRefMixin
 from angee.base.querysets import row_lock_paths
-from angee.graphql.access import assert_no_gated_read_fields
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.contracts import (
     DataAggregateMeasureMetadata,
@@ -67,6 +65,7 @@ from angee.graphql.data.contracts import (
     DataResourceRoots,
     DataResourceSubtitleMetadata,
 )
+from angee.graphql.data.extensions import resource_extensions
 from angee.graphql.data.lookups import resource_filter_lookups
 from angee.graphql.data.metadata import (
     DataResourceContribution,
@@ -91,12 +90,7 @@ from angee.graphql.introspection import (
     is_to_one_relation,
     require_field_for_path,
 )
-from angee.graphql.relations import RecordReferenceNode, actor_scoped_relation_expression, with_record_reference_access
 from angee.graphql.writes import write_queryset
-from angee.iam.models.base import ProtectedModel
-from angee.iam.models.locks import ProtectedRowLockMixin
-from angee.iam.models.refs import ProtectedRecordRefMixin
-from angee.iam.permissions import declared_rebac_definition, require_rebac_queryset
 
 if TYPE_CHECKING:
     from django.db.models.sql.compiler import _AsSqlType
@@ -128,7 +122,7 @@ class HasuraLines:
     Lines are owned parts: rows that exist only as part of their parent and are
     saved with it. Their writes are the user's writes, elevated only because the
     parent write authorizes them, so they never bypass the child's own guards. A
-    child composing :class:`~angee.iam.models.locks.ProtectedRowLockMixin` has each row checked
+    child composing :class:`~angee.base.models.locks.RowLockMixin` has each row checked
     against its persisted lock before the elevated write: a line may not change a
     locked field, delete a system row, or create or turn into one. Its node must
     project the same fact as ``locked_fields``, which the metadata advertises as
@@ -207,7 +201,7 @@ class AngeeHasuraWriteBackend:
 
     Values for input-extension fields that are not model fields never reach
     strawberry-django, which would ignore them: each write persists the row,
-    then hands them to the row's :meth:`ProtectedModel.apply_input_extensions` in
+    then hands them to the row's :meth:`AngeeModel.apply_input_extensions` in
     the same transaction.
     """
 
@@ -306,21 +300,32 @@ class AngeeHasuraWriteBackend:
                 pk,
                 queryset=self.write_target_queryset().select_for_update(of=row_lock_paths(self.model)),
             )
-            instance.require_access("write")
-            if expected_revision is not None:
-                instance.require_revision(expected_revision)
-            patch = dict(patch)
-            extensions = _pop_input_extensions(self.model, patch)
-            if patch:
-                instance = self._update_row(info, instance, self._decode_public_id_fields(patch))
-            elif (line_rows is not None or extensions) and isinstance(instance, OptimisticLockMixin):
-                # A document's revision covers its child set and extension values as well as its columns.
-                instance.save(update_fields={instance.REVISION_FIELD})
-            if line_rows is not None:
-                self._apply_line_diff(info, instance, line_rows)
-            if extensions:
-                instance.apply_input_extensions(**extensions)
-            return instance
+            return self._save_locked_parent(info, instance, patch, line_rows, expected_revision=expected_revision)
+
+    def _save_locked_parent(
+        self,
+        info: strawberry.Info,
+        instance: models.Model,
+        patch: dict[str, Any],
+        line_rows: list[dict[str, Any]] | None,
+        *,
+        expected_revision: int | None,
+    ) -> Any:
+        """Persist the once-locked parent and its actual owned values."""
+        if expected_revision is not None:
+            instance.require_revision(expected_revision)
+        patch = dict(patch)
+        extensions = _pop_input_extensions(self.model, patch)
+        if patch:
+            instance = self._update_row(info, instance, self._decode_public_id_fields(patch))
+        elif (line_rows is not None or extensions) and isinstance(instance, OptimisticLockMixin):
+            # A document's revision covers its child set and extension values as well as its columns.
+            instance.save(update_fields={instance.REVISION_FIELD})
+        if line_rows is not None:
+            self._apply_line_diff(info, instance, line_rows)
+        if extensions:
+            instance.apply_input_extensions(**extensions)
+        return instance
 
     def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
         """Create one row through strawberry-django's resolver and native manager."""
@@ -345,7 +350,12 @@ class AngeeHasuraWriteBackend:
         return [dict(row) for row in rows]
 
     def _apply_line_diff(
-        self, info: strawberry.Info, parent: models.Model, rows: list[dict[str, Any]], *, replace: bool = True,
+        self,
+        info: strawberry.Info,
+        parent: models.Model,
+        rows: list[dict[str, Any]],
+        *,
+        replace: bool = True,
     ) -> None:
         """Decode the transport input under the caller, then dispatch to the parent."""
         assert self.lines is not None
@@ -359,17 +369,30 @@ class AngeeHasuraWriteBackend:
         def create(values: dict[str, Any]) -> models.Model:
             assert self.lines is not None
             return mutation_resolvers.create(
-                info, self.lines.model, values, key_attr=PUBLIC_ID_FIELD_NAME, full_clean=True,
+                info,
+                self.lines.model,
+                values,
+                key_attr=PUBLIC_ID_FIELD_NAME,
+                full_clean=True,
             )
 
         def update(child: models.Model, values: dict[str, Any], validate: Callable[[models.Model], None] | None) -> Any:
             return mutation_resolvers.update(
-                info, child, values, key_attr=PUBLIC_ID_FIELD_NAME, full_clean=True, pre_save_hook=validate,
+                info,
+                child,
+                values,
+                key_attr=PUBLIC_ID_FIELD_NAME,
+                full_clean=True,
+                pre_save_hook=validate,
             )
 
         parent.save_children(
-            self.lines.field, prepared, create=create, update=update,
-            position_field=self.lines.position_field, replace=replace,
+            self.lines.field,
+            prepared,
+            create=create,
+            update=update,
+            position_field=self.lines.position_field,
+            replace=replace,
         )
 
     def _prepare_line_rows(self, rows: list[dict[str, Any]]) -> list[tuple[str | None, dict[str, Any]]]:
@@ -595,8 +618,9 @@ class _RelationIDDecoder:
     def __call__(self, value: _DecodedRelationID) -> Any:
         return value.value
 
-    def resolve(self, values: Iterable[str], actor: Any) -> dict[str, _DecodedRelationID]:
-        queryset = require_rebac_queryset(self.model).with_actor(actor).with_action("read")
+    def resolve(self, values: Iterable[str], source: models.QuerySet[Any]) -> dict[str, _DecodedRelationID]:
+        transform = resource_extensions(self.model).relation_queryset
+        queryset = transform(self.model, source) if transform is not None else self.model._default_manager.all()
         instances = instances_from_public_ids(self.model, values, queryset=queryset)
         return {
             value: _DecodedRelationID(self.decoder(value) if self.decoder is not None else instance.pk)
@@ -618,8 +642,11 @@ class _RelationFilterExtension(FieldExtension):
     """
 
     def __init__(
-        self, decoders: Mapping[str, Callable[[Any], Any]], source: Callable[..., Any],
-        filter_type: type, aliases: Mapping[str, str],
+        self,
+        decoders: Mapping[str, Callable[[Any], Any]],
+        source: Callable[..., Any],
+        filter_type: type,
+        aliases: Mapping[str, str],
     ) -> None:
         self.decoders = {name: decoder for name, decoder in decoders.items() if isinstance(decoder, _RelationIDDecoder)}
         self.source = source
@@ -628,14 +655,16 @@ class _RelationFilterExtension(FieldExtension):
         self.keys = {alias: path for path, alias in aliases.items()}
         self.resolved = {alias for alias, path in self.keys.items() if alias in self.decoders and "__" not in path}
         self.negation = next(
-            field.python_name for field in get_object_definition(filter_type, strict=True).fields
+            field.python_name
+            for field in get_object_definition(filter_type, strict=True).fields
             if field.graphql_name == "_not"
         )
         # An internal dataclass adapts field names only, plus each relation's raw
         # key path. The public input and native Hasura's boolean/operator
         # translation remain unchanged.
         self.aliased_type = dataclasses.make_dataclass(
-            "RelationFilter", [
+            "RelationFilter",
+            [
                 *((aliases.get(field.name, field.name), Any) for field in dataclasses.fields(filter_type)),
                 *((path, Any, dataclasses.field(default=strawberry.UNSET)) for path in aliases),
             ],
@@ -647,7 +676,11 @@ class _RelationFilterExtension(FieldExtension):
         return next_(source, info, **kwargs)
 
     async def resolve_async(
-        self, next_: Callable[..., Awaitable[Any]], source: Any, info: strawberry.Info, **kwargs: Any,
+        self,
+        next_: Callable[..., Awaitable[Any]],
+        source: Any,
+        info: strawberry.Info,
+        **kwargs: Any,
     ) -> Any:
         kwargs["where"] = await sync_to_async(self.prepare)(info, kwargs.get("where"))
         return await next_(source, info, **kwargs)
@@ -669,12 +702,14 @@ class _RelationFilterExtension(FieldExtension):
             if not dataclasses.is_dataclass(value) or isinstance(value, type):
                 return value
             if not isinstance(value, self.filter_type):
-                return dataclasses.replace(value, **{
-                    field.name: adapt(getattr(value, field.name), negated) for field in dataclasses.fields(value)
-                })
+                return dataclasses.replace(
+                    value,
+                    **{field.name: adapt(getattr(value, field.name), negated) for field in dataclasses.fields(value)},
+                )
             fields = {
                 self.aliases.get(field.name, field.name): adapt(
-                    getattr(value, field.name), negated or field.name == self.negation,
+                    getattr(value, field.name),
+                    negated or field.name == self.negation,
                 )
                 for field in dataclasses.fields(value)
             }
@@ -690,24 +725,31 @@ class _RelationFilterExtension(FieldExtension):
 
         prepared = adapt(where)
         if comparisons:
-            actor = relation_actor(source())
+            source_queryset = source()
             for name, items in comparisons.items():
                 operands = [
                     (item, field.name, getattr(item, field.name))
-                    for item in items for field in dataclasses.fields(item)
+                    for item in items
+                    for field in dataclasses.fields(item)
                     if field.name != "is_null" and getattr(item, field.name) not in (None, strawberry.UNSET)
                 ]
                 values = {
-                    str(value) for _, _, operand in operands
+                    str(value)
+                    for _, _, operand in operands
                     for value in (operand if isinstance(operand, list) else [operand])
                 }
-                resolved = self.decoders[name].resolve(values, actor) if values else {}
+                resolved = self.decoders[name].resolve(values, source_queryset) if values else {}
                 missing = _DecodedRelationID(_UnresolvedRelationID())
                 for item, attribute, operand in operands:
-                    setattr(item, attribute, (
-                        [resolved.get(str(value), missing) for value in operand]
-                        if isinstance(operand, list) else resolved.get(str(operand), missing)
-                    ))
+                    setattr(
+                        item,
+                        attribute,
+                        (
+                            [resolved.get(str(value), missing) for value in operand]
+                            if isinstance(operand, list)
+                            else resolved.get(str(operand), missing)
+                        ),
+                    )
         for adapted, alias, item in positive:
             match, whole = _key_match(item)
             setattr(adapted, self.keys[alias], match)
@@ -729,7 +771,8 @@ def _key_match(comparison: Any) -> tuple[Any, bool]:
 
     operators = {field.name: getattr(comparison, field.name) for field in dataclasses.fields(comparison)}
     identity = {
-        name for name in ("eq", "in_")
+        name
+        for name in ("eq", "in_")
         if name in operators and operators[name] is not None and operators[name] is not strawberry.UNSET
     }
     if not identity:
@@ -803,7 +846,8 @@ def aggregate_queryset(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
     User-authored joins retain their normal Django aggregate cardinality.
     """
 
-    return queryset.scoped_for_aggregate() if isinstance(queryset, RebacQuerySet) else queryset
+    transform = resource_extensions(queryset.model).aggregate_queryset
+    return transform(queryset) if transform is not None else queryset
 
 
 def _model_queryset(
@@ -845,7 +889,8 @@ def _relation_scalar_queryset(
             continue
         if not (is_to_one_relation(field) or ("__" in path and not field.is_relation)):
             continue
-        expression = actor_scoped_relation_expression(queryset, path)
+        provider = resource_extensions(queryset.model).relation_expression
+        expression = provider(queryset, path) if provider is not None else None
         if is_to_one_relation(field):
             assert isinstance(field, (models.ForeignObject, ForeignObjectRel))
             target = field.target_field
@@ -875,7 +920,8 @@ def _group_by_expression_provider(
     for path, _granularity in spec:
         if "." in path:
             continue
-        expression = actor_scoped_relation_expression(queryset, path)
+        provider = resource_extensions(queryset.model).relation_expression
+        expression = provider(queryset, path) if provider is not None else None
         if expression is not None:
             expressions[path] = expression
     return expressions
@@ -909,7 +955,9 @@ def declared_hasura_resource_fields(
             field = str(item)
             try:
                 if attribute in {
-                    "hasura_sortable_fields", "hasura_filterable_fields", "hasura_groupable_fields",
+                    "hasura_sortable_fields",
+                    "hasura_filterable_fields",
+                    "hasura_groupable_fields",
                     "hasura_container_scope_fields",
                 }:
                     require_field_for_path(model, field)
@@ -996,15 +1044,16 @@ def _declared_aliases(
                     raise ImproperlyConfigured(
                         f"{model._meta.label} sortable alias {name!r} must compose F, Value, Func or arithmetic."
                     )
-            assert_no_gated_read_fields(
-                model, paths, f"sortable alias {name!r}", "field-gated reads cannot be query axes",
-                definition_for=declared_rebac_definition,
-            )
+            validator = resource_extensions(model).validate_fields
+            if validator is not None:
+                validator(model, paths, f"sortable alias {name!r}", "field-gated reads cannot be query axes")
             expression = models.ExpressionWrapper(
-                expression, output_field=expression.resolve_expression(model._default_manager.all().query).output_field,
+                expression,
+                output_field=expression.resolve_expression(model._default_manager.all().query).output_field,
             )
             aliases[name] = SortAlias(
-                f"_angee_sort_{name}", partial(_sortable_alias_expression, expression, tuple(sorted(paths))),
+                f"_angee_sort_{name}",
+                partial(_sortable_alias_expression, expression, tuple(sorted(paths))),
             )
             filters[name] = (expression, tuple(sorted(paths)))
     return aliases, filters
@@ -1041,7 +1090,9 @@ def _declared_filter_expressions(
 
 
 def _check_filter_expression_names(
-    model: type[models.Model], names: Iterable[str], existing_filters: set[str],
+    model: type[models.Model],
+    names: Iterable[str],
+    existing_filters: set[str],
 ) -> None:
     """Keep computed filters additive to model fields, resource filters and Hasura combinators."""
 
@@ -1066,7 +1117,8 @@ def _sortable_alias_expression(
 
     del info
     for path in paths:
-        guarded = actor_scoped_relation_expression(queryset, path, value=expression)
+        provider = resource_extensions(queryset.model).relation_expression
+        guarded = provider(queryset, path, value=expression) if provider is not None else None
         if guarded is not None:
             expression = guarded
     return expression
@@ -1079,7 +1131,8 @@ def with_filter_aliases[M: models.Model](queryset: models.QuerySet[M]) -> models
         if name in queryset.query.annotations:
             continue
         projected[name] = _scalar_alias_expression(
-            queryset, _sortable_alias_expression(expression, paths, None, queryset),
+            queryset,
+            _sortable_alias_expression(expression, paths, None, queryset),
         )
     return queryset.alias(**projected) if projected else queryset
 
@@ -1094,9 +1147,8 @@ def _scalar_alias_expression(queryset: models.QuerySet[Any], expression: Combina
 def _composition_queryset(model: type[models.Model]) -> models.QuerySet[Any]:
     """Return an elevated declaration-time queryset for framework or upstream models."""
 
-    if issubclass(model, ProtectedModel):
-        return model.system_queryset()
-    return model._base_manager.all()
+    source = resource_extensions(model).declaration_queryset
+    return source(model) if source is not None else model._base_manager.all()
 
 
 def _public_pk(model: type[models.Model], value: Any) -> Any:
@@ -1150,15 +1202,28 @@ class _FilterInputExtension(FieldExtension):
     def __init__(self, base: type, donor: type | None, aliases: Mapping[str, str]) -> None:
         self.base = base
         self.aliases = aliases
-        self.combined = base if donor is None else dataclasses.make_dataclass(
-            f"{base.__name__}WithExpressions", [], bases=(base, donor), kw_only=True,
+        self.combined = (
+            base
+            if donor is None
+            else dataclasses.make_dataclass(
+                f"{base.__name__}WithExpressions",
+                [],
+                bases=(base, donor),
+                kw_only=True,
+            )
         )
-        self.mapped = dataclasses.make_dataclass(
-            f"{base.__name__}Columns",
-            [(aliases.get(field.name, field.name), Any, dataclasses.field(default=strawberry.UNSET))
-             for field in dataclasses.fields(self.combined)],
-            kw_only=True,
-        ) if aliases else self.combined
+        self.mapped = (
+            dataclasses.make_dataclass(
+                f"{base.__name__}Columns",
+                [
+                    (aliases.get(field.name, field.name), Any, dataclasses.field(default=strawberry.UNSET))
+                    for field in dataclasses.fields(self.combined)
+                ],
+                kw_only=True,
+            )
+            if aliases
+            else self.combined
+        )
 
     def map_arguments(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         return {key: self._value(value) for key, value in kwargs.items()}
@@ -1171,17 +1236,21 @@ class _FilterInputExtension(FieldExtension):
 
     def _value(self, value: Any) -> Any:
         if isinstance(value, self.base):
-            return self.mapped(**{
-                self.aliases.get(field.name, field.name): self._value(getattr(value, field.name, strawberry.UNSET))
-                for field in dataclasses.fields(self.combined)
-            })
+            return self.mapped(
+                **{
+                    self.aliases.get(field.name, field.name): self._value(getattr(value, field.name, strawberry.UNSET))
+                    for field in dataclasses.fields(self.combined)
+                }
+            )
         if isinstance(value, list):
             return [self._value(item) for item in value]
         return value
 
 
 def _resource_filter_annotation(
-    source: Callable[[strawberry.Info], models.QuerySet[Any]], expression: Any, info: strawberry.Info,
+    source: Callable[[strawberry.Info], models.QuerySet[Any]],
+    expression: Any,
+    info: strawberry.Info,
 ) -> Any:
     """Resolve a contributed scalar for the actor loading the resource node."""
     queryset = source(info)
@@ -1189,7 +1258,9 @@ def _resource_filter_annotation(
 
 
 def row_annotations(
-    row: models.Model, annotations: Mapping[str, Any], queryset: models.QuerySet[Any],
+    row: models.Model,
+    annotations: Mapping[str, Any],
+    queryset: models.QuerySet[Any],
 ) -> dict[str, Any]:
     """Return each named annotation for ``row``: the optimizer's value, else one read for this row.
 
@@ -1207,7 +1278,10 @@ def row_annotations(
 
 
 def _resource_filter_value(
-    name: str, source: Callable[[strawberry.Info], models.QuerySet[Any]], expression: Any, output: Any,
+    name: str,
+    source: Callable[[strawberry.Info], models.QuerySet[Any]],
+    expression: Any,
+    output: Any,
 ) -> Callable[..., Any]:
     """Resolve a contributed scalar from the optimizer's annotation, or read it for one row.
 
@@ -1227,7 +1301,9 @@ def _resource_filter_value(
 
 
 def _resource_filter_projection(
-    node: type, model: type[models.Model], expressions: tuple[tuple[str, Any], ...],
+    node: type,
+    model: type[models.Model],
+    expressions: tuple[tuple[str, Any], ...],
     source: Callable[[strawberry.Info], models.QuerySet[Any]],
 ) -> type:
     """Native type extensions expose contributed filters as readable badge values."""
@@ -1260,8 +1336,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     model: type[models.Model],
     name: str | None = None,
     filterable: Sequence[str] | EllipsisType,
-    filter_expressions: Mapping[str, BaseExpression | Callable[[models.QuerySet[Any]], BaseExpression]]
-    | None = None,
+    filter_expressions: Mapping[str, BaseExpression | Callable[[models.QuerySet[Any]], BaseExpression]] | None = None,
     record_ref_filters: tuple[str, str] | None = None,
     record_ref_requires_read: bool = False,
     sortable: Sequence[str] | EllipsisType,
@@ -1385,34 +1460,49 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     if record_ref_requires_read and record_ref_filters is None:
         raise ImproperlyConfigured("A record-reference read guard requires record-reference filters.")
     if record_ref_filters is not None:
-        if not issubclass(model, ProtectedRecordRefMixin):
-            raise ImproperlyConfigured("Record-reference filters require ProtectedRecordRefMixin.")
+        if not issubclass(model, RecordRefMixin):
+            raise ImproperlyConfigured("Record-reference filters require RecordRefMixin.")
         model_name, id_name = record_ref_filters
         claimed = set(expressions) | set(field_id_decode or {})
         if model_name == id_name or set(record_ref_filters) & claimed:
             raise ImproperlyConfigured("Record-reference filter names must be distinct and unclaimed.")
         reference = model.record_ref_field()
-        expressions.update({
-            model_name: Concat(
-                f"{reference.ct_field}__app_label", models.Value("."), f"{reference.ct_field}__model",
-                output_field=models.CharField(),
-            ),
-            id_name: Cast(reference.fk_field, output_field=models.CharField()),
-        })
+        expressions.update(
+            {
+                model_name: Concat(
+                    f"{reference.ct_field}__app_label",
+                    models.Value("."),
+                    f"{reference.ct_field}__model",
+                    output_field=models.CharField(),
+                ),
+                id_name: Cast(reference.fk_field, output_field=models.CharField()),
+            }
+        )
         field_id_decode = {
-            **(field_id_decode or {}), model_name: str.lower, id_name: model.record_public_id_operand,
+            **(field_id_decode or {}),
+            model_name: str.lower,
+            id_name: model.record_public_id_operand,
         }
     container_scopes = set(declared_hasura_resource_fields(model, "hasura_container_scope_fields"))
     # Caller-owned computed filters name themselves in filterable; extension
     # declarations must not replace any filter the resource already owns.
     _check_filter_expression_names(
-        model, expressions,
+        model,
+        expressions,
         (set(filterable) | container_scopes) - set(filter_expressions or {}) - set(record_ref_filters or ()),
     )
-    filterable = tuple(dict.fromkeys((
-        *filterable, *contributed_filters, *sorted(container_scopes), *model_filter_aliases,
-        *declared_expressions, *(record_ref_filters or ()),
-    )))
+    filterable = tuple(
+        dict.fromkeys(
+            (
+                *filterable,
+                *contributed_filters,
+                *sorted(container_scopes),
+                *model_filter_aliases,
+                *declared_expressions,
+                *(record_ref_filters or ()),
+            )
+        )
+    )
     if collisions := model_aliases.keys() & (sortable_aliases or {}).keys():
         raise ImproperlyConfigured(f"{model._meta.label} declares duplicate sortable aliases: {sorted(collisions)}.")
     sortable = tuple(dict.fromkeys((*sortable, *model_aliases)))
@@ -1424,13 +1514,14 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         ("groupable", active_groupable),
         ("aggregatable", aggregatable),
     ):
-        assert_no_gated_read_fields(
-            model,
-            tuple(field for field in fields if field not in expressions),
-            f"hasura_model_resource {axis} axis",
-            "field-gated reads cannot be query axes",
-            definition_for=declared_rebac_definition,
-        )
+        validator = resource_extensions(model).validate_fields
+        if validator is not None:
+            validator(
+                model,
+                tuple(field for field in fields if field not in expressions),
+                f"hasura_model_resource {axis} axis",
+                "field-gated reads cannot be query axes",
+            )
 
     resource_name = name or model.__name__.lower()
     relation_paths = (
@@ -1440,10 +1531,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     )
     for path in sorted(container_scopes):
         field = require_field_for_path(model, path)
-        if (
-            "__" not in path or field.is_relation
-            or path in {*sortable, *active_groupable, *aggregatable}
-        ):
+        if "__" not in path or field.is_relation or path in {*sortable, *active_groupable, *aggregatable}:
             raise ImproperlyConfigured(
                 f"{model._meta.label}.{path}: container scope keys must be filter-only related scalars."
             )
@@ -1461,8 +1549,11 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
 
     def prepare_queryset(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
         queryset = _relation_scalar_queryset(queryset, relation_paths)
-        if issubclass(node, RecordReferenceNode) or record_ref_requires_read:
-            queryset = with_record_reference_access(queryset, select=False)
+        transform = resource_extensions(model).prepare_queryset
+        if transform is not None:
+            queryset = transform(queryset, node, record_ref_requires_read)
+        elif record_ref_requires_read:
+            raise ImproperlyConfigured("A record-reference read guard requires a declared resource contributor.")
         return with_filter_aliases(queryset)
 
     def prepare_filters(queryset: models.QuerySet[Any], predicate: models.Q) -> models.QuerySet[Any]:
@@ -1477,7 +1568,8 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
             if record_ref_requires_read and name in (record_ref_filters or ()):
                 expression = models.Case(
                     models.When(_angee_record_readable=True, then=expression),
-                    default=models.Value(None), output_field=expression.output_field,
+                    default=models.Value(None),
+                    output_field=expression.output_field,
                 )
             aliases[name] = expression
         return queryset.alias(**aliases) if aliases else queryset
@@ -1496,7 +1588,8 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     sortable_aliases = {**{alias: alias for alias in relation_sort_aliases.values()}, **sortable_aliases}
     if id_decode is None and id_column == "pk":
         id_decode = public_pk_decoder(model)
-    active_write_backend = write_backend or AngeeHasuraWriteBackend(model, lines=lines)
+    backend_factory = resource_extensions(model).write_backend_factory or AngeeHasuraWriteBackend
+    active_write_backend = write_backend or backend_factory(model, lines=lines)
     if isinstance(active_write_backend, AngeeHasuraWriteBackend):
         field_id_decode = {
             **{name: public_pk_decoder(related) for name, related in active_write_backend.public_id_fields.items()},
@@ -1537,8 +1630,11 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     relation_filter_aliases = {path: _relation_axis_alias(path) for path in _relation_axis_fields(model, filterable)}
     field_id_decode = {
         **(field_id_decode or {}),
-        **{alias: field_id_decode[path] for path, alias in relation_filter_aliases.items()
-           if field_id_decode is not None and path in field_id_decode},
+        **{
+            alias: field_id_decode[path]
+            for path, alias in relation_filter_aliases.items()
+            if field_id_decode is not None and path in field_id_decode
+        },
     }
     active_json_paths = dict(json_paths or {})
     filter_lookups = resource_filter_lookups(model, model_filters)
@@ -1575,9 +1671,14 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         id_column=id_column,
     )
     if contributed_filters:
-        resource.types.append(_resource_filter_projection(
-            node, model, tuple(contributed_filters.items()), source_read_queryset,
-        ))
+        resource.types.append(
+            _resource_filter_projection(
+                node,
+                model,
+                tuple(contributed_filters.items()),
+                source_read_queryset,
+            )
+        )
     if relation_sort_aliases:
         assert resource.order_by_type is not None
         wire_names = {alias: path for path, alias in relation_sort_aliases.items()}
@@ -1599,15 +1700,21 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         non_null_filter_fields = tuple(
             key for key in (*(filter_expressions or {}), *declared_expressions) if not output_fields[key].null
         )
-        donor = type(f"{filter_name}Expressions", (), {
-            "__annotations__": {
-                key: comparison_for_python_type(
-                    field_type_map[type(output_field)], public_id=key in (field_id_decode or {}),
-                ) | None
-                for key, output_field in output_fields.items()
+        donor = type(
+            f"{filter_name}Expressions",
+            (),
+            {
+                "__annotations__": {
+                    key: comparison_for_python_type(
+                        field_type_map[type(output_field)],
+                        public_id=key in (field_id_decode or {}),
+                    )
+                    | None
+                    for key, output_field in output_fields.items()
+                },
+                **{key: strawberry.field(name=key, default=strawberry.UNSET) for key in expressions},
             },
-            **{key: strawberry.field(name=key, default=strawberry.UNSET) for key in expressions},
-        })
+        )
         donor = strawberry.input(donor, name=filter_name, extend=True)
         resource.types.append(donor)
         adapter = _FilterInputExtension(resource.filter_type, donor, {})
@@ -1622,8 +1729,13 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         for graphql_field in get_object_definition(resource.query, strict=True).fields:
             if any(argument.python_name == "where" for argument in graphql_field.arguments):
                 graphql_field.extensions.append(
-                    relation_filter if graphql_field.graphql_name == resource.list_root else _RelationFilterExtension(
-                        field_id_decode, source_aggregate, filter_type, relation_filter_aliases,
+                    relation_filter
+                    if graphql_field.graphql_name == resource.list_root
+                    else _RelationFilterExtension(
+                        field_id_decode,
+                        source_aggregate,
+                        filter_type,
+                        relation_filter_aliases,
                     )
                 )
     if lines is not None:
@@ -1640,21 +1752,28 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         if adapter is not None:
             where = adapter.map_arguments({"where": where})["where"]
         predicate = where_to_q(
-            where, id_column=id_column, id_decode=id_decode,
+            where,
+            id_column=id_column,
+            id_decode=id_decode,
             # Validate operators now; related identities require the executing
             # queryset's actor and are resolved afresh when the filter is used.
             field_decoders={
-                name: decoder for name, decoder in field_id_decode.items()
+                name: decoder
+                for name, decoder in field_id_decode.items()
                 if not isinstance(decoder, _RelationIDDecoder)
-            }, lookups=filter_lookups,
+            },
+            lookups=filter_lookups,
         )
 
         def apply(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
             active = predicate
             if relation_filter is not None:
                 active = where_to_q(
-                    relation_filter.prepare_queryset(queryset, where), id_column=id_column, id_decode=id_decode,
-                    field_decoders=field_id_decode, lookups=filter_lookups,
+                    relation_filter.prepare_queryset(queryset, where),
+                    id_column=id_column,
+                    id_decode=id_decode,
+                    field_decoders=field_id_decode,
+                    lookups=filter_lookups,
                 )
             return filter_queryset(prepare_queryset(queryset), active, prepare_queryset=prepare_filters)
 
@@ -1806,16 +1925,26 @@ def _attach_lines_save(
         return save(info, pk, patch, lines)
 
     def resolve_revisioned_save(
-        self: Any, info: strawberry.Info, pk: PublicID, patch: Any = None, lines: Any = None,
+        self: Any,
+        info: strawberry.Info,
+        pk: PublicID,
+        patch: Any = None,
+        lines: Any = None,
         expected_revision: int | None = None,
     ) -> Any:
         return save(info, pk, patch, lines, expected_revision=expected_revision)
 
     resolver = resolve_revisioned_save if revisioned else resolve_save
-    resolver.__annotations__.update({
-        "self": Any, "info": strawberry.Info, "pk": PublicID,
-        "patch": patch_type | None, "lines": _types.GenericAlias(list, (line_input,)) | None, "return": node,
-    })
+    resolver.__annotations__.update(
+        {
+            "self": Any,
+            "info": strawberry.Info,
+            "pk": PublicID,
+            "patch": patch_type | None,
+            "lines": _types.GenericAlias(list, (line_input,)) | None,
+            "return": node,
+        }
+    )
     if revisioned:
         resolver.__annotations__["expected_revision"] = int | None
 
@@ -1931,15 +2060,14 @@ def _line_metadata(
 def _line_lock_field(lines: HasuraLines, schema: Any) -> str | None:
     """Return the child node's ``locked_fields`` wire name when the child locks rows."""
 
-    if not issubclass(lines.model, ProtectedRowLockMixin):
+    if not issubclass(lines.model, RowLockMixin):
         return None
     wire_name = resource_wire_field_name(lines.node, "locked_fields")
     node_name = resource_type_name(lines.node)
     node_type = schema.get_type(node_name) if node_name is not None else None
     if wire_name is None or node_type is None or wire_name not in getattr(node_type, "fields", {}):
         raise ImproperlyConfigured(
-            f"editable lines {lines.model._meta.label}.{lines.field} lock rows; "
-            "their node must project locked_fields."
+            f"editable lines {lines.model._meta.label}.{lines.field} lock rows; their node must project locked_fields."
         )
     return wire_name
 

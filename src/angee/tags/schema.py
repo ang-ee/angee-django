@@ -32,13 +32,13 @@ from strawberry_django.queryset import run_type_get_queryset
 
 from angee.base.refs import canonical_link_path
 from angee.graphql.data.hasura import (
-    AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
     declared_hasura_write_relation_fields,
     hasura_model_resource,
 )
 from angee.graphql.ids import PublicID
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.tags.models import Tag as TagModel
 
 Tag = apps.get_model("tags", "Tag")
@@ -46,7 +46,7 @@ TagAssignment = apps.get_model("tags", "TagAssignment")
 
 
 @strawberry_django.type(Tag)
-class TagType(AngeeNode):
+class TagType(ProtectedNode):
     """Admin projection of one tag in the vocabulary."""
 
     name: auto
@@ -58,7 +58,7 @@ class TagType(AngeeNode):
 
 
 @strawberry_django.type(TagAssignment)
-class TagAssignmentType(AngeeNode):
+class TagAssignmentType(ProtectedNode):
     """Admin projection of one polymorphic tag edge, with its target addressed publicly."""
 
     tag: TagType
@@ -121,7 +121,7 @@ def _prefetched_tag_edges(row: models.Model) -> Any:
 class TaggedNode:
     """Project a model's tags as a relation list on its node type.
 
-    Compose alongside the node base, e.g. ``class FileType(TaggedNode, AngeeNode)``,
+    Compose alongside the node base, e.g. ``class FileType(TaggedNode, ProtectedNode)``,
     or through a console ``type_extensions`` donor when the node type is shared
     with another schema; the model composes :class:`~angee.tags.models.TaggedModel`.
     With :func:`tags_input_extensions` on the resource's inputs, resource metadata
@@ -199,7 +199,7 @@ _TAG_RESOURCE = hasura_model_resource(
     ))),
     insertable=...,
     updatable=...,
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         Tag,
         public_id_fields=declared_hasura_write_relation_fields(Tag),
     ),

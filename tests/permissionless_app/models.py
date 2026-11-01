@@ -42,3 +42,17 @@ class Reference(RecordRefMixin, AngeeDataModel):
     class Meta:
         abstract = False
         app_label = "permissionless"
+
+
+class PlainDefaultTarget(models.Model):
+    slug = models.SlugField(unique=True)
+
+    class Meta:
+        app_label = "permissionless"
+
+
+class PlainDefaultSource(models.Model):
+    target = models.ForeignKey(PlainDefaultTarget, on_delete=models.CASCADE)
+
+    class Meta:
+        app_label = "permissionless"

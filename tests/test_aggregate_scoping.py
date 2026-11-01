@@ -14,8 +14,8 @@ from rebac.testing import install_schema
 from strawberry import auto
 
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.graphql.node import ProtectedNode
 from angee.iam.models.base import ProtectedDataModel
 from tests.conftest import SchemaAddon, execute_schema, result_data
 from tests.tables import model_tables
@@ -40,7 +40,7 @@ def test_native_aggregates_scope_each_logical_row_once() -> None:
     """Multiple permissions on one row cannot inflate groups, counts, or sums."""
 
     @strawberry_django.type(ScopedAggregateRecord)
-    class ScopedAggregateRecordType(AngeeNode):
+    class ScopedAggregateRecordType(ProtectedNode):
         name: auto
 
     reset_backend()

@@ -13,15 +13,16 @@ import strawberry_django
 from django.apps import apps
 from strawberry import auto
 
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
-from angee.graphql.node import AngeeNode
+from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 
 UomCategory = apps.get_model("uom", "UomCategory")
 Uom = apps.get_model("uom", "Uom")
 
 
 @strawberry_django.type(UomCategory)
-class UomCategoryType(AngeeNode):
+class UomCategoryType(ProtectedNode):
     """Admin projection of one unit-of-measure category."""
 
     name: auto
@@ -30,7 +31,7 @@ class UomCategoryType(AngeeNode):
 
 
 @strawberry_django.type(Uom)
-class UomType(AngeeNode):
+class UomType(ProtectedNode):
     """Admin projection of one unit, with its category as a display node."""
 
     category: UomCategoryType
@@ -65,7 +66,7 @@ _UOM_RESOURCE = hasura_model_resource(
     groupable=["category", "is_reference", "is_archived"],
     writable=["name", "category", "ratio", "offset", "rounding", "is_reference", "is_archived"],
     field_id_decode={"category": public_pk_decoder(UomCategory)},
-    write_backend=AngeeHasuraWriteBackend(Uom, public_id_fields=("category",)),
+    write_backend=ProtectedHasuraWriteBackend(Uom, public_id_fields=("category",)),
     id_column="sqid",
 )
 

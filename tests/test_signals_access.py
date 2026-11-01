@@ -31,8 +31,7 @@ from angee.base.models.timestamps import TimestampMixin
 from angee.base.serialization import json_safe
 from angee.base.signals import ModelChange, send_created_batch
 from angee.base.testing.packages import write_addon_distribution
-from angee.graphql import access, publishing
-from angee.graphql.access import ChangeReadGate
+from angee.graphql import publishing
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.events import ChangePayload
@@ -41,6 +40,8 @@ from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.graphql.publishing import publication_ingestion_context
 from angee.graphql.schema import DEFAULT_SCHEMA_NAME, GraphQLSchemas
 from angee.graphql.subscriptions import changes
+from angee.iam.graphql import access
+from angee.iam.graphql.access import ChangeReadGate
 from tests.conftest import SchemaAddon
 from tests.tables import model_tables
 

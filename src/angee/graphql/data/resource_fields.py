@@ -19,11 +19,10 @@ from strawberry_django_hasura import SnakeNameConverter
 
 from angee.base.fields import ImplClassField
 from angee.base.fields.state import StatusDisplay
-from angee.base.models.trash import ARCHIVE_FLAG_FIELD, TRASH_FLAG_FIELD, ArchiveMixin
+from angee.base.models.trash import ARCHIVE_FLAG_FIELD, TRASH_FLAG_FIELD, ArchiveMixin, TrashMixin
 from angee.graphql.data import contracts as data_contract
 from angee.graphql.impl import model_impl_choices
 from angee.graphql.introspection import is_to_many_relation, surface_field_names, surface_name
-from angee.iam.models.trash import ProtectedTrashMixin
 from graphql import (
     GraphQLEnumType,
     GraphQLInputObjectType,
@@ -41,16 +40,30 @@ RESOURCE_FIELD_SCALARS = frozenset(
     {"ID", "String", "Boolean", "Int", "Float", "Decimal", "DateTime", "Date", "UUID", "JSON"}
 )
 
-RESOURCE_FIELD_WIDGETS = frozenset({
-    "select", "many2one", "tagInput", "switch", "integer", "float", "money", "datetime", "date", "json", "visibility",
-    "tone", "color",
-})
+RESOURCE_FIELD_WIDGETS = frozenset(
+    {
+        "select",
+        "many2one",
+        "tagInput",
+        "switch",
+        "integer",
+        "float",
+        "money",
+        "datetime",
+        "date",
+        "json",
+        "visibility",
+        "tone",
+        "color",
+    }
+)
 
 ENUM_FIELD_WIDGETS = frozenset({"select", "tone"})
 
 MONEY_CURRENCY_FIELD_METADATA_KEY = "angee_currency_field"
 
 STATUS_DISPLAY_METADATA_KEY = "angee_status_display"
+
 
 def is_resource_field_widget(value: str) -> bool:
     """Accept built-ins or an addon-qualified registry key (namespace.addon.widget).
@@ -191,8 +204,7 @@ def is_archive_field(field: models.Field[Any, Any] | ForeignObjectRel | None) ->
 
 def is_trash_field(field: models.Field[Any, Any] | ForeignObjectRel | None) -> bool:
     """Recognize the trash capability on its declared model owner."""
-    return (isinstance(field, models.Field) and field.name == TRASH_FLAG_FIELD
-            and issubclass(field.model, ProtectedTrashMixin))
+    return isinstance(field, models.Field) and field.name == TRASH_FLAG_FIELD and issubclass(field.model, TrashMixin)
 
 
 #: Backend-owned display-field precedence, shared by record representation and
@@ -347,15 +359,23 @@ def final_resource_fields(
                 values=values,
                 widget=resource_field_widget(model_field, kind, source_metadata, scalar=scalar),
                 aggregatable=(
-                    name in aggregatable or python_name in aggregatable
+                    name in aggregatable
+                    or python_name in aggregatable
                     or (model_field is not None and model_field_name in aggregatable)
                 ),
-                creatable=(name in creatable or python_name in creatable
-                           or (model_field is not None and model_field_name in creatable)),
-                updatable=(name in updatable or python_name in updatable
-                           or (model_field is not None and model_field_name in updatable)),
+                creatable=(
+                    name in creatable
+                    or python_name in creatable
+                    or (model_field is not None and model_field_name in creatable)
+                ),
+                updatable=(
+                    name in updatable
+                    or python_name in updatable
+                    or (model_field is not None and model_field_name in updatable)
+                ),
                 required_on_create=(
-                    name in required_on_create or python_name in required_on_create
+                    name in required_on_create
+                    or python_name in required_on_create
                     or (model_field is not None and model_field_name in required_on_create)
                 ),
                 archivable=is_archive_field(model_field),
@@ -836,7 +856,8 @@ def _field_choice_labels(field: models.Field[Any, Any] | ForeignObjectRel | None
 
 
 def _model_field_or_none(
-    model: type[models.Model] | None, name: str,
+    model: type[models.Model] | None,
+    name: str,
 ) -> models.Field[Any, Any] | ForeignObjectRel | None:
     """Return a Django model field for ``name`` when one owns that GraphQL field."""
 

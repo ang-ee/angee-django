@@ -21,11 +21,9 @@ from strawberry_django.utils.requests import get_request
 from angee.base.fields.identity import SqidField
 from angee.base.models.identity import instance_from_public_id
 from angee.base.models.locks import StaleRevisionError
-from angee.graphql.actions import ActionResult, action_guard, session_user
-from angee.graphql.capabilities import permission_expression, permissions_field
+from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.data.contracts import DataResourceSubtitleMetadata
 from angee.graphql.data.hasura import (
-    AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
     declared_hasura_write_relation_fields,
     hasura_model_resource,
@@ -39,10 +37,13 @@ from angee.graphql.ids import (
     require_public_id,
     to_public_id,
 )
-from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
-from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch
+from angee.iam.graphql.actions import session_user
+from angee.iam.graphql.capabilities import permission_expression, permissions_field
+from angee.iam.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, ProtectedNode
+from angee.iam.graphql.relations import actor_scoped_to_one
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.identity import user_display_label, user_label, user_public_id
 from angee.knowledge.models import (
     AmbiguousMatchError,
@@ -68,11 +69,11 @@ RecordBinding = apps.get_model("knowledge", "RecordBinding")
 
 
 @strawberry_django.type(Vault)
-class VaultType(TrashedRefMixin, AngeeNode):
+class VaultType(TrashedRefMixin, ProtectedNode):
     """GraphQL projection of a vault."""
 
     display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name, only=["name"], description=NODE_DISPLAY_NAME_DESCRIPTION
+        resolver=ProtectedNode.display_name, only=["name"], description=NODE_DISPLAY_NAME_DESCRIPTION
     )
     name: auto
     description: auto
@@ -110,7 +111,7 @@ class OutlineEntryType:
 
 
 @strawberry_django.type(MarkdownPage)
-class MarkdownPageType(AngeeNode):
+class MarkdownPageType(ProtectedNode):
     """GraphQL projection of a concrete markdown page."""
 
     revision: auto
@@ -187,11 +188,11 @@ def _wikilinks_prefetch(_info: strawberry.Info) -> Prefetch:
 
 
 @strawberry_django.type(Page)
-class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
+class PageType(AuthoredRefMixin, TrashedRefMixin, ProtectedNode):
     """GraphQL projection of a page."""
 
     display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name, only=["title"], description=NODE_DISPLAY_NAME_DESCRIPTION
+        resolver=ProtectedNode.display_name, only=["title"], description=NODE_DISPLAY_NAME_DESCRIPTION
     )
     revision: auto
     title: auto
@@ -281,7 +282,7 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
 
 
 @strawberry_django.type(RecordBinding)
-class RecordBindingType(AngeeNode):
+class RecordBindingType(ProtectedNode):
     """Binding metadata visible only to readers of both knowledge and target."""
 
     role: auto
@@ -382,7 +383,7 @@ def _markdown_write_payload(write: Callable[[], Any]) -> PageBodyPayload:
     return PageBodyPayload(ok=True, markdown=cast(MarkdownPageType, markdown))
 
 
-class VaultWriteBackend(AngeeHasuraWriteBackend):
+class VaultWriteBackend(ProtectedHasuraWriteBackend):
     """Write semantics for vaults: create belongs to the manager factory."""
 
     def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:
@@ -395,7 +396,7 @@ class VaultWriteBackend(AngeeHasuraWriteBackend):
         return Vault._default_manager.create_for(user, **fields)
 
 
-class PageWriteBackend(AngeeHasuraWriteBackend):
+class PageWriteBackend(ProtectedHasuraWriteBackend):
     """Write semantics for pages: create belongs to the manager factory."""
 
     def _create_row(self, info: strawberry.Info, data: dict[str, Any]) -> Any:

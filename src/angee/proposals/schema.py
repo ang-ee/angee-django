@@ -18,17 +18,8 @@ from strawberry.experimental.pydantic import input as pydantic_input
 from strawberry.scalars import JSON
 
 from angee.base.models.locks import StaleRevisionError
-from angee.graphql.actions import (
-    ActionResult,
-    ActionSelectionInput,
-    action_guard,
-    authorized_action_target,
-    authorized_permission_target,
-    many_actions,
-)
-from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
+from angee.graphql.actions import ActionResult, ActionSelectionInput, action_guard, many_actions
 from angee.graphql.data.hasura import (
-    AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
     declared_hasura_write_relation_fields,
     hasura_model_resource,
@@ -36,10 +27,14 @@ from angee.graphql.data.hasura import (
 )
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.inputs import InputReference
-from angee.graphql.node import AngeeNode
-from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
+from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
+from angee.iam.graphql.capabilities import held_permissions, permission_annotations, permissions_field
+from angee.iam.graphql.inputs import AuthorizedInputReference
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import actor_scoped_to_one
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.messaging.schema import MessageType
@@ -99,11 +94,18 @@ class ProposalRoundSetupInput:
     """Round setup references are authorized before the domain sees them."""
 
     template: ProposalRoundTemplateInput
-    facilitator: PublicID = strawberry.field(metadata={InputReference: InputReference(settings.AUTH_USER_MODEL)})
-    responders: list[PublicID] = strawberry.field(metadata={InputReference: InputReference(settings.AUTH_USER_MODEL)})
-    team: PublicID | None = strawberry.field(default=None, metadata={InputReference: InputReference("spaces.Group")})
+    facilitator: PublicID = strawberry.field(
+        metadata={InputReference: AuthorizedInputReference(settings.AUTH_USER_MODEL)}
+    )
+    responders: list[PublicID] = strawberry.field(
+        metadata={InputReference: AuthorizedInputReference(settings.AUTH_USER_MODEL)}
+    )
+    team: PublicID | None = strawberry.field(
+        default=None, metadata={InputReference: AuthorizedInputReference("spaces.Group")}
+    )
     requester_party: PublicID | None = strawberry.field(
-        default=None, metadata={InputReference: InputReference("parties.Party")},
+        default=None,
+        metadata={InputReference: AuthorizedInputReference("parties.Party")},
     )
 
 
@@ -164,7 +166,7 @@ class ResponderRemovalResult(ActionResult):
 
 
 @strawberry_django.type(Round)
-class ProposalRoundType(AuthoredRefMixin, AngeeNode):
+class ProposalRoundType(AuthoredRefMixin, ProtectedNode):
     """Round row with independently gated settings and roster projections."""
 
     revision: auto
@@ -245,9 +247,12 @@ def question_attention_field(model: Any, *, passed_on: bool = False) -> Any:
     def resolve(root: Any) -> int:
         return getattr(root, name)
 
-    return strawberry_django.field(resolver=resolve, annotate={
-        name: lambda info: model.question_attention_expression(current_actor(), passed_on=passed_on),
-    })
+    return strawberry_django.field(
+        resolver=resolve,
+        annotate={
+            name: lambda info: model.question_attention_expression(current_actor(), passed_on=passed_on),
+        },
+    )
 
 
 @strawberry.type
@@ -294,7 +299,7 @@ class ConsoleTaskProposalsExtension(TaskProposalsFields):
 
 
 @strawberry_django.type(Topic)
-class ProposalTopicType(AuthoredRefMixin, AngeeNode):
+class ProposalTopicType(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of one stable comparison topic."""
 
     key: auto
@@ -308,7 +313,7 @@ class ProposalTopicType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Proposal)
-class ProposalFields(AuthoredRefMixin, AngeeNode):
+class ProposalFields(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of a field-gated structured response."""
 
     revision: auto
@@ -429,24 +434,33 @@ class ConsoleProjectProposalsExtension(ProjectAttentionFields):
 
 
 @strawberry_django.type(Answer)
-class ProposalAnswerType(AuthoredRefMixin, AngeeNode):
+class ProposalAnswerType(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of one topic-aligned answer."""
 
     revision: auto
     visibility: auto
     shared_with_responders: auto
 
-    @strawberry_django.field(only=["visibility"], annotate={
-        "_angee_permission_actor": lambda info: permission_annotations(Answer, ())["_angee_permission_actor"],
-        **{f"_angee_permission_{name}": partial(_permission_annotation, Answer, name)
-           for name in ("narrow", "manage")},
-    })
+    @strawberry_django.field(
+        only=["visibility"],
+        annotate={
+            "_angee_permission_actor": lambda info: permission_annotations(Answer, ())["_angee_permission_actor"],
+            **{
+                f"_angee_permission_{name}": partial(_permission_annotation, Answer, name)
+                for name in ("narrow", "manage")
+            },
+        },
+    )
     def allowed_visibility(self) -> list[AnswerVisibility]:
         """Project the answer verb's permission-dependent choices."""
         held = held_permissions(cast(Any, self), ("narrow", "manage"))
-        return [AnswerVisibility(value) for value in cast(Any, self).allowed_visibility(
-            narrow="narrow" in held, manage="manage" in held,
-        )]
+        return [
+            AnswerVisibility(value)
+            for value in cast(Any, self).allowed_visibility(
+                narrow="narrow" in held,
+                manage="manage" in held,
+            )
+        ]
 
     permissions = permissions_field(("write", "narrow", "manage"))
 
@@ -459,7 +473,7 @@ class ProposalAnswerType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Review)
-class ProposalReviewType(AuthoredRefMixin, AngeeNode):
+class ProposalReviewType(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of one evaluator assessment."""
 
     body: auto
@@ -477,7 +491,9 @@ class ProposalReviewType(AuthoredRefMixin, AngeeNode):
 
 @action_guard("Resolve question failed.")
 def resolve_proposal_clarification(
-    info: strawberry.Info, task: PublicID, expected_revision: int,
+    info: strawberry.Info,
+    task: PublicID,
+    expected_revision: int,
 ) -> ActionResult:
     """Resolve a question through its round's management verb."""
 
@@ -488,6 +504,7 @@ def resolve_proposal_clarification(
     round = round.with_actor(current_actor())
     result = round.resolve_clarification(question, expected_revision=expected_revision)
     return ActionResult(ok=True, message="Question resolved.", id=result.sqid)
+
 
 @strawberry.type
 class ProposalActionMutation:
@@ -510,9 +527,7 @@ class ProposalActionMutation:
             raise ValidationError({"project": "Choose exactly one project or task."})
         target_id = project if project is not None else task
         assert target_id is not None
-        target_row = authorized_permission_target(
-            info, Project if project is not None else Task, target_id, "write"
-        )
+        target_row = authorized_permission_target(info, Project if project is not None else Task, target_id, "write")
         facilitator_row = authorized_permission_target(info, User, facilitator, "read")
         responder_rows = [authorized_permission_target(info, User, user, "read") for user in responders]
         team_row = authorized_permission_target(info, Team, team, "read") if team else None
@@ -633,9 +648,7 @@ class ProposalActionMutation:
     ) -> ActionResult:
         """Return only the question id, including replays after surrender."""
         row = authorized_permission_target(info, Round, round, "ask")
-        task = row.ask(
-            title, body, audience, _clarification_recipient(info, recipient, responders), idempotency_key
-        )
+        task = row.ask(title, body, audience, _clarification_recipient(info, recipient, responders), idempotency_key)
         return ActionResult(ok=True, message="Question asked.", id=task.sqid)
 
     @strawberry.mutation
@@ -662,13 +675,20 @@ class ProposalActionMutation:
 
     @strawberry.mutation
     def resolve_proposal_clarifications(
-        self, info: strawberry.Info, selection: list[ActionSelectionInput],
+        self,
+        info: strawberry.Info,
+        selection: list[ActionSelectionInput],
     ) -> list[ActionResult]:
         """Resolve selected questions; refusals do not roll back eligible rows."""
 
-        return many_actions(selection, lambda item: resolve_proposal_clarification(
-            info, item.id, item.expected_revision,
-        ))
+        return many_actions(
+            selection,
+            lambda item: resolve_proposal_clarification(
+                info,
+                item.id,
+                item.expected_revision,
+            ),
+        )
 
     @strawberry.mutation
     @action_guard("Passing question failed.", errors=(StaleRevisionError,))
@@ -917,7 +937,7 @@ _ROUND_RESOURCE = hasura_model_resource(
         "opened_by": public_pk_decoder(User),
         "closed_by": public_pk_decoder(User),
     },
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         Round,
         public_id_fields=(
             "task",
@@ -943,7 +963,7 @@ _TOPIC_RESOURCE = hasura_model_resource(
     insertable=["round", "key", "name", "hint", "sort_order"],
     updatable=["name", "hint", "sort_order"],
     field_id_decode={"round": public_pk_decoder(Round)},
-    write_backend=AngeeHasuraWriteBackend(Topic, public_id_fields=("round",)),
+    write_backend=ProtectedHasuraWriteBackend(Topic, public_id_fields=("round",)),
 )
 
 
@@ -1012,7 +1032,7 @@ def _proposal_resource(node_type: type) -> Any:
             "submitted_by": public_pk_decoder(User),
             "decided_by": public_pk_decoder(User),
         },
-        write_backend=AngeeHasuraWriteBackend(
+        write_backend=ProtectedHasuraWriteBackend(
             Proposal,
             public_id_fields=("round", "responder", "party", "source_message", "currency"),
         ),
@@ -1036,7 +1056,7 @@ _ANSWER_RESOURCE = hasura_model_resource(
         "proposal": public_pk_decoder(Proposal),
         "topic": public_pk_decoder(Topic),
     },
-    write_backend=AngeeHasuraWriteBackend(Answer, public_id_fields=("proposal", "topic")),
+    write_backend=ProtectedHasuraWriteBackend(Answer, public_id_fields=("proposal", "topic")),
 )
 
 _REVIEW_RESOURCE = hasura_model_resource(
@@ -1053,7 +1073,7 @@ _REVIEW_RESOURCE = hasura_model_resource(
         "proposal": public_pk_decoder(Proposal),
         "reviewer": public_pk_decoder(User),
     },
-    write_backend=AngeeHasuraWriteBackend(Review, public_id_fields=("proposal", "reviewer")),
+    write_backend=ProtectedHasuraWriteBackend(Review, public_id_fields=("proposal", "reviewer")),
 )
 
 _COMMON_RESOURCE_TYPES = [

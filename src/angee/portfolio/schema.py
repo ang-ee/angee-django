@@ -11,13 +11,15 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from strawberry import auto
 
-from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.actions import ActionResult, action_guard
+from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, optional_public_id
-from angee.graphql.node import AngeeNode
-from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
+from angee.iam.graphql.actions import authorized_action_target
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import actor_scoped_to_one
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.portfolio.models import Health
@@ -43,7 +45,7 @@ UpdateHealthChoice = strawberry.enum(cast(EnumMeta, Enum("UpdateHealth", _HEALTH
 
 
 @strawberry_django.type(Product)
-class ProductType(AuthoredRefMixin, AngeeNode):
+class ProductType(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of a phasal Product."""
 
     name: auto
@@ -62,7 +64,7 @@ class ProductType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Product)
-class ConsoleProductType(AuthoredRefMixin, AngeeNode):
+class ConsoleProductType(AuthoredRefMixin, ProtectedNode):
     """Console Product projection with a label-bearing owner relation."""
 
     name: auto
@@ -76,7 +78,7 @@ class ConsoleProductType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Initiative)
-class InitiativeType(AuthoredRefMixin, AngeeNode):
+class InitiativeType(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of one strategic tree node."""
 
     name: auto
@@ -101,7 +103,7 @@ class InitiativeType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Initiative)
-class ConsoleInitiativeType(AuthoredRefMixin, AngeeNode):
+class ConsoleInitiativeType(AuthoredRefMixin, ProtectedNode):
     """Console Initiative projection with a label-bearing owner relation."""
 
     name: auto
@@ -121,7 +123,7 @@ class ConsoleInitiativeType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(InitiativeProject)
-class InitiativeProjectType(AuthoredRefMixin, AngeeNode):
+class InitiativeProjectType(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of an ordered Initiative-to-Project placement."""
 
     sort_order: auto
@@ -133,7 +135,7 @@ class InitiativeProjectType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Update)
-class PortfolioUpdateType(AuthoredRefMixin, AngeeNode):
+class PortfolioUpdateType(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of one Project/Initiative health assertion."""
 
     health: UpdateHealthChoice  # type: ignore[valid-type]
@@ -155,7 +157,7 @@ class PortfolioUpdateType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Release)
-class ReleaseType(AuthoredRefMixin, AngeeNode):
+class ReleaseType(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of a Product release artifact."""
 
     name: auto
@@ -284,7 +286,7 @@ def _product_resource(node_type: type) -> Any:
             "owner": public_pk_decoder(User),
             "originated_from": public_pk_decoder(Project),
         },
-        write_backend=AngeeHasuraWriteBackend(Product),
+        write_backend=ProtectedHasuraWriteBackend(Product),
     )
 
 
@@ -360,7 +362,7 @@ def _initiative_resource(node_type: type) -> Any:
             "parent": public_pk_decoder(Initiative),
             "owner": public_pk_decoder(User),
         },
-        write_backend=AngeeHasuraWriteBackend(
+        write_backend=ProtectedHasuraWriteBackend(
             Initiative,
             public_id_fields=("parent",),
         ),
@@ -385,7 +387,7 @@ _INITIATIVE_PROJECT_RESOURCE = hasura_model_resource(
         "project": public_pk_decoder(Project),
         "project__product": public_pk_decoder(Product),
     },
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         InitiativeProject,
         public_id_fields=("initiative", "project"),
     ),
@@ -401,7 +403,7 @@ _UPDATE_RESOURCE = hasura_model_resource(
     groupable=["health"],
     insert=False,
     updatable=["health", "body"],
-    write_backend=AngeeHasuraWriteBackend(Update),
+    write_backend=ProtectedHasuraWriteBackend(Update),
 )
 
 _RELEASE_RESOURCE = hasura_model_resource(
@@ -432,7 +434,7 @@ _RELEASE_RESOURCE = hasura_model_resource(
     insertable=["product", "name", "status", "target_date", "shipped_on", "notes"],
     updatable=["product", "name", "status", "target_date", "shipped_on", "notes"],
     field_id_decode={"product": public_pk_decoder(Product)},
-    write_backend=AngeeHasuraWriteBackend(Release, public_id_fields=("product",)),
+    write_backend=ProtectedHasuraWriteBackend(Release, public_id_fields=("product",)),
 )
 
 _COMMON_RESOURCE_TYPES = [

@@ -25,19 +25,15 @@ from strawberry_django.utils.requests import get_request
 
 from angee.agents import provisioning
 from angee.agents.context import render_view_context
-from angee.graphql.actions import (
-    ActionResult,
-    action_target,
-    authorized_permission_target,
-    resolve_action_target,
-    session_user,
-)
-from angee.graphql.capabilities import permissions_field
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.actions import ActionResult
+from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
-from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
+from angee.iam.graphql.actions import action_target, authorized_permission_target, resolve_action_target, session_user
+from angee.iam.graphql.capabilities import permissions_field
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.identity import public_subject_ref
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import PlatformAdminPermission
@@ -76,7 +72,7 @@ User = get_user_model()
 
 
 @strawberry_django.type(InferenceProvider)
-class InferenceProviderType(IntegrationLabelMixin, IntegrationOAuthMixin, AngeeNode):
+class InferenceProviderType(IntegrationLabelMixin, IntegrationOAuthMixin, ProtectedNode):
     """Admin projection of an inference provider child model."""
 
     vendor: VendorType
@@ -108,7 +104,7 @@ class IntegrationInferenceProviderExtension:
 
 
 @strawberry_django.type(InferenceModel)
-class InferenceModelType(AngeeNode):
+class InferenceModelType(ProtectedNode):
     """Admin projection of one model in a provider's catalogue."""
 
     provider: InferenceProviderType
@@ -128,7 +124,7 @@ class InferenceModelType(AngeeNode):
 
 
 @strawberry_django.type(Skill)
-class SkillType(AngeeNode):
+class SkillType(ProtectedNode):
     """Admin projection of one discovered skill."""
 
     source: SourceType
@@ -141,7 +137,7 @@ class SkillType(AngeeNode):
 
 
 @strawberry_django.type(MCPServer)
-class MCPServerType(AngeeNode):
+class MCPServerType(ProtectedNode):
     """Admin projection of one MCP server."""
 
     name: auto
@@ -156,7 +152,7 @@ class MCPServerType(AngeeNode):
 
 
 @strawberry_django.type(MCPTool)
-class MCPToolType(AngeeNode):
+class MCPToolType(ProtectedNode):
     """Admin projection of one MCP tool."""
 
     server: MCPServerType
@@ -170,7 +166,7 @@ class MCPToolType(AngeeNode):
 
 
 @strawberry_django.type(Agent)
-class AgentType(AngeeNode):
+class AgentType(ProtectedNode):
     """Admin projection of an agent (or, when ``is_template``, an agent template)."""
 
     owner: UserType | None
@@ -224,7 +220,7 @@ class AgentType(AngeeNode):
 
 
 @strawberry_django.type(AgentSessionModel)
-class AgentSessionType(AngeeNode):
+class AgentSessionType(ProtectedNode):
     """Projection of one persisted agent conversation, readable by its user."""
 
     agent: AgentType
@@ -239,7 +235,7 @@ class AgentSessionType(AngeeNode):
 
 
 @strawberry_django.type(AgentTurn)
-class AgentTurnType(AngeeNode):
+class AgentTurnType(ProtectedNode):
     """Projection of one persisted agent turn, readable through its session."""
 
     session: AgentSessionType
@@ -338,7 +334,7 @@ _AGENT_RESOURCE = hasura_model_resource(
         "mcp_tools": public_pk_decoder(MCPTool),
         "workspace_template": public_pk_decoder(Template),
     },
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         Agent,
         public_id_fields=(
             "model",
@@ -360,7 +356,7 @@ _AGENT_SESSION_RESOURCE = hasura_model_resource(
     groupable=["agent", "agent__name", "user", "user__first_name", "status"],
     insert=False,
     update=False,
-    write_backend=AngeeHasuraWriteBackend(AgentSessionModel),
+    write_backend=ProtectedHasuraWriteBackend(AgentSessionModel),
     field_id_decode={
         "agent": public_pk_decoder(Agent),
         "user": public_pk_decoder(User),
@@ -403,7 +399,7 @@ _MCP_SERVER_RESOURCE = hasura_model_resource(
     insertable=["name", "description", "placement", "transport", "url", "credential", "config"],
     updatable=["name", "description", "placement", "transport", "url", "credential", "config"],
     field_id_decode={"credential": public_pk_decoder(Credential)},
-    write_backend=AngeeHasuraWriteBackend(MCPServer, public_id_fields=("credential",)),
+    write_backend=ProtectedHasuraWriteBackend(MCPServer, public_id_fields=("credential",)),
 )
 _MCP_TOOL_RESOURCE = hasura_model_resource(
     MCPToolType,
@@ -416,7 +412,7 @@ _MCP_TOOL_RESOURCE = hasura_model_resource(
     insertable=["server", "name", "description", "input_schema", "enabled", "requires_approval"],
     updatable=["description", "input_schema", "enabled", "requires_approval"],
     field_id_decode={"server": public_pk_decoder(MCPServer)},
-    write_backend=AngeeHasuraWriteBackend(MCPTool, public_id_fields=("server",)),
+    write_backend=ProtectedHasuraWriteBackend(MCPTool, public_id_fields=("server",)),
 )
 _INFERENCE_PROVIDER_RESOURCE = hasura_model_resource(
     InferenceProviderType,
@@ -490,7 +486,7 @@ _INFERENCE_MODEL_RESOURCE = hasura_model_resource(
         "provider": public_pk_decoder(InferenceProvider),
         "publisher": public_pk_decoder(Vendor),
     },
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         InferenceModel,
         public_id_fields=("provider", "publisher"),
     ),

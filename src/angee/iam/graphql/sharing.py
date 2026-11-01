@@ -8,8 +8,9 @@ from django.db import transaction
 from rebac import PermissionDenied, SubjectRef, resolve_subjects
 from rebac.resources import model_for_resource_type
 
-from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
+from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.ids import PublicID
+from angee.iam.graphql.actions import authorized_permission_target
 from angee.iam.identity import canonical_subject_ref, public_subject_ref
 from angee.iam.models.base import ProtectedModel
 from angee.iam.permissions import DirectRecordAccess
@@ -52,7 +53,10 @@ class RecordAccessQuery:
 
     @strawberry.field
     def record_access(
-        self, info: strawberry.Info, target_type: str, target_ids: list[PublicID],
+        self,
+        info: strawberry.Info,
+        target_type: str,
+        target_ids: list[PublicID],
     ) -> list[RecordAccessType]:
         """Return direct declared-relation tuples, without effective expansion."""
 
@@ -71,7 +75,10 @@ class RecordAccessQuery:
 
     @strawberry.field
     def record_access_options(
-        self, info: strawberry.Info, target_type: str, target_ids: list[PublicID],
+        self,
+        info: strawberry.Info,
+        target_type: str,
+        target_ids: list[PublicID],
     ) -> list[RecordAccessOption]:
         """Return relations the caller may manage on every selected record."""
 
@@ -112,10 +119,7 @@ class RecordAccessMutation:
         permission = model.record_access_permission(relation)
 
         with transaction.atomic():
-            targets = [
-                authorized_permission_target(info, model, target_id, permission)
-                for target_id in target_ids
-            ]
+            targets = [authorized_permission_target(info, model, target_id, permission) for target_id in target_ids]
             subject_ref = _grant_subject(subject)
             for target in targets:
                 target.grant_record_access(relation, subject_ref)
@@ -140,10 +144,7 @@ class RecordAccessMutation:
         subject_ref = canonical_subject_ref(subject)
 
         with transaction.atomic():
-            targets = [
-                authorized_permission_target(info, model, target_id, permission)
-                for target_id in target_ids
-            ]
+            targets = [authorized_permission_target(info, model, target_id, permission) for target_id in target_ids]
             for target in targets:
                 target.revoke_record_access(relation, subject_ref)
         return ActionResult(ok=True, message="Record access revoked.")
@@ -185,7 +186,7 @@ def authorized_record_access(
     for permission in dict.fromkeys(declaration.values()):
         try:
             candidates[permission] = authorized_permission_target(info, model, target_id, permission)
-        except (PermissionDenied, ValidationError):
+        except PermissionDenied, ValidationError:
             continue
     for relation, permission in declaration.items():
         if permission in candidates:

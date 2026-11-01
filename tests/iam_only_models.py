@@ -1,5 +1,9 @@
 """Minimal concrete IAM source fixtures without optional capability imports."""
 
+from django.db import models
+from rebac import RebacMixin
+
+from angee.base.models.children import OwnedChildrenMixin
 from angee.base.models.trash import TrashQuerySet
 from angee.base.querysets import MergeableQuerySet
 from angee.iam.managers import ProtectedManager
@@ -66,3 +70,57 @@ class TrashTarget(ProtectedTrashMixin, ProtectedDataModel):
     class Meta(ProtectedDataModel.Meta):
         app_label = "iam"
         rebac_resource_type = "probe/trash"
+
+
+class APIEntry(ProtectedDataModel):
+    name = models.CharField(max_length=80)
+    secret = models.CharField(max_length=80, blank=True)
+
+    class Meta(ProtectedDataModel.Meta):
+        app_label = "iam"
+        rebac_resource_type = "probe/api"
+
+
+class APILine(ProtectedDataModel):
+    entry = models.ForeignKey(APIEntry, on_delete=models.CASCADE, related_name="lines")
+    text = models.CharField(max_length=80)
+
+    class Meta(ProtectedDataModel.Meta):
+        app_label = "iam"
+        rebac_resource_type = "probe/api_line"
+
+
+class NativeAPIEntry(RebacMixin, OwnedChildrenMixin):
+    name = models.CharField(max_length=80)
+    secret = models.CharField(max_length=80, blank=True)
+    slug = models.SlugField(blank=True, default="")
+    parent = models.ForeignKey("self", on_delete=models.CASCADE, null=True, blank=True, related_name="children")
+
+    class Meta:
+        app_label = "iam"
+        rebac_resource_type = "probe/native_api"
+
+
+class NativeAPILine(models.Model):
+    entry = models.ForeignKey(NativeAPIEntry, on_delete=models.CASCADE, related_name="lines")
+    text = models.CharField(max_length=80)
+    position = models.IntegerField(default=0)
+
+    class Meta:
+        app_label = "iam"
+
+
+class NeutralAPIRoot(models.Model):
+    label = models.CharField(max_length=80)
+    target = models.ForeignKey(NativeAPIEntry, on_delete=models.CASCADE)
+
+    class Meta:
+        app_label = "iam"
+
+
+class MixedDefaultSource(models.Model):
+    plain = models.ForeignKey("permissionless.PlainDefaultTarget", on_delete=models.CASCADE)
+    protected = models.ForeignKey(NativeAPIEntry, on_delete=models.CASCADE)
+
+    class Meta:
+        app_label = "iam"

@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     class _ViewAsRequest(HttpRequest):
         view_as: ViewAs
 
+
 logger = logging.getLogger(__name__)
 _DENIED = "View-as is not permitted."
 
@@ -91,7 +92,10 @@ class ViewAs:
             del request.view_as
             logger.info(
                 "GraphQL view-as request: real_actor=%s target=%s schema=%s operations=%s",
-                public_id_of(self.real_user), public_id_of(self.target), schema_name, tuple(self.operations),
+                public_id_of(self.real_user),
+                public_id_of(self.target),
+                schema_name,
+                tuple(self.operations),
             )
 
 

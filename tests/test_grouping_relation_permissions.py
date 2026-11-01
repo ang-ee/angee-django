@@ -29,16 +29,16 @@ from rebac.schema import parse_zed
 from rebac.testing import install_schema
 from strawberry import auto
 
-from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import (
     _declared_aliases,
     aggregate_queryset,
     declared_hasura_resource_fields,
     hasura_model_resource,
 )
-from angee.graphql.node import AngeeNode
-from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.graphql.capabilities import permissions_field
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.iam.models.base import ProtectedDataModel
 from tests.conftest import (
     SchemaAddon,
@@ -157,20 +157,20 @@ class GroupParent(ProtectedDataModel):
 
 
 @strawberry_django.type(GroupLabel)
-class GroupLabelType(AngeeNode):
+class GroupLabelType(ProtectedNode):
     display_name: auto
     permissions = permissions_field(("read",))
 
 
 @strawberry_django.type(GroupMiddle)
-class GroupMiddleType(AngeeNode):
+class GroupMiddleType(ProtectedNode):
     target: GroupLabelType | None = actor_scoped_to_one("target")
     parents: list["GroupParentType"] = actor_scoped_to_many("parents")
     permissions = permissions_field(("read",))
 
 
 @strawberry_django.type(GroupParent)
-class GroupParentType(AngeeNode):
+class GroupParentType(ProtectedNode):
     kind: auto
     amount: auto
     label_name: str | None = strawberry_django.field(annotate=models.F("label_name"))
@@ -209,7 +209,7 @@ def relation_grouping_case(transactional_db: None):
     with (
         model_tables(models_in_order),
         patch(
-            "angee.graphql.capabilities.declared_rebac_definition",
+            "angee.iam.graphql.capabilities.declared_rebac_definition",
             side_effect=lambda model: definition.get_definition(cast(str, model_resource_type(model))),
         ),
     ):
@@ -792,7 +792,7 @@ def test_permissions_remain_batched_through_guarded_relations(relation_grouping_
     for limit in (1, 10, 50):
         with (
             patch(
-                "angee.graphql.capabilities.permission_annotations",
+                "angee.iam.graphql.capabilities.permission_annotations",
                 side_effect=AssertionError("Unbatched permission check"),
             ),
             CaptureQueriesContext(connection) as queries,

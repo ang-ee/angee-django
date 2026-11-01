@@ -12,7 +12,7 @@ from rebac.mixins import RebacModelBase
 from rebac.schema import parse_zed
 
 from angee.base import permissions
-from angee.graphql.access import is_gated_read_axis
+from angee.iam.graphql.access import is_gated_read_axis
 from angee.iam.permissions import (
     bind_rebac_schema,
     declared_rebac_definition,

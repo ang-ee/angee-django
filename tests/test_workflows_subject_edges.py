@@ -8,8 +8,8 @@ from django.db.models.functions import Now
 from rebac import actor_context, generic_target, system_context
 
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.graphql.node import ProtectedNode
 from angee.workflows.runner import runner
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun, Trigger, TriggerEvent, WorkflowRun
@@ -26,7 +26,7 @@ pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("
 def child_source(monkeypatch):
     """Expose the real child through a temporary native resource declaration."""
     @strawberry_django.type(MtiChild)
-    class SubjectChild(AngeeNode):
+    class SubjectChild(ProtectedNode):
         detail: str
 
     resource = hasura_model_resource(

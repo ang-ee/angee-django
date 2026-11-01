@@ -5,19 +5,19 @@ from django.apps import apps
 from strawberry import auto
 
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 
 Party = apps.get_model("parties", "Party")
 Address = apps.get_model("parties", "Address")
 
 
 @strawberry_django.type(Party)
-class BillingPartyType(AngeeNode):
+class BillingPartyType(ProtectedNode):
     tax_country: auto
 
 
 @strawberry_django.type(Address)
-class CountryAddressType(AngeeNode):
+class CountryAddressType(ProtectedNode):
     country: auto
 
 

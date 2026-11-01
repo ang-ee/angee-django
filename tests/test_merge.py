@@ -32,7 +32,7 @@ from angee.base.models.merge_references import (
     references,
 )
 from angee.base.signals import bulk_updated
-from angee.graphql import records
+from angee.iam.graphql import records
 from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.messaging.testing.models import Directory, Participant, Party, Reaction
 from angee.projects.testing.models import Link, Project, Queue, Task

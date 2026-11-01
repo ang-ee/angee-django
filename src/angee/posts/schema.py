@@ -15,8 +15,8 @@ from django.apps import apps
 from strawberry import auto
 
 from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
-from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
+from angee.iam.graphql.node import ProtectedNode
 from angee.integrate.schema import BridgeTypeMixin
 from angee.parties.schema import HandleType
 
@@ -42,7 +42,7 @@ class PublicMessageType:
 
 
 @strawberry_django.type(Feed)
-class FeedType(BridgeTypeMixin, AngeeNode):
+class FeedType(BridgeTypeMixin, ProtectedNode):
     """GraphQL projection of a connected public-content feed."""
 
     feed_backend_class: auto
@@ -52,7 +52,7 @@ class FeedType(BridgeTypeMixin, AngeeNode):
 
 
 @strawberry_django.type(FeedFollow)
-class FeedFollowType(AngeeNode):
+class FeedFollowType(ProtectedNode):
     """GraphQL projection of a feed following/timeline subscription."""
 
     feed: FeedType | None

@@ -13,14 +13,17 @@ from strawberry import auto
 from strawberry.scalars import JSON
 
 from angee.decisions.schema import DecisionType
-from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
-from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.actions import ActionResult, action_guard
+from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.inputs import InputReference
-from angee.graphql.node import AngeeNode
-from angee.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
+from angee.iam.graphql.actions import authorized_permission_target
+from angee.iam.graphql.capabilities import held_permissions, permission_annotations, permissions_field
+from angee.iam.graphql.inputs import AuthorizedInputReference
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import actor_scoped_to_one
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
 from angee.intake.choices import NeedAccessAction
@@ -49,7 +52,7 @@ class ProjectIntakeSetupInput:
     """Assign the Need's party through the shared setup input."""
 
     party: PublicID | None = strawberry.field(
-        default=None, metadata={InputReference: InputReference("parties.Party")},
+        default=None, metadata={InputReference: AuthorizedInputReference("parties.Party")},
     )
 
 
@@ -62,7 +65,7 @@ class NeedTargetInput:
 
 
 @strawberry_django.type(Need)
-class NeedType(AngeeNode):
+class NeedType(ProtectedNode):
     """GraphQL projection of one external-request evidence row."""
 
     importance: auto
@@ -301,7 +304,7 @@ _NEED_RESOURCE = hasura_model_resource(
         "project": public_pk_decoder(Project),
         "source_message": public_pk_decoder(Message),
     },
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         Need,
         public_id_fields=("party", "task", "project"),
     ),

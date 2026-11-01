@@ -10,6 +10,13 @@ from typing import Any
 from django.conf import settings as django_settings
 
 SETTINGS = {
+    "ANGEE_GRAPHQL_SCHEMA_CLASS:append": ["angee.iam.graphql.schema.IAMSchema"],
+    "ANGEE_GRAPHQL_HTTP_VIEW_CLASS:append": ["angee.iam.graphql.views.IAMGraphQLView"],
+    "ANGEE_GRAPHQL_WS_CONSUMER_CLASS:append": ["angee.iam.graphql.consumers.IAMGraphQLWSConsumer"],
+    "ANGEE_GRAPHQL_RESOURCE_CONTRIBUTORS:append": ["angee.iam.graphql.resources.contribute"],
+    "ANGEE_GRAPHQL_RESOURCE_METADATA:append": ["angee.iam.graphql.resources.enrich_metadata"],
+    "ANGEE_GRAPHQL_CHANGE_PROJECTORS:append": ["angee.iam.graphql.changes.project"],
+    "ANGEE_GRAPHQL_CHANGE_FILTER:append": ["angee.iam.graphql.changes.filter_event"],
     "COMPOSE_INTEGRATIONS:append": ["angee.iam.build.PermissionIntegration"],
     "COMPOSE_FINGERPRINT_GLOBS:append": ["pyproject.toml", "**/*.zed"],
     "COMPOSE_EXTERNAL_ARTIFACT_ROOTS:append": ["permissions"],

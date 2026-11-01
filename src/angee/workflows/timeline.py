@@ -11,7 +11,7 @@ from django.db import models
 from django.db.models.query import EmptyQuerySet
 from rebac import GenericTarget, generic_target, system_context
 
-from angee.graphql.relations import with_record_reference_access
+from angee.iam.graphql.relations import with_record_reference_access
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, actor_label
 from angee.workflows.states import RunStatus, StepRunStatus, WaitingKind
 

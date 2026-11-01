@@ -10,10 +10,11 @@ from django.apps import apps
 from rebac import current_actor
 from strawberry import auto
 
-from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import require_instance_for_id
-from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.permissions import actor_user_id
 from angee.nexus.inbox_schema import NexusInboxQuery
 from angee.parties.schema import PartyType
@@ -31,7 +32,7 @@ def _viewer_user_id() -> Any | None:
 
 
 @strawberry_django.type(Tie)
-class TieType(AngeeNode):
+class TieType(ProtectedNode):
     """GraphQL projection of one fully derived canonical party edge."""
 
     party_a: PartyType
@@ -49,7 +50,7 @@ class TieType(AngeeNode):
 
 
 @strawberry_django.type(Cadence)
-class CadenceType(AngeeNode):
+class CadenceType(ProtectedNode):
     """GraphQL projection of one viewer-owned party cadence."""
 
     party: PartyType
@@ -222,7 +223,7 @@ _CADENCE_RESOURCE = hasura_model_resource(
     insertable=["party", "cadence_days"],
     updatable=["cadence_days"],
     field_id_decode={"party": public_pk_decoder(Party)},
-    write_backend=AngeeHasuraWriteBackend(Cadence, public_id_fields=("party",)),
+    write_backend=ProtectedHasuraWriteBackend(Cadence, public_id_fields=("party",)),
 )
 
 _NEXUS_SCHEMA_BUCKET: dict[str, list[type]] = {
