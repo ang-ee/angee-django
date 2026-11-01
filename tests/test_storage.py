@@ -38,10 +38,10 @@ from strawberry.django.views import GraphQLView
 
 from angee.base.models.identity import public_id_of
 from angee.base.models.trash import ARCHIVE_FLAG_FIELD, ArchiveMixin, ArchiveQuerySet
-from angee.base.permissions import DirectRecordAccess
 from angee.graphql import records
 from angee.graphql.data.resource_fields import is_archive_field, is_trash_field
 from angee.graphql.views import graphql_endpoint
+from angee.iam.permissions import DirectRecordAccess
 from angee.storage import exceptions
 from angee.storage.choices import FileVisibility
 from angee.storage.models import FileManager, UploadState

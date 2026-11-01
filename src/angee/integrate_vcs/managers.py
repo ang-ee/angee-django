@@ -10,12 +10,12 @@ from django.db import transaction
 from django.utils import timezone
 from rebac import database_context, system_context
 
-from angee.base.managers import AngeeManager
+from angee.iam.managers import ProtectedManager
 from angee.integrate_vcs import registry
 from angee.integrate_vcs.templates import parse_template_meta
 
 
-class RepositoryManager(AngeeManager):
+class RepositoryManager(ProtectedManager):
     """Manager owning the upsert/reconcile of repository rows from a host listing."""
 
     def reconcile(self, vcs_bridge: Any, descriptors: Iterable[Any]) -> int:
@@ -101,7 +101,7 @@ class RepositoryManager(AngeeManager):
         }
 
 
-class TemplateManager(AngeeManager, registry.VcsOutputManager):
+class TemplateManager(ProtectedManager, registry.VcsOutputManager):
     """Manager owning the reconcile of template rows from a template source."""
 
     def sync_from_source(self, source: Any) -> int:

@@ -25,12 +25,13 @@ from rebac import (
 from rebac.relation_loading import relation_actor
 
 from angee.base.fields.implementation import ImplClassField
-from angee.base.models.ownership import OwnerQuerySet
 from angee.base.models.trash import TrashQuerySet
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder, KeysetPage
-from angee.base.permissions import actor_user_id
-from angee.base.querysets import AngeeQuerySet, MergeableQuerySet
+from angee.base.querysets import MergeableQuerySet
 from angee.base.serialization import strip_null_bytes
+from angee.iam.models.ownership import OwnerQuerySet
+from angee.iam.permissions import actor_user_id
+from angee.iam.querysets import ProtectedQuerySet
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.models import IntegrationLifecycle, IntegrationQuerySet
 from angee.messaging.expressions import AttachedFileSkipReason
@@ -287,7 +288,7 @@ class ThreadQuerySet[ThreadT: Thread](
         return labels
 
 
-class ThreadFollowerQuerySet[ThreadFollowerT: ThreadFollower](AngeeQuerySet[ThreadFollowerT]):
+class ThreadFollowerQuerySet[ThreadFollowerT: ThreadFollower](ProtectedQuerySet[ThreadFollowerT]):
     """Chainable read scopes for record chatter followers."""
 
     @staticmethod
@@ -339,7 +340,7 @@ class NotificationPointerIterable(ModelIterable):
         yield from rows
 
 
-class ThreadNotificationQuerySet[ThreadNotificationT: ThreadNotification](AngeeQuerySet[ThreadNotificationT]):
+class ThreadNotificationQuerySet[ThreadNotificationT: ThreadNotification](ProtectedQuerySet[ThreadNotificationT]):
     """Chainable read scopes for per-recipient delivery rows."""
 
     DELIVERY_ERROR_STATUSES = ("bounce", "exception")
@@ -455,7 +456,9 @@ def _resolve_user_id(*, user: Any = None, user_id: Any = None) -> Any | None:
     return actor_user_id(current_actor())
 
 
-class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuerySet[MessageT], AngeeQuerySet[MessageT]):
+class MessageQuerySet[MessageT: Message](
+    MergeableQuerySet[MessageT], TrashQuerySet[MessageT], ProtectedQuerySet[MessageT]
+):
     """Chainable read scopes for chatter/ingest messages."""
 
     def record_scope(
@@ -965,7 +968,7 @@ class MessageQuerySet[MessageT: Message](MergeableQuerySet[MessageT], TrashQuery
         }
 
 
-class PartQuerySet[PartT: Part](AngeeQuerySet[PartT]):
+class PartQuerySet[PartT: Part](ProtectedQuerySet[PartT]):
     """Chainable read scopes for message body parts."""
 
     def inbox(self) -> Self:

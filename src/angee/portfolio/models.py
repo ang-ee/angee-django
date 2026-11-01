@@ -27,13 +27,13 @@ from rebac import (
 from angee.base.fields.ordering import FractionalRankField
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
 from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.merge_references import MergePolicy
-from angee.base.models.ownership import OwnerMixin
-from angee.base.models.refs import RecordRefMixin
-from angee.base.models.roles import role_anchor
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.ownership import OwnerMixin
+from angee.iam.models.refs import ProtectedRecordRefMixin
+from angee.iam.models.roles import role_anchor
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -136,7 +136,7 @@ class ProductManager[ProductT: Product](AngeeHistoryManager[ProductT]):
             return product
 
 
-class Product(OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class Product(OwnerMixin, HistoryMixin, ProtectedDataModel, concrete=True):
     """A perpetual subject passing through phases rather than toward fulfillment."""
 
     sqid_prefix = "pdt_"
@@ -184,7 +184,7 @@ class InitiativeQuerySet[InitiativeT: Initiative](HierarchyQuerySet[InitiativeT]
 _InitiativeManager = AngeeHistoryManager.from_queryset(InitiativeQuerySet)
 
 
-class Initiative(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class Initiative(HierarchyMixin, OwnerMixin, HistoryMixin, ProtectedDataModel, concrete=True):
     """A tree-shaped long-horizon intent whose pushes can be fulfilled."""
 
     sqid_prefix = "ini_"
@@ -282,7 +282,7 @@ class Initiative(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concr
         return self.name
 
 
-class InitiativeProject(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
+class InitiativeProject(ResourceLoadMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """An ordered Project placement on an ancestry-safe Initiative tree."""
 
     sqid_prefix = "inp_"
@@ -456,7 +456,9 @@ class UpdateManager[UpdateT: Update](_UpdateManagerBase[UpdateT]):
             return self.insert(report)
 
 
-class Update(ImmutableFieldsMixin, HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=True):
+class Update(
+    ImmutableFieldsMixin, HistoryMixin, AuditMixin, ProtectedRecordRefMixin, ProtectedDataModel, concrete=True
+):
     """A required-health report on a Project or Initiative, never a Product."""
 
     merge_policy = MergePolicy.MOVE
@@ -535,7 +537,7 @@ class Update(ImmutableFieldsMixin, HistoryMixin, AuditMixin, RecordRefMixin, Ang
         return f"{self.record_model_label}:{self.record_public_id} {self.health}"
 
 
-class Release(HistoryMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Release(HistoryMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """The named artifact a ship Project leaves on a Product timeline."""
 
     sqid_prefix = "rls_"

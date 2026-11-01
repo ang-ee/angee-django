@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Any, Self
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet, ClosedUpdateQuerySet
+from angee.base.querysets import ClosedUpdateQuerySet
+from angee.iam.querysets import ProtectedQuerySet, ProtectedUnscopedQuerySet
 from angee.proposals.choices import RoundStatus
 
 if TYPE_CHECKING:
@@ -45,11 +46,11 @@ class _RoundRequesterWrites(ClosedUpdateQuerySet):
         )
 
 
-class _RoundBaseQuerySet(_RoundRequesterWrites, AngeeUnscopedQuerySet):
+class _RoundBaseQuerySet(_RoundRequesterWrites, ProtectedUnscopedQuerySet):
     """Keep native unfiltered manager writes under the requester identity contract."""
 
 
-class RoundQuerySet[T: Round](_RoundRequesterWrites, AngeeQuerySet[T]):
+class RoundQuerySet[T: Round](_RoundRequesterWrites, ProtectedQuerySet[T]):
     """Round collection scopes shared by record projections."""
 
     def active_for_project(self, project: Project) -> Self:

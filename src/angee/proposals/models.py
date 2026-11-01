@@ -45,13 +45,13 @@ from angee.base.expressions import JSONArraySubquery
 from angee.base.fields.ordering import FractionalRankField
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin, retained_set_null
-from angee.base.models.base import AngeeDataModel, AngeeModel
 from angee.base.models.locks import ImmutableFieldsMixin, OptimisticLockMixin
-from angee.base.models.ownership import OwnerQuerySet
-from angee.base.models.roles import role_anchor
 from angee.base.models.transitions import StateTransitions, save_state, transition
-from angee.base.permissions import actor_user_id, instance_actor, subject_reaches_user
 from angee.iam.identity import user_label_expression, user_label_queryset
+from angee.iam.models.base import ProtectedDataModel, ProtectedModel
+from angee.iam.models.ownership import OwnerQuerySet
+from angee.iam.models.roles import role_anchor
+from angee.iam.permissions import actor_user_id, instance_actor, subject_reaches_user
 from angee.messaging.models import ThreadedModelMixin
 from angee.money.fields import MoneyField
 from angee.proposals.choices import ANSWER_VISIBILITY_ORDER as ANSWER_VISIBILITY_ORDER
@@ -148,7 +148,9 @@ class _RosterProjection(TypedDict):
     _roster_track_status: str | None
 
 
-class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, AngeeDataModel, concrete=True):
+class Round(
+    OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModelMixin, ProtectedDataModel, concrete=True
+):
     """A bounded solicitation on one project or task; its chatter is shared."""
 
     _roster_entries: list[WithAnnotations[Proposal, _RosterProjection]]
@@ -439,7 +441,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             .first()
         )
 
-    def _build_collections(self) -> list[tuple[models.QuerySet[AngeeModel], bool]]:
+    def _build_collections(self) -> list[tuple[models.QuerySet[ProtectedModel], bool]]:
         """Return the retained shell/answer and owned track content this round governs."""
 
         tracks = apps.get_model("projects", "Project").system_queryset().using(self._state.db).filter(
@@ -1226,7 +1228,7 @@ class Round(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ThreadedModel
             raise ValidationError("Closed round left a submitted proposal undecided.")
 
 
-class Topic(ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Topic(ImmutableFieldsMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """One stable, ordered comparison subject within a Round."""
 
     sqid_prefix = "top_"
@@ -1287,7 +1289,7 @@ class Topic(ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
         super().save(*args, **kwargs)
 
 
-class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """One responder's structured response; its private work lives on ``track``."""
 
     sqid_prefix = "prp_"
@@ -2418,7 +2420,7 @@ ProposalsRole = role_anchor("proposals/role")
 """Table-less REBAC anchor for global proposal-viewer membership."""
 
 
-class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """One Proposal response aligned to one Topic in the same Round."""
 
     sqid_prefix = "ans_"
@@ -2562,7 +2564,7 @@ class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataMod
         return f"{self.proposal_id}:{self.topic_id}"
 
 
-class Review(ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Review(ImmutableFieldsMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """One evaluator's private assessment of a Proposal."""
 
     sqid_prefix = "rvw_"

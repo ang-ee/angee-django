@@ -11,7 +11,7 @@ from django.utils import timezone
 from rebac import database_context, system_context
 
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
+from angee.iam.models.base import ProtectedDataModel
 from angee.integrate_vcs.registry import VcsOutput, VcsOutputManager
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 
@@ -45,7 +45,7 @@ class SkillManager(VcsOutputManager, AngeeHistoryManager):
         return len(descriptors)
 
 
-class Skill(VcsOutput, AuditMixin, AngeeDataModel, concrete=True):
+class Skill(VcsOutput, AuditMixin, ProtectedDataModel, concrete=True):
     """One skill discovered under an ``integrate_vcs.Source`` (``source_kind="skill"``).
 
     The operator mounts the skill's directory into an agent's workspace; Django keeps

@@ -24,7 +24,7 @@ from typing import Any
 from django.db import models
 
 from angee.base.fields.state import StateField
-from angee.base.models.base import AngeeModel
+from angee.iam.models.base import ProtectedModel
 from angee.platform.discovery import (
     AddonCategory,
 )
@@ -43,7 +43,7 @@ def get_addon_display_label(name: str, label: str) -> str:
     return label or name
 
 
-class Addon(AngeeModel, concrete=True):
+class Addon(ProtectedModel, concrete=True):
     """The composed-runtime addon registry — local reflection, system-synced.
 
     Public identity is the inherited sqid. ``name`` (e.g. ``angee.iam``) is the
@@ -153,7 +153,7 @@ class Addon(AngeeModel, concrete=True):
         }
 
 
-class PlatformExplorer(AngeeModel, concrete=True):
+class PlatformExplorer(ProtectedModel, concrete=True):
     """Table-less REBAC type anchor for the platform introspection surface."""
 
 

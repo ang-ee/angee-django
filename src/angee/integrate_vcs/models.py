@@ -16,9 +16,9 @@ from rebac import system_context
 from angee.base.fields.encrypted import EncryptedField
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
-from angee.base.managers import AngeeManager
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
+from angee.iam.managers import ProtectedManager
+from angee.iam.models.base import ProtectedDataModel
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate_vcs import registry
 from angee.integrate_vcs.backend import Checkout, VCSBackend, source_path, tree_entries
@@ -142,7 +142,7 @@ class VcsBridge(Bridge, inherits="integrate.Integration"):
 
 
 
-class Repository(AuditMixin, AngeeDataModel, concrete=True):
+class Repository(AuditMixin, ProtectedDataModel, concrete=True):
     """Inventory of one git remote, reached through its ``VcsBridge``.
 
     A plain noun: Django records the remote; the operator clones it. ``org`` groups
@@ -190,7 +190,7 @@ class Repository(AuditMixin, AngeeDataModel, concrete=True):
         return self.name
 
 
-class Source(AuditMixin, AngeeDataModel, concrete=True):
+class Source(AuditMixin, ProtectedDataModel, concrete=True):
     """A pointer into a ``Repository`` at a ``ref`` and ``path``, with a ``kind``.
 
     One noun for every source kind. ``kind`` binds the source to an output model
@@ -209,7 +209,7 @@ class Source(AuditMixin, AngeeDataModel, concrete=True):
     """Pathspec of the subtree this source points at within the repository."""
     last_synced_at = models.DateTimeField(null=True, blank=True)
 
-    objects = AngeeManager()
+    objects = ProtectedManager()
 
     class Meta:
         """Django model options for source inventory."""
@@ -301,7 +301,7 @@ class Source(AuditMixin, AngeeDataModel, concrete=True):
 
 
 
-class Template(registry.VcsOutput, AuditMixin, AngeeDataModel, concrete=True):
+class Template(registry.VcsOutput, AuditMixin, ProtectedDataModel, concrete=True):
     """One Copier template discovered under a ``Source`` (``source_kind="template"``).
 
     The operator renders these; the kind here is the *template* kind from the

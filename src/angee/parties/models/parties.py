@@ -16,12 +16,12 @@ from rebac.mixins import RebacModelBase
 
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.lineage import concrete_child, concrete_child_models
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.identity import public_id_of
-from angee.base.models.merge import MergeableMixin
-from angee.base.models.ownership import OwnerMixin
-from angee.base.models.trash import TrashMixin
-from angee.base.permissions import instance_actor
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.merge import ProtectedMergeableMixin
+from angee.iam.models.ownership import OwnerMixin
+from angee.iam.models.trash import ProtectedTrashMixin
+from angee.iam.permissions import instance_actor
 from angee.parties.managers import (
     AddressManager,
     PartyManager,
@@ -42,13 +42,14 @@ from angee.tags.models import TaggedModel
 
 
 class Party(
-    MergeableMixin, TrashMixin, StatementsMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel, concrete=True
+    ProtectedMergeableMixin, ProtectedTrashMixin, StatementsMixin, HistoryMixin, TaggedModel, OwnerMixin,
+    ProtectedDataModel, concrete=True
 ):
     """A person or organisation the project tracks.
 
     The parent owns the common contact identity — the public id, ownership, the
     display name, avatar, notes and tags. Ownership is the transferable ``owner``
-    (:class:`~angee.base.models.ownership.OwnerMixin`), which an insert defaults to the
+    (:class:`~angee.iam.models.ownership.OwnerMixin`), which an insert defaults to the
     creator; ``created_by`` stays attribution. RecordLink owns directory payloads.
     The concrete kind (and its kind-specific fields) lives on the :class:`Person` /
     :class:`Organization` child row, which inherits the owner; a child's tags key

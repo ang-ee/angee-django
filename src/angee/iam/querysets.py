@@ -2,25 +2,86 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, Self, TypeVar, cast
 
+from django.db import models
 from django.db.models import Exists, F, OuterRef, Q, TextField
-from django.db.models.functions import Cast
+from django.db.models.functions import Cast, Coalesce
 from rebac import (
+    current_actor,
     to_subject_ref,
 )
+from rebac.managers import RebacQuerySet, TrackedQuerySet
 from rebac.resources import model_resource_type
 from rebac.roles import ROLE_RELATION
 
 from angee.base.querysets import AngeeQuerySet
 from angee.iam.choices import UserKind
+from angee.iam.permissions import actor_user_id
 from angee.iam.roles import protected_account_holders
 
 if TYPE_CHECKING:
     from angee.iam.models import User
 
 
-class UserQuerySet[UserT: User](AngeeQuerySet[UserT]):
+_ModelT = TypeVar("_ModelT", bound=models.Model)
+
+
+class ProtectedQuerySet(AngeeQuerySet[_ModelT], RebacQuerySet[_ModelT]):
+    """Native actor-scoped collection and readable correlated projections."""
+
+    def attributed_user_id(self) -> Any:
+        return actor_user_id(self.actor() or current_actor())
+
+    def readable_scalar_subquery(
+        self,
+        field: str,
+        *,
+        actor: Any = None,
+        default: Any = None,
+        output_field: models.Field | None = None,
+    ) -> models.Expression | models.Subquery:
+        """Project one correlated readable value, including under an elevated parent.
+
+        Add correlation predicates before calling. No actor yields no value;
+        callers own domain fallbacks and may explicitly coalesce an absent value.
+        """
+
+        actor = actor or self.actor() or current_actor()
+        readable = self.with_actor(actor).scoped() if actor is not None else self
+        # The selected field owns the scalar type; only the outer fallback needs
+        # a common output type (overriding Subquery changes empty-set compilation).
+        scalar = models.Subquery(readable.values(field)[:1])
+        if actor is None:
+            return models.Value(default, output_field=output_field or scalar.output_field)
+        if default is None:
+            return scalar
+        return Coalesce(
+            scalar,
+            models.Value(default),
+            output_field=output_field or scalar.output_field,
+        )
+
+    def readable_count_subquery(self, *, actor: Any = None) -> models.Expression | models.Subquery:
+        """Count a correlated actor-scoped row set, returning zero when empty."""
+
+        rows = self.order_by().annotate(_count_group=models.Value(1)).values("_count_group")
+        return rows.annotate(_count=models.Count("pk", distinct=True)).readable_scalar_subquery(
+            "_count",
+            actor=actor,
+            default=0,
+            output_field=models.IntegerField(),
+        )
+
+    def _keyset_cursor_scope(self, scope: tuple[Any, ...]) -> tuple[Any, ...]:
+        return (*scope, str(self.actor() or current_actor()))
+
+
+class ProtectedUnscopedQuerySet(AngeeQuerySet[_ModelT], TrackedQuerySet[_ModelT]):
+    """Unfiltered native Django reads with REBAC-tracked protected writes."""
+
+
+class UserQuerySet[UserT: User](ProtectedQuerySet[UserT]):
     """Queryset vocabulary for user-row surfaces."""
 
     def people(self) -> Self:

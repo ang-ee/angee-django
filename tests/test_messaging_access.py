@@ -15,8 +15,8 @@ from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_r
 from rebac.backends import backend
 from rebac.evaluator import evaluator_scope
 
-from angee.base.build import extension_source_map
-from angee.base.testing.permissions import emit_permissions, installed_field_owners
+from angee.iam.build import extension_source_map
+from angee.iam.testing.permissions import emit_permissions, installed_field_owners
 from angee.messaging.testing.models import Channel, Message, Part, Thread, ThreadAttachment
 from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import File, Vendor

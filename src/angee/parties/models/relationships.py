@@ -10,8 +10,8 @@ from django.db import models
 
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
-from angee.base.models.trash import TrashMixin
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.trash import ProtectedTrashMixin
 from angee.parties.managers import (
     RelationshipManager,
 )
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from angee.parties.models.parties import Party
 
 
-class RelationshipKind(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
+class RelationshipKind(ResourceLoadMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """The relationship vocabulary — types as catalogue data, never schema.
 
     One row expresses both directions of an asymmetric type through
@@ -192,7 +192,7 @@ class RelationshipKind(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=T
             errors[field] = f"{self.name} requires {required} on this end."
 
 
-class Relationship(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Relationship(ProtectedTrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """A typed edge from one party's viewpoint: the *other* is ``kind`` of ``party``.
 
     ``kind.name`` names what the counterparty is to the anchor ("Mother",

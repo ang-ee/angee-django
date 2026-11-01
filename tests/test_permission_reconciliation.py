@@ -299,7 +299,7 @@ settings.configure(
     INSTALLED_APPS=["django.contrib.contenttypes", "rebac", "angee"],
 )
 assert not apps.apps_ready
-import angee.base.permissions
+import angee.iam.permissions
 assert not apps.apps_ready
 assert not apps.models_ready
 """],

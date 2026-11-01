@@ -45,8 +45,6 @@ from strawberry.scalars import JSON
 from strawberry_django.auth.utils import get_current_user
 from strawberry_django.utils.requests import get_request
 
-from angee.base.identity import public_subject_ref
-from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id
 from angee.graphql.access import ActorSelfChangeReadGate
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target, session_user
@@ -60,9 +58,10 @@ from angee.graphql.sharing import authorized_record_access
 from angee.graphql.subscriptions import changes
 from angee.graphql.view_as import ViewAs
 from angee.iam.choices import UserAccountAction
-from angee.iam.identity import user_display_label, user_label
+from angee.iam.identity import public_subject_ref, user_display_label, user_label
 from angee.iam.managers import VISIBLE_PEOPLE_DEFAULT_LIMIT
 from angee.iam.models import Group as GroupModel
+from angee.iam.models.base import ProtectedModel
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import is_platform_admin
 from angee.iam.roles import (
@@ -859,7 +858,7 @@ class IAMConsoleQuery:
         """
 
         model = model_for_resource_type(target_type)
-        if model is None or not issubclass(model, AngeeModel):
+        if model is None or not issubclass(model, ProtectedModel):
             raise ValueError("Unknown record target type.")
         target = (
             authorized_record_access(info, model, target_id)[0]

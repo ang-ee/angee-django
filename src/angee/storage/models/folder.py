@@ -12,9 +12,9 @@ from django.db import models
 from django.db.models import Q
 
 from angee.base.fields.state import StateField
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.hierarchy import HierarchyMixin
-from angee.base.models.ownership import OwnerMixin
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.ownership import OwnerMixin
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.storage.managers import (
     FolderManager,
@@ -23,7 +23,7 @@ from angee.storage.managers import (
 logger = logging.getLogger(__name__)
 
 
-class Folder(HierarchyMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class Folder(HierarchyMixin, OwnerMixin, HistoryMixin, ProtectedDataModel, concrete=True):
     """Tree node inside a drive, or a per-user smart folder.
 
     A real folder has a ``drive`` and filesystem-style uniqueness on

@@ -9,8 +9,8 @@ from django.apps import apps
 from django.db import models
 
 from angee.base.fields.implementation import ImplClassField
-from angee.base.models.base import AngeeDataModel
-from angee.base.models.ownership import OwnerMixin
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.ownership import OwnerMixin
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate.states import StreamDefinition, StreamDirection, StreamKind
 from angee.parties.backends import DirectoryBackend, ParsedAddressbook
@@ -22,7 +22,7 @@ from angee.provenance.statements import (
 )
 
 
-class Folder(OwnerMixin, AngeeDataModel, concrete=True):
+class Folder(OwnerMixin, ProtectedDataModel, concrete=True):
     """A group of parties — the local mirror of a synced address book.
 
     The contacts counterpart of storage's ``Drive``/``Folder`` and knowledge's

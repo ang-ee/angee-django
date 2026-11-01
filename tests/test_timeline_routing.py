@@ -203,10 +203,10 @@ def write_callback_addon(tmp_path: Path, *, depends_on=("angee.workflows",)):
     write_addon_distribution(addon, "example.callback_routing", depends_on=depends_on)
     (addon / "models.py").write_text(
         "from django.db import models\n"
-        "from angee.base.models.base import AngeeDataModel\n"
-        "from angee.base.models.ownership import OwnerMixin\n"
+        "from angee.iam.models.base import ProtectedDataModel\n"
+        "from angee.iam.models.ownership import OwnerMixin\n"
         "from angee.provenance.contrib.angee.history import HistoryMixin\n"
-        "class Record(HistoryMixin, OwnerMixin, AngeeDataModel, concrete=True):\n"
+        "class Record(HistoryMixin, OwnerMixin, ProtectedDataModel, concrete=True):\n"
         " label = models.CharField(max_length=100)\n"
         " class Meta:\n  abstract = True\n  rebac_resource_type = 'callback/record'\n"
     )

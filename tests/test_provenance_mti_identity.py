@@ -9,7 +9,7 @@ from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
-from angee.base.models.base import AngeeDataModel
+from angee.iam.models.base import ProtectedDataModel
 from angee.provenance.context import changeset, current_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.statements import Aspect, SourceKind, StatementRecords, StatementsMixin
@@ -57,13 +57,13 @@ def identity_policy(composed_tables):
 
 @pytest.mark.usefixtures("identity_policy")
 def test_distinct_parent_identity_scopes_statements_and_inverse_without_colliding_children():
-    class IdentityParent(StatementsMixin, HistoryMixin, AngeeDataModel):
+    class IdentityParent(StatementsMixin, HistoryMixin, ProtectedDataModel):
         title = models.CharField(max_length=80)
         owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
         statements = StatementRecords(aspects={"identity": Aspect(fields=("title",))})
         history_relations = ("identity_lines",)
 
-        class Meta(AngeeDataModel.Meta):
+        class Meta(ProtectedDataModel.Meta):
             app_label = "scopedemo"
             rebac_resource_type = "scopedemo/identity_parent"
 
@@ -83,11 +83,11 @@ def test_distinct_parent_identity_scopes_statements_and_inverse_without_collidin
             app_label = "scopedemo"
             rebac_resource_type = "scopedemo/identity_sibling"
 
-    class IdentityLine(HistoryMixin, AngeeDataModel):
+    class IdentityLine(HistoryMixin, ProtectedDataModel):
         parent = models.ForeignKey(IdentityParent, on_delete=models.CASCADE, related_name="identity_lines")
         title = models.CharField(max_length=80)
 
-        class Meta(AngeeDataModel.Meta):
+        class Meta(ProtectedDataModel.Meta):
             app_label = "scopedemo"
             rebac_resource_type = "scopedemo/identity_line"
 

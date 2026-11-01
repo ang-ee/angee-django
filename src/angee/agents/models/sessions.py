@@ -25,10 +25,10 @@ from angee.agents.runners import TurnOutcome
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.transitions import StateTransitions, save_state, transition
-from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.refs import RecordRef
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.permissions import actor_user_id, instance_actor
 from angee.jobs.enqueue import enqueue_task
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -96,7 +96,7 @@ class AgentSessionManager[SessionT: AgentSession](_AgentSessionManagerBase[Sessi
         )
 
 
-class AgentSession(AuditMixin, AngeeDataModel, concrete=True):
+class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
     """Runtime-neutral conversation whose turns run once, without crash recovery.
 
     A pending turn retained across a rebuild runs first when the user next posts.
@@ -452,7 +452,7 @@ class AgentTurnQuerySet[TurnT: AgentTurn](AngeeHistoryQuerySet[TurnT]):
 _AgentTurnManager = AngeeHistoryManager.from_queryset(AgentTurnQuerySet)
 
 
-class AgentTurn(AuditMixin, AngeeDataModel, concrete=True):
+class AgentTurn(AuditMixin, ProtectedDataModel, concrete=True):
     """One prompt-to-response cycle with append-only ACP updates."""
 
     sqid_prefix = "atn_"

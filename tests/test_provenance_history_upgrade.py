@@ -18,7 +18,7 @@ from django.conf import settings
 mode, root = sys.argv[1], Path(sys.argv[2])
 settings.configure(
     INSTALLED_APPS=['django.contrib.contenttypes', 'django.contrib.auth', 'rebac',
-                    'simple_history', 'angee.base', 'angee.provenance', 'angee.provenance.testing'],
+                    'simple_history', 'angee.base', 'angee.iam', 'angee.provenance', 'angee.provenance.testing'],
     SECRET_KEY='retained-history-upgrade', AUTH_USER_MODEL='auth.User',
     PROVENANCE_CHANGESET_MODEL='provenance.Changeset', ANGEE_MERGE_GUARDS=[],
     PROVENANCE_POLICY='angee.provenance.contrib.angee.policy.AngeePolicy',
@@ -38,7 +38,7 @@ from simple_history.utils import get_history_manager_for_model
 from rebac import SubjectRef, actor_context, database_context, system_context
 from rebac.models import SchemaDefinition, SchemaPermission
 from rebac.models.schema_write import schema_changes
-from angee.base.models.base import AngeeDataModel
+from angee.iam.models.base import ProtectedDataModel
 from angee.provenance.context import changeset, current_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.history import _ChangesetHistory
@@ -47,7 +47,7 @@ from angee.provenance.testing.models import Changeset
 
 # This is the pre-adoption historical field declaration, not a copy of capture
 # or replay. The new phase uses the canonical native capture/replay adapter.
-row_bases = (AngeeDataModel,) if mode == 'old' else (HistoryMixin, AngeeDataModel)
+row_bases = (ProtectedDataModel,) if mode == 'old' else (HistoryMixin, ProtectedDataModel)
 class Row(*row_bases):
     title = models.CharField(max_length=30)
     history = (HistoricalRecords(bases=(_ChangesetHistory,), use_base_model_db=True, excluded_fields=["sqid"])

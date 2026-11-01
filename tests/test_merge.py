@@ -23,7 +23,6 @@ from rebac.roles import grant as grant_role
 
 from angee.base.models import merge as merge_module
 from angee.base.models import merge_references as reference_owner
-from angee.base.signals import bulk_updated
 from angee.base.models.identity import public_id_of
 from angee.base.models.merge_references import (
     EdgeReference,
@@ -32,8 +31,9 @@ from angee.base.models.merge_references import (
     MergePolicy,
     references,
 )
-from angee.base.models.refs import RecordRefMixin
+from angee.base.signals import bulk_updated
 from angee.graphql import records
+from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.messaging.testing.models import Directory, Participant, Party, Reaction
 from angee.projects.testing.models import Link, Project, Queue, Task
 from angee.provenance.context import changeset, changeset_model, current_changeset
@@ -145,7 +145,9 @@ def test_native_reference_move_without_batch_projection_keeps_the_single_update_
         raise AssertionError("A model without bulk target projection entered observed batching")
 
     monkeypatch.setattr(reference_owner, "query_batch_size", unexpected_batch)
-    reference = next(item for item in references(Tag) if item.model is TagAssignment and isinstance(item, ForeignKeyReference))
+    reference = next(
+        item for item in references(Tag) if item.model is TagAssignment and isinstance(item, ForeignKeyReference)
+    )
     bulk_updated.connect(observe, sender=TagAssignment, weak=False)
     try:
         with changeset(), system_context(reason="test.merge.unobserved_reference"):
@@ -291,7 +293,7 @@ def test_an_edge_without_a_merge_policy_blocks_and_its_blockers_project(monkeypa
 
     mobile, mobil, _ada, _bob = _vocabulary()
     _tag_on_tag(mobile, mobil)
-    monkeypatch.setattr(TagAssignment, "merge_policy", RecordRefMixin.merge_policy)
+    monkeypatch.setattr(TagAssignment, "merge_policy", ProtectedRecordRefMixin.merge_policy)
     blocked = {tag.pk for condition, _message in Tag.merge_blockers() for tag in Tag._base_manager.filter(condition)}
     assert blocked == {mobil.pk}
     with actor_context(_curator("merge-blocked")), pytest.raises(ValidationError, match="tag assignments"):

@@ -31,22 +31,17 @@ from rebac.managers import TrackedManager
 from rebac.mixins import RebacModelBase
 
 from angee.base.fields.state import StateField
-from angee.base.managers import AngeeManager, AngeeUnscopedManager
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
-from angee.base.models.locks import (
-    ImmutableFieldsMixin,
-    RowLockMixin,
-    RowLockQuerySet,
-    _RowLockBaseManager,
-    _RowLockBaseQuerySet,
-)
+from angee.base.models.locks import ImmutableFieldsMixin, _RowLockBaseManager, _RowLockBaseQuerySet
 from angee.base.models.stages import Stage as StagePrimitive
 from angee.base.models.stages import StagedModelMixin
 from angee.base.models.stages import StageManager as StageManagerPrimitive
 from angee.base.models.stages import StageQuerySet as StageQuerySetPrimitive
-from angee.base.permissions import actor_user_id, instance_actor
-from angee.base.querysets import AngeeQuerySet
+from angee.iam.managers import ProtectedManager, ProtectedUnscopedManager
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.locks import ProtectedRowLockMixin, ProtectedRowLockQuerySet
+from angee.iam.permissions import actor_user_id, instance_actor
+from angee.iam.querysets import ProtectedQuerySet
 from angee.projects.models import TaskManager as ProjectTaskManager
 from angee.projects.models import TaskQuerySet as ProjectTaskQuerySet
 from angee.resources.mixins import ResourceLoadMixin
@@ -352,7 +347,9 @@ class ManualStageQuerySet[StageT: Stage](StageQuerySetPrimitive[StageT]):
         return self.for_container(container).filter(category=category, rule_owned=False)
 
 
-class StageQuerySet[StageT: Stage](ManualStageQuerySet[StageT], RowLockQuerySet[StageT], AngeeQuerySet[StageT]):
+class StageQuerySet[StageT: Stage](
+    ManualStageQuerySet[StageT], ProtectedRowLockQuerySet[StageT], ProtectedQuerySet[StageT]
+):
     """Scoped stage selections with system-row mutation guards."""
 
 
@@ -360,14 +357,14 @@ class StageBaseQuerySet[StageT: Stage](ManualStageQuerySet[StageT], _RowLockBase
     """Unfiltered stage selections retaining system-row mutation guards."""
 
 
-_StageManagerBase = AngeeManager.from_queryset(StageQuerySet)
+_StageManagerBase = ProtectedManager.from_queryset(StageQuerySet)
 
 
 class StageManager[StageT: Stage](_StageManagerBase[StageT], StageManagerPrimitive[StageT]):
     """Actor-scoped Work stages extending the generic stage manager contract."""
 
 
-_StageBaseManagerBase = AngeeUnscopedManager.from_queryset(StageBaseQuerySet)
+_StageBaseManagerBase = ProtectedUnscopedManager.from_queryset(StageBaseQuerySet)
 
 
 class StageBaseManager[StageT: Stage](
@@ -376,7 +373,7 @@ class StageBaseManager[StageT: Stage](
     """Unfiltered Work stages preserving row-lock and generic stage contracts."""
 
 
-class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=True):
+class Stage(ProtectedRowLockMixin, StagePrimitive, AuditMixin, ProtectedDataModel, concrete=True):
     """One ordered, user-named pipeline stage owned by a queue.
 
     Triage and duplicate stages are system rows: provisioning and resource loads
@@ -584,7 +581,7 @@ class Stage(RowLockMixin, StagePrimitive, AuditMixin, AngeeDataModel, concrete=T
         super().save(*args, **kwargs)
 
 
-class CycleManager[CycleT: Cycle](AngeeManager[CycleT]):
+class CycleManager[CycleT: Cycle](ProtectedManager[CycleT]):
     """Own idempotent queue-cadence generation and due-cycle closure."""
 
     def maintain_cadence(self, *, now: datetime | None = None) -> int:
@@ -702,7 +699,7 @@ class CycleManager[CycleT: Cycle](AngeeManager[CycleT]):
             )
 
 
-class Cycle(AuditMixin, AngeeDataModel, concrete=True):
+class Cycle(AuditMixin, ProtectedDataModel, concrete=True):
     """One generated, queue-scoped planning window with immutable close evidence."""
 
     sqid_prefix = "cyc_"

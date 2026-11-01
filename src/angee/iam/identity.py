@@ -15,9 +15,10 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db.models import CharField, QuerySet, Value
 from django.db.models.functions import Coalesce, Concat, NullIf, Trim
 from django.http import HttpRequest
-from rebac import system_context
-from rebac.resources import model_resource_type
+from rebac import SubjectRef, system_context
+from rebac.resources import model_for_resource_type, model_resource_type
 
+from angee.base.identity import public_data_id_field
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for
 
 
@@ -187,3 +188,46 @@ def user_from_public_id(user_id: Any) -> Any:
     if user is None:
         raise ValueError(f"User {user_id!s} was not found.")
     return user
+
+
+def canonical_subject_ref(value: str) -> SubjectRef:
+    """Decode a transport subject into its canonical REBAC identity."""
+
+    subject = SubjectRef.parse(value)
+    if subject.subject_id in {"", "*"}:
+        return subject
+    model = model_for_resource_type(subject.subject_type)
+    if model is None or not model._meta.managed:
+        return subject
+    field = public_data_id_field(model)
+    if field is None:
+        return subject
+    pk = field.public_id_to_value(subject.subject_id)
+    if pk is None:
+        if not field.prefix:
+            raise ValueError(f"Subject {value!r} has an invalid public id.")
+        model_pk = model._meta.pk
+        if model_pk is None:
+            raise ValueError(f"Subject {value!r} has no model identity.")
+        try:
+            pk = model_pk.to_python(subject.subject_id)
+        except (TypeError, ValueError, ValidationError) as error:
+            raise ValueError(f"Subject {value!r} has an invalid canonical id.") from error
+    return SubjectRef.of(subject.subject_type, str(pk), subject.optional_relation)
+
+def public_subject_ref(subject: SubjectRef) -> SubjectRef:
+    """Encode a canonical model-backed subject for a transport boundary."""
+
+    if subject.subject_id in {"", "*"}:
+        return subject
+    model = model_for_resource_type(subject.subject_type)
+    if model is None or not model._meta.managed:
+        return subject
+    field = public_data_id_field(model)
+    if field is None:
+        return subject
+    return SubjectRef.of(
+        subject.subject_type,
+        field.public_id_from_value(subject.subject_id),
+        subject.optional_relation,
+    )

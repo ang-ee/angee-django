@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from django_provenance.managers import ChangesetManager as NativeChangesetManager
 
-from angee.base.managers import AngeeManager
+from angee.iam.managers import ProtectedManager
 from angee.provenance.changeset_querysets import ChangesetQuerySet as ChangesetQuerySet
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from angee.provenance.contrib.angee.serialization import creation_fingerprint
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from angee.provenance.models import Changeset
 
 
-_ChangesetManagerBase = AngeeManager.from_queryset(ChangesetQuerySet)
+_ChangesetManagerBase = ProtectedManager.from_queryset(ChangesetQuerySet)
 
 
 class ChangesetManager[ChangesetT: Changeset](_ChangesetManagerBase[ChangesetT], NativeChangesetManager):

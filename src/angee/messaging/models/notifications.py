@@ -16,7 +16,7 @@ from django.db.models.sql.compiler import SQLCompiler
 from angee.base.fields import DiagnosticTextField
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
+from angee.iam.models.base import ProtectedDataModel
 from angee.messaging.managers import (
     ThreadFollowerManager,
     ThreadNotificationManager,
@@ -102,7 +102,7 @@ class ThreadAudienceMixin(models.Model):
         raise NotImplementedError
 
 
-class ThreadFollower(AuditMixin, AngeeDataModel, concrete=True):
+class ThreadFollower(AuditMixin, ProtectedDataModel, concrete=True):
     """A party's per-thread subscription row — subscription policy plus read receipt.
 
     The one row per ``(thread, party)``: it carries how the follower wants updates
@@ -184,7 +184,7 @@ class ThreadFollower(AuditMixin, AngeeDataModel, concrete=True):
         )
 
 
-class ThreadNotification(AuditMixin, AngeeDataModel, concrete=True):
+class ThreadNotification(AuditMixin, ProtectedDataModel, concrete=True):
     """A recipient's delivery ledger and acknowledgement of one inbox item.
 
     ``read_at`` records acknowledgement of this notification independently of

@@ -1,19 +1,13 @@
-"""Model-owned generic record edges, accepted targets and deletion policy.
+"""Neutral Django generic record edges and their merge/deletion policy.
 
-**Placement invariant.** Every polymorphic edge and every reverse
-``GenericRelation`` onto one (``messaging.ThreadedModelMixin.thread_attachments``,
-``projects.ProjectBindingsMixin.project_bindings``) must be declared on, and any
-mixin owning it composed onto, the *same* topmost REBAC-typed MTI ancestor the
-canonical write keys on. A reverse ``GenericRelation`` filters at its declaring
-model's own content type, so composing the mixin on a child while its canonical
-ancestor does not splits the write content type from the collect content type
-and orphans edge rows on delete.
+Declare each GenericRelation on the model its identity owner returns from
+``generic_pointer_model`` so forward writes and reverse collection use the same
+native contenttype. Optional protection contributes admission at its own owner.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any, ClassVar, Protocol, cast
+from typing import Any, ClassVar, Protocol
 
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
@@ -22,17 +16,12 @@ from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django.db.models.deletion import ProtectedError
-from django.utils.text import capfirst
-from rebac import system_context
-from rebac.field_backing import canonical_model
-from rebac.resources import model_for_resource_type
-from rebac.schema import Definition, FieldBinding
+from django_compose.models import Composable
 
 from angee.base.identity import public_data_id_field
 from angee.base.models.identity import public_id_for
 from angee.base.models.merge import MergeableMixin
 from angee.base.models.merge_references import MergePolicy, RecordRefMergeContract
-from angee.base.permissions import effective_rebac_definition
 from angee.base.querysets import MergeableQuerySet
 from angee.base.refs import RecordRef, generic_pointer_model, generic_pointer_target
 
@@ -41,7 +30,7 @@ class _TargetTeardown(Protocol):
     def __call__(self, target: models.Model) -> None: ...
 
 
-class RecordRefMixin(RecordRefMergeContract):
+class RecordRefMixin(RecordRefMergeContract, Composable, concrete=False):
     """Project a row reference from the model's single declared generic foreign key.
 
     Its collision declarations (``merge_identity``, ``merge_collapse``) are the
@@ -52,8 +41,6 @@ class RecordRefMixin(RecordRefMergeContract):
     """What merging the referenced record does to this edge's rows; an edge that declares none blocks."""
     on_target_delete: ClassVar[Any] = models.PROTECT
     """What deleting the referenced record does to this edge's rows."""
-    accepts_any_record_target: ClassVar[bool] = False
-    """Whether this infrastructure edge may point at every canonical record type."""
     teardown_for_target: ClassVar[_TargetTeardown | None] = None
     """Optional class hook replacing ordinary deletion policy with the edge owner's cleanup."""
 
@@ -112,14 +99,14 @@ class RecordRefMixin(RecordRefMergeContract):
             if content_type_id not in (None, "") and object_id not in (None, "") else None
         )
         if model is None:
-            return RecordRef(model_label="", object_id=object_id, public_id="", resource_type="")
+            return RecordRef(model_label="", object_id=object_id, public_id="")
         return RecordRef.from_model(model, object_id)
 
     @classmethod
     def blocks_target_delete(cls, target: type[models.Model]) -> bool:
         """Use the same owned edge policy for ordinary deletion and creation undo."""
 
-        canonical = canonical_model(target)
+        canonical = generic_pointer_model(target)
         declared = record_edges_by_target().get(canonical, ()) if canonical is not None else ()
         controlled = {*declared, *record_ref_cleanup_edges_for_target(target)}
         return cls not in controlled or cls.on_target_delete is models.PROTECT
@@ -157,67 +144,28 @@ class RecordRefMixin(RecordRefMergeContract):
         return models.Q(**scope)
 
     @classmethod
-    def declared_target_models(
-        cls, *, definition_for: Callable[[type[models.Model]], Definition | None] = effective_rebac_definition,
-    ) -> dict[str, type[models.Model]]:
-        """Return the target models this edge's effective schema declares, by ``label_lower``.
-
-        One relation per target type, backed by the generic pointer
-        (``// rebac:field=target``), names the types the edge may hold under an
-        actor. Owners derive their accepted-target sets from this one
-        declaration instead of listing the types again.
-        """
-
-        definition = definition_for(cls)
-        if definition is None:
-            raise ImproperlyConfigured(f"{cls._meta.label} declares no REBAC definition to read target types from.")
-        return cls._declared_target_models(definition)
-
-    @classmethod
-    def _declared_target_models(cls, definition: Definition) -> dict[str, type[models.Model]]:
-        """Project one already-resolved effective definition through its pointer field."""
-
-        pointer = cls.record_ref_field().name
-        targets: dict[str, type[models.Model]] = {}
-        for relation in definition.relations:
-            backing = relation.backing
-            if not isinstance(backing, FieldBinding) or backing.path != pointer:
-                continue
-            model = model_for_resource_type(relation.allowed_subjects[0].type)
-            if model is not None:
-                targets[model._meta.label_lower] = model
-        return targets
-
-    @classmethod
-    def declared_target_model(cls, model_label: str) -> type[models.Model]:
-        """Return the declared target a ``app_label.model`` label names, or a ``ValidationError``.
-
-        A label names its canonical type, as :meth:`declares_target` decides: a
-        multi-table child (a person) addresses its typed parent (a party).
-        """
-
-        try:
-            model = apps.get_model(str(model_label).strip())
-        except (LookupError, ValueError) as error:
-            raise cls._undeclared_target(cls.declared_target_models()) from error
-        if not cls.declares_target(model):
-            raise cls._undeclared_target(cls.declared_target_models())
-        return cast(type[models.Model], canonical_model(model))
-
-    @classmethod
-    def accepted_target_models(
-        cls, *, definition_for: Callable[[type[models.Model]], Definition | None] = effective_rebac_definition,
-    ) -> dict[str, type[models.Model]]:
-        """Return the complete target set from the schema or the explicit open edge."""
-
-        if not cls.accepts_any_record_target:
-            return cls.declared_target_models(definition_for=definition_for)
-        targets = {
-            target._meta.label_lower: target
-            for model in cls._meta.apps.get_models()
-            if (target := canonical_model(model)) is not None
+    def accepted_target_models(cls) -> dict[str, type[models.Model]]:
+        """Normal Django generic pointers accept every installed concrete record."""
+        return {
+            model._meta.label_lower: model
+            for model in sorted(cls._meta.apps.get_models(), key=lambda model: model._meta.label_lower)
+            if not model._meta.auto_created
         }
-        return dict(sorted(targets.items()))
+
+    @classmethod
+    def validate_target(cls, target: models.Model) -> None:
+        """Require a saved target; domain and protection donors own further admission."""
+        if target.pk is None or target._state.adding:
+            raise ValidationError({"target": "A record reference requires a saved target."})
+
+    @classmethod
+    def remove_target_refs(cls, rows: models.QuerySet[Any]) -> None:
+        """Apply this edge's deletion policy through native Django persistence."""
+        pointer = cls.record_ref_field()
+        if cls.on_target_delete is models.CASCADE:
+            rows.delete()
+        elif cls.on_target_delete is models.SET_NULL:
+            rows.update(**{pointer.ct_field: None, pointer.fk_field: None})
 
     @classmethod
     def record_edge_roles(cls, target: type[models.Model]) -> tuple[str, ...]:
@@ -231,29 +179,6 @@ class RecordRefMixin(RecordRefMergeContract):
 
         del target
         return ()
-
-    @classmethod
-    def declares_target(cls, model: type[models.Model]) -> bool:
-        """Whether this edge's schema declares ``model``'s canonical type a target.
-
-        A record of an undeclared type cannot carry the edge under an actor: the
-        edge's ``create`` has no arm for it and :meth:`validate_target` refuses it.
-        """
-
-        target = canonical_model(model)
-        return target is not None and target._meta.label_lower in cls.accepted_target_models()
-
-    @classmethod
-    def validate_target(cls, target: models.Model) -> None:
-        """Reject a target whose canonical model the edge's schema does not declare."""
-
-        if not cls.declares_target(type(target)):
-            raise cls._undeclared_target(cls.declared_target_models())
-
-    @classmethod
-    def _undeclared_target(cls, declared: dict[str, type[models.Model]]) -> ValidationError:
-        names = ", ".join(sorted(str(model._meta.verbose_name) for model in declared.values()))
-        return ValidationError({"target": f"{capfirst(str(cls._meta.verbose_name))} may target only: {names}."})
 
     @classmethod
     def record_public_id_operand(cls, value: str) -> models.Case:
@@ -299,30 +224,13 @@ class RecordRefMixin(RecordRefMergeContract):
         return self.record_ref.public_id
 
 
-def record_edges_by_target(
-    *, definition_for: Callable[[type[models.Model]], Definition | None] = effective_rebac_definition,
-) -> dict[type[models.Model], tuple[type[RecordRefMixin], ...]]:
-    """Index installed edges by every canonical target they accept, in label order.
-
-    The inverse of :meth:`RecordRefMixin.accepted_target_models`: the polymorphic
-    edges a record can carry, keyed by the canonical model
-    :func:`rebac.generic_target` names it by. Infrastructure edges can explicitly
-    accept every canonical target without declaring an independent row policy.
-    """
-
+def record_edges_by_target() -> dict[type[models.Model], tuple[type[RecordRefMixin], ...]]:
+    """Index model-owned generic edge admission, independent of its policy provider."""
     index: dict[type[models.Model], list[type[RecordRefMixin]]] = {}
     for edge in sorted(apps.get_models(), key=lambda model: model._meta.label):
-        if not issubclass(edge, RecordRefMixin):
-            continue
-        if edge.accepts_any_record_target:
-            targets = edge.accepted_target_models(definition_for=definition_for)
-        else:
-            definition = definition_for(edge)
-            if definition is None:
-                continue
-            targets = edge._declared_target_models(definition)
-        for target in targets.values():
-            index.setdefault(target, []).append(edge)
+        if issubclass(edge, RecordRefMixin):
+            for target in edge.accepted_target_models().values():
+                index.setdefault(target, []).append(edge)
     return {target: tuple(edges) for target, edges in index.items()}
 
 
@@ -355,7 +263,7 @@ def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> Non
         teardown = edge.teardown_for_target
         assert teardown is not None
         teardown(instance)
-    target = canonical_model(type(instance))
+    target = generic_pointer_model(type(instance))
     declared = record_edges_by_target().get(target, ()) if target is not None else ()
     content_type, object_id = generic_pointer_target(instance)
     for edge in declared:
@@ -371,8 +279,4 @@ def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> Non
             if protected:
                 raise ProtectedError(f"{edge._meta.label} rows still refer to {instance}.", protected)
             continue
-        with system_context(reason="record_ref.target_delete"):
-            if policy is models.CASCADE:
-                rows.delete()
-            elif policy is models.SET_NULL:
-                rows.update(**{pointer.ct_field: None, pointer.fk_field: None})
+        edge.remove_target_refs(rows)

@@ -32,7 +32,6 @@ from strawberry_django.resolvers import django_resolver
 from strawberry_django.utils.requests import get_request
 
 from angee.base.models.identity import instance_from_public_id
-from angee.base.serialization import strip_null_bytes
 from angee.graphql.actions import (
     ActionResult,
     ActionSelectionInput,

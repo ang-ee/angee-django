@@ -40,17 +40,18 @@ from simple_history.utils import get_history_manager_for_model
 
 from angee.base.fields.state import StateField
 from angee.base.lineage import most_derived_concrete
-from angee.base.managers import AngeeManager
 from angee.base.models.base import record_display_label
 from angee.base.models.identity import SqidMixin
 from angee.base.models.locks import OptimisticLockMixin
 from angee.base.models.merge_references import MergeContractMixin
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.timestamps import TimestampMixin, update_fields_with_auto_now
-from angee.base.models.trash import TrashMixin, TrashQuerySet
-from angee.base.permissions import instance_actor, require_rebac_queryset
+from angee.base.models.trash import TrashQuerySet
 from angee.base.querysets import by_key, query_batch_size
 from angee.base.validators import validate_value
+from angee.iam.managers import ProtectedManager
+from angee.iam.models.trash import ProtectedTrashMixin
+from angee.iam.permissions import instance_actor, require_rebac_queryset
 from angee.provenance.context import current_changeset
 from angee.provenance.contrib.angee.history import HistoryDocumentMixin, HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.managers import AngeeHistoryUnscopedManager
@@ -243,7 +244,7 @@ def prime_readable_statement_records(rows: Sequence[Any], actor: Any) -> None:
         row._readable_asserting_source = readable_sources.get(source_key) if source_key is not None else None
 
 
-_StatementManagerBase = AngeeManager.from_queryset(StatementQuerySet)
+_StatementManagerBase = ProtectedManager.from_queryset(StatementQuerySet)
 
 
 class StatementManager[T: Statement](_StatementManagerBase[T], StatementWriteMixin):
@@ -568,7 +569,7 @@ class StatementManager[T: Statement](_StatementManagerBase[T], StatementWriteMix
             self.db_manager(rows.db).resolve(subject=subject)
 
 
-_StatementPairManagerBase = AngeeManager.from_queryset(AngeeHistoryQuerySet)
+_StatementPairManagerBase = ProtectedManager.from_queryset(AngeeHistoryQuerySet)
 
 
 class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
@@ -655,7 +656,7 @@ class StatementSubjectQuerySet[T: models.Model](TrashQuerySet[T], AngeeHistoryQu
         return self.untrashed().filter(~Exists(statements) | Exists(remaining))
 
 
-_StatementSubjectManagerBase = AngeeManager.from_queryset(StatementSubjectQuerySet)
+_StatementSubjectManagerBase = ProtectedManager.from_queryset(StatementSubjectQuerySet)
 
 
 class StatementSubjectManager[T: models.Model](_StatementSubjectManagerBase[T]):
@@ -1309,7 +1310,7 @@ _StatementPairUnscopedManager = AngeeHistoryUnscopedManager.from_queryset(_State
 
 
 class StatementPair(
-    MergeContractMixin, TrashMixin, StatementsMixin, HistoryMixin, SqidMixin, TimestampMixin, RebacMixin
+    MergeContractMixin, ProtectedTrashMixin, StatementsMixin, HistoryMixin, SqidMixin, TimestampMixin, RebacMixin
 ):
     """Ordered pair subject; admission and application stay on its endpoints."""
 

@@ -34,12 +34,12 @@ from django.db import models, router, transaction
 from django.utils import timezone
 from rebac import GenericTarget, database_context, generic_target
 
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.merge_references import MergePolicy
 from angee.base.models.persistence import PersistenceMixin
-from angee.base.models.refs import RecordRefMixin
-from angee.base.models.roles import role_anchor
 from angee.base.models.trash import ArchiveMixin, ArchiveQuerySet
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.refs import ProtectedRecordRefMixin
+from angee.iam.models.roles import role_anchor
 from angee.money.rounding import RoundingMode, rounding_constant
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -77,7 +77,7 @@ class CurrencyQuerySet[CurrencyT: Currency](ArchiveQuerySet[CurrencyT], AngeeHis
 CurrencyManager = AngeeHistoryManager.from_queryset(CurrencyQuerySet)
 
 
-class Currency(ResourceLoadMixin, ArchiveMixin, AngeeDataModel, concrete=True):
+class Currency(ResourceLoadMixin, ArchiveMixin, ProtectedDataModel, concrete=True):
     """One ISO-4217 currency: its code, display name, symbol, and minor-unit exponent.
 
     ``decimal_places`` is the currency's minor-unit exponent (2 for most, 0 for
@@ -306,7 +306,7 @@ class CurrencyRateQuerySet[RateT: CurrencyRate](ArchiveQuerySet[RateT], AngeeHis
 
 CurrencyRateManager = AngeeHistoryManager.from_queryset(CurrencyRateQuerySet)
 
-class CurrencyRate(HistoryMixin, RecordRefMixin, ArchiveMixin, AngeeDataModel, concrete=True):
+class CurrencyRate(HistoryMixin, ProtectedRecordRefMixin, ArchiveMixin, ProtectedDataModel, concrete=True):
     """One dated global or exact-context exchange rate per reference unit.
 
     A global row has no context or explicit reference and remains relative to
@@ -448,5 +448,5 @@ class CurrencyRate(HistoryMixin, RecordRefMixin, ArchiveMixin, AngeeDataModel, c
 
 MoneyRole = role_anchor("money/role")
 """The ``money/role`` anchor: its const ``admin`` arm resolves a platform admin as
-an effective money manager. See :func:`angee.base.models.roles.role_anchor`.
+an effective money manager. See :func:`angee.iam.models.roles.role_anchor`.
 """

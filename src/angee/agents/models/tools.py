@@ -15,8 +15,8 @@ from angee.agents.constants import BUILTIN_MCP_ANGEE as BUILTIN_MCP_ANGEE
 from angee.agents.managers import MCPServerManager, MCPToolManager
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
-from angee.base.models.roles import role_anchor
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.roles import role_anchor
 from angee.resources.mixins import ResourceLoadMixin
 
 if TYPE_CHECKING:
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 ToolRole = role_anchor("agents/toolrole", name="ToolRole")
 
 
-class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
+class MCPServer(ResourceLoadMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """An MCP server an agent can reach — internal to the platform or external.
 
     An external server authenticates with an ``integrate.Credential``; the operator renders
@@ -196,7 +196,7 @@ class MCPServer(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
         return sqid, digest
 
 
-class MCPTool(AuditMixin, AngeeDataModel, concrete=True):
+class MCPTool(AuditMixin, ProtectedDataModel, concrete=True):
     """One tool an MCP server exposes; agents select the tools they may call."""
 
 

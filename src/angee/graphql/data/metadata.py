@@ -15,10 +15,6 @@ from strawberry_django_hasura import HasuraResource
 
 from angee.base.fields import ImplClassField
 from angee.base.lineage import concrete_child_models
-from angee.base.models.base import AngeeModel
-from angee.base.models.merge import MergeableMixin
-from angee.base.models.refs import RecordRefMixin, record_edges_by_target
-from angee.base.permissions import declared_rebac_definition
 from angee.base.refs import generic_pointer_model
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data import contracts as data_contract
@@ -45,6 +41,10 @@ from angee.graphql.introspection import (
     is_to_one_relation,
     require_field_for_path,
 )
+from angee.iam.models.base import ProtectedModel
+from angee.iam.models.merge import ProtectedMergeableMixin
+from angee.iam.models.refs import ProtectedRecordRefMixin, record_edges_by_target
+from angee.iam.permissions import declared_rebac_definition
 from graphql import GraphQLList, GraphQLNonNull, GraphQLObjectType, GraphQLSchema, get_named_type
 
 __all__ = [
@@ -324,7 +324,7 @@ def finalize_data_resources(
             grantable=_grantable_relations(item.model, resources_by_model),
             concrete_kinds=_concrete_kinds(item.model, resources_by_model),
             record_edges=_record_edges(item.model, edges_by_target),
-            mergeable=item.model is not None and issubclass(item.model, MergeableMixin),
+            mergeable=item.model is not None and issubclass(item.model, ProtectedMergeableMixin),
             history=bool(_single_policy_value(item.model_label, by_label[item.model_label], "history")),
         )
         for item in finalized
@@ -738,14 +738,14 @@ def _concrete_kinds(
 
 def _record_edges(
     model: type[models.Model] | None,
-    edges_by_target: Mapping[type[models.Model], tuple[type[RecordRefMixin], ...]],
+    edges_by_target: Mapping[type[models.Model], tuple[type[ProtectedRecordRefMixin], ...]],
 ) -> tuple[str, ...]:
     """Project the edge models accepting this resource's canonical type as a target.
 
     A record carries only these edges, so a surface listing one (a record's files,
     pages or source conversations) applies to the record types that name it. An
     edge with roles adds ``<label>:<role>`` for each role the type carries
-    (:meth:`~angee.base.models.refs.RecordRefMixin.record_edge_roles`), so a surface
+    (:meth:`~angee.iam.models.refs.ProtectedRecordRefMixin.record_edge_roles`), so a surface
     serving one role (Comments on the chatter role) gates on that entry.
     """
 
@@ -764,7 +764,7 @@ def _grantable_relations(
 ) -> tuple[data_contract.GrantableRelationMetadata, ...]:
     """Project grants through resources exposing their model's subject relation."""
 
-    if model is None or not issubclass(model, AngeeModel):
+    if model is None or not issubclass(model, ProtectedModel):
         return ()
     declaration = model.get_rebac_grantable()
     definition = declared_rebac_definition(model)

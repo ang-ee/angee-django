@@ -7,9 +7,9 @@ from django.apps import apps
 from django.db import models
 from django.test.utils import isolate_apps
 
-from angee.base.models.base import AngeeModel
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.querysets import row_lock_paths
+from angee.iam.models.base import ProtectedModel
 
 
 def _multi_table_models():
@@ -76,8 +76,8 @@ def test_row_lock_paths_cover_mti_without_locking_unrelated_selected_rows() -> N
 
 @isolate_apps()
 def test_delete_lock_preserves_scope_and_excludes_unrelated_selected_rows(monkeypatch: pytest.MonkeyPatch) -> None:
-    class Parent(AngeeModel):
-        class Meta(AngeeModel.Meta):
+    class Parent(ProtectedModel):
+        class Meta(ProtectedModel.Meta):
             app_label = "lock_contract"
 
     class Related(models.Model):

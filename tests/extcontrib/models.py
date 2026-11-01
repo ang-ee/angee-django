@@ -5,8 +5,8 @@ from typing import cast
 from django.db import models
 
 from angee.base.fields.relations import RetainedGenericRelation
-from angee.base.models.base import AngeeDataModel
-from angee.base.models.roles import role_anchor
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.roles import role_anchor
 from angee.provenance.statements import (
     Aspect,
     SourceKind,
@@ -18,14 +18,14 @@ from angee.provenance.statements import (
 Role = role_anchor("extcontrib/role", name="Role")
 
 
-class Record(AngeeDataModel):
+class Record(ProtectedDataModel):
     """A concerned record exposing retained links through a typed query path."""
 
     sqid_prefix = "xrc_"
     name = models.CharField(max_length=100)
     decision_records = RetainedGenericRelation("decisions.DecisionRecord", related_query_name="extcontrib_record")
 
-    class Meta(AngeeDataModel.Meta):
+    class Meta(ProtectedDataModel.Meta):
         abstract = False
         db_table = "test_extcontrib_record"
         rebac_resource_type = "extcontrib/record"
@@ -35,7 +35,7 @@ class ClaimedStatementQuerySet(StatementQuerySet):
     """The subject source's own statement queryset, which donors must not displace."""
 
 
-class ClaimedSource(StatementsMixin, AngeeDataModel):
+class ClaimedSource(StatementsMixin, ProtectedDataModel):
     """The subject source: it declares the statement table's options and its own aspect."""
 
     sqid_prefix = "xcl_"
@@ -46,7 +46,7 @@ class ClaimedSource(StatementsMixin, AngeeDataModel):
         historical_queryset=ClaimedStatementQuerySet,
     )
 
-    class Meta(AngeeDataModel.Meta):
+    class Meta(ProtectedDataModel.Meta):
         abstract = True
 
 
@@ -80,7 +80,7 @@ class ClaimedBilling(models.Model):
 class Claimed(ClaimedBilling, ClaimedSource):
     """A statement subject composed from a source and a consumer donor."""
 
-    class Meta(AngeeDataModel.Meta):
+    class Meta(ProtectedDataModel.Meta):
         abstract = False
         db_table = "test_extcontrib_claimed"
         rebac_resource_type = "extcontrib/claimed"

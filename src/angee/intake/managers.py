@@ -11,7 +11,7 @@ from django.db import models, router, transaction
 from rebac import PermissionDenied, current_actor, database_context, system_context
 
 from angee.base.exceptions import DomainError
-from angee.base.permissions import actor_user_id
+from angee.iam.permissions import actor_user_id
 from angee.intake.choices import NeedImportance
 from angee.intake.querysets import NeedQuerySet
 from angee.provenance.context import changeset, changeset_model, require_changeset

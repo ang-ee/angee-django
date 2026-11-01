@@ -8,7 +8,7 @@ from typing import Any, ClassVar, Self, TypeVar
 from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
-from rebac.managers import RebacQuerySet, TrackedQuerySet
+from django_compose.models import Composable
 
 from angee.base.querysets import ClosedUpdateQuerySet, _AngeeQuerySetMixin
 
@@ -58,7 +58,7 @@ class _AppendOnlyWritesMixin(ClosedUpdateQuerySet[_ModelT]):
         raise self.immutable_error("_raw_delete")
 
 
-class AppendOnlyQuerySet(_AppendOnlyWritesMixin[_ModelT], RebacQuerySet[_ModelT]):
+class AppendOnlyQuerySet(_AppendOnlyWritesMixin[_ModelT]):
     """Close generic collection edits and deletion around owner-controlled writes.
 
     Compose before the domain's base queryset to preserve authorization.
@@ -69,11 +69,6 @@ class AppendOnlyQuerySet(_AppendOnlyWritesMixin[_ModelT], RebacQuerySet[_ModelT]
     calling this queryset.
     """
 
-    def insert(self, obj: _ModelT) -> _ModelT:
-        """Validate one append before its ordinary authorized insertion."""
-
-        self.validate_insert()
-        return super().insert(obj)
 
 
 def _validate_model_insert(model: type[models.Model]) -> None:
@@ -88,7 +83,6 @@ def _validate_model_insert(model: type[models.Model]) -> None:
 class AppendOnlyBaseQuerySet(
     _AppendOnlyWritesMixin[_ModelT],
     _AngeeQuerySetMixin[_ModelT],
-    TrackedQuerySet[_ModelT],
 ):
     """Unscoped rows for Django's own relation reads, with the same writes closed."""
 
@@ -105,7 +99,7 @@ class AppendOnlyBaseManager(_AppendOnlyBaseManagerBase):
     """The base manager an append-only model declares: unfiltered reads, closed writes."""
 
 
-class AppendOnlyModel(models.Model):
+class AppendOnlyModel(Composable, concrete=False):
     """Admit new rows while reserving retained-row changes for owner verbs.
 
     The model's default manager must compose :class:`AppendOnlyQuerySet`. An owner may

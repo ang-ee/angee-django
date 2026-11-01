@@ -27,10 +27,8 @@ from rebac.resources import model_for_subject_type, model_resource_type
 from simple_history.utils import get_history_manager_for_model
 from strawberry.scalars import JSON
 
-from angee.base.identity import public_subject_ref
 from angee.base.models.base import record_display_label
 from angee.base.models.identity import public_id_for, public_id_of
-from angee.base.permissions import require_rebac_queryset
 from angee.base.refs import generic_pointer_model
 from angee.base.serialization import json_safe
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
@@ -40,6 +38,8 @@ from angee.graphql.data.metadata import (
     attach_data_resource_contribution,
 )
 from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
+from angee.iam.identity import public_subject_ref
+from angee.iam.permissions import require_rebac_queryset
 from angee.provenance.context import changeset_model
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory, record_history
 from angee.provenance.evidence import FactAuthority

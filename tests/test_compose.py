@@ -18,14 +18,14 @@ from django_compose.model_composition import ModelComposition
 from django_compose.models import Composable
 from django_compose.rendering import render_models
 
-from angee.base.build import PermissionIntegration, composed_grants
-from angee.base.models.base import AngeeModel
-from angee.base.models.roles import role_anchor
+from angee.iam.build import PermissionIntegration, composed_grants
+from angee.iam.models.base import ProtectedModel
+from angee.iam.models.roles import role_anchor
 from angee.web.build import WebRuntime
 from tests.conftest import make_addon
 
 
-class FirstRenderPlanMetaThing(AngeeModel, concrete=True):
+class FirstRenderPlanMetaThing(ProtectedModel, concrete=True):
     """Source-owned Meta must survive the native permission declaration hook."""
 
     class Meta:
@@ -34,7 +34,7 @@ class FirstRenderPlanMetaThing(AngeeModel, concrete=True):
         rebac_resource_type = "tests/first-render-plan"
 
 
-class SecondRenderPlanMetaThing(AngeeModel, concrete=True):
+class SecondRenderPlanMetaThing(ProtectedModel, concrete=True):
     """A second model keeps its own permission type in the same module."""
 
     class Meta:
@@ -335,7 +335,7 @@ def test_role_anchor_factory_pins_the_hand_rolled_anchor_shape() -> None:
     assert anchor._meta.managed is False
     assert anchor._meta.rebac_resource_type == "storage/role"
     assert anchor.__dict__["compose_concrete"] is True
-    assert issubclass(anchor, AngeeModel)
+    assert issubclass(anchor, ProtectedModel)
     # The name derives from the resource type; a symbol that differs is overridable.
     assert role_anchor("operator/role").__name__ == "OperatorRole"
     assert role_anchor("tags/role", name="Role").__name__ == "Role"
@@ -540,7 +540,7 @@ def test_resources_catalogue_hook_preserves_source_local_markers(monkeypatch):
 
     module = ModuleType("tests.catalogue_emission")
     monkeypatch.setitem(sys.modules, module.__name__, module)
-    parent = type("CatalogueThing", (ResourceLoadMixin, AngeeModel), {
+    parent = type("CatalogueThing", (ResourceLoadMixin, ProtectedModel), {
         "__module__": module.__name__, "catalogue": True,
         "catalogue_tier": "install", "catalogue_tiers": ("install", "demo"),
         "Meta": type("Meta", (), {"abstract": True, "app_label": "catalogue"}),

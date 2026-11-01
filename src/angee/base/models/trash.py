@@ -12,14 +12,10 @@ from django.core import checks
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models, transaction
 from django.utils import timezone
-from rebac import (
-    RebacMixin,
-    current_actor,
-)
+from django_compose.models import Composable
 
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.timestamps import auto_now_stamps, update_fields_with_auto_now
-from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.querysets import CanonicalQuerySet, by_key
 from angee.base.serialization import strip_null_bytes
 from angee.base.signals import bulk_updated
@@ -87,7 +83,7 @@ def clean_trash_reason(reason: Any) -> str:
     return text
 
 
-class TrashMixin(PersistenceMixin, models.Model):
+class TrashMixin(PersistenceMixin, Composable, concrete=False):
     """Soft-remove ("trash") a row while keeping it, with who, when and why.
 
     Trash is removal, distinct from archival (:class:`ArchiveMixin`): nothing is
@@ -185,7 +181,7 @@ class TrashMixin(PersistenceMixin, models.Model):
             self.validate_trash()
             self.is_trashed = True
             self.trashed_at = timezone.now()
-            self.trashed_by_id = actor_user_id(instance_actor(self))
+            self.trashed_by_id = self.attributed_user_id()
             self.trash_reason = reason
             self.save(using=db, update_fields=update_fields_with_auto_now(self, self.TRASH_FIELDS))
 
@@ -208,11 +204,7 @@ class TrashMixin(PersistenceMixin, models.Model):
         owner = self._meta.get_field(TRASH_FLAG_FIELD).model
         if not issubclass(owner, TrashMixin):
             raise ImproperlyConfigured("The trash flag must be declared by TrashMixin.")
-        target = owner._base_manager.db_manager(hints={"instance": self}).get(pk=self.pk)
-        if (actor := instance_actor(self)) is not None:
-            if not isinstance(target, RebacMixin):
-                raise ImproperlyConfigured("Actor-attributed trash replay requires RebacMixin.")
-            target.with_actor(actor)
+        target = self.bind_persistence_record(owner._base_manager.db_manager(hints={"instance": self}).get(pk=self.pk))
         trashed = previous is None or previous.history_type == "-" or previous.is_trashed
         if target.is_trashed != trashed:
             if trashed:
@@ -291,7 +283,7 @@ class TrashQuerySet(CanonicalQuerySet[_TrashModelT]):
             **auto_now_stamps(self.model, now),
             "is_trashed": True,
             "trashed_at": at or now,
-            "trashed_by_id": actor_user_id(current_actor()),
+            "trashed_by_id": self.attributed_user_id(),
             "trash_reason": clean_trash_reason(reason),
         })
 

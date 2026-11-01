@@ -12,8 +12,8 @@ from django.db.models import OuterRef, Prefetch, Q, Subquery
 from django.utils import timezone
 
 from angee.base.lineage import concrete_child_accessor, concrete_child_models
-from angee.base.models.ownership import OwnerQuerySet
 from angee.base.refs import generic_pointer_target
+from angee.iam.models.ownership import OwnerQuerySet
 from angee.integrate.choices import (
     IntegrationLifecycle,
     IntegrationRuntimeStatus,

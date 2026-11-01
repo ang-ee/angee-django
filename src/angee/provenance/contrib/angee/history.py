@@ -34,8 +34,8 @@ from simple_history.utils import get_history_manager_for_model
 from angee.base.lineage import concrete_child_models, concrete_lineage
 from angee.base.models.merge_references import MergeContractMixin
 from angee.base.models.persistence import PersistenceMixin
-from angee.base.models.trash import TrashMixin
-from angee.base.permissions import candidate_relationships
+from angee.iam.models.trash import ProtectedTrashMixin
+from angee.iam.permissions import candidate_relationships
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
 from angee.provenance.history import (
     _UNLOADED,
@@ -343,7 +343,7 @@ class ModelHistory(CaptureHistory):
                 and not (field.is_relation and field.remote_field.parent_link)
                 and getattr(last, field.attname) != getattr(previous, field.attname)
             }
-            if isinstance(row, TrashMixin) and "is_trashed" in changed:
+            if isinstance(row, ProtectedTrashMixin) and "is_trashed" in changed:
                 row.revert_removal(previous)
                 changed.difference_update(row.TRASH_FIELDS)
             for name in changed:

@@ -31,12 +31,12 @@ from rebac import (
 )
 from rebac.actors import is_anonymous_actor, is_sudo
 
-from angee.base.managers import AngeeManager
 from angee.base.models.identity import instances_from_public_ids
-from angee.base.permissions import actor_user_id
 from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256, strip_null_bytes
 from angee.base.signals import mute_changes
 from angee.graphql.actions import ActionResult, ActionSelectionInput, many_actions, validate_action_selection
+from angee.iam.managers import ProtectedManager
+from angee.iam.permissions import actor_user_id
 from angee.integrate.errors import IntegrationError, safe_integration_failure
 from angee.integrate.net import AddressNotAllowedError
 from angee.jobs.timeouts import task_claim_lease
@@ -285,7 +285,7 @@ def _parsed_sync_hash(
     return canonical_json_sha256(chunks=(canonical,))
 
 
-class MessageSubtypeManager[SubtypeT: MessageSubtype](AngeeManager[SubtypeT]):
+class MessageSubtypeManager[SubtypeT: MessageSubtype](ProtectedManager[SubtypeT]):
     """Resolve catalogue identity, retaining the first declared source metadata."""
 
     def resolve(
@@ -321,7 +321,7 @@ def _humanize_key(value: str) -> str:
     return value.replace("_", " ").replace("-", " ").strip().capitalize() or "Message"
 
 
-class MessageStarManager[MessageStarT: MessageStar](AngeeManager[MessageStarT]):
+class MessageStarManager[MessageStarT: MessageStar](ProtectedManager[MessageStarT]):
     """Owns per-user Odoo-style starred message state."""
 
     def is_starred(self, message: Any, *, user: Any | None) -> bool:
@@ -371,7 +371,7 @@ class MessageStarManager[MessageStarT: MessageStar](AngeeManager[MessageStarT]):
         return int(deleted)
 
 
-class ReactionManager[ReactionT: Reaction](AngeeManager[ReactionT]):
+class ReactionManager[ReactionT: Reaction](ProtectedManager[ReactionT]):
     """Owns the attributed-reaction write — the row shape for a (message, handle, reaction).
 
     ``MessageManager.set_reaction`` is the user-keyed chatter toggle; this is the
@@ -405,7 +405,7 @@ class ReactionManager[ReactionT: Reaction](AngeeManager[ReactionT]):
         return len(rows)
 
 
-_MessageManagerBase = AngeeManager.from_queryset(MessageQuerySet)
+_MessageManagerBase = ProtectedManager.from_queryset(MessageQuerySet)
 
 
 class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):

@@ -8,12 +8,12 @@ from django.db import connection, models
 from django.test.utils import CaptureQueriesContext, isolate_apps
 from rebac import actor_context
 
-from angee.base.models.refs import RecordRefMixin
 from angee.decisions import schema as decision_schema
 from angee.decisions.testing.drivers import seed_decision
 from angee.decisions.testing.models import Decision, DecisionRecord
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.relations import with_record_reference_access
+from angee.iam.models.refs import ProtectedRecordRefMixin
 from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, result_data, vault_for
 from tests.tables import model_tables
 
@@ -131,7 +131,7 @@ def test_reference_filter_declaration_rejects_claimed_decoder_names(name):
 @isolate_apps()
 def test_record_reference_guard_uses_the_declared_string_key_and_current_actor(composed_tables):
     """A string reference key compares typed target keys and rebinds read scope safely."""
-    class TextReference(RecordRefMixin, models.Model):
+    class TextReference(ProtectedRecordRefMixin, models.Model):
         content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
         object_id = models.CharField(max_length=63)
         target = GenericForeignKey()
@@ -259,7 +259,7 @@ def test_reference_projection_uses_registered_key_lookup(composed_tables):
         def as_sql(self, compiler, connection):
             return "0 = 1", []
 
-    class CustomReference(RecordRefMixin, models.Model):
+    class CustomReference(ProtectedRecordRefMixin, models.Model):
         content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
         object_id = ReferenceKey(max_length=63)
         target = GenericForeignKey()

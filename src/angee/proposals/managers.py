@@ -19,9 +19,9 @@ from rebac.errors import MissingActorError
 from rebac.resources import model_resource_type
 
 from angee.base.fields.ordering import FractionalRankField
-from angee.base.managers import AngeeManager
 from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256
 from angee.base.validators import validate_value
+from angee.iam.managers import ProtectedManager
 from angee.proposals.choices import ProposalState, RoundStatus
 from angee.proposals.inputs import RoundTemplate
 from angee.proposals.querysets import RoundQuerySet, _RoundBaseQuerySet
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
 
 _RoundBaseManager = models.Manager.from_queryset(_RoundBaseQuerySet)
 
-_RoundManagerBase = AngeeManager.from_queryset(RoundQuerySet)
+_RoundManagerBase = ProtectedManager.from_queryset(RoundQuerySet)
 
 
 class RoundManager[T: Round](_RoundManagerBase[T]):
@@ -155,7 +155,7 @@ class RoundManager[T: Round](_RoundManagerBase[T]):
             .filter(proposals__track_id=project_id).order_by("pk").first()
         )
 
-class ProposalManager[T: Proposal](AngeeManager[T]):
+class ProposalManager[T: Proposal](ProtectedManager[T]):
     """Own replay-safe message capture into Proposal and Answer rows."""
 
     CAPTURE_PARSER_VERSION = "proposals.capture.v1"

@@ -38,8 +38,8 @@ from rebac.mixins import RebacModelBase
 
 from angee.base.fields.implementation import ImplClassField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.timestamps import update_fields_with_auto_now
+from angee.iam.models.base import ProtectedDataModel
 from angee.integrate.models import IntegrationCreateMode
 from angee.posts.backends import FeedBackend
 from angee.posts.managers import (
@@ -155,7 +155,7 @@ class Feed(Composable, metaclass=RebacModelBase, inherits="messaging.Channel"):
         return timezone.now() + timedelta(hours=hours)
 
 
-class FeedFollow(AuditMixin, AngeeDataModel, concrete=True):
+class FeedFollow(AuditMixin, ProtectedDataModel, concrete=True):
     """A follow of a :class:`Feed` by a ``parties.Handle`` — the timeline subscription.
 
     The following edge behind a public timeline: a handle subscribes to a feed's
@@ -223,7 +223,7 @@ class FeedFollow(AuditMixin, AngeeDataModel, concrete=True):
         return f"{self.handle_id} → {self.feed_id}"
 
 
-class PostMetrics(AuditMixin, AngeeDataModel, concrete=True):
+class PostMetrics(AuditMixin, ProtectedDataModel, concrete=True):
     """Rolled-up public engagement counts for one message (the platform snapshot).
 
     Flat one-to-one, not MTI — the counter set overlaps heavily across platforms;
@@ -261,7 +261,7 @@ class PostMetrics(AuditMixin, AngeeDataModel, concrete=True):
         return f"metrics:{self.message_id}"
 
 
-class Quota(AuditMixin, AngeeDataModel, concrete=True):
+class Quota(AuditMixin, ProtectedDataModel, concrete=True):
     """A provider-scoped API-unit ledger for one billing period.
 
     Feed backends spend platform API units (search, list, insert) against a per-period

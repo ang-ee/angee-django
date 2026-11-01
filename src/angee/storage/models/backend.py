@@ -16,9 +16,9 @@ from rebac import (
 
 from angee.base.fields.implementation import ImplClassField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
-from angee.base.models.ownership import ItemOwnershipMixin, OwnerMixin
 from angee.base.models.trash import ArchiveMixin
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.ownership import ItemOwnershipMixin, OwnerMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryUnscopedManager
 from angee.storage.backends import StorageBackend
 from angee.storage.managers import (
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 _STORAGE_CACHE_MAX_SIZE = 128
 
 
-class Backend(AuditMixin, ArchiveMixin, AngeeDataModel, concrete=True):
+class Backend(AuditMixin, ArchiveMixin, ProtectedDataModel, concrete=True):
     """Credentialed storage backend instance.
 
     One row names a :class:`~angee.storage.backends.StorageBackend` subclass by
@@ -106,7 +106,7 @@ class Backend(AuditMixin, ArchiveMixin, AngeeDataModel, concrete=True):
         return instance
 
 
-class Drive(OwnerMixin, ItemOwnershipMixin, ArchiveMixin, AngeeDataModel, concrete=True):
+class Drive(OwnerMixin, ItemOwnershipMixin, ArchiveMixin, ProtectedDataModel, concrete=True):
     """Addressable storage volume on top of a backend.
 
     Object keys live under ``{prefix}/…`` inside the parent backend's

@@ -50,8 +50,8 @@ from rebac.models import active_relationship_model
 from rebac.models.relationship import WIRE_VALUE_FIELDS
 from rebac.schema.walker import find_relation, subject_allowed_by_relation
 
-from angee.base.identity import canonical_subject_ref
-from angee.base.refs import ancestor_object_refs
+from angee.iam.identity import canonical_subject_ref
+from angee.iam.refs import ancestor_object_refs
 from angee.resources.entries import GrantGroup, GrantRow
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.widgets import resolve_xref

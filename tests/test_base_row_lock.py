@@ -11,7 +11,7 @@ from django.db import close_old_connections, connection, connections, models
 from django.test.utils import isolate_apps
 from rebac import actor_context, system_context
 
-from angee.base.models.locks import RowLockMixin
+from angee.iam.models.locks import ProtectedRowLockMixin
 from tests.conftest import create_user
 from tests.linesdemo.models import Document, PinnedLine
 
@@ -36,7 +36,7 @@ def test_collection_writes_cannot_mutate_or_create_system_rows(composed_tables: 
 
 @isolate_apps()
 def test_row_lock_model_requires_collection_guard_on_default_and_base_managers() -> None:
-    class Unguarded(RowLockMixin, models.Model):
+    class Unguarded(ProtectedRowLockMixin, models.Model):
         objects = models.Manager()
         _angee_base = models.Manager()
 

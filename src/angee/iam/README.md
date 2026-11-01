@@ -1,5 +1,19 @@
 # IAM access and credential actions
 
+IAM is optional. Base models and querysets remain ordinary Django when it is
+absent. Selecting IAM contributes native REBAC model behavior and scoped/tracked
+querysets through the compiler’s abstract-target `extends` and `compose_querysets`
+contracts. Source declarations using native REBAC Meta options import
+`ProtectedModel` or `ProtectedDataModel` from `angee.iam.models.base`; custom
+protected collections and factories use `angee.iam.querysets` and
+`angee.iam.managers`. Native manager factories, configuration and database
+bindings remain with their source owners.
+
+IAM owns schema composition, permission settings, provisioning and access
+checks. Its GraphQL, web and resource modules are contributions to those optional
+capabilities; none is required to load IAM’s auth/model lifecycle.
+
+
 The Share dialog is IAM's one-record People surface. `record_readers` lists
 named effective person readers through REBAC's subject lookup after the
 model's declared share permissions are checked. Wildcard and authenticated

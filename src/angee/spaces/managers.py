@@ -12,9 +12,9 @@ from rebac.errors import MissingActorError
 from rebac.resources import model_resource_type
 
 from angee.base.fields.state import enum_member_for
-from angee.base.managers import AngeeManager
 from angee.base.models.hierarchy import HierarchyQuerySet
-from angee.base.querysets import AngeeQuerySet
+from angee.iam.managers import ProtectedManager
+from angee.iam.querysets import ProtectedQuerySet
 from angee.messaging.managers import ThreadManager, ThreadQuerySet
 
 if TYPE_CHECKING:
@@ -22,18 +22,18 @@ if TYPE_CHECKING:
     from angee.spaces.models import Group, Membership
 
 
-class GroupQuerySet[GroupT: Group](HierarchyQuerySet[GroupT], AngeeQuerySet[GroupT]):
+class GroupQuerySet[GroupT: Group](HierarchyQuerySet[GroupT], ProtectedQuerySet[GroupT]):
     """Group read scopes with hierarchy subtree and ancestor traversal."""
 
 
-_GroupManagerBase = AngeeManager.from_queryset(GroupQuerySet)
+_GroupManagerBase = ProtectedManager.from_queryset(GroupQuerySet)
 
 
 class GroupManager[GroupT: Group](_GroupManagerBase[GroupT]):
     """Keep a stable import identity for shared group tree managers."""
 
 
-class MembershipQuerySet[MembershipT: Membership](AngeeQuerySet[MembershipT]):
+class MembershipQuerySet[MembershipT: Membership](ProtectedQuerySet[MembershipT]):
     """Canonical roster selections shared by admission and the team audience."""
 
     def confirmed(self) -> Self:
@@ -42,7 +42,7 @@ class MembershipQuerySet[MembershipT: Membership](AngeeQuerySet[MembershipT]):
         return self.filter(is_confirmed=True, is_dismissed=False)
 
 
-_MembershipManagerBase = AngeeManager.from_queryset(MembershipQuerySet)
+_MembershipManagerBase = ProtectedManager.from_queryset(MembershipQuerySet)
 
 
 class MembershipManager[MembershipT: Membership](_MembershipManagerBase[MembershipT]):

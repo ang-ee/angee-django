@@ -8,7 +8,7 @@ from typing import Any, cast
 
 from django.core.exceptions import ImproperlyConfigured
 
-from angee.base.models.base import AngeeModel
+from angee.iam.models.base import ProtectedModel
 
 
 def role_anchor(
@@ -17,7 +17,7 @@ def role_anchor(
     name: str | None = None,
     module: str | None = None,
     doc: str | None = None,
-) -> type[AngeeModel]:
+) -> type[ProtectedModel]:
     """Return an abstract, table-less REBAC role anchor for ``resource_type``.
 
     A const-backed role relation (``admin: <ns>/role // rebac:const=admin`` in an
@@ -69,7 +69,7 @@ def role_anchor(
         "__doc__": doc or f"Table-less REBAC type anchor for the ``{resource_type}`` namespace.",
         "Meta": meta,
     }
-    return cast("type[AngeeModel]", type(anchor_name, (AngeeModel,), namespace, concrete=True))
+    return cast("type[ProtectedModel]", type(anchor_name, (ProtectedModel,), namespace, concrete=True))
 
 
 def _role_anchor_name(resource_type: str) -> str:

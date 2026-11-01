@@ -26,10 +26,10 @@ from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.locks import record_lock_key, task_lock
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.implementations import ImplDefaultsMixin
-from angee.base.models.ownership import OwnerMixin
 from angee.base.serialization import canonical_json
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.ownership import OwnerMixin
 from angee.integrate.choices import (
     AccountStatus,
     CredentialStatus,
@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 _OAUTH_REFRESH_MARGIN = timedelta(minutes=5)
 
 
-class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
+class OAuthClient(ImplDefaultsMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """OAuth2 client registration for connecting an external account.
 
     The base of the connection substrate: enough to run the authorization-code and
@@ -362,7 +362,7 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, AngeeDataModel, concrete=True):
         return discovery
 
 
-class ExternalAccount(OwnerMixin, AngeeDataModel, concrete=True):
+class ExternalAccount(OwnerMixin, ProtectedDataModel, concrete=True):
     """A user's identity at a provider, owned by the user it belongs to.
 
     Connection identity only: which client minted it (``oauth_client``), which
@@ -470,7 +470,7 @@ class ExternalAccount(OwnerMixin, AngeeDataModel, concrete=True):
         return email
 
 
-class Credential(AuditMixin, AngeeDataModel, concrete=True):
+class Credential(AuditMixin, ProtectedDataModel, concrete=True):
     """Per-user credential material for acting against a vendor OAuth client."""
 
     def check_disconnect(self) -> None:

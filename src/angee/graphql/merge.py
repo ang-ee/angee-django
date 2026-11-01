@@ -9,14 +9,14 @@ from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from rebac import PermissionDenied
 from rebac.resources import model_for_resource_type
 
-from angee.base.models.merge import MergeableMixin
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.ids import PublicID, public_id_value
+from angee.iam.models.merge import ProtectedMergeableMixin
 
 
 @strawberry.type
 class MergeMutation:
-    """Merge verb for every model composing ``MergeableMixin``."""
+    """Merge verb for every model composing ``ProtectedMergeableMixin``."""
 
     @strawberry.mutation
     @action_guard("Merging the records failed.")
@@ -33,10 +33,10 @@ class MergeMutation:
         if not confirm:
             raise ValidationError({"confirm": "Confirm the change to apply it."})
         model = model_for_resource_type(target_type)
-        if model is None or not issubclass(model, MergeableMixin):
+        if model is None or not issubclass(model, ProtectedMergeableMixin):
             raise ValidationError({"target_type": f"Records of type {target_type!r} cannot be merged."})
         target = cast(
-            MergeableMixin,
+            ProtectedMergeableMixin,
             authorized_permission_target(info, cast(Any, model), target_id, model.SURVIVOR_PERMISSION),
         )
         try:

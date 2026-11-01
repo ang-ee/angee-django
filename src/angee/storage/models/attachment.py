@@ -9,9 +9,9 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import models
 
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.merge_references import MergePolicy
-from angee.base.models.refs import RecordRefMixin
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.storage.managers import (
     FileAttachmentManager,
@@ -20,7 +20,7 @@ from angee.storage.managers import (
 logger = logging.getLogger(__name__)
 
 
-class FileAttachment(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class FileAttachment(AuditMixin, ProtectedRecordRefMixin, HistoryMixin, ProtectedDataModel, concrete=True):
     """Polymorphic edge attaching one :class:`File` to any model row.
 
     Consumers attach explicitly through :meth:`FileAttachmentManager.attach` or

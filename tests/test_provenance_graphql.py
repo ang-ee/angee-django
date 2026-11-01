@@ -21,9 +21,9 @@ from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
-from angee.base.identity import public_subject_ref
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.identity import public_id_of
+from angee.iam.identity import public_subject_ref
+from angee.iam.models.base import ProtectedDataModel
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.knowledge import schema as knowledge_schema
@@ -523,11 +523,11 @@ def test_record_history_refuses_reverting_a_boundary_that_also_changes_another_r
 
 @isolate_apps()
 def test_generic_statement_source_uses_its_link_owner_without_an_integrate_stream() -> None:
-    class LocalLink(StatementLinkMixin, AngeeDataModel):
+    class LocalLink(StatementLinkMixin, ProtectedDataModel):
         sqid_prefix = "lnk_"
         name = models.CharField(max_length=80)
 
-        class Meta(AngeeDataModel.Meta):
+        class Meta(ProtectedDataModel.Meta):
             abstract = False
             app_label = "base"
 

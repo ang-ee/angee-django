@@ -34,8 +34,8 @@ from rebac import (
     RelationshipTuple, actor_context, database_context, system_context,
     to_object_ref, to_subject_ref, write_relationships,
 )
-from angee.base.build import extension_source_map
-from angee.base.testing.permissions import emit_permissions, installed_field_owners
+from angee.iam.build import extension_source_map
+from angee.iam.testing.permissions import emit_permissions, installed_field_owners
 from angee.provenance.context import changeset
 from angee.provenance.testing import load_statement_sources
 from tests.chatterdemo.models import ChatterDoc
