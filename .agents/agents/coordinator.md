@@ -51,24 +51,30 @@ through Pull instead. Resolve conflicts at the owner named in the plan. Run the
 independent reviewers (`architecture-reviewer`, then `django-reviewer` or
 `react-reviewer` for the affected areas) on the integrated diff. Return each
 finding to the builder that owns the lane, via its lane file, and integrate the
-fix the same way; re-review every consequential fix before accepting it. Then
-run the composed checks per `docs/checks.md` and stack validation through the
-operator per `angee-runtime` against the integrated revision. Never start
-services by hand.
+fix the same way; re-review every consequential fix before accepting it.
+Distinguish completed lane checks from pending host-dependent checks using the
+[verification phases](../../docs/checks.md#verification-phases). Integrate
+reviewed lanes as they become ready; host-dependent checks follow preparation
+of the integrated host in step 4.
 
 ## Step 4: hand out
 
-At integration, assign the operator run (build, migrate, provision, restart per
-`angee-runtime`) and browser or boundary acceptance per `docs/checks.md` and the
-`slice` skill's verification rules, each against the integrated revision on
-`src`. Collect that evidence into the ledger before closing a lane or the
-change. Publish only when requested or already authorized; publication is Push
-in `angee-workspace`, separate from the local hand-off.
+At integration, assign the needed host preparation through `angee-runtime` and
+the operator; never start services by hand. Once that host is prepared, run the
+pending focused Python, frontend, and browser or boundary acceptance checks
+against the integrated revision on `src`. Reserve consolidated full suites for
+the completed candidate, as the verification phases require. Collect the
+results into the ledger before declaring verification complete. Publish only
+when requested or already authorized; publication is Push in `angee-workspace`,
+separate from the local hand-off.
 
 ## Ledger rule
 
 You are the only writer of the plan ledger. Builders report in their own lane
-files; fold their reports into the ledger yourself. Keep implementation,
+files; fold their reports into the ledger yourself. Update the existing lane
+reports and plan ledger instead of creating a new qualification campaign
+for each adjustment. Retain the relevant revision, commands, outcomes, and
+blockers; reuse evidence whose relevant inputs are unchanged. Keep implementation,
 verification, integration, and publication status explicit; activity, test
 counts, and a partial green run do not establish completion.
 

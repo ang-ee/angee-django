@@ -56,11 +56,13 @@ the deletion items the plan assigned to this lane.
 ## Step 3: lane checks
 
 A lane workspace has no running host, no database, and no JS install
-(`angee-workspace` → Create Workspace). Run only the Python checks
-`docs/checks.md` names for the touched area: focused tests, the linter, the
-type checker on touched files, and the layering tests. Web checks, codegen,
-schema drift, and browser verification belong to the coordinator on `src`;
-name them as not run.
+(`angee-workspace` → Create Workspace). Follow the
+[verification phases](../../docs/checks.md#verification-phases) for focused
+tests and applicable static checks. Python checks can require a composed host
+just as web checks do: assign those checks to integration instead of building
+an ad hoc environment solely for lane handoff. Report them as pending, with
+the required host and fixture contract, and seal the reviewed lane with its
+available focused evidence.
 
 ## Step 4: report and seal
 

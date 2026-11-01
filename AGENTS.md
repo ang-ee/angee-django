@@ -229,12 +229,20 @@ Meaningful UI changes require browser verification as well as relevant tests.
 
 ## Common Errors
 
+- **Executing before understanding.** Before changing code, read the actual
+  owner and callers; explain the cause, expected behavior, and contracts to
+  preserve. Before running a command, establish its imports, execution root,
+  fixtures, and lifecycle prerequisites. This applies equally to production
+  code, tests, scratch scripts, and diagnostic tools. Use bounded experiments
+  for genuine uncertainty, not to discover documented prerequisites through
+  failed launches. Keep this reasoning in the existing working note or update;
+  it does not require another approval gate.
 - **Testing instead of building.** Finish the agreed owner changes and caller
-  migrations before a consolidated final verification pass. During implementation,
-  use a focused check only to resolve a concrete uncertainty or failure. Carry
-  forward valid evidence for unchanged code; repeat a suite only when a new change,
-  failure, or unresolved concern justifies it. Passing checks never replace
-  unfinished implementation, and required final checks remain delivery gates.
+  migrations before a consolidated final verification pass. Follow the
+  [verification phases](docs/checks.md#verification-phases): local integration
+  and final delivery have different gates. Carry forward valid evidence for
+  unchanged code. Passing checks never replace unfinished implementation, and
+  required final checks remain delivery gates.
 - **Repeating settled research.** Keep one current ownership and completion
   ledger. Reuse delegated findings and recorded evidence; reopen an audit only
   when new code or conflicting evidence changes its conclusion. Turn findings

@@ -1,6 +1,6 @@
 ---
 name: angee-tests
-description: "Authors an Angee addon's tests: bare-host test models, composed_tables/composed_permissions, per-actor permission tests, verb and queryset tests, resource loads, schema-driven GraphQL tests, vitest fragment tests, story fixtures and e2e specs. Use for 'write tests for <addon>', 'add e2e'."
+description: "Authors an Angee addon's tests: bare-host test models, composed_tables/composed_permissions, per-actor permission tests, verb and queryset tests, resource loads, schema-driven GraphQL tests, vitest fragment tests, story fixtures and e2e specs. Use for 'write addon tests', 'add e2e'."
 ---
 
 # Angee Tests
@@ -195,8 +195,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 
 Validators: the new modules run standalone, the owning guards (`tests/test_layering.py`, `tests/test_permission_composition.py`, `packages/app/src/architecture-guardrails.test.ts`) stay green, and for UI the live page is exercised; commands and roots in [Python contracts](../../../docs/checks.md#python-and-composition-contracts), [Frontend packages](../../../docs/checks.md#frontend-packages-and-addon-fragments), [Browser verification](../../../docs/checks.md#browser-verification); loop in `.agents/skills/slice/SKILL.md`.
 
-- In a jj lane (no host, database or JS install): each changed Python module alone, then with the addon's other modules; ruff and mypy on touched files; the layering tests. Consumer `TransactionTestCase` modules need a composed host and do not run here.
-- Only on integrated `src`: the composed-host runs (`tests/test_composed_*.py`, consumer modules), per-package `typecheck` (it includes `*.test.tsx`), vitest per fragment, `catalog:check`, the browser suite against a seeded stack, and after a schema change codegen first ([Composition](../../../docs/checks.md#composition-and-schema)).
+- Select lane, integration, and final checks through [Verification phases](../../../docs/checks.md#verification-phases). Composed consumer tests require the matching host and fixture lifecycle; [environment pitfalls](references/environment.md) distinguish setup failures from test failures. Schema-dependent frontend checks require codegen first ([Composition](../../../docs/checks.md#composition-and-schema)).
 - Done means: every actor row in step 4 is asserted (owner, grantee, outsider, non-admin reader, admin), every verb has its deny path, GraphQL covers the denied anonymous write and the 1/25-row budget, `expectValidBaseAddon` passes, and a meaningful UI change was seen in the browser.
 - False greens: a broad run passing while the module alone fails (registry leak); the composed `web` typecheck passing while per-package `tsc` fails on a test file; stale `@angee/gql` until codegen reruns; PostgreSQL-only modules skipping silently on SQLite ([what CI runs](../../../docs/checks.md#what-ci-actually-runs)); CI never runs browser e2e ([e2e CI](../../../docs/frontend/e2e.md#ci)).
 
