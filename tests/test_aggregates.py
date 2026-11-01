@@ -43,7 +43,7 @@ from angee.graphql.data.metadata import (
 from angee.graphql.data.metadata import _relation_label_axes
 from angee.graphql.data.resource_fields import final_input_only_resource_fields, resource_string_field_names
 from angee.graphql.ids import require_public_id
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.iam.models.base import ProtectedDataModel
 from tests.conftest import (
@@ -268,7 +268,7 @@ def _finalize_data_resource(
         types=[] if node_type is None else [node_type],
         config=hasura_config(),
     )
-    if "public_id_field" not in kwargs and node_type is not None and not issubclass(node_type, AngeeNode):
+    if "public_id_field" not in kwargs and node_type is not None and not issubclass(node_type, ProtectedNode):
         model = kwargs.get("model")
         for field in node_type.__strawberry_definition__.fields:
             python_name = field.python_name
@@ -345,7 +345,7 @@ def test_computed_filter_expressions_preserve_nested_boolean_inputs_and_aggregat
     """Native input donors remain visible to the upstream dataclass visitor."""
 
     @strawberry_django.type(HasuraResourceThing)
-    class FilteredThingType(AngeeNode):
+    class FilteredThingType(ProtectedNode):
         name: auto
 
     resource = hasura_model_resource(
@@ -383,7 +383,7 @@ def test_hasura_resource_attaches_angee_resource_metadata() -> None:
     """The Hasura builder remains external while Angee owns resource metadata."""
 
     @strawberry_django.type(HasuraResourceThing)
-    class HasuraResourceThingType(AngeeNode):
+    class HasuraResourceThingType(ProtectedNode):
         name: auto
         word_count: auto
         created_at: auto
@@ -510,7 +510,7 @@ def test_named_schemas_project_only_the_native_roots_they_expose(monkeypatch: An
     """One native resource finalizes once per schema with that schema's actual roots."""
 
     @strawberry_django.type(HasuraResourceThing, name="NamedSchemaThingType")
-    class NamedSchemaThingType(AngeeNode):
+    class NamedSchemaThingType(ProtectedNode):
         name: auto
         word_count: auto
 
@@ -600,11 +600,11 @@ def test_final_extension_object_retains_target_type_without_becoming_a_relation(
     """A resolver target can name a Django model without declaring a relation."""
 
     @strawberry_django.type(ResourceParent, name="FinalRelationParentType")
-    class FinalRelationParentType(AngeeNode):
+    class FinalRelationParentType(ProtectedNode):
         name: auto
 
     @strawberry_django.type(HasuraResourceThing, name="FinalRelationThingType")
-    class FinalRelationThingType(AngeeNode):
+    class FinalRelationThingType(ProtectedNode):
         name: auto
 
     def inferred_parent(self: Any) -> Any:
@@ -681,7 +681,7 @@ def test_final_metadata_includes_only_allowlisted_input_only_fields() -> None:
     """An accepted write-only input is described once without gaining read access."""
 
     @strawberry_django.type(HasuraResourceThing, name="WriteOnlyThingType")
-    class WriteOnlyThingType(AngeeNode):
+    class WriteOnlyThingType(ProtectedNode):
         name: auto
 
     resource = hasura_model_resource(
@@ -729,7 +729,7 @@ def test_final_scalar_id_fk_keeps_django_relation_semantics(label: bool) -> None
     """A scalar ID relation remains a relation while rejecting sub-selections."""
 
     @strawberry_django.type(ResourceChild, name="FinalScalarRelationChildType")
-    class FinalScalarRelationChildType(AngeeNode):
+    class FinalScalarRelationChildType(ProtectedNode):
         name: auto
 
         @strawberry_django.field(name="owner", only=["parent_id"])
@@ -851,7 +851,7 @@ def test_final_alias_keeps_model_source_for_readable_publisher_fields() -> None:
     """Final wire aliases retain their Django source for publisher redaction."""
 
     @strawberry_django.type(HasuraResourceThing, name="FinalAliasThingType")
-    class FinalAliasThingType(AngeeNode):
+    class FinalAliasThingType(ProtectedNode):
         name: auto = strawberry_django.field(name="display_name")
 
     resource = hasura_model_resource(
@@ -899,7 +899,7 @@ def test_final_fields_share_declared_presentation_metadata_across_output_and_inp
     }
 
     @strawberry_django.type(HasuraResourceThing, name="FinalDjangoSourceThingType")
-    class FinalDjangoSourceThingType(AngeeNode):
+    class FinalDjangoSourceThingType(ProtectedNode):
         @strawberry_django.field(metadata=presentation)
         def amount_due(self) -> Decimal:
             return Decimal("0")
@@ -1021,7 +1021,7 @@ def test_hasura_nested_relation_group_dimension_matches_group_key_contract(label
     """A nested FK dimension uses the aggregate builder's attname key and relation shape."""
 
     @strawberry_django.type(ResourceGrandchild)
-    class ResourceGrandchildType(AngeeNode):
+    class ResourceGrandchildType(ProtectedNode):
         pass
 
     write_backend = type(
@@ -1083,7 +1083,7 @@ def test_hasura_model_resource_groups_json_path_axes() -> None:
     """Hasura resources can expose allowlisted JSON paths as group axes."""
 
     @strawberry_django.type(HasuraJsonResourceThing)
-    class HasuraJsonResourceThingType(AngeeNode):
+    class HasuraJsonResourceThingType(ProtectedNode):
         name: auto
 
     write_backend = type(
@@ -1139,7 +1139,7 @@ def test_hasura_model_resource_groups_json_path_values(transactional_db: Any) ->
     del transactional_db
 
     @strawberry_django.type(HasuraJsonResourceThing)
-    class HasuraJsonValuesThingType(AngeeNode):
+    class HasuraJsonValuesThingType(ProtectedNode):
         name: auto
 
     write_backend = type(
@@ -1367,7 +1367,7 @@ def test_data_resource_metadata_marks_public_id_field_as_id_scalar() -> None:
     """The GraphQL public id is an ID boundary, not the model's integer pk."""
 
     @strawberry_django.type(ResourceThing)
-    class ResourceThingNodeType(AngeeNode):
+    class ResourceThingNodeType(ProtectedNode):
         name: auto
 
     resource = _finalize_data_resource(
@@ -1389,7 +1389,7 @@ def test_surface_resource_metadata_marks_decimal_fields_as_decimal_scalar() -> N
     """Strawberry Decimal surfaces keep the same metadata scalar."""
 
     @strawberry_django.type(MeasureOpsThing)
-    class MeasureOpsThingType(AngeeNode):
+    class MeasureOpsThingType(ProtectedNode):
         amount: auto
         ratio: auto
 
@@ -1417,7 +1417,7 @@ def test_data_resource_metadata_marks_computed_surface_enum_field() -> None:
     """Strawberry enum surfaces own enum field classification."""
 
     @strawberry_django.type(ResourceThing)
-    class ResourceThingComputedEnumType(AngeeNode):
+    class ResourceThingComputedEnumType(ProtectedNode):
         name: auto
 
         @strawberry.field
@@ -1441,7 +1441,7 @@ def test_data_resource_metadata_projects_string_field_choices_as_select_options(
     """Django choices retain a String wire while supplying the selector vocabulary."""
 
     @strawberry_django.type(ResourceChoiceThing)
-    class ResourceChoiceThingType(AngeeNode):
+    class ResourceChoiceThingType(ProtectedNode):
         country: auto
 
     resource = _finalize_data_resource(
@@ -1466,7 +1466,7 @@ def test_blank_choice_groups_emit_separate_blank_null_and_real_buckets(transacti
     """The schema's generated enum owns both display decoding and exact drills."""
 
     @strawberry_django.type(ResourceBlankChoiceThing)
-    class ResourceBlankChoiceThingType(AngeeNode):
+    class ResourceBlankChoiceThingType(ProtectedNode):
         country: auto
 
     resource = hasura_model_resource(
@@ -1518,7 +1518,7 @@ def test_data_resource_metadata_rejects_unsupported_surface_scalar() -> None:
     """Scalar resource fields must have a supported metadata scalar family."""
 
     @strawberry_django.type(ResourceThing)
-    class ResourceThingUnsupportedScalarType(AngeeNode):
+    class ResourceThingUnsupportedScalarType(ProtectedNode):
         name: auto
 
         @strawberry.field
@@ -1605,7 +1605,7 @@ def test_hasura_resource_rejects_unresolvable_axis_paths(
     """
 
     @strawberry_django.type(ResourceChild)
-    class ResourceChildResourceType(AngeeNode):
+    class ResourceChildResourceType(ProtectedNode):
         name: auto
 
     write_backend = type(
@@ -1673,7 +1673,7 @@ def test_filterable_relation_filters_by_public_id_without_field_id_decode(
     """A child list filters by parent sqid even when the resource declares no field_id_decode."""
 
     @strawberry_django.type(ResourceChild)
-    class ResourceChildFilterType(AngeeNode):
+    class ResourceChildFilterType(ProtectedNode):
         name: auto
 
         @strawberry_django.field(only=["parent_id"])
@@ -1733,7 +1733,7 @@ def test_nested_relation_group_key_filters_its_bucket_rows(
     """A nested relation bucket sqid decodes through its full filter path."""
 
     @strawberry_django.type(ResourceGrandchild)
-    class ResourceGrandchildFilterType(AngeeNode):
+    class ResourceGrandchildFilterType(ProtectedNode):
         pass
 
     resource = hasura_model_resource(
@@ -1847,7 +1847,7 @@ def test_interleaved_json_resources_do_not_replace_upstream_builders(monkeypatch
 
     def build_resource(name: str, path: str) -> Any:
         node = strawberry_django.type(HasuraJsonResourceThing, name=name)(
-            type(name, (AngeeNode,), {"__annotations__": {"name": str}})
+            type(name, (ProtectedNode,), {"__annotations__": {"name": str}})
         )
         return hasura_model_resource(
             node,

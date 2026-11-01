@@ -23,7 +23,7 @@ from rebac import (
 from strawberry import Schema
 
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Milestone, Project, Task
@@ -33,7 +33,7 @@ from tests.proposals_models import Answer, Proposal, Round, Topic
 
 
 @strawberry_django.type(Proposal)
-class ProposalDeleteNode(AngeeNode):
+class ProposalDeleteNode(ProtectedNode):
     """Public identity of the real proposal target for Hasura deletion tests."""
 
 

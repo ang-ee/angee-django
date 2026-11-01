@@ -6,7 +6,7 @@ from typing import cast
 
 import strawberry
 
-from angee.graphql.actions import session_user
+from angee.iam.graphql.actions import session_user
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES
 from angee.storage_integrate.models import MountMode
 from angee.storage_integrate.schema import MountType

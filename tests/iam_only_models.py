@@ -1,5 +1,7 @@
 """Minimal concrete IAM source fixtures without optional capability imports."""
 
+from django.db import models
+
 from angee.base.models.trash import TrashQuerySet
 from angee.base.querysets import MergeableQuerySet
 from angee.iam.managers import ProtectedManager
@@ -66,3 +68,12 @@ class TrashTarget(ProtectedTrashMixin, ProtectedDataModel):
     class Meta(ProtectedDataModel.Meta):
         app_label = "iam"
         rebac_resource_type = "probe/trash"
+
+
+class APIEntry(ProtectedDataModel):
+    name = models.CharField(max_length=80)
+    secret = models.CharField(max_length=80, blank=True)
+
+    class Meta(ProtectedDataModel.Meta):
+        app_label = "iam"
+        rebac_resource_type = "probe/api"

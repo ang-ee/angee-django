@@ -20,7 +20,8 @@ from strawberry import auto
 from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.queryset import run_type_get_queryset
 
-from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, session_user
+from angee.graphql.actions import ActionResult, action_guard
+from angee.iam.graphql.actions import authorized_action_target, session_user
 from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
@@ -28,8 +29,8 @@ from angee.graphql.data.hasura import (
     public_pk_decoder,
 )
 from angee.graphql.ids import PublicID, optional_public_id, require_instance_for_id
-from angee.graphql.node import AngeeNode
-from angee.graphql.relations import actor_scoped_to_one
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import public_subject_ref, user_public_id
@@ -97,7 +98,7 @@ def _display_avatar_prefetch(name: str) -> Callable[[strawberry.Info], Prefetch]
 
 
 @strawberry_django.type(Party)
-class PartyType(AuthoredRefMixin, AngeeNode):
+class PartyType(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of a party (the unified contact)."""
 
     display_name: auto
@@ -190,7 +191,7 @@ class OrganizationType(PartyType):
 
 
 @strawberry_django.type(Handle)
-class HandleType(AngeeNode):
+class HandleType(ProtectedNode):
     """GraphQL projection of a handle (a party's reachable address)."""
 
     platform: auto
@@ -237,7 +238,7 @@ class StatementEvidenceType:
 
 
 @strawberry_django.type(PartyStatement)
-class PartyStatementType(AngeeNode):
+class PartyStatementType(ProtectedNode):
     """Subject-authorized handle assertion; the member retains its read gate."""
 
     subject: PartyType | None = actor_scoped_to_one("subject")
@@ -287,7 +288,7 @@ class PartyStatementType(AngeeNode):
 
 
 @strawberry_django.type(Address)
-class AddressType(AngeeNode):
+class AddressType(ProtectedNode):
     """GraphQL projection of a physical/postal address."""
 
     party: PartyType | None
@@ -305,7 +306,7 @@ class AddressType(AngeeNode):
 
 
 @strawberry_django.type(Folder)
-class ContactFolderType(AngeeNode):
+class ContactFolderType(ProtectedNode):
     """GraphQL projection of a contact folder (a synced address book's parties).
 
     Named distinctly from storage's file ``FolderType`` — a different concept.
@@ -319,14 +320,14 @@ class ContactFolderType(AngeeNode):
 
 
 @strawberry_django.type(Directory)
-class DirectoryType(BridgeTypeMixin, AngeeNode):
+class DirectoryType(BridgeTypeMixin, ProtectedNode):
     """GraphQL projection of a connected contacts directory (e.g. a CardDAV source)."""
 
     poll_interval: auto
 
 
 @strawberry_django.type(Circle)
-class CircleType(AngeeNode):
+class CircleType(ProtectedNode):
     """GraphQL projection of a circle (a private, overlapping grouping of parties)."""
 
     name: auto
@@ -346,7 +347,7 @@ class CircleType(AngeeNode):
 
 
 @strawberry_django.type(CircleMember)
-class CircleMemberType(AngeeNode):
+class CircleMemberType(ProtectedNode):
     """GraphQL projection of a party's circle membership."""
 
     circle: CircleType | None
@@ -358,7 +359,7 @@ class CircleMemberType(AngeeNode):
 
 
 @strawberry_django.type(SameAsStatement)
-class SameAsStatementType(AngeeNode):
+class SameAsStatementType(ProtectedNode):
     """A symmetric identity statement, admitted and read through its endpoints."""
 
     snak: auto
@@ -367,7 +368,7 @@ class SameAsStatementType(AngeeNode):
 
 
 @strawberry_django.type(RelationshipKind)
-class RelationshipKindType(AngeeNode):
+class RelationshipKindType(ProtectedNode):
     """GraphQL projection of a relationship-vocabulary kind."""
 
     slug: auto
@@ -379,7 +380,7 @@ class RelationshipKindType(AngeeNode):
 
 
 @strawberry_django.type(Relationship)
-class PartyRelationshipType(AngeeNode):
+class PartyRelationshipType(ProtectedNode):
     """GraphQL projection of a typed party edge (anchor viewpoint)."""
 
     party: PartyType | None

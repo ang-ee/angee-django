@@ -11,7 +11,7 @@ from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import models
 
-from angee.graphql.access import is_gated_read_axis
+from angee.iam.graphql.access import is_gated_read_axis
 from angee.graphql.data.hasura import declared_hasura_resource_fields
 from angee.graphql.introspection import FieldPathError, require_field_for_path
 from angee.graphql.schema import GraphQLSchemas

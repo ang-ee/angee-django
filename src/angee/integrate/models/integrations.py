@@ -31,7 +31,7 @@ from angee.base.lineage import concrete_child, concrete_child_models
 from angee.base.models.audit import AuditMixin
 from angee.base.models.implementations import ImplDefaultsMixin
 from angee.base.models.transitions import StateTransitions, save_state, transition
-from angee.graphql.capabilities import held_permissions
+from angee.iam.graphql.capabilities import held_permissions
 from angee.iam.models.base import ProtectedDataModel
 from angee.iam.models.ownership import OwnerMixin
 from angee.iam.permissions import actor_user_id, instance_actor

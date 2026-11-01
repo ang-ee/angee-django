@@ -54,24 +54,29 @@ class GraphQLSdl:
         """Compare the prebuilt compiler-owned schema snapshot without writing it."""
 
         expected = self._rendered_artifacts()
-        stale = [path for path, text in expected.items()
-                 if not (self.schema_dir / path).is_file()
-                 or (self.schema_dir / path).read_text(encoding='utf-8') != text]
+        stale = [
+            path
+            for path, text in expected.items()
+            if not (self.schema_dir / path).is_file() or (self.schema_dir / path).read_text(encoding="utf-8") != text
+        ]
         if stale:
-            raise RuntimeError('generated GraphQL schema artifacts are stale: '
-                               + ', '.join(f'schemas/{path}' for path in sorted(stale)))
+            raise RuntimeError(
+                "generated GraphQL schema artifacts are stale: "
+                + ", ".join(f"schemas/{path}" for path in sorted(stale))
+            )
 
     def _rendered_artifacts(self) -> dict[Path, str]:
         """Return owned schema artifact filenames mapped to rendered content."""
 
         artifacts = {Path(f"{name}{_SDL_SUFFIX}"): sdl for name, sdl in self.render().items()}
-        artifacts.update({
-            Path(f"{name}{_METADATA_SUFFIX}"): _metadata_json(metadata)
-            for name, metadata in self.render_metadata().items()
-        })
+        artifacts.update(
+            {
+                Path(f"{name}{_METADATA_SUFFIX}"): _metadata_json(metadata)
+                for name, metadata in self.render_metadata().items()
+            }
+        )
         artifacts[Path(PUBLISHERS_ARTIFACT.name)] = _metadata_json(self.schemas.render_publishers())
         return artifacts
-
 
 
 def _metadata_json(metadata: object) -> str:
@@ -97,8 +102,9 @@ class SchemaIntegration:
         from angee.graphql.publishing import connect_change_publishers
 
         schemas = GraphQLSdl.from_discovery()
-        artifacts = {Path("schemas") / path: text.encode("utf-8")
-                     for path, text in schemas._rendered_artifacts().items()}
+        artifacts = {
+            Path("schemas") / path: text.encode("utf-8") for path, text in schemas._rendered_artifacts().items()
+        }
         # Native compose reaches this hook after every app's ready callback.
         connect_change_publishers(schemas.schemas.render_publishers())
         return artifacts

@@ -14,14 +14,14 @@ from django.apps import apps
 from strawberry import auto
 
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 
 UomCategory = apps.get_model("uom", "UomCategory")
 Uom = apps.get_model("uom", "Uom")
 
 
 @strawberry_django.type(UomCategory)
-class UomCategoryType(AngeeNode):
+class UomCategoryType(ProtectedNode):
     """Admin projection of one unit-of-measure category."""
 
     name: auto
@@ -30,7 +30,7 @@ class UomCategoryType(AngeeNode):
 
 
 @strawberry_django.type(Uom)
-class UomType(AngeeNode):
+class UomType(ProtectedNode):
     """Admin projection of one unit, with its category as a display node."""
 
     category: UomCategoryType

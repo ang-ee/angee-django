@@ -9,7 +9,7 @@ from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionRequest
 from angee.decisions.testing.drivers import seed_decision
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 from tests.conftest import addon_schema, create_user, execute_schema, result_data
 from tests.mtidemo.models import MtiChild, MtiParent
 
@@ -67,7 +67,7 @@ def test_mti_inbox_reference_resolves_the_readable_canonical_parent_label(compos
     decision = seed_decision(actor=issuer, assignees=(reviewer,), reference=child)
 
     @strawberry_django.type(MtiParent)
-    class InboxSubjectType(AngeeNode):
+    class InboxSubjectType(ProtectedNode):
         title: str
 
     subjects = hasura_model_resource(

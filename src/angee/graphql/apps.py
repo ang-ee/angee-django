@@ -8,9 +8,18 @@ from django.apps import AppConfig
 from django.core import checks
 from sentry_sdk.integrations.logging import ignore_logger
 
-from angee.base.hooks import check_hooks
+from angee.base.hooks import check_hook, check_hooks
 
-check_settings = partial(check_hooks, ("ANGEE_GRAPHQL_RESOURCE_FILTERS",))
+check_settings = partial(
+    check_hooks,
+    (
+        "ANGEE_GRAPHQL_RESOURCE_FILTERS",
+        "ANGEE_GRAPHQL_RESOURCE_CONTRIBUTORS",
+        "ANGEE_GRAPHQL_RESOURCE_METADATA",
+        "ANGEE_GRAPHQL_CHANGE_PROJECTORS",
+        "ANGEE_GRAPHQL_CHANGE_FILTERS",
+    ),
+)
 
 
 class GraphQLConfig(AppConfig):
@@ -19,7 +28,7 @@ class GraphQLConfig(AppConfig):
     default = True
     name = "angee.graphql"
     compose_urls = "angee.graphql.urls"
-    requires_apps = ('channels', 'django.contrib.auth', 'django.contrib.sessions')
+    requires_apps = ("channels",)
 
     def compose_asgi(self):
         """Contribute the single Channels protocol owner after app population."""
@@ -51,6 +60,8 @@ class GraphQLConfig(AppConfig):
 
         connect_change_adapter()
         checks.register(check_settings, checks.Tags.models)
+        for name in ("ANGEE_GRAPHQL_SCHEMA_CLASS", "ANGEE_GRAPHQL_HTTP_VIEW_CLASS", "ANGEE_GRAPHQL_WS_CONSUMER_CLASS"):
+            checks.register(partial(check_hook, name), checks.Tags.models)
 
         checks.register(check_graphql_schemas)
         if getattr(settings, "COMPOSE_SNAPSHOT", None) is not None and mode() is None:

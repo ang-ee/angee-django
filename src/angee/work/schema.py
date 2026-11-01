@@ -14,20 +14,15 @@ from strawberry import auto
 from strawberry_django.auth.utils import get_current_user
 from strawberry_django.utils.requests import get_request
 
-from angee.graphql.actions import (
-    ActionResult,
-    ActionSelectionInput,
-    action_guard,
-    authorized_action_target,
-    authorized_permission_target,
-    many_actions,
-)
-from angee.graphql.capabilities import permissions_field
+from angee.graphql.actions import ActionResult, ActionSelectionInput, action_guard, many_actions
+from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
+from angee.iam.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID, instance_for_id, optional_public_id, to_public_id
 from angee.graphql.inputs import InputReference
-from angee.graphql.node import AngeeNode
-from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
+from angee.iam.graphql.inputs import AuthorizedInputReference
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import public_subject_ref, user_display_labels, user_label, user_public_id
 from angee.projects.schema import DroppedReason, TaskType
@@ -60,7 +55,7 @@ class WorkStagePolicyQuery:
 
 
 @strawberry_django.type(Queue)
-class WorkQueueType(AngeeNode):
+class WorkQueueType(ProtectedNode):
     """GraphQL projection of one operational queue."""
 
     name: auto
@@ -90,7 +85,7 @@ class WorkQueueType(AngeeNode):
 
 
 @strawberry_django.type(Stage)
-class WorkStageType(AngeeNode):
+class WorkStageType(ProtectedNode):
     """GraphQL projection of an ordered queue stage."""
 
     name: auto
@@ -112,7 +107,7 @@ class WorkStageType(AngeeNode):
 
 
 @strawberry_django.type(Cycle)
-class WorkCycleType(AngeeNode):
+class WorkCycleType(ProtectedNode):
     """GraphQL projection of one generated queue cycle."""
 
     number: auto
@@ -219,7 +214,7 @@ class ConsoleTaskWorkExtension:
 class ProjectWorkSetupInput:
     """Work contributes the project team without coupling projects to work."""
 
-    team: PublicID = strawberry.field(metadata={InputReference: InputReference("spaces.Group")})
+    team: PublicID = strawberry.field(metadata={InputReference: AuthorizedInputReference("spaces.Group")})
 
 
 @strawberry.input(name="ProjectMilestoneSetupInput", extend=True)
@@ -227,7 +222,7 @@ class MilestoneWorkSetupInput:
     """Work contributes the stage mapping to the typed milestone template."""
 
     active_stage: PublicID | None = strawberry.field(
-        default=None, metadata={InputReference: InputReference("work.Stage")},
+        default=None, metadata={InputReference: AuthorizedInputReference("work.Stage")},
     )
 
 

@@ -30,14 +30,14 @@ from rebac import (
 from strawberry import auto
 
 from angee.graphql.data.hasura import HasuraLines, hasura_model_resource
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.schema import GraphQLSchemas
 from tests.conftest import SchemaAddon, create_platform_admin, create_user, execute_schema, result_data
 from tests.linesdemo.models import Document, DocumentLine, LineReceipt, PinnedLine, Product, Tag
 
 
 @strawberry_django.type(DocumentLine)
-class DocumentLineType(AngeeNode):
+class DocumentLineType(ProtectedNode):
     """GraphQL projection of one document line.
 
     ``kind`` reads as the UPPERCASE enum wire member (the choices column projects
@@ -57,7 +57,7 @@ class DocumentLineType(AngeeNode):
 
 
 @strawberry_django.type(Document)
-class DocumentType(AngeeNode):
+class DocumentType(ProtectedNode):
     """GraphQL projection of a document with its ordered lines."""
 
     title: auto
@@ -800,7 +800,7 @@ def test_rich_save_round_trips_enum_and_m2m_diff(composed_tables):
 
 
 @strawberry_django.type(PinnedLine)
-class PinnedLineType(AngeeNode):
+class PinnedLineType(ProtectedNode):
     """GraphQL projection of a row-locked document part, with its lock."""
 
     label: auto
@@ -813,7 +813,7 @@ class PinnedLineType(AngeeNode):
 
 
 @strawberry_django.type(Document, name="PinnedDocumentType")
-class PinnedDocumentType(AngeeNode):
+class PinnedDocumentType(ProtectedNode):
     """GraphQL projection of a document with its ordered, row-locked parts."""
 
     title: auto
@@ -988,7 +988,7 @@ def test_row_locked_lines_require_the_node_lock_projection():
     """A row-locked child whose node omits ``locked_fields`` fails at schema build."""
 
     @strawberry_django.type(PinnedLine, name="UnlockedPinnedLineType")
-    class UnlockedPinnedLineType(AngeeNode):
+    class UnlockedPinnedLineType(ProtectedNode):
         label: auto
         quantity: auto
         position: auto

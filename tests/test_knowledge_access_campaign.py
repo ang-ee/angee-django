@@ -12,7 +12,7 @@ from angee.base import signals as model_signals
 from angee.base.models import merge_references
 from angee.base.models.merge_references import EdgeReference, references
 from angee.base.refs import RecordRef
-from angee.graphql.access import ChangeReadGate
+from angee.iam.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.knowledge.models import bindings as binding_owner
 from angee.knowledge.schema import schemas

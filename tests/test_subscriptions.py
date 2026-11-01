@@ -36,7 +36,7 @@ from rebac.roles import revoke as revoke_role
 from strawberry_django.utils.requests import get_request
 
 from angee.graphql import access, publishing, subscriptions
-from angee.graphql.actions import session_user
+from angee.iam.graphql.actions import session_user
 from angee.graphql.consumers import AngeeGraphQLWSConsumer
 from angee.graphql.events import ChangeEvent, ChangePayload, ChangeRelatedRecord
 from angee.graphql.mixins import ChangeBroadcastMixin

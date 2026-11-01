@@ -39,7 +39,11 @@ def actor_can_read(resource: ObjectRef) -> bool:
 
 
 def assert_no_gated_read_fields(
-    model: type[models.Model], field_names: Iterable[str], owner: str, reason: str, *,
+    model: type[models.Model],
+    field_names: Iterable[str],
+    owner: str,
+    reason: str,
+    *,
     definition_for: Callable[[type[models.Model]], Definition | None] = effective_rebac_definition,
 ) -> None:
     if gated := sorted(
@@ -49,7 +53,9 @@ def assert_no_gated_read_fields(
 
 
 def is_gated_read_axis(
-    model: type[models.Model], axis: str, *,
+    model: type[models.Model],
+    axis: str,
+    *,
     definition_for: Callable[[type[models.Model]], Definition | None] = effective_rebac_definition,
 ) -> bool:
     """Whether a (possibly relation-leaf) group-by axis reads a field-gated column.
@@ -78,7 +84,9 @@ def is_gated_read_axis(
 
 
 def _gated_read_fields(
-    model: type[models.Model], *, definition_for: Callable[[type[models.Model]], Definition | None],
+    model: type[models.Model],
+    *,
+    definition_for: Callable[[type[models.Model]], Definition | None],
 ) -> frozenset[str]:
     """Resolve native gate declarations through the caller's policy authority."""
 
@@ -132,17 +140,25 @@ class ChangeReadGate:
         self.gated_fields = gated_read_fields(model)
         self.active_backend = backend()
 
-    def filter(
+    def filter(self, payload: Mapping[str, Any] | ChangePayload) -> ChangeEvent | None:
+        change = self.filter_payload(payload)
+        return None if change is None else ChangeEvent.from_payload(change)
+
+    def filter_payload(
         self,
         payload: Mapping[str, Any] | ChangePayload,
-    ) -> ChangeEvent | None:
+    ) -> ChangePayload | None:
         """Return a readable change event, or ``None`` when hidden."""
 
         change = self._change(payload)
         if not self.resource_type:
-            return self._emit(change)
+            return self._prepare_payload(change)
 
-        resource = change.read_resource or ObjectRef(self.resource_type, change.resource_identifier)
+        resource = (
+            ObjectRef(change.read_resource_type, change.read_resource_id)
+            if change.read_resource_type is not None and change.read_resource_id is not None
+            else ObjectRef(self.resource_type, change.resource_identifier)
+        )
         allowed = check_field_access(
             self.active_backend,
             subject=self.actor,
@@ -151,7 +167,7 @@ class ChangeReadGate:
         )
         if not allowed.allowed:
             return None
-        return self._emit(change)
+        return self._prepare_payload(change)
 
     def _change(
         self,
@@ -161,14 +177,14 @@ class ChangeReadGate:
 
         return payload if isinstance(payload, ChangePayload) else ChangePayload.from_mapping(payload)
 
-    def _emit(self, change: ChangePayload) -> ChangeEvent:
+    def _prepare_payload(self, change: ChangePayload) -> ChangePayload:
         """Redact one policy-approved change and project its GraphQL event."""
 
         change = self._filter_related_records(change)
         if not self.resource_type:
-            return ChangeEvent.from_payload(change)
+            return change
         resource = ObjectRef(self.resource_type, change.resource_identifier)
-        return ChangeEvent.from_payload(self._redact(change, resource))
+        return self._redact(change, resource)
 
     def _filter_related_records(self, change: ChangePayload) -> ChangePayload:
         """Retain only canonical related rows readable by this subscriber."""
@@ -177,7 +193,7 @@ class ChangeReadGate:
         for reference in change.related_records:
             try:
                 model = apps.get_model(reference.model)
-            except (LookupError, ValueError):
+            except LookupError, ValueError:
                 continue
             scope = require_rebac_queryset(model).with_actor(self.actor).with_action("read")
             if instance_from_public_id(model, reference.id, queryset=scope) is not None:
@@ -222,10 +238,10 @@ class ActorSelfChangeReadGate(ChangeReadGate):
     is reimplemented here.
     """
 
-    def filter(
+    def filter_payload(
         self,
         payload: Mapping[str, Any] | ChangePayload,
-    ) -> ChangeEvent | None:
+    ) -> ChangePayload | None:
         """Return only this actor's own resource change event."""
 
         change = self._change(payload)
@@ -235,4 +251,4 @@ class ActorSelfChangeReadGate(ChangeReadGate):
             return None
         if change.resource_identifier != self.actor.subject_id:
             return None
-        return self._emit(change)
+        return self._prepare_payload(change)

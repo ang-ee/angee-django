@@ -8,7 +8,7 @@ from django.apps import apps
 from strawberry.schema.schema_converter import GraphQLCoreConverter
 from strawberry.types import get_object_definition
 
-from angee.graphql.actions import authorized_permission_target
+from angee.graphql.ids import require_instance_for_id
 from graphql import GraphQLInputObjectType
 
 
@@ -17,7 +17,6 @@ class InputReference:
     """Declare the model and permission of an input field's public references."""
 
     model: str
-    permission: str = "read"
 
     def resolve(self, info: strawberry.Info, value: Any) -> Any:
         """Resolve nullable scalar or list references at the schema boundary."""
@@ -26,7 +25,10 @@ class InputReference:
             return None
         if isinstance(value, list):
             return [self.resolve(info, item) for item in value]
-        return authorized_permission_target(info, apps.get_model(self.model), value, self.permission)
+        return self.resolve_reference(info, value)
+
+    def resolve_reference(self, info: strawberry.Info, value: Any) -> Any:
+        return require_instance_for_id(apps.get_model(self.model), str(value))
 
 
 def input_values(info: strawberry.Info, value: Any) -> Any:

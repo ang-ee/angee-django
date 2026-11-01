@@ -8,9 +8,9 @@ from django.db import models
 from django.db.models.functions import Upper
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
-from angee.graphql.actions import session_user
+from angee.iam.graphql.actions import session_user
 from angee.graphql.data.hasura import _declared_aliases, _declared_filter_expressions, hasura_model_resource
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.iam.models.base import ProtectedDataModel
 from tests.composed_host import run_composed_tests
@@ -28,7 +28,7 @@ def clear_declared_aliases():
 
 
 @strawberry_django.type(Scope)
-class AliasScopeType(AngeeNode):
+class AliasScopeType(ProtectedNode):
     """Reuse an installed test model without adding a model or registry entry."""
 
     name: strawberry.auto

@@ -25,18 +25,13 @@ from strawberry_django.utils.requests import get_request
 
 from angee.agents import provisioning
 from angee.agents.context import render_view_context
-from angee.graphql.actions import (
-    ActionResult,
-    action_target,
-    authorized_permission_target,
-    resolve_action_target,
-    session_user,
-)
-from angee.graphql.capabilities import permissions_field
+from angee.graphql.actions import ActionResult
+from angee.iam.graphql.actions import action_target, authorized_permission_target, resolve_action_target, session_user
+from angee.iam.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import public_subject_ref
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
@@ -76,7 +71,7 @@ User = get_user_model()
 
 
 @strawberry_django.type(InferenceProvider)
-class InferenceProviderType(IntegrationLabelMixin, IntegrationOAuthMixin, AngeeNode):
+class InferenceProviderType(IntegrationLabelMixin, IntegrationOAuthMixin, ProtectedNode):
     """Admin projection of an inference provider child model."""
 
     vendor: VendorType
@@ -108,7 +103,7 @@ class IntegrationInferenceProviderExtension:
 
 
 @strawberry_django.type(InferenceModel)
-class InferenceModelType(AngeeNode):
+class InferenceModelType(ProtectedNode):
     """Admin projection of one model in a provider's catalogue."""
 
     provider: InferenceProviderType
@@ -128,7 +123,7 @@ class InferenceModelType(AngeeNode):
 
 
 @strawberry_django.type(Skill)
-class SkillType(AngeeNode):
+class SkillType(ProtectedNode):
     """Admin projection of one discovered skill."""
 
     source: SourceType
@@ -141,7 +136,7 @@ class SkillType(AngeeNode):
 
 
 @strawberry_django.type(MCPServer)
-class MCPServerType(AngeeNode):
+class MCPServerType(ProtectedNode):
     """Admin projection of one MCP server."""
 
     name: auto
@@ -156,7 +151,7 @@ class MCPServerType(AngeeNode):
 
 
 @strawberry_django.type(MCPTool)
-class MCPToolType(AngeeNode):
+class MCPToolType(ProtectedNode):
     """Admin projection of one MCP tool."""
 
     server: MCPServerType
@@ -170,7 +165,7 @@ class MCPToolType(AngeeNode):
 
 
 @strawberry_django.type(Agent)
-class AgentType(AngeeNode):
+class AgentType(ProtectedNode):
     """Admin projection of an agent (or, when ``is_template``, an agent template)."""
 
     owner: UserType | None
@@ -224,7 +219,7 @@ class AgentType(AngeeNode):
 
 
 @strawberry_django.type(AgentSessionModel)
-class AgentSessionType(AngeeNode):
+class AgentSessionType(ProtectedNode):
     """Projection of one persisted agent conversation, readable by its user."""
 
     agent: AgentType
@@ -239,7 +234,7 @@ class AgentSessionType(AngeeNode):
 
 
 @strawberry_django.type(AgentTurn)
-class AgentTurnType(AngeeNode):
+class AgentTurnType(ProtectedNode):
     """Projection of one persisted agent turn, readable through its session."""
 
     session: AgentSessionType

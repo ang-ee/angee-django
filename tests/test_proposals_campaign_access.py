@@ -13,7 +13,7 @@ from rebac import ObjectRef, PermissionDenied, SubjectRef, actor_context, system
 from rebac.models import active_relationship_model
 
 from angee.base.exceptions import RecordAccessSubjectRefused
-from angee.graphql.access import ChangeReadGate
+from angee.iam.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Milestone, Project, Task

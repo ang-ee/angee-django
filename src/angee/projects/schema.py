@@ -22,20 +22,15 @@ from strawberry.types import get_object_definition
 from strawberry_django.utils.gql_compat import get_field_arguments
 
 from angee.graphql import capabilities
-from angee.graphql.actions import ActionResult, action_guard, authorized_action_target, authorized_permission_target
-from angee.graphql.data.hasura import (
-    AngeeHasuraWriteBackend,
-    SortAlias,
-    declared_hasura_resource_fields,
-    declared_hasura_write_relation_fields,
-    hasura_model_resource,
-    public_pk_decoder,
-    row_annotations,
-)
+from angee.graphql.actions import ActionResult, action_guard
+from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
+from angee.graphql.data.hasura import SortAlias, declared_hasura_resource_fields, declared_hasura_write_relation_fields, hasura_model_resource, public_pk_decoder, row_annotations
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.graphql.ids import PublicID, instance_for_id, optional_public_id
 from angee.graphql.inputs import input_values
-from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
-from angee.graphql.relations import RecordPointerType, actor_scoped_to_many, actor_scoped_to_one
+from angee.iam.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, ProtectedNode
+from angee.graphql.relations import RecordPointerType
+from angee.iam.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
@@ -148,7 +143,7 @@ class TaskOrderFields:
     task_order: TaskOrderInput | None = strawberry.UNSET
 
 
-class TaskHasuraWriteBackend(AngeeHasuraWriteBackend):
+class TaskHasuraWriteBackend(ProtectedHasuraWriteBackend):
     """Acquire Task ordering ownership before the native backend locks its row."""
 
     def update(
@@ -251,7 +246,7 @@ class ProjectSetupFields:
 
 
 @strawberry_django.type(Project)
-class ProjectType(ProjectSetupFields, AuthoredRefMixin, AngeeNode):
+class ProjectType(ProjectSetupFields, AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of a bounded project."""
 
     title: auto
@@ -286,7 +281,7 @@ class ProjectType(ProjectSetupFields, AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Project)
-class ConsoleProjectType(ProjectSetupFields, AuthoredRefMixin, TaggedNode, AngeeNode):
+class ConsoleProjectType(ProjectSetupFields, AuthoredRefMixin, TaggedNode, ProtectedNode):
     """Console project projection with a label-bearing lead relation."""
 
     title: auto
@@ -316,7 +311,7 @@ class ConsoleProjectType(ProjectSetupFields, AuthoredRefMixin, TaggedNode, Angee
 
 
 @strawberry_django.type(Milestone)
-class MilestoneType(AuthoredRefMixin, AngeeNode):
+class MilestoneType(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of a project milestone."""
 
     name: auto
@@ -455,11 +450,11 @@ class TaskProjectionMixin:
 
 
 @strawberry_django.type(Task)
-class TaskType(TaskProjectionMixin, AuthoredRefMixin, AngeeNode):
+class TaskType(TaskProjectionMixin, AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of one human action."""
 
     display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name,
+        resolver=ProtectedNode.display_name,
         only=["title"],
         description=NODE_DISPLAY_NAME_DESCRIPTION,
     )
@@ -499,11 +494,11 @@ class TaskType(TaskProjectionMixin, AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Task)
-class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, TaggedNode, AngeeNode):
+class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, TaggedNode, ProtectedNode):
     """Console task projection with label-bearing user relations."""
 
     display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name,
+        resolver=ProtectedNode.display_name,
         only=["title"],
         description=NODE_DISPLAY_NAME_DESCRIPTION,
     )
@@ -533,7 +528,7 @@ class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, TaggedNode, AngeeNo
 
 
 @strawberry_django.type(TaskRelation)
-class TaskRelationType(AuthoredRefMixin, AngeeNode):
+class TaskRelationType(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of a canonical directed task relation."""
 
     kind: auto
@@ -551,7 +546,7 @@ class TaskRelationType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Participant)
-class ProjectParticipantType(AuthoredRefMixin, AngeeNode):
+class ProjectParticipantType(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of project involvement, not access."""
 
     kind: auto
@@ -563,7 +558,7 @@ class ProjectParticipantType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Link)
-class ProjectLinkType(AuthoredRefMixin, AngeeNode):
+class ProjectLinkType(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of a project/task external URL."""
 
     url: auto
@@ -586,7 +581,7 @@ class ProjectLinkType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(ProjectBinding)
-class ProjectBindingType(AuthoredRefMixin, AngeeNode):
+class ProjectBindingType(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of one explicit project container binding."""
 
     created_at: auto
@@ -607,7 +602,7 @@ class ProjectBindingType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(ActivityType)
-class ActivityTypeType(AngeeNode):
+class ActivityTypeType(ProtectedNode):
     """The installed, resource-declared kinds of record task."""
 
     key: auto
@@ -1020,7 +1015,7 @@ def _project_resource(node_type: type) -> Any:
             "folder",
             *_PROJECT_EXTENSION_UPDATE_FIELDS,
         ],
-        write_backend=AngeeHasuraWriteBackend(
+        write_backend=ProtectedHasuraWriteBackend(
             Project,
             public_id_fields=("lead", "folder", *_PROJECT_EXTENSION_PUBLIC_ID_FIELDS),
         ),
@@ -1077,7 +1072,7 @@ _MILESTONE_RESOURCE = hasura_model_resource(
         "sort_order",
         *_MILESTONE_EXTENSION_UPDATE_FIELDS,
     ],
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         Milestone,
         public_id_fields=("project", *_MILESTONE_EXTENSION_PUBLIC_ID_FIELDS),
     ),
@@ -1223,7 +1218,7 @@ _TASK_RELATION_RESOURCE = hasura_model_resource(
         "task": public_pk_decoder(Task),
         "related_task": public_pk_decoder(Task),
     },
-    write_backend=AngeeHasuraWriteBackend(TaskRelation, public_id_fields=("task", "related_task")),
+    write_backend=ProtectedHasuraWriteBackend(TaskRelation, public_id_fields=("task", "related_task")),
 )
 
 _PARTICIPANT_RESOURCE = hasura_model_resource(
@@ -1240,7 +1235,7 @@ _PARTICIPANT_RESOURCE = hasura_model_resource(
         "project": public_pk_decoder(Project),
         "party": public_pk_decoder(Party),
     },
-    write_backend=AngeeHasuraWriteBackend(Participant, public_id_fields=("project", "party")),
+    write_backend=ProtectedHasuraWriteBackend(Participant, public_id_fields=("project", "party")),
 )
 
 _LINK_RESOURCE = hasura_model_resource(
@@ -1253,7 +1248,7 @@ _LINK_RESOURCE = hasura_model_resource(
     groupable=["url"],
     insert=False,
     updatable=["title", "metadata"],
-    write_backend=AngeeHasuraWriteBackend(Link),
+    write_backend=ProtectedHasuraWriteBackend(Link),
 )
 
 _BINDING_RESOURCE = hasura_model_resource(
@@ -1278,7 +1273,7 @@ _ACTIVITY_TYPE_RESOURCE = hasura_model_resource(
     aggregatable=["id"],
     insertable=["key", "name", "glyph"],
     updatable=["name", "glyph"],
-    write_backend=AngeeHasuraWriteBackend(ActivityType),
+    write_backend=ProtectedHasuraWriteBackend(ActivityType),
 )
 
 _COMMON_RESOURCE_TYPES = [

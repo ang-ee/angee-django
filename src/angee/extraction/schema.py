@@ -16,13 +16,8 @@ from strawberry_django.auth.utils import get_current_user
 from angee.base.models.identity import public_id_for
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id
-from angee.graphql.node import AngeeNode
-from angee.graphql.relations import (
-    RECORD_REFERENCE_ANNOTATIONS,
-    RecordReferenceNode,
-    actor_scoped_to_many,
-    actor_scoped_to_one,
-)
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import RECORD_REFERENCE_ANNOTATIONS, RecordReferenceNode, actor_scoped_to_many, actor_scoped_to_one
 from angee.storage.schema import FileType
 
 Extraction = apps.get_model("extraction.Extraction")
@@ -43,7 +38,7 @@ def _readable_target(field: str) -> Callable[[strawberry.Info], Prefetch]:
 
 
 @strawberry_django.type(Extraction)
-class ExtractionType(AngeeNode):
+class ExtractionType(ProtectedNode):
     """One exact retained revision and its separately authorized source records."""
 
     @strawberry_django.field(
@@ -103,7 +98,7 @@ class ExtractionSourceType(RecordReferenceNode):
 
 
 @strawberry_django.type(ExtractionPage)
-class ExtractionPageType(AngeeNode):
+class ExtractionPageType(ProtectedNode):
     """Page dimensions and its independently authorized raster."""
 
     extraction: ExtractionType | None = actor_scoped_to_one("extraction")
@@ -119,7 +114,7 @@ class ExtractionPageType(AngeeNode):
 
 
 @strawberry_django.type(ExtractionPart)
-class ExtractionPartType(AngeeNode):
+class ExtractionPartType(ProtectedNode):
     """A retained carrier, readable through its evidence revision's policy."""
 
     extraction: ExtractionType | None = actor_scoped_to_one("extraction")

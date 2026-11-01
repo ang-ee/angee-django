@@ -14,10 +14,11 @@ from strawberry.permission import PermissionExtension
 from strawberry.scalars import JSON
 from strawberry.types import get_object_definition
 
-from angee.graphql.actions import ActionResult, action_target
+from angee.graphql.actions import ActionResult
+from angee.iam.graphql.actions import action_target
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.schema import UserType
@@ -43,7 +44,7 @@ Template = apps.get_model("integrate_vcs", "Template")
 
 
 @strawberry_django.type(VcsBridge)
-class VcsBridgeType(IntegrationLabelMixin, BridgeSyncStatusMixin, AngeeNode):
+class VcsBridgeType(IntegrationLabelMixin, BridgeSyncStatusMixin, ProtectedNode):
     """Admin projection of a VCS bridge child model."""
 
     vendor: VendorType
@@ -63,7 +64,7 @@ class VcsBridgeType(IntegrationLabelMixin, BridgeSyncStatusMixin, AngeeNode):
 
 
 @strawberry_django.type(Repository)
-class RepositoryType(AngeeNode):
+class RepositoryType(ProtectedNode):
     """Admin projection of one inventoried repository."""
 
     vcs_bridge: VcsBridgeType
@@ -81,7 +82,7 @@ class RepositoryType(AngeeNode):
 
 
 @strawberry_django.type(Source)
-class SourceType(AngeeNode):
+class SourceType(ProtectedNode):
     """Admin projection of one source (a ref+path pointer into a repository)."""
 
     repository: RepositoryType
@@ -94,7 +95,7 @@ class SourceType(AngeeNode):
 
 
 @strawberry_django.type(Template)
-class TemplateType(AngeeNode):
+class TemplateType(ProtectedNode):
     """Admin projection of one discovered template."""
 
     source: SourceType

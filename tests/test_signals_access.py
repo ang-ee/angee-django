@@ -32,7 +32,7 @@ from angee.base.serialization import json_safe
 from angee.base.signals import ModelChange, send_created_batch
 from angee.base.testing.packages import write_addon_distribution
 from angee.graphql import access, publishing
-from angee.graphql.access import ChangeReadGate
+from angee.iam.graphql.access import ChangeReadGate
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.events import ChangePayload

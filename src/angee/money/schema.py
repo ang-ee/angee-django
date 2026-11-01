@@ -18,14 +18,14 @@ from django.apps import apps
 from strawberry import auto
 
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 
 Currency = apps.get_model("money", "Currency")
 CurrencyRate = apps.get_model("money", "CurrencyRate")
 
 
 @strawberry_django.type(Currency)
-class CurrencyType(AngeeNode):
+class CurrencyType(ProtectedNode):
     """Admin projection of one currency in the catalogue."""
 
     code: auto
@@ -44,7 +44,7 @@ class CurrencyType(AngeeNode):
 
 
 @strawberry_django.type(CurrencyRate)
-class CurrencyRateType(AngeeNode):
+class CurrencyRateType(ProtectedNode):
     """Admin projection of one dated exchange rate, with its currency as a display node."""
 
     currency: CurrencyType

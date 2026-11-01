@@ -12,7 +12,7 @@ from strawberry import auto
 
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import require_instance_for_id
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.subscriptions import changes
 from angee.iam.permissions import actor_user_id
 from angee.nexus.inbox_schema import NexusInboxQuery
@@ -31,7 +31,7 @@ def _viewer_user_id() -> Any | None:
 
 
 @strawberry_django.type(Tie)
-class TieType(AngeeNode):
+class TieType(ProtectedNode):
     """GraphQL projection of one fully derived canonical party edge."""
 
     party_a: PartyType
@@ -49,7 +49,7 @@ class TieType(AngeeNode):
 
 
 @strawberry_django.type(Cadence)
-class CadenceType(AngeeNode):
+class CadenceType(ProtectedNode):
     """GraphQL projection of one viewer-owned party cadence."""
 
     party: PartyType

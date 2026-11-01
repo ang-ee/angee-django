@@ -25,9 +25,9 @@ from rebac import (
 )
 from rebac.models import active_relationship_model
 
-from angee.graphql.capabilities import permissions_field
+from angee.iam.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.schema import GraphQLSchemas
 from angee.iam.build import extension_source_map
 from angee.iam.testing.permissions import emit_permissions, installed_field_owners
@@ -50,7 +50,7 @@ from tests.conftest import (
 
 
 @strawberry_django.type(Task)
-class TaskPermissionsType(AngeeNode):
+class TaskPermissionsType(ProtectedNode):
     """Exercise the shared field on the real project/work permission graph."""
 
     permissions = permissions_field(("write", "share", "delete"))
@@ -109,7 +109,7 @@ def test_task_permissions_are_typed_actor_scoped_and_batched(project_access_sche
             for limit in (1, 10, 50):
                 with (
                     patch(
-                        "angee.graphql.capabilities.permission_annotations",
+                        "angee.iam.graphql.capabilities.permission_annotations",
                         side_effect=AssertionError("Per-row permission fallback"),
                     ),
                     CaptureQueriesContext(connection) as queries,

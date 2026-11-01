@@ -27,7 +27,7 @@ from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 from angee.projects.models import Task as AbstractTask
 from tests.conftest import (
     create_platform_admin,
@@ -62,7 +62,7 @@ class ProjectAccessTask(AbstractTask):
 
 
 @strawberry_django.type(ProjectAccessTask)
-class ProjectAccessTaskType(AngeeNode):
+class ProjectAccessTaskType(ProtectedNode):
     title: strawberry.auto
     priority_rank: int = strawberry_django.field(resolver=AbstractTask.priority_rank)
     promoted_phase: str | None = strawberry_django.field(resolver=AbstractTask.promoted_phase)

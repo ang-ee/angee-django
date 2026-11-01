@@ -5,10 +5,11 @@ import strawberry_django
 from django.apps import apps
 from strawberry import auto
 
-from angee.graphql.actions import ActionResult, action_guard, authorized_action_target
+from angee.graphql.actions import ActionResult, action_guard
+from angee.iam.graphql.actions import authorized_action_target
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.subscriptions import changes
 from angee.integrate.schema import (
     BridgeTypeMixin,
@@ -23,7 +24,7 @@ NotionConnection = apps.get_model("knowledge_integrate_notion", "NotionConnectio
 
 
 @strawberry_django.type(NotionConnection)
-class NotionConnectionType(BridgeTypeMixin, AngeeNode):
+class NotionConnectionType(BridgeTypeMixin, ProtectedNode):
     """Connection identity and health; credential material stays write-only."""
 
     vendor: VendorType

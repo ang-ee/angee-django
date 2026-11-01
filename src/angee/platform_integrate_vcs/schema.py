@@ -20,7 +20,8 @@ import strawberry_django
 from django.apps import apps
 from strawberry import auto
 
-from angee.graphql.actions import ActionResult, action_target
+from angee.graphql.actions import ActionResult
+from angee.iam.graphql.actions import action_target
 from angee.graphql.ids import PublicID
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 

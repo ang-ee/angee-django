@@ -24,23 +24,14 @@ from angee.base.implementations import resolve_all_impl_classes
 from angee.base.models.base import record_display_label
 from angee.base.models.identity import public_id_for
 from angee.decisions.schema import DecisionType
-from angee.graphql.actions import (
-    ActionResult,
-    action_guard,
-    authorized_action_target,
-    authorized_permission_target,
-)
-from angee.graphql.capabilities import permission_expression, permissions_field
+from angee.graphql.actions import ActionResult, action_guard
+from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
+from angee.iam.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id, require_instance_for_id
 from angee.graphql.impl import ImplChoice
-from angee.graphql.node import AngeeNode
-from angee.graphql.relations import (
-    RECORD_REFERENCE_ANNOTATIONS,
-    RecordReferenceNode,
-    actor_scoped_to_many,
-    actor_scoped_to_one,
-)
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import RECORD_REFERENCE_ANNOTATIONS, RecordReferenceNode, actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_public_id
 from angee.iam.schema import UserType
@@ -78,10 +69,10 @@ _STEP_POLICY_VERSION = Prefetch(
 
 
 @strawberry_django.type(Workflow)
-class WorkflowType(AngeeNode):
+class WorkflowType(ProtectedNode):
     """Workflow identity with draft fields governed by native REBAC redaction."""
 
-    display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["name"])
+    display_name: str = strawberry_django.field(resolver=ProtectedNode.display_name, only=["name"])
     key: auto
     name: auto
     description: auto
@@ -95,10 +86,10 @@ class WorkflowType(AngeeNode):
 
 
 @strawberry_django.type(WorkflowVersion)
-class WorkflowVersionType(AngeeNode):
+class WorkflowVersionType(ProtectedNode):
     """The immutable graph selected by an admitted run."""
 
-    display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["number"])
+    display_name: str = strawberry_django.field(resolver=ProtectedNode.display_name, only=["number"])
     number: auto
     document: JSON
     content_hash: auto
@@ -124,7 +115,7 @@ class WorkflowRunType(RecordReferenceNode):
     """Execution state, admission and result visible through the run's policy."""
 
     display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name,
+        resolver=ProtectedNode.display_name,
         annotate={"_workflow_name": F("version__workflow__name")}, only=["created_at", "version_id"],
     )
     version: WorkflowVersionType | None = actor_scoped_to_one("version")
@@ -196,10 +187,10 @@ class StepNoteType:
 
 
 @strawberry_django.type(StepRun)
-class StepRunType(AngeeNode):
+class StepRunType(ProtectedNode):
     """A node's retained execution and wait state; transitions use actions."""
 
-    display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["node_key", "map_index"])
+    display_name: str = strawberry_django.field(resolver=ProtectedNode.display_name, only=["node_key", "map_index"])
     run: WorkflowRunType | None = actor_scoped_to_one("run")
     child_runs: list[WorkflowRunType] = actor_scoped_to_many("child_runs")
     awaited_run: WorkflowRunType | None = actor_scoped_to_one("awaited_run")
@@ -261,10 +252,10 @@ class StepRunType(AngeeNode):
 
 
 @strawberry_django.type(StepAttempt)
-class StepAttemptType(AngeeNode):
+class StepAttemptType(ProtectedNode):
     """One claim's timing, effect marker, failure and operator acknowledgment."""
 
-    display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["number"])
+    display_name: str = strawberry_django.field(resolver=ProtectedNode.display_name, only=["number"])
     step_run: StepRunType | None = actor_scoped_to_one("step_run")
     number: auto
     page_index: auto
@@ -376,7 +367,7 @@ class StepWatchType(RecordReferenceNode):
 class StepRecordType(RecordReferenceNode):
     """A step's labeled reference to a record, governed by its execution policy."""
 
-    display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["label"])
+    display_name: str = strawberry_django.field(resolver=ProtectedNode.display_name, only=["label"])
     run: WorkflowRunType | None = actor_scoped_to_one("run")
     step_run: StepRunType | None = actor_scoped_to_one("step_run")
     operation: auto
@@ -414,10 +405,10 @@ class TriggerEnablePreviewType:
 
 
 @strawberry_django.type(Trigger)
-class TriggerType(AngeeNode):
+class TriggerType(ProtectedNode):
     """A workflow's editable event admission policy and server-owned activation."""
 
-    display_name: str = strawberry_django.field(resolver=AngeeNode.display_name, only=["source", "model_label"])
+    display_name: str = strawberry_django.field(resolver=ProtectedNode.display_name, only=["source", "model_label"])
     workflow: WorkflowType | None = actor_scoped_to_one("workflow")
     source: auto
     model_label: auto

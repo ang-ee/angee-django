@@ -17,7 +17,7 @@ from angee.decisions import schema as decisions_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest, RecordActions
 from angee.decisions.testing.models import Decision
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.publishing import connect_publishers, disconnect_publishers
 from angee.projects.testing.models import Task
 from angee.workflows.decision_steps import apply_proposals
@@ -389,7 +389,7 @@ def test_attention_is_actor_scoped_for_unrelated_resources_and_open_record_read(
     model = type(targets[0])
 
     @strawberry_django.type(model)
-    class AttentionType(AngeeNode):
+    class AttentionType(ProtectedNode):
         name: str
 
     resource = hasura_model_resource(

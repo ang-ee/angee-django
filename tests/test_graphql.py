@@ -43,17 +43,17 @@ from strawberry.extensions import SchemaExtension
 
 from angee.base.exceptions import TransitionNotAllowed
 from angee.base.fields.state import StateField
-from angee.graphql.actions import session_user
+from angee.iam.graphql.actions import session_user
 from angee.graphql.data import hasura as hasura_data
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.schema import (
     DEFAULT_SCHEMA_NAME,
     SCHEMA_PART_KEYS,
     AngeeSchema,
     GraphQLSchemas,
 )
-from angee.graphql.view_as import ViewAsReadOnlyExtension
+from angee.iam.graphql.view_as import ViewAsReadOnlyExtension
 from angee.iam.models.base import ProtectedModel
 from angee.iam.permissions import require_rebac_queryset
 from tests.conftest import make_addon
@@ -78,7 +78,7 @@ def test_generated_read_root_conceals_missing_and_hidden_ids(composed_tables: No
     ])
 
     @strawberry_django.type(user_model)
-    class PersonNode(AngeeNode):
+    class PersonNode(ProtectedNode):
         username: strawberry.auto
 
     # Every signed-in user reads a name; the directory is the row scope that hides people.
@@ -910,9 +910,9 @@ def test_unexpected_graphql_errors_log_frames_without_exception_values(caplog: p
 def test_graphql_identity_exports_public_node() -> None:
     """The framework exposes one public node seam."""
 
-    from angee.graphql.node import AngeeNode
+    from angee.iam.graphql.node import ProtectedNode
 
-    definition = strawberry.types.get_object_definition(AngeeNode)
+    definition = strawberry.types.get_object_definition(ProtectedNode)
     assert definition is not None
     assert definition.name == "Node"
 

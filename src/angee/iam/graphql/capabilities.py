@@ -42,7 +42,10 @@ def permission_annotations(model: type[models.Model], names: Iterable[str]) -> d
 
 
 def held_permissions(
-    record: models.Model, names: Iterable[str], *, model: type[models.Model] | None = None,
+    record: models.Model,
+    names: Iterable[str],
+    *,
+    model: type[models.Model] | None = None,
 ) -> frozenset[str]:
     """Return declared permission names held by the ambient actor on this row.
 
@@ -67,8 +70,12 @@ def held_permissions(
     ):
         annotations = permission_annotations(owner, names)
         values = (
-            require_rebac_queryset(owner).system_context(reason="graphql.permissions")
-            .filter(pk=record.pk).annotate(**annotations).values(*annotations).first()
+            require_rebac_queryset(owner)
+            .system_context(reason="graphql.permissions")
+            .filter(pk=record.pk)
+            .annotate(**annotations)
+            .values(*annotations)
+            .first()
             or {}
         )
     return frozenset(name for name in names if values.get(f"_angee_permission_{name}"))

@@ -35,26 +35,17 @@ from strawberry_django.utils.requests import get_request
 
 from angee.base.exceptions import exception_text
 from angee.base.models.identity import public_id_of
-from angee.graphql.actions import (
-    ActionResult,
-    action_guard,
-    action_target,
-    authorized_action_target,
-    resolve_action_target,
-)
-from angee.graphql.actions import session_user as _session_user
-from angee.graphql.capabilities import PermissionsExtension, held_permissions
-from angee.graphql.data.hasura import (
-    AngeeHasuraWriteBackend,
-    declared_hasura_resource_fields,
-    hasura_model_resource,
-    public_pk_decoder,
-)
+from angee.graphql.actions import ActionResult, action_guard
+from angee.iam.graphql.actions import action_target, authorized_action_target, resolve_action_target
+from angee.iam.graphql.actions import session_user as _session_user
+from angee.iam.graphql.capabilities import PermissionsExtension, held_permissions
+from angee.graphql.data.hasura import declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
+from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.impl import ImplChoice, can_read_impl_choices
 from angee.graphql.impl import impl_choices as resolve_impl_choices
-from angee.graphql.node import AngeeNode
+from angee.iam.graphql.node import ProtectedNode
 from angee.graphql.subscriptions import changes
 from angee.graphql.writes import instance_for_write
 from angee.iam.identity import user_from_public_id as _user_from_public_id
@@ -186,7 +177,7 @@ class CredentialOAuthClientType:
 
 
 @strawberry_django.type(ExternalAccount)
-class ExternalAccountType(AngeeNode):
+class ExternalAccountType(ProtectedNode):
     """GraphQL projection of a linked external identity."""
 
     external_id: auto
@@ -230,7 +221,7 @@ class ExternalAccountType(AngeeNode):
 
 
 @strawberry_django.type(Credential)
-class CredentialType(AngeeNode):
+class CredentialType(ProtectedNode):
     """GraphQL projection of credential health without secret values."""
 
     kind: auto
@@ -252,7 +243,7 @@ class CredentialType(AngeeNode):
 
 
 @strawberry_django.type(ExternalAccount)
-class ConnectedExternalAccountType(AngeeNode):
+class ConnectedExternalAccountType(ProtectedNode):
     """Public projection of the current user's connected external account."""
 
     external_id: auto
@@ -272,7 +263,7 @@ class ConnectedExternalAccountType(AngeeNode):
 
 
 @strawberry_django.type(Credential)
-class ConnectedCredentialType(AngeeNode):
+class ConnectedCredentialType(ProtectedNode):
     """Public projection of one current-user connected credential."""
 
     kind: auto
@@ -300,7 +291,7 @@ class ConnectedCredentialType(AngeeNode):
 
 
 @strawberry_django.type(OAuthClient)
-class OAuthClientType(AngeeNode):
+class OAuthClientType(ProtectedNode):
     """Admin GraphQL projection of an OAuth client registration."""
 
     display_name: auto
@@ -1015,7 +1006,7 @@ attach_delete_preview_metadata(
 
 
 @strawberry_django.type(Vendor)
-class VendorType(AngeeNode):
+class VendorType(ProtectedNode):
     """GraphQL projection of an integration vendor catalogue row."""
 
     slug: auto
@@ -1171,7 +1162,7 @@ class IntegrationLabelMixin(IntegrationConnectionMixin):
     """Project Integration identity, credential health and saved-stream visibility.
 
     Compose alongside the node base, e.g. ``class ChannelType(IntegrationLabelMixin,
-    AngeeNode)``, to surface the operator label (falling back to ``Vendor
+    ProtectedNode)``, to surface the operator label (falling back to ``Vendor
     (lifecycle)``) and annotated ``stream_count`` on every ``Integration`` child
     type. A ``@strawberry.type`` (not an interface): merges fields into the concrete
     type without adding a GraphQL interface to the SDL.
@@ -1249,7 +1240,7 @@ class BridgeTypeMixin(IntegrationLabelMixin, IntegrationOAuthMixin, BridgeSyncSt
 
 
 @strawberry_django.type(Integration)
-class IntegrationType(IntegrationLabelMixin, AngeeNode):
+class IntegrationType(IntegrationLabelMixin, ProtectedNode):
     """Admin projection of an integration.
 
     Exposes the catalogue/identity associations as nested relations so the
@@ -1309,7 +1300,7 @@ class IntegrationType(IntegrationLabelMixin, AngeeNode):
 
 
 @strawberry_django.type(Integration)
-class ConnectedIntegrationType(IntegrationLabelMixin, AngeeNode):
+class ConnectedIntegrationType(IntegrationLabelMixin, ProtectedNode):
     """Public projection of a current-user integration connection."""
 
     vendor: VendorType
@@ -1325,7 +1316,7 @@ class ConnectedIntegrationType(IntegrationLabelMixin, AngeeNode):
 
 
 @strawberry_django.type(WebhookSubscription)
-class WebhookSubscriptionType(AngeeNode):
+class WebhookSubscriptionType(ProtectedNode):
     """Admin projection of an outbound webhook subscription.
 
     The signing ``secret`` is deliberately omitted (write-only) — unlike
@@ -1391,10 +1382,10 @@ class SyncFailureType:
 
 
 @strawberry_django.type(SyncStream)
-class SyncStreamType(AngeeNode):
+class SyncStreamType(ProtectedNode):
     """Read-only inspection of a bridge partition's retained epoch."""
 
-    display_name = strawberry_django.field(resolver=AngeeNode.display_name, only=["key", "partition"])
+    display_name = strawberry_django.field(resolver=ProtectedNode.display_name, only=["key", "partition"])
     integration: IntegrationType
     key: auto
     partition: auto
@@ -1439,10 +1430,10 @@ class SyncStreamType(AngeeNode):
 
 
 @strawberry_django.type(RecordLink)
-class RecordLinkType(AngeeNode):
+class RecordLinkType(ProtectedNode):
     """Read-only identity, comparison bases and deletion evidence."""
 
-    display_name = strawberry_django.field(resolver=AngeeNode.display_name, only=["external_key"])
+    display_name = strawberry_django.field(resolver=ProtectedNode.display_name, only=["external_key"])
     stream: SyncStreamType
     external_key: auto
     status: auto
@@ -1670,7 +1661,7 @@ def integration_input_extensions(resource: Any) -> list[type]:
     return donors
 
 
-class IntegrationWriteBackend(AngeeHasuraWriteBackend):
+class IntegrationWriteBackend(ProtectedHasuraWriteBackend):
     """Compose native patch authorization with model-owned credential attachment."""
 
     def update(
@@ -1768,7 +1759,7 @@ _WEBHOOK_SUBSCRIPTION_RESOURCE = hasura_model_resource(
         "owner": public_pk_decoder(User),
         "integration_filter": public_pk_decoder(Integration),
     },
-    write_backend=AngeeHasuraWriteBackend(
+    write_backend=ProtectedHasuraWriteBackend(
         WebhookSubscription,
         public_id_fields=("integration_filter",),
     ),
@@ -1915,7 +1906,7 @@ class WebhookActionMutation:
 
 
 # Extracted with an explicit annotation: a bare homogeneous list of two
-# AngeeNode-decorated types infers as ``list[type[AngeeNode]]`` and trips mypy's
+# ProtectedNode-decorated types infers as ``list[type[ProtectedNode]]`` and trips mypy's
 # invariance check; ``list[type]`` widens it. (iam's inline lists are heterogeneous,
 # so they don't hit this.)
 _CONSOLE_TYPES: list[object] = [

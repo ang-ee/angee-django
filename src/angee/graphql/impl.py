@@ -17,7 +17,7 @@ from angee.base.fields import ImplClassField
 from angee.base.implementations import ImplChoice as BaseImplChoice
 from angee.base.implementations import impl_choices as registry_impl_choices
 from angee.graphql.mixins import ImplementationChoicesMixin
-from angee.iam.implementations import readable_impl_defaults
+from angee.graphql.data.extensions import resource_extensions
 
 
 @strawberry.type
@@ -51,8 +51,10 @@ def impl_choices(model: str, field: str) -> list[ImplChoice]:
     django_model = _model_for_label(model)
     field_name = _field_name(field)
     choices = [ImplChoice.from_choice(choice) for choice in model_impl_choices(django_model, field_name)]
-    for choice in choices:
-        choice.defaults = JSON(readable_impl_defaults(django_model, cast(dict[str, Any], choice.defaults)))
+    transform = resource_extensions(django_model).implementation_defaults
+    if transform is not None:
+        for choice in choices:
+            choice.defaults = JSON(transform(django_model, cast(dict[str, Any], choice.defaults)))
     return choices
 
 

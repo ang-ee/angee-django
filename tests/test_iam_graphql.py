@@ -47,7 +47,7 @@ from angee.graphql.data.metadata import readable_model_field_names
 from angee.graphql.data.resource_fields import resource_field_kind, resource_field_widget
 from angee.graphql.events import ChangePayload
 from angee.graphql.schema import AngeeSchema
-from angee.graphql.view_as import ViewAsReadOnlyExtension
+from angee.iam.graphql.view_as import ViewAsReadOnlyExtension
 from angee.graphql.views import graphql_endpoint
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.oauth import state

@@ -10,12 +10,12 @@ from django.apps import apps
 from django.db.models import QuerySet
 from strawberry import auto
 
-from angee.graphql.actions import authorized_action_target, authorized_permission_target
-from angee.graphql.capabilities import permissions_field
+from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
+from angee.iam.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import require_instance_for_id
-from angee.graphql.node import AngeeNode
-from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.schema import UserType
 from angee.messaging.models import NotificationPolicy
@@ -35,7 +35,7 @@ strawberry.enum(cast(Any, MembershipRole))
 
 
 @strawberry_django.type(Group)
-class SpaceGroupType(AngeeNode):
+class SpaceGroupType(ProtectedNode):
     """GraphQL projection of a shared group."""
 
     name: auto
@@ -57,7 +57,7 @@ class SpaceGroupType(AngeeNode):
 
 
 @strawberry_django.type(Membership)
-class SpaceMembershipType(AngeeNode):
+class SpaceMembershipType(ProtectedNode):
     """GraphQL projection of one role-bearing group roster row."""
 
     permissions = permissions_field(("write", "write__role", "delete", "set_notifications"))
@@ -89,7 +89,7 @@ class VaultSpaceExtension:
 
 
 @strawberry_django.type(Thread)
-class SpaceThreadType(AngeeNode):
+class SpaceThreadType(ProtectedNode):
     """Read-only projection of a messaging group thread bound to a space."""
 
     title: FragmentType | None

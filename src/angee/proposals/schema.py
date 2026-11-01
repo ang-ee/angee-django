@@ -18,15 +18,9 @@ from strawberry.experimental.pydantic import input as pydantic_input
 from strawberry.scalars import JSON
 
 from angee.base.models.locks import StaleRevisionError
-from angee.graphql.actions import (
-    ActionResult,
-    ActionSelectionInput,
-    action_guard,
-    authorized_action_target,
-    authorized_permission_target,
-    many_actions,
-)
-from angee.graphql.capabilities import held_permissions, permission_annotations, permissions_field
+from angee.graphql.actions import ActionResult, ActionSelectionInput, action_guard, many_actions
+from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
+from angee.iam.graphql.capabilities import held_permissions, permission_annotations, permissions_field
 from angee.graphql.data.hasura import (
     AngeeHasuraWriteBackend,
     declared_hasura_resource_fields,
@@ -36,8 +30,9 @@ from angee.graphql.data.hasura import (
 )
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.inputs import InputReference
-from angee.graphql.node import AngeeNode
-from angee.graphql.relations import actor_scoped_to_one
+from angee.iam.graphql.inputs import AuthorizedInputReference
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import actor_scoped_to_one
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.identity import user_public_id
@@ -99,11 +94,11 @@ class ProposalRoundSetupInput:
     """Round setup references are authorized before the domain sees them."""
 
     template: ProposalRoundTemplateInput
-    facilitator: PublicID = strawberry.field(metadata={InputReference: InputReference(settings.AUTH_USER_MODEL)})
-    responders: list[PublicID] = strawberry.field(metadata={InputReference: InputReference(settings.AUTH_USER_MODEL)})
-    team: PublicID | None = strawberry.field(default=None, metadata={InputReference: InputReference("spaces.Group")})
+    facilitator: PublicID = strawberry.field(metadata={InputReference: AuthorizedInputReference(settings.AUTH_USER_MODEL)})
+    responders: list[PublicID] = strawberry.field(metadata={InputReference: AuthorizedInputReference(settings.AUTH_USER_MODEL)})
+    team: PublicID | None = strawberry.field(default=None, metadata={InputReference: AuthorizedInputReference("spaces.Group")})
     requester_party: PublicID | None = strawberry.field(
-        default=None, metadata={InputReference: InputReference("parties.Party")},
+        default=None, metadata={InputReference: AuthorizedInputReference("parties.Party")},
     )
 
 
@@ -164,7 +159,7 @@ class ResponderRemovalResult(ActionResult):
 
 
 @strawberry_django.type(Round)
-class ProposalRoundType(AuthoredRefMixin, AngeeNode):
+class ProposalRoundType(AuthoredRefMixin, ProtectedNode):
     """Round row with independently gated settings and roster projections."""
 
     revision: auto
@@ -294,7 +289,7 @@ class ConsoleTaskProposalsExtension(TaskProposalsFields):
 
 
 @strawberry_django.type(Topic)
-class ProposalTopicType(AuthoredRefMixin, AngeeNode):
+class ProposalTopicType(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of one stable comparison topic."""
 
     key: auto
@@ -308,7 +303,7 @@ class ProposalTopicType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Proposal)
-class ProposalFields(AuthoredRefMixin, AngeeNode):
+class ProposalFields(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of a field-gated structured response."""
 
     revision: auto
@@ -429,7 +424,7 @@ class ConsoleProjectProposalsExtension(ProjectAttentionFields):
 
 
 @strawberry_django.type(Answer)
-class ProposalAnswerType(AuthoredRefMixin, AngeeNode):
+class ProposalAnswerType(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of one topic-aligned answer."""
 
     revision: auto
@@ -459,7 +454,7 @@ class ProposalAnswerType(AuthoredRefMixin, AngeeNode):
 
 
 @strawberry_django.type(Review)
-class ProposalReviewType(AuthoredRefMixin, AngeeNode):
+class ProposalReviewType(AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of one evaluator assessment."""
 
     body: auto

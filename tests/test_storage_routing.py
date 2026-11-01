@@ -16,7 +16,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, database_context, system_context
 
 from angee.base.testing.packages import write_addon_distribution
-from angee.graphql.relations import with_record_reference_access
+from angee.iam.graphql.relations import with_record_reference_access
 from angee.provenance.context import changeset
 from angee.storage import exceptions
 from angee.storage.managers import FileAttachmentManager

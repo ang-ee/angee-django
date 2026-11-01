@@ -15,7 +15,8 @@ from django.views.decorators.debug import sensitive_variables
 from graphql import GraphQLError
 
 from angee.base.exceptions import exception_text
-from angee.graphql.actions import ActionResult, action_target, authorized_action_target, session_user
+from angee.graphql.actions import ActionResult
+from angee.iam.graphql.actions import action_target, authorized_action_target, session_user
 from angee.graphql.ids import PublicID
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES
 from angee.messaging.schema import ChannelType
