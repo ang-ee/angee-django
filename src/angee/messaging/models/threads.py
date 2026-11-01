@@ -415,11 +415,17 @@ class ThreadedModelMixin(models.Model):
             raise ValueError("Message does not belong to this record thread.")
         return apps.get_model("messaging", "Message").objects.restore_in_thread(message, thread=attachment.thread)
 
-    def message_removed(self, *, role: str = "chatter", limit: int = 50) -> tuple[list[Any], int]:
-        """Return the newest trashed chatter messages and their count, for moderators only."""
+    def message_removed_window(self, *, role: str = "chatter", limit: int = 50) -> tuple[models.QuerySet, int]:
+        """Return a composable removed-message window only after this record's moderation gate."""
 
         self._require_moderation("Listing removed")
-        return apps.get_model("messaging", "Message").objects.for_record(self, role=role, limit=limit, trashed=True)
+        return apps.get_model("messaging", "Message").objects.record_window(self, role=role, limit=limit, trashed=True)
+
+    def message_removed(self, *, role: str = "chatter", limit: int = 50) -> tuple[list[Any], int]:
+        """Materialize the moderator's window for existing Python callers."""
+
+        rows, count = self.message_removed_window(role=role, limit=limit)
+        return list(rows), count
 
     def record_message(self, message_id: str, *, role: str = "chatter", trashed: bool = False) -> Message:
         """Return one message of this record's thread; a trashed one only for moderators."""

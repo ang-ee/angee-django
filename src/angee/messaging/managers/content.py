@@ -176,10 +176,11 @@ class PartManager[PartT: Part](_PartManagerBase[PartT]):
     Tree reads falling back to the base manager require callers to authorize
     the parent Message, including record-scoped chatter projections. Each
     operation loads that message's parts once, with fragment/file/MIME joins,
-    or reuses a native ``parts`` prefetch of already authorized rows when its
-    parts and related rows are fully loaded.
-    Incomplete caches fall back to that single joined read. Prefetch the relation with
-    those joins for repeated queries without SQL; no separate tree cache is kept.
+    or reuses a native ``parts`` prefetch of already authorized rows with its
+    parent/position/public-ID navigation columns loaded. The caller owns selected
+    content and relation hints; navigation never forces unrequested body or file
+    fields. Missing navigation columns fall back to the single joined read.
+    No separate tree cache is kept.
     """
 
     def attach_file(
@@ -391,25 +392,11 @@ class PartManager[PartT: Part](_PartManagerBase[PartT]):
             # authorization. Re-evaluating its queryset would re-enter REBAC
             # before this owner can reject incomplete rows.
             parts = cache["parts"]._result_cache
-            fragment_field = self.model.fragment.field
-            file_field = self.model.file.field
-            file_model = file_field.related_model
-            assert file_model is not None
-            mime_field = file_model._meta.get_field("mime_type")
-            assert isinstance(mime_field, models.ForeignKey)
-            for part in parts if parts is not None else ():
-                fragment = fragment_field.get_cached_value(part, default=None)
-                file = file_field.get_cached_value(part, default=None)
-                mime_type = mime_field.get_cached_value(file, default=None) if file is not None else None
-                if (
-                    # Reject incomplete prefetches so the fallback batches all navigation reads.
-                    any(row.get_deferred_fields() for row in (part, fragment, file, mime_type) if row is not None)
-                    or (part.fragment_id is not None and fragment is None)
-                    or (part.file_id is not None and file is None)
-                    or (file is not None and mime_field.value_from_object(file) is not None and mime_type is None)
-                ):
-                    parts = None
-                    break
+            if any(
+                {"parent_id", "position", "sqid"} & part.get_deferred_fields()
+                for part in (parts if parts is not None else ())
+            ):
+                parts = None
         if parts is None:
             parts = list(
                 self.model._base_manager.filter(message=message)
