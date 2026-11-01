@@ -8,7 +8,7 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
-from angee.iam.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
+from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
 from angee.messaging.testing.models import Fragment, Message, MessageStar, Thread
 from tests.conftest import execute_schema, result_data
 from tests.test_messaging_graphql import _schema

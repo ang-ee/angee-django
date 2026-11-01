@@ -23,6 +23,7 @@ from rebac import (
 )
 
 import angee.graphql.actions as actions_module
+import angee.iam.graphql.actions as protected_actions_module
 from angee.base.exceptions import RecordAccessSubjectRefused, TransitionNotAllowed
 from angee.base.models.locks import StaleRevisionError
 from angee.graphql.actions import ActionResult, ActionSelectionInput, action_guard, many_actions
@@ -311,7 +312,7 @@ def test_resolve_action_target_elevates_lookup(
         reasons.append(reason)
         return Context()
 
-    monkeypatch.setattr(actions_module, "system_context", system_context)
+    monkeypatch.setattr(protected_actions_module, "system_context", system_context)
 
     target = resolve_action_target(
         Group,
@@ -391,7 +392,7 @@ def test_action_target_wraps_lookup_and_body_in_system_context(
 
         return Context(reason)
 
-    monkeypatch.setattr(actions_module, "system_context", system_context)
+    monkeypatch.setattr(protected_actions_module, "system_context", system_context)
 
     with action_target(Group, str(group.pk), reason="tests.action.context") as target:
         assert target == group

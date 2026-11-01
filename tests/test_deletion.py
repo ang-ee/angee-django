@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any, Self, cast
 
 import pytest
@@ -16,7 +18,6 @@ from graphql import GraphQLError
 from rebac import PermissionDenied, RebacMixin, SubjectRef, actor_context, system_context, to_object_ref
 from rebac.models import active_relationship_model
 
-import angee.graphql.deletion as deletion_module
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.deletion import (
     DeletePreview,
@@ -26,6 +27,7 @@ from angee.graphql.deletion import (
 )
 from angee.graphql.ids import RECORD_NOT_FOUND_MESSAGE
 from angee.iam import signals as iam_signals
+from angee.iam.graphql import resources as iam_resources
 from angee.iam.models.base import ProtectedModel
 from tests.tables import model_tables
 
@@ -630,61 +632,61 @@ def test_delete_by_public_id_previews_and_deletes_inside_transaction(
     assert not Group.objects.filter(pk=group.pk).exists()
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
+@isolate_apps("django.contrib.auth")
 def test_delete_by_public_id_elevates_lookup_and_runs_hook(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Admin deletes share one elevated preview/delete helper with before-delete hooks."""
+    """IAM contributes elevated admin deletion and preserves before-delete hooks."""
 
-    group = Group.objects.create(name="admin-delete")
+    class AdminDeleteTarget(ProtectedModel):
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "auth"
+            rebac_resource_type = "tests/admin_delete_target"
+
     reasons: list[str | None] = []
     hooked: list[int] = []
 
-    class Context:
-        """Small context manager that records the elevated reason."""
+    @contextmanager
+    def recording_system_context(*, reason: str | None = None) -> Iterator[None]:
+        reasons.append(reason)
+        with system_context(reason=reason):
+            yield
 
-        def __init__(self, reason: str | None) -> None:
-            """Store the reason passed to ``system_context``."""
+    with model_tables((AdminDeleteTarget,)):
+        with system_context(reason="tests.deletion.admin_fixture"):
+            target = AdminDeleteTarget.objects.create(name="admin-delete")
+        target_pk = target.pk
 
-            self.reason = reason
+        def preview_for(cls: type[DeletePreview], instance: AdminDeleteTarget) -> DeletePreview:
+            del cls
+            assert instance == target
+            return DeletePreview(
+                total_deleted_count=1,
+                deleted=[DeletePreviewGroup(label="admin delete targets", count=1)],
+                updated=[],
+                blocked=[],
+                has_blockers=False,
+            )
 
-        def __enter__(self) -> None:
-            reasons.append(self.reason)
+        monkeypatch.setattr(iam_resources, "system_context", recording_system_context)
+        monkeypatch.setattr(DeletePreview, "from_instance", classmethod(preview_for))
 
-        def __exit__(self, *exc: object) -> None:
-            return None
-
-    def recording_system_context(*, reason: str | None = None) -> Context:
-        """Return a recording system context."""
-
-        return Context(reason)
-
-    def preview_for(cls: type[DeletePreview], instance: Group) -> DeletePreview:
-        del cls
-        assert instance == group
-        return DeletePreview(
-            total_deleted_count=1,
-            deleted=[DeletePreviewGroup(label="groups", count=1)],
-            updated=[],
-            blocked=[],
-            has_blockers=False,
+        preview = delete_by_public_id(
+            AdminDeleteTarget,
+            str(target_pk),
+            confirm=True,
+            reason="iam.graphql.user.delete",
+            before_delete=lambda row: hooked.append(row.pk),
         )
 
-    monkeypatch.setattr(deletion_module, "system_context", recording_system_context)
-    monkeypatch.setattr(DeletePreview, "from_instance", classmethod(preview_for))
-
-    preview = delete_by_public_id(
-        Group,
-        str(group.pk),
-        confirm=True,
-        reason="iam.graphql.user.delete",
-        before_delete=lambda row: hooked.append(cast(Group, row).pk),
-    )
-
-    assert not preview.has_blockers
-    assert reasons == ["iam.graphql.user.delete"]
-    assert hooked == [group.pk]
-    assert not Group.objects.filter(pk=group.pk).exists()
+        assert not preview.has_blockers
+        assert reasons == ["iam.graphql.user.delete"]
+        assert hooked == [target_pk]
+        with system_context(reason="tests.deletion.admin_assert"):
+            assert not AdminDeleteTarget.objects.filter(pk=target_pk).exists()
 
 
 @pytest.mark.django_db

@@ -41,13 +41,14 @@ from angee.graphql.data.hasura import (
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
+from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
 from angee.graphql.relations import RecordPointerType
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import TrashedRefMixin
 from angee.iam.graphql.access import ADMIN_PERMISSION_CLASSES
 from angee.iam.graphql.actions import action_target, authorized_permission_target, resolve_action_target
 from angee.iam.graphql.capabilities import held_permissions, permissions_field
-from angee.iam.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, ProtectedNode
+from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import (
     RECORD_REFERENCE_ANNOTATIONS,
     RecordReferenceNode,

@@ -32,12 +32,13 @@ from angee.graphql.data.hasura import (
 )
 from angee.graphql.ids import PublicID, instance_for_id, optional_public_id
 from angee.graphql.inputs import input_values
+from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
 from angee.graphql.relations import RecordPointerType
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.graphql import capabilities
 from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
-from angee.iam.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, ProtectedNode
+from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.identity import user_public_id

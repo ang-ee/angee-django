@@ -11,10 +11,11 @@ from angee.graphql.data.contracts import DataResourceSubtitleMetadata
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, hasura_model_resource
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
 from angee.graphql.ids import PublicID
+from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
 from angee.iam.graphql.capabilities import permissions_field
-from angee.iam.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, ProtectedNode
+from angee.iam.graphql.node import ProtectedNode
 from angee.iam.schema import UserType
 
 Note = apps.get_model("notes", "Note")
