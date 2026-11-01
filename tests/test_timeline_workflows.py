@@ -6,6 +6,7 @@ from datetime import timedelta
 
 import pytest
 from django.db import connection
+from django.db.models.query import EmptyQuerySet
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import (
@@ -164,6 +165,7 @@ def test_run_waiting_projection_preserves_read_scope_and_row_cardinality(review)
     assert list(hidden.annotate(waiting=kind.waiting_on_expression(hidden, reviewer))) == []
     with actor_context(reviewer):
         for actor in (None, SubjectRef.of("auth/group", str(reviewer.pk))):
+            assert isinstance(Decision.objects.using(rows.db).waiting_on(actor), EmptyQuerySet)
             assert list(rows.annotate(waiting=kind.waiting_on_expression(rows, actor))
                         .values_list("pk", "waiting")) == [(run.pk, False)]
 

@@ -8,9 +8,9 @@ from typing import Any
 
 from django.apps import apps
 from django.db import models
-from rebac import GenericTarget, generic_target, system_context, to_subject_ref
+from django.db.models.query import EmptyQuerySet
+from rebac import GenericTarget, generic_target, system_context
 
-from angee.base.permissions import actor_user_id
 from angee.graphql.relations import with_record_reference_access
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, actor_label
 from angee.workflows.states import RunStatus, StepRunStatus, WaitingKind
@@ -91,13 +91,12 @@ class RunKind(TimelineKind):
 
     def waiting_on_expression(self, rows: Any, actor: Any) -> models.Expression:
         """Project a readable waiting decision without rebuilding the run branch."""
-        subject = to_subject_ref(actor) if actor is not None else None
-        if actor_user_id(subject) is None:
+        decisions = apps.get_model("decisions", "Decision").objects.using(rows.db).waiting_on(actor)
+        if isinstance(decisions, EmptyQuerySet):
             return models.Value(False, output_field=models.BooleanField())
-        decisions = (apps.get_model("decisions", "Decision").objects.using(rows.db)
-                     .with_actor(subject).waiting_on(subject).scoped())
+        decisions = decisions.with_actor(actor).scoped()
         steps = (apps.get_model("workflows", "StepRun").objects.using(rows.db)
-                 .with_actor(subject).scoped().filter(
+                 .with_actor(actor).scoped().filter(
                      run_id=models.OuterRef("pk"), status=StepRunStatus.WAITING,
                      waiting_kind=WaitingKind.DECISION, decision_id__in=decisions.values("pk"),
                  ))
