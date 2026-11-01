@@ -116,6 +116,14 @@ fields the actor cannot read on the record (`read__<field>`): statement tables
 mirror history tables, so the subject's redaction is the only rule. MTI parents'
 versions of the same row join the entry. A page holds at most 100 changesets.
 
+A null `changes` or `statements` projection means its retained source values are
+unavailable; an empty list remains a truthful empty projection. Attribution and
+independently complete details remain visible with one warning on the entry.
+A delta also needs its predecessor: a complete current version with an incomplete
+predecessor has null changes and cannot be reverted. Merge identities use retained
+primary keys, deletion/redirect facts and capture metadata, which the former
+changeset collision did not overwrite.
+
 `revert_changeset(model, id, changeset)` is the `ActionResult` verb behind an
 Activity history entry's Revert: the record's `history_revert_permission` is the one
 admission rule and `Changeset.revert()` restores. Resource metadata marks a model that keeps history with

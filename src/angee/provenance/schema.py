@@ -184,8 +184,9 @@ class HistorySummaryType(HistoryAttribution):
 class HistoryEntryType(HistoryAttribution):
     """One changeset with the record's authorized deltas and replay eligibility."""
 
-    changes: list[HistoryFieldChangeType]
-    statements: list[HistoryStatementType]
+    # None distinguishes unavailable retained values from a truthful empty projection.
+    changes: list[HistoryFieldChangeType] | None
+    statements: list[HistoryStatementType] | None
     merge: HistoryMergeType | None
     can_revert: bool
 
@@ -365,18 +366,23 @@ class RecordHistory:
         merges = self._merges(page)
         actors = _actor_projections(page)
         revertable = self.record.revertable_changesets(page, actor=self.actor)
-        return [
-            HistoryEntryType(
-                **_attribution(changeset, *actors.get(changeset.actor_ref, (None, None))),
-                changes=[
-                    change for state in versions.get(changeset.pk, ()) for change in self._changes(state, redacted)
-                ],
-                statements=self._statements(statements.get(changeset.pk, ()), redacted),
-                merge=merges.get(changeset.pk),
-                can_revert=changeset.pk in revertable,
+        entries: list[HistoryEntryType] = []
+        for changeset in page:
+            deltas = [self._changes(state, redacted) for state in versions.get(changeset.pk, ())]
+            statement_versions = statements.get(changeset.pk, ())
+            complete_statements = all(
+                (owner := model_history(table)) is not None and owner.source_state_complete(version)
+                for table, version in statement_versions
             )
-            for changeset in page
-        ]
+            available = all(delta is not None for delta in deltas)
+            entries.append(HistoryEntryType(
+                **_attribution(changeset, *actors.get(changeset.actor_ref, (None, None))),
+                changes=[change for delta in deltas if delta is not None for change in delta] if available else None,
+                statements=self._statements(statement_versions, redacted) if complete_statements else None,
+                merge=merges.get(changeset.pk),
+                can_revert=available and complete_statements and changeset.pk in revertable,
+            ))
+        return entries
 
     def page(self, limit: int, offset: int, selected: PublicID | None = None) -> RecordHistoryType:
         changesets = self.changesets()
@@ -534,7 +540,7 @@ class RecordHistory:
         self,
         state: _Version,
         redactions: dict[tuple[type[models.Model], Any, Any | None], frozenset[str]],
-    ) -> list[HistoryFieldChangeType]:
+    ) -> list[HistoryFieldChangeType] | None:
         """Project the history owner's native diff through its redaction decision."""
 
         table, first, last, previous = state
@@ -542,6 +548,8 @@ class RecordHistory:
         history = model_history(table)
         if history is None:
             return []
+        if not history.source_state_complete(first, last, previous):
+            return None
         hidden = redactions.get(
             (table, pk, last.history_changeset_id),
             redactions[table, pk, None],

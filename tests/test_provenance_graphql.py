@@ -138,6 +138,43 @@ def test_history_lists_a_records_changesets_newest_first_with_their_field_deltas
     assert _changes(draft)["vault"][1] == public_id_of(_vault)
 
 
+def test_incomplete_predecessor_keeps_history_page_and_independent_complete_delta() -> None:
+    owner = create_user("history-incomplete-predecessor")
+    _vault, page = _titled_page(owner)
+    with system_context(reason="tests.legacy.incomplete"):
+        Page.history.filter(id=page.pk, history_type="+").update(history_source_complete=False)
+    with actor_context(owner), changeset(fresh=True, change_reason="Complete later edit"):
+        page.title = "Later title"
+        page.save(update_fields=["title"])
+
+    later, rename, draft = _history(_schema(), owner, "knowledge.Page", page)["entries"]
+
+    assert _changes(later) == {"title": ("Final title", "Later title")}
+    assert rename["change_reason"] == "Rename"
+    assert rename["changes"] is None
+    assert rename["can_revert"] is False
+    assert draft["change_reason"] == "Draft"
+    assert draft["changes"] is None
+    assert draft["can_revert"] is False
+
+
+def test_incomplete_statement_values_keep_attribution_and_independent_field_changes() -> None:
+    person = create_user("history-incomplete-statement")
+    with actor_context(person), changeset(fresh=True, change_reason="Create party"):
+        party = Party.objects.create(display_name="Retained person")
+    statement_model = Party.statements.model
+    with system_context(reason="tests.legacy.incomplete_statement"):
+        statement_model.history.filter(subject_id=party.pk).update(history_source_complete=False)
+
+    created = _history(_schema(), person, "parties.Party", party)["entries"][-1]
+
+    assert created["change_reason"] == "Create party"
+    assert created["actor"] == str(public_subject_ref(to_subject_ref(person)))
+    assert created["changes"] is not None
+    assert created["statements"] is None
+    assert created["can_revert"] is False
+
+
 @pytest.mark.usefixtures("activity_catalog", "composed_permissions")
 def test_history_keeps_foreign_keys_to_named_fields_as_stored_values() -> None:
     owner = create_user("history-named-reference")
