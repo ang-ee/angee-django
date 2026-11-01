@@ -12,6 +12,8 @@ import { useCollectionQueryBatch } from "../collection-source";
 import { EMPTY_ARRAY } from "./types";
 export function useResourceViewSurface<TRow extends Row = Row>({
   source,
+  records,
+  relatedModels,
   columns,
   fields,
   filter,
@@ -70,6 +72,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
       pageSize: paginationState.pageSize,
     },
     fields: requestedFields,
+    records, relatedModels,
     enabled: active && !source,
   });
   const sourceRequests = React.useMemo(

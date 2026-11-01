@@ -18,6 +18,8 @@ import type { ResourceListResult, ResourceViewSurface, RowRecord, RowsResourceVi
  * only the active path issues a query and resolves a data provider.
  */
 export function useClientResourceViewSurface<TRow extends Row = Row>({
+  records,
+  relatedModels,
   columns,
   fields,
   filter,
@@ -45,6 +47,7 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
     resource: dataResource,
     scope: { filter: undefined, order: {}, page: 1, pageSize: CLIENT_ROW_MODEL_FETCH_CAP },
     fields: requestedFields,
+    records, relatedModels,
     enabled: active,
   });
   const allRows = React.useMemo(

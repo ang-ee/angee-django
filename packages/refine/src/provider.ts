@@ -26,6 +26,8 @@ import {
 } from "./dialect/wire";
 import {
   createAuthoredLiveInvalidation,
+  authoredQueryReadsLiveChange,
+  authoredQueryReadsAnyModel,
   mutationReconciliation,
   type ReconciliationPublish,
   type AuthoredLiveChange,
@@ -331,6 +333,9 @@ export function createAngeeChangeLiveProvider(
       return [resource.schemaName, "default"].some((provider) => {
         const key = keys().data(provider).resource(identifier);
         if (!matchQuery({ queryKey: key.get() }, query)) return false;
+        if (authoredQueryReadsAnyModel(query.meta, [record.model])) {
+          return authoredQueryReadsLiveChange(query.meta, { ...change, model: record.model, id: record.id });
+        }
         if (!record.id) return true;
         if (matchQuery({ queryKey: key.action("one").get() }, query)) {
           return matchQuery({ queryKey: key.action("one").id(record.id).get() }, query);

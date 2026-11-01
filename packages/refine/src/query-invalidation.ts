@@ -35,7 +35,7 @@ export function authoredQueryReadsChange(meta: unknown, model: string, id: strin
 }
 
 /** Match one live change: an exact row with its related rows, or a whole model. */
-function authoredQueryReadsLiveChange(meta: unknown, change: AuthoredLiveChange): boolean {
+export function authoredQueryReadsLiveChange(meta: unknown, change: AuthoredLiveChange): boolean {
   if (!change.id) return authoredQueryReadsAnyModel(meta, [change.model]);
   return authoredQueryReadsChange(meta, change.model, change.id)
     || authoredQueryReadsAnyModel(meta, [change.model]) && (change.relatedRecords ?? []).some((record) => {
