@@ -147,20 +147,24 @@ describe("Angee Hasura provider defaults", () => {
     });
   });
 
-  test.each([undefined, [], ["id"]])("keeps native cancellation lazy when normalizing projection %j", async (fields) => {
-    const readSignal = vi.fn(() => new AbortController().signal);
+  test.each([undefined, [], ["id"]])("forwards native cancellation through projection normalization %j", async (fields) => {
+    const signal = new AbortController().signal;
+    const readSignal = vi.fn(() => signal);
     const meta = { fields, get signal() { return readSignal(); } };
     const provider = createAngeeHasuraDataProvider({
       url: "https://example.invalid/graphql", auth: (request) => request,
-      fetch: async () => jsonResponse({
-        channels: [{ id: "chn_1" }], channels_by_pk: { id: "chn_1" },
-        channels_aggregate: { aggregate: { count: 1 } },
-      }),
+      fetch: async (_input, init) => {
+        expect(init?.signal).toBe(signal);
+        return jsonResponse({
+          channels: [{ id: "chn_1" }], channels_by_pk: { id: "chn_1" },
+          channels_aggregate: { aggregate: { count: 1 } },
+        });
+      },
     });
     await provider.getList({ resource: "channels", meta });
     await provider.getOne({ resource: "channels", id: "chn_1", meta });
     await provider.getMany({ resource: "channels", ids: ["chn_1"], meta });
-    expect(readSignal).not.toHaveBeenCalled();
+    expect(readSignal).toHaveBeenCalledTimes(3);
     expect(meta.fields).toBe(fields);
   });
 
