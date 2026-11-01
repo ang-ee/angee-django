@@ -13,6 +13,7 @@ from rebac import (
     RelationshipTuple,
     SubjectRef,
     actor_context,
+    delete_relationship,
     system_context,
     to_object_ref,
     to_subject_ref,
@@ -26,6 +27,7 @@ from angee.decisions.testing.models import Decision
 from angee.graphql import publishing
 from angee.graphql.publishing import change_published
 from angee.provenance.context import changeset
+from angee.timeline.reading import Timeline
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.states import RunStatus, WaitingKind
 from angee.workflows.testing.drivers import decide, load_workflow, run_until
@@ -120,7 +122,7 @@ def test_waiting_run_folds_readable_children_and_computes_attention(review) -> N
     assert data["timeline_attention"] == data["timeline"]["needs_me"] == 1
     folded_groups = [
         query["sql"] for query in queries.captured_queries
-        if 'AS "_timeline_fold_type"' in query["sql"] and "GROUP BY" in query["sql"]
+        if 'SELECT "timeline_source"."_timeline_fold_type"' in query["sql"] and "GROUP BY" in query["sql"]
     ]
     assert len(folded_groups) == 1
 
@@ -298,3 +300,23 @@ def test_each_committed_workflow_wait_refreshes_the_inherited_record_feed(
     run_until(run)
     assert snapshots[-1]["timeline_attention"] == 0
     assert snapshots[-1]["timeline"]["entries"][0]["detail"] == "Succeeded"
+
+
+def test_cached_source_query_rechecks_parent_read_after_revocation(review) -> None:
+    """Building fold membership never freezes a readable parent's identity set."""
+    _, reviewers, _, question = review
+    run, step = start_review(review)
+    reviewer, subject = reviewers[0], question.review_subject
+    share = RelationshipTuple(to_object_ref(run), "reader", to_subject_ref(reviewer))
+    with system_context(reason="test.timeline.fold_parent_share"):
+        write_relationships([share])
+    timeline = Timeline(subject, reviewer)
+    assert timeline.lines is not None
+    with system_context(reason="test.timeline.fold_parent_revoke"):
+        delete_relationship(share)
+    page = timeline.page()
+    assert all(entry.target_id != public_id_of(run) for entry in page.entries)
+    decision, = [entry for entry in page.entries if entry.kind == "decisions.decision"]
+    assert decision.target_id == public_id_of(step.decision) and decision.needs_me
+    assert next(kind.count for kind in page.kinds if kind.id == "workflows.run") == 0
+    assert page.needs_me == 1

@@ -1571,9 +1571,11 @@ open fresh evaluator scopes for authorization and change-feed reads.
 - **Live timelines read owners; notifications invalidate reads.**
   [Timeline kinds](../../src/angee/timeline/kinds.py) contribute actor-scoped
   source querysets. The [read owner](../../src/angee/timeline/reading.py)
-  combines their common columns with Django's `union(all=True)`, applying
-  permissions, attention, folding and cursors in each branch before the shared
-  page limit. A kind projects attention with its join-free `waiting_on_expression`;
+  combines their common columns with Django's `union(all=True)` in one upstream
+  CTE source relation per statement. Each branch retains its permissions and
+  attention; native outer queries apply folding, cursors and the shared page limit.
+  Parent membership uses the same authorized source relation in that statement,
+  including its final permission witnesses. A kind projects attention with its join-free `waiting_on_expression`;
   queryset `waiting_on` filters compose that same owner predicate. Related read/action
   gates remain; outer record membership and read scope are not repeated.
   Display payloads are hydrated only for selected source rows.
