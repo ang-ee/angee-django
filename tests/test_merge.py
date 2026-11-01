@@ -22,7 +22,8 @@ from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
 from angee.base.models import merge as merge_module
-from angee.base.signals import pre_merge
+from angee.base.models import merge_references as reference_owner
+from angee.base.signals import bulk_updated
 from angee.base.models.identity import public_id_of
 from angee.base.models.merge_references import (
     EdgeReference,
@@ -133,21 +134,26 @@ def test_several_records_merge_into_one_survivor() -> None:
     assert _tagged_parties(mobile) == sorted([ada.pk, bob.pk])
 
 
-def test_pre_merge_exposes_the_same_locked_sources_to_lifecycle_receivers() -> None:
+def test_native_reference_move_without_batch_projection_keeps_the_single_update_path(monkeypatch) -> None:
     survivor, duplicate, _ada, _bob = _vocabulary()
     observed = []
 
-    def observe(sender, *, survivor, merged, contexts, **kwargs):
-        observed.append((sender, survivor.pk, tuple(row.pk for row in merged)))
-        contexts.callback(lambda: observed.append("completed"))
+    def observe(sender, **kwargs):
+        observed.append(kwargs)
 
-    pre_merge.connect(observe, sender=Tag, weak=False)
+    def unexpected_batch(_query):
+        raise AssertionError("A model without bulk target projection entered observed batching")
+
+    monkeypatch.setattr(reference_owner, "query_batch_size", unexpected_batch)
+    reference = next(item for item in references(Tag) if item.model is TagAssignment and isinstance(item, ForeignKeyReference))
+    bulk_updated.connect(observe, sender=TagAssignment, weak=False)
     try:
-        with actor_context(_curator("merge-signal-sources")):
-            Tag.objects.get(pk=survivor.pk).merge(records=[public_id_of(duplicate)])
+        with changeset(), system_context(reason="test.merge.unobserved_reference"):
+            reference.move(reference.rows(duplicate), survivor=survivor)
     finally:
-        pre_merge.disconnect(observe, sender=Tag)
-    assert observed == [(Tag, survivor.pk, (duplicate.pk,)), "completed"]
+        bulk_updated.disconnect(observe, sender=TagAssignment)
+    assert observed == []
+    assert _tagged_parties(survivor) == sorted([_ada.pk, _bob.pk])
 
 
 def test_a_retained_alias_protects_its_survivor_from_deletion() -> None:
