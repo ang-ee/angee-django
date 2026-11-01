@@ -19,7 +19,6 @@ from typing import Any
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
-from django.db import models
 from rebac import system_context, to_subject_ref
 
 from angee.iam.models.merge import ProtectedMergeableMixin
@@ -35,7 +34,7 @@ SOURCE_IDENTITY_RULE = "messaging.source_identity"
 """The provenance rule that asserts email copies, and the reason its folds record."""
 
 
-class SourceCopyMixin(ProtectedMergeableMixin, StatementsMixin, models.Model):
+class SourceCopyMixin(ProtectedMergeableMixin, StatementsMixin):
     """A channel occurrence; an applied ``same_as`` statement folds it into its oldest copy."""
 
     channel_id: int | None
