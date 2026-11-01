@@ -35,6 +35,7 @@ vi.mock("./record-chrome-context", () => ({
 vi.mock("@angee/refine", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   useActionMutation: dataMocks.useActionMutation,
+  useReconcileMutationResponse: () => Object.assign(async () => undefined, { batch: (run: () => Promise<unknown>) => run() }),
 }));
 
 vi.mock("./action-result-run", () => ({

@@ -1,5 +1,8 @@
 // @vitest-environment happy-dom
 
+import { createAngeeChangeLiveProvider, useReconcileMutationResponse } from "@angee/refine";
+import { keys } from "@refinedev/core";
+import { QueryObserver } from "@tanstack/react-query";
 import type { Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import {
@@ -26,13 +29,52 @@ import type { ActionDescriptor } from "../page";
 import { jsonSchemaActionArgs } from "./json-schema";
 import { useTrashActions } from "../resource/trash";
 
-const { Provider, clearClients } = createUiTestProviders({
+const { Provider, createClient, clearClients } = createUiTestProviders({
   queryClientConfig: { defaultOptions: {
     mutations: { retry: false }, queries: { retry: false },
   } },
 });
 
 describe("RecordActionBar", () => {
+  test("typed record action effects and automatic exact form completion share one awaited read", async () => {
+    const client = createClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+    const key = keys().data("console").resource("notes_Note").action("one").id("note-1").params({ fields: ["id", "revision"] }).get();
+    client.setQueryData(key, { data: { id: "note-1", revision: 1 } });
+    let release!: () => void;
+    const read = vi.fn(() => new Promise<{ data: { id: string; revision: number } }>((resolve) => {
+      release = () => resolve({ data: { id: "note-1", revision: 2 } });
+    }));
+    const observer = new QueryObserver(client, { queryKey: key, queryFn: read,
+      meta: { angeeModels: ["notes.Note"], angeeRecords: [{ model: "notes.Note", id: "note-1" }] } });
+    const stop = observer.subscribe(() => undefined);
+    const provider = createAngeeChangeLiveProvider(undefined, [], { queryClient: client });
+    const reload = vi.fn(async () => (await observer.refetch()).data?.data ?? null);
+    function TypedAction() {
+      const reconcile = useReconcileMutationResponse();
+      return <RecordActionBar record={{ id: "note-1" }} reload={reload} refreshQueryKey={key} actions={[
+        { id: "review", label: "Review", args: [], submit: async () => {
+          await reconcile(undefined, undefined, { records: [{ model: "notes.Note", id: "note-1" }] });
+          return { ok: true, message: "Reviewed" };
+        } },
+      ]} />;
+    }
+    render(<Provider queryClient={client} liveProvider={provider}><ModalsHost><ToastProvider>
+      <AppRuntimeProvider runtime={{ widgets: defaultWidgets }}><TypedAction /></AppRuntimeProvider>
+    </ToastProvider></ModalsHost></Provider>);
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Review" }));
+      const dialog = await screen.findByRole("dialog", { name: "Review" });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Review" }));
+      await waitFor(() => expect(read).toHaveBeenCalledOnce());
+      expect(screen.queryByRole("dialog", { name: "Review" })).not.toBeNull();
+      await act(async () => { release(); });
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Review" })).toBeNull());
+      expect(read).toHaveBeenCalledOnce();
+      expect(reload).not.toHaveBeenCalled();
+    } finally { provider.setEnabled(false); stop(); }
+  });
+
   test("trash opens its native reason prompt without a second confirmation", async () => {
     const resource = testDataResource("test.Note", { resourceType: "test/note", fields: [{
       name: "is_trashed", kind: "scalar", scalar: "Boolean", readable: true, aggregatable: false,

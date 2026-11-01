@@ -1,3 +1,4 @@
+import type { QueryKey } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import type { Row } from "@angee/metadata";
 import type { ActionOutcome, ListQueryFieldArgument } from "@angee/refine";
@@ -28,8 +29,10 @@ export interface ActionContext {
   record: Row | null;
   /** Values collected by the action's `prompt`, keyed by field name. */
   values: Record<string, string>;
-  /** Re-pull the target record into the form (fire-and-forget). */
-  refresh: () => void;
+  /** Re-pull the target record into the form. Opaque/custom reloads remain imperative. */
+  refresh: () => void | Promise<unknown>;
+  /** Exact native read owned by the form, when its reload is query-backed. */
+  refreshQueryKey?: QueryKey;
   /** Patch the target record through the model's generated `update` mutation. */
   update: (patch: Record<string, unknown>) => Promise<Row | null>;
   /** Open a follow-up prompt — e.g. to reveal a freshly rotated secret. */

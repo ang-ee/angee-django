@@ -5,7 +5,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
 
 import { createAngeeChangeLiveProvider } from "./provider";
-import { acceptQueryData, useAcceptQueryData, useReconcileMutationResponse } from "./query-invalidation";
+import { createAuthoredLiveInvalidation, acceptQueryData, useAcceptQueryData, useReconcileMutationResponse } from "./query-invalidation";
 import { createRefineTestProviders } from "./testing";
 
 const { Provider, createClient, clearClients } = createRefineTestProviders();
@@ -29,9 +29,12 @@ test("actual complete acceptance settles before held derived reads without rerea
   const hook = renderHook(() => useReconcileMutationResponse(), { wrapper });
   try {
     await act(async () => {
-      await hook.result.current({ title: "accepted" }, {}, {
-        invalidateModels: ["notes.Note"],
-        acceptResponse: (data) => acceptQueryData(client, detailKey, data),
+      await hook.result.current.batch(async () => {
+        await hook.result.current({ title: "accepted" }, {}, {
+          invalidateModels: ["notes.Note"],
+          acceptResponse: (data) => acceptQueryData(client, detailKey, data),
+        });
+        await hook.result.current(undefined, undefined, { queryKeys: [detailKey] });
       });
     });
     expect(client.getQueryData(detailKey)).toEqual({ title: "accepted" });
@@ -89,4 +92,53 @@ test("repeated local-only suspension invalidates a callback captured while alrea
   await act(async () => { await hook.result.current(["private"], "new actor"); });
   expect(client.getQueryData(["private"])).toBe("new actor");
   provider.setEnabled(false);
+});
+
+
+test("batch acceptance excludes only its fallback; a later independent live change still reads", async () => {
+  vi.useFakeTimers();
+  const client = createClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  const key = ["exact-form", { fields: ["title"] }];
+  client.setQueryData(key, { title: "accepted" });
+  const read = vi.fn(async () => ({ title: "remote" }));
+  const observer = new QueryObserver(client, { queryKey: key, queryFn: read,
+    meta: { angeeModels: ["notes.Note"], angeeRecords: [{ model: "notes.Note", id: "n1" }] } });
+  const stop = observer.subscribe(() => undefined);
+  const scheduler = createAuthoredLiveInvalidation(client);
+  try {
+    await scheduler.batch(async () => {
+      await scheduler.reconcile({ changes: [{ model: "notes.Note", id: "n1" }],
+        accepted: new Set([client.getQueryCache().find({ queryKey: key, exact: true })!.queryHash]), background: true });
+      await scheduler.reconcile({ changes: [], queryKeys: [key] });
+    });
+    expect(read).not.toHaveBeenCalled();
+    scheduler.push({ model: "notes.Note", id: "n1" });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(read).toHaveBeenCalledOnce();
+    expect(observer.getCurrentResult().data).toEqual({ title: "remote" });
+  } finally { scheduler.clear(); stop(); }
+});
+
+
+test.each([true, false])("exact fallback respects no-effects response completeness (%s)", async (complete) => {
+  const client = createClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  const key = ["form-projection", { fields: ["title", "count"] }];
+  client.setQueryData(key, { title: "before", count: 1 });
+  const read = vi.fn(async () => ({ title: "authoritative", count: 2 }));
+  const observer = new QueryObserver(client, { queryKey: key, queryFn: read });
+  const stop = observer.subscribe(() => undefined);
+  const provider = createAngeeChangeLiveProvider(undefined, [], { queryClient: client });
+  const wrapper = ({ children }: { children: ReactNode }) => <Provider queryClient={client} liveProvider={provider}>{children}</Provider>;
+  const hook = renderHook(() => useReconcileMutationResponse(), { wrapper });
+  try {
+    await act(async () => { await hook.result.current.batch(async () => {
+      await hook.result.current(undefined, undefined, {
+        acceptResponse: () => acceptQueryData(client, key, complete
+          ? { title: "accepted", count: 2 } : { title: "accepted", count: 1 }, { complete }),
+      });
+      await hook.result.current(undefined, undefined, { queryKeys: [key] });
+    }); });
+    expect(read).toHaveBeenCalledTimes(complete ? 0 : 1);
+    expect(observer.getCurrentResult().data?.title).toBe(complete ? "accepted" : "authoritative");
+  } finally { provider.setEnabled(false); stop(); }
 });
