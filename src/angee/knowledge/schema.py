@@ -37,11 +37,12 @@ from angee.graphql.ids import (
     require_public_id,
     to_public_id,
 )
+from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch
 from angee.iam.graphql.actions import session_user
 from angee.iam.graphql.capabilities import permission_expression, permissions_field
-from angee.iam.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, ProtectedNode
+from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import actor_scoped_to_one
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.identity import user_display_label, user_label, user_public_id

@@ -25,7 +25,7 @@ from rebac.models import active_relationship_model
 from rebac.resources import model_for_resource_type
 from rebac.roles import ROLE_RELATION, grant, revoke
 
-from angee.graphql.data.metadata import _grantable_relations
+from angee.iam.graphql.resources import _grantable_relations
 from angee.projects.testing.models import Project
 from tests.conftest import addon_schema, execute_schema
 from tests.conftest import create_platform_admin as _platform_admin
