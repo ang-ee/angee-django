@@ -13,7 +13,6 @@ from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
 from angee.base.models.locks import ImmutableFieldsMixin, OptimisticLockMixin
-from angee.base.models.timestamps import TimestampMixin
 from angee.base.models.trash import TrashQuerySet
 from angee.iam.models.base import ProtectedModel
 from angee.iam.models.ownership import ItemOwnershipMixin, OwnerMixin, OwnerQuerySet
@@ -81,7 +80,7 @@ class ReceiptRow(ImmutableFieldsMixin):
         app_label = "scopedemo"
 
 
-class TrashRow(ProtectedTrashMixin, TimestampMixin):
+class TrashRow(ProtectedTrashMixin):
     title = models.CharField(max_length=40, default="kept")
     objects = TrashQuerySet.as_manager()
 

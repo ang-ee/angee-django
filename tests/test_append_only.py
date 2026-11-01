@@ -29,7 +29,7 @@ class RetainedEvidenceQuerySet(ProtectedAppendOnlyQuerySet["RetainedEvidence"], 
     """Compose append-only policy with the ordinary authorization chain."""
 
 
-class RetainedEvidence(ProtectedAppendOnlyModel, AuditMixin, models.Model):
+class RetainedEvidence(ProtectedAppendOnlyModel, AuditMixin):
     """Minimal audited row exercising the shared collection policy."""
 
     name = models.CharField(max_length=64)

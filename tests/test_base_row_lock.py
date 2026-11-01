@@ -36,7 +36,7 @@ def test_collection_writes_cannot_mutate_or_create_system_rows(composed_tables: 
 
 @isolate_apps()
 def test_row_lock_model_requires_collection_guard_on_default_and_base_managers() -> None:
-    class Unguarded(ProtectedRowLockMixin, models.Model):
+    class Unguarded(ProtectedRowLockMixin):
         objects = models.Manager()
         _angee_base = models.Manager()
 

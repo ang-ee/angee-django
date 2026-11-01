@@ -11,7 +11,6 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.core.exceptions import ValidationError
 from django.db import models, router, transaction
-from django_compose.models import Composable
 from django_provenance.base import AbstractChangeset
 from django_provenance.context import actor_context as provenance_actor_context
 from django_provenance.replay import ordered_states
@@ -52,7 +51,7 @@ from angee.provenance.querysets import model_history
 MACHINE_REASON = re.compile(r"[a-z0-9_]+(?:\.[a-z0-9_]+)+")
 
 
-class Changeset(AbstractChangeset, Composable, ProtectedRecordRefMixin, SqidMixin, RebacMixin, concrete=True):
+class Changeset(AbstractChangeset, ProtectedRecordRefMixin, SqidMixin, RebacMixin, concrete=True):
     """One logical write's attribution and touched-model index; never historized.
 
     ``actor_ref`` stores the native SubjectRef wire representation in the historical
