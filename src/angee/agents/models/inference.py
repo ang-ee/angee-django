@@ -12,7 +12,6 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import PermissionDenied
 from django.db import models, transaction
-from django_compose.models import Composable
 from pydantic_ai.messages import (
     BinaryContent,
     ModelMessage,
@@ -27,7 +26,6 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import RequestUsage, RunUsage
 from rebac import system_context
-from rebac.mixins import RebacModelBase
 
 from angee.agents.backends import InferenceBackend
 from angee.agents.models.choices import InferenceModelStatus, InferenceModelUse
@@ -35,7 +33,7 @@ from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.implementations import ImplDefaultsMixin
-from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.base import ProtectedDataModel, ProtectedModel
 from angee.integrate.models import IntegrationCreateMode
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.resources.mixins import ResourceLoadMixin
@@ -161,7 +159,7 @@ def normalize_inference_usage(usage: RequestUsage | RunUsage) -> dict[str, int]:
     return {key: int(value) for key, value in values.items() if value}
 
 
-class InferenceProvider(ImplDefaultsMixin, Composable, metaclass=RebacModelBase, inherits="integrate.Integration"):
+class InferenceProvider(ImplDefaultsMixin, ProtectedModel, inherits="integrate.Integration"):
     """An LLM provider account, materialized as an integration child row.
 
     It draws its API credential from its inherited integration credential and

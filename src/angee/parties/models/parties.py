@@ -9,15 +9,13 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
-from django_compose.models import Composable
 from rebac import PermissionDenied, actor_context, database_context
 from rebac.database import write_alias
-from rebac.mixins import RebacModelBase
 
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.lineage import concrete_child, concrete_child_models
 from angee.base.models.identity import public_id_of
-from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.base import ProtectedDataModel, ProtectedModel
 from angee.iam.models.merge import ProtectedMergeableMixin
 from angee.iam.models.ownership import OwnerMixin
 from angee.iam.models.trash import ProtectedTrashMixin
@@ -483,7 +481,7 @@ class Party(
             self.same_as.for_pair(self, row).with_actor(instance_actor(self)).confirm(aspect="same_as", values={})
 
 
-class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
+class Person(ProtectedModel, inherits="parties.Party"):
     """A human party — carries name parts and an optional platform-user link."""
 
     statements = StatementRecords(
@@ -531,7 +529,7 @@ class Person(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
         rebac_resource_type = "parties/person"
 
 
-class Organization(Composable, metaclass=RebacModelBase, inherits="parties.Party"):
+class Organization(ProtectedModel, inherits="parties.Party"):
     """An organisation party — carries its legal name and primary domain."""
 
     statements = StatementRecords(

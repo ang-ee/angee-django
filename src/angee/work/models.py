@@ -28,7 +28,6 @@ from django_compose.models import Composable
 from rebac import PermissionDenied, current_actor, database_context, system_context
 from rebac.actors import is_sudo
 from rebac.managers import TrackedManager
-from rebac.mixins import RebacModelBase
 
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
@@ -38,7 +37,7 @@ from angee.base.models.stages import StagedModelMixin
 from angee.base.models.stages import StageManager as StageManagerPrimitive
 from angee.base.models.stages import StageQuerySet as StageQuerySetPrimitive
 from angee.iam.managers import ProtectedManager, ProtectedUnscopedManager
-from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.base import ProtectedDataModel, ProtectedModel
 from angee.iam.models.locks import ProtectedRowLockMixin, ProtectedRowLockQuerySet
 from angee.iam.permissions import actor_user_id, instance_actor
 from angee.iam.querysets import ProtectedQuerySet
@@ -144,7 +143,7 @@ class QueueManager[QueueT: Queue](GroupManager[QueueT]):
         )
 
 
-class Queue(ImmutableFieldsMixin, Composable, metaclass=RebacModelBase, inherits="spaces.Group"):
+class Queue(ImmutableFieldsMixin, ProtectedModel, inherits="spaces.Group"):
     """An ongoing operational context, materialized as a ``spaces.Group`` child."""
 
     immutable_fields = ("provision_stages",)
