@@ -1,4 +1,5 @@
 import * as React from "react";
+import type { AuthoredQueryOptions } from "@angee/refine";
 import { type ModelMetadata, type QueryFilter, type Row } from "@angee/metadata";
 import { type BaseRecord } from "@refinedev/core";
 import { type ColumnDef, type Row as TableRowModel, type Table as TableModel, type VisibilityState } from "@tanstack/react-table";
@@ -37,7 +38,7 @@ export interface ListViewNavigationScope {
   pageSize: number;
 }
 
-export interface UseResourceViewSurfaceProps<TRow extends Row = Row> {
+export interface UseResourceViewSurfaceProps<TRow extends Row = Row> extends Pick<AuthoredQueryOptions, "records" | "relatedModels"> {
   resource: string;
   source?: CollectionSource<TRow>;
   columns: readonly ColumnDescriptor<TRow>[];

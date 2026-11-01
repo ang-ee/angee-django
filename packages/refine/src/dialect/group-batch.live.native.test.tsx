@@ -6,10 +6,10 @@ import type { ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { createAngeeChangeLiveProvider } from "../provider";
-import { useAuthoredQuery } from "./authored-hooks";
+import { useAuthoredQuery, type AuthoredQueryOptions } from "./authored-hooks";
 import { groupByVariables } from "../operations";
 import type { TypedDocumentNode } from "../typed-document";
-import { invalidateAuthoredQueries } from "../query-invalidation";
+import { createAuthoredLiveInvalidation, invalidateAuthoredQueries } from "../query-invalidation";
 import { createRefineTestProviders } from "../testing";
 import { useAngeeAggregate, useAngeeFacets, useAngeeGroupBy, useAngeeGroupByBatch, type GroupByBatchScope } from "./hooks";
 
@@ -320,4 +320,45 @@ test("native aggregate and group polling survives unrelated renders, pauses with
   unmount();
   await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
   expect(custom).toHaveBeenCalledTimes(6);
+});
+
+
+test.each(["aggregate", "single", "batch", "facets"] as const)("%s grouped reads retain explicit direct and related live interests", async (mode) => {
+  const f = fixture(vi.fn(async () => ({ data: { ...response(1).data, messages_aggregate: { aggregate: { count: 4 } } } })));
+  const direct: Pick<AuthoredQueryOptions, "records" | "relatedModels"> = { records: [{ model: "messaging.Message", id: "message-a" }] };
+  const { result, rerender } = renderHook(({ interests }) => {
+    const single = useAngeeGroupBy(TARGET, { document: DOCUMENT, ...SCOPES[0]!.query, ...interests, enabled: mode === "single" });
+    const batch = useAngeeGroupByBatch(TARGET, SCOPES, { document: DOCUMENT, ...interests, enabled: mode === "batch" });
+    const facets = useAngeeFacets(TARGET, { document: DOCUMENT, facets: [{ id: "channels", ...SCOPES[0]!.query }], ...interests, enabled: mode === "facets" });
+    const aggregate = useAngeeAggregate({ ...TARGET, root: "messages_aggregate" }, {
+      document: "query Total { messages_aggregate { aggregate { count } } }", ...interests, enabled: mode === "aggregate",
+    });
+    return { single, batch, facets, aggregate };
+  }, { wrapper: f.wrapper, initialProps: { interests: direct } });
+  await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(result.current.single.fetching || result.current.batch.get("channels")?.fetching || result.current.facets.fetching || result.current.aggregate.fetching).toBe(false));
+  const live = createAuthoredLiveInvalidation(f.client);
+  vi.useFakeTimers();
+  await act(async () => {
+    live.push({ model: "messaging.Message", id: "message-other" });
+    await vi.advanceTimersByTimeAsync(300);
+  });
+  expect(f.custom).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    live.push({ model: "messaging.Message", id: "message-a" });
+    await vi.advanceTimersByTimeAsync(300);
+  });
+  expect(f.custom).toHaveBeenCalledTimes(2);
+  rerender({ interests: { records: [{ model: "notes.Note", id: "note-a" }], relatedModels: ["messaging.Message"] } });
+  await act(async () => {
+    live.push({ model: "messaging.Message", id: "message-unrelated" });
+    await vi.advanceTimersByTimeAsync(300);
+  });
+  expect(f.custom).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    live.push({ model: "messaging.Message", id: "message-related", relatedRecords: [{ model: "notes.Note", id: "note-a" }] });
+    await vi.advanceTimersByTimeAsync(300);
+  });
+  expect(f.custom).toHaveBeenCalledTimes(3);
+  live.clear();
 });

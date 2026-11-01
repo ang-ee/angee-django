@@ -178,6 +178,8 @@ function useResourceModels(resource: string, canonical: string | null | undefine
 function ListViewBody<TRow extends Row = Row>({
   resource,
   source,
+  records,
+  relatedModels,
   availableViews: declaredViews,
   textFilterField: declaredTextField,
   maxGroupDepth,
@@ -334,12 +336,14 @@ function ListViewBody<TRow extends Row = Row>({
     source ? "" : resource,
     facets,
     mergedFilter,
+    { records, relatedModels },
   );
   const scalarFacets = useScalarFacets(
     resource,
     resolvedColumns,
     modelMetadata,
     mergedFilter,
+    { records, relatedModels },
   );
   const laneSourceGroup = React.useMemo(
     () =>
@@ -364,6 +368,8 @@ function ListViewBody<TRow extends Row = Row>({
     effectiveGroupStack.length > 0 &&
     !clientRowModel;
   const surfaceProps: UseResourceViewSurfaceProps<TRow> = {
+    records,
+    relatedModels,
     resource,
     source,
     columns: resolvedColumns,
