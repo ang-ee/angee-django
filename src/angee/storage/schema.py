@@ -31,6 +31,7 @@ from angee.graphql.ids import (
 )
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
+from angee.iam.graphql.access import RolePermission
 from angee.iam.graphql.actions import resolve_action_target
 from angee.iam.graphql.capabilities import permissions_field
 from angee.iam.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, ProtectedNode
@@ -41,7 +42,6 @@ from angee.iam.graphql.relations import (
     with_record_reference_access,
 )
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
-from angee.iam.permissions import RolePermission
 from angee.storage import exceptions
 from angee.storage.models import File as FileModel
 from angee.storage.models import FileVisibility, FolderQuerySet, UploadState

@@ -10,9 +10,18 @@ from typing import TYPE_CHECKING, Any
 
 from django.apps import AppConfig, apps
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
-from rebac import SubjectRef, check_new, current_actor, proposed_forward_relationships, to_object_ref, to_subject_ref
+from rebac import (
+    ObjectRef,
+    SubjectRef,
+    check_new,
+    current_actor,
+    proposed_forward_relationships,
+    to_object_ref,
+    to_subject_ref,
+)
 from rebac import user_subject_type as _user_subject_type
 from rebac.actors import is_sudo
 from rebac.backends import backend
@@ -23,8 +32,31 @@ from rebac.schema import Definition, Schema, resolve_schema_path
 from rebac.schema.introspection import relation_dependencies
 from rebac.schema.parser import parse_zed
 
+from angee.iam.roles import platform_admin_role, subject_has_role
+
 if TYPE_CHECKING:
     from rebac import RebacMixin
+
+
+def is_authenticated(user: Any) -> bool:
+    """Return whether ``user`` is a real authenticated session user."""
+
+    return not isinstance(user, AnonymousUser) and bool(getattr(user, "is_authenticated", False))
+
+
+def is_platform_admin(user: Any) -> bool:
+    """Return whether ``user`` reaches IAM's platform-admin role."""
+
+    if not is_authenticated(user):
+        return False
+    role = platform_admin_role()
+    return role is not None and current_actor_has_role(role)
+
+
+def current_actor_has_role(role: ObjectRef) -> bool:
+    """Return whether the ambient REBAC actor is an effective member of ``role``."""
+
+    return subject_has_role(current_actor(), role)
 
 
 def declared_grants(model: type[models.Model]) -> dict[str, str]:

@@ -18,10 +18,10 @@ from angee.graphql.actions import ActionResult
 from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
 from angee.graphql.ids import PublicID
 from angee.graphql.subscriptions import changes
+from angee.iam.graphql.access import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.graphql.actions import action_target
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
-from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.schema import UserType
 from angee.integrate.schema import (
     BridgeSyncStatusMixin,

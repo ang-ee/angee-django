@@ -23,9 +23,9 @@ from angee.graphql.actions import ActionResult
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.data.pydantic_resource import hasura_pydantic_resource
 from angee.graphql.ids import PublicID
+from angee.iam.graphql.access import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.graphql.access import actor_can_read
 from angee.iam.graphql.node import ProtectedNode
-from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.platform import composed
 from angee.platform.models import Addon as AddonModel
 
