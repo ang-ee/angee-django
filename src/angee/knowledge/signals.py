@@ -60,4 +60,3 @@ def refresh_bulk_targets(
     if (sender._meta.label_lower in {_MARKDOWN_LABEL, "knowledge.page"}
             and {"title", "is_trashed"}.intersection(update_fields)):
         apps.get_model("knowledge", "Link").objects.db_manager(using).refresh_targets(instances)
-
