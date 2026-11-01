@@ -1554,7 +1554,10 @@ open fresh evaluator scopes for authorization and change-feed reads.
   source querysets. The [read owner](../../src/angee/timeline/reading.py)
   combines their common columns with Django's `union(all=True)`, applying
   permissions, attention, folding and cursors in each branch before the shared
-  page limit. Display payloads are hydrated only for selected source rows.
+  page limit. A kind projects attention with its join-free `waiting_on_expression`;
+  queryset `waiting_on` filters compose that same owner predicate. Related read/action
+  gates remain; outer record membership and read scope are not repeated.
+  Display payloads are hydrated only for selected source rows.
   There is no event projection table or backfill requirement. Folding hides a
   child only when a readable parent target occurs on the same record; counts
   and attention use that same scope, independent of the page's filters.

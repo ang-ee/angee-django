@@ -94,12 +94,11 @@ class Timeline:
             fold_type, fold_pk = fold or (
                 models.Value(None, models.IntegerField()), models.Value(None, models.BigIntegerField()),
             )
-            waiting = kind.waiting_on(rows, actor).filter(pk=models.OuterRef("pk"))
             self.branches[kind.id] = rows.annotate(
                 _timeline_kind=models.Value(kind.id, output_field=models.CharField()),
                 _timeline_at=kind.at,
                 _timeline_pk=Cast("pk", output_field=models.BigIntegerField()),
-                _timeline_needs=models.Exists(waiting),
+                _timeline_needs=kind.waiting_on_expression(rows, actor),
                 _timeline_fold_type=fold_type,
                 _timeline_fold_pk=fold_pk,
             )

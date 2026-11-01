@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from rebac import actor_context
+from rebac import SubjectRef, actor_context, system_context
 
 from angee.graphql.publishing import mute_changes
 from angee.projects.testing.models import ActivityType, Task
@@ -102,3 +102,29 @@ def test_presentation_hydrates_native_task_rows_for_the_explicit_actor(comment_r
         entry, = timeline_entries(record, author)
     assert entry.title == task.title and entry.actor == author.get_username()
     assert entry.needs_me
+
+
+def test_task_waiting_projection_matches_filter_without_changing_scope(comment_record) -> None:
+    record, author, writer = comment_record.record, comment_record.author, comment_record.writer
+    with actor_context(writer):
+        assigned = Task.objects.schedule(record.with_actor(writer), title="Assigned", assignee=author)
+        unassigned = Task.objects.schedule(record.with_actor(writer), title="Unassigned")
+        closed = Task.objects.schedule(record.with_actor(writer), title="Closed", assignee=author)
+        closed.with_actor(writer).complete()
+        trashed = Task.objects.schedule(record.with_actor(writer), title="Trashed", assignee=author)
+        trashed.with_actor(writer).trash()
+    with system_context(reason="test.timeline.unassigned_task"):
+        Task.objects.filter(pk=unassigned.pk).update(assignee=None)
+    ids = [assigned.pk, unassigned.pk, closed.pk, trashed.pk]
+    rows = Task.objects.with_actor(writer).filter(pk__in=ids)
+    projected = dict(rows.annotate(waiting=rows.waiting_on_expression(author)).values_list("pk", "waiting"))
+    assert projected == {assigned.pk: True, unassigned.pk: False, closed.pk: False, trashed.pk: False}
+    assert list(rows.waiting_on(author).values_list("pk", flat=True)) == [assigned.pk]
+    assert not rows.exclude(pk=assigned.pk).waiting_on(author).exists()
+    assert not Task.objects.with_actor(comment_record.outsider).filter(pk__in=ids).waiting_on(author).exists()
+    for actor in (None, SubjectRef.of("non_user", "subject")):
+        assert rows.waiting_on(actor).query.is_empty()
+        assert not rows.waiting_on(actor).exists()
+        assert list(rows.annotate(waiting=rows.waiting_on_expression(actor)).values_list("waiting", flat=True)) == [
+            False,
+        ] * len(ids)

@@ -25,8 +25,8 @@ class TaskKind(TimelineKind):
             "assignee",
         )
 
-    def waiting_on(self, rows: Any, actor: Any) -> models.QuerySet:
-        return rows.waiting_on(actor)
+    def waiting_on_expression(self, rows: Any, actor: Any) -> models.Expression:
+        return rows.waiting_on_expression(actor)
 
     def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
         result = {}
