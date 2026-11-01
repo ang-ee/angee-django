@@ -5,10 +5,12 @@ from __future__ import annotations
 import importlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import strawberry
+from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test import RequestFactory
@@ -3575,3 +3577,99 @@ def test_selected_record_message_dependencies_have_constant_page_query_count(
         counts.append(len(captured))
         record_property(f"{root}_selected_queries_{size}", len(captured))
     assert counts[0] == counts[1], counts
+
+
+@pytest.mark.parametrize(("root", "async_execution"), [
+    ("record_thread", False),
+    ("record_message_feed", False),
+    ("record_message_feed_revalidate", False),
+    ("record_message_feed", True),
+])
+def test_record_message_labels_load_only_their_native_dependencies(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch, root: str, async_execution: bool,
+) -> None:
+    """Label-only pages batch their dependencies and resolve safely on the async schema path."""
+    admin = _platform_admin("msg-label-native")
+    expected = {}
+    messages = []
+    with actor_context(admin), system_context(reason="test.messaging.label_native.seed"), mute_changes():
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Native label projection")
+        attachment = messaging_models.ThreadAttachment.objects.ensure_for_record(ticket)
+        subtype = messaging_schema.MessageSubtype.objects.create(key="native_labels", name="Native labels")
+        for index in range(25):
+            parent = messaging_models.Message.objects.create(
+                thread=attachment.thread, message_type="comment", direction="internal",
+                preview=f"Parent {index}", created_by=admin,
+                sent_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            )
+            message = messaging_models.Message.objects.create(
+                thread=attachment.thread, message_type="comment", direction="internal",
+                preview=f"Reply {index}", parent=parent, subtype=subtype, created_by=admin,
+                sent_at=datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=index),
+            )
+            fragment = messaging_models.Fragment.objects.upsert(text=f"Fragment {index}: " + "x" * 70)
+            part = messaging_models.Part.objects.create(
+                message=message, position=0, role="body", type="text/plain", fragment=fragment,
+            )
+            expected[message.sqid] = {
+                "display_name": str(message),
+                "parent": {"display_name": str(parent)},
+                "subtype": {"display_name": str(subtype)},
+                "parts": [{"display_name": str(part), "fragment": {"display_name": str(fragment)}}],
+            }
+            messages.append(message)
+    schema = _schema()
+    args = 'input: { model_label: "messaging.ThreadedTicket", record_id: $id'
+    declarations = "$id: ID!, $limit: Int!"
+    if root == "record_thread":
+        args += ", message_limit: $limit }"
+    elif root == "record_message_feed":
+        args += " }, limit: $limit"
+    else:
+        args += " }, ids: $ids"
+        declarations = "$id: ID!, $ids: [ID!]!"
+    # Deliberately omit preview/type/role/text/name: those selections would mask missing hints.
+    counts_selection = "part_count message_count" if async_execution else ""
+    query = f"query Labels({declarations}) {{ {root}({args}) {{ messages {{" + """
+        id display_name parent { display_name } subtype { display_name }
+        parts { display_name fragment { display_name """ + counts_selection + " } } } } }"
+
+    def deferred_read(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("A selected native label attempted a deferred model reload")
+
+    for model in (messaging_models.Message, messaging_models.Part, messaging_models.Fragment,
+                  messaging_schema.MessageSubtype):
+        monkeypatch.setattr(model, "refresh_from_db", deferred_read)
+
+    def read(size: int) -> dict[str, Any]:
+        variables: dict[str, Any] = {"id": ticket.sqid}
+        if root == "record_message_feed_revalidate":
+            variables["ids"] = [message.sqid for message in messages[:size]]
+        else:
+            variables["limit"] = size
+        request = _request(admin)
+        if async_execution:
+            with actor_context(admin):
+                result = async_to_sync(schema.execute)(
+                    query, variable_values=variables, context_value=SimpleNamespace(request=request),
+                )
+        else:
+            result = execute_schema(schema, query, variables, request=request)
+        return _data(result)[root]
+
+    read(1)  # Warm native schema/permission caches before comparing page budgets.
+    counts = []
+    for size in ((25,) if async_execution else (1, 25)):
+        with CaptureQueriesContext(connection) as captured:
+            payload = read(size)
+        assert len(payload["messages"]) == size
+        for row in payload["messages"]:
+            label = expected[row.pop("id")]
+            if async_execution:
+                fragment = row["parts"][0]["fragment"]
+                assert fragment.pop("part_count") == 1
+                assert fragment.pop("message_count") == 1
+            assert row == label
+        counts.append(len(captured))
+    if not async_execution:
+        assert counts[0] == counts[1], counts
