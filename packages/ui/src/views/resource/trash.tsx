@@ -103,10 +103,12 @@ export function useTrashRecord(resource: DataResourceMetadata | null | undefined
   const [trashRecord, trashState] = useAuthoredResourceMutation(TrashRecord, {
     ...options,
     shouldInvalidate: (data) => data?.trash_record.ok === true,
+    records: (_data, variables) => resource ? [{ model: resource.modelLabel, id: variables.target_id }] : [],
   });
   const [restoreRecord, restoreState] = useAuthoredResourceMutation(RestoreRecord, {
     ...options,
     shouldInvalidate: (data) => data?.restore_record.ok === true,
+    records: (_data, variables) => resource ? [{ model: resource.modelLabel, id: variables.target_id }] : [],
   });
   const trash = React.useCallback(async (id: string, name?: string): Promise<boolean> => {
     if (!targetType) return false;

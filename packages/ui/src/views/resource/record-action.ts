@@ -7,6 +7,7 @@ import {
   type ActionArguments,
   type ActionMutate,
   type UseActionMutationState,
+  type UseActionMutationOptions,
 } from "@angee/refine";
 import {
   useCanonicalResourceModelLabels,
@@ -119,18 +120,21 @@ export function useRecordActionMutation<TField extends string = string>(
       if (settleOptions) {
         const outcome = await settleActionResult(mutateRecord);
         if (outcome?.ok) {
-          if (options?.refresh !== false) context.refresh();
           await options?.afterSuccess?.(context, outcome.message);
         }
         return undefined;
       }
       return runActionResult(await mutateRecord());
     },
-    [mutate, options?.actionArguments, options?.afterSuccess, options?.refresh, settleActionResult, settleOptions],
+    [mutate, options?.actionArguments, options?.afterSuccess, settleActionResult, settleOptions],
   );
-  return [useRecordAction(run, settleOptions
-    ? { ...options, afterSuccess: undefined, refresh: false }
-    : options), state];
+  // The mutation already reconciles affected native and authored reads. Keep
+  // domain acknowledgement callbacks, without issuing a second form refresh.
+  return [useRecordAction(run, {
+    ...options,
+    afterSuccess: settleOptions ? undefined : options?.afterSuccess,
+    refresh: false,
+  }), state];
 }
 
 export interface UseActionResultMutationOptions {
@@ -142,6 +146,12 @@ export interface UseActionResultMutationOptions {
   dataProviderName?: string;
   /** The verb records its outcome even when it fails, so caches refresh after a failure too. */
   invalidateOnFailure?: boolean;
+  /** Remove credential-bearing variables and results from the settled mutation cache. */
+  transient?: UseActionMutationOptions["transient"];
+  /** Explicit written records; related or unknown effects retain model fallback. */
+  records?: UseActionMutationOptions["records"];
+  /** Adopt an authoritative declared result before scheduling derived reads. */
+  acceptResponse?: UseActionMutationOptions["acceptResponse"];
 }
 
 export type ActionResultMutation = (
@@ -199,7 +209,7 @@ export function useActionOutcomeMutation<TField extends string = string>(
   const canonicalInvalidateModels = useCanonicalResourceModelLabels(
     options.invalidateModels,
   );
-  const invalidates = useResourceInvalidates(canonicalInvalidateModels);
+  const invalidates = useResourceInvalidates(canonicalInvalidateModels, options.records);
   return useActionMutation<TField>(field, {
     ...(options.idArgument !== undefined ? { idArgument: options.idArgument } : {}),
     ...(dataProviderName !== undefined ? { dataProviderName } : {}),
@@ -207,6 +217,9 @@ export function useActionOutcomeMutation<TField extends string = string>(
       ? { invalidateModels: canonicalInvalidateModels }
       : {}),
     ...(options.invalidateOnFailure ? { invalidateOnFailure: true } : {}),
+    ...(options.transient ? { transient: true } : {}),
+    ...(options.records ? { records: options.records } : {}),
+    ...(options.acceptResponse ? { acceptResponse: options.acceptResponse } : {}),
     invalidates,
   });
 }
@@ -294,7 +307,7 @@ function useAuthoredChromeActionOutcome(
 /** Read the record-chrome context into the action options a chrome verb fires with. */
 function useRecordChromeActionOptions(
   options: UseRecordChromeActionMutationOptions,
-): UseActionResultMutationOptions {
+): Pick<UseActionResultMutationOptions, "dataProviderName" | "idArgument" | "invalidateModels"> {
   const { canonicalResource, dataProviderName, resource } =
     useRecordChromeContext();
   // Derived during render: `useResourceInvalidates` keys on the labels'

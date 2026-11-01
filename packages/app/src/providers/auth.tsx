@@ -189,7 +189,7 @@ export function createAngeeAuthProviderFromRequest(
     return currentUserPayload(data.current_user);
   };
   const sharedIdentity = async (): Promise<AuthIdentity | null> => {
-    const query = identityQueryOptions(provider);
+    const query = identityQueryOptions(provider, options.queryClient);
     return options.queryClient ? options.queryClient.fetchQuery(query) : query.queryFn();
   };
   const provider: RefineAuthProvider = {
@@ -270,7 +270,7 @@ export function createAngeeAuthProviderFromRequest(
       try {
         const identity = options.queryClient
           ? await options.queryClient.fetchQuery({
-              ...identityQueryOptions(provider),
+              ...identityQueryOptions(provider, options.queryClient),
               staleTime: 0,
             })
           : await currentUser();
@@ -294,8 +294,10 @@ export function createAngeeAuthProviderFromRequest(
  * Its public session read gates the console-only preview projection.
  * `staleTime: Infinity` keeps warm navigations from
  * re-issuing it — refine's `useInvalidateAuthStore` (login/logout and preference
- * writes) refreshes the entry, a live preference delivery writes its document
- * into it, and a mid-session server expiry still surfaces at the data layer as
+ * writes) refreshes the entry. Canonical self interests also let the shared
+ * live scheduler revalidate it after registration/reconnect and user changes;
+ * a delivered preference event rebases its document immediately. A mid-session
+ * server expiry still surfaces at the data layer as
  * an unauthorized data response asks the authoritative Django `current_user`
  * endpoint to confirm session loss before logout. This matters because one
  * Refine auth provider serves data providers with independent credentials.
@@ -315,12 +317,25 @@ const identityQueryKey = () => keys().auth().action("identity").get();
  * @kind null
  * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
-export function identityQueryOptions(authProvider: RefineAuthProvider) {
+export function identityQueryOptions(authProvider: RefineAuthProvider, client?: QueryClient) {
   return {
     queryKey: identityQueryKey(),
     queryFn: async (): Promise<AuthIdentity | null> =>
       ((await authProvider.getIdentity?.()) ?? null) as AuthIdentity | null,
+    ...identityQuerySettings(client),
+  };
+}
+
+function identityQuerySettings(client?: QueryClient) {
+  const id = client?.getQueryData<AuthIdentity | null>(identityQueryKey())?.id;
+  return {
     ...IDENTITY_QUERY_SETTINGS,
+    // This native auth entry has one current actor, not accumulated authored
+    // interests. Native auth reset removes the query and its session metadata.
+    meta: {
+      angeeModels: USER_PREFERENCES_LIVE_MODELS,
+      ...(id ? { angeeRecords: [{ model: "iam.User", id }] } : {}),
+    },
   };
 }
 
@@ -329,8 +344,9 @@ export function identityQueryOptions(authProvider: RefineAuthProvider) {
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
 export function useRuntimeAuthState(): UseRuntimeAuthStateResult {
+  const client = useQueryClient();
   const identity = useGetIdentity<AuthIdentity | null>({
-    queryOptions: IDENTITY_QUERY_SETTINGS,
+    queryOptions: identityQuerySettings(client),
   });
   const auth = useMemo(() => identity.data === undefined && identity.isFetching
     ? { user: null, status: "resolving", hasRole: () => false } satisfies AuthState

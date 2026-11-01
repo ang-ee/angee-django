@@ -44,6 +44,7 @@ export function CredentialForm({
   const [createCredential] = useAuthoredResourceMutation(IntegrateCreateCredential, {
     invalidateModels: INTEGRATE_CREATE_CREDENTIAL_INVALIDATES,
     errorNotification: false,
+    transient: true,
   });
   const revealSecret = useSecretReveal();
 

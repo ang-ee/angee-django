@@ -5,14 +5,22 @@ import {
   useCanonicalResourceModelLabels,
   useResourceInvalidates,
   refineResourceName,
+  refineInvalidationParams,
+  rowPublicId,
   type DataResourceLinesMetadata,
   type DataResourceMetadata,
   type ModelMetadata,
   type Row,
 } from "@angee/metadata";
-import { invalidateAuthoredQueries, publicGraphQLErrorsFromUnknown, useAngeeResourceSave, type MutationRootArguments } from "@angee/refine";
 import {
-  useInvalidate,
+  acceptQueryData,
+  publicGraphQLErrorsFromUnknown,
+  selectedFieldsPresent,
+  useAngeeResourceSave,
+  useReconcileMutationResponse,
+  type MutationRootArguments,
+} from "@angee/refine";
+import {
   useOne,
   useCreate,
   useUpdate,
@@ -264,14 +272,13 @@ export function useFormViewSave({
   const queryClient = useQueryClient();
   const canonicalInvalidateModels = useCanonicalResourceModelLabels(invalidateModels);
   const dependentInvalidations = useResourceInvalidates(canonicalInvalidateModels);
-  const authoredInvalidateModels = React.useMemo(() => [...new Set([
-    ...(!submitOwner && dataResource ? [dataResource.modelLabel] : []), ...canonicalInvalidateModels,
-  ])], [dataResource, canonicalInvalidateModels, submitOwner]);
+  const reconcileMutationResponse = useReconcileMutationResponse();
   const { keys } = useKeys();
   const { identifier } = useResourceParams({ resource: refineResource });
-  const detailKey = React.useMemo(() => keys().data(dataResource?.schemaName ?? "default")
-    .resource(identifier ?? "").action("one").id(id ?? "")
-    .params({ fields: mutationFields }).get(), [dataResource?.schemaName, id, identifier, keys, mutationFields]);
+  const detailKeyFor = React.useCallback((recordId: BaseKey) => keys().data(dataResource?.schemaName ?? "default")
+    .resource(identifier ?? "").action("one").id(recordId)
+    .params({ fields: mutationFields }).get(), [dataResource?.schemaName, identifier, keys, mutationFields]);
+  const detailKey = React.useMemo(() => detailKeyFor(id ?? ""), [detailKeyFor, id]);
   const nativeReadEnabled = acknowledgedSource === undefined && !isCreate && Boolean(id && dataResource?.roots.detail);
   const read = useOne<RowRecord, HttpError>({
     resource: refineResource,
@@ -301,7 +308,7 @@ export function useFormViewSave({
     resource: refineResource,
     dataProviderName: dataResource?.schemaName,
     meta: { fields: mutationFields },
-    invalidates: ["list", "many"],
+    invalidates: [],
     successNotification: false,
     errorNotification: false,
   });
@@ -309,7 +316,8 @@ export function useFormViewSave({
     resource: refineResource,
     dataProviderName: dataResource?.schemaName,
     meta: { fields: mutationFields },
-    invalidates: ["list", "many", "detail"],
+    invalidates: [],
+    mutationMode: "pessimistic",
     successNotification: false,
     errorNotification: false,
   });
@@ -323,7 +331,6 @@ export function useFormViewSave({
   const resourceSave = useAngeeResourceSave(saveOperation.target, {
     document: saveOperation.document,
   });
-  const invalidate = useInvalidate();
   const linesActive =
     linesConfig !== null &&
     linesField !== null &&
@@ -349,16 +356,6 @@ export function useFormViewSave({
         : null,
     [linesActive, linesConfig, linesField],
   );
-  const invalidateResource = React.useCallback(async () => {
-    if (!dataResource) return;
-    await invalidate({
-      resource: refineResourceName(dataResource),
-      dataProviderName: dataResource.schemaName,
-      id: id ?? undefined,
-      invalidates: ["list", "many", "detail"],
-    });
-  }, [dataResource, id, invalidate]);
-
   const values = React.useMemo(() => {
     if (acknowledgedSource !== undefined || isCreate) {
       const sourceValues = acknowledgedSource !== undefined ? acknowledgedSource.values : emptyValues;
@@ -432,8 +429,11 @@ export function useFormViewSave({
   const lineDraftDirty = Boolean(!isCreate && linesActive && linesField && dirtyFields[linesField]);
   // Replay a held remote array when the user undoes the last local line edit.
   React.useEffect(() => {
+    // A partial response preserves old cache fields for display. Those stale
+    // fields must not replace the accepted local baseline before its reread.
+    if (acknowledgedSource === undefined && queryClient.getQueryState(detailKey)?.isInvalidated) return;
     syncRecordValues(values);
-  }, [lineDraftDirty, syncRecordValues, values]);
+  }, [acknowledgedSource, detailKey, lineDraftDirty, queryClient, read.query.dataUpdatedAt, syncRecordValues, values]);
   const serverFieldErrors = React.useMemo(() => serverErrorsFromForm(form.formState.errors), [form.formState.errors]);
   const saveError = form.formState.errors.root?.server?.message ?? null;
   const saveConflict = form.formState.errors.root?.server?.type === "conflict";
@@ -495,7 +495,6 @@ export function useFormViewSave({
           let saved: Row | null;
           if (useSave) {
             saved = await resourceSave.save({ pk: id, patch: data, lines: lines.payload, ...rootArguments });
-            if (saved) await invalidateResource();
           } else {
             const mutationMeta = Object.keys(rootArguments).length
               ? { meta: { fields: mutationFields, gqlVariables: rootArguments } } : {};
@@ -511,13 +510,7 @@ export function useFormViewSave({
           }
           result = savedFormSubmitResult(saved, t("form.genericSaveError"));
         }
-        if (result.status === "ok") {
-          if (isCreate) idempotencyKey.current = null;
-          await Promise.all([
-            ...dependentInvalidations.map((target) => invalidate(target)),
-            ...(authoredInvalidateModels.length ? [invalidateAuthoredQueries(queryClient, authoredInvalidateModels)] : []),
-          ]);
-        }
+        if (result.status === "ok" && isCreate) idempotencyKey.current = null;
         return result;
       } catch (error) {
         if (isCreate && publicGraphQLErrorsFromUnknown(error).some((item) => item.extensions.code === "CREATION_KEY_CONFLICT")) {
@@ -528,10 +521,6 @@ export function useFormViewSave({
     },
     [
       customSubmit.mutateAsync,
-      authoredInvalidateModels,
-      dependentInvalidations,
-      invalidate,
-      queryClient,
       dataResource,
       mutationFields,
       updateRevision,
@@ -541,7 +530,6 @@ export function useFormViewSave({
       create.mutateAsync,
       update.mutateAsync,
       id,
-      invalidateResource,
       isCreate,
       linesField,
       resource,
@@ -551,7 +539,9 @@ export function useFormViewSave({
     ],
   );
   const readSubmitResult = React.useCallback((result: FormSubmitResult<Row | FormSubmitAcknowledgement>) => {
-    if (!mounted.current) return null;
+    // A completed write still reconciles its original cache after navigation.
+    // Only mounted forms receive validation errors, resets and notifications.
+    if (!mounted.current) return result.status === "ok" ? result : null;
     return applyFormErrors(form, result, {
       fieldNames: [...fieldByName.keys(), ...(linesField ? [linesField] : [])],
       fieldSummary: (errors) => fieldValidationSummary(errors, fieldByName, t),
@@ -559,7 +549,7 @@ export function useFormViewSave({
     }) ? null : result;
   }, [fieldByName, form, linesField, t]);
   const commitSavedRecord = React.useCallback(
-    (saved: Row, options: {
+    async (saved: Row, options: {
       submitted?: FormValues;
       submittedFields?: readonly string[];
       acceptedValues?: FormValues;
@@ -567,25 +557,37 @@ export function useFormViewSave({
       createdLines?: boolean;
       notify?: boolean;
       message?: string;
-      refetchPartial?: boolean;
-    } = {}): void => {
-      // A mutation response is a patch over the latest cache, which may have
-      // refreshed while the write was pending. Accepted submitted values fill
-      // response omissions until canonical refetch; unsubmitted fields stay current.
+    } = {}): Promise<Row | null> => {
+      // Submitted values acknowledge the local draft only. Cache data always
+      // comes from the returned projection, never from the input patch.
       const submitted = Object.fromEntries((options.submittedFields ?? [])
         .map((name) => [name, options.submitted?.[name]]));
-      const acceptedPatch = { ...submitted, ...saved };
-      const accepted = acknowledgedSource !== undefined
-        ? { ...(record ?? {}), ...saved }
-        : isCreate ? acceptedPatch : queryClient.setQueryData<GetOneResponse<RowRecord>>(
-        detailKey,
-        (current) => ({ ...current, data: { ...(current?.data ?? record), ...acceptedPatch } }),
-      )?.data ?? acceptedPatch;
+      const savedId = rowPublicId(saved, dataResource) ?? (isCreate ? null : id ?? null);
+      const complete = selectedFieldsPresent(saved, mutationFields);
+      const acceptedKey = savedId === null ? null : detailKeyFor(savedId);
+      let accepted: Row = { ...(record ?? {}), ...submitted, ...saved };
+      if (acknowledgedSource === undefined && acceptedKey) {
+        // A field is replaceable only when its declared selection is present.
+        // This preserves missing nested fields and never guesses a deep merge.
+        const returnedFields = mutationFields.filter((field) => selectedFieldsPresent(saved, [field]));
+        const returnedNames = returnedFields.flatMap((field) => typeof field === "string" ? [field] : Object.keys(field));
+        const patch = Object.fromEntries(returnedNames.map((name) => [name, saved[name]]));
+        await acceptQueryData<GetOneResponse<RowRecord>>(queryClient, acceptedKey, (current) => {
+          if (complete) {
+            accepted = saved;
+            return { ...current, data: saved };
+          }
+          // Partial results cannot seed a detail query. Existing unmentioned
+          // fields stay visible but stale until the authorized read completes.
+          accepted = { ...(current?.data ?? record), ...submitted, ...saved };
+          return current ? { ...current, data: { ...current.data, ...patch } } : undefined;
+        }, { complete });
+      }
       editBasisRecordRef.current = accepted;
-      if (!mounted.current) return;
+      if (!mounted.current) return null;
       const savedValues = options.acceptedValues
         ?? recordToValues(accepted, formFields, linesSeed(rowsFromRecord(accepted)));
-      if (isCreate || (options.acceptedValues && acknowledgedSource !== undefined)) {
+      if (isCreate || acknowledgedSource !== undefined) {
         // Until the source changes, a descriptor rerender must retain the save
         // acknowledgement instead of replaying the original create defaults.
         localAcknowledgementRef.current = {
@@ -642,19 +644,42 @@ export function useFormViewSave({
       resetHistory();
       activeFieldInteractions.current.clear();
       if (isCreate) manualSlugFieldsRef.current.clear();
+      return accepted;
+    },
+    [acknowledgedSource, dataResource, detailKeyFor, emptyValues, form, formFields, id, isCreate, linesConfig, linesField, linesSeed, mutationFields, queryClient, record, reset, resetDefaultValues, resetHistory, rowsFromRecord, setValue, syncRecordValues],
+  );
+  const acceptSavedRecord = React.useCallback(
+    async (saved: Row, options: Parameters<typeof commitSavedRecord>[1] = {}): Promise<void> => {
+      const savedId = rowPublicId(saved, dataResource) ?? (isCreate ? null : id ?? null);
+      const acceptance: { record: Row | null } = { record: null };
+      await reconcileMutationResponse(saved, undefined, {
+        acceptResponse: async () => { acceptance.record = await commitSavedRecord(saved, options); },
+        records: !submitOwner && dataResource
+          ? [{ model: dataResource.modelLabel, ...(savedId !== null ? { id: savedId } : {}) }]
+          : [],
+        invalidateModels: canonicalInvalidateModels,
+        invalidates: [
+          ...dependentInvalidations,
+          ...(!submitOwner && dataResource ? [refineInvalidationParams({
+            resource: identifier ?? refineResource,
+            dataProviderName: dataResource.schemaName,
+            ...(savedId !== null ? { id: savedId } : {}),
+          })] : acknowledgedSource === undefined && !isCreate && dataResource
+            && !selectedFieldsPresent(saved, mutationFields) ? [{
+              resource: identifier ?? refineResource,
+              dataProviderName: dataResource.schemaName,
+              id: id ?? undefined,
+              invalidates: ["detail"],
+            }] : []),
+        ],
+      });
+      if (!acceptance.record || !mounted.current) return;
       if (options.message || options.notify) {
         toast.success({ title: options.message || t(isCreate ? "form.createSuccess" : "form.updateSuccess") });
       }
-      if (options.notify) {
-        onSaved?.(accepted);
-      }
-      // Fetch canonical server values when the response omitted any selected field.
-      if (options.refetchPartial !== false && !isCreate && (
-        formFields.some((field) => !Object.hasOwn(saved, field.name))
-        || (linesActive && linesField !== null && !Object.hasOwn(saved, linesField))
-      )) reload();
+      if (options.notify) onSaved?.(acceptance.record);
     },
-    [acknowledgedSource, detailKey, emptyValues, form, formFields, isCreate, linesActive, linesConfig, linesField, linesSeed, onSaved, queryClient, record, reload, reset, resetDefaultValues, resetHistory, rowsFromRecord, setValue, syncRecordValues, t, toast],
+    [acknowledgedSource, canonicalInvalidateModels, commitSavedRecord, dataResource, dependentInvalidations, id, identifier, isCreate, mutationFields, onSaved, reconcileMutationResponse, refineResource, submitOwner, t, toast],
   );
   const submitValues = React.useCallback(
     async (value: FormValues) => {
@@ -702,7 +727,7 @@ export function useFormViewSave({
           const response = result.data;
           const acknowledgement = isFormSubmitAcknowledgement(response) ? response : undefined;
           const saved: Row = acknowledgement ? acknowledgement.record : response as Row;
-          commitSavedRecord(saved, {
+          await acceptSavedRecord(saved, {
             submitted: value,
             submittedFields: acknowledgement
               ? []
@@ -730,7 +755,7 @@ export function useFormViewSave({
       formReadOnly,
       isCreate,
       previewBlockedRef,
-      commitSavedRecord,
+      acceptSavedRecord,
       createSeedNames,
       linesActive,
       linesConfig,
@@ -763,7 +788,7 @@ export function useFormViewSave({
       if (result) {
         const response = result.data;
         saved = isFormSubmitAcknowledgement(response) ? response.record : response;
-        commitSavedRecord(saved, {
+        await acceptSavedRecord(saved, {
           ...(isFormSubmitAcknowledgement(response) ? { acceptedValues: response.values } : {}),
           message: result.message,
         });
@@ -771,10 +796,10 @@ export function useFormViewSave({
       }
       return saved;
     },
-    [clearErrors, commitSavedRecord, formReadOnly, id, resource, runSubmit, readSubmitResult],
+    [clearErrors, acceptSavedRecord, formReadOnly, id, resource, runSubmit, readSubmitResult],
   );
   const patchRecord = React.useCallback((patch: Record<string, unknown>): void => {
-    if (record) { commitSavedRecord(patch, { refetchPartial: false }); clearErrors(); }
+    if (record) void commitSavedRecord(patch).then(() => clearErrors());
   }, [clearErrors, commitSavedRecord, record]);
 
   const afterFieldChange = React.useCallback(
