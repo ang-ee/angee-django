@@ -3,8 +3,30 @@
 This guide owns verification commands and their execution context. The
 [backend](backend/guidelines.md) and [frontend](frontend/guidelines.md) guides own
 what behavior needs coverage; manifests and CI own the executable scripts.
-Run focused checks while editing, then the relevant broad checks before handoff.
 Do not weaken a failing check or claim a check ran when its environment was absent.
+
+## Verification Phases
+
+Local lane handoff, integration into `src`, and final delivery have different
+gates. Select checks for the affected behavior and their required environment:
+
+| Phase | Checks and prerequisites |
+|---|---|
+| Lane development and local handoff | Read the owners and review the diff; run focused tests and applicable static checks supported by the lane's documented test environment. Record host-dependent checks as pending integration. |
+| Local integration into `src` | Prepare the integrated host through its native composition and operator lifecycle, then run pending host-dependent Python checks, affected frontend checks and browser journeys. Native test runners own isolated test databases. |
+| Before merging to `main` or releasing | Run the relevant consolidated full suites against the completed integrated candidate, including the full Python coverage required for shared foundation/composition changes. |
+
+A pending host-dependent check does not by itself block a reviewed local lane
+handoff. Use an existing documented disposable host when it supports the test's
+fixture contract; otherwise run the check after integration. Do not construct an
+ad hoc environment solely to satisfy lane handoff. Final required checks must
+pass before the change is described as fully verified.
+
+Each additional run must resolve a named uncertainty or check a relevant change.
+Reuse passing evidence when its relevant source and environment inputs are
+unchanged. After a consolidated run fails, diagnose and fix related causes, run
+the affected checks, then repeat the required consolidated gate on the completed
+candidate; do not restart a full suite after each individual fix.
 
 ## Choose The Working Directory
 
@@ -42,7 +64,7 @@ locked dependencies from `pyproject.toml`/`uv.lock`:
 | Scope | Command |
 |---|---|
 | Focused Python test | `uv run --locked python -m pytest -q tests/<test_file>.py` |
-| Python/addon/template handoff: full SQLite suite; required for shared foundation/composition changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
+| Final integrated Python/addon/template verification: full SQLite suite; required for shared foundation/composition changes | `env -u DATABASE_URL uv run --locked python -m pytest -q -n auto --dist loadfile --durations=25` |
 | Randomized parallel isolation proof | `uv run --locked python -m pytest -q -n auto --dist loadfile -p randomly --randomly-seed=137 --durations=25` |
 | Python lint | `uv run --locked python -m ruff check . --no-cache` |
 | Python types | `PYTHONPATH=src uv run --locked python -m mypy src` |

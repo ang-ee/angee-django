@@ -189,10 +189,11 @@ jj -R <store-path> workspace add --colocate \
   touches that repository.
 - Attach `.work` beside the slot by the work-state repository's `AGENTS.md`.
 - The workspace has no running host, no database, and no JS install: the
-  stack's JS install links only the `src` workspace's slots. Run focused Python
-  checks in the slot. Run web checks, codegen, and browser verification on
-  `src`, after bringing the workspace's sealed change there with
-  [Hand Off A Lane Locally](#hand-off-a-lane-locally).
+  stack's JS install links only the `src` workspace's slots. Use
+  [Verification phases](../../../docs/checks.md#verification-phases) to assign
+  lane checks and pending host-dependent checks. The latter follow
+  [Hand Off A Lane Locally](#hand-off-a-lane-locally) and native host preparation
+  on `src`.
 
 Remove one with `jj -R <store-path> workspace forget <stack>--<name>`, then
 delete its directory.
