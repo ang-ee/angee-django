@@ -318,7 +318,9 @@ class RecordBinding(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel, co
             return ()
         using = rows[0]._state.db
         previous = {row.pk: row for row in previous_instances}
-        fields = (cls._meta.pk.attname, "content_type_id", "object_id", "page_id", "vault_id")
+        scope_fields = {cls._meta.pk.attname, "content_type_id", "object_id", "page_id", "vault_id"}
+        # Django's sparse from_db values follow native concrete-field order.
+        fields = tuple(field.attname for field in cls._meta.concrete_fields if field.attname in scope_fields)
         projected: list[tuple[Self, tuple[RecordRef, ...]]] = []
         references: list[RecordRef] = []
         for row in rows:

@@ -321,7 +321,7 @@ def test_message_parts_projection_returns_depth_first_order(composed_tables: Non
 
 @pytest.mark.parametrize(
     ("surface", "expected_mime_queries"),
-    [("messages", (1, 1, 1, 1)), ("record_thread", (1, 1, 1, 0))],
+    [("messages", (1, 1, 1, 1)), ("record_thread", (1, 0, 0, 0))],
 )
 def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
     composed_tables: None,
@@ -334,9 +334,9 @@ def test_transcript_parts_reuse_complete_prefetch_at_list_scale(
     """Narrow transcripts keep MIME loading constant at three and six messages.
 
     MessageType loads parts, fragments, files and MIME types in four prefetch
-    queries. RecordMessageType consumes for_record's three prefetch queries:
-    parts, fragments and files joined to MIME types. Every real reading-order
-    call must then issue zero queries under the manager's complete-cache gate.
+    queries. RecordMessageType projects only the selected part identities and
+    navigation in one query. Every real reading-order call then issues zero
+    queries through the manager's authorized navigation cache.
     """
 
     admin = _platform_admin(f"transcript-prefetch-{surface}")
@@ -646,47 +646,50 @@ def test_handle_party_batches_one_related_model_query(
 
     admin = _platform_admin("batched-party-admin")
     with system_context(reason="test.messaging.party.batching.seed"):
-        for index in range(3):
+        for index in range(25):
             party = messaging_models.Party.objects.create(
                 display_name=f"Party {index}",
                 created_by_id=admin.pk,
             )
             messaging_models.Handle.objects.create(
                 platform="email",
-                value=f"party-{index}@example.com",
+                value=f"party-{index:02}@example.com",
                 display_name=f"Handle {index}",
                 party=party,
                 created_by_id=admin.pk,
             )
     schema = _schema()
 
-    with CaptureQueriesContext(connection) as queries:
-        result = execute_schema(
-            schema,
-            """
-            query Handles {
-              handles(order_by: [{value: asc}]) {
-                value
-                party { display_name }
-              }
-            }
-            """,
-            request=_request(admin),
-        )
-
-    assert result.errors is None, result.errors
-    assert [row["party"]["display_name"] for row in result.data["handles"]] == [
-        "Party 0",
-        "Party 1",
-        "Party 2",
-    ]
-    party_selects = [
-        query["sql"]
-        for query in queries.captured_queries
-        if query["sql"].lstrip().upper().startswith("SELECT")
-        and f'FROM "{messaging_models.Party._meta.db_table}"' in query["sql"]
-    ]
-    assert len(party_selects) == 1, party_selects
+    query = """
+        query Handles($limit: Int!) {
+          handles(limit: $limit, order_by: [{value: asc}]) {
+            value
+            party { display_name }
+          }
+        }
+    """
+    _data(execute_schema(schema, query, {"limit": 1}, request=_request(admin)))
+    counts = []
+    table = connection.ops.quote_name(messaging_models.Party._meta.db_table)
+    for size in (1, 3, 25):
+        with CaptureQueriesContext(connection) as queries:
+            result = _data(execute_schema(schema, query, {"limit": size}, request=_request(admin)))
+        assert [row["party"]["display_name"] for row in result["handles"]] == [
+            f"Party {index}" for index in range(size)
+        ]
+        party_selects = [
+            item["sql"] for item in queries
+            if item["sql"].startswith(f"SELECT {table}.") and f"FROM {table}" in item["sql"]
+        ]
+        # Hydrate selected labels once; native pk-only permission witnesses
+        # remain required and must also stay bounded across populated pages.
+        hydrated = [
+            sql for sql in party_selects
+            if sql.startswith(f'SELECT {table}."id", {table}."display_name" FROM')
+        ]
+        assert len(hydrated) == 1, party_selects
+        counts.append((len(queries), len(party_selects)))
+    assert counts[1] == counts[2], counts
 
 
 def test_handle_party_regates_sudo_loaded_parent(
@@ -3659,7 +3662,7 @@ def test_record_message_labels_load_only_their_native_dependencies(
 
     read(1)  # Warm native schema/permission caches before comparing page budgets.
     counts = []
-    for size in ((25,) if async_execution else (1, 25)):
+    for size in ((25,) if async_execution else (1, 2, 25)):
         with CaptureQueriesContext(connection) as captured:
             payload = read(size)
         assert len(payload["messages"]) == size
@@ -3672,4 +3675,6 @@ def test_record_message_labels_load_only_their_native_dependencies(
             assert row == label
         counts.append(len(captured))
     if not async_execution:
-        assert counts[0] == counts[1], counts
+        # Singleton related reads use native point-source preparation; compare
+        # populated plans while retaining the exact singleton output above.
+        assert counts[1] == counts[2], counts

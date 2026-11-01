@@ -20,7 +20,13 @@ from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
 from angee.base.models import refs as record_refs
 from angee.base.models.refs import RecordRefMixin, delete_record_refs, record_edges_by_target
-from angee.base.refs import RecordRef, ancestor_object_refs, generic_pointer_model, generic_pointer_target, record_view_refs
+from angee.base.refs import (
+    RecordRef,
+    ancestor_object_refs,
+    generic_pointer_model,
+    generic_pointer_target,
+    record_view_refs,
+)
 from angee.knowledge import schema as knowledge_schema
 from angee.projects.testing.models import Link, Task
 from angee.storage import schema as storage_schema
@@ -540,8 +546,9 @@ def test_inherited_record_refs_obey_the_native_parameter_budget(composed_tables,
     with system_context(reason="test.refs.parameter_batches"):
         children = [MtiChild.objects.create(title=f"Parent {index}", detail="Child") for index in range(5)]
         identities = [RecordRef.from_model(MtiParent, child.pk) for child in children]
-        monkeypatch.setattr(connection.features, "max_query_params", 2)
-        with CaptureQueriesContext(connection) as captured:
-            expanded = record_view_refs(*identities)
+        with monkeypatch.context() as features:
+            features.setattr(type(connection.features), "max_query_params", 2)
+            with CaptureQueriesContext(connection) as captured:
+                expanded = record_view_refs(*identities)
     assert set(expanded) == {*identities, *(RecordRef.from_instance(child) for child in children)}
     assert len(captured) == 3

@@ -8,12 +8,12 @@ from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
-from angee.base.refs import RecordRef
-from angee.graphql.access import ChangeReadGate
-from angee.graphql.events import ChangePayload
 from angee.base import signals as model_signals
 from angee.base.models import merge_references
 from angee.base.models.merge_references import EdgeReference, references
+from angee.base.refs import RecordRef
+from angee.graphql.access import ChangeReadGate
+from angee.graphql.events import ChangePayload
 from angee.knowledge.models import bindings as binding_owner
 from angee.knowledge.schema import schemas
 from angee.provenance.context import changeset, changeset_model
@@ -109,7 +109,10 @@ def test_binding_retarget_observes_only_old_and_new_parent_scopes_after_commit(
 
     monkeypatch.setattr(model_signals, "publish_change", queue_identity)
     model_signals.connect_observers(RecordBinding)
-    reference = next(item for item in references(type(before_target)) if item.model is RecordBinding and isinstance(item, EdgeReference))
+    reference = next(
+        item for item in references(type(before_target))
+        if item.model is RecordBinding and isinstance(item, EdgeReference)
+    )
     with TestCase.captureOnCommitCallbacks(execute=True):
         try:
             with changeset(), transaction.atomic(), system_context(reason="test.binding.native_retarget"):
@@ -126,7 +129,9 @@ def test_binding_retarget_observes_only_old_and_new_parent_scopes_after_commit(
         assert len(delivered) == 1
         assert delivered[0][0] == binding.pk
         assert set(delivered[0][1]) >= {
-            RecordRef.from_instance(before_target), RecordRef.from_instance(after_target), RecordRef.from_instance(page),
+            RecordRef.from_instance(before_target),
+            RecordRef.from_instance(after_target),
+            RecordRef.from_instance(page),
         }
     with system_context(reason="test.binding.retarget_result"):
         binding.refresh_from_db()
@@ -182,7 +187,10 @@ def test_binding_native_move_batches_sparse_facts_and_resolves_lineage_once_per_
     monkeypatch.setattr(model_signals, "publish_change", publish)
     model_signals.connect_observers(RecordBinding)
     model_signals.bulk_updated.connect(observe_batch, sender=RecordBinding, weak=False)
-    reference = next(item for item in references(type(before_target)) if item.model is RecordBinding and isinstance(item, EdgeReference))
+    reference = next(
+        item for item in references(type(before_target))
+        if item.model is RecordBinding and isinstance(item, EdgeReference)
+    )
     try:
         with changeset(), system_context(reason="test.binding.bounded_move"):
             reference.move(reference.rows(before_target), survivor=after_target)
@@ -211,11 +219,16 @@ def test_binding_move_collapses_only_identity_collisions_and_keeps_source_gates(
 
     monkeypatch.setattr(model_signals, "publish_change", publish)
     model_signals.connect_observers(RecordBinding)
-    reference = next(item for item in references(type(before_target)) if item.model is RecordBinding and isinstance(item, EdgeReference))
+    reference = next(
+        item for item in references(type(before_target))
+        if item.model is RecordBinding and isinstance(item, EdgeReference)
+    )
     with changeset(), system_context(reason="test.binding.collision_move"):
         reference.move(reference.rows(before_target), survivor=after_target)
     assert [(pk, action) for pk, action, _refs in events] == [(removed.pk, "delete"), (moved.pk, "update")]
-    assert set(events[-1][2]) >= {RecordRef.from_instance(before_target), RecordRef.from_instance(after_target), RecordRef.from_instance(page)}
+    assert set(events[-1][2]) >= {
+        RecordRef.from_instance(before_target), RecordRef.from_instance(after_target), RecordRef.from_instance(page),
+    }
     with system_context(reason="test.binding.collision_result"):
         assert not RecordBinding._base_manager.filter(pk=removed.pk).exists()
         assert RecordBinding._base_manager.get(pk=kept.pk).object_id == after_target.pk

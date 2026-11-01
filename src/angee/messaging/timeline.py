@@ -27,7 +27,9 @@ class CommentKind(TimelineKind):
         "messaging.Thread": ("merged_into",),
         "messaging.Reaction": ("message", "reaction", "handle"),
         "messaging.MessageStar": ("message", "user"),
-        "messaging.ThreadFollower": ("thread", "attachment", "notification_policy", "subtype_keys", "last_read_message"),
+        "messaging.ThreadFollower": (
+            "thread", "attachment", "notification_policy", "subtype_keys", "last_read_message",
+        ),
         "messaging.ThreadNotification": ("thread", "attachment", "message", "read_at", "notification_status"),
     }
 
