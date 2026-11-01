@@ -46,10 +46,10 @@ vi.mock("./action-result-run", () => ({
 // there owns testing that fold. What the tests below own is which labels reach it,
 // and in what order — so the fake keeps the label visible in its output.
 vi.mock("@angee/metadata", () => ({
-  useCanonicalResourceModelLabels: (modelLabels: readonly string[] | undefined) =>
-    (modelLabels ?? []).map((modelLabel) =>
-      modelLabel === "Skill" ? "agents.Skill" : modelLabel
-    ),
+  useResourceMutationModels: (modelLabels: readonly string[] | undefined) => {
+    const models = (modelLabels ?? []).map((modelLabel) => modelLabel === "Skill" ? "agents.Skill" : modelLabel);
+    return { models, resourceModels: models };
+  },
   useResourceInvalidates: (modelLabels: readonly string[] | undefined) =>
     (modelLabels ?? []).map((modelLabel) => ({
       dataProviderName: "console",

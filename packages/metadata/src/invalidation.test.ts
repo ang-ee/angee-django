@@ -23,6 +23,7 @@ import {
   refineInvalidationParams,
   resourceInvalidationTargets,
   useResourceInvalidates,
+  useResourceMutationModels,
 } from "./invalidation";
 import {
   schemaFieldMetadataFromDataResources,
@@ -76,6 +77,35 @@ describe("resource invalidation targets", () => {
     ]).map(refineInvalidationParams)).toEqual([
       { resource: "console:notes.Note", dataProviderName: "console", invalidates: ["resourceAll"] },
     ]);
+  });
+
+  test("mutation model mapping retains authored-only fallbacks beside canonical resource aliases", () => {
+    hookMocks.metadata = schemaFieldMetadataFromDataResources([testDataResource("notes.Note")]);
+    expect(useResourceMutationModels(["Note", "notes.NoteBody", "notes.RecordBinding", "notes.Note"])).toEqual({
+      models: ["notes.Note", "notes.NoteBody", "notes.RecordBinding"], resourceModels: ["notes.Note"],
+    });
+  });
+
+  test("mixed record effects map only exposed resources without requiring authored-only resources", () => {
+    hookMocks.metadata = schemaFieldMetadataFromDataResources([testDataResource("notes.Note")]);
+    const records = [
+      { model: "notes.Note", id: "note-1" },
+      { model: "notes.NoteBody", id: "body-1" },
+      { model: "notes.RecordBinding", id: "binding-1", relatedRecords: [{ model: "notes.Target", id: "target-1" }] },
+    ];
+    expect(resourceInvalidationTargets(hookMocks.metadata, ["notes.Note"], records)
+      .map(refineInvalidationParams)).toEqual([
+      { resource: "console:notes.Note", dataProviderName: "console", id: "note-1", invalidates: ["list", "many", "detail"] },
+    ]);
+    const resolve = useResourceInvalidates([], () => records);
+    if (typeof resolve !== "function") throw new Error("Expected dynamic record mapping");
+    expect(resolve(undefined, undefined)).toEqual([
+      { resource: "console:notes.Note", dataProviderName: "console", id: "note-1", invalidates: ["list", "many", "detail"] },
+    ]);
+    expect(useResourceInvalidates([], records.filter((record) => record.model !== "notes.Note"))).toEqual([]);
+    // Explicit native-resource declarations retain their strict contract.
+    expect(() => resourceInvalidationTargets(hookMocks.metadata, ["notes.RecordBinding"], records))
+      .toThrow(/Unknown model spelling/);
   });
 
   test("canonicalizes an authored mutation's model alias", () => {
