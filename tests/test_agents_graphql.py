@@ -515,13 +515,13 @@ def test_agent_delete_preview_reports_hidden_active_turn_blockers(
 
 
 def test_agent_delete_preview_has_constant_query_count_across_sessions(composed_tables: None) -> None:
-    """Collecting 1 or 50 private active sessions adds no per-session blocker queries."""
+    """Private session populations batch blockers across native point and population plans."""
 
     owner = User.objects.create_user(username="agt-preview-budget-owner")
     other = User.objects.create_user(username="agt-preview-budget-session-user")
     agents = []
     with system_context(reason="test.agents.preview_budget.seed"):
-        for size in (1, 50):
+        for size in (1, 2, 50):
             agent = Agent.objects.create(name=f"Assistant {size}", owner=owner, lifecycle="deprovisioned")
             agents.append(agent)
             for _ in range(size):
@@ -540,7 +540,8 @@ def test_agent_delete_preview_has_constant_query_count_across_sessions(composed_
             "An agent turn is still running or awaiting approval; stop it first.",
         ]
         counts.append(len(captured))
-    assert counts[0] == counts[1], counts
+    # Native singleton and population plans differ; population work stays constant.
+    assert counts[0] <= counts[1] == counts[2], counts
 
 
 @pytest.mark.parametrize("surface", ["agent", "user"])
