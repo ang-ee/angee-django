@@ -10,6 +10,9 @@ from angee.workflows_integrate.models import SyncCycleBridge
 class SyncCycleTestBridge(SyncCycleBridge, Bridge, Integration):
     """Snapshot plain configured input with no additional scope to lock."""
 
+    created_at = Integration.created_at
+    updated_at = Integration.updated_at
+
     sync_workflow_key = "test_sync_cycle"
 
     class Meta(Bridge.Meta):

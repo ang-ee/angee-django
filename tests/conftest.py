@@ -261,6 +261,9 @@ class Page(RecordChangedOptIn, AbstractPage):
 class MarkdownPage(AbstractMarkdownPage, Page):
     """Concrete knowledge markdown child used by source-addon tests."""
 
+    created_at = Page.created_at
+    updated_at = Page.updated_at
+
     class Meta(AbstractMarkdownPage.Meta):
         """Django model options for the canonical test markdown page."""
 
@@ -273,6 +276,9 @@ class MarkdownPage(AbstractMarkdownPage, Page):
 
 class NotionConnection(AbstractNotionConnection, Integration):
     """Native Notion integration child for source-addon contract tests."""
+
+    created_at = Integration.created_at
+    updated_at = Integration.updated_at
 
     class Meta(AbstractNotionConnection.Meta):
         abstract = False
@@ -288,6 +294,9 @@ class VcsBridge(AbstractVcsBridge, Integration):
     module) rather than in a single test file — otherwise importing the schema from
     one test depends on another test having been collected first.
     """
+
+    created_at = Integration.created_at
+    updated_at = Integration.updated_at
 
     class Meta(AbstractVcsBridge.Meta):
         """Django model options for the canonical test VCS bridge."""
@@ -306,6 +315,9 @@ class Mount(AbstractMount, Integration):
     type follows the emitted runtime model so the ``integration_ptr`` relation
     in ``storage_integrate/permissions.zed`` resolves through the parent row.
     """
+
+    created_at = Integration.created_at
+    updated_at = Integration.updated_at
 
     class Meta(AbstractMount.Meta):
         """Django model options for the canonical test Mount."""
@@ -774,6 +786,9 @@ class Feed(AbstractFeed, Channel):
     ``Feed(AbstractFeed, Channel)``. Lives in conftest (like ``VcsBridge``) because
     ``angee.posts.schema`` binds its console types at import time via ``apps.get_model``.
     """
+
+    created_at = Channel.created_at
+    updated_at = Channel.updated_at
 
     class Meta(AbstractFeed.Meta):
         """Django model options for the canonical test feed."""

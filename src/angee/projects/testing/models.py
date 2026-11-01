@@ -26,6 +26,9 @@ from angee.work.models import Stage as AbstractWorkStage
 class Queue(AbstractQueue, Group):
     """Native work queue shared by task access and lifecycle fixtures."""
 
+    created_at = Group.created_at
+    updated_at = Group.updated_at
+
     class Meta(AbstractQueue.Meta):
         abstract = False
         app_label = "work"

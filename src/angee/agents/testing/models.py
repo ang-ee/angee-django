@@ -15,6 +15,9 @@ from angee.integrate.testing.integration import Integration
 class InferenceProvider(AbstractInferenceProvider, Integration):
     """Concrete inference capability over the shared integration."""
 
+    created_at = Integration.created_at
+    updated_at = Integration.updated_at
+
     class Meta(AbstractInferenceProvider.Meta):
         abstract = False
         app_label = "agents"
