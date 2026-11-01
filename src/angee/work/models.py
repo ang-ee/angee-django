@@ -31,14 +31,19 @@ from rebac.managers import TrackedManager
 
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.locks import ImmutableFieldsMixin, _RowLockBaseManager, _RowLockBaseQuerySet
+from angee.base.models.locks import ImmutableFieldsMixin
 from angee.base.models.stages import Stage as StagePrimitive
 from angee.base.models.stages import StagedModelMixin
 from angee.base.models.stages import StageManager as StageManagerPrimitive
 from angee.base.models.stages import StageQuerySet as StageQuerySetPrimitive
 from angee.iam.managers import ProtectedManager, ProtectedUnscopedManager
 from angee.iam.models.base import ProtectedDataModel, ProtectedModel
-from angee.iam.models.locks import ProtectedRowLockMixin, ProtectedRowLockQuerySet
+from angee.iam.models.locks import (
+    ProtectedRowLockMixin,
+    ProtectedRowLockQuerySet,
+    _ProtectedRowLockBaseManager,
+    _ProtectedRowLockBaseQuerySet,
+)
 from angee.iam.permissions import actor_user_id, instance_actor
 from angee.iam.querysets import ProtectedQuerySet
 from angee.projects.models import TaskManager as ProjectTaskManager
@@ -352,7 +357,7 @@ class StageQuerySet[StageT: Stage](
     """Scoped stage selections with system-row mutation guards."""
 
 
-class StageBaseQuerySet[StageT: Stage](ManualStageQuerySet[StageT], _RowLockBaseQuerySet[StageT]):
+class StageBaseQuerySet[StageT: Stage](ManualStageQuerySet[StageT], _ProtectedRowLockBaseQuerySet[StageT]):
     """Unfiltered stage selections retaining system-row mutation guards."""
 
 
@@ -367,7 +372,7 @@ _StageBaseManagerBase = ProtectedUnscopedManager.from_queryset(StageBaseQuerySet
 
 
 class StageBaseManager[StageT: Stage](
-    _StageBaseManagerBase[StageT], _RowLockBaseManager[StageT], TrackedManager[StageT], StageManagerPrimitive[StageT],
+    _StageBaseManagerBase[StageT], _ProtectedRowLockBaseManager[StageT], TrackedManager[StageT], StageManagerPrimitive[StageT],
 ):
     """Unfiltered Work stages preserving row-lock and generic stage contracts."""
 
