@@ -146,13 +146,15 @@ def test_record_reference_guard_uses_the_declared_string_key_and_current_actor(c
             TextReference.objects.create(
                 content_type=ContentType.objects.get_for_model(record), object_id=str(record.pk),
             )
+        TextReference.objects.create(
+            content_type=ContentType.objects.get_for_model(owned), object_id="0" + str(owned.pk),
+        )
         with actor_context(owner):
             guarded = with_record_reference_access(TextReference.objects.order_by("pk"))
-            assert list(guarded.values_list("_angee_record_readable", flat=True)) == [True, False]
-            assert "CAST(" in str(guarded.query) and "varchar(63)" in str(guarded.query)
+            assert list(guarded.values_list("_angee_record_readable", flat=True)) == [True, False, False]
         with actor_context(other):
             rebound = with_record_reference_access(guarded)
-            assert list(rebound.values_list("_angee_record_readable", flat=True)) == [False, True]
+            assert list(rebound.values_list("_angee_record_readable", flat=True)) == [False, True, False]
 
 
 def test_unselected_reference_fields_do_not_discover_targets(referenced_decisions, monkeypatch):
