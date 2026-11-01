@@ -1,13 +1,14 @@
 """Real changeset-close and record-deletion subscribers stay on the producer."""
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.db import connections, transaction
-from django.test import TransactionTestCase
+from django.test import RequestFactory, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, database_context, system_context
 from rebac.models import PermissionAuditEvent
@@ -16,6 +17,7 @@ from rebac.roles import grant as grant_role
 from angee.base.models.identity import public_id_of
 from angee.base.signals import change_published
 from angee.base.testing.packages import write_addon_distribution
+from angee.graphql.schema import GraphQLSchemas
 from angee.provenance.context import changeset, current_changeset
 from angee.provenance.timeline import ChangeKind
 from angee.timeline.reading import Timeline
@@ -121,6 +123,35 @@ class CallbackRoutingContract(TransactionTestCase):
         self.assertEqual([entry.target_id for entry in page.entries], [public_id_of(run)])
         self.assertEqual(page.entries[0].title, "Callback")
         self.assertEqual(page.entries[0].actor, self.users["producer"].get_username())
+
+    def test_record_run_aliases_keep_the_selected_database(self):
+        with patch("angee.jobs.enqueue.celery_app.send_task"):
+            default_run = self._run("default")
+            run = self._run("producer")
+        self.assertEqual(default_run.pk, run.pk)
+        schema = GraphQLSchemas.from_discovery().build("console")
+        request = RequestFactory().post("/graphql/console/")
+        request.user = self.users["producer"]
+        with (
+            self.settings(DATABASE_ROUTERS=["tests.test_workflows_refactor_routing.ProducerRouter"]),
+            CaptureQueriesContext(connections["default"]) as default_queries,
+            database_context("producer"),
+            actor_context(self.users["producer"]),
+        ):
+            result = schema.execute_sync("""query($records:[TimelineRecordInput!]!) {
+              record_timeline(records:$records, run_limit:1) { records {
+                compact:runs { id status }
+                detailed:runs { id subject_model subject_id version { number } }
+              } }
+            }""", variable_values={"records": [{
+                "model": self.Record._meta.label, "id": public_id_of(self.records["producer"]),
+            }]}, context_value=SimpleNamespace(request=request))
+        self.assertIsNone(result.errors)
+        self.assertEqual(list(default_queries), [])
+        row = result.data["record_timeline"]["records"][0]
+        self.assertEqual(row["compact"][0]["id"], public_id_of(run))
+        self.assertEqual(row["detailed"][0]["subject_id"], public_id_of(self.records["producer"]))
+        self.assertEqual(row["detailed"][0]["subject_model"], self.Record._meta.label)
 
     def test_actual_producer_deletion_retains_cancel_actor_and_commit_boundary(self):
         with patch("angee.jobs.enqueue.celery_app.send_task") as send:

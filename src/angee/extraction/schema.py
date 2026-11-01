@@ -17,7 +17,12 @@ from angee.base.models.identity import public_id_for
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id
 from angee.graphql.node import AngeeNode
-from angee.graphql.relations import RecordReferenceNode, actor_scoped_to_many, actor_scoped_to_one
+from angee.graphql.relations import (
+    RECORD_REFERENCE_ANNOTATIONS,
+    RecordReferenceNode,
+    actor_scoped_to_many,
+    actor_scoped_to_one,
+)
 from angee.storage.schema import FileType
 
 Extraction = apps.get_model("extraction.Extraction")
@@ -91,7 +96,7 @@ class ExtractionSourceType(RecordReferenceNode):
     content_hash: auto
     mime_type: auto
 
-    @strawberry_django.field(only=["message_part_id"])
+    @strawberry_django.field(only=["message_part_id"], annotate=RECORD_REFERENCE_ANNOTATIONS)
     def message_part_id(self) -> PublicID | None:
         """Project the retained part only while its current record remains readable."""
         return RecordReferenceNode.reference_id(self) if cast(Any, self).message_part_id else None

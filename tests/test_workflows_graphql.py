@@ -191,7 +191,14 @@ def test_run_owner_reads_execution_evidence_but_another_starter_cannot(schema, c
     with CaptureQueriesContext(connection) as many:
         expanded = result_data(execute_schema(schema, labels, user=owner))
     assert len(expanded["workflowrun"]) == len(expanded["steprecord"]) == 2
-    assert len(many) == len(one)
+    for _ in range(2):
+        extra = start_run(workflow, actor=owner)
+        run_until(extra)
+    with CaptureQueriesContext(connection) as four:
+        expanded_four = result_data(execute_schema(schema, labels, user=owner))
+    assert len(expanded_four["workflowrun"]) == len(expanded_four["steprecord"]) == 4
+    # Native singleton and population plans differ; population work stays constant.
+    assert len(one) <= len(many) == len(four), [len(one), len(many), len(four)]
     artifact.label = ""
     assert str(artifact) == artifact.sqid
 
@@ -709,26 +716,36 @@ def test_studio_native_field_reads_follow_monitor_on_every_path_and_batch(
     }}"""
     with CaptureQueriesContext(connection) as one:
         data = result_data(execute_schema(schema, query, {"id": workflow.sqid}, user=reader))
-    rows = [
-        data["workflow_by_pk"],
-        *data["workflow"],
-        *(row["version"]["workflow"] for row in data["workflowrun"]),
-        *(row["workflow"] for row in data["workflowversion"]),
-        *(row["workflow"] for row in data["trigger"]),
-    ]
-    assert len(rows) == 5
-    for row in rows:
-        assert row["permissions"] == (
-            ["monitor"] if visible else ["start"] if relation in {"starter", "operator"} else []
-        )
-        assert row["draft"] == (document("entry") if visible else None)
-        assert row["draft_revision"] == (1 if visible else None)
-        assert row["layout"] == ({} if visible else None)
+    def assert_projection(data, count):
+        rows = [
+            data["workflow_by_pk"],
+            *data["workflow"],
+            *(row["version"]["workflow"] for row in data["workflowrun"]),
+            *(row["workflow"] for row in data["workflowversion"]),
+            *(row["workflow"] for row in data["trigger"]),
+        ]
+        assert len(data["workflow"]) == count
+        assert len(rows) == 1 + 4 * count
+        for row in rows:
+            assert row["permissions"] == (
+                ["monitor"] if visible else ["start"] if relation in {"starter", "operator"} else []
+            )
+            assert row["draft"] == (document("entry") if visible else None)
+            assert row["draft_revision"] == (1 if visible else None)
+            assert row["layout"] == ({} if visible else None)
+
+    assert_projection(data, 1)
     create("studio_two")
     with CaptureQueriesContext(connection) as many:
         larger = result_data(execute_schema(schema, query, {"id": workflow.sqid}, user=reader))
-    assert len(larger["workflow"]) == 2
-    assert len(many) == len(one)
+    assert_projection(larger, 2)
+    create("studio_three")
+    create("studio_four")
+    with CaptureQueriesContext(connection) as four:
+        largest = result_data(execute_schema(schema, query, {"id": workflow.sqid}, user=reader))
+    assert_projection(largest, 4)
+    # Native singleton and population plans differ; population work stays constant.
+    assert len(one) <= len(many) == len(four), [len(one), len(many), len(four)]
 
 
 def test_studio_save_conflict_precedes_validation_and_publish_checks_revision(schema, callers):

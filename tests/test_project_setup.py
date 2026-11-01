@@ -357,13 +357,16 @@ class ProjectAttentionCase(ProjectSetupFixture):
           id setup_state questions_waiting_for_me questions_passed_on overdue_milestone_count
         } }"""
         counts = []
-        for limit in (1, 5):
+        for limit in (1, 2, 5):
             self.graphql(query, {"limit": limit}, user=self.manager)
             with CaptureQueriesContext(connection) as queries:
                 rows = self.graphql(query, {"limit": limit}, user=self.manager)["project_tasks"]
             self.assertEqual(len(rows), limit)
             counts.append(len(queries))
-        self.assertEqual(counts[0], counts[1])
+        # Post-fetch clarification-asker guards use a native singleton point
+        # or a population scope; attention work stays fixed within the latter.
+        self.assertLessEqual(counts[0], counts[1], counts)
+        self.assertEqual(counts[1], counts[2], counts)
 
 
 class DashboardVisibilityCase(WorkCase):

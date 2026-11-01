@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Sequence
 from functools import cached_property
 from typing import Any
 
@@ -135,12 +135,9 @@ class TimelineSelection:
         """The shared run-owner selection, ready for a schema-specific optimizer."""
 
         runs = apps.get_model("workflows", "WorkflowRun").objects.with_actor(self.actor)
-        events = apps.get_model("workflows", "TriggerEvent").objects.with_actor(self.actor)
         return runs.about(self.records, limit=self.run_limit).order_by("-created_at", "-pk").select_related(
             "parent_step",
-        ).prefetch_related("records", models.Prefetch(
-            "trigger_event", queryset=with_record_reference_access(events),
-        ))
+        ).prefetch_related("records")
 
     @cached_property
     def open_decision_count(self) -> int:
@@ -150,15 +147,12 @@ class TimelineSelection:
         with system_context(reason="workflows.timeline.selection_attention"):
             return int(decisions.objects.open_for(*self.records).count())
 
-    def entries(self, runs: Sequence[Any]) -> Iterator[tuple[GenericTarget, list[Any], list[Any]]]:
-        """Group selected runs with their ancestors and readable open decisions."""
-
-        decisions = apps.get_model("decisions", "Decision").objects.with_actor(self.actor)
-        links = apps.get_model("decisions", "DecisionRecord").objects.with_actor(self.actor)
-        questions = list(decisions.open_for(*self.records).prefetch_related(models.Prefetch(
-            "records", queryset=with_record_reference_access(links),
-        )))
+    @cached_property
+    def runs_by_record(self) -> dict[GenericTarget, tuple[int, ...]]:
+        """Run identities grouped once, independently of a schema's projection."""
+        runs = list(self.runs)
         by_run = {run.pk: run for run in runs}
+        grouped = {}
         for target in self.targets:
             identity = (target.content_type.pk, target.object_id)
             selected = {run.pk for run in runs if (
@@ -171,12 +165,23 @@ class TimelineSelection:
                     if run.pk in selected:
                         break
                     selected.add(run.pk)
-            yield (
-                target,
-                list(reversed([run for run in runs if run.pk in selected][:self.run_limit])),
-                [decision for decision in questions if any(
-                    (link.content_type_id, link.object_id) == identity for link in decision.records.all())],
-            )
+            grouped[target] = tuple(reversed([run.pk for run in runs if run.pk in selected][:self.run_limit]))
+        return grouped
+
+    @cached_property
+    def decisions_by_record(self) -> dict[GenericTarget, list[Any]]:
+        """Readable open questions, loaded only by a question projection."""
+        decisions = apps.get_model("decisions", "Decision").objects.with_actor(self.actor)
+        links = apps.get_model("decisions", "DecisionRecord").objects.with_actor(self.actor)
+        questions = list(decisions.open_for(*self.records).prefetch_related(models.Prefetch(
+            "records", queryset=with_record_reference_access(links),
+        )))
+        return {
+            target: [decision for decision in questions if any(
+                (link.content_type_id, link.object_id) == (target.content_type.pk, target.object_id)
+                for link in decision.records.all())]
+            for target in self.targets
+        }
 
 
 def timeline_kinds() -> tuple[TimelineKind, ...]:

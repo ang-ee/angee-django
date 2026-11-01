@@ -11,6 +11,9 @@ from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db.models import F, Prefetch
 from django.db.models.lookups import IsNull
+from graphql import FieldNode
+from rebac import GenericTarget
+from rebac.graphql.strawberry_django import optimize
 from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
@@ -33,6 +36,7 @@ from angee.graphql.ids import PublicID, optional_public_id, require_instance_for
 from angee.graphql.impl import ImplChoice
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import (
+    RECORD_REFERENCE_ANNOTATIONS,
     RecordReferenceNode,
     actor_scoped_to_many,
     actor_scoped_to_one,
@@ -169,9 +173,11 @@ class WorkflowRunType(RecordReferenceNode):
 
     subject_model: str | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_model, only=["subject_content_type_id", "subject_object_id"],
+        annotate=RECORD_REFERENCE_ANNOTATIONS,
     )
     subject_id: PublicID | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_id, only=["subject_content_type_id", "subject_object_id"],
+        annotate=RECORD_REFERENCE_ANNOTATIONS,
     )
 
     @strawberry_django.field(only=["subject_content_type_id", "subject_object_id"], prefetch_related=["subject"])
@@ -358,9 +364,11 @@ class StepWatchType(RecordReferenceNode):
 
     record_model: str | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
+        annotate=RECORD_REFERENCE_ANNOTATIONS,
     )
     record_id: PublicID | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_id, only=["content_type_id", "object_id"],
+        annotate=RECORD_REFERENCE_ANNOTATIONS,
     )
 
 
@@ -377,9 +385,11 @@ class StepRecordType(RecordReferenceNode):
 
     record_model: str | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
+        annotate=RECORD_REFERENCE_ANNOTATIONS,
     )
     record_id: PublicID | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_id, only=["content_type_id", "object_id"],
+        annotate=RECORD_REFERENCE_ANNOTATIONS,
     )
 
 
@@ -470,9 +480,11 @@ class TriggerEventType(RecordReferenceNode):
 
     record_model: str | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_model, only=["record_content_type_id", "record_object_id"],
+        annotate=RECORD_REFERENCE_ANNOTATIONS,
     )
     record_id: PublicID | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_id, only=["record_content_type_id", "record_object_id"],
+        annotate=RECORD_REFERENCE_ANNOTATIONS,
     )
 
 
@@ -885,15 +897,69 @@ class TimelineRecordInput:
 class RecordTimelineType:
     record_model: str
     record_id: PublicID
-    runs: list[WorkflowRunType]
-    decisions: list[DecisionType]
+    _target: strawberry.Private[GenericTarget]
+    _owner: strawberry.Private[RecordTimelineSelectionType]
+
+    @strawberry.field
+    def runs(self, info: strawberry.Info) -> list[WorkflowRunType]:
+        return self._owner._runs(self._target, info)
+
+    @strawberry.field
+    def decisions(self) -> list[DecisionType]:
+        return self._owner._selection.decisions_by_record[self._target]
 
 
 @strawberry.type
 class RecordTimelineSelectionType:
-    records: list[RecordTimelineType]
-    open_decision_count: int
-    has_runs: bool
+    _selection: strawberry.Private[TimelineSelection]
+    _include_runs: strawberry.Private[bool]
+    _run_projections: strawberry.Private[dict[tuple[FieldNode, ...], dict[int, Any]]] = strawberry.field(
+        default_factory=dict,
+    )
+
+    @strawberry.field
+    def records(self) -> list[RecordTimelineType]:
+        result = []
+        for target in self._selection.targets:
+            canonical = target.content_type.model_class()
+            assert canonical is not None
+            result.append(RecordTimelineType(
+                record_model=canonical._meta.label,
+                record_id=PublicID(public_id_for(canonical, target.object_id)),
+                _target=target,
+                _owner=self,
+            ))
+        return result
+
+    @strawberry.field
+    def open_decision_count(self) -> int:
+        return self._selection.open_decision_count
+
+    @strawberry.field
+    def has_runs(self) -> bool:
+        return self._selection.runs.exists()
+
+    def _runs(self, target: GenericTarget, info: strawberry.Info) -> list[WorkflowRunType]:
+        if not self._include_runs:
+            return []
+        groups = self._selection.runs_by_record
+        identities = {pk for group in groups.values() for pk in group}
+        if not identities:
+            return []
+        # One batch per native field group, not the first alias's optimized models.
+        # The same group across records shares hydration; distinct aliases keep
+        # their actual child Info, including fragments and directive variables.
+        key = tuple(info._raw_info.field_nodes)
+        if key not in self._run_projections:
+            rows = (
+                WorkflowRun.objects.db_manager(self._selection.runs.db)
+                .with_actor(self._selection.actor)
+                .filter(pk__in=identities)
+            )
+            hydrated = optimize(run_type_get_queryset(rows, WorkflowRunType, info), info)
+            self._run_projections[key] = {row.pk: row for row in hydrated}
+        projected = self._run_projections[key]
+        return [projected[pk] for pk in groups[target] if pk in projected]
 
 
 @strawberry.type
@@ -912,23 +978,11 @@ class RecordTimelineQuery:
             model = apps.get_model(reference.model)
             record = require_instance_for_id(model, str(reference.id), queryset=model.objects.with_actor(actor))
             concerned.append(record)
-        selection = TimelineSelection(concerned, actor, run_limit=run_limit)
-        runs = list(run_type_get_queryset(selection.runs, WorkflowRunType, info)) if include_runs else []
-        result = []
-        for target, selected_runs, decisions in selection.entries(runs):
-            canonical = target.content_type.model_class()
-            assert canonical is not None
-            result.append(RecordTimelineType(
-                record_model=canonical._meta.label,
-                record_id=PublicID(public_id_for(canonical, target.object_id)),
-                runs=selected_runs,
-                decisions=decisions,
-            ))
         return RecordTimelineSelectionType(
-            records=result,
-            open_decision_count=selection.open_decision_count,
-            has_runs=bool(runs) if include_runs else selection.runs.exists(),
+            _selection=TimelineSelection(concerned, actor, run_limit=run_limit),
+            _include_runs=include_runs,
         )
+
 
 schemas = {
     "console": {

@@ -13,11 +13,11 @@ from django.db.models import Prefetch, prefetch_related_objects
 from django.urls import reverse
 from graphql import GraphQLError
 from rebac import ObjectRef, PermissionDenied, generic_target, system_context
+from rebac.graphql.strawberry_django import optimize
 from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry.permission import BasePermission
 from strawberry.scalars import JSON
-from strawberry_django.optimizer import optimize
 from strawberry_django.utils.requests import get_request
 
 from angee.base.models.identity import instance_from_public_id
@@ -31,7 +31,12 @@ from angee.graphql.ids import (
     require_instance_for_id,
 )
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
-from angee.graphql.relations import RecordReferenceNode, actor_scoped_public_id, with_record_reference_access
+from angee.graphql.relations import (
+    RECORD_REFERENCE_ANNOTATIONS,
+    RecordReferenceNode,
+    actor_scoped_public_id,
+    with_record_reference_access,
+)
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
 from angee.iam.permissions import RolePermission
@@ -181,11 +186,11 @@ class FileAttachmentType(RecordReferenceNode):
     )
 
     model_label: str | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_model,
+        resolver=RecordReferenceNode.reference_model, annotate=RECORD_REFERENCE_ANNOTATIONS,
         only=["content_type_id", "object_id"],
     )
     record_id: PublicID | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_id,
+        resolver=RecordReferenceNode.reference_id, annotate=RECORD_REFERENCE_ANNOTATIONS,
         only=["content_type_id", "object_id"],
     )
 

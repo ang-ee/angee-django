@@ -273,12 +273,29 @@ class PublicationCases(TransactionTestCase):
         with CaptureQueriesContext(connection) as queries:
             self.data(self.execute(document, {}, self.manager))
         baseline = len(queries)
-        for _ in range(9):
+
+        def assert_blockers(rows, count):
+            self.assertEqual(len(rows), count)
+            for row in rows:
+                self.assertEqual(
+                    row["clarification_widen_blocker"],
+                    "hidden_asker_message" if row["id"] == str(question.sqid) else None,
+                )
+
+        second = self.question()
+        with CaptureQueriesContext(connection) as intermediate:
+            rows = self.data(self.execute(document, {}, self.manager))["project_tasks"]
+        assert_blockers(rows, 2)
+        self.assertEqual({row["id"] for row in rows}, {str(question.sqid), str(second.sqid)})
+        for _ in range(8):
             self.question()
         with CaptureQueriesContext(connection) as queries:
             rows = self.data(self.execute(document, {}, self.manager))["project_tasks"]
-        self.assertEqual(len(rows), 10)
-        self.assertEqual(len(queries), baseline)
+        assert_blockers(rows, 10)
+        # Native singleton and population plans differ; population work stays constant.
+        counts = [baseline, len(intermediate), len(queries)]
+        self.assertLessEqual(counts[0], counts[1], counts)
+        self.assertEqual(counts[1], counts[2], counts)
 
     def test_graphql_actions_refuse_in_band_and_leave_question_unchanged(self) -> None:
         question = self.question()

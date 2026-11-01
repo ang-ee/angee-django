@@ -10,11 +10,13 @@ from django.contrib.auth import get_user_model
 from django.core import signing
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import connections, transaction
+from django.db import connections, models, transaction
 from django.test import RequestFactory, TransactionTestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, database_context, system_context
 
 from angee.base.testing.packages import write_addon_distribution
+from angee.graphql.relations import with_record_reference_access
 from angee.provenance.context import changeset
 from angee.storage import exceptions
 from angee.storage.managers import FileAttachmentManager
@@ -169,6 +171,32 @@ class StorageRoutingContract(TransactionTestCase):
             self.assertEqual(default.metadata, {})
             self.assertEqual(default.upload_envelope, {})
             self.assertFalse(Attachment.objects.using("default").exists())
+
+    def test_reference_projection_clone_uses_the_selected_connection(self):
+        Attachment = apps.get_model("storage", "FileAttachment")
+        edges = {}
+        for alias in ("default", "producer"):
+            with (
+                database_context(alias),
+                actor_context(self.users[alias]),
+                changeset(fresh=True, using=alias),
+            ):
+                edges[alias] = Attachment.objects.db_manager(alias).attach(
+                    self._draft(alias), self.drives[alias],
+                )
+        self.assertEqual(edges["default"].pk, edges["producer"].pk)
+        with database_context("default"), system_context(reason="tests.reference.routing.revoke"):
+            self.drives["default"].owner = None
+            self.drives["default"].save(using="default", update_fields=["owner"])
+        with actor_context(self.users["producer"]), database_context("default"):
+            # A plain native source isolates target projection from source-row
+            # admission, which remains the caller's existing responsibility.
+            prepared = with_record_reference_access(models.QuerySet(model=Attachment, using="default"))
+            self.assertEqual(list(prepared.values_list("_angee_record_readable", flat=True)), [False])
+            with CaptureQueriesContext(connections["default"]) as default_queries:
+                selected = prepared.all().using("producer")
+                self.assertEqual(list(selected.values_list("_angee_record_readable", flat=True)), [True])
+            self.assertEqual(list(default_queries), [])
 
     def test_native_factories_route_writes_and_enclose_attachment_failure(self):
         File = apps.get_model("storage", "File")
