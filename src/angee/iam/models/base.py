@@ -27,6 +27,7 @@ from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type, resource_id_attr
 
 from angee.base.models.base import AngeeDataModel, AngeeModel
+from angee.base.models.persistence import PersistenceMixin
 from angee.base.signals import record_access_revoked
 from angee.iam.managers import ProtectedManager, ProtectedUnscopedManager
 from angee.iam.permissions import (
@@ -43,7 +44,25 @@ from angee.iam.refs import named_in_relationships
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
 
-class ProtectedModel(AngeeModel, RebacMixin, concrete=False):
+class ProtectedPersistenceMixin(PersistenceMixin):
+    """Field-free system reads for models declaring native protected querysets.
+
+    Compose this owner when a model needs IAM's persistence read contract without
+    AngeeModel's fields or per-record RebacMixin behavior. Its source manager owns
+    the queryset, database selection and filters; PersistenceMixin owns locks.
+    """
+
+    class Meta:
+        abstract = True
+
+    @classmethod
+    def system_queryset(cls, *, lock: tuple[str, ...] | None = None) -> Any:
+        """Keep the declared queryset while admitting owner-controlled system work."""
+        rows = super().system_queryset(lock=lock)
+        return rows.system_context(reason=f"{cls._meta.label_lower}.system_queryset")
+
+
+class ProtectedModel(AngeeModel, ProtectedPersistenceMixin, RebacMixin, concrete=False):
     """IAM's native authorization contribution to the neutral model contract.
 
     Protected source declarations inherit this class when their Meta uses native
@@ -58,12 +77,6 @@ class ProtectedModel(AngeeModel, RebacMixin, concrete=False):
     def generic_pointer_model(cls) -> type[models.Model]:
         """Keep the native REBAC canonical identity on protected record pointers."""
         return canonical_model(cls) or super().generic_pointer_model()
-
-    @classmethod
-    def system_queryset(cls, *, lock: tuple[str, ...] | None = None) -> Any:
-        """Keep the declared queryset while admitting owner-controlled system work."""
-        rows = super().system_queryset(lock=lock)
-        return rows.system_context(reason=f"{cls._meta.label_lower}.system_queryset")
 
     def bind_persistence_record(self, record: Self) -> Self:
         """Preserve native explicit actor precedence across persistence reloads."""

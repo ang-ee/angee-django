@@ -173,3 +173,38 @@ def test_pinned_actor_cannot_merge_an_unreadable_candidate_inside_sudo(pinned_ac
         with pytest.raises(ValidationError, match="no longer exist"):
             kept.with_actor(SubjectRef.of("auth/user", "denied")).merge(records=[merged.public_id])
         assert MergeTarget._base_manager.filter(pk__in=(kept.pk, merged.pk)).count() == 2
+
+
+def test_field_free_protected_persistence_scopes_native_subquery_construction():
+    from django.db import models
+    from rebac import RebacMixin
+    from rebac.errors import MissingActorError
+
+    from angee.iam.managers import ProtectedManager, ProtectedUnscopedManager
+    from angee.iam.models.base import ProtectedPersistenceMixin
+    from tests.iam_only_models import APIEntry, ProtectedMembership
+
+    assert issubclass(ProtectedMembership, ProtectedPersistenceMixin)
+    assert not issubclass(ProtectedMembership, RebacMixin)
+    assert [field.name for field in ProtectedMembership._meta.local_fields] == ["id", "entry", "label"]
+    assert type(ProtectedMembership._default_manager) is ProtectedManager
+    assert type(ProtectedMembership._base_manager) is ProtectedUnscopedManager
+    assert ProtectedMembership._base_manager.name == "_angee_base"
+    rows = ProtectedMembership.system_queryset(lock=("self",))
+    assert isinstance(rows, ProtectedQuerySet)
+    assert rows.effective_actor(strict=True) == (None, True)
+    assert rows.query.select_for_update
+    assert rows.query.select_for_update_of == ("self",)
+
+    def annotation(rows):
+        return APIEntry.system_queryset().annotate(
+            membership_label=models.Subquery(
+                rows.filter(entry_id=models.OuterRef("pk")).values("label")[:1]
+            )
+        )
+
+    # Building a nested native query enforces actor admission even without SQL.
+    with pytest.raises(MissingActorError):
+        annotation(ProtectedMembership.objects.all())
+    query = annotation(ProtectedMembership.system_queryset())
+    assert isinstance(query.query.annotations["membership_label"].output_field, models.CharField)
