@@ -34,12 +34,11 @@ from django.db import connections, models, transaction
 from django.utils import timezone
 from django_compose.models import Composable
 from rebac import PermissionDenied, system_context
-from rebac.mixins import RebacModelBase
 
 from angee.base.fields.implementation import ImplClassField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
-from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.base import ProtectedDataModel, ProtectedModel
 from angee.integrate.models import IntegrationCreateMode
 from angee.posts.backends import FeedBackend
 from angee.posts.managers import (
@@ -64,7 +63,7 @@ def validate_reply_hold(hours: float | None) -> None:
             raise ValidationError("Reply hold is too large.") from error
 
 
-class Feed(Composable, metaclass=RebacModelBase, inherits="messaging.Channel"):
+class Feed(ProtectedModel, inherits="messaging.Channel"):
     """A connected public-content source that polls an external platform for posts.
 
     A ``messaging.Channel`` child (identity, bridge state and message access from

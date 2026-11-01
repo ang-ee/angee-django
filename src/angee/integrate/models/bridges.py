@@ -11,18 +11,17 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connections, models, transaction
 from django.utils import timezone
-from django_compose.models import Composable
 from rebac import (
     database_context,
     system_context,
 )
 from rebac.database import write_alias
-from rebac.mixins import RebacModelBase
 
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
+from angee.iam.models.base import ProtectedModel
 from angee.integrate.backends.base import BridgeImpl, ConnectionDiscovery, IntegrationImpl, LiveBridgeImpl
 from angee.integrate.choices import (
     IntegrationLifecycle,
@@ -82,7 +81,7 @@ def merge_json_state(
     return document
 
 
-class Bridge(Composable, metaclass=RebacModelBase, demands="integrate.Integration"):
+class Bridge(ProtectedModel, concrete=False, demands="integrate.Integration"):
     """Abstract base for child models that synchronize or subscribe to vendor data.
 
     Pure bridge state and behavior. A materialized bridge extends

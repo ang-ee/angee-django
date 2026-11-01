@@ -14,7 +14,6 @@ from urllib.parse import quote, unquote
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
-from django_compose.models import Composable
 from markdown_it import MarkdownIt
 from rebac import (
     PermissionDenied,
@@ -25,7 +24,6 @@ from rebac import (
     to_subject_ref,
 )
 from rebac.errors import MissingActorError
-from rebac.mixins import RebacModelBase
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 
@@ -36,7 +34,7 @@ from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
 from angee.base.models.locks import OptimisticLockMixin
 from angee.base.models.trash import TrashQuerySet
 from angee.base.signals import send_created_batch
-from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.base import ProtectedDataModel, ProtectedModel
 from angee.iam.models.trash import ProtectedTrashMixin
 from angee.iam.permissions import actor_user_id
 from angee.knowledge.exceptions import (
@@ -501,7 +499,7 @@ class SectionOp(StrEnum):
     PREPEND = "prepend"
 
 
-class MarkdownPage(HistoryMixin, Composable, metaclass=RebacModelBase, inherits="knowledge.Page"):
+class MarkdownPage(HistoryMixin, ProtectedModel, inherits="knowledge.Page"):
     """Concrete page with a versioned markdown body.
 
     ``body`` is the canonical content store; ``body_hash`` and
