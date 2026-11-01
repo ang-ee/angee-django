@@ -14,19 +14,21 @@ from angee.decisions.testing.drivers import seed_decision
 from angee.decisions.testing.models import Decision, DecisionRecord
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.relations import with_record_reference_access
-from tests.conftest import Page, addon_schema, create_user, execute_schema, result_data, vault_for
+from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, result_data, vault_for
 from tests.tables import model_tables
 
-pytestmark = pytest.mark.django_db(transaction=True, reset_sequences=True)
+pytestmark = pytest.mark.django_db(transaction=True)
+
+CROSS_MODEL_REFERENCE_PK = 771
 
 
 @pytest.fixture
 def referenced_decisions(composed_tables):
     """Admit decisions for two readable records with colliding numeric IDs."""
     owner, outsider = create_user("reference-owner"), create_user("reference-outsider")
-    vault = vault_for(owner)
     with actor_context(owner):
-        page = Page.objects.create_in(vault, title="Reference")
+        vault = Vault.objects.create_for(owner, pk=CROSS_MODEL_REFERENCE_PK, name="Research")
+        page = Page.objects.create_in(vault, pk=CROSS_MODEL_REFERENCE_PK, title="Reference")
     assert page.pk == vault.pk
     records = (vault, page)
     decisions = []
