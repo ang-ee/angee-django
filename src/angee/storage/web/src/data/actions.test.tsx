@@ -28,6 +28,9 @@ const sdk = vi.hoisted(() => {
     authoredCalls: [] as unknown[],
     refineMutations: [] as RefineMutation[],
     invalidations: [] as unknown[],
+    reconciliations: [] as unknown[],
+    batches: [] as string[],
+    failDeleteId: null as string | null,
   };
 });
 
@@ -60,6 +63,12 @@ vi.mock("@angee/refine", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@angee/refine")>();
   return {
     ...actual,
+    useReconcileMutationResponse: () => Object.assign(async (_data: unknown, _input: unknown, options: unknown) => {
+      sdk.reconciliations.push(options);
+    }, { batch: async <T,>(run: () => Promise<T>) => {
+      sdk.batches.push("start");
+      try { return await run(); } finally { sdk.batches.push("flush"); }
+    } }),
     useAuthoredMutation: vi.fn(() => [
       vi.fn(async (variables: unknown) => {
         sdk.authoredCalls.push(variables);
@@ -79,7 +88,13 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       return {
         mutateAsync: vi.fn(async (input: unknown) => {
           calls.push(input);
-          return { data: response(input) };
+          if (kind === "deletePreview" && (input as { values?: { id?: string } }).values?.id === sdk.failDeleteId) {
+            throw new Error("Deletion refused");
+          }
+          const result = { data: response(input) };
+          const lifecycle = options.mutationOptions as { onSuccess?: (result: { data: unknown }, input: unknown) => Promise<void> } | undefined;
+          await lifecycle?.onSuccess?.(result, input);
+          return result;
         }),
         mutation: { error: null, isPending: false },
       };
@@ -117,11 +132,13 @@ describe("storage file/folder actions", () => {
     sdk.authoredCalls.length = 0;
     sdk.refineMutations.length = 0;
     sdk.invalidations.length = 0;
+    sdk.reconciliations.length = 0;
+    sdk.batches.length = 0;
+    sdk.failDeleteId = null;
   });
 
   test("file actions use refine mutations and confirm soft deletes", async () => {
-    const onChanged = vi.fn();
-    const { result } = renderHook(() => useFileActions({ onChanged }), {
+    const { result } = renderHook(() => useFileActions(), {
       wrapper: MetadataWrapper,
     });
     const [deleteFile, updateFile] = sdk.refineMutations;
@@ -150,7 +167,20 @@ describe("storage file/folder actions", () => {
       { id: "fil_1", values: { folder: "fld_1" } },
     ]);
     expect(sdk.authoredCalls).toEqual([{ id: "fil_1" }]);
-    expect(onChanged).toHaveBeenCalledTimes(4);
+    expect(sdk.batches).toEqual(["start", "flush"]);
+  });
+
+  test("bulk trash preserves successful item effects and stops at a refusal", async () => {
+    sdk.failDeleteId = "fil_2";
+    const { result } = renderHook(() => useFileActions(), { wrapper: MetadataWrapper });
+    await act(async () => {
+      await expect(result.current.trashMany(["fil_1", "fil_2", "fil_3"])).rejects.toThrow("Deletion refused");
+    });
+    expect(sdk.refineMutations[0]?.calls).toHaveLength(2);
+    expect(sdk.batches).toEqual(["start", "flush"]);
+    expect(sdk.reconciliations).toEqual([
+      expect.objectContaining({ records: [{ model: "storage.File", id: "fil_1" }] }),
+    ]);
   });
 
   test("folder actions use refine mutations and confirm removes", async () => {
@@ -190,23 +220,11 @@ describe("storage file/folder actions", () => {
     expect(deleteFolder?.calls).toEqual([
       expect.objectContaining({ values: { id: "fld_1", confirm: true } }),
     ]);
-    expect(sdk.invalidations).toEqual([
-      {
-        resource: "console:storage.File",
-        dataProviderName: "console",
-        invalidates: ["resourceAll"],
-      },
-      {
-        resource: "console:storage.Folder",
-        dataProviderName: "console",
-        invalidates: ["resourceAll"],
-      },
-      {
-        resource: "console:storage.File",
-        dataProviderName: "console",
-        invalidates: ["resourceAll"],
-      },
-    ]);
+    expect(sdk.reconciliations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ records: [{ model: "storage.Folder", id: "row_1", action: "create" }] }),
+      expect.objectContaining({ records: [{ model: "storage.Folder", id: "fld_1" }], invalidateModels: ["storage.File"] }),
+      expect.objectContaining({ invalidateModels: ["storage.File"] }),
+    ]));
   });
 });
 

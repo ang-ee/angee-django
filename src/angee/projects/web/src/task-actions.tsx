@@ -46,9 +46,11 @@ export function useTaskRowActions<
   const t = useProjectsT();
   const [complete] = useActionResultMutation<ActionFieldName>("complete_task", {
     invalidateModels: [TASK_MODEL],
+    records: (_outcome, input) => [{ model: TASK_MODEL, id: String(input.id) }],
   });
   const [reopen] = useActionResultMutation<ActionFieldName>("reopen_task", {
     invalidateModels: [TASK_MODEL],
+    records: (_outcome, input) => [{ model: TASK_MODEL, id: String(input.id) }],
   });
 
   return React.useMemo(
@@ -107,14 +109,17 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
   const dropReasonOptions = useEnumOptions(TASK_MODEL, "dropped_reason", { casing: "upper" });
   const [complete] = useRecordActionMutation<ActionFieldName>("complete_task", {
     invalidateModels: [TASK_MODEL],
+    records: (_outcome, input) => [{ model: TASK_MODEL, id: String(input.id) }],
     settle: true,
   });
   const [reopen] = useRecordActionMutation<ActionFieldName>("reopen_task", {
     invalidateModels: [TASK_MODEL],
+    records: (_outcome, input) => [{ model: TASK_MODEL, id: String(input.id) }],
     settle: true,
   });
   const [promoteTask] = useActionOutcomeMutation<ActionFieldName>("promote_task_to_project", {
     invalidateModels: [TASK_MODEL, PROJECT_MODEL],
+    records: (_outcome, input) => [{ model: TASK_MODEL, id: String(input.id) }],
   });
   const settlePromotion = useActionResultRun({ linkTo: PROJECT_MODEL });
   const promote = useRecordAction(async (id, context) => {
@@ -122,6 +127,7 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
   });
   const [dropTask] = useActionOutcomeMutation<ActionFieldName>("drop_task", {
     invalidateModels: [TASK_MODEL],
+    records: (_outcome, input) => [{ model: TASK_MODEL, id: String(input.id) }],
   });
   const dropSubmit = React.useCallback<
     NonNullable<ActionDescriptor["submit"]>

@@ -104,11 +104,21 @@ export function PortfolioUpdateComposer({
   const [reportProject] = useActionOutcomeMutation<ActionFieldName>(
     "report_project_update", {
       invalidateModels: [UPDATE_MODEL, targetModel],
+      records: (outcome) => [
+        { model: targetModel, id: targetId },
+        ...(outcome?.id ? [{ model: UPDATE_MODEL, id: outcome.id, action: "create",
+          relatedRecords: [{ model: targetModel, id: targetId }] }] : []),
+      ],
     },
   );
   const [reportInitiative] = useActionOutcomeMutation<ActionFieldName>(
     "report_initiative_update", {
       invalidateModels: [UPDATE_MODEL, targetModel],
+      records: (outcome) => [
+        { model: targetModel, id: targetId },
+        ...(outcome?.id ? [{ model: UPDATE_MODEL, id: outcome.id, action: "create",
+          relatedRecords: [{ model: targetModel, id: targetId }] }] : []),
+      ],
     },
   );
   const submit = React.useCallback(

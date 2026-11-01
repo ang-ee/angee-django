@@ -1,8 +1,8 @@
 import * as React from "react";
-import { holdsPermission, rowPublicId, useModelMetadata, useResourceInvalidates, type Row } from "@angee/metadata";
-import { useAuthoredMutation } from "@angee/refine";
+import { holdsPermission, rowPublicId, useModelMetadata, type Row } from "@angee/metadata";
+import { useReconcileMutationResponse } from "@angee/refine";
 import {
-  FieldRoot, FieldLabel, RelationMultiFieldWidget, relationFieldInfoForResource, relationIdList,
+  useAuthoredResourceMutation, FieldRoot, FieldLabel, RelationMultiFieldWidget, relationFieldInfoForResource, relationIdList,
   useRecordChromeContext, useRuntimeViewAs, useToast, errorMessage, type WidgetDefinition, type WidgetRenderProps,
 } from "@angee/ui";
 
@@ -18,10 +18,15 @@ function RecordTagsWidget({ readOnly }: WidgetRenderProps): React.ReactElement |
   const metadata = useModelMetadata(context.resource);
   const relation = relationFieldInfoForResource("tags.Tag", useModelMetadata("tags.Tag"));
   const models = [context.resource, "tags.TagAssignment"];
-  const invalidates = useResourceInvalidates(models);
-  const options = { invalidateModels: models, invalidates, errorNotification: false } as const;
-  const [tag] = useAuthoredMutation(TagRecord, options);
-  const [untag] = useAuthoredMutation(UntagRecord, options);
+  const reconcile = useReconcileMutationResponse();
+  const [tag] = useAuthoredResourceMutation(TagRecord, {
+    invalidateModels: models, errorNotification: false,
+    records: (_data, input) => [{ model: context.resource, id: input.id }],
+  });
+  const [untag] = useAuthoredResourceMutation(UntagRecord, {
+    invalidateModels: models, errorNotification: false,
+    records: (_data, input) => [{ model: context.resource, id: input.id }],
+  });
   const [pending, setPending] = React.useState(false);
   const running = React.useRef(false);
   const labelId = React.useId();
@@ -41,8 +46,10 @@ function RecordTagsWidget({ readOnly }: WidgetRenderProps): React.ReactElement |
       const previous = relationIdList(tags);
       const added = wanted.filter((id) => !previous.includes(id));
       const removed = previous.filter((id) => !wanted.includes(id));
-      if (added.length) await tag({ type, id, tags: added });
-      if (removed.length) await untag({ type, id, tags: removed });
+      await reconcile.batch(async () => {
+        if (added.length) await tag({ type, id, tags: added });
+        if (removed.length) await untag({ type, id, tags: removed });
+      });
     } catch (error) {
       toast.danger({ title: errorMessage(error, t("record.error")) });
     } finally {

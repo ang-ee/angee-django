@@ -22,6 +22,7 @@ from rebac.actors import to_subject_ref
 from rebac.roles import grant as grant_role
 
 from angee.base.models import merge as merge_module
+from angee.base.signals import pre_merge
 from angee.base.models.identity import public_id_of
 from angee.base.models.merge_references import (
     EdgeReference,
@@ -130,6 +131,23 @@ def test_several_records_merge_into_one_survivor() -> None:
         assert Tag._base_manager.get(pk=mobil.pk).merged_into_id == mobile.pk
         assert not Tag._base_manager.filter(pk=cell.pk).exists()
     assert _tagged_parties(mobile) == sorted([ada.pk, bob.pk])
+
+
+def test_pre_merge_exposes_the_same_locked_sources_to_lifecycle_receivers() -> None:
+    survivor, duplicate, _ada, _bob = _vocabulary()
+    observed = []
+
+    def observe(sender, *, survivor, merged, contexts, **kwargs):
+        observed.append((sender, survivor.pk, tuple(row.pk for row in merged)))
+        contexts.callback(lambda: observed.append("completed"))
+
+    pre_merge.connect(observe, sender=Tag, weak=False)
+    try:
+        with actor_context(_curator("merge-signal-sources")):
+            Tag.objects.get(pk=survivor.pk).merge(records=[public_id_of(duplicate)])
+    finally:
+        pre_merge.disconnect(observe, sender=Tag)
+    assert observed == [(Tag, survivor.pk, (duplicate.pk,)), "completed"]
 
 
 def test_a_retained_alias_protects_its_survivor_from_deletion() -> None:

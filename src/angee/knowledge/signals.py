@@ -8,18 +8,25 @@ Target creation, renaming and trash changes refresh the affected incoming links.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
+from contextlib import ExitStack
+from typing import TYPE_CHECKING, Any, cast
 
 from django.apps import apps
+from django.db import models
 from django.db.models.signals import post_save
 
-from angee.base.signals import bulk_updated, connect_for_models
+from angee.base.signals import bulk_updated, connect_for_models, pre_merge, publish_change
+
+if TYPE_CHECKING:
+    from angee.knowledge.models.bindings import RecordBinding
 
 _MARKDOWN_LABEL = "knowledge.markdownpage"
 
 
 def connect() -> None:
     """Wire knowledge-owned receivers after app population."""
+
+    pre_merge.connect(binding_merge_scopes, dispatch_uid="angee.knowledge.binding_merge_scopes")
 
     def is_page(model: type[Any]) -> bool:
         return model._meta.label_lower in {_MARKDOWN_LABEL, "knowledge.page"}
@@ -60,3 +67,35 @@ def refresh_bulk_targets(
     if (sender._meta.label_lower in {_MARKDOWN_LABEL, "knowledge.page"}
             and {"title", "is_trashed"}.intersection(update_fields)):
         apps.get_model("knowledge", "Link").objects.db_manager(using).refresh_targets(instances)
+
+
+def binding_merge_scopes(
+    sender: type[models.Model], *, survivor: models.Model, merged: tuple[models.Model, ...],
+    contexts: ExitStack, **_: Any,
+) -> None:
+    """Retain only this fold's binding scopes while the native mover owns its writes."""
+    binding_model = cast("type[RecordBinding]", apps.get_model("knowledge", "RecordBinding"))
+    if not merged or not binding_model.declares_target(sender):
+        return
+    predicate = models.Q()
+    for record in merged:
+        predicate |= binding_model.record_filter(record)
+    previous = tuple(binding_model.system_queryset().using(survivor._state.db).filter(predicate).order_by("pk"))
+    if previous:
+        contexts.callback(binding_merge_completed, binding_model, previous, survivor._state.db)
+
+
+def binding_merge_completed(model: type[RecordBinding], previous: tuple[RecordBinding, ...], using: str | None) -> None:
+    """Observe the old and new scope identities after an actual in-place retarget.
+
+    Collision deletions already publish through native post_delete. Identity-only
+    observations expose no prior field values; the transport still gates each
+    related reference and queues publication after the surrounding commit.
+    """
+    current = model.system_queryset().using(using).in_bulk(row.pk for row in previous)
+    for before in previous:
+        after = current.get(before.pk)
+        if after is None or before.record_ref == after.record_ref:
+            continue
+        publish_change(before, action="update", update_fields=None)
+        publish_change(after, action="update", update_fields=None)

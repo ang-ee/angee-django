@@ -86,7 +86,7 @@ test("lists bound pages in the shared child stream without a page conversation",
     expect.objectContaining({ enabled: true }));
 });
 
-test("composer posts one atomic note command, then refetches", async () => {
+test("composer posts one atomic note command without a duplicate binding refetch", async () => {
   render(<RecordNotesStream target={target} role="notes" vault="vlt_1" />);
   const source = lastChildSource();
   expect(source.items[0]).toMatchObject({
@@ -101,7 +101,8 @@ test("composer posts one atomic note command, then refetches", async () => {
     model_label: target.modelLabel, record_id: target.recordId, vault: "vlt_1", role: "notes",
     body: "New first line\nMore detail", idempotency_key: expect.any(String),
   });
-  expect(sdk.refetch).toHaveBeenCalledOnce();
+  expect(source.onCreated).toBeUndefined();
+  expect(sdk.refetch).not.toHaveBeenCalled();
 });
 
 test("composer is absent without record bind or vault write permission", () => {

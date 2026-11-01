@@ -22,9 +22,11 @@ from django.dispatch import Signal
 logger = logging.getLogger(__name__)
 
 pre_merge = Signal()
-"""Enter addon-owned contexts around one record fold (survivor, join, contexts).
+"""Enter addon-owned contexts around one record fold (survivor, merged, join, contexts).
 
-``contexts`` is the fold's ExitStack. Receivers may enter a context there;
+``merged`` is the deterministic tuple of locked source rows being folded;
+``survivor`` is their locked destination. ``contexts`` is the fold's ExitStack.
+Receivers may enter a context there;
 its cleanup runs after the fold, including when validation or a write fails.
 """
 

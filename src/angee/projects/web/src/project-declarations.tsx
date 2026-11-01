@@ -49,15 +49,19 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
   const targetResolutionOptions = useEnumOptions(PROJECT_MODEL, "target_date_resolution");
   const [pause] = useActionResultMutation("pause_project", {
     invalidateModels: [PROJECT_MODEL],
+    records: (_outcome, input) => [{ model: PROJECT_MODEL, id: String(input.id) }],
   });
   const [resume] = useActionResultMutation("resume_project", {
     invalidateModels: [PROJECT_MODEL],
+    records: (_outcome, input) => [{ model: PROJECT_MODEL, id: String(input.id) }],
   });
   const [complete] = useActionResultMutation("complete_project", {
     invalidateModels: [PROJECT_MODEL],
+    records: (_outcome, input) => [{ model: PROJECT_MODEL, id: String(input.id) }],
   });
   const [drop] = useActionResultMutation("drop_project", {
     invalidateModels: [PROJECT_MODEL],
+    records: (_outcome, input) => [{ model: PROJECT_MODEL, id: String(input.id) }],
   });
   const pauseProject = useRecordAction((id, context) => pause(id, { expected_revision: context.record?.revision }));
   const resumeProject = useRecordAction((id, context) => resume(id, { expected_revision: context.record?.revision }));
@@ -125,6 +129,7 @@ function ProjectMilestonesTab({ recordId }: RecordPanelContext): React.ReactElem
   const t = useProjectsT();
   const [markReached] = useActionResultMutation("mark_milestone_reached", {
     invalidateModels: [MILESTONE_MODEL],
+    records: (_outcome, input) => [{ model: MILESTONE_MODEL, id: String(input.id) }],
   });
   const rowActions = React.useMemo(() => [defineRowAction<MilestoneRow>({
     kind: "page",
