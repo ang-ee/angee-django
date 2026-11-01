@@ -8,11 +8,11 @@ def test_canonical_protected_child_retains_native_composed_history(tmp_path):
     addon = tmp_path / "addons" / "mti_history"
     addon.mkdir(parents=True)
     (addon / "__init__.py").write_text("")
-    write_addon_distribution(addon, "mti_history", depends_on=("angee.provenance",))
+    write_addon_distribution(addon, "mti_history", depends_on=("angee.provenance", "angee.iam"))
     (addon / "models.py").write_text("""
-from django.conf import settings
 from django.db import models
 from angee.iam.models.base import ProtectedDataModel, ProtectedModel
+from angee.iam.models.ownership import OwnerMixin
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -30,9 +30,8 @@ class ChildManager(AngeeHistoryManager):
         self.marker = marker
     def factory_marker(self): return self.marker
 
-class Parent(HistoryMixin, ProtectedDataModel, concrete=True):
+class Parent(OwnerMixin, HistoryMixin, ProtectedDataModel, concrete=True):
     title = models.CharField(max_length=80)
-    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     sqid_prefix = 'mhp_'
     objects = ParentManager('parent')
     unscoped_objects = AngeeHistoryUnscopedManager()
@@ -58,12 +57,15 @@ definition mti_history/parent {
     permission create = authenticated
     permission read = owner
     permission write = owner
+    permission transfer = owner
+    permission write__owner = transfer
 }
 definition mti_history/child {
     relation parent: mti_history/parent // rebac:field=parent_ptr
     permission create = parent->write
     permission read = parent->read
     permission write = parent->write
+    permission write__owner = parent->transfer
 }
 """)
     run_composed_tests(
