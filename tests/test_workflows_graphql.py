@@ -707,15 +707,15 @@ def test_studio_native_field_reads_follow_monitor_on_every_path_and_batch(
 
     workflow = create("studio_one")
     fields = "id permissions draft draft_revision layout"
-    query = f"""query($id: String!) {{
+    query = f"""query($id: String!, $limit: Int) {{
       workflow_by_pk(id: $id) {{ {fields} }}
-      workflow {{ {fields} }}
-      workflowrun {{ version {{ workflow {{ {fields} }} }} }}
-      workflowversion {{ workflow {{ {fields} }} }}
-      trigger {{ workflow {{ {fields} }} }}
+      workflow(limit: $limit) {{ {fields} }}
+      workflowrun(limit: $limit) {{ version {{ workflow {{ {fields} }} }} }}
+      workflowversion(limit: $limit) {{ workflow {{ {fields} }} }}
+      trigger(limit: $limit) {{ workflow {{ {fields} }} }}
     }}"""
     with CaptureQueriesContext(connection) as one:
-        data = result_data(execute_schema(schema, query, {"id": workflow.sqid}, user=reader))
+        data = result_data(execute_schema(schema, query, {"id": workflow.sqid, "limit": 1}, user=reader))
     def assert_projection(data, count):
         rows = [
             data["workflow_by_pk"],
@@ -744,8 +744,12 @@ def test_studio_native_field_reads_follow_monitor_on_every_path_and_batch(
     with CaptureQueriesContext(connection) as four:
         largest = result_data(execute_schema(schema, query, {"id": workflow.sqid}, user=reader))
     assert_projection(largest, 4)
-    # Native singleton and population plans differ; population work stays constant.
-    assert len(one) <= len(many) == len(four), [len(one), len(many), len(four)]
+    with CaptureQueriesContext(connection) as limited:
+        limited_data = result_data(execute_schema(schema, query, {"id": workflow.sqid, "limit": 1}, user=reader))
+    assert_projection(limited_data, 1)
+    # Native singleton and population plans differ; compare growth within each plan.
+    assert len(one) == len(limited), [len(one), len(limited)]
+    assert len(many) == len(four), [len(many), len(four)]
 
 
 def test_studio_save_conflict_precedes_validation_and_publish_checks_revision(schema, callers):
