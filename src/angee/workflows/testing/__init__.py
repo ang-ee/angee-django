@@ -8,7 +8,7 @@ from ``angee.workflows.testing.models`` and drivers from
 in ``angee.workflows.autoconfig``.
 
 Django's native test database setup creates the shared tables. For permission
-synchronization, follow the fixture contract in ``angee.base.testing``. Production
+synchronization, follow the fixture contract in ``angee.iam.testing``. Production
 settings and serving code must not depend on this test support.
 
 Pytest suites opt into ``angee.workflows.testing.fixtures`` alongside
