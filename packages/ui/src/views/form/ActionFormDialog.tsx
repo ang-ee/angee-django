@@ -1,7 +1,7 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { useWatch, type Control } from "react-hook-form";
-import { useReconcileMutationResponse, type ActionOutcome } from "@angee/refine";
+import { useReconcileMutationResponse, type ActionOutcome, type MutationExecutionOptions } from "@angee/refine";
 
 import { DialogForm } from "../../fragments/DialogForm";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
@@ -30,8 +30,8 @@ export interface ActionFormDialogProps {
   context: ActionFormContext;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Called once with the successful (`ok`) outcome — e.g. to reload or follow its record. */
-  onSucceeded?: (outcome: ActionOutcome) => void | Promise<void>;
+  /** Called once for success inside this explicit command; execution may be forwarded to shared completion. */
+  onSucceeded?: (outcome: ActionOutcome, execution: MutationExecutionOptions) => void | Promise<void>;
   /**
    * Render the fields in a saved record's page flow and the submit in its
    * record toolbar instead of a dialog; success does not close it.
@@ -100,10 +100,10 @@ function ActionArgsDialog({
   const actionForm = useActionForm<ArgValues, ActionOutcome>({
     defaultValues: definition?.defaultValues ?? argDefaultValues(args, context),
     resolver: definition?.resolver,
-    submit: (collected) => reconcile.batch(async () => {
-      const result = await action.submit?.(serializeActionArgValues(args, collected), context);
+    submit: (collected) => reconcile.batch(async (reconciliation) => {
+      const result = await action.submit?.(serializeActionArgValues(args, collected), { ...context, reconciliation });
       const submitted = result && "status" in result ? result : actionOutcomeSubmitResult(result);
-      if (submitted.status === "ok") await onSucceeded?.(submitted.data);
+      if (submitted.status === "ok") await onSucceeded?.(submitted.data, { reconciliation });
       return submitted;
     }),
     onSuccess: () => {

@@ -29,12 +29,13 @@ test("actual complete acceptance settles before held derived reads without rerea
   const hook = renderHook(() => useReconcileMutationResponse(), { wrapper });
   try {
     await act(async () => {
-      await hook.result.current.batch(async () => {
+      await hook.result.current.batch(async (reconciliation) => {
         await hook.result.current({ title: "accepted" }, {}, {
+          reconciliation,
           invalidateModels: ["notes.Note"],
           acceptResponse: (data) => acceptQueryData(client, detailKey, data),
         });
-        await hook.result.current(undefined, undefined, { queryKeys: [detailKey] });
+        await hook.result.current(undefined, undefined, { queryKeys: [detailKey], reconciliation });
       });
     });
     expect(client.getQueryData(detailKey)).toEqual({ title: "accepted" });
@@ -106,10 +107,10 @@ test("batch acceptance excludes only its fallback; a later independent live chan
   const stop = observer.subscribe(() => undefined);
   const scheduler = createAuthoredLiveInvalidation(client);
   try {
-    await scheduler.batch(async () => {
-      await scheduler.reconcile({ changes: [{ model: "notes.Note", id: "n1" }],
+    await scheduler.batch(async (scope) => {
+      await scope!.reconcile({ changes: [{ model: "notes.Note", id: "n1" }],
         accepted: new Set([client.getQueryCache().find({ queryKey: key, exact: true })!.queryHash]), background: true });
-      await scheduler.reconcile({ changes: [], queryKeys: [key] });
+      await scope!.reconcile({ changes: [], queryKeys: [key] });
     });
     expect(read).not.toHaveBeenCalled();
     scheduler.push({ model: "notes.Note", id: "n1" });
@@ -131,12 +132,13 @@ test.each([true, false])("exact fallback respects no-effects response completene
   const wrapper = ({ children }: { children: ReactNode }) => <Provider queryClient={client} liveProvider={provider}>{children}</Provider>;
   const hook = renderHook(() => useReconcileMutationResponse(), { wrapper });
   try {
-    await act(async () => { await hook.result.current.batch(async () => {
+    await act(async () => { await hook.result.current.batch(async (reconciliation) => {
       await hook.result.current(undefined, undefined, {
+        reconciliation,
         acceptResponse: () => acceptQueryData(client, key, complete
           ? { title: "accepted", count: 2 } : { title: "accepted", count: 1 }, { complete }),
       });
-      await hook.result.current(undefined, undefined, { queryKeys: [key] });
+      await hook.result.current(undefined, undefined, { queryKeys: [key], reconciliation });
     }); });
     expect(read).toHaveBeenCalledTimes(complete ? 0 : 1);
     expect(observer.getCurrentResult().data?.title).toBe(complete ? "accepted" : "authoritative");

@@ -29,7 +29,7 @@ vi.mock("@refinedev/core", () => ({
   useDataProvider: vi.fn(),
   useCustomMutation: ({ mutationOptions }: { mutationOptions: {
     gcTime?: number;
-    onMutate: () => unknown;
+    onMutate: (input: { meta?: object }) => unknown;
     onSuccess: (response: { data: { data: unknown } }, variables: { values: Record<string, unknown> }, context: unknown) => Promise<void>;
   } }) => {
     const policy = mutationOptions.gcTime === 0 ? "transient" : "ordinary";
@@ -41,8 +41,9 @@ vi.mock("@refinedev/core", () => ({
           dataProviderName: string;
           values: Record<string, unknown>;
           errorNotification?: unknown;
+          meta?: object;
         }) => {
-          const context = mutationOptions.onMutate();
+          const context = mutationOptions.onMutate(payload);
           mutationMock.calls.push({
             dataProviderName: payload.dataProviderName,
             generation,

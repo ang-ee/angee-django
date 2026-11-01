@@ -40,7 +40,7 @@ import {
   useOperationDocuments,
 } from "../operation-documents";
 import { useActiveDataProviderName } from "./data-provider-context";
-import { useReconcileMutationResponse, type MutationReconciliationOptions } from "../query-invalidation";
+import { useReconcileMutationResponse, type MutationReconciliationOptions, type MutationExecutionOptions } from "../query-invalidation";
 import { useAuthoredQueryBatch, useOperationMutation, type AuthoredQueryOptions } from "./authored-hooks";
 import type { TypedDocumentNode } from "../typed-document";
 import { graphqlDocumentIdentity } from "./wire";
@@ -155,6 +155,7 @@ export type ActionArguments = Readonly<Record<string, unknown>>;
 export type ActionMutate = (
   id: string,
   arguments_?: ActionArguments,
+  execution?: MutationExecutionOptions,
 ) => Promise<ActionOutcome | undefined>;
 
 export interface UseActionMutationOptions extends MutationReconciliationOptions<ActionOutcome | undefined, Record<string, unknown>> {
@@ -565,19 +566,20 @@ export function useActionMutation<TField extends string = string>(
       return { url: "", method: "post", dataProviderName: request.dataProviderName, meta: request.meta };
     },
     select: (data) => extractActionOutcome(data, field) ?? undefined,
-    onResponse: async (outcome, variables) => {
+    onResponse: async (outcome, variables, execution) => {
       const effects = !outcome || outcome.ok || options.invalidateOnFailure;
       await reconcileMutationResponse(outcome, variables, {
         ...(effects ? options : {}),
+        ...execution,
         // A recorded failure may have effects, but is never accepted as success.
         acceptResponse: outcome?.ok ? options.acceptResponse : undefined,
       });
     },
   });
-  const mutate = useCallback<ActionMutate>(async (id, arguments_ = {}) => {
+  const mutate = useCallback<ActionMutate>(async (id, arguments_ = {}, execution) => {
     const idArgument = options.idArgument === undefined ? "id" : options.idArgument;
     const variables = idArgument === null ? { ...arguments_ } : { ...arguments_, [idArgument]: id };
-    return run(variables);
+    return run(variables, execution);
   }, [run, options.idArgument]);
   return [mutate, state];
 }

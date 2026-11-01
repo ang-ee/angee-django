@@ -350,7 +350,7 @@ export function createAngeeChangeLiveProvider(
   if (liveInvalidation) publish[mutationReconciliation] = {
     get generation() { return liveInvalidation.generation; },
     reconcile: (request) => enabled ? liveInvalidation.reconcile(request) : Promise.resolve(),
-    batch: (run) => liveInvalidation.batch(run),
+    batch: (run) => enabled ? liveInvalidation.batch(run) : run(undefined),
   };
 
   // Attach one fan-in consumer to the shared upstream for `changesRoot`, opening

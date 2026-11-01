@@ -396,8 +396,8 @@ test("an explicit batch flushes successful item effects once after a later item 
   const live = createAuthoredLiveInvalidation(cache);
   const failure = new Error("second item denied");
   try {
-    await expect(live.batch(async () => {
-      await live.reconcile({ changes: [{ model: "notes.Note", id: "first" }] });
+    await expect(live.batch(async (scope) => {
+      await scope!.reconcile({ changes: [{ model: "notes.Note", id: "first" }] });
       expect(reads).toBe(before);
       throw failure;
     })).rejects.toBe(failure);
@@ -418,4 +418,33 @@ test("authentication suspension settles buffered reconciliation without replayin
   expect(live.generation).toBe(generation + 1);
   expect(invalidate.mock.calls.filter(([filters]) => filters?.refetchType === "active")).toHaveLength(0);
   cache.clear();
+});
+
+
+test("held command transport cannot postpone a continuous live burst past its max wait", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const heldTransport = pending<void>();
+  let reads = 0;
+  cache.setQueryData(["live-during-command"], 0);
+  const observer = new QueryObserver(cache, { queryKey: ["live-during-command"], queryFn: async () => ++reads,
+    meta: { angeeModels: ["notes.Note"] } });
+  const stop = observer.subscribe(() => undefined);
+  const scheduler = createAuthoredLiveInvalidation(cache);
+  let settled = false;
+  const command = scheduler.batch(async (scope) => {
+    await heldTransport.promise;
+    await scope!.reconcile({ changes: [{ model: "notes.Note", id: "local" }] });
+  }).then(() => { settled = true; });
+  try {
+    for (let index = 0; index < 10; index++) {
+      scheduler.push({ model: "notes.Note", id: `remote-${index}` });
+      await vi.advanceTimersByTimeAsync(200);
+    }
+    expect(reads).toBe(1);
+    expect(settled).toBe(false);
+    heldTransport.resolve();
+    await command;
+    expect(reads).toBe(2);
+  } finally { scheduler.clear(); stop(); cache.clear(); }
 });

@@ -5,6 +5,7 @@ import {
   useActionMutation,
   useReconcileMutationResponse,
   type AuthoredDocument,
+  type MutationExecutionOptions,
   type ActionArguments,
   type ActionMutate,
   type UseActionMutationState,
@@ -70,13 +71,13 @@ async function completeRecordAction(
 
 /** Form-owned automatic completion; explicit/custom refresh retains its imperative contract. */
 export async function refreshRecordAction(
-  context: Pick<ActionContext, "refresh" | "refreshQueryKey">,
+  context: Pick<ActionContext, "refresh" | "refreshQueryKey" | "reconciliation">,
   reconcile: ReturnType<typeof useReconcileMutationResponse>,
   refresh?: boolean,
 ): Promise<void> {
   if (refresh === true || (refresh !== false && !context.refreshQueryKey)) await context.refresh();
   else if (refresh !== false && context.refreshQueryKey) {
-    await reconcile(undefined, undefined, { queryKeys: [context.refreshQueryKey] });
+    await reconcile(undefined, undefined, { queryKeys: [context.refreshQueryKey], reconciliation: context.reconciliation });
   }
 }
 
@@ -95,14 +96,15 @@ export function useRecordAction(
     refresh,
   } = options;
   return React.useCallback<RecordAction>(
-    (context) => reconcile.batch(async () => {
+    (context) => reconcile.batch(async (reconciliation) => {
+      const scopedContext = { ...context, reconciliation };
       const id = recordActionId(context);
       if (!id) {
         if (missingRecordMessage) throw new Error(missingRecordMessage);
         return;
       }
-      const result = (await run(id, context)) ?? defaultMessage;
-      await completeRecordAction(context, result, reconcile, { refresh, afterSuccess });
+      const result = (await run(id, scopedContext)) ?? defaultMessage;
+      await completeRecordAction(scopedContext, result, reconcile, { refresh, afterSuccess });
       return result;
     }),
     [afterSuccess, defaultMessage, missingRecordMessage, reconcile, refresh, run],
@@ -139,9 +141,9 @@ export function useRecordActionMutation<TField extends string = string>(
   const run = React.useCallback<RecordActionRunner>(
     async (id, context) => {
       const arguments_ = options?.actionArguments?.(id);
-      const mutateRecord = () => arguments_ === undefined
-        ? mutate(id)
-        : mutate(id, arguments_);
+      const execution = context.reconciliation ? { reconciliation: context.reconciliation } : undefined;
+      const mutateRecord = () => execution ? mutate(id, arguments_, execution)
+        : arguments_ === undefined ? mutate(id) : mutate(id, arguments_);
       if (settleOptions) {
         const outcome = await settleActionResult(mutateRecord);
         if (outcome?.ok) {
@@ -182,6 +184,7 @@ export interface UseActionResultMutationOptions {
 export type ActionResultMutation = (
   id: string,
   arguments_?: ActionArguments,
+  execution?: MutationExecutionOptions,
 ) => Promise<void>;
 
 /**
@@ -206,10 +209,9 @@ export function useActionResultMutation<TField extends string = string>(
   const [mutate, state] = useActionOutcomeMutation<TField>(field, options);
   const settle = useActionResultRun();
   const run = React.useCallback<ActionResultMutation>(
-    async (id, arguments_) => {
-      await settle(() =>
-        arguments_ === undefined ? mutate(id) : mutate(id, arguments_),
-      );
+    async (id, arguments_, execution) => {
+      await settle(() => execution ? mutate(id, arguments_, execution)
+        : arguments_ === undefined ? mutate(id) : mutate(id, arguments_));
     },
     [mutate, settle],
   );
@@ -321,8 +323,8 @@ function useAuthoredChromeActionOutcome(
     ...options,
     shouldInvalidate: (data) => extractActionOutcome(data, action.resultField)?.ok === true,
   });
-  const run = React.useCallback<ActionMutate>(async (id, args = {}) =>
-    extractActionOutcome(await mutate({ ...args, [action.idArgument]: id } as never), action.resultField) ?? undefined,
+  const run = React.useCallback<ActionMutate>(async (id, args = {}, execution) =>
+    extractActionOutcome(await mutate({ ...args, [action.idArgument]: id } as never, execution), action.resultField) ?? undefined,
   [action.idArgument, action.resultField, mutate]);
   return [run, state];
 }

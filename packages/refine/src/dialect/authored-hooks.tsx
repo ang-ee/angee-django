@@ -5,6 +5,7 @@ import {
   useSubscription,
   type BaseRecord,
   type HttpError,
+  type MetaQuery,
   type UseCustomMutationProps,
   type UseCustomMutationReturnType,
 } from "@refinedev/core";
@@ -21,6 +22,7 @@ import {
   invalidateAuthoredQueries,
   useReconcileMutationResponse,
   type MutationReconciliationOptions,
+  type MutationExecutionOptions,
 } from "../query-invalidation";
 import {
   useStableArray,
@@ -171,8 +173,10 @@ export function useSetAuthoredQueryData(): <TDocument extends AuthoredDocument>(
   }, [activeProvider, accept]);
 }
 
+/** Optional execution metadata explicitly joins one command's reconciliation collector. */
 export type AuthoredMutate<TDocument extends AuthoredDocument> = (
   variables?: AuthoredVariables<TDocument>,
+  execution?: MutationExecutionOptions,
 ) => Promise<DocumentData<TDocument> | undefined>;
 
 export interface AuthoredMutationOptions<
@@ -242,11 +246,12 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
       url: "", method: "post", dataProviderName, meta: mutationMeta(document, variables),
     }),
     select: authoredOperationData<Data>,
-    onResponse: async (data, variables) => {
+    onResponse: async (data, variables, execution) => {
       const resultError = errorFromAuthoredEnvelope(errorFrom?.(data, variables));
       if (resultError) throw resultError;
       const effects = shouldInvalidate?.(data, variables) ?? true;
       await reconcileMutationResponse(data, variables, {
+        ...execution,
         acceptResponse,
         ...(effects ? { records, invalidateModels: invalidateModelLabels, invalidates } : {}),
       });
@@ -257,21 +262,32 @@ export function useAuthoredMutation<TDocument extends AuthoredDocument>(
 type OperationMutationOptions<Data, Variables extends Record<string, unknown>> = {
   request: (variables: Variables) => Omit<Parameters<UseCustomMutationReturnType<BaseRecord, HttpError, Variables>["mutateAsync"]>[0], "values">;
   select: (data: BaseRecord) => Data | undefined;
-  onResponse: (data: Data | undefined, variables: Variables) => Promise<void>;
+  onResponse: (data: Data | undefined, variables: Variables, execution?: MutationExecutionOptions) => Promise<void>;
 } & Pick<AuthoredMutationOptions<Data, Variables>, "transient" | "errorNotification">;
+
+const operationExecution = Symbol("angee.operationExecution");
+type ExecutionMeta = MetaQuery & { [operationExecution]?: MutationExecutionOptions };
 
 /** One native execution/retention owner for authored operations and generated actions. */
 export function useOperationMutation<Data, Variables extends Record<string, unknown>>(
   options: OperationMutationOptions<Data, Variables>,
-): [(variables?: Variables) => Promise<Data | undefined>, { fetching: boolean; error: Error | null; reset: () => void }] {
+): [(variables?: Variables, execution?: MutationExecutionOptions) => Promise<Data | undefined>, { fetching: boolean; error: Error | null; reset: () => void }] {
   const { request, select, onResponse } = options;
   const inFlight = useRef({ count: 0, transient: false });
-  const captureMutationContext = () => ({ select, onResponse });
+  type MutationContext = { select: typeof select; onResponse: typeof onResponse; execution?: MutationExecutionOptions };
+  const captureMutationContext = (input: { meta?: MetaQuery }): MutationContext => ({
+    select, onResponse, execution: (input.meta as ExecutionMeta | undefined)?.[operationExecution],
+  });
   const mutationOptions: NonNullable<UseCustomMutationProps<BaseRecord, HttpError, Variables>["mutationOptions"]> = {
     onMutate: captureMutationContext,
     async onSuccess(response, { values }, context) {
-      const { select, onResponse } = context as ReturnType<typeof captureMutationContext>;
-      await onResponse(select(response.data), values);
+      const captured = context as MutationContext;
+      try { await captured.onResponse(captured.select(response.data), values, captured.execution); }
+      finally { delete captured.execution; }
+    },
+    onSettled(_response, _error, input, context) {
+      if (input.meta) delete (input.meta as ExecutionMeta)[operationExecution];
+      if (context) delete (context as MutationContext).execution;
     },
   };
   // Native observers retain a fixed policy: changing the next dispatch's mode
@@ -301,7 +317,7 @@ export function useOperationMutation<Data, Variables extends Record<string, unkn
     transient: options.transient,
     errorNotification: options.errorNotification,
   };
-  const mutate = useCallback<(variables?: Variables) => Promise<Data | undefined>>(async (variables) => {
+  const mutate = useCallback<(variables?: Variables, execution?: MutationExecutionOptions) => Promise<Data | undefined>>(async (variables, execution) => {
     const {
       request,
       select,
@@ -321,8 +337,10 @@ export function useOperationMutation<Data, Variables extends Record<string, unkn
     if (transient) inFlight.current.transient = true;
     const resolvedVariables = (variables ?? {}) as Variables;
     try {
+      const operation = request(resolvedVariables);
       const response = await run.mutateAsync({
-        ...request(resolvedVariables),
+        ...operation,
+        ...(execution ? { meta: { ...operation.meta, [operationExecution]: execution } } : {}),
         values: resolvedVariables,
         ...(errorNotification === false ? { errorNotification } : {}),
       });

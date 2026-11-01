@@ -52,8 +52,8 @@ describe("RecordActionBar", () => {
     function TypedAction() {
       const reconcile = useReconcileMutationResponse();
       return <RecordActionBar record={{ id: "note-1" }} reload={reload} refreshQueryKey={key} actions={[
-        { id: "review", label: "Review", args: [], submit: async () => {
-          await reconcile(undefined, undefined, { records: [{ model: "notes.Note", id: "note-1" }] });
+        { id: "review", label: "Review", args: [], submit: async (_values, context) => {
+          await reconcile(undefined, undefined, { reconciliation: context.reconciliation, records: [{ model: "notes.Note", id: "note-1" }] });
           return { ok: true, message: "Reviewed" };
         } },
       ]} />;

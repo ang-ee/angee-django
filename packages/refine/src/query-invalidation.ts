@@ -84,10 +84,20 @@ export interface QueryReconciliation {
   background?: boolean;
 }
 
+/** Explicit invocation-owned effect collection; never inferred from an async stack. */
+export interface MutationReconciliationScope {
+  reconcile: (request: QueryReconciliation) => Promise<void>;
+}
+
+/** Execution metadata stays outside GraphQL variables and authored wire arguments. */
+export interface MutationExecutionOptions {
+  reconciliation?: MutationReconciliationScope;
+}
+
 export interface AuthoredLiveInvalidation {
   push: (change: AuthoredLiveChange, deliver?: () => void) => void;
   reconcile: (request: QueryReconciliation) => Promise<void>;
-  batch: <T>(run: () => Promise<T>) => Promise<T>;
+  batch: <T>(run: (reconciliation?: MutationReconciliationScope) => Promise<T>) => Promise<T>;
   clear: () => void;
   readonly generation: number;
 }
@@ -99,9 +109,9 @@ export type ReconciliationPublish = NonNullable<LiveProvider["publish"]> & {
 };
 
 /**
- * One provider-owned burst for accepted local effects and server events. Cancel
- * earlier snapshots immediately; retain committed data, honestly stale, until
- * the bounded flush. Query owns retries, errors and all row state.
+ * One native reconciliation owner: server/unscoped effects use a bounded queue;
+ * explicit command collectors flush independently. Cancel earlier snapshots and
+ * retain committed data honestly stale. Query owns retries, errors and row state.
  */
 export function createAuthoredLiveInvalidation(
   queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries" | "getQueryCache">,
@@ -109,11 +119,9 @@ export function createAuthoredLiveInvalidation(
 ): AuthoredLiveInvalidation {
   type Request = QueryReconciliation & { fallbackAccepted?: ReadonlySet<string> };
   let requests: Request[] = [];
-  let batches: { accepted: Set<string>; background: boolean; legacy: boolean }[] = [];
   let deliveries: (() => void)[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
   let firstAt: number | undefined;
-  let batchDepth = 0;
   let generation = 0;
   const pending = new Set<{ resolve: () => void; reject: (error: unknown) => void }>();
   let waiting: { resolve: () => void; reject: (error: unknown) => void }[] = [];
@@ -125,20 +133,17 @@ export function createAuthoredLiveInvalidation(
         authoredQueryReadsLiveChange(query.meta, change) || nativeReadsChange(query, change))
     );
 
-  async function flush(): Promise<void> {
-    if (batchDepth > 0 || requests.length === 0) return;
-    if (timer !== undefined) clearTimeout(timer);
-    const settled = waiting;
-    waiting = [];
-    const batch = requests;
-    const callbacks = deliveries;
-    requests = [];
-    deliveries = [];
-    timer = undefined;
-    firstAt = undefined;
+  function prepare(request: Request): void {
+    const predicate = (query: Query) => matches(query, request);
+    void queryClient.cancelQueries({ predicate: (query) => query.state.fetchStatus !== "idle" && predicate(query) });
+    void queryClient.invalidateQueries({ predicate, type: "all", refetchType: "none" });
+  }
+
+  // One native refresh implementation serves independent command collections
+  // and the provider's bounded live queue. Neither waits for another transport.
+  async function refresh(batch: readonly Request[], callbacks: readonly (() => void)[] = []): Promise<void> {
+    if (!batch.length) return;
     const predicate = (query: Query) => batch.some((request) => matches(query, request));
-    // The native infinite query function consumes this batch during its own
-    // fetch lifecycle. Inactive reads discard it and perform a full read later.
     const queries = queryClient.getQueryCache().findAll({ predicate });
     const changesByQuery = new Map(queries.map((query) => {
       const effects = batch.filter((request) => matches(query, request)).flatMap((request) => request.changes)
@@ -147,16 +152,10 @@ export function createAuthoredLiveInvalidation(
       if (query.meta) query.meta.angeeChanges = changes;
       return [query, changes] as const;
     }));
-    const refresh = queryClient.invalidateQueries({ predicate, type: "all", refetchType: "active" });
-    // Stock Refine auto callbacks join the running native request. createApp
-    // uses manual mode, leaving scheduling entirely with this owner.
+    const refreshed = queryClient.invalidateQueries({ predicate, type: "all", refetchType: "active" });
     try {
       callbacks.forEach((deliver) => deliver());
-      await refresh;
-      settled.forEach((waiter) => { pending.delete(waiter); waiter.resolve(); });
-    } catch (error) {
-      settled.forEach((waiter) => { pending.delete(waiter); waiter.reject(error); });
-      throw error;
+      await refreshed;
     } finally {
       for (const query of queries) {
         const meta = query.meta;
@@ -165,23 +164,32 @@ export function createAuthoredLiveInvalidation(
     }
   }
 
-  function reconcile(effect: QueryReconciliation, local = true): Promise<void> {
-    // Remote events share the queue, but never grant local acceptance or
-    // change the settlement contract of a command currently collecting effects.
-    for (const batch of local ? batches : []) {
-      effect.accepted?.forEach((key) => batch.accepted.add(key));
-      if (effect.background) batch.background = true;
-      else if (!effect.queryKeys?.length) batch.legacy = true;
+  async function flush(): Promise<void> {
+    if (!requests.length) return;
+    if (timer !== undefined) clearTimeout(timer);
+    const settled = waiting;
+    const batch = requests;
+    const callbacks = deliveries;
+    requests = [];
+    waiting = [];
+    deliveries = [];
+    timer = undefined;
+    firstAt = undefined;
+    try {
+      await refresh(batch, callbacks);
+      settled.forEach((waiter) => { pending.delete(waiter); waiter.resolve(); });
+    } catch (error) {
+      settled.forEach((waiter) => { pending.delete(waiter); waiter.reject(error); });
+      throw error;
     }
-    const request: Request = { ...effect, fallbackAccepted: local ? batches.at(-1)?.accepted : undefined };
-    const predicate = (query: Query) => matches(query, request);
-    void queryClient.cancelQueries({ predicate: (query) => query.state.fetchStatus !== "idle" && predicate(query) });
-    void queryClient.invalidateQueries({ predicate, type: "all", refetchType: "none" });
+  }
+
+  function reconcile(request: QueryReconciliation): Promise<void> {
+    prepare(request);
     requests.push(request);
     const now = performance.now();
     firstAt ??= now;
     if (timer !== undefined) clearTimeout(timer);
-    if (batchDepth > 0) return Promise.resolve();
     timer = setTimeout(() => { void flush().catch(() => undefined); }, Math.max(0, Math.min(LIVE_WINDOW_MS, firstAt + LIVE_MAX_WAIT_MS - now)));
     return new Promise<void>((resolve, reject) => {
       const waiter = { resolve, reject };
@@ -190,44 +198,63 @@ export function createAuthoredLiveInvalidation(
     });
   }
 
+  function awaitRefresh(refreshed: Promise<void>): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const waiter = { resolve, reject };
+      pending.add(waiter);
+      void refreshed.then(
+        () => { pending.delete(waiter); resolve(); },
+        (error) => { pending.delete(waiter); reject(error); },
+      );
+    });
+  }
+
   return {
     get generation() { return generation; },
     clear() {
       generation++;
-      batchDepth = 0;
-      batches = [];
       if (timer !== undefined) clearTimeout(timer);
       requests = [];
       deliveries = [];
       timer = undefined;
       firstAt = undefined;
-      // Authentication suspension drops old-actor work and settles its waiters.
       pending.forEach(({ resolve }) => resolve());
       pending.clear();
       waiting = [];
     },
-    async batch<T>(run: () => Promise<T>): Promise<T> {
+    async batch<T>(run: (reconciliation?: MutationReconciliationScope) => Promise<T>): Promise<T> {
       const started = generation;
-      batchDepth++;
-      const scope = { accepted: new Set<string>(), background: false, legacy: false };
-      batches.push(scope);
+      const collected: Request[] = [];
+      const accepted = new Set<string>();
+      let background = false;
+      let legacy = false;
+      let collecting = true;
+      const scope: MutationReconciliationScope = {
+        reconcile(effect) {
+          if (started !== generation || !collecting) return Promise.resolve();
+          effect.accepted?.forEach((key) => accepted.add(key));
+          if (effect.background) background = true;
+          else if (!effect.queryKeys?.length) legacy = true;
+          const request = { ...effect, fallbackAccepted: accepted };
+          prepare(request);
+          collected.push(request);
+          return Promise.resolve();
+        },
+      };
       let failed = false;
       try {
-        return await run();
+        return await run(scope);
       } catch (error) {
         failed = true;
         throw error;
       } finally {
+        collecting = false;
         if (started === generation) {
-          batchDepth--;
-          batches.pop();
-          if (batchDepth === 0) {
-            const refresh = flush();
-            if (scope.background && !scope.legacy) void refresh.catch(() => undefined);
-            else {
-              try { await refresh; }
-              catch (error) { if (!failed) throw error; }
-            }
+          const refreshed = refresh(collected);
+          if (background && !legacy) void refreshed.catch(() => undefined);
+          else {
+            try { await awaitRefresh(refreshed); }
+            catch (error) { if (!failed) throw error; }
           }
         }
       }
@@ -235,7 +262,7 @@ export function createAuthoredLiveInvalidation(
     reconcile,
     push(change, deliver) {
       if (deliver) deliveries.push(deliver);
-      void reconcile({ changes: [change] }, false).catch(() => undefined);
+      void reconcile({ changes: [change] }).catch(() => undefined);
     },
   };
 }
@@ -294,7 +321,7 @@ export function useAcceptQueryData() {
 
 type NativeInvalidation = Parameters<ReturnType<typeof useInvalidate>>[0];
 type Effects<TData, TVariables, TValue> = readonly TValue[] | ((data: TData, variables: TVariables) => readonly TValue[]);
-export interface MutationReconciliationOptions<TData, TVariables> {
+export interface MutationReconciliationOptions<TData, TVariables> extends MutationExecutionOptions {
   acceptResponse?: (data: TData, variables: TVariables) => void | Promise<void>;
   records?: Effects<TData, TVariables, AuthoredLiveChange>;
   invalidateModels?: readonly string[];
@@ -363,7 +390,7 @@ export function useReconcileMutationResponse() {
     const scheduler = publish?.[mutationReconciliation];
     if (scheduler) {
       const refresh = Promise.all([
-        ...(changes.length || filters.length || options.queryKeys?.length || options.acceptResponse ? [scheduler.reconcile(request)] : []),
+        ...(changes.length || filters.length || options.queryKeys?.length || options.acceptResponse ? [(options.reconciliation ?? scheduler).reconcile(request)] : []),
         ...customTargets.map((target) => invalidate(target)),
       ]);
       if (options.acceptResponse) void refresh.catch(() => undefined);
@@ -389,11 +416,12 @@ export function useReconcileMutationResponse() {
   }, [client, invalidate, publish, resources, generation]);
   return useMemo(() => Object.assign(reconcile, {
     /** Explicit bulk command boundary; partial failures still flush in finally. */
-    batch: async <T,>(run: () => Promise<T>): Promise<T> => {
+    batch: async <T,>(run: (reconciliation?: MutationReconciliationScope) => Promise<T>): Promise<T> => {
+      if (generation !== publish?.[mutationReconciliation]?.generation) throw new CancelledError({ silent: true });
       const scheduler = publish?.[mutationReconciliation];
-      return scheduler ? scheduler.batch(run) : run();
+      return scheduler ? scheduler.batch(run) : run(undefined);
     },
-  }), [reconcile, publish]);
+  }), [reconcile, publish, generation]);
 }
 
 /**
