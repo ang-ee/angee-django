@@ -49,6 +49,7 @@ from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION, AngeeNode
 from angee.graphql.relations import (
+    RECORD_REFERENCE_ANNOTATIONS,
     RecordPointerType,
     RecordReferenceNode,
     actor_scoped_to_many,
@@ -775,10 +776,12 @@ class ThreadAttachmentType(RecordReferenceNode):
     updated_at: auto
 
     record_model: str | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
+        resolver=RecordReferenceNode.reference_model, annotate=RECORD_REFERENCE_ANNOTATIONS,
+        only=["content_type_id", "object_id"],
     )
     record_id: PublicID | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_id, only=["content_type_id", "object_id"],
+        resolver=RecordReferenceNode.reference_id, annotate=RECORD_REFERENCE_ANNOTATIONS,
+        only=["content_type_id", "object_id"],
     )
 
 

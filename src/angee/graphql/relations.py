@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, Self, cast
 
 import strawberry
@@ -13,6 +13,7 @@ from django.db import models
 from django.db.models.expressions import Combinable
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.functions import Cast
+from django.db.models.sql.where import WhereNode
 from rebac import current_actor
 from rebac.graphql.strawberry_django import optimize
 from rebac.managers import RebacQuerySet
@@ -83,48 +84,99 @@ class _ActorScopedSubquery(models.Expression):
         return []
 
 
-def with_record_reference_access(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
-    """Annotate generic references with their targets' current read policy."""
+RECORD_REFERENCE_ANNOTATIONS = {"_angee_record_readable": models.F("_angee_record_readable")}
 
-    if not issubclass(queryset.model, RecordRefMixin):
-        raise ImproperlyConfigured("Record-reference access requires RecordRefMixin.")
-    reference = queryset.model.record_ref_field()
-    key_field = queryset.model._meta.get_field(reference.fk_field)
-    if not isinstance(key_field, models.Field):
-        raise ImproperlyConfigured("A record reference must store its object id in a forward field.")
-    reference_rows = queryset.scoped_for_aggregate() if isinstance(queryset, RebacQuerySet) else queryset
-    content_types = ContentType.objects.filter(pk__in=reference_rows.order_by().values_list(
-        reference.ct_field, flat=True,
-    )).order_by("app_label", "model")
-    actor = relation_actor(queryset)
-    readable = models.Q(pk__in=[])
-    for content_type in content_types:
-        model = content_type.model_class()
-        if model is None:
-            continue
-        targets = require_rebac_queryset(model).with_actor(actor).with_action("read")
-        keys = targets.order_by().annotate(_angee_reference_key=Cast("pk", output_field=key_field))
-        readable |= models.Q(**{
-            reference.ct_field_attname: content_type.pk,
-            f"{reference.fk_field}__in": _ActorScopedSubquery(keys, "_angee_reference_key"),
-        })
-    return queryset.annotate(_angee_record_readable=models.ExpressionWrapper(
-        readable, output_field=models.BooleanField(),
-    ))
+
+class _RecordReferenceAccess(models.Expression):
+    """The existing source population's target privacy, compiled only when used.
+
+    The actor is an authored snapshot: bind it before calling this owner, and
+    redeclare this annotation after an actor change. Native expression children
+    carry the containing row's columns through aliases, clones and optimizer paths.
+    Source discovery runs for each SQL render that uses this expression. No
+    permission answer or compiled SQL is retained between evaluations.
+    """
+
+    contains_subquery = True
+
+    def __init__(self, queryset: models.QuerySet[Any]) -> None:
+        if not issubclass(queryset.model, RecordRefMixin):
+            raise ImproperlyConfigured("Record-reference access requires RecordRefMixin.")
+        reference = queryset.model.record_ref_field()
+        key_field = queryset.model._meta.get_field(reference.fk_field)
+        if not isinstance(key_field, models.Field):
+            raise ImproperlyConfigured("A record reference must store its object id in a forward field.")
+        super().__init__(output_field=models.BooleanField())
+        self.queryset = queryset
+        self.actor = relation_actor(queryset)
+        self.reference = reference
+        self.key_field = key_field
+        self.columns: list[Any] = [models.F(reference.ct_field_attname), models.F(reference.fk_field)]
+
+    def get_source_expressions(self) -> list[Any]:
+        return self.columns
+
+    def set_source_expressions(self, expressions: Sequence[Combinable | models.Expression]) -> None:
+        self.columns = list(expressions)
+
+    def as_sql(self, compiler: Any, connection: Any) -> tuple[str, Any]:
+        source = self.queryset.using(connection.alias)
+        reference_rows = source.scoped_for_aggregate() if isinstance(source, RebacQuerySet) else source
+        content_types = ContentType.objects.using(connection.alias).filter(
+            pk__in=reference_rows.order_by().values_list(self.reference.ct_field, flat=True),
+        ).order_by("app_label", "model")
+        branches = []
+        content_type_column, object_id_column = self.columns
+        for content_type in content_types:
+            model = content_type.model_class()
+            if model is None:
+                continue
+            targets = require_rebac_queryset(model).with_actor(self.actor).with_action("read")
+            keys = targets.order_by().annotate(_angee_reference_key=Cast("pk", output_field=self.key_field))
+            branch = WhereNode(connector="AND")
+            branch.add(content_type_column.get_lookup("exact")(content_type_column, content_type.pk), "AND")
+            branch.add(
+                object_id_column.get_lookup("in")(
+                    object_id_column, _ActorScopedSubquery(keys, "_angee_reference_key"),
+                ),
+                "AND",
+            )
+            branches.append(branch)
+        if not branches:
+            return compiler.compile(models.Value(False, output_field=models.BooleanField()))
+        predicate = WhereNode(connector="OR")
+        for branch in branches:
+            predicate.add(branch, "OR")
+        return compiler.compile(predicate)
+
+
+def with_record_reference_access(
+    queryset: models.QuerySet[Any], *, select: bool = True,
+) -> models.QuerySet[Any]:
+    """Declare current target privacy, selecting it for explicit Python consumers.
+
+    Schema preparation uses an alias; selected reference fields promote it through
+    their native annotation hints. Discovery retains this source population, even
+    when callers later narrow their queryset. Bind the actor before declaration;
+    reapplying this helper after changing actor refreshes the captured projection.
+    """
+    annotation = {"_angee_record_readable": _RecordReferenceAccess(queryset)}
+    return queryset.annotate(**annotation) if select else queryset.alias(**annotation)
 
 
 @strawberry.type
 class RecordReferenceNode(AngeeNode):
     """Project a generic reference only while its current target is readable.
 
-    ``get_queryset`` batches the target read into the rows' own query. A row
+    ``get_queryset`` declares a lazy target-read alias; selected reference fields
+    promote it into the rows' own query. A row
     loaded another way (a to-one fallback, a mutation result) answers the same
     annotation on a one-row queryset under the current actor.
     """
 
     @classmethod
     def get_queryset(cls, queryset: models.QuerySet[Any], info: Info) -> models.QuerySet[Any]:
-        return with_record_reference_access(queryset)
+        return with_record_reference_access(queryset, select=False)
 
     def reference_model(self) -> str | None:
         row = cast(Any, self)

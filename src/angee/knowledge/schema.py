@@ -12,10 +12,10 @@ from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db.models import F, Prefetch, prefetch_related_objects
 from rebac import system_context
+from rebac.graphql.strawberry_django import optimize
 from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry_django.auth.utils import get_current_user
-from strawberry_django.optimizer import optimize
 from strawberry_django.utils.requests import get_request
 
 from angee.base.fields.identity import SqidField

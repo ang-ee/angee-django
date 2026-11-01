@@ -25,6 +25,7 @@ from angee.graphql.data.hasura import (
 from angee.graphql.ids import PublicID, require_instance_for_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import (
+    RECORD_REFERENCE_ANNOTATIONS,
     RecordReferenceNode,
     actor_scoped_to_many,
     actor_scoped_to_one,
@@ -41,10 +42,12 @@ DecisionRecord = apps.get_model("decisions", "DecisionRecord")
 class DecisionRecordType(RecordReferenceNode):
     decision: DecisionType = actor_scoped_to_one("decision")
     record_model: str | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
+        resolver=RecordReferenceNode.reference_model, annotate=RECORD_REFERENCE_ANNOTATIONS,
+        only=["content_type_id", "object_id"],
     )
     record_id: PublicID | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_id, only=["content_type_id", "object_id"],
+        resolver=RecordReferenceNode.reference_id, annotate=RECORD_REFERENCE_ANNOTATIONS,
+        only=["content_type_id", "object_id"],
     )
 
 
