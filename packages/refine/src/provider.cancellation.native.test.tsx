@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { useCustom, useInfiniteList, useList, useMany, useOne } from "@refinedev/core";
+import { useCustom, useInfiniteList, useInvalidate, useList, useMany, useOne } from "@refinedev/core";
 import { parse } from "graphql";
 import type { ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
@@ -23,9 +23,9 @@ function response(id = "current") {
 }
 
 function fixture() {
-  const attempts: { signal: AbortSignal | null | undefined; resolve: (response: Response) => void }[] = [];
+  const attempts: { signal: AbortSignal | null | undefined; resolve: (response: Response) => void; reject: (error: Error) => void }[] = [];
   const fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
-    attempts.push({ signal: init?.signal, resolve });
+    attempts.push({ signal: init?.signal, resolve, reject });
     init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
   }));
   const provider = createAngeeHasuraDataProvider({ url: "https://example.invalid/graphql", auth: (base) => base, fetch });
@@ -121,5 +121,127 @@ test("live changes abort actual HTTP on arrival and keep the replacement read", 
   } finally {
     live.clear();
     f.attempts.forEach((attempt) => attempt.resolve(response()));
+  }
+});
+
+const invalidateReaders = [
+  ["all", () => useList({ resource: "notes" }).query],
+  ["list", () => useList({ resource: "notes" }).query],
+  ["many", () => useMany({ resource: "notes", ids: ["one"] }).query],
+  ["resourceAll", () => useList({ resource: "notes" }).query],
+  ["detail", () => useOne({ resource: "notes", id: "one" }).query],
+] as const;
+
+test.each(invalidateReaders)("native %s invalidation preserves declared cancellation options", async (selector, read) => {
+  for (const cancelRefetch of [false, undefined, true] as const) {
+    const f = fixture();
+    const hook = renderHook(() => ({ query: read(), invalidate: useInvalidate() }), { wrapper: f.wrapper });
+    let refreshed: Promise<void> | undefined;
+    try {
+      await waitFor(() => expect(f.attempts).toHaveLength(1));
+      await act(async () => { f.attempts[0]?.resolve(response("initial")); });
+      await waitFor(() => expect(hook.result.current.query.isSuccess).toBe(true));
+      act(() => { void hook.result.current.query.refetch(); });
+      await waitFor(() => expect(f.attempts).toHaveLength(2));
+      await act(async () => {
+        refreshed = hook.result.current.invalidate({
+          resource: "notes", id: "one", invalidates: [selector],
+          ...(cancelRefetch === undefined ? {} : { invalidationOptions: { cancelRefetch } }),
+        });
+      });
+      expect(f.attempts[1]?.signal?.aborted).toBe(cancelRefetch === true);
+      expect(f.attempts).toHaveLength(cancelRefetch === true ? 3 : 2);
+      await act(async () => {
+        f.attempts.at(-1)?.resolve(response("current"));
+        await refreshed;
+      });
+      expect(hook.result.current.query.isSuccess).toBe(true);
+    } finally {
+      await act(async () => {
+        f.attempts.forEach((attempt) => attempt.resolve(response()));
+        await refreshed;
+      });
+      hook.unmount();
+    }
+  }
+});
+
+test("native invalidation retains its selectors and refetch filters", async () => {
+  const f = fixture();
+  const hook = renderHook(() => ({ query: useList({ resource: "notes", queryOptions: { meta: { invalidationTarget: true } } }).query, invalidate: useInvalidate() }), { wrapper: f.wrapper });
+  try {
+    await waitFor(() => expect(f.attempts).toHaveLength(1));
+    await act(async () => { f.attempts[0]?.resolve(response()); });
+    await waitFor(() => expect(hook.result.current.query.isSuccess).toBe(true));
+    const target = f.client.getQueryCache().getAll().find((query) => query.meta?.invalidationTarget === true)!;
+    const otherKey = [...target.queryKey, "another-projection"];
+    f.client.setQueryData(otherKey, { id: "other" });
+    await act(async () => {
+      await hook.result.current.invalidate({ resource: "notes", invalidates: false });
+      await hook.result.current.invalidate({
+        resource: "notes", invalidates: ["resourceAll"],
+        invalidationFilters: { predicate: () => false },
+      });
+    });
+    expect(target.state.isInvalidated).toBe(false);
+    await act(async () => {
+      await hook.result.current.invalidate({
+        resource: "notes", id: "different-record", invalidates: ["detail"],
+        invalidationFilters: { queryKey: target.queryKey, exact: true, refetchType: "none", predicate: (query) => query === target },
+        invalidationOptions: { cancelRefetch: false, throwOnError: true },
+      });
+    });
+    expect(target.state.isInvalidated).toBe(true);
+    expect(f.client.getQueryState(otherKey)?.isInvalidated).toBe(false);
+    expect(f.attempts).toHaveLength(1);
+  } finally { f.attempts.forEach((attempt) => attempt.resolve(response())); }
+});
+
+test.each([false, true])("native invalidation forwards throwOnError=%s to Query", async (throwOnError) => {
+  const f = fixture();
+  const hook = renderHook(() => ({ query: useList({ resource: "notes" }).query, invalidate: useInvalidate() }), { wrapper: f.wrapper });
+  let refreshed: Promise<void> | undefined;
+  try {
+    await waitFor(() => expect(f.attempts).toHaveLength(1));
+    await act(async () => { f.attempts[0]?.resolve(response()); });
+    await waitFor(() => expect(hook.result.current.query.isSuccess).toBe(true));
+    act(() => {
+      refreshed = hook.result.current.invalidate({
+        resource: "notes", invalidates: ["list"], invalidationOptions: { cancelRefetch: false, throwOnError },
+      });
+    });
+    // Attach the rejection expectation before releasing the native fetch.
+    const settled = throwOnError
+      ? expect(refreshed).rejects.toThrow("Request failed.")
+      : expect(refreshed).resolves.toBeUndefined();
+    await waitFor(() => expect(f.attempts).toHaveLength(2));
+    await act(async () => { f.attempts[1]?.reject(new Error("controlled native provider failure")); await settled; });
+  } finally {
+    f.attempts.forEach((attempt) => attempt.resolve(response()));
+    await refreshed?.catch(() => undefined);
+  }
+});
+
+test.each([false, undefined])("native invalidation joins an initial request with cancelRefetch=%s", async (cancelRefetch) => {
+  const f = fixture();
+  const hook = renderHook(() => ({ query: useList({ resource: "notes" }).query, invalidate: useInvalidate() }), { wrapper: f.wrapper });
+  let refreshed: Promise<void> | undefined;
+  try {
+    await waitFor(() => expect(f.attempts).toHaveLength(1));
+    await act(async () => {
+      refreshed = hook.result.current.invalidate({
+        resource: "notes", invalidates: ["list"],
+        ...(cancelRefetch === undefined ? {} : { invalidationOptions: { cancelRefetch } }),
+      });
+    });
+    expect(f.attempts).toHaveLength(1);
+    expect(f.attempts[0]?.signal?.aborted).toBe(false);
+    await act(async () => { f.attempts[0]?.resolve(response()); await refreshed; });
+    await waitFor(() => expect(hook.result.current.query.isSuccess).toBe(true));
+  } finally {
+    await act(async () => {
+      f.attempts.forEach((attempt) => attempt.resolve(response()));
+      await refreshed;
+    });
   }
 });

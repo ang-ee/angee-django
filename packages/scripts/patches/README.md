@@ -1,23 +1,33 @@
-# Refine query-context backport
+# Refine query lifecycle repairs
 
-`refinedev-core-5.0.12.patch` backports exactly the six source changes from
+`refinedev-core-5.0.12.patch` retains the six query-context source changes from
 [Refine PR #7426](https://github.com/refinedev/refine/pull/7426), commit
-`f8e4c53f7aa83eff6563d62a9f09fc71d513e0c3`. Remove this patch and its install-policy
-entry when the first Refine release containing that fix is adopted.
+`f8e4c53f7aa83eff6563d62a9f09fc71d513e0c3`. It also corrects native
+`useInvalidate` to pass `invalidationOptions` as the second argument to
+`QueryClient.invalidateQueries(filters, options)`, preserving the declared
+`cancelRefetch: false` default, explicit cancellation and `throwOnError`.
+Remove each repair when a released core includes it; remove the patch and its
+install-policy entry when both repairs are adopted.
 
 Generate the patch in a disposable workspace with native `pnpm patch` and
 `pnpm patch-commit`. Start from the published `@refinedev/core@5.0.12` tarball,
-apply those upstream source hunks, then run upstream core's `npm run build`
+apply the query-context hunks and the native invalidation argument correction,
+then run upstream core's `npm run build`
 (`tsup` followed by `packages/shared/generate-declarations.js`). Obtain its
-`tsup.config.ts`, declaration/build tsconfigs and shared build helpers from that
-commit. The build uses tsup 6.7.0, TypeScript 5.8.3 and the native dependency APIs
+`tsup.config.ts`, declaration/build tsconfigs and shared build helpers from the
+published core tag below. The build uses tsup 6.7.0, TypeScript 5.8.3 and the native dependency APIs
 from core's manifest, including TanStack Query 5.81.5. Include the regenerated
 CommonJS, ESM, declaration files and source maps in the patch.
 
 Before applying the source fix, the same build must reproduce every published
-artifact byte for byte. Only artifacts changed by the upstream source fix belong
+artifact byte for byte. Only artifacts changed by these native source repairs belong
 in the patch. The provider's native lifecycle tests cover all five affected hooks
 and both providers that consume cancellation and providers that leave signals unread.
+The same real-provider suite seeds committed data and holds a native refetch to
+verify false/default/true invalidation options, initial-fetch joining, native
+selector/filter precedence and error propagation. This repair changes argument
+forwarding, not live/mutation invalidation policy. The published core source
+matches official tag `4d60acfd919461f319c71b52195aff0c23ce904f`.
 
 ## Hasura read cancellation
 
