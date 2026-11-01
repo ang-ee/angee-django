@@ -107,7 +107,8 @@ test.each(["changes", "statements", "both"])("unavailable %s retain attribution 
   expect(screen.getByText(/The original source values were not retained/)).toBeTruthy();
   if (unavailable === "statements") expect(screen.getByText("Applied source")).toBeTruthy();
   else expect(screen.queryByText("Applied source")).toBeNull();
-  if (unavailable === "changes") expect(screen.getByText("Statement value")).toBeTruthy();
-  else expect(screen.queryByText("Statement value")).toBeNull();
+  const statementValue = screen.queryByText('{"reference":"Statement value"}', { selector: "code" });
+  if (unavailable === "changes") expect(statementValue).toBeTruthy();
+  else expect(statementValue).toBeNull();
   expect(screen.queryByRole("button", { name: "Revert" })).toBeNull();
 });
