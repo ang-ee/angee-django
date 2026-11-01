@@ -126,7 +126,14 @@ disabling before enabling preview in a host.
 edit baseline's revision and create retries reuse one key until acceptance or a
 `CREATION_KEY_CONFLICT`. A stale revision keeps local edits until an explicit reload
 and discard. Custom submit owners receive `baselineRecord` and `idempotencyKey`
-and retain responsibility for their own operation arguments.
+and retain responsibility for their own operation arguments and mutation effects.
+Native saves cancel earlier exact detail reads, adopt complete returned selections
+in the native cache and RHF baseline, then schedule collection and dependent reads
+through Refine's shared reconciliation owner. Later edits remain dirty. Partial
+responses update only complete selected fields in an existing cache, leave that
+query stale and request an authoritative read; they never seed a complete detail.
+Authored resource mutations compose the same lifecycle through `acceptResponse`
+and explicit `records`, retaining broad invalidation for unknown effects.
 
 `GraphView` automatically lays out unpositioned nodes using measured sizes and
 preserves explicit positions. Layout debt: `GraphEditor` still lays out from

@@ -15,14 +15,17 @@ import { refineResourceIdentifier } from "./resources";
 export interface ResourceInvalidationTarget {
   resource: string;
   dataProviderName: string;
+  /** Exact written record when the operation declares its identity. */
+  id?: string;
 }
 
 export function resourceInvalidationTargets(
   metadata: SchemaFieldMetadata,
   modelLabels: readonly string[],
+  records?: readonly { model: string; id?: string }[],
 ): readonly ResourceInvalidationTarget[] {
   if (modelLabels.length === 0) return [];
-  return modelLabels.map((spelling) => {
+  return modelLabels.flatMap((spelling) => {
     const modelLabel = canonicalModelLabel(metadata.resources ?? [], spelling);
     const model = modelMetadataForLabel(metadata, modelLabel);
     const resource = model?.resource;
@@ -31,10 +34,17 @@ export function resourceInvalidationTargets(
         `Action invalidation target "${spelling}" is not exposed in resource metadata.`,
       );
     }
-    return {
+    const target = {
       resource: refineResourceIdentifier(resource),
       dataProviderName: resource.schemaName,
     };
+    const matching = records?.filter((record) =>
+      canonicalModelLabel(metadata.resources ?? [], record.model) === modelLabel);
+    // A model-only effect deliberately retains the broad fallback. Collections
+    // still reconcile for exact writes because membership/order/totals are owned
+    // by their server query, not by a single returned row.
+    if (!matching?.length || matching.some((record) => !record.id)) return [target];
+    return [...new Set(matching.flatMap((record) => record.id ? [record.id] : []))].map((id) => ({ ...target, id }));
   });
 }
 
@@ -44,13 +54,22 @@ export function refineInvalidationParams(
   return {
     resource: target.resource,
     dataProviderName: target.dataProviderName,
-    // Refine's `detail` invalidation requires an id. Authored verbs name every
-    // model they mutate, but may update a related model whose id is not the
-    // action subject. Invalidate the declared resource prefix so its active
-    // list, many, and real-id detail queries all refresh.
-    invalidates: ["resourceAll"],
+    ...(target.id !== undefined ? {
+      id: target.id,
+      invalidates: ["list", "many", "detail"],
+    } : {
+      // Unknown identity requires the whole resource prefix, including every
+      // detail projection; Refine's detail invalidation always requires an id.
+      invalidates: ["resourceAll"],
+    }),
   };
 }
+
+type InvalidationRecord = { model: string; id?: string };
+type InvalidationRecords<TData, TVariables> = readonly InvalidationRecord[]
+  | ((data: TData, variables: TVariables) => readonly InvalidationRecord[]);
+type InvalidationParams<TData, TVariables> = readonly UseInvalidateProp[]
+  | ((data: TData, variables: TVariables) => readonly UseInvalidateProp[]);
 
 /**
  * The refine `invalidates` a verb's mutated Angee model labels map to.
@@ -60,22 +79,31 @@ export function refineInvalidationParams(
  * hook that moves a named model's resource caches composes this instead of
  * repeating the pair against the ambient metadata. Stabilized by label contents,
  * so a caller passing a fresh array literal each render does not churn the
- * mutation options it feeds.
+ * mutation options it feeds. Declared record effects may be static or resolved
+ * from the mutation response/variables; unknown model identities stay broad.
  */
-export function useResourceInvalidates(
+export function useResourceInvalidates(modelLabels: readonly string[] | undefined): readonly UseInvalidateProp[];
+export function useResourceInvalidates<TData, TVariables>(
   modelLabels: readonly string[] | undefined,
-): readonly UseInvalidateProp[] {
+  records: InvalidationRecords<TData, TVariables> | undefined,
+): InvalidationParams<TData, TVariables>;
+export function useResourceInvalidates<TData, TVariables>(
+  modelLabels: readonly string[] | undefined,
+  records?: InvalidationRecords<TData, TVariables>,
+): InvalidationParams<TData, TVariables> {
   const metadata = useSchemaFieldMetadata();
   const canonicalModelLabels = useCanonicalResourceModelLabels(modelLabels);
   const key = JSON.stringify(canonicalModelLabels);
-  return useMemo(
-    () =>
-      resourceInvalidationTargets(metadata, canonicalModelLabels).map(
-        refineInvalidationParams,
-      ),
+  return useMemo(() => {
+    const resolve = (effects: readonly InvalidationRecord[] | undefined) => {
+      const models = [...new Set([...canonicalModelLabels, ...(effects ?? []).map((record) => record.model)])];
+      return resourceInvalidationTargets(metadata, models, effects).map(refineInvalidationParams);
+    };
+    return typeof records === "function"
+      ? (data: TData, variables: TVariables) => resolve(records(data, variables))
+      : resolve(records);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [key, metadata],
-  );
+  }, [key, metadata, records]);
 }
 
 /**
