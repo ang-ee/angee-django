@@ -50,12 +50,9 @@ from strawberry_django_hasura.inputs import comparison_for_python_type
 
 from angee.base.hooks import resolve_hooks
 from angee.base.identity import public_data_id_field
-from angee.base.models.base import AngeeModel
 from angee.base.models.children import OwnedChildrenMixin
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for
-from angee.base.models.locks import OptimisticLockMixin, RowLockMixin
-from angee.base.models.refs import RecordRefMixin
-from angee.base.permissions import declared_rebac_definition, require_rebac_queryset
+from angee.base.models.locks import OptimisticLockMixin
 from angee.base.querysets import row_lock_paths
 from angee.graphql.access import assert_no_gated_read_fields
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
@@ -96,6 +93,10 @@ from angee.graphql.introspection import (
 )
 from angee.graphql.relations import RecordReferenceNode, actor_scoped_relation_expression, with_record_reference_access
 from angee.graphql.writes import write_queryset
+from angee.iam.models.base import ProtectedModel
+from angee.iam.models.locks import ProtectedRowLockMixin
+from angee.iam.models.refs import ProtectedRecordRefMixin
+from angee.iam.permissions import declared_rebac_definition, require_rebac_queryset
 
 if TYPE_CHECKING:
     from django.db.models.sql.compiler import _AsSqlType
@@ -127,7 +128,7 @@ class HasuraLines:
     Lines are owned parts: rows that exist only as part of their parent and are
     saved with it. Their writes are the user's writes, elevated only because the
     parent write authorizes them, so they never bypass the child's own guards. A
-    child composing :class:`~angee.base.models.locks.RowLockMixin` has each row checked
+    child composing :class:`~angee.iam.models.locks.ProtectedRowLockMixin` has each row checked
     against its persisted lock before the elevated write: a line may not change a
     locked field, delete a system row, or create or turn into one. Its node must
     project the same fact as ``locked_fields``, which the metadata advertises as
@@ -206,7 +207,7 @@ class AngeeHasuraWriteBackend:
 
     Values for input-extension fields that are not model fields never reach
     strawberry-django, which would ignore them: each write persists the row,
-    then hands them to the row's :meth:`AngeeModel.apply_input_extensions` in
+    then hands them to the row's :meth:`ProtectedModel.apply_input_extensions` in
     the same transaction.
     """
 
@@ -1093,7 +1094,7 @@ def _scalar_alias_expression(queryset: models.QuerySet[Any], expression: Combina
 def _composition_queryset(model: type[models.Model]) -> models.QuerySet[Any]:
     """Return an elevated declaration-time queryset for framework or upstream models."""
 
-    if issubclass(model, AngeeModel):
+    if issubclass(model, ProtectedModel):
         return model.system_queryset()
     return model._base_manager.all()
 
@@ -1384,8 +1385,8 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     if record_ref_requires_read and record_ref_filters is None:
         raise ImproperlyConfigured("A record-reference read guard requires record-reference filters.")
     if record_ref_filters is not None:
-        if not issubclass(model, RecordRefMixin):
-            raise ImproperlyConfigured("Record-reference filters require RecordRefMixin.")
+        if not issubclass(model, ProtectedRecordRefMixin):
+            raise ImproperlyConfigured("Record-reference filters require ProtectedRecordRefMixin.")
         model_name, id_name = record_ref_filters
         claimed = set(expressions) | set(field_id_decode or {})
         if model_name == id_name or set(record_ref_filters) & claimed:
@@ -1930,7 +1931,7 @@ def _line_metadata(
 def _line_lock_field(lines: HasuraLines, schema: Any) -> str | None:
     """Return the child node's ``locked_fields`` wire name when the child locks rows."""
 
-    if not issubclass(lines.model, RowLockMixin):
+    if not issubclass(lines.model, ProtectedRowLockMixin):
         return None
     wire_name = resource_wire_field_name(lines.node, "locked_fields")
     node_name = resource_type_name(lines.node)

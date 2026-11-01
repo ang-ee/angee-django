@@ -8,16 +8,16 @@ from django.apps import apps
 from django.db.models import BooleanField, Case, Exists, ExpressionWrapper, ManyToManyField, OuterRef, Q, Value, When
 from rebac import permission_expression, to_subject_ref
 
-from angee.base.models.append_only import AppendOnlyQuerySet
-from angee.base.permissions import actor_user_id
-from angee.base.querysets import AngeeQuerySet
 from angee.base.refs import generic_pointer_model
+from angee.iam.models.append_only import ProtectedAppendOnlyQuerySet
+from angee.iam.permissions import actor_user_id
+from angee.iam.querysets import ProtectedQuerySet
 
 if TYPE_CHECKING:
     from angee.decisions.models import Decision
 
 
-class DecisionQuerySet[T: Decision](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
+class DecisionQuerySet[T: Decision](ProtectedAppendOnlyQuerySet[T], ProtectedQuerySet[T]):
     def open_expression(self) -> ExpressionWrapper:
         return ExpressionWrapper(Q(verdict__isnull=True), output_field=BooleanField())
 
@@ -88,5 +88,5 @@ class DecisionQuerySet[T: Decision](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
 
 
 
-class DecisionRecordQuerySet(AppendOnlyQuerySet[Any], AngeeQuerySet):
+class DecisionRecordQuerySet(ProtectedAppendOnlyQuerySet[Any], ProtectedQuerySet):
     """Concern links are authored once with their decision."""

@@ -17,7 +17,6 @@ from rebac import PermissionDenied, RebacMixin, SubjectRef, actor_context, syste
 from rebac.models import active_relationship_model
 
 import angee.graphql.deletion as deletion_module
-from angee.base.models.base import AngeeModel
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.deletion import (
     DeletePreview,
@@ -27,6 +26,7 @@ from angee.graphql.deletion import (
 )
 from angee.graphql.ids import RECORD_NOT_FOUND_MESSAGE
 from angee.iam import signals as iam_signals
+from angee.iam.models.base import ProtectedModel
 from tests.tables import model_tables
 
 
@@ -48,7 +48,7 @@ def test_confirm_delete_composes_model_locks_after_permission_with_caller_scope(
 
     locked: list[int] = []
 
-    class ScopedDeleteTarget(AngeeModel):
+    class ScopedDeleteTarget(ProtectedModel):
         """Target whose eligibility can change while a domain lock is acquired."""
 
         eligible = models.BooleanField(default=True)
@@ -123,7 +123,7 @@ def test_deletion_preview_reports_model_blockers_and_refuses_confirm(
 ) -> None:
     """Model refusals are distinct messages, including collected cascade children."""
 
-    class PolicyParent(AngeeModel):
+    class PolicyParent(ProtectedModel):
         """Deletion target with an optional model-owned refusal."""
 
         blocked = models.BooleanField(default=False)
@@ -138,7 +138,7 @@ def test_deletion_preview_reports_model_blockers_and_refuses_confirm(
 
             return "Release the parent first." if self.blocked else None
 
-    class PolicyChild(AngeeModel):
+    class PolicyChild(ProtectedModel):
         """Cascade row with an optional model-owned refusal."""
 
         parent = models.ForeignKey(PolicyParent, on_delete=models.CASCADE)
@@ -154,7 +154,7 @@ def test_deletion_preview_reports_model_blockers_and_refuses_confirm(
 
             return "Release the children first." if self.blocked else None
 
-    def refuse_delete(sender: Any, instance: AngeeModel, **kwargs: Any) -> None:
+    def refuse_delete(sender: Any, instance: ProtectedModel, **kwargs: Any) -> None:
         """Enforce each test model's refusal on every deletion path."""
 
         if message := instance.delete_blocker():
@@ -190,7 +190,7 @@ def test_deletion_preview_reports_model_blockers_and_refuses_confirm(
 def test_deletion_preview_error_includes_model_refusals_and_fk_blockers() -> None:
     """Neither a model refusal nor a protected relation hides the other in errors."""
 
-    class PolicyParent(AngeeModel):
+    class PolicyParent(ProtectedModel):
         """Deletion target refused independently of its protected child."""
 
         class Meta:
@@ -810,7 +810,7 @@ def test_delete_preview_from_counts_reports_target_refusal_with_or_without_fk_bl
 ) -> None:
     """Count-based purges project the target's rule alongside retaining-row groups."""
 
-    class PurgeTarget(AngeeModel):
+    class PurgeTarget(ProtectedModel):
         """Counted purge root with a model-owned refusal."""
 
         class Meta:

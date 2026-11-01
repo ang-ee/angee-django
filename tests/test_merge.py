@@ -31,9 +31,9 @@ from angee.base.models.merge_references import (
     MergePolicy,
     references,
 )
-from angee.base.models.refs import RecordRefMixin
 from angee.base.signals import bulk_updated
 from angee.graphql import records
+from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.messaging.testing.models import Directory, Participant, Party, Reaction
 from angee.projects.testing.models import Link, Project, Queue, Task
 from angee.provenance.context import changeset, changeset_model, current_changeset
@@ -174,9 +174,9 @@ def test_reverting_a_merge_restores_exact_assignment_identities_and_clears_the_a
     before = set(TagAssignment._base_manager.values_list("pk", "tag_id", "content_type_id", "object_id"))
     with actor_context(curator):
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
-        boundary = Tag.history.filter(id=mobil.pk).order_by("-history_id").first().changeset
+        boundary = Tag.history.filter(id=mobil.pk).order_by("-history_id").first().history_changeset
         changed_assignments = set(
-            TagAssignment.history.filter(changeset=boundary).values_list("id", flat=True)
+            TagAssignment.history.filter(history_changeset=boundary).values_list("id", flat=True)
         )
         assert changed_assignments == {pk for pk, tag, _kind, _record in before if tag == mobil.pk}
         reverted = boundary.with_actor(curator).revert()
@@ -193,9 +193,9 @@ def test_a_second_merge_flattens_aliases_and_revert_restores_the_previous_surviv
     with actor_context(curator):
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
         Tag.objects.get(pk=phones.pk).merge(records=[public_id_of(mobile)])
-        boundary = Tag.history.filter(id=mobile.pk).order_by("-history_id").first().changeset
+        boundary = Tag.history.filter(id=mobile.pk).order_by("-history_id").first().history_changeset
         assert Tag._base_manager.get(pk=mobil.pk).merged_into_id == phones.pk
-        assert Tag.history.filter(id=mobil.pk, changeset=boundary, merged_into_id=phones.pk).exists()
+        assert Tag.history.filter(id=mobil.pk, history_changeset=boundary, merged_into_id=phones.pk).exists()
         assert Tag.objects.get(pk=mobil.pk).canonical().pk == phones.pk
         boundary.with_actor(curator).revert()
         assert Tag.objects.get(pk=mobil.pk).canonical().pk == mobile.pk
@@ -210,7 +210,7 @@ def test_a_later_survivor_write_refuses_merge_revert_before_edges_move() -> None
     mobile, mobil, ada, bob = _vocabulary(owner=curator)
     with actor_context(curator):
         survivor = Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
-        boundary = Tag.history.filter(id=mobil.pk).order_by("-history_id").first().changeset
+        boundary = Tag.history.filter(id=mobil.pk).order_by("-history_id").first().history_changeset
         survivor.name = "Mobile phones"
         survivor.save(update_fields=("name",))
         with pytest.raises(ValidationError, match="later write prevents revert"):
@@ -293,7 +293,7 @@ def test_an_edge_without_a_merge_policy_blocks_and_its_blockers_project(monkeypa
 
     mobile, mobil, _ada, _bob = _vocabulary()
     _tag_on_tag(mobile, mobil)
-    monkeypatch.setattr(TagAssignment, "merge_policy", RecordRefMixin.merge_policy)
+    monkeypatch.setattr(TagAssignment, "merge_policy", ProtectedRecordRefMixin.merge_policy)
     blocked = {tag.pk for condition, _message in Tag.merge_blockers() for tag in Tag._base_manager.filter(condition)}
     assert blocked == {mobil.pk}
     with actor_context(_curator("merge-blocked")), pytest.raises(ValidationError, match="tag assignments"):
@@ -600,7 +600,7 @@ def test_a_reverted_stance_gets_its_recency_back_so_the_tie_break_returns_to_its
             statements._base_manager.filter(pk=older.pk).update(display_name="Ada K.", updated_at=timezone.now())
         older.refresh_from_db()
         assert min((older, newer), key=lambda row: row.sort_key()).pk == older.pk
-        redated = statements.history.filter(id=older.pk).order_by("-history_id").first().changeset
+        redated = statements.history.filter(id=older.pk).order_by("-history_id").first().history_changeset
 
         with changeset(fresh=True, change_reason="test.revert"):
             redated.revert()

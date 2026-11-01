@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 
 from django.core.exceptions import NON_FIELD_ERRORS, ObjectDoesNotExist, PermissionDenied, ValidationError
-from rebac import MissingActorError
 
 INTERNAL_ERROR_MESSAGE = "An unexpected error occurred."
 
@@ -37,8 +36,6 @@ def classify_error(error: BaseException | None) -> ErrorClassification:
 
     if isinstance(error, DomainError):
         return ErrorClassification(error.code, error.code)
-    if isinstance(error, MissingActorError):
-        return ErrorClassification("UNAUTHENTICATED", "Authentication required.")
     if isinstance(error, PermissionDenied):
         return ErrorClassification("PERMISSION_DENIED", "Permission denied.")
     validation = validation_error(error)

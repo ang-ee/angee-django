@@ -8,7 +8,7 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.backends import backend
 from rebac.evaluator import evaluator_scope
 
-from angee.base.testing.permissions import installed_field_owners
+from angee.iam.testing.permissions import installed_field_owners
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Project
 from angee.spaces.testing.models import Group, Membership

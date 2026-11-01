@@ -44,12 +44,12 @@ import angee.spaces.testing.models  # noqa: F401 -- register related models befo
 import tests.test_integrate_vcs  # noqa: F401 -- register related models before native database setup
 from angee.agents.testing.models import Agent
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeModel
 from angee.base.models.identity import SqidMixin
 from angee.base.serialization import strip_null_bytes
 from angee.graphql import publishing
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
+from angee.iam.models.base import ProtectedModel
 from angee.messaging.backends import (
     ManualChannelBackend,
     ParsedHandle,
@@ -95,7 +95,7 @@ from tests.conftest import (
 from tests.mtidemo.models import MtiChild, MtiParent
 
 
-class ThreadedTicket(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, AngeeModel):
+class ThreadedTicket(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, ProtectedModel):
     """Concrete model that opts into record chatter for messaging tests."""
 
     sqid_prefix = "tkt_"
@@ -128,7 +128,7 @@ class ThreadedTicket(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, An
         return self.title
 
 
-class BroadcastRoom(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, AngeeModel):
+class BroadcastRoom(SqidMixin, AuditMixin, HistoryMixin, ThreadedModelMixin, ProtectedModel):
     """A threaded host that opts its chatter into the ``changes(Thread)`` stream.
 
     Stands in for a chat room: ``thread_broadcasts_changes = True`` flips the F-stream

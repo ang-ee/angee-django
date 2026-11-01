@@ -11,20 +11,25 @@ from django.db import models
 from django.db.migrations.writer import MigrationWriter
 from rebac import system_context
 
-from angee.base.models.append_only import AppendOnlyBaseQuerySet, AppendOnlyModel, AppendOnlyQuerySet
 from angee.base.models.audit import AuditMixin, retained_set_null
 from angee.base.models.hierarchy import HierarchyQuerySet
-from angee.base.querysets import AngeeQuerySet, ClosedUpdateQuerySet
+from angee.base.querysets import ClosedUpdateQuerySet
+from angee.iam.models.append_only import (
+    ProtectedAppendOnlyBaseQuerySet,
+    ProtectedAppendOnlyModel,
+    ProtectedAppendOnlyQuerySet,
+)
+from angee.iam.querysets import ProtectedQuerySet
 from angee.provenance.contrib.angee.querysets import AngeeHistoryUnscopedQuerySet
 from tests.conftest import create_user
 from tests.hierdemo.models import HierNode
 
 
-class RetainedEvidenceQuerySet(AppendOnlyQuerySet["RetainedEvidence"], AngeeQuerySet["RetainedEvidence"]):
+class RetainedEvidenceQuerySet(ProtectedAppendOnlyQuerySet["RetainedEvidence"], ProtectedQuerySet["RetainedEvidence"]):
     """Compose append-only policy with the ordinary authorization chain."""
 
 
-class RetainedEvidence(AppendOnlyModel, AuditMixin, models.Model):
+class RetainedEvidence(ProtectedAppendOnlyModel, AuditMixin, models.Model):
     """Minimal audited row exercising the shared collection policy."""
 
     name = models.CharField(max_length=64)
@@ -40,7 +45,7 @@ def test_append_only_base_manager_and_instance_writes_are_guarded(transactional_
     del transactional_db
     with system_context(reason="test append-only base manager"):
         row = RetainedEvidence.objects.create(name="retained")
-        assert isinstance(RetainedEvidence._base_manager.get_queryset(), AppendOnlyBaseQuerySet)
+        assert isinstance(RetainedEvidence._base_manager.get_queryset(), ProtectedAppendOnlyBaseQuerySet)
         for write in (
             lambda: RetainedEvidence._base_manager.filter(pk=row.pk).update(name="changed"),
             lambda: RetainedEvidence._base_manager.filter(pk=row.pk).delete(),
@@ -71,7 +76,7 @@ def test_append_only_rejects_collection_mutation_and_collector_nullifies_audit_f
 
     del composed_tables
     with pytest.raises(ValidationError, match="contenttypes.ContentType rows cannot be edited"):
-        AppendOnlyQuerySet(model=ContentType).update(created_by=None)
+        ProtectedAppendOnlyQuerySet(model=ContentType).update(created_by=None)
     actor = create_user("append-only-auditor")
     other_actor = create_user("append-only-other-auditor")
     with system_context(reason="test append-only policy"):
@@ -132,8 +137,8 @@ def test_owner_writes_preserve_downstream_queryset_guards(monkeypatch: pytest.Mo
     def deny(*args: Any, **kwargs: Any) -> Any:
         raise PermissionDenied("downstream write guard")
 
-    monkeypatch.setattr(AngeeQuerySet, "update", deny)
-    monkeypatch.setattr(AngeeQuerySet, "bulk_create", deny)
+    monkeypatch.setattr(ProtectedQuerySet, "update", deny)
+    monkeypatch.setattr(ProtectedQuerySet, "bulk_create", deny)
     queryset = RetainedEvidence.objects.filter(pk=1)
     with pytest.raises(PermissionDenied, match="downstream write guard"):
         queryset.owner_update(name="changed")
@@ -161,7 +166,7 @@ def test_closed_owner_update_preserves_downstream_independent_guard() -> None:
 def test_closed_owner_update_keeps_hierarchy_and_capture_downstream() -> None:
     """A combined native queryset retains hierarchy refusal before capture/SQL."""
 
-    class Combined(AppendOnlyBaseQuerySet, HierarchyQuerySet, AngeeHistoryUnscopedQuerySet):
+    class Combined(ProtectedAppendOnlyBaseQuerySet, HierarchyQuerySet, AngeeHistoryUnscopedQuerySet):
         pass
 
     lineage = Combined.__mro__

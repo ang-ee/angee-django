@@ -20,11 +20,11 @@ from rebac import system_context
 from angee.base.exceptions import exception_text
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.merge_references import MergePolicy
-from angee.base.models.refs import RecordRefMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.refs import RecordRef
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.workflows.definition import MAP_BODY_SUFFIX, Definition
 from angee.workflows.managers import (
@@ -100,7 +100,7 @@ class _NodeFailureRoute(models.Func):
         )
 
 
-class StepRun(AngeeDataModel, concrete=True):
+class StepRun(ProtectedDataModel, concrete=True):
     """One graph node's state and input, with its claim counter as the fence.
 
     ``rank`` stores graph order for query sorting without reparsing the version.
@@ -492,7 +492,7 @@ class StepRun(AngeeDataModel, concrete=True):
         ]
 
 
-class StepAttempt(AngeeDataModel, concrete=True):
+class StepAttempt(ProtectedDataModel, concrete=True):
     """One committed claim, closed once the attempt finishes."""
 
     sqid_prefix = "wsa_"
@@ -537,7 +537,7 @@ class StepAttempt(AngeeDataModel, concrete=True):
         ]
 
 
-class StepRecord(RecordRefMixin, AngeeDataModel, concrete=True):
+class StepRecord(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
     """One record used by a step, or supplied by its run's trigger."""
 
     merge_policy = MergePolicy.KEEP
@@ -576,7 +576,7 @@ class StepRecord(RecordRefMixin, AngeeDataModel, concrete=True):
         ]
 
 
-class StepWatch(RecordRefMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class StepWatch(ProtectedRecordRefMixin, HistoryMixin, ProtectedDataModel, concrete=True):
     """One transactional observation and its durable, coalesced wake obligation."""
 
     merge_policy = MergePolicy.MOVE

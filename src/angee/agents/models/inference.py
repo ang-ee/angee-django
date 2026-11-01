@@ -34,8 +34,8 @@ from angee.agents.models.choices import InferenceModelStatus, InferenceModelUse
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.implementations import ImplDefaultsMixin
+from angee.iam.models.base import ProtectedDataModel
 from angee.integrate.models import IntegrationCreateMode
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.resources.mixins import ResourceLoadMixin
@@ -271,7 +271,7 @@ class InferenceModelManager[ModelT: InferenceModel](AngeeHistoryManager[ModelT])
         return len(specs)
 
 
-class InferenceModel(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
+class InferenceModel(ResourceLoadMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """One model in a provider's catalogue, agents bind to by FK.
 
     ``publisher`` is the model's maker, reusing the ``integrate.Vendor`` catalogue

@@ -15,9 +15,9 @@ from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
 from angee.base.fields.implementation import impl_choices_enum
-from angee.base.querysets import AngeeQuerySet
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.querysets import ProtectedQuerySet
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import ParsedMessage, ParsedPart
 from angee.messaging.events import message_ingested
@@ -377,14 +377,14 @@ class MessageTriggerTests(TransactionTestCase):
             )
         refined = Trigger.objects.enable(refined, actor=self.admin)
         locked = []
-        lock = AngeeQuerySet.select_for_update
+        lock = ProtectedQuerySet.select_for_update
 
         def count_lock(rows, **kwargs):
             locked.append(rows.model)
             return lock(rows, **kwargs)
 
         with (
-            patch.object(AngeeQuerySet, "select_for_update", count_lock),
+            patch.object(ProtectedQuerySet, "select_for_update", count_lock),
             patch.object(type(StepWatch.objects), "record_change", autospec=True) as observed,
         ):
             self.ingest()

@@ -12,10 +12,7 @@ from django.db import models
 
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
-from angee.base.models.append_only import AppendOnlyModel
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel, AngeeModel
-from angee.base.models.derived import DerivedFrom
 from angee.base.refs import RecordRef
 from angee.base.serialization import canonical_json
 from angee.extraction.contracts import (
@@ -43,10 +40,13 @@ from angee.extraction.pointers import (
     set_json_pointer,
 )
 from angee.extraction.profiles import ExtractionProfile
+from angee.iam.models.append_only import ProtectedAppendOnlyModel
+from angee.iam.models.base import ProtectedDataModel, ProtectedModel
+from angee.iam.models.derived import ProtectedDerivedFrom
 from angee.provenance.evidence import FactAuthority
 
 
-class RetainedEvidence(AppendOnlyModel):
+class RetainedEvidence(ProtectedAppendOnlyModel):
     """Let the retention owner admit inserts while generic insertion stays closed."""
 
     class Meta:
@@ -57,7 +57,7 @@ class RetainedEvidence(AppendOnlyModel):
         self._owner_insert()
 
 
-class ExtractionLineage(RetainedEvidence, AngeeModel, concrete=True):
+class ExtractionLineage(RetainedEvidence, ProtectedModel, concrete=True):
     """Private row locked while allocating a revision and advancing its head."""
 
     identity = models.CharField(max_length=64, unique=True, editable=False)
@@ -75,7 +75,7 @@ class ExtractionLineage(RetainedEvidence, AngeeModel, concrete=True):
         self.head = extraction
 
 
-class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
+class Extraction(RetainedEvidence, AuditMixin, ProtectedDataModel, concrete=True):
     """One immutable schema candidate and the evidence supporting its facts."""
 
     sqid_prefix = "ext_"
@@ -542,7 +542,7 @@ class Extraction(RetainedEvidence, AuditMixin, AngeeDataModel, concrete=True):
         return None
 
 
-class ExtractionSource(DerivedFrom, concrete=True):
+class ExtractionSource(ProtectedDerivedFrom, concrete=True):
     """One derived-from source with retained position, digest and REBAC links."""
 
     sqid_prefix = "exs_"
@@ -588,7 +588,7 @@ class ExtractionSource(DerivedFrom, concrete=True):
         )
 
 
-class ExtractionPage(RetainedEvidence, AngeeDataModel, concrete=True):
+class ExtractionPage(RetainedEvidence, ProtectedDataModel, concrete=True):
     """One ordered page's recognized content and safe provider metadata."""
 
     sqid_prefix = "exp_"
@@ -616,7 +616,7 @@ class ExtractionPage(RetainedEvidence, AngeeDataModel, concrete=True):
         )
 
 
-class ExtractionPart(RetainedEvidence, AngeeDataModel, concrete=True):
+class ExtractionPart(RetainedEvidence, ProtectedDataModel, concrete=True):
     """One immutable text or structured carrier supporting a candidate."""
 
     sqid_prefix = "exr_"

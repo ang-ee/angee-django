@@ -5,12 +5,12 @@ from typing import Any
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from angee.base.models.base import AngeeDataModel
+from angee.iam.models.base import ProtectedDataModel
 from angee.workflows import models as sources
 from angee.workflows.subjects import RunSubject
 
 
-class RunSubjectRecord(RunSubject, AngeeDataModel):
+class RunSubjectRecord(RunSubject, ProtectedDataModel):
     """Persist hook observations and refusals for generic lifecycle proofs."""
 
     admissions = models.PositiveIntegerField(default=0)
@@ -32,7 +32,7 @@ class RunSubjectRecord(RunSubject, AngeeDataModel):
         if self.refuse_settlement:
             raise ValidationError("The subject refuses settlement.")
 
-    class Meta(AngeeDataModel.Meta):
+    class Meta(ProtectedDataModel.Meta):
         """Keep test-only subject state in the optional testing app."""
 
         abstract = False

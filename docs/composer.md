@@ -61,7 +61,7 @@ Custom integrations consume `django_compose.components` and
 | Source declarations, model composition and collision checks | `django_compose.models.Composable`, `model_composition`, and Django |
 | Build/check publication, artifact receipt and serving verification | `django_compose.build`, `artifacts` and `serving` |
 | Native migration safeguards and retained history | `django_compose.migrations` and native Django migration commands |
-| REBAC projection and additive schema fragments | [`PermissionIntegration`](../src/angee/base/build.py) |
+| REBAC projection and additive schema fragments | [`PermissionIntegration`](../src/angee/iam/build.py) |
 | Source-local catalogue facts and resource retirement exemptions | [`CatalogueIntegration`](../src/angee/resources/build.py) |
 | Web manifest and Tailwind projection | [`WebIntegration`](../src/angee/web/build.py) |
 | Database readiness and optional app preparation hooks | `django_compose.provision` |

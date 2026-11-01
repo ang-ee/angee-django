@@ -30,10 +30,10 @@ from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.text import ModelLabelField
 from angee.base.implementations import ImplBase, resolve_all_impl_classes
 from angee.base.models.base import record_display_label
-from angee.base.permissions import effective_rebac_definition
 from angee.base.querysets import by_key, row_lock_paths
 from angee.base.signals import connect_for_models
 from angee.iam.identity import user_label
+from angee.iam.permissions import effective_rebac_definition
 
 if TYPE_CHECKING:
     pass

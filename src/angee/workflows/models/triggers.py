@@ -19,11 +19,11 @@ from rebac.models import active_relationship_model
 
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.text import DiagnosticTextField, ModelLabelField
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.merge_references import MergePolicy
-from angee.base.models.refs import RecordRefMixin
 from angee.graphql.mixins import ImplementationChoicesMixin
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.resources.mixins import ResourceLoadMixin
 from angee.workflows.managers import (
     TriggerEventManager,
@@ -88,7 +88,7 @@ class WorkflowDecision(Composable, extends="decisions.Decision"):
         return (*cast(Any, super()).requester_querysets(), runs, retained)
 
 
-class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, concrete=True):
+class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, ProtectedDataModel, concrete=True):
     """Disabled-by-default admission policy with source-scoped domain hooks.
 
     An ``extends`` donor implementing ``trigger_input`` or ``check_admission``
@@ -278,7 +278,7 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, AngeeDataModel, con
         rebac_resource_type = "workflows/trigger"
 
 
-class TriggerEvent(RecordRefMixin, AngeeDataModel, concrete=True):
+class TriggerEvent(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
     """One retained admission fact per trigger and concrete record reference."""
 
     merge_policy = MergePolicy.KEEP

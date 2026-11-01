@@ -40,9 +40,9 @@ from rebac.actors import is_sudo, to_subject_ref
 from rebac.database import write_alias
 
 from angee.base.hooks import resolve_hooks
-from angee.base.permissions import actor_user_id
 from angee.base.querysets import by_key
 from angee.base.serialization import canonical_json
+from angee.iam.permissions import actor_user_id
 from angee.parties.backends import AvatarReport, ParsedAddress, ParsedAddressbook, ParsedContact, ParsedPhoto
 from angee.parties.connections import ParsedConnection
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS

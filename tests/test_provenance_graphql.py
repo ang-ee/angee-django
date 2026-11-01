@@ -21,16 +21,16 @@ from rebac.backends import reset_backend
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
-from angee.base.identity import public_subject_ref
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.identity import public_id_of
+from angee.iam.identity import public_subject_ref
+from angee.iam.models.base import ProtectedDataModel
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.knowledge import schema as knowledge_schema
 from angee.messaging.testing.models import Channel
 from angee.parties import schema as parties_schema
 from angee.provenance import schema as provenance_schema
-from angee.provenance.context import changeset
+from angee.provenance.context import changeset, current_changeset
 from angee.provenance.evidence import EvidenceReference
 from angee.provenance.statements import (
     SourceKind,
@@ -136,6 +136,43 @@ def test_history_lists_a_records_changesets_newest_first_with_their_field_deltas
     assert _changes(rename) == {"title": ("Draft title", "Final title")}
     assert _changes(draft)["title"] == ("", "Draft title")
     assert _changes(draft)["vault"][1] == public_id_of(_vault)
+
+
+def test_incomplete_predecessor_keeps_history_page_and_independent_complete_delta() -> None:
+    owner = create_user("history-incomplete-predecessor")
+    _vault, page = _titled_page(owner)
+    with system_context(reason="tests.legacy.incomplete"):
+        Page.history.filter(id=page.pk, history_type="+").update(history_source_complete=False)
+    with actor_context(owner), changeset(fresh=True, change_reason="Complete later edit"):
+        page.title = "Later title"
+        page.save(update_fields=["title"])
+
+    later, rename, draft = _history(_schema(), owner, "knowledge.Page", page)["entries"]
+
+    assert _changes(later) == {"title": ("Final title", "Later title")}
+    assert rename["change_reason"] == "Rename"
+    assert rename["changes"] is None
+    assert rename["can_revert"] is False
+    assert draft["change_reason"] == "Draft"
+    assert draft["changes"] is None
+    assert draft["can_revert"] is False
+
+
+def test_incomplete_statement_values_keep_attribution_and_independent_field_changes() -> None:
+    person = create_user("history-incomplete-statement")
+    with actor_context(person), changeset(fresh=True, change_reason="Create party"):
+        party = Party.objects.create(display_name="Retained person")
+    statement_model = Party.statements.model
+    with system_context(reason="tests.legacy.incomplete_statement"):
+        statement_model.history.filter(subject_id=party.pk).update(history_source_complete=False)
+
+    created = _history(_schema(), person, "parties.Party", party)["entries"][-1]
+
+    assert created["change_reason"] == "Create party"
+    assert created["actor"] == str(public_subject_ref(to_subject_ref(person)))
+    assert created["changes"] is not None
+    assert created["statements"] is None
+    assert created["can_revert"] is False
 
 
 @pytest.mark.usefixtures("activity_catalog", "composed_permissions")
@@ -350,6 +387,34 @@ def test_history_carries_the_statements_a_changeset_asserted_for_the_record() ->
     assert identity[-1]["values"] == {"display_name": "Ada Lovelace"}
 
 
+def test_statement_last_writer_and_capture_remain_distinct_through_replay() -> None:
+    person = create_user("statement-last-writer-history")
+    with actor_context(person), changeset(fresh=True, change_reason="Create party"):
+        party = Party.objects.create(display_name="Retained person")
+    statement_model = Party.statements.model
+    with system_context(reason="tests.statement.last_writer.fixture"):
+        statement = statement_model._base_manager.get(subject=party, aspect="identity")
+        before = statement.confidence
+        with actor_context(person), changeset(fresh=True, change_reason="Adjust confidence"):
+            statement.confidence = 0.25
+            statement.save(update_fields=["confidence"])
+            receipt = current_changeset()
+        captured = statement.history.first()
+        assert statement.changeset_id == receipt.pk
+        assert captured.changeset_id == receipt.pk
+        assert captured.history_changeset_id == receipt.pk
+        retained = dict(statement.history.filter(history_id=captured.history_id).values().get())
+        with actor_context(person):
+            inverse = receipt.with_actor(person).revert()
+        statement.refresh_from_db()
+        assert statement.confidence == before
+        assert statement.changeset_id == inverse.pk
+        inverse_snapshot = statement.history.first()
+        assert inverse_snapshot.changeset_id == inverse.pk
+        assert inverse_snapshot.history_changeset_id == inverse.pk
+        assert statement.history.filter(history_id=captured.history_id).values().get() == retained
+
+
 def test_field_provenance_decorates_a_partys_stated_field_through_the_statement_read_gate() -> None:
     person = create_user("field-provenance-person")
     outsider = create_user("field-provenance-outsider")
@@ -523,11 +588,11 @@ def test_record_history_refuses_reverting_a_boundary_that_also_changes_another_r
 
 @isolate_apps()
 def test_generic_statement_source_uses_its_link_owner_without_an_integrate_stream() -> None:
-    class LocalLink(StatementLinkMixin, AngeeDataModel):
+    class LocalLink(StatementLinkMixin, ProtectedDataModel):
         sqid_prefix = "lnk_"
         name = models.CharField(max_length=80)
 
-        class Meta(AngeeDataModel.Meta):
+        class Meta(ProtectedDataModel.Meta):
             abstract = False
             app_label = "base"
 

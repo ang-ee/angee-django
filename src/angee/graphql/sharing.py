@@ -8,11 +8,11 @@ from django.db import transaction
 from rebac import PermissionDenied, SubjectRef, resolve_subjects
 from rebac.resources import model_for_resource_type
 
-from angee.base.identity import canonical_subject_ref, public_subject_ref
-from angee.base.models.base import AngeeModel
-from angee.base.permissions import DirectRecordAccess
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
 from angee.graphql.ids import PublicID
+from angee.iam.identity import canonical_subject_ref, public_subject_ref
+from angee.iam.models.base import ProtectedModel
+from angee.iam.permissions import DirectRecordAccess
 
 
 @strawberry.type
@@ -149,11 +149,11 @@ class RecordAccessMutation:
         return ActionResult(ok=True, message="Record access revoked.")
 
 
-def _shareable_model(target_type: str) -> type[AngeeModel]:
+def _shareable_model(target_type: str) -> type[ProtectedModel]:
     """Resolve one declared Angee record model from its REBAC resource type."""
 
     model = model_for_resource_type(target_type)
-    if model is None or not issubclass(model, AngeeModel):
+    if model is None or not issubclass(model, ProtectedModel):
         raise ValueError(f"Record target type {target_type!r} is not shareable.")
     return model
 
@@ -171,17 +171,17 @@ def _grant_subject(value: str) -> SubjectRef:
 
 def authorized_record_access(
     info: strawberry.Info,
-    model: type[AngeeModel],
+    model: type[ProtectedModel],
     target_id: PublicID,
-) -> tuple[AngeeModel, list[str]]:
+) -> tuple[ProtectedModel, list[str]]:
     """Resolve a target and independently authorize each declared share relation."""
 
     declaration = model.get_rebac_grantable()
     if not declaration:
         raise ValueError(f"{model._meta.label} declares no grantable relations.")
-    target: AngeeModel | None = None
+    target: ProtectedModel | None = None
     allowed: list[str] = []
-    candidates: dict[str, AngeeModel] = {}
+    candidates: dict[str, ProtectedModel] = {}
     for permission in dict.fromkeys(declaration.values()):
         try:
             candidates[permission] = authorized_permission_target(info, model, target_id, permission)

@@ -12,14 +12,16 @@ from rebac import ObjectRef
 
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
-from angee.base.models.ownership import OwnerMixin
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.ownership import OwnerMixin
 from angee.messaging.models import ThreadedModelMixin
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.workflows.triggers import RecordChangedOptIn, TriggerGrantTarget
 
 
-class Note(RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class Note(
+    RecordChangedOptIn, OwnerMixin, AuditMixin, ThreadedModelMixin, HistoryMixin, ProtectedDataModel, concrete=True
+):
     """A short note used to exercise backend composition.
 
     Metadata and body changes are recorded through native ``history``.

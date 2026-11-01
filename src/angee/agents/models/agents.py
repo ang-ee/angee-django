@@ -22,11 +22,11 @@ from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.locks import LockKey, record_lock_key
-from angee.base.models.base import AngeeDataModel
-from angee.base.models.ownership import OwnerMixin
 from angee.base.models.transitions import StateTransitions, save_state, transition
-from angee.base.permissions import actor_user_id
 from angee.iam.models import ServiceUserMixin
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.ownership import OwnerMixin
+from angee.iam.permissions import actor_user_id
 from angee.operator.daemon import OperatorInstanceKind, WorkspaceStatus
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -61,7 +61,7 @@ class AgentManager[AgentT: Agent](AngeeHistoryManager[AgentT]):
             return next((agent for agent in candidates if agent.can_chat), None)
 
 
-class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, ProtectedDataModel, concrete=True):
     """An agent definition (or, when ``is_template``, an agent template).
 
     The operator renders an agent into a workspace from ``workspace_template`` and a
@@ -70,7 +70,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Angee
     into the workspace, and the model's API credential into the service. ``service`` and
     ``workspace`` hold the operator instance names once rendered.
 
-    Ownership is transferable (:class:`~angee.base.models.ownership.OwnerMixin`). An agent
+    Ownership is transferable (:class:`~angee.iam.models.ownership.OwnerMixin`). An agent
     installed before any user exists loads without an owner until an
     administrator transfers it, and deleting the owner clears it, leaving the
     agent to platform administrators.

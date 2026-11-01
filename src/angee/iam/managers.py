@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from django.contrib.auth.base_user import BaseUserManager
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, router, transaction
+from django.db import IntegrityError, models, router, transaction
 from rebac import (
     ObjectRef,
     PermissionDenied,
@@ -21,15 +21,15 @@ from rebac import (
     system_context,
 )
 from rebac.errors import MissingActorError
+from rebac.managers import RebacManager
 from rebac.memberships import grant as grant_membership
 from rebac.resources import model_resource_type
 
-from angee.base.managers import AngeeManager
 from angee.base.models.identity import instance_from_public_id
 from angee.iam.choices import UserKind
 from angee.iam.events import person_created
 from angee.iam.exceptions import AccountExists, AmbiguousAccountEmail
-from angee.iam.querysets import UserQuerySet
+from angee.iam.querysets import ProtectedQuerySet, ProtectedUnscopedQuerySet, UserQuerySet
 
 if TYPE_CHECKING:
     from angee.iam.models import User
@@ -53,7 +53,25 @@ def bounded_limit(limit: int, *, maximum: int = VISIBLE_PEOPLE_MAX_LIMIT) -> int
     return max(1, min(int(limit), maximum))
 
 
-_UserManagerBase = AngeeManager.from_queryset(UserQuerySet)
+_ProtectedManagerBase = RebacManager.from_queryset(ProtectedQuerySet)
+
+
+class ProtectedManager[T: models.Model](_ProtectedManagerBase[T]):
+    """Manager retaining the native REBAC collection contract."""
+
+    model: type[T]
+
+
+_ProtectedUnscopedManagerBase = models.Manager.from_queryset(ProtectedUnscopedQuerySet)
+
+
+class ProtectedUnscopedManager[T: models.Model](_ProtectedUnscopedManagerBase[T]):
+    """Manager preserving unfiltered reads and native tracked writes."""
+
+    model: type[T]
+
+
+_UserManagerBase = ProtectedManager.from_queryset(UserQuerySet)
 
 
 class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
@@ -262,8 +280,13 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
                 candidate = f"{base[: maximum - len(suffix_text)]}{suffix_text}"
                 suffix += 1
             return manager.create_user(
-                candidate, email=email, password=None, first_name=first_name, last_name=last_name,
-                is_staff=False, is_superuser=False,
+                candidate,
+                email=email,
+                password=None,
+                first_name=first_name,
+                last_name=last_name,
+                is_staff=False,
+                is_superuser=False,
             )
 
     def ensure_service_user(self, *, username: str, name: str, user_id: Any = None) -> UserT:
@@ -278,7 +301,8 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
             rows = self.db_manager(using).get_queryset()
             if user_id is None:
                 user, created = rows.get_or_create(
-                    username=username, defaults=self.model.service_identity_values(username=username, name=name),
+                    username=username,
+                    defaults=self.model.service_identity_values(username=username, name=name),
                 )
                 if created:
                     return user
@@ -335,8 +359,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
             except self.model.DoesNotExist:
                 if not password:
                     raise ValueError(
-                        "bootstrap_admin needs ANGEE_BOOTSTRAP_ADMIN_PASSWORD "
-                        "or --password when creating a new admin."
+                        "bootstrap_admin needs ANGEE_BOOTSTRAP_ADMIN_PASSWORD or --password when creating a new admin."
                     )
                 user = manager.create_superuser(username=username, email=email, password=password)
                 created = True

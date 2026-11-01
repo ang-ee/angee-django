@@ -2,7 +2,7 @@
 
 from django.apps import apps
 
-from angee.base.models.roles import role_anchor
+from angee.iam.models.roles import role_anchor
 from angee.provenance.models.changesets import MACHINE_REASON as MACHINE_REASON
 from angee.provenance.models.changesets import Changeset as Changeset
 from angee.provenance.models.principals import Rule as Rule

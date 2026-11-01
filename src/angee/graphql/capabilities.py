@@ -19,7 +19,7 @@ from strawberry.extensions import FieldExtension
 from strawberry.types.field import StrawberryField
 from strawberry_django.fields.field import StrawberryDjangoField
 
-from angee.base.permissions import declared_rebac_definition, require_rebac_queryset
+from angee.iam.permissions import declared_rebac_definition, require_rebac_queryset
 
 _ACTOR = "_angee_permission_actor"
 

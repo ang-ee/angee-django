@@ -10,6 +10,17 @@ from typing import Any
 from django.conf import settings as django_settings
 
 SETTINGS = {
+    "COMPOSE_INTEGRATIONS:append": ["angee.iam.build.PermissionIntegration"],
+    "COMPOSE_FINGERPRINT_GLOBS:append": ["pyproject.toml", "**/*.zed"],
+    "COMPOSE_EXTERNAL_ARTIFACT_ROOTS:append": ["permissions"],
+    "ANGEE_REBAC_FORCE_OVERWRITE": False,
+    "REBAC_BACKEND": "local",
+    "REBAC_LOCAL_BACKEND_STORAGE": "registry",
+    "REBAC_STRICT_MODE": True,
+    "REBAC_LINT_BARE_PREFETCH": False,
+    "REBAC_FIELD_READ_MODE": "redact",
+    "REBAC_ALLOW_SUDO": True,
+    "REBAC_SUPERUSER_BYPASS": False,
     "COMPOSE_COMMAND_CONTEXT:append": ["angee.iam.context.command_context"],
     "AUTH_USER_MODEL": "iam.User",
     # IAM owns the platform-admin role used by its schema and bootstrap command.
@@ -33,17 +44,21 @@ SETTINGS = {
 """Django settings contributed when IAM is installed."""
 
 
-def settings(namespace: Mapping[str, Any]) -> dict[str, str]:
+def settings(namespace: Mapping[str, Any]) -> dict[str, Any]:
     """Isolate local projects' cookies; browsers share localhost cookies across ports.
 
     Production and explicit cookie names retain their host-defined behavior.
     The project path is stable across process reloads and source workspaces.
     """
 
+    result = {"REBAC_DEPTH_LIMIT": int(namespace.get(
+        "REBAC_DEPTH_LIMIT", 8 if namespace.get("DATABASES", {}).get("default", {}).get("ENGINE")
+        == "django.db.backends.sqlite3" else 16,
+    ))}
     if not namespace.get("DEBUG") or not namespace.get("BASE_DIR"):
-        return {}
+        return result
     suffix = hashlib.blake2s(str(namespace["BASE_DIR"]).encode(), digest_size=6).hexdigest()
-    return {
+    return result | {
         name: f"angee_{suffix}_{cookie}"
         for name, cookie in (("SESSION_COOKIE_NAME", "session"), ("CSRF_COOKIE_NAME", "csrf"))
         if name not in namespace

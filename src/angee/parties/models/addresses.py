@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING, Any, cast
 from django.db import models, transaction
 
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
-from angee.base.models.trash import TrashMixin
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.trash import ProtectedTrashMixin
 from angee.parties.fields import CountryCodeField
 from angee.parties.managers import (
     AddressManager,
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     pass
 
 
-class Address(TrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Address(ProtectedTrashMixin, PartyAspectMixin, HistoryMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """A physical or postal address of a party (the vCard ``ADR`` property).
 
     There is intentionally no ``(party, label)`` uniqueness — a party may carry

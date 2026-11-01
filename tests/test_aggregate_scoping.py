@@ -13,15 +13,15 @@ from rebac.schema import parse_zed
 from rebac.testing import install_schema
 from strawberry import auto
 
-from angee.base.models.base import AngeeDataModel
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.models.base import ProtectedDataModel
 from tests.conftest import SchemaAddon, execute_schema, result_data
 from tests.tables import model_tables
 
 
-class ScopedAggregateRecord(AngeeDataModel):
+class ScopedAggregateRecord(ProtectedDataModel):
     """A custom-public-identity record with two independent read grant paths."""
 
     sqid_prefix = "sar_"
@@ -29,7 +29,7 @@ class ScopedAggregateRecord(AngeeDataModel):
     amount = models.IntegerField()
     bucket = models.CharField(max_length=16)
 
-    class Meta(AngeeDataModel.Meta):
+    class Meta(ProtectedDataModel.Meta):
         abstract = False
         app_label = "tests"
         rebac_resource_type = "tests/scoped_aggregate_record"

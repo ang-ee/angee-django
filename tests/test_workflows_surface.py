@@ -15,9 +15,9 @@ from django.db.models.deletion import PROTECT
 from pydantic import BaseModel
 
 import angee.workflows as workflows
-from angee.base.models.derived import DerivedFrom
-from angee.base.models.refs import RecordRefMixin
 from angee.decisions.contracts import DecisionFact, DecisionRecordReference, DecisionRequest
+from angee.iam.models.derived import ProtectedDerivedFrom
+from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.provenance.evidence import EvidenceFact, EvidenceReference, FactAuthority, readable_records
 from angee.workflows.managers import PublishResult
 from angee.workflows.states import RunOrigin
@@ -255,8 +255,8 @@ def test_evidence_owner_surface() -> None:
     extraction_source = apps.get_model("extraction", "ExtractionSource")
     extraction = apps.get_model("extraction", "Extraction")
     decision = apps.get_model("decisions", "Decision")
-    assert issubclass(run_evidence, RecordRefMixin)
-    assert issubclass(extraction_source, DerivedFrom)
+    assert issubclass(run_evidence, ProtectedRecordRefMixin)
+    assert issubclass(extraction_source, ProtectedDerivedFrom)
     assert callable(extraction.fact_correction) and callable(extraction.fact_authority)
     assert issubclass(DecisionFact, EvidenceFact)
     assert issubclass(DecisionRecordReference, EvidenceReference)
@@ -264,7 +264,7 @@ def test_evidence_owner_surface() -> None:
     assert tuple(FactAuthority) == ("source", "correction", "unverified")
     assert callable(readable_records)
     concern = apps.get_model("decisions", "DecisionRecord")
-    assert issubclass(concern, DerivedFrom)
+    assert issubclass(concern, ProtectedDerivedFrom)
     assert decision._meta.get_field("records").related_model is concern
     assert next(index.fields for index in concern._meta.indexes if index.name == "decisions_record_target") == [
         "content_type",

@@ -14,25 +14,25 @@ from __future__ import annotations
 
 from django.db import models
 
-from angee.base.managers import AngeeManager
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
-from angee.base.querysets import AngeeQuerySet
+from angee.iam.managers import ProtectedManager
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.querysets import ProtectedQuerySet
 
 
-class HierNodeQuerySet(HierarchyQuerySet["HierNode"], AngeeQuerySet["HierNode"]):
+class HierNodeQuerySet(HierarchyQuerySet["HierNode"], ProtectedQuerySet["HierNode"]):
     """Angee queryset for the plain hierarchy demo, with the subtree scopes."""
 
 
-class ScopedHierNodeQuerySet(HierarchyQuerySet["ScopedHierNode"], AngeeQuerySet["ScopedHierNode"]):
+class ScopedHierNodeQuerySet(HierarchyQuerySet["ScopedHierNode"], ProtectedQuerySet["ScopedHierNode"]):
     """Angee queryset for the locally scoped hierarchy demo."""
 
 
-HierNodeManager = AngeeManager.from_queryset(HierNodeQuerySet)
-ScopedHierNodeManager = AngeeManager.from_queryset(ScopedHierNodeQuerySet)
+HierNodeManager = ProtectedManager.from_queryset(HierNodeQuerySet)
+ScopedHierNodeManager = ProtectedManager.from_queryset(ScopedHierNodeQuerySet)
 
 
-class HierNode(HierarchyMixin, AngeeDataModel):
+class HierNode(HierarchyMixin, ProtectedDataModel):
     """A plain materialized-path tree node for the hierarchy behaviour tests."""
 
     sqid_prefix = "hnd_"
@@ -50,7 +50,7 @@ class HierNode(HierarchyMixin, AngeeDataModel):
         ordering = ("path", "sqid")
 
 
-class PlainManagerHierNode(HierarchyMixin, AngeeDataModel):
+class PlainManagerHierNode(HierarchyMixin, ProtectedDataModel):
     """Hierarchy consumer retaining the native manager without tree read scopes."""
 
     sqid_prefix = "phn_"
@@ -64,7 +64,7 @@ class PlainManagerHierNode(HierarchyMixin, AngeeDataModel):
         ordering = ("path", "sqid")
 
 
-class ScopedHierNode(HierarchyMixin, AngeeDataModel):
+class ScopedHierNode(HierarchyMixin, ProtectedDataModel):
     """A locally scoped tree node for the cross-scope parent rejection test."""
 
     sqid_prefix = "shn_"

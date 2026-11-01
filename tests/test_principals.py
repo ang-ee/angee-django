@@ -11,7 +11,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import SubjectRef, system_context, to_subject_ref
 
 from angee.agents.testing.models import Agent
-from angee.base.permissions import actor_user_id
+from angee.iam.permissions import actor_user_id
 
 User = get_user_model()
 

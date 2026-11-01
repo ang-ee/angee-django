@@ -19,14 +19,10 @@ from rebac.resources import model_resource_type
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
 from angee.base.models import refs as record_refs
-from angee.base.models.refs import RecordRefMixin, delete_record_refs, record_edges_by_target
-from angee.base.refs import (
-    RecordRef,
-    ancestor_object_refs,
-    generic_pointer_model,
-    generic_pointer_target,
-    record_view_refs,
-)
+from angee.base.models.refs import delete_record_refs, record_edges_by_target
+from angee.base.refs import RecordRef, generic_pointer_model, generic_pointer_target, record_view_refs
+from angee.iam.models.refs import ProtectedRecordRefMixin
+from angee.iam.refs import ancestor_object_refs
 from angee.knowledge import schema as knowledge_schema
 from angee.projects.testing.models import Link, Task
 from angee.storage import schema as storage_schema
@@ -101,13 +97,11 @@ def test_record_ref_for_instance_projects_identity_and_rebac_type(record_ref_tab
         model_label="recordrefdemo.RecordRefTypedTarget",
         object_id=typed.pk,
         public_id=typed.public_id,
-        resource_type="tests/record-ref-target",
     )
     assert RecordRef.from_instance(plain) == RecordRef(
         model_label="recordrefdemo.RecordRefPlainTarget",
         object_id=plain.pk,
         public_id=plain.sqid,
-        resource_type="",
     )
 
 
@@ -133,7 +127,6 @@ def test_record_ref_mixin_projects_default_target_fields_with_cached_contenttype
         model_label="recordrefdemo.RecordRefTypedTarget",
         object_id=target.pk,
         public_id=target.public_id,
-        resource_type="tests/record-ref-target",
     )
     assert any("django_content_type" in query["sql"] for query in first_access.captured_queries)
 
@@ -155,7 +148,7 @@ def test_record_ref_mixin_keeps_resource_type_empty_for_untyped_targets(record_r
         object_id=target.pk,
     )
 
-    assert edge.record_ref.resource_type == ""
+    assert edge.record_resource_type == ""
 
 
 def test_record_ref_mixin_returns_empty_ref_for_unset_pointer(record_ref_tables: None) -> None:
@@ -164,7 +157,7 @@ def test_record_ref_mixin_returns_empty_ref_for_unset_pointer(record_ref_tables:
     del record_ref_tables
     edge = RecordRefNullableEdge.objects.create(content_type=None, object_id=42)
 
-    assert edge.record_ref == RecordRef(model_label="", object_id=42, public_id="", resource_type="")
+    assert edge.record_ref == RecordRef(model_label="", object_id=42, public_id="")
 
 
 def test_record_ref_mixin_returns_empty_ref_for_stale_contenttype(record_ref_tables: None) -> None:
@@ -174,7 +167,7 @@ def test_record_ref_mixin_returns_empty_ref_for_stale_contenttype(record_ref_tab
     stale_content_type = ContentType.objects.create(app_label="missing", model="recordrefghost")
     edge = RecordRefTargetEdge.objects.create(content_type=stale_content_type, object_id=43)
 
-    assert edge.record_ref == RecordRef(model_label="", object_id=43, public_id="", resource_type="")
+    assert edge.record_ref == RecordRef(model_label="", object_id=43, public_id="")
 
 
 def test_record_ref_mixin_uses_the_declared_subject_relation(record_ref_tables: None) -> None:
@@ -192,7 +185,6 @@ def test_record_ref_mixin_uses_the_declared_subject_relation(record_ref_tables: 
         model_label="recordrefdemo.RecordRefTypedTarget",
         object_id=target.pk,
         public_id=target.public_id,
-        resource_type="tests/record-ref-target",
     )
     assert edge.record_model_label == "recordrefdemo.RecordRefTypedTarget"
     assert edge.record_public_id == target.public_id
@@ -259,7 +251,7 @@ def test_record_ref_mixin_projects_each_source_addon_reference(
 def test_record_ref_mixin_rejects_a_missing_generic_foreign_key() -> None:
     """A missing relation is an invalid declaration, not an empty record pointer."""
 
-    class MissingReference(RecordRefMixin):
+    class MissingReference(ProtectedRecordRefMixin):
         """Invalid reference model without a generic relation."""
 
         class Meta:
@@ -277,7 +269,7 @@ def test_record_ref_mixin_rejects_a_missing_generic_foreign_key() -> None:
 def test_record_ref_mixin_rejects_ambiguous_generic_foreign_keys() -> None:
     """Two generic relations cannot silently choose which record to project."""
 
-    class AmbiguousReference(RecordRefMixin):
+    class AmbiguousReference(ProtectedRecordRefMixin):
         """Invalid reference model with two otherwise valid generic relations."""
 
         content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
@@ -309,7 +301,7 @@ def test_record_ref_mixin_accepts_its_declared_generic_pointer() -> None:
 def test_record_ref_mixin_rejects_unknown_target_delete_policy() -> None:
     """An edge must use one of Django's three supported target-delete policies."""
 
-    class InvalidPolicy(RecordRefMixin):
+    class InvalidPolicy(ProtectedRecordRefMixin):
         on_target_delete = models.DO_NOTHING
         content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
         object_id = models.PositiveBigIntegerField()
@@ -327,7 +319,7 @@ def test_record_ref_mixin_rejects_unknown_target_delete_policy() -> None:
 def test_record_ref_mixin_requires_nullable_columns_for_set_null() -> None:
     """SET_NULL cannot leave half of a generic pointer behind."""
 
-    class NonNullableSetNull(RecordRefMixin):
+    class NonNullableSetNull(ProtectedRecordRefMixin):
         on_target_delete = models.SET_NULL
         content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
         object_id = models.PositiveBigIntegerField()

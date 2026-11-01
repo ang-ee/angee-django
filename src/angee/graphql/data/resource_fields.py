@@ -19,10 +19,11 @@ from strawberry_django_hasura import SnakeNameConverter
 
 from angee.base.fields import ImplClassField
 from angee.base.fields.state import StatusDisplay
-from angee.base.models.trash import ARCHIVE_FLAG_FIELD, TRASH_FLAG_FIELD, ArchiveMixin, TrashMixin
+from angee.base.models.trash import ARCHIVE_FLAG_FIELD, TRASH_FLAG_FIELD, ArchiveMixin
 from angee.graphql.data import contracts as data_contract
 from angee.graphql.impl import model_impl_choices
 from angee.graphql.introspection import is_to_many_relation, surface_field_names, surface_name
+from angee.iam.models.trash import ProtectedTrashMixin
 from graphql import (
     GraphQLEnumType,
     GraphQLInputObjectType,
@@ -190,7 +191,8 @@ def is_archive_field(field: models.Field[Any, Any] | ForeignObjectRel | None) ->
 
 def is_trash_field(field: models.Field[Any, Any] | ForeignObjectRel | None) -> bool:
     """Recognize the trash capability on its declared model owner."""
-    return isinstance(field, models.Field) and field.name == TRASH_FLAG_FIELD and issubclass(field.model, TrashMixin)
+    return (isinstance(field, models.Field) and field.name == TRASH_FLAG_FIELD
+            and issubclass(field.model, ProtectedTrashMixin))
 
 
 #: Backend-owned display-field precedence, shared by record representation and

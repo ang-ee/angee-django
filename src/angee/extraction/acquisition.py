@@ -23,7 +23,6 @@ from pydantic_ai.settings import ThinkingLevel
 from rebac import to_subject_ref
 
 from angee.agents.backends import InferenceBackend
-from angee.base.permissions import actor_user_id
 from angee.base.validators import validate_value
 from angee.extraction.contracts import (
     DocumentPart,
@@ -33,6 +32,7 @@ from angee.extraction.contracts import (
 )
 from angee.extraction.enums import ExtractionSourceKind
 from angee.extraction.profiles import ExtractionProfile
+from angee.iam.permissions import actor_user_id
 from angee.storage.models import UploadState
 
 

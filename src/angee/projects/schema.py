@@ -597,7 +597,7 @@ class ProjectBindingType(AuthoredRefMixin, AngeeNode):
     def target_type(self) -> str:
         """Return the bound target's REBAC resource type."""
 
-        return cast(Any, self).record_ref.resource_type
+        return cast(Any, self).record_resource_type
 
     @strawberry.field
     def target_id(self) -> strawberry.ID:

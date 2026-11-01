@@ -19,7 +19,6 @@ from strawberry import auto
 from strawberry_django_aggregates.errors import GroupByFieldNotAllowed
 from strawberry_django_hasura import hasura_config
 
-from angee.base.models.base import AngeeDataModel
 from angee.graphql.data import metadata as metadata_module
 from angee.graphql.data.contracts import (
     DataAggregateMeasureMetadata,
@@ -46,6 +45,7 @@ from angee.graphql.data.resource_fields import final_input_only_resource_fields,
 from angee.graphql.ids import require_public_id
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.models.base import ProtectedDataModel
 from tests.conftest import (
     SchemaAddon,
     execute_schema,
@@ -54,7 +54,7 @@ from tests.conftest import (
 from tests.tables import model_tables
 
 
-class ResourceThing(AngeeDataModel):
+class ResourceThing(ProtectedDataModel):
     """Concrete test model used by resource metadata tests."""
 
     sqid_prefix = "rt_"
@@ -73,7 +73,7 @@ def resource_thing_country_choices() -> tuple[tuple[str, tuple[tuple[str, str], 
     return (("Europe", (("DE", "Germany"), ("NL", "Netherlands"))),)
 
 
-class ResourceChoiceThing(AngeeDataModel):
+class ResourceChoiceThing(ProtectedDataModel):
     """Concrete test model carrying ordinary callable Django choices."""
 
     sqid_prefix = "rct_"
@@ -84,7 +84,7 @@ class ResourceChoiceThing(AngeeDataModel):
         app_label = "tests"
 
 
-class ResourceBlankChoiceThing(AngeeDataModel):
+class ResourceBlankChoiceThing(ProtectedDataModel):
     """Nullable flat string choices with an explicit blank storage value."""
 
     sqid_prefix = "rbct_"
@@ -97,7 +97,7 @@ class ResourceBlankChoiceThing(AngeeDataModel):
         app_label = "tests"
 
 
-class ResourceParent(AngeeDataModel):
+class ResourceParent(ProtectedDataModel):
     """Concrete parent model used by relation group-axis tests."""
 
     sqid_prefix = "rp_"
@@ -110,7 +110,7 @@ class ResourceParent(AngeeDataModel):
         app_label = "tests"
 
 
-class ResourceChild(AngeeDataModel):
+class ResourceChild(ProtectedDataModel):
     """Concrete child model used by relation group-axis tests."""
 
     sqid_prefix = "rc_"
@@ -125,7 +125,7 @@ class ResourceChild(AngeeDataModel):
         app_label = "tests"
 
 
-class ResourceGrandchild(AngeeDataModel):
+class ResourceGrandchild(ProtectedDataModel):
     """Concrete grandchild model used by nested relation group-axis tests."""
 
     sqid_prefix = "rg_"
@@ -153,7 +153,7 @@ class ResourceSubtitleChildType:
     parent: ResourceSubtitleParentType
 
 
-class ResourceTimedThing(AngeeDataModel):
+class ResourceTimedThing(ProtectedDataModel):
     """Concrete model with a field class not supported by resource metadata."""
 
     sqid_prefix = "rtt_"
@@ -179,7 +179,7 @@ class ResourceFlaggedTimestampThing(models.Model):
         app_label = "tests"
 
 
-class HasuraResourceThing(AngeeDataModel):
+class HasuraResourceThing(ProtectedDataModel):
     """Concrete model used by Hasura resource metadata bridge tests."""
 
     sqid_prefix = "hrt_"
@@ -195,7 +195,7 @@ class HasuraResourceThing(AngeeDataModel):
         rebac_resource_type = "tests/hasura_resource_thing"
 
 
-class HasuraJsonResourceThing(AngeeDataModel):
+class HasuraJsonResourceThing(ProtectedDataModel):
     """Concrete model used by JSON-path aggregate bridge tests."""
 
     sqid_prefix = "hjrt_"
@@ -210,7 +210,7 @@ class HasuraJsonResourceThing(AngeeDataModel):
         rebac_resource_type = "tests/hasura_json_resource_thing"
 
 
-class MeasureOpsThing(AngeeDataModel):
+class MeasureOpsThing(ProtectedDataModel):
     """Concrete model exercising every curated measure-op field family."""
 
     sqid_prefix = "mot_"

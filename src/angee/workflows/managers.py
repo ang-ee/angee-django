@@ -42,13 +42,13 @@ from rebac.relationships import delete_relationship, write_relationships
 from angee.base.exceptions import exception_text
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.text import ModelLabelField
-from angee.base.managers import AngeeManager
 from angee.base.models.identity import public_id_of
 from angee.base.models.locks import StaleRevisionError, require_revision
-from angee.base.permissions import actor_user_id
 from angee.base.querysets import query_batch_size, row_lock_paths
 from angee.base.serialization import canonical_json_sha256
 from angee.iam.identity import group_subject_type, user_label
+from angee.iam.managers import ProtectedManager
+from angee.iam.permissions import actor_user_id
 from angee.jobs.enqueue import enqueue_task
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.evidence import EvidenceReference, readable_records
@@ -482,13 +482,13 @@ class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
             return workflow
 
 
-StepRecordManager = AngeeManager.from_queryset(StepRecordQuerySet)
+StepRecordManager = ProtectedManager.from_queryset(StepRecordQuerySet)
 
 
-StepAttemptManager = AngeeManager.from_queryset(StepAttemptQuerySet)
+StepAttemptManager = ProtectedManager.from_queryset(StepAttemptQuerySet)
 
 
-_WorkflowRunManagerBase = AngeeManager.from_queryset(WorkflowRunQuerySet)
+_WorkflowRunManagerBase = ProtectedManager.from_queryset(WorkflowRunQuerySet)
 
 
 class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
@@ -884,7 +884,7 @@ class StepWatchManager[T: StepWatch](AngeeHistoryManager[T]):
             logger.exception("Workflow watch capture failed.")
 
 
-_StepRunManagerBase = AngeeManager.from_queryset(StepRunQuerySet)
+_StepRunManagerBase = ProtectedManager.from_queryset(StepRunQuerySet)
 
 
 class StepRunManager[T: StepRun](_StepRunManagerBase[T]):
@@ -929,7 +929,7 @@ class StepRunManager[T: StepRun](_StepRunManagerBase[T]):
                 return current.with_actor(actor)
 
 
-_TriggerEventManagerBase = AngeeManager.from_queryset(TriggerEventQuerySet)
+_TriggerEventManagerBase = ProtectedManager.from_queryset(TriggerEventQuerySet)
 
 
 class TriggerEventManager[T: TriggerEvent](_TriggerEventManagerBase[T]):
@@ -989,7 +989,7 @@ class TriggerEventManager[T: TriggerEvent](_TriggerEventManagerBase[T]):
                 logger.exception("Workflow trigger capture failed.")
 
 
-_TriggerManagerBase = AngeeManager.from_queryset(TriggerQuerySet)
+_TriggerManagerBase = ProtectedManager.from_queryset(TriggerQuerySet)
 
 
 class TriggerManager[T: Trigger](_TriggerManagerBase[T]):

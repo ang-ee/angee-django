@@ -19,12 +19,12 @@ from rebac import database_context, system_context
 from angee.base.fields.identity import SqidField
 from angee.base.fields.text import ModelLabelField
 from angee.base.implementations import resolve_impl_class
-from angee.base.managers import AngeeManager
-from angee.base.models.base import AngeeModel
 from angee.base.models.identity import SqidMixin, public_id_of
-from angee.base.querysets import AngeeQuerySet
 from angee.base.schemas.forms import relation_positions
 from angee.base.serialization import canonical_json_sha256
+from angee.iam.managers import ProtectedManager
+from angee.iam.models.base import ProtectedModel
+from angee.iam.querysets import ProtectedQuerySet
 from angee.resources.entries import (
     GRANT_KIND,
     ROW_KIND,
@@ -54,7 +54,7 @@ if TYPE_CHECKING:
     from angee.resources.models import Resource
 
 
-class ResourceQuerySet[LedgerT: Resource](AngeeQuerySet[LedgerT]):
+class ResourceQuerySet[LedgerT: Resource](ProtectedQuerySet[LedgerT]):
     """Reusable filtered reads over resource-ledger rows."""
 
     def counts_by_addon(self) -> dict[str, int]:
@@ -139,7 +139,7 @@ def seeded_record_merge_guard(record: models.Model) -> str | None:
     return f"{record} is loaded from {ledger.source_addon} resources, which would recreate it; keep it instead."
 
 
-_ResourceManagerBase = AngeeManager.from_queryset(ResourceQuerySet)
+_ResourceManagerBase = ProtectedManager.from_queryset(ResourceQuerySet)
 
 
 class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
@@ -317,7 +317,7 @@ class ResourceManager[LedgerT: Resource](_ResourceManagerBase[LedgerT]):
             addon_aliases=self._addon_aliases(selected_addons),
         )
 
-    def load_xref[M: AngeeModel](
+    def load_xref[M: ProtectedModel](
         self,
         handle: str,
         *,

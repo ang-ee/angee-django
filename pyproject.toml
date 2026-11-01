@@ -235,7 +235,7 @@ exclude = [
 select = ["E", "F", "I"]
 
 [tool.mypy]
-plugins = ["angee.base.typing", "angee.provenance.typing"]
+plugins = ["angee.iam.typing", "angee.provenance.typing"]
 python_version = "3.14"
 cache_dir = ".mypy_cache"
 explicit_package_bases = true

@@ -9,7 +9,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from rebac import database_context, system_context
 
-from angee.base.managers import AngeeManager
+from angee.iam.managers import ProtectedManager
 from angee.integrate_vcs.registry import VcsOutputManager
 from angee.platform.discovery import (
     available_addons,
@@ -20,7 +20,7 @@ from angee.platform.discovery import (
 from angee.platform_integrate_vcs.catalog import source_descriptors
 
 
-class AddonCatalogManager(AngeeManager, VcsOutputManager):
+class AddonCatalogManager(ProtectedManager, VcsOutputManager):
     """Owns the reconcile of marketplace rows from an addon ``Source``."""
 
     @staticmethod

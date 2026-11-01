@@ -168,7 +168,7 @@ The reference example is `examples/src/example/notes` (steps, rows, trigger, tes
 - Applying a verdict's actions yourself in `continue_with`: `apply_proposals` already ran in the body transaction (`decision_steps.py:81-90`).
 - Reading a record in a body through `Model.objects` or `system_context`: `ctx.load` / `ctx.subject` under the run actor (`context.py:87`).
 - `enabled: true` on a trigger row or a trigger enabled by code: `TriggerResource` clears activation (`resources.py:121`); enablement is operator state ([Glossary: Trigger source grant](../../../../../docs/glossary.md#backend)).
-- A caveated subject in a grant target's zed: `angee.E024` (`src/angee/base/checks.py:37`); field-backed conditional relations.
+- A caveated subject in a grant target's zed: `angee.E024` (`src/angee/iam/checks.py:37`); field-backed conditional relations.
 
 ## Verify
 

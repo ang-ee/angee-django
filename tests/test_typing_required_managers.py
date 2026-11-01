@@ -16,7 +16,7 @@ from mypy.nodes import GDEF, Block, ClassDef, SymbolTable, SymbolTableNode, Type
 from rebac.managers import TrackedManager
 from rebac.mixins import INJECTED_BASE_MANAGER, RebacModelBase
 
-from angee.base.typing import BaseCompositionContext
+from angee.iam.typing import IAMCompositionContext
 
 
 @pytest.mark.parametrize("name", ("_default_manager", "_base_manager"))
@@ -67,7 +67,7 @@ def test_required_parent_manager_preserves_explicit_native_selection(
         assert isinstance(Fallback._meta.base_manager, TrackedManager)
         assert Fallback._meta.base_manager.name == INJECTED_BASE_MANAGER
         assert Fallback._meta.default_manager.auto_created
-        context = object.__new__(BaseCompositionContext)
+        context = object.__new__(IAMCompositionContext)
         context.required_ancestors = {Fallback: Parent, Explicit: Parent, ExplicitMeta: Parent}
         context.composed = {f"{Parent.__module__}.{Parent.__qualname__}": Parent}
 
@@ -100,18 +100,18 @@ def test_checked_parent_keeps_manager_methods_and_model_rows(tmp_path: Path) -> 
     (app / "models.py").write_text("""from django.db import models
 from django_compose.models import Composable
 from rebac.mixins import INJECTED_BASE_MANAGER, RebacModelBase
-from angee.base.models.base import AngeeModel
-from angee.base.managers import AngeeUnscopedManager
-class ParentManager[T: models.Model](AngeeUnscopedManager[T]):
+from angee.iam.models.base import ProtectedModel
+from angee.iam.managers import ProtectedUnscopedManager
+class ParentManager[T: models.Model](ProtectedUnscopedManager[T]):
     def parent_method(self) -> str:
         return 'parent'
-class OtherManager[T: models.Model](AngeeUnscopedManager[T]):
+class OtherManager[T: models.Model](ProtectedUnscopedManager[T]):
     def other_method(self) -> int:
         return 1
-class Parent(AngeeModel, concrete=True):
+class Parent(ProtectedModel, concrete=True):
     title = models.CharField(max_length=30)
     objects = ParentManager()
-    class Meta(AngeeModel.Meta):
+    class Meta(ProtectedModel.Meta):
         abstract = True
         base_manager_name = 'objects'
 class Capability(Composable, metaclass=RebacModelBase, demands='manager_contract.Parent'):
@@ -130,7 +130,7 @@ class Explicit(Capability, inherits='manager_contract.Parent'):
         "from pathlib import Path\n"
         "SECRET_KEY = 'manager-typing'\n"
         "INSTALLED_APPS = ['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', "
-        "'angee.base', 'manager_contract']\n"
+        "'angee.base', 'angee.iam', 'manager_contract']\n"
         "DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}}\n"
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
         f"COMPOSE_OUTPUT_DIR = Path({str(tmp_path / 'manager_runtime')!r})\n"
@@ -139,7 +139,7 @@ class Explicit(Capability, inherits='manager_contract.Parent'):
     )
     config = tmp_path / "mypy.ini"
     config.write_text(
-        "[mypy]\nplugins = angee.base.typing\n"
+        "[mypy]\nplugins = angee.iam.typing\n"
         f"mypy_path = {tmp_path},{root},{root / 'src'}\n"
         f"cache_dir = {tmp_path / 'cache'}\n"
         "ignore_missing_imports = True\n"

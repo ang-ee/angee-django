@@ -9,7 +9,7 @@ from django.db import models
 from django.db.models.functions import Coalesce, NullIf
 from rebac.relation_loading import relation_actor
 
-from angee.base.permissions import actor_user_id
+from angee.iam.permissions import actor_user_id
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 
 if TYPE_CHECKING:

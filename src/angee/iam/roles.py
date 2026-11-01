@@ -45,9 +45,8 @@ from rebac.schema import (
     relation_is_writable,
 )
 
-from angee.base.identity import canonical_subject_ref, public_subject_ref
 from angee.base.models.identity import public_id_for
-from angee.iam.identity import group_subject_type, user_label
+from angee.iam.identity import canonical_subject_ref, group_subject_type, public_subject_ref, user_label
 
 IAM_OVERVIEW_DEFAULT_PEEK_LIMIT = 6
 IAM_OVERVIEW_MAX_PEEK_LIMIT = 100

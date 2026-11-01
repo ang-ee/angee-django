@@ -567,7 +567,7 @@ This project runs **fail-closed**: `REBAC_STRICT_MODE=True` and
 data through REBAC, never a queryset bypass.
 
 - **The local backend is the only supported REBAC backend.** Base
-  [autoconfig](../../src/angee/base/autoconfig.py) selects it because field- and
+  [autoconfig](../../src/angee/iam/autoconfig.py) selects it because field- and
   const-backed relations, `authenticated`, and SQL read scopes are evaluated
   against the Django rows themselves, which no remote tuple store can see. Do not
   mirror column facts into tuples to keep another backend viable.
@@ -695,7 +695,7 @@ data through REBAC, never a queryset bypass.
   per-test throttles; IAM composes `django-axes` at the `authenticate(request=...)`
   backend/signal path, so the password GraphQL mutation stays a thin caller.
 - **Person accounts have one factory.** Actor-requested accounts go through
-  [`UserManager.create_person`](../../src/angee/iam/models.py), whose `create`
+  [`UserManager.create_person`](../../src/angee/iam/managers.py), whose `create`
   permission owns admission; ingress without an actor uses
   `create_person_as_system` with a named reason, once its channel owner has
   required channel `write` and account `create` to enable that ingress.
@@ -779,7 +779,7 @@ data through REBAC, never a queryset bypass.
   `read` and stores no wildcard tuple; [`tags/tag`](../../src/angee/tags/permissions.zed)
   is the reference. `authenticated` also admits non-user subjects.
 - **Caveated relations are refused in framework fragments.**
-  [`angee.E024`](../../src/angee/base/checks.py) rejects caveated subjects in every
+  [`angee.E024`](../../src/angee/iam/checks.py) rejects caveated subjects in every
   effective schema. Actor-scoped querysets carry no caveat context. Express
   row-dependent conditions as live field-backed relations.
 - User-requested reads and writes retain their actor scope. Reserve
@@ -849,7 +849,7 @@ data through REBAC, never a queryset bypass.
   `permissions.zed` declares the *seam* (for example, the in-repo spaces addon
   extends `messaging/thread`); a consumer addon that needs its own role adds it
   from its own **`permissions.extends.zed`** (sibling to `permissions.zed`),
-  owned by `angee.base.build`. The `tests/extcontrib` fixture keeps the
+  owned by `angee.iam.build`. The `tests/extcontrib` fixture keeps the
   mechanical merge covered. Each
   `definition <target> { … }` block in the fragment names an existing definition
   and lists the relations it contributes and the permission arms it unions in
@@ -864,7 +864,7 @@ data through REBAC, never a queryset bypass.
   belong to one introducing addon; references pass native schema validation.
   A new field gate, `read__<field>` or `write__<field>`, additionally requires a
   concrete column that the same package's donor contributes to the target model;
-  no other package may extend that declaration. [`angee.base.build.field_gate_owners`](../../src/angee/base/build.py)
+  no other package may extend that declaration. [`angee.iam.build.field_gate_owners`](../../src/angee/iam/build.py)
   interprets the compiler's neutral donor-field provenance for REBAC.
   Functional drift is caught by `rebac sync` (content hash) and `angee check`
   (the emitted file); the contribution is revisioned by the contributing
@@ -903,7 +903,7 @@ data through REBAC, never a queryset bypass.
 - `REBAC_DEPTH_LIMIT` bounds compiled SQL nesting and inherited permission hops.
   On SQLite (default 8), access inherited through more than eight parent hops is
   denied: scoped lists omit those rows; point checks raise `PermissionDepthExceeded`.
-  Deeper hierarchies need PostgreSQL (default 16). [Base autoconfig](../../src/angee/base/autoconfig.py)
+  Deeper hierarchies need PostgreSQL (default 16). [IAM autoconfig](../../src/angee/iam/autoconfig.py)
   owns the defaults; explicit environment values take precedence over project settings.
 - Native `rebac --skip-checks sync --prune-stale --yes` retires removed
   package-managed declarations and their stored relationships in the same policy
@@ -1038,7 +1038,7 @@ linkage failure rolls the account back), while a foreign write that only
 enriches parties treats that work as best effort — deferred with
 `transaction.on_commit`, logged on failure, never blocking the foreign write.
 IAM stores the canonical person email:
-[`UserManager.normalize_email`](../../src/angee/iam/models.py) owns the rule
+[`UserManager.normalize_email`](../../src/angee/iam/managers.py) owns the rule
 and every save that writes `email` applies it, so lookups and the person-email
 unique constraint compare the stored column without SQL transforms.
 
@@ -1136,13 +1136,13 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   independent of `OwnerMixin` and never implies transferable user authority.
 - **Delegated field gates:** a definition that delegates to a parent re-declares
   the parent's field gates through that relation, as enforced for ownership by
-  [the base checks](../../src/angee/base/checks.py). Re-save a fresh, unreloaded
+  [the IAM checks](../../src/angee/iam/checks.py). Re-save a fresh, unreloaded
   instance with `update_fields`: without a loaded snapshot, a full save writes
   every column, including `owner`, and must pass every applicable field gate.
 - **Owning containers:** a container composing `ItemOwnershipMixin` can own its
   newly inserted items, which then reach access through it; items name it with
   `owner_container` (`angee.E025`) and ask
-  [`OwnerMixin.container_owns_items()`](../../src/angee/base/models/ownership.py) for its policy.
+  [`OwnerMixin.container_owns_items()`](../../src/angee/iam/models/ownership.py) for its policy.
   Changing the flag affects later inserts only.
 - **Write-once fields:** `ImmutableFieldsMixin` rejects changes to declared
   fields; only an authorized owning verb grants the next save an allowance.
@@ -1185,10 +1185,15 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   re-declare the column. The field is NULL-safe by design, because a sqid can be
   selected through a nullable join where `django_sqids.SqidsField` crashes on a
   NULL (REBAC `// rebac:field=` arrows run over nullable FKs).
-- **`AngeeModel` managers/querysets must keep the canon.** If a model customizes
-  `objects`, its queryset class must derive from `AngeeQuerySet`; otherwise
-  shared methods such as public-id lookup, actor scoping, and elevated reads drift
-  between models.
+- **Neutral and protected model contracts have distinct owners.**
+  [`AngeeModel`/`AngeeDataModel`](../../src/angee/base/models/base.py),
+  `AngeeQuerySet` and `AngeeManager` use ordinary Django semantics without an actor.
+  IAM contributes native protection through the compiler's abstract model and
+  QuerySet contracts. Protected authored declarations use
+  [`ProtectedModel`/`ProtectedDataModel`](../../src/angee/iam/models/base.py) and
+  [`ProtectedQuerySet`](../../src/angee/iam/querysets.py), preserving native REBAC
+  field and row checks. Keep custom manager factories on their existing owner;
+  QuerySet contributions extend named slots instead of replacing those factories.
 - **MTI down-casts use `angee.base.lineage.concrete_child`.** The parent-link
   accessor and any query prefetch identify the child; callers supply their
   actor-scoped queryset when that lookup is permission-sensitive. A parent
@@ -1436,7 +1441,7 @@ open fresh evaluator scopes for authorization and change-feed reads.
 ### GraphQL actor and write contracts
 
 - **View-as is a server-side, read-only HTTP preview.** `X-Angee-View-As`
-  carries the target user's public id. [IAM admission](../../src/angee/iam/models.py)
+  carries the target user's public id. [IAM admission](../../src/angee/iam/models/__init__.py)
   checks the real actor's `view_as` permission and the target's eligibility;
   [ViewAs](../../src/angee/graphql/view_as.py) binds both `request.user` and
   the ambient actor to that target. Mutations and HTTP subscriptions fail with
@@ -1668,12 +1673,14 @@ Direct grants and ownership transfers acquire their model's cooperative
 `lock_for_record_access` hook before fresh subject admission. An addon with a
 domain lock order acquires its prerequisite rows there and delegates; validators
 stay usable independently of a write transaction. See
-[`AngeeModel`](../../src/angee/base/models/base.py) and the
+[`ProtectedModel`](../../src/angee/iam/models/base.py) and the
 [Proposals owners](../../src/angee/proposals/models.py).
 
 [`RecordRefMixin`](../../src/angee/base/models/refs.py)
-owns the generic pointer's model contract, accepted targets, merge policy and
-deletion policy. [`angee.base.refs`](../../src/angee/base/refs.py) owns the underlying pointer
+owns the generic pointer's neutral Django contract, merge policy and deletion
+policy. It accepts saved Django records without a target allowlist; IAM's
+[`ProtectedRecordRefMixin`](../../src/angee/iam/models/refs.py) owns any native
+schema-derived admission on protected edges. [`angee.base.refs`](../../src/angee/base/refs.py) owns the underlying pointer
 identities and public reference values. Its public projection uses the minimal
 [`model identity contract`](../../src/angee/base/models/identity.py), without
 importing the composed model toolkit.
@@ -1702,7 +1709,7 @@ filtered by `generic_target(record).lookups(Edge, "target")`. Move an edge by
 deleting and recreating it; the library refuses a retargeting save. A type
 without a relation is refused under an actor, and an edge that accepts only
 some types derives that set from the schema through
-`RecordRefMixin.declared_target_models` (`declares_target` for one type)
+`ProtectedRecordRefMixin.declared_target_models` (`declares_target` for one type)
 instead of listing it again. Resource metadata projects the inverse as
 `recordEdges`, so a surface listing one edge applies only to the record types
 that can carry it; a resolver does not re-decide that per request. Each
@@ -1735,7 +1742,7 @@ accepts grants only on its lineage head; GraphQL must not infer that rule from
 Workflow fields. A `validate_record_access_subject()` override that keeps one
 user out of a record's holders raises the foundation-owned
 [`RecordAccessSubjectRefused`](../../src/angee/base/exceptions.py) when
-[`subject_reaches_user`](../../src/angee/base/permissions.py), the one predicate for
+[`subject_reaches_user`](../../src/angee/iam/permissions.py), the one predicate for
 whether a subject reference resolves to, or contains, that user, answers true;
 it never decodes wildcards or usersets itself.
 

@@ -17,7 +17,7 @@ def installed_field_owners(app_configs: Iterable[AppConfig]) -> dict[str, dict[s
     # Pytest imports plugins before Django populates each worker's app registry.
     from django_compose.model_composition import ModelComposition
 
-    from angee.base.build import field_gate_owners
+    from angee.iam.build import field_gate_owners
 
     return field_gate_owners(ModelComposition.discover(app_configs))
 
@@ -25,7 +25,7 @@ def installed_field_owners(app_configs: Iterable[AppConfig]) -> dict[str, dict[s
 def emit_permissions(app_configs: Iterable[AppConfig], runtime: Path, *, sources: Mapping[Path, str]) -> None:
     """Bind temporary merged inputs through the native AppConfig schema seam."""
 
-    from angee.base.permissions import bind_rebac_schema, declared_schema_path, merged_schema_relpath
+    from angee.iam.permissions import bind_rebac_schema, declared_schema_path, merged_schema_relpath
 
     for relative, content in sorted(sources.items()):
         atomic_write(runtime / relative, content.encode("utf-8"))
@@ -40,7 +40,7 @@ def composed_permissions(composed_tables: None, restore_composed_permission_bind
     """Bind installed contributions and let native sync persist their schema."""
 
     # Permission compilation reads Django models; fixture execution follows setup.
-    from angee.base.build import extension_source_map
+    from angee.iam.build import extension_source_map
 
     configs = list(apps.get_app_configs())
     sources = extension_source_map(configs, field_owners=installed_field_owners(configs))

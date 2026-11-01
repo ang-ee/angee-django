@@ -24,12 +24,12 @@ from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.optimizer import OptimizerStore
 from strawberry_django.queryset import run_type_get_queryset
 
-from angee.base.models.refs import RecordRefMixin
-from angee.base.permissions import require_rebac_queryset
 from angee.base.refs import RecordRef
 from angee.graphql.ids import PublicID, optional_public_id, to_public_id
 from angee.graphql.introspection import FieldPathError, fields_for_path, is_to_one_relation
 from angee.graphql.node import AngeeNode
+from angee.iam.models.refs import ProtectedRecordRefMixin
+from angee.iam.permissions import require_rebac_queryset
 
 
 @strawberry.type
@@ -100,8 +100,8 @@ class _RecordReferenceAccess(models.Expression):
     contains_subquery = True
 
     def __init__(self, queryset: models.QuerySet[Any]) -> None:
-        if not issubclass(queryset.model, RecordRefMixin):
-            raise ImproperlyConfigured("Record-reference access requires RecordRefMixin.")
+        if not issubclass(queryset.model, ProtectedRecordRefMixin):
+            raise ImproperlyConfigured("Record-reference access requires ProtectedRecordRefMixin.")
         reference = queryset.model.record_ref_field()
         key_field = queryset.model._meta.get_field(reference.fk_field)
         if not isinstance(key_field, models.Field):

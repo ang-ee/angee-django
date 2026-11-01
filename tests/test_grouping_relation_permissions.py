@@ -29,7 +29,6 @@ from rebac.schema import parse_zed
 from rebac.testing import install_schema
 from strawberry import auto
 
-from angee.base.models.base import AngeeDataModel
 from angee.graphql.capabilities import permissions_field
 from angee.graphql.data.hasura import (
     _declared_aliases,
@@ -40,6 +39,7 @@ from angee.graphql.data.hasura import (
 from angee.graphql.node import AngeeNode
 from angee.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.models.base import ProtectedDataModel
 from tests.conftest import (
     SchemaAddon,
     execute_schema,
@@ -57,7 +57,7 @@ def clear_declared_aliases():
     _declared_aliases.cache_clear()
 
 
-class GroupLabel(AngeeDataModel):
+class GroupLabel(ProtectedDataModel):
     """Protected target whose scalar fields must follow its own read scope."""
 
     sqid_prefix = "grl_"
@@ -65,13 +65,13 @@ class GroupLabel(AngeeDataModel):
     display_name = models.CharField(max_length=64)
     rank = models.IntegerField()
 
-    class Meta(AngeeDataModel.Meta):
+    class Meta(ProtectedDataModel.Meta):
         abstract = False
         app_label = "scopedemo"
         rebac_resource_type = "tests/group_label"
 
 
-class GroupMiddle(AngeeDataModel):
+class GroupMiddle(ProtectedDataModel):
     """Readable first hop whose protected target can still be unreadable."""
 
     sqid_prefix = "grm_"
@@ -81,7 +81,7 @@ class GroupMiddle(AngeeDataModel):
         on_delete=models.CASCADE,
     )
 
-    class Meta(AngeeDataModel.Meta):
+    class Meta(ProtectedDataModel.Meta):
         abstract = False
         app_label = "scopedemo"
         rebac_resource_type = "tests/group_middle"
@@ -113,7 +113,7 @@ def test_plain_django_aggregate_source_retains_native_grouping(transactional_db)
         ]
 
 
-class GroupParent(AngeeDataModel):
+class GroupParent(ProtectedDataModel):
     """Readable parent spanning direct, scalar, nested, and plain axes."""
 
     sqid_prefix = "grp_"
@@ -150,7 +150,7 @@ class GroupParent(AngeeDataModel):
         related_name="+",
     )
 
-    class Meta(AngeeDataModel.Meta):
+    class Meta(ProtectedDataModel.Meta):
         abstract = False
         app_label = "scopedemo"
         rebac_resource_type = "tests/group_parent"

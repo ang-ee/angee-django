@@ -24,11 +24,11 @@ from rebac.backends import backend
 from rebac.resources import model_resource_type
 
 from angee.base.fields import DiagnosticTextField
-from angee.base.managers import AngeeManager
-from angee.base.permissions import actor_user_id, require_rebac_queryset
 from angee.base.querysets import MergeableQuerySet
 from angee.base.refs import generic_pointer_model
 from angee.base.serialization import strip_null_bytes
+from angee.iam.managers import ProtectedManager
+from angee.iam.permissions import actor_user_id, require_rebac_queryset
 from angee.messaging.querysets import (
     ChannelQuerySet as ChannelQuerySet,
 )
@@ -62,7 +62,7 @@ if TYPE_CHECKING:
 from angee.messaging.managers.threads import _record_attachment, _record_thread_title
 from angee.messaging.querysets import _MESSAGE_ORDER, _resolve_user_id
 
-_ThreadFollowerManagerBase = AngeeManager.from_queryset(ThreadFollowerQuerySet)
+_ThreadFollowerManagerBase = ProtectedManager.from_queryset(ThreadFollowerQuerySet)
 
 
 class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerManagerBase[ThreadFollowerT]):
@@ -584,7 +584,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         return deleted
 
 
-_ThreadNotificationManagerBase = AngeeManager.from_queryset(ThreadNotificationQuerySet)
+_ThreadNotificationManagerBase = ProtectedManager.from_queryset(ThreadNotificationQuerySet)
 
 
 class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](

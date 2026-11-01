@@ -16,10 +16,10 @@ from strawberry import auto
 from strawberry.types import get_object_definition
 from strawberry_django.optimizer import DjangoOptimizerExtension
 
-from angee.base.models.base import AngeeDataModel
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, HasuraLines, hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.models.base import ProtectedDataModel
 from tests.conftest import create_platform_admin, create_user, execute_schema, make_addon, result_data
 from tests.linesdemo.models import Document, DocumentLine, Tag
 from tests.scopedemo.models import SharedDoc
@@ -125,13 +125,13 @@ class StampedLineType(AngeeNode):
 def test_write_relation_declaration_supplies_public_id_inputs(filterable: bool) -> None:
     """A relation's write owner also declares its public scalar, even without a filter."""
 
-    class Referenced(AngeeDataModel):
+    class Referenced(ProtectedDataModel):
         key = models.IntegerField(primary_key=True)
 
         class Meta:
             app_label = "write_contract"
 
-    class Reference(AngeeDataModel):
+    class Reference(ProtectedDataModel):
         product = models.ForeignKey(Referenced, on_delete=models.CASCADE)
 
         class Meta:

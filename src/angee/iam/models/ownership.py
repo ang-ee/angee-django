@@ -21,9 +21,9 @@ from rebac.resources import model_resource_type
 from rebac.schema import AllowedSubject, FieldBinding, PermArrow, PermRef
 
 from angee.base.models.audit import AuditMixin, retained_set_null
-from angee.base.models.base import AngeeModel
 from angee.base.models.persistence import PersistenceMixin
-from angee.base.permissions import actor_user_id, declared_rebac_definition, instance_actor
+from angee.iam.models.base import ProtectedModel
+from angee.iam.permissions import actor_user_id, declared_rebac_definition, instance_actor
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
@@ -275,8 +275,8 @@ class OwnerMixin(AuditMixin, PersistenceMixin):
         if actor is None:
             raise PermissionDenied("Ownership transfer requires an acting user.")
         using = router.db_for_write(type(self), instance=self)
-        if not isinstance(self, AngeeModel):
-            raise ImproperlyConfigured("Ownership transfer requires AngeeModel's record-access contract.")
+        if not isinstance(self, ProtectedModel):
+            raise ImproperlyConfigured("Ownership transfer requires ProtectedModel's record-access contract.")
 
         with transaction.atomic(using=using):
             locked = self.lock_for_record_access(using=using)
@@ -288,8 +288,12 @@ class OwnerMixin(AuditMixin, PersistenceMixin):
                     raise ImproperlyConfigured("The owner field must be declared by OwnerMixin.")
                 parent_pk = owner_model._meta.pk
                 assert parent_pk is not None
-                target = owner_model.system_queryset().using(using).get(
-                    pk=parent_pk.value_from_object(locked),
+                target = (
+                    owner_model.system_queryset()
+                    .using(using)
+                    .get(
+                        pk=parent_pk.value_from_object(locked),
+                    )
                 )
             if not isinstance(target, RebacMixin):
                 raise ImproperlyConfigured("Ownership transfer requires a model composing RebacMixin.")

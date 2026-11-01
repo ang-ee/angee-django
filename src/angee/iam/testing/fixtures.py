@@ -10,7 +10,7 @@ from django.core.management import call_command
 from django.db.models.signals import post_migrate
 from pytest_django.plugin import DjangoDbBlocker
 
-from angee.base.testing.permissions import composed_permissions as composed_permissions
+from angee.iam.testing.permissions import composed_permissions as composed_permissions
 
 
 @pytest.fixture(scope="session")
@@ -46,7 +46,7 @@ def django_db_setup(
 @pytest.fixture(autouse=True)
 def restore_composed_permission_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
     """Restore generated permission paths and source annotations after each test."""
-    from angee.base.permissions import _SCHEMA_BINDING
+    from angee.iam.permissions import _SCHEMA_BINDING
 
     for config in apps.get_app_configs():
         for key in ("rebac_schema", _SCHEMA_BINDING):

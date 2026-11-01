@@ -6,14 +6,14 @@ from typing import ClassVar, cast
 
 from django.db import models
 
-from angee.base.models.base import AngeeDataModel
+from angee.iam.models.base import ProtectedDataModel
 from angee.provenance.statements import (
     SourceKind,
     StatementSourceMixin,
 )
 
 
-class StatementPrincipal(StatementSourceMixin, AngeeDataModel):
+class StatementPrincipal(StatementSourceMixin, ProtectedDataModel):
     """Persisted statement-source principal keyed by its declared identity."""
 
     key = models.CharField(max_length=255, unique=True)

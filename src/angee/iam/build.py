@@ -68,7 +68,7 @@ from rebac.resources import model_resource_type
 from rebac.schema import Definition, Permission, Schema, parse_zed, validate_schema
 from rebac.schema import render_zed as render_schema
 
-from angee.base.permissions import declared_grants, declared_schema_path, merged_schema_relpath
+from angee.iam.permissions import declared_grants, declared_schema_path, merged_schema_relpath
 
 if TYPE_CHECKING:
     from django_compose.model_composition import ModelComposition

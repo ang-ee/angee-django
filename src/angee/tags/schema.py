@@ -68,7 +68,7 @@ class TagAssignmentType(AngeeNode):
     def target_type(self) -> str:
         """Return the target row's REBAC resource type (e.g. ``parties/party``)."""
 
-        return cast(Any, self).record_ref.resource_type
+        return cast(Any, self).record_resource_type
 
     @strawberry_django.field(only=["content_type_id", "object_id"])
     def target_id(self) -> PublicID:

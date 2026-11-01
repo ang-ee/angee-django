@@ -12,7 +12,7 @@ from rebac import (
     system_context,
 )
 
-from angee.base.models.base import AngeeDataModel
+from angee.iam.models.base import ProtectedDataModel
 from angee.knowledge.models.pages import MarkdownPage, Page, parse_wikilinks
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -103,7 +103,7 @@ class LinkManager[LinkT: Link](_LinkManagerBase[LinkT]):
             self.db_manager(using).rebuild_many(markdown._base_manager.using(using).filter(affected).distinct())
 
 
-class Link(AngeeDataModel, concrete=True):
+class Link(ProtectedDataModel, concrete=True):
     """Wikilink edge from one page to another, derived from the source body.
 
     Indexer-authored (see :class:`LinkManager`) — no user-facing mutation,

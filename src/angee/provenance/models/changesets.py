@@ -35,13 +35,13 @@ from rebac.resources import model_resource_type
 from rebac.schema.walker import subject_allowed_by_relation
 
 from angee.base.fields.state import StateField
-from angee.base.managers import AngeeUnscopedManager
 from angee.base.models.identity import SqidMixin
 from angee.base.models.merge_references import MergePolicy
-from angee.base.models.refs import RecordRefMixin
-from angee.base.permissions import actor_user_id, instance_actor
 from angee.base.serialization import json_safe
 from angee.base.signals import bulk_updated
+from angee.iam.managers import ProtectedUnscopedManager
+from angee.iam.models.refs import ProtectedRecordRefMixin
+from angee.iam.permissions import actor_user_id, instance_actor
 from angee.provenance.context import is_current_changeset
 from angee.provenance.contrib.angee.exceptions import ChangesetRequired
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
@@ -52,7 +52,7 @@ from angee.provenance.querysets import model_history
 MACHINE_REASON = re.compile(r"[a-z0-9_]+(?:\.[a-z0-9_]+)+")
 
 
-class Changeset(AbstractChangeset, Composable, RecordRefMixin, SqidMixin, RebacMixin, concrete=True):
+class Changeset(AbstractChangeset, Composable, ProtectedRecordRefMixin, SqidMixin, RebacMixin, concrete=True):
     """One logical write's attribution and touched-model index; never historized.
 
     ``actor_ref`` stores the native SubjectRef wire representation in the historical
@@ -66,7 +66,7 @@ class Changeset(AbstractChangeset, Composable, RecordRefMixin, SqidMixin, RebacM
     sqid_prefix = "cst_"
     merge_policy: ClassVar[MergePolicy] = MergePolicy.KEEP
     objects = ChangesetManager()
-    _angee_base = AngeeUnscopedManager()
+    _angee_base = ProtectedUnscopedManager()
 
     class Action(models.TextChoices):
         CREATE = "C", "Create"

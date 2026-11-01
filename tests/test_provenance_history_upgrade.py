@@ -1,4 +1,4 @@
-"""Retained pre-adoption history remains readable without a schema/format migration."""
+"""Explicit capture-metadata migration retains verified legacy source state."""
 
 import os
 import subprocess
@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 
-def test_old_colocated_history_bytes_and_nondefault_replay_survive_upgrade(tmp_path):
+def test_old_colocated_history_migrates_capture_metadata_and_preserves_replay(tmp_path):
     # Two interpreters share the same real database. The first uses the old
     # simple-history field bases and serializer; the second uses the adapter.
     script = r'''
@@ -18,7 +18,7 @@ from django.conf import settings
 mode, root = sys.argv[1], Path(sys.argv[2])
 settings.configure(
     INSTALLED_APPS=['django.contrib.contenttypes', 'django.contrib.auth', 'rebac',
-                    'simple_history', 'angee.base', 'angee.provenance', 'angee.provenance.testing'],
+                    'simple_history', 'angee.base', 'angee.iam', 'angee.provenance', 'angee.provenance.testing'],
     SECRET_KEY='retained-history-upgrade', AUTH_USER_MODEL='auth.User',
     PROVENANCE_CHANGESET_MODEL='provenance.Changeset', ANGEE_MERGE_GUARDS=[],
     PROVENANCE_POLICY='angee.provenance.contrib.angee.policy.AngeePolicy',
@@ -38,19 +38,20 @@ from simple_history.utils import get_history_manager_for_model
 from rebac import SubjectRef, actor_context, database_context, system_context
 from rebac.models import SchemaDefinition, SchemaPermission
 from rebac.models.schema_write import schema_changes
-from angee.base.models.base import AngeeDataModel
+from angee.iam.models.base import ProtectedDataModel
 from angee.provenance.context import changeset, current_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
+from django_provenance.base import ChangesetAttribution as LegacyAttribution
 from angee.provenance.history import _ChangesetHistory
 from angee.base.serialization import canonical_json, json_safe
 from angee.provenance.testing.models import Changeset
 
 # This is the pre-adoption historical field declaration, not a copy of capture
 # or replay. The new phase uses the canonical native capture/replay adapter.
-row_bases = (AngeeDataModel,) if mode == 'old' else (HistoryMixin, AngeeDataModel)
+row_bases = (ProtectedDataModel,) if mode == 'old' else (HistoryMixin, ProtectedDataModel)
 class Row(*row_bases):
     title = models.CharField(max_length=30)
-    history = (HistoricalRecords(bases=(_ChangesetHistory,), use_base_model_db=True, excluded_fields=["sqid"])
+    history = (HistoricalRecords(bases=(LegacyAttribution,), use_base_model_db=True, excluded_fields=["sqid"])
                if mode == 'old' else ModelHistory())
     class Meta:
         app_label = 'provenance'
@@ -107,24 +108,37 @@ if mode == 'old':
             connections['selected'].cursor(), history_model._meta.db_table)]}))
 else:
     retained = json.loads((root / 'receipt.json').read_text())
+    # Native schema editing preserves the old capture column, then records the
+    # verified fact that Row had no colliding source changeset field.
+    import copy
+    capture = history_model._meta.get_field('history_changeset')
+    legacy_capture = copy.copy(capture)
+    legacy_capture.set_attributes_from_name('changeset')
+    with connections['selected'].schema_editor() as editor:
+        editor.alter_field(history_model, legacy_capture, capture)
+        editor.add_field(history_model, history_model._meta.get_field('history_source_complete'))
+    history_model.objects.using('selected').update(history_source_complete=True)
     columns = [column.name for column in connections['selected'].introspection.get_table_description(
         connections['selected'].cursor(), history_model._meta.db_table)]
-    assert columns == retained['columns']
-    assert field_state == retained['fields']
-    # Native model state can use the unchanged legacy table, without add-field,
-    # migration defaults or a backfill whose source identity would be ambiguous.
     assert set(columns) == {field.column for field in history_model._meta.local_concrete_fields}
+    assert set(columns) == ((set(retained['columns']) - {'changeset_id'})
+                            | {'history_changeset_id', 'history_source_complete'})
     edited = Changeset._base_manager.using('selected').get(pk=retained['pk'])
     with system_context(reason='tests.legacy.export'), database_context('selected'):
-        assert edited.document() == (root / 'legacy.json').read_text()
+        legacy = json.loads((root / 'legacy.json').read_text())
+        adopted = json.loads(edited.document())
+        for value in legacy['history']['provenance.row']:
+            value['history_changeset'] = value.pop('changeset')
+            value['history_source_complete'] = True
+        assert adopted == legacy
     edited.refresh_from_db(using='selected')
-    assert edited.hash == retained['digest']
+    assert hashlib.sha256((root / 'legacy.json').read_bytes()).hexdigest() == retained['digest']
     with actor_context(actor), database_context('default'):
         inverse = edited.revert()
     assert inverse._state.db == 'selected'
     row = Row._base_manager.using('selected').get(pk=1)
     assert row.title == 'before'
-    assert get_history_manager_for_model(Row).using('selected').filter(changeset_id=inverse.pk).exists()
+    assert get_history_manager_for_model(Row).using('selected').filter(history_changeset_id=inverse.pk).exists()
 '''
     environment = {key: value for key, value in os.environ.items() if key != 'DJANGO_SETTINGS_MODULE'}
     for mode in ('old', 'new'):

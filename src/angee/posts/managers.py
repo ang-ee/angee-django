@@ -9,14 +9,14 @@ from zoneinfo import ZoneInfo
 from django.db import models, transaction
 from django.utils import timezone
 
-from angee.base.managers import AngeeManager
-from angee.base.querysets import AngeeQuerySet
+from angee.iam.managers import ProtectedManager
+from angee.iam.querysets import ProtectedQuerySet
 
 if TYPE_CHECKING:
     from angee.posts.models import FeedFollow, PostMetrics, Quota
 
 
-class FeedFollowQuerySet[FollowT: FeedFollow](AngeeQuerySet[FollowT]):
+class FeedFollowQuerySet[FollowT: FeedFollow](ProtectedQuerySet[FollowT]):
     """REBAC-scoped read scopes for the following/timeline edge."""
 
     def active(self) -> Self:
@@ -30,7 +30,7 @@ class FeedFollowQuerySet[FollowT: FeedFollow](AngeeQuerySet[FollowT]):
         return self.filter(feed=feed)
 
 
-_FeedFollowManagerBase = AngeeManager.from_queryset(FeedFollowQuerySet)
+_FeedFollowManagerBase = ProtectedManager.from_queryset(FeedFollowQuerySet)
 
 
 class FeedFollowManager[FollowT: FeedFollow](_FeedFollowManagerBase[FollowT]):
@@ -58,7 +58,7 @@ class FeedFollowManager[FollowT: FeedFollow](_FeedFollowManagerBase[FollowT]):
         )
 
 
-class PostMetricsManager[MetricsT: PostMetrics](AngeeManager[MetricsT]):
+class PostMetricsManager[MetricsT: PostMetrics](ProtectedManager[MetricsT]):
     """Owns the one-to-one engagement-counter upsert for a message."""
 
     def reply_counts(self, *, channel: Any, platform: str, external_ids: list[str]) -> dict[str, int]:
@@ -96,7 +96,7 @@ class PostMetricsManager[MetricsT: PostMetrics](AngeeManager[MetricsT]):
         return row
 
 
-class QuotaManager[QuotaT: Quota](AngeeManager[QuotaT]):
+class QuotaManager[QuotaT: Quota](ProtectedManager[QuotaT]):
     """Owns the API-unit ledger: opening a period and atomic consumption.
 
     A backend calls :meth:`consume` before spending platform API units; enforcement is

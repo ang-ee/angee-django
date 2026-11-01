@@ -134,7 +134,7 @@ catalogue, the subject model and the seams; runtime and vendor addons own their 
 - An agent-local FastMCP server or tool table: the addon `mcp_tools.py` registrar (`src/angee/mcp/server.py:92`).
 - Running a turn inside `transaction.atomic` or retrying a crashed turn: `run_next_turn` refuses, no delivery reclaims (`sessions.py:1-6,60`).
 - Creating agents with `Agent.objects.create` in seeds or commands: a resource row (`AgentResource`, `resources.py:11`).
-- A caveated subject in the agents zed: `angee.E024` (`src/angee/base/checks.py:37`); field-backed conditional relations.
+- A caveated subject in the agents zed: `angee.E024` (`src/angee/iam/checks.py:37`); field-backed conditional relations.
 
 ## Verify
 

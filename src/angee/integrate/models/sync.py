@@ -25,10 +25,11 @@ from rebac.database import write_alias
 
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel, record_display_label
+from angee.base.models.base import record_display_label
 from angee.base.models.merge_references import MergePolicy, references
-from angee.base.models.refs import RecordRefMixin
 from angee.base.serialization import canonical_json
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.integrate.managers import (
     RecordLinkManager,
     SyncStreamManager,
@@ -56,7 +57,7 @@ from angee.provenance.statements import (
 )
 
 
-class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
+class SyncStream(SyncStateMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """An epoch's opaque progress and adapter-owned policy for one partition."""
 
     sqid_prefix = "sst_"
@@ -201,7 +202,8 @@ class SyncStream(SyncStateMixin, AuditMixin, AngeeDataModel, concrete=True):
 
 
 class RecordLink(
-    RecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, StatementLinkMixin, AngeeDataModel, concrete=True
+    ProtectedRecordRefMixin, SyncStateMixin, AuditMixin, HistoryMixin, StatementLinkMixin, ProtectedDataModel,
+    concrete=True
 ):
     """A remote identity retaining observations, application facts and run state.
 

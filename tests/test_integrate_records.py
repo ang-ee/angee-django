@@ -12,7 +12,7 @@ from django.db import models, transaction
 from django.utils import timezone
 from rebac import actor_context, system_context
 
-from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet
+from angee.iam.querysets import ProtectedQuerySet, ProtectedUnscopedQuerySet
 from angee.integrate.impl import BridgeImpl
 from angee.integrate.states import (
     ConflictKeep,
@@ -57,9 +57,9 @@ def test_record_managers_preserve_native_locking_querysets(replica: Any) -> None
             assert model._default_manager is model.objects
             for manager in (model.objects, model._base_manager):
                 queryset = manager.filter(pk=row.pk).order_by("pk").lock_if_supported()
-                expected = AngeeQuerySet
+                expected = ProtectedQuerySet
                 if manager is model._base_manager:
-                    expected = AngeeUnscopedQuerySet
+                    expected = ProtectedUnscopedQuerySet
                 assert isinstance(queryset, expected)
                 assert queryset.query.select_for_update is True
                 assert list(queryset) == [row]
@@ -67,7 +67,7 @@ def test_record_managers_preserve_native_locking_querysets(replica: Any) -> None
                 assert manager.from_public_id(str(row.sqid)) == row
         for manager, row in ((replica.links, link),):
             queryset = manager.filter(pk=row.pk).lock_if_supported()
-            assert isinstance(queryset, AngeeQuerySet)
+            assert isinstance(queryset, ProtectedQuerySet)
             assert list(queryset) == [row]
 
 

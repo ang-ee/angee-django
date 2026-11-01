@@ -251,7 +251,7 @@ def test_native_integrate_producer_contract(tmp_path: Path):
     (addon / "models.py").write_text(
         "from django.db import models\n"
         "from angee.base.fields.implementation import ImplClassField\n"
-        "from angee.base.models.base import AngeeDataModel\n"
+        "from angee.iam.models.base import ProtectedDataModel\n"
         "from angee.provenance.contrib.angee.history import HistoryMixin\n"
         "from angee.integrate.models import Bridge\n"
         "from tests.test_integrate_routing import RoutingBackend\n"
@@ -259,7 +259,7 @@ def test_native_integrate_producer_contract(tmp_path: Path):
         "    connection_impl = ImplClassField(RoutingBackend, default='routing')\n"
         "    live_impl_field = 'connection_impl'\n"
         "    class Meta:\n        abstract = True\n        rebac_resource_type = 'routing/bridge'\n"
-        "class ImportedRecord(HistoryMixin, AngeeDataModel, concrete=True):\n"
+        "class ImportedRecord(HistoryMixin, ProtectedDataModel, concrete=True):\n"
         "    key = models.CharField(max_length=80, unique=True)\n"
         "    value = models.IntegerField(default=0)\n"
         "    class Meta:\n        abstract = True\n        rebac_resource_type = 'routing/imported'\n"

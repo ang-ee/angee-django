@@ -22,10 +22,11 @@ from rebac.resources import model_resource_type
 
 from angee.base.fields.implementation import ImplClassField
 from angee.base.lineage import concrete_child_accessor, concrete_child_models
-from angee.base.models.base import AngeeDataModel
-from angee.base.models.ownership import OwnerMixin
-from angee.base.models.trash import TrashMixin, TrashQuerySet
-from angee.base.permissions import actor_user_id
+from angee.base.models.trash import TrashQuerySet
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.ownership import OwnerMixin
+from angee.iam.models.trash import ProtectedTrashMixin
+from angee.iam.permissions import actor_user_id
 from angee.knowledge.exceptions import UnsupportedPageKindError
 from angee.knowledge.retrieval import MAX_SEARCH_PAGE_SIZE, RetrievalBackend
 from angee.provenance.context import changeset, changeset_model, require_changeset, write_group
@@ -221,7 +222,7 @@ class VaultManager[VaultT: Vault](_VaultManagerBase[VaultT]):
         return vault.with_actor(actor)
 
 
-class Vault(OwnerMixin, TrashMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class Vault(OwnerMixin, ProtectedTrashMixin, HistoryMixin, ProtectedDataModel, concrete=True):
     """Top-level page container; the permission and namespace boundary.
 
     Trashing a vault withholds its pages while retaining their independent trash
