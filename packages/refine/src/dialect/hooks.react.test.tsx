@@ -1,242 +1,109 @@
 // @vitest-environment happy-dom
-
-import { act, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { keys } from "@refinedev/core";
+import { afterEach, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
 
 import { ActiveDataProviderNameProvider } from "./data-provider-context";
 import { OperationDocumentsProvider } from "../operation-documents";
+import { createRefineTestProviders } from "../testing";
 import { useActionMutation } from "./hooks";
 import type { ActionOutcome } from "../operations";
 
-const mutationMock = vi.hoisted(() => ({
-  calls: [] as Array<{
-    dataProviderName: string;
-    values: Record<string, unknown>;
-  }>,
-  response: { ok: true, message: "Done" } as Record<string, unknown>,
-  invalidate: vi.fn(async () => {}),
-  invalidateQueries: vi.fn(async (_options: unknown) => {}),
-}));
+const { Provider, createClient, clearClients } = createRefineTestProviders();
+afterEach(() => { cleanup(); clearClients(); });
+const ACTION_DOCUMENT = "mutation Probe($id: String) { run_probe(id: $id) { ok message id } }";
 
-vi.mock("@tanstack/react-query", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
-  useQueryClient: () => ({
-    cancelQueries: vi.fn(async () => undefined),
-    invalidateQueries: mutationMock.invalidateQueries,
-  }),
-}));
-
-vi.mock("@refinedev/core", () => ({
-  useCustom: () => ({ query: {}, result: {} }),
-  useCustomMutation: () => ({
-    mutateAsync: vi.fn(
-      async (payload: {
-        dataProviderName: string;
-        values: Record<string, unknown>;
-      }) => {
-        mutationMock.calls.push({
-          dataProviderName: payload.dataProviderName,
-          values: payload.values,
-        });
-        return { data: { run_probe: mutationMock.response } };
-      },
-    ),
-    mutation: { isPending: false, error: null },
-  }),
-  useInvalidate: () => mutationMock.invalidate,
-}));
-
-beforeEach(() => {
-  mutationMock.calls = [];
-  mutationMock.response = { ok: true, message: "Done" };
-  mutationMock.invalidate.mockClear();
-  mutationMock.invalidateQueries.mockClear();
-});
-
-const ACTION_DOCUMENT = "mutation Probe { run_probe(id: $id) { ok message } }";
-
-function ConsoleProvider({ children }: { children: ReactNode }) {
-  // A resource page's DataProviderContext pins the active schema; the action
-  // documents are keyed by that same real schema name (never a "default" alias).
-  return (
-    <ActiveDataProviderNameProvider name="console">
-      <OperationDocumentsProvider
-        documents={{ console: { actions: { run_probe: ACTION_DOCUMENT } } }}
-      >
-        {children}
-      </OperationDocumentsProvider>
-    </ActiveDataProviderNameProvider>
-  );
+function fixture(response: Record<string, unknown> = { ok: true, message: "Done" }, active = true) {
+  const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  const custom = vi.fn(async () => ({ data: { run_probe: response } }));
+  const wrapper = ({ children }: { children: ReactNode }) => {
+    const documents = <OperationDocumentsProvider documents={{ console: { actions: { run_probe: ACTION_DOCUMENT } } }}>{children}</OperationDocumentsProvider>;
+    return <Provider queryClient={client} dataProvider={{ custom }} providerNames={["console"]}>
+      {active ? <ActiveDataProviderNameProvider name="console">{documents}</ActiveDataProviderNameProvider> : documents}
+    </Provider>;
+  };
+  const seed = (queryKey: readonly unknown[], model?: string) => {
+    client.setQueryData(queryKey, { retained: true });
+    const query = client.getQueryCache().find({ queryKey, exact: true })!;
+    if (model) query.setOptions({ ...query.options, meta: { angeeModels: [model] } });
+    return query;
+  };
+  return { custom, client, wrapper, seed };
 }
 
-describe("useActionMutation", () => {
-  test("resolves the action document and data provider from the active schema", async () => {
-    const { result } = renderHook(() => useActionMutation("run_probe"), {
-      wrapper: ConsoleProvider,
-    });
+test("actions resolve the document/provider from the active schema and return the created record", async () => {
+  const f = fixture({ ok: true, message: "Created.", id: "tr_9" });
+  const { result } = renderHook(() => useActionMutation("run_probe"), { wrapper: f.wrapper });
+  let outcome: ActionOutcome | undefined;
+  await act(async () => { outcome = await result.current[0]("rec_1"); });
+  expect(outcome).toEqual({ ok: true, message: "Created.", id: "tr_9" });
+  expect(f.custom).toHaveBeenCalledWith(expect.objectContaining({ payload: { id: "rec_1" }, meta: expect.objectContaining({ gqlMutation: ACTION_DOCUMENT }) }));
+});
 
-    let outcome: ActionOutcome | undefined;
-    await act(async () => {
-      outcome = await result.current[0]("rec_1");
-    });
+test.each(["round", null])("actions bind only their declared target argument: %s", async (idArgument) => {
+  const f = fixture();
+  const { result } = renderHook(() => useActionMutation("run_probe", { idArgument }), { wrapper: f.wrapper });
+  await act(async () => { await result.current[0]("round_1", { proposals: ["proposal_2"] }); });
+  expect(f.custom).toHaveBeenCalledWith(expect.objectContaining({ payload: idArgument === null
+    ? { proposals: ["proposal_2"] } : { round: "round_1", proposals: ["proposal_2"] } }));
+});
 
-    // The in-band outcome flows back, proving the "console" action document
-    // resolved — the pre-fix "default" lookup would throw (no "default" alias in
-    // the operation-documents map), the Post-button asymmetry.
-    expect(outcome).toEqual({ ok: true, message: "Done" });
-    // The mutation runs against the active schema's provider, not the "default"
-    // alias — matching the fallback the authored hooks already use.
-    expect(mutationMock.calls).toEqual([
-      { dataProviderName: "console", values: { id: "rec_1" } },
-    ]);
-  });
+test("explicit provider options resolve an action without ambient schema context", async () => {
+  const f = fixture(undefined, false);
+  const { result } = renderHook(() => useActionMutation("run_probe", { dataProviderName: "console" }), { wrapper: f.wrapper });
+  await act(async () => { await result.current[0]("rec_2"); });
+  expect(f.custom).toHaveBeenCalledWith(expect.objectContaining({ payload: { id: "rec_2" } }));
+});
 
-  test.each(["round", null])("binds only the declared target argument: %s", async (idArgument) => {
-    const { result } = renderHook(() => useActionMutation("run_probe", { idArgument }), { wrapper: ConsoleProvider });
-    await act(async () => { await result.current[0]("round_1", { proposals: ["proposal_2"] }); });
-    expect(mutationMock.calls[0]?.values).toEqual(idArgument === null
-      ? { proposals: ["proposal_2"] }
-      : { round: "round_1", proposals: ["proposal_2"] });
-  });
+test.each([false, true])("recorded domain failure effects preserve invalidateOnFailure=%s", async (invalidateOnFailure) => {
+  const f = fixture({ ok: false, message: "Not allowed.", validation_errors: { __all__: ["Permission denied."] } });
+  const resource = f.seed(keys().data("console").resource("records").action("list").get());
+  const authored = f.seed(["authored-agent"], "agents.Agent");
+  const untouched = f.seed(["another-model"], "messaging.Thread");
+  const acceptResponse = vi.fn();
+  const { result } = renderHook(() => useActionMutation("run_probe", {
+    invalidates: [{ dataProviderName: "console", resource: "records", invalidates: ["list"] }],
+    invalidateModels: ["agents.Agent"], invalidateOnFailure, acceptResponse,
+  }), { wrapper: f.wrapper });
+  let outcome: ActionOutcome | undefined;
+  await act(async () => { outcome = await result.current[0]("rec_1"); });
+  expect(outcome).toEqual({ ok: false, message: "Not allowed.", validationErrors: { __all__: ["Permission denied."] } });
+  expect(resource.state.isInvalidated).toBe(invalidateOnFailure);
+  expect(authored.state.isInvalidated).toBe(invalidateOnFailure);
+  expect(untouched.state.isInvalidated).toBe(false);
+  expect(acceptResponse).not.toHaveBeenCalled();
+});
 
-  test("forwards a required scalar argument beside the target id", async () => {
-    const { result } = renderHook(() => useActionMutation("run_probe"), {
-      wrapper: ConsoleProvider,
-    });
+test("successful actions reconcile native and declared authored interests", async () => {
+  const f = fixture();
+  const native = f.seed(keys().data("console").resource("records").action("list").get());
+  const authored = f.seed(["channel"], "messaging.Channel");
+  const unrelated = f.seed(["thread"], "messaging.Thread");
+  const { result } = renderHook(() => useActionMutation("run_probe", {
+    invalidates: [{ dataProviderName: "console", resource: "records", invalidates: ["list"] }],
+    invalidateModels: ["messaging.Channel"],
+  }), { wrapper: f.wrapper });
+  await act(async () => { await result.current[0]("chn_1"); });
+  expect(native.state.isInvalidated).toBe(true);
+  expect(authored.state.isInvalidated).toBe(true);
+  expect(unrelated.state.isInvalidated).toBe(false);
+});
 
-    await act(async () => {
-      await result.current[0]("chn_1", { password: "one-use-secret" });
-    });
-
-    expect(mutationMock.calls).toEqual([
-      {
-        dataProviderName: "console",
-        values: { id: "chn_1", password: "one-use-secret" },
-      },
-    ]);
-  });
-
-  test("resolves a domain failure in-band and skips invalidation", async () => {
-    mutationMock.response = {
-      ok: false,
-      message: "Not allowed.",
-      validation_errors: { __all__: ["You are not allowed to modify this record."] },
-    };
-    const { result } = renderHook(
-      () =>
-        useActionMutation("run_probe", {
-          invalidates: [{ resource: "records", invalidates: ["list"] }],
-        }),
-      { wrapper: ConsoleProvider },
-    );
-
-    let outcome: ActionOutcome | undefined;
-    await act(async () => {
-      outcome = await result.current[0]("rec_1");
-    });
-
-    // ok=false resolves (no throw) so a settle owner can toast message +
-    // in-band reasons; a failed write never refreshes caches.
-    expect(outcome).toEqual({
-      ok: false,
-      message: "Not allowed.",
-      validationErrors: { __all__: ["You are not allowed to modify this record."] },
-    });
-    expect(mutationMock.invalidate).not.toHaveBeenCalled();
-    expect(mutationMock.invalidateQueries).not.toHaveBeenCalled();
-  });
-
-  test("invalidates after a domain failure when the verb records its failures", async () => {
-    mutationMock.response = { ok: false, message: "Provisioning failed." };
-    const { result } = renderHook(
-      () =>
-        useActionMutation("run_probe", {
-          invalidates: [{ resource: "records", invalidates: ["list"] }],
-          invalidateModels: ["agents.Agent"],
-          invalidateOnFailure: true,
-        }),
-      { wrapper: ConsoleProvider },
-    );
-
-    let outcome: ActionOutcome | undefined;
-    await act(async () => {
-      outcome = await result.current[0]("rec_1");
-    });
-
-    expect(outcome?.ok).toBe(false);
-    expect(mutationMock.invalidate).toHaveBeenCalledWith({ resource: "records", invalidates: ["list"] });
-    expect(mutationMock.invalidateQueries).toHaveBeenCalledOnce();
-  });
-
-  test("carries the created record id and invalidates on success", async () => {
-    mutationMock.response = { ok: true, message: "Created.", id: "tr_9" };
-    const { result } = renderHook(
-      () =>
-        useActionMutation("run_probe", {
-          invalidates: [{ resource: "records", invalidates: ["list"] }],
-        }),
-      { wrapper: ConsoleProvider },
-    );
-
-    let outcome: ActionOutcome | undefined;
-    await act(async () => {
-      outcome = await result.current[0]("rec_1");
-    });
-
-    expect(outcome).toEqual({ ok: true, message: "Created.", id: "tr_9" });
-    expect(mutationMock.invalidate).toHaveBeenCalledTimes(1);
-  });
-
-  test("invalidates authored reads registered against a moved model", async () => {
-    const { result } = renderHook(
-      () =>
-        useActionMutation("run_probe", {
-          invalidateModels: ["messaging.Channel"],
-        }),
-      { wrapper: ConsoleProvider },
-    );
-
-    await act(async () => {
-      await result.current[0]("chn_1");
-    });
-
-    expect(mutationMock.invalidateQueries).toHaveBeenCalledOnce();
-    const options = mutationMock.invalidateQueries.mock.calls[0]?.[0] as {
-      predicate: (query: { meta: unknown }) => boolean;
-      refetchType: string;
-      type: string;
-    };
-    expect(options.type).toBe("all");
-    expect(options.refetchType).toBe("active");
-    expect(
-      options.predicate({ meta: { angeeModels: ["messaging.Channel"] } }),
-    ).toBe(true);
-    expect(
-      options.predicate({ meta: { angeeModels: ["messaging.Thread"] } }),
-    ).toBe(false);
-  });
-
-  test("an explicit dataProviderName option still wins over the active schema", async () => {
-    const { result } = renderHook(
-      () => useActionMutation("run_probe", { dataProviderName: "console" }),
-      {
-        wrapper: ({ children }: { children: ReactNode }) => (
-          <OperationDocumentsProvider
-            documents={{ console: { actions: { run_probe: ACTION_DOCUMENT } } }}
-          >
-            {children}
-          </OperationDocumentsProvider>
-        ),
-      },
-    );
-
-    await act(async () => {
-      await result.current[0]("rec_2");
-    });
-
-    expect(mutationMock.calls).toEqual([
-      { dataProviderName: "console", values: { id: "rec_2" } },
-    ]);
-  });
+test("transient generated actions reject overlap and remove secret input/results after settlement", async () => {
+  const f = fixture();
+  let release!: (response: { data: { run_probe: Record<string, unknown> } }) => void;
+  const response = new Promise<{ data: { run_probe: Record<string, unknown> } }>((resolve) => { release = resolve; });
+  f.custom.mockImplementationOnce(() => response);
+  const { result } = renderHook(() => useActionMutation("run_probe", { transient: true }), { wrapper: f.wrapper });
+  let completion!: ReturnType<typeof result.current[0]>;
+  act(() => { completion = result.current[0]("chn_1", { password: "one-use-secret" }); });
+  await waitFor(() => expect(result.current[1].fetching).toBe(true));
+  await expect(result.current[0]("chn_1", { password: "another" })).rejects.toThrow("Transient mutations cannot overlap another mutation.");
+  expect(f.custom).toHaveBeenCalledOnce();
+  expect(f.custom).toHaveBeenCalledWith(expect.objectContaining({ payload: { id: "chn_1", password: "one-use-secret" } }));
+  await act(async () => { release({ data: { run_probe: { ok: true, message: "Accepted." } } }); await completion; });
+  await waitFor(() => expect(f.client.getMutationCache().getAll()).toHaveLength(0));
+  expect(result.current[1].fetching).toBe(false);
+  expect(result.current[1].error).toBeNull();
 });

@@ -1,4 +1,4 @@
-export { refineFieldsFromPaths } from "./selections";
+export { refineFieldsFromPaths, selectedFieldsPresent } from "./selections";
 export {
   listQueryMeta,
   type ListQueryFieldArgument,
@@ -170,6 +170,11 @@ export {
 export {
   authoredQueryReadsAnyModel,
   invalidateAuthoredQueries,
+  acceptQueryData,
+  useAcceptQueryData,
+  useReconcileMutationResponse,
+  type AuthoredLiveChange,
+  type MutationReconciliationOptions,
 } from "./query-invalidation";
 export {
   stableKey,
@@ -212,4 +217,5 @@ export {
   type KeysetFeedCursor,
   type KeysetFeedWindow,
   type KeysetFeedRevalidation,
+  type KeysetFeedAcceptance,
 } from "./dialect/keyset-feed";

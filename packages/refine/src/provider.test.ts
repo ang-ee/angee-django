@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { parse } from "graphql";
-import type { AngeeLiveResource, GraphQLWsClient } from "./provider";
+import { keys } from "@refinedev/core";
+import type { AngeeLiveResource } from "./provider";
 
 import {
   ANGEE_HASURA_PROVIDER_OPTIONS,
@@ -363,7 +364,7 @@ describe("Angee Hasura provider defaults", () => {
         },
       },
     });
-    expect(invalidateQueries).not.toHaveBeenCalled();
+    expect(invalidateQueries).toHaveBeenCalledWith(expect.objectContaining({ refetchType: "none" }));
     await vi.advanceTimersByTimeAsync(300);
 
     await vi.waitFor(() => expect(invalidateQueries).toHaveBeenCalledWith({
@@ -371,7 +372,7 @@ describe("Angee Hasura provider defaults", () => {
       type: "all",
       refetchType: "active",
     }));
-    const predicate = invalidateQueries.mock.calls[0]?.[0]?.predicate as
+    const predicate = invalidateQueries.mock.calls.find(([filters]) => filters.refetchType === "active")?.[0]?.predicate as
       | ((query: { meta: unknown }) => boolean)
       | undefined;
     expect(predicate?.({ meta: { angeeModels: ["workflows.Decision"] } })).toBe(true);
@@ -396,212 +397,48 @@ describe("Angee Hasura provider defaults", () => {
     expect(subscribe).not.toHaveBeenCalled();
   });
 
-  test("revalidates retained authored data on socket reconnect and removes its listener with the last consumer", async () => {
-    const client = new QueryClient();
-    let rows = ["survivor", "revoked"];
-    const queryFn = vi.fn(async () => rows);
-    const noteQuery = {
-      queryKey: ["message-feed", "current"],
-      queryFn,
-      meta: { angeeModels: ["notes.Note"] },
-      staleTime: Infinity,
-    };
-    const unrelated = {
-      queryKey: ["unrelated"],
-      queryFn: vi.fn(async () => ["tag"]),
-      meta: { angeeModels: ["notes.Tag"] },
-      staleTime: Infinity,
-    };
-    await client.fetchQuery(noteQuery);
-    await client.fetchQuery(unrelated);
-    await client.fetchQuery({ ...noteQuery, queryKey: ["message-feed", "inactive"] });
-    const observer = new QueryObserver(client, noteQuery);
-    const unsubscribeObserver = observer.subscribe(() => undefined);
-    const socket = connectingClient();
-    const provider = createAngeeChangeLiveProvider(
-      socket.client,
-      [resource({ changes: "noteChanged" }), resource({ changes: "tagChanged", list: "tags", model: "notes.Tag" })],
-      { queryClient: client },
-    );
-    const subscription = () => provider.subscribe({
-      channel: "angee/authored/notes.Note", types: ["*"], callback: vi.fn(),
-      params: { models: ["notes.Note"] },
-    });
-    const first = subscription();
-    const second = subscription();
-    try {
-      expect(socket.client.on).toHaveBeenCalledTimes(1);
-      socket.connect(false);
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(queryFn).toHaveBeenCalledTimes(2);
-      rows = ["survivor"];
-      socket.connect(true);
-      await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["survivor"]));
-      expect(queryFn).toHaveBeenCalledTimes(3);
-      expect(client.getQueryState(["message-feed", "inactive"])?.isInvalidated).toBe(true);
-      expect(unrelated.queryFn).toHaveBeenCalledTimes(1);
-      expect(client.getQueryState(unrelated.queryKey)?.isInvalidated).toBe(false);
-      provider.unsubscribe(first);
-      provider.unsubscribe(second);
-      expect(socket.connect(false)).toBe(0);
-      const next = subscription();
-      expect(socket.client.on).toHaveBeenCalledTimes(2);
-      rows = ["latest"];
-      socket.connect(false);
-      await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["latest"]));
-      expect(queryFn).toHaveBeenCalledTimes(4);
-      provider.unsubscribe(next);
-      expect(socket.connect(false)).toBe(0);
-    } finally {
-      provider.unsubscribe(first);
-      provider.unsubscribe(second);
-      unsubscribeObserver();
-      client.clear();
-    }
-  });
-
-  test("keeps first loads running across first and idle-reopened connections", async () => {
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    let resolveNote!: (rows: string[]) => void;
-    let resolveTag!: (rows: string[]) => void;
-    const noteRequest = new Promise<string[]>((resolve) => { resolveNote = resolve; });
-    const tagRequest = new Promise<string[]>((resolve) => { resolveTag = resolve; });
-    const noteQuery = vi.fn(({ signal }: { signal: AbortSignal }) => {
-      expect(signal.aborted).toBe(false);
-      return noteRequest;
-    });
-    const tagQuery = vi.fn(({ signal }: { signal: AbortSignal }) => {
-      expect(signal.aborted).toBe(false);
-      return tagRequest;
-    });
-    const notes = new QueryObserver(client, {
-      queryKey: ["notes"], queryFn: noteQuery, meta: { angeeModels: ["notes.Note"] },
-    });
-    const tags = new QueryObserver(client, {
-      queryKey: ["tags"], queryFn: tagQuery, meta: { angeeModels: ["notes.Tag"] },
-    });
-    const stopNotes = notes.subscribe(() => undefined);
-    const cancelQueries = vi.spyOn(client, "cancelQueries");
-    const socket = connectingClient();
-    const provider = createAngeeChangeLiveProvider(
-      socket.client,
-      [resource({ changes: "noteChanged" }), resource({ changes: "tagChanged", list: "tags", model: "notes.Tag" })],
-      { queryClient: client },
-    );
-    const first = provider.subscribe({
-      channel: "notes", types: ["*"], callback: vi.fn(), params: { resource: "notes" },
-    });
-    try {
-      socket.connect(false);
-      socket.connect(true);
-      expect(noteQuery).toHaveBeenCalledOnce();
-      expect(cancelQueries).not.toHaveBeenCalled();
-      provider.unsubscribe(first);
-      const stopTags = tags.subscribe(() => undefined);
-      const second = provider.subscribe({
-        channel: "tags", types: ["*"], callback: vi.fn(), params: { resource: "tags" },
-      });
-      try {
-        // graphql-ws reports an idle-close reopening as a non-retry connection.
-        resolveTag(["tag"]);
-        await vi.waitFor(() => expect(tags.getCurrentResult().data).toEqual(["tag"]));
-        socket.connect(false);
-        expect(tagQuery).toHaveBeenCalledOnce();
-        expect(cancelQueries).not.toHaveBeenCalled();
-        resolveNote(["note"]);
-        await vi.waitFor(() => expect(notes.getCurrentResult().data).toEqual(["note"]));
-      } finally {
-        provider.unsubscribe(second);
-        stopTags();
-      }
-    } finally {
-      resolveNote([]);
-      resolveTag([]);
-      provider.unsubscribe(first);
-      stopNotes();
-      client.clear();
-    }
-  });
-
-  test.each(["first", "idle"])("keeps a cached query's mount refetch across a %s socket connection", async (connection) => {
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const queryKey = ["notes", "revisited"];
-    client.setQueryData(queryKey, ["cached"], { updatedAt: Date.now() - 31_000 });
-    let finish!: (rows: string[]) => void;
-    const request = new Promise<string[]>((resolve) => { finish = resolve; });
-    let signal!: AbortSignal;
-    const queryFn = vi.fn(({ signal: requestSignal }: { signal: AbortSignal }) => {
-      signal = requestSignal;
-      return request;
-    });
-    const observer = new QueryObserver(client, {
-      queryKey, queryFn, staleTime: 30_000, meta: { angeeModels: ["notes.Note"] },
-    });
-    const socket = connectingClient();
-    const provider = createAngeeChangeLiveProvider(
-      socket.client,
-      [resource({ changes: "noteChanged" })],
-      { queryClient: client },
-    );
-    const subscription = () => provider.subscribe({
-      channel: "notes", types: ["*"], callback: vi.fn(), params: { resource: "notes" },
-    });
-    if (connection === "idle") {
-      const first = subscription();
-      socket.connect(false);
-      provider.unsubscribe(first);
-    }
-    const stopObserver = observer.subscribe(() => undefined);
-    const second = subscription();
-    try {
-      expect(queryFn).toHaveBeenCalledOnce();
-      socket.connect(false);
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(queryFn).toHaveBeenCalledOnce();
-      expect(signal.aborted).toBe(false);
-      finish(["fresh"]);
-      await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["fresh"]));
-    } finally {
-      finish([]);
-      provider.unsubscribe(second);
-      stopObserver();
-      client.clear();
-    }
-  });
-
-  test("restarts a data-holding refetch on a genuine socket retry", async () => {
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const queryKey = ["notes", "retry"];
-    client.setQueryData(queryKey, ["cached"]);
+  test("server readiness restarts stale first reads and recovers retained rows after resume", async () => {
+    vi.useFakeTimers();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     const attempts: { signal: AbortSignal; resolve: (rows: string[]) => void }[] = [];
     const queryFn = vi.fn(({ signal }: { signal: AbortSignal }) => new Promise<string[]>((resolve) => {
       attempts.push({ signal, resolve });
     }));
     const observer = new QueryObserver(client, {
-      queryKey, queryFn, staleTime: Infinity, meta: { angeeModels: ["notes.Note"] },
+      queryKey: ["notes"], queryFn, meta: { angeeModels: ["notes.Note"] },
     });
     const stopObserver = observer.subscribe(() => undefined);
-    const socket = connectingClient();
-    const provider = createAngeeChangeLiveProvider(
-      socket.client,
-      [resource({ changes: "noteChanged" })],
-      { queryClient: client },
-    );
-    const subscription = provider.subscribe({
-      channel: "notes", types: ["*"], callback: vi.fn(), params: { resource: "notes" },
-    });
+    const { subscribe, sinks } = recordingClient();
+    const on = vi.fn(() => () => undefined);
+    const provider = createAngeeChangeLiveProvider({ subscribe, on } as never,
+      [resource({ changes: "noteChanged" })], { queryClient: client });
+    const callback = vi.fn();
+    const subscription = provider.subscribe({ channel: "notes", types: ["*"], callback, params: { resource: "notes" } });
+    const ready = { data: { noteChanged: { model: "notes.Note", id: "", action: "ready" } } };
     try {
-      socket.connect(false);
-      void client.refetchQueries({ queryKey, exact: true });
       expect(queryFn).toHaveBeenCalledOnce();
-      socket.connect(true);
-      await vi.waitFor(() => expect(queryFn).toHaveBeenCalledTimes(2));
+      // A connection ack has no authority to restart reads. Only server ready does.
+      expect(on).not.toHaveBeenCalled();
+      nthSink(sinks, 0).next(ready);
       expect(attempts[0]?.signal.aborted).toBe(true);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(queryFn).toHaveBeenCalledTimes(2);
       attempts[0]?.resolve(["obsolete"]);
-      expect(observer.getCurrentResult().data).toEqual(["cached"]);
       attempts[1]?.resolve(["fresh"]);
-      await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["fresh"]));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(observer.getCurrentResult().data).toEqual(["fresh"]);
+      expect(callback).not.toHaveBeenCalled();
+      provider.setEnabled(false);
+      provider.setEnabled(true);
+      nthSink(sinks, 0).next(ready); // disposed subscription cannot recover the new actor
+      expect(queryFn).toHaveBeenCalledTimes(2);
+      nthSink(sinks, 1).next(ready);
+      await vi.advanceTimersByTimeAsync(300);
+      attempts[2]?.resolve(["recovered"]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(observer.getCurrentResult().data).toEqual(["recovered"]);
     } finally {
+      provider.setEnabled(false);
       attempts.forEach((attempt) => attempt.resolve([]));
       provider.unsubscribe(subscription);
       stopObserver();
@@ -609,73 +446,34 @@ describe("Angee Hasura provider defaults", () => {
     }
   });
 
-  test("catches up reads loaded while subscriptions were disabled", async () => {
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    let rows = ["before-enable"];
-    const queryFn = vi.fn(async () => rows);
-    const observer = new QueryObserver(client, {
-      queryKey: ["notes"], queryFn, staleTime: Infinity, meta: { angeeModels: ["notes.Note"] },
+  test("related parent effects coalesce native projections and preserve unrelated detail rows", async () => {
+    vi.useFakeTimers();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    const parent = keys().data("console").resource("console:notes.Parent");
+    const reads = [vi.fn(async () => "new parent"), vi.fn(async () => "unrelated"), vi.fn(async () => "new list")];
+    const queryKeys = [parent.action("one").id("parent-1").params({ fields: ["id"] }).get(),
+      parent.action("one").id("parent-2").get(), parent.action("list").get()];
+    const observers = queryKeys.map((queryKey, index) => {
+      client.setQueryData(queryKey, "retained");
+      return new QueryObserver(client, { queryKey, queryFn: reads[index]! });
     });
-    const socket = connectingClient();
-    const provider = createAngeeChangeLiveProvider(
-      socket.client,
-      [resource({ changes: "noteChanged" })],
-      { queryClient: client },
-    );
-    const subscription = () => provider.subscribe({
-      channel: "notes", types: ["*"], callback: vi.fn(), params: { resource: "notes" },
-    });
-    const first = subscription();
-    socket.connect(false);
-    provider.unsubscribe(first);
-    provider.setEnabled(false);
-    const second = subscription();
-    const stopObserver = observer.subscribe(() => undefined);
+    const stops = observers.map((observer) => observer.subscribe(() => undefined));
+    const { subscribe, sinks } = recordingClient();
+    const provider = createAngeeChangeLiveProvider({ subscribe, on: vi.fn() } as never, [
+      resource({ changes: "noteChanged" }),
+      { ...resource({ changes: "parentChanged", list: "parents", model: "notes.Parent" }), resourceIdentifier: "console:notes.Parent" },
+    ], { queryClient: client });
+    const subscription = provider.subscribe({ channel: "notes", types: ["*"], callback: vi.fn(), params: { resource: "notes" } });
     try {
-      await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["before-enable"]));
-      rows = ["after-enable"];
-      provider.setEnabled(true);
-      socket.connect(false);
-      await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["after-enable"]));
-      expect(queryFn).toHaveBeenCalledTimes(2);
-    } finally {
-      provider.unsubscribe(second);
-      stopObserver();
-      client.clear();
-    }
-  });
-
-  test("clears an unused enable catch-up before a later first connection", async () => {
-    const client = new QueryClient();
-    const queryFn = vi.fn(async () => ["cached"]);
-    const query = {
-      queryKey: ["notes", "enable"], queryFn, staleTime: Infinity,
-      meta: { angeeModels: ["notes.Note"] },
-    };
-    await client.fetchQuery(query);
-    const observer = new QueryObserver(client, query);
-    const stopObserver = observer.subscribe(() => undefined);
-    const socket = connectingClient();
-    const provider = createAngeeChangeLiveProvider(
-      socket.client, [resource({ changes: "noteChanged" })], { queryClient: client },
-    );
-    const subscribe = () => provider.subscribe({
-      channel: "notes", types: ["*"], callback: vi.fn(), params: { resource: "notes" },
-    });
-    provider.setEnabled(false);
-    const first = subscribe();
-    provider.setEnabled(true);
-    provider.unsubscribe(first);
-    const second = subscribe();
-    try {
-      socket.connect(false);
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(queryFn).toHaveBeenCalledOnce();
-    } finally {
-      provider.unsubscribe(second);
-      stopObserver();
-      client.clear();
-    }
+      const event = { data: { noteChanged: { model: "notes.Note", id: "note-1", action: "update",
+        relatedRecords: [{ model: "notes.Parent", id: "parent-1" }] } } };
+      nthSink(sinks, 0).next(event);
+      nthSink(sinks, 0).next(event);
+      await vi.advanceTimersByTimeAsync(300);
+      expect(reads[0]).toHaveBeenCalledOnce();
+      expect(reads[1]).not.toHaveBeenCalled();
+      expect(reads[2]).toHaveBeenCalledOnce();
+    } finally { provider.setEnabled(false); provider.unsubscribe(subscription); stops.forEach((stop) => stop()); client.clear(); }
   });
 
   test("shares one upstream subscription across consumers for the same resource", () => {
@@ -887,7 +685,7 @@ describe("Angee Hasura provider defaults", () => {
       type: "all",
       refetchType: "active",
     }));
-    const predicate = invalidateQueries.mock.calls[0]?.[0]?.predicate as
+    const predicate = invalidateQueries.mock.calls.find(([filters]) => filters.refetchType === "active")?.[0]?.predicate as
       | ((query: { meta: unknown }) => boolean)
       | undefined;
     expect(predicate?.({ meta: { angeeModels: ["notes.Note"] } })).toBe(true);
@@ -915,7 +713,7 @@ describe("Angee Hasura provider defaults", () => {
     await vi.advanceTimersByTimeAsync(300);
 
     expect(invalidateQueries).toHaveBeenCalledTimes(1);
-    const predicate = invalidateQueries.mock.calls[0]?.[0]?.predicate as (query: { meta: unknown }) => boolean;
+    const predicate = invalidateQueries.mock.calls.find(([filters]) => filters.refetchType === "active")?.[0]?.predicate as (query: { meta: unknown }) => boolean;
     expect(predicate({ meta: { angeeModels: ["notes.Note"] } })).toBe(true);
     for (const callback of callbacks) expect(callback).toHaveBeenCalledTimes(1);
   });
@@ -989,26 +787,6 @@ function recordingClient(): {
     return dispose;
   });
   return { subscribe, sinks };
-}
-
-function connectingClient(): {
-  client: Pick<GraphQLWsClient, "subscribe" | "on">;
-  connect: (wasRetry: boolean) => number;
-} {
-  const listeners = new Set<(socket: unknown, payload: unknown, wasRetry: boolean) => void>();
-  const on: GraphQLWsClient["on"] = (event, listener) => {
-    if (event !== "connected") throw new Error(`Unexpected socket event: ${event}`);
-    const connected = listener as (socket: unknown, payload: unknown, wasRetry: boolean) => void;
-    listeners.add(connected);
-    return () => { listeners.delete(connected); };
-  };
-  return {
-    client: { subscribe: () => () => undefined, on: vi.fn(on) },
-    connect(wasRetry) {
-      listeners.forEach((connected) => connected(null, undefined, wasRetry));
-      return listeners.size;
-    },
-  };
 }
 
 function nthSink(sinks: readonly RecordedSink[], index: number): RecordedSink {

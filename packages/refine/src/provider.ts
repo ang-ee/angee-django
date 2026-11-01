@@ -1,3 +1,5 @@
+import { keys } from "@refinedev/core";
+import { matchQuery, type Query } from "@tanstack/react-query";
 import hasuraDataProvider, {
   GraphQLClient,
   graphqlWS,
@@ -23,9 +25,9 @@ import {
   stringValue,
 } from "./dialect/wire";
 import {
-  catchUpAuthoredQueries,
   createAuthoredLiveInvalidation,
-  retainedAuthoredQueryHashes,
+  mutationReconciliation,
+  type ReconciliationPublish,
   type AuthoredLiveChange,
 } from "./query-invalidation";
 
@@ -87,6 +89,8 @@ export interface AngeeHasuraSchemaConfig
 export interface AngeeLiveResource {
   schemaName: string;
   modelLabel: string;
+  /** Native Refine identity supplied by the metadata edge; standalone callers use the list root. */
+  resourceIdentifier?: string;
   roots: {
     list?: string | null;
     changes?: string | null;
@@ -315,23 +319,39 @@ export function createAngeeChangeLiveProvider(
   // consumer leaves.
   const subscriptions = new Map<string, ChangeSubscription>();
   let enabled = true;
-  let hasConnected = false;
-  let catchUpAfterEnable = false;
-  let startedSubscriptions = 0;
-  let retainedBeforeIdleReopen: Set<string> | undefined;
-  let stopConnectionListener: () => void = noopSubscription;
   const liveInvalidation = options.queryClient
-    ? createAuthoredLiveInvalidation(options.queryClient)
+    ? createAuthoredLiveInvalidation(options.queryClient, nativeReadsChange)
     : undefined;
 
-  function stopUnusedConnectionListener(): void {
-    if (subscriptions.size === 0) {
-      stopConnectionListener();
-      stopConnectionListener = noopSubscription;
-      retainedBeforeIdleReopen = undefined;
-      catchUpAfterEnable = false;
-    }
+  function nativeReadsChange(query: Query, change: AuthoredLiveChange): boolean {
+    return [change, ...(change.relatedRecords ?? [])].some((record) => {
+      const resource = resourcesByModel.get(record.model);
+      if (!resource?.roots.list) return false;
+      const identifier = resource.resourceIdentifier ?? resource.roots.list;
+      return [resource.schemaName, "default"].some((provider) => {
+        const key = keys().data(provider).resource(identifier);
+        if (!matchQuery({ queryKey: key.get() }, query)) return false;
+        if (!record.id) return true;
+        if (matchQuery({ queryKey: key.action("one").get() }, query)) {
+          return matchQuery({ queryKey: key.action("one").id(record.id).get() }, query);
+        }
+        if (matchQuery({ queryKey: key.action("many").get() }, query)) {
+          const ids = query.queryKey[key.action("many").get().length];
+          return !Array.isArray(ids) || ids.includes(record.id);
+        }
+        // Lists/infinite scopes own membership and totals. A row cannot prove
+        // exclusion from an arbitrary filter or ordering, so refetch the scope.
+        return true;
+      });
+    });
   }
+
+  const publish: ReconciliationPublish = () => undefined;
+  if (liveInvalidation) publish[mutationReconciliation] = {
+    get generation() { return liveInvalidation.generation; },
+    reconcile: (request) => enabled ? liveInvalidation.reconcile(request) : Promise.resolve(),
+    batch: (run) => liveInvalidation.batch(run),
+  };
 
   // Attach one fan-in consumer to the shared upstream for `changesRoot`, opening
   // the socket subscription on the first consumer; the returned disposer removes
@@ -353,35 +373,8 @@ export function createAngeeChangeLiveProvider(
     };
     entry.consumers.add(consumer);
     if (!subscriptions.has(changesRoot)) {
-      if (subscriptions.size === 0) {
-        // Changes have no replay cursor. Catch-up is owed for retained reads
-        // when subscriptions resume after a gap, not for a page's first socket
-        // connection while its initial reads are still loading. An initial
-        // connection also closes the gap between HTTP and subscribing, but
-        // leaving first loads in flight accepts a possible stale first response.
-        stopConnectionListener = client.on("connected", (_socket, _payload, wasRetry) => {
-          const reconnect = hasConnected || wasRetry || catchUpAfterEnable;
-          hasConnected = true;
-          catchUpAfterEnable = false;
-          const retainedAtStart = retainedBeforeIdleReopen;
-          retainedBeforeIdleReopen = undefined;
-          if (!enabled || !reconnect) return;
-          const models = resources
-            .filter((resource) => subscriptions.has(resource.roots.changes ?? ""))
-            .map((resource) => resource.modelLabel);
-          if (options.queryClient) void catchUpAuthoredQueries(
-            options.queryClient, models, wasRetry ? undefined : retainedAtStart, wasRetry,
-          );
-        });
-      }
       subscriptions.set(changesRoot, entry);
       entry.start = () => {
-        if (startedSubscriptions === 0 && hasConnected && !catchUpAfterEnable && options.queryClient) {
-          retainedBeforeIdleReopen = retainedAuthoredQueryHashes(
-            options.queryClient,
-            resources.filter((candidate) => candidate.roots.changes).map((candidate) => candidate.modelLabel),
-          );
-        }
         // Ignore late deliveries from a disposed subscription, even after resume.
         let active = true;
         const dispose = client.subscribe(
@@ -389,9 +382,17 @@ export function createAngeeChangeLiveProvider(
           {
             next: (result) => {
               if (!active || !enabled) return;
+              const payload = recordValue(recordValue(result.data)?.[changesRoot]);
+              // This is emitted only after the server joins the model's group.
+              // Connection ack precedes subscription installation and is not ready.
+              if (payload?.action === "ready") {
+                liveInvalidation?.push({ model: resource.modelLabel });
+                return;
+              }
               // One upstream result is one change, however many consumers share it.
-              liveInvalidation?.push(liveChangeFromResult(result.data, changesRoot, resource));
-              entry.consumers.forEach((c) => c(result.data));
+              const deliver = () => entry.consumers.forEach((c) => c(result.data));
+              if (liveInvalidation) liveInvalidation.push(liveChangeFromResult(result.data, changesRoot, resource), deliver);
+              else deliver();
             },
             error: (error) => {
               if (!active) return;
@@ -403,17 +404,14 @@ export function createAngeeChangeLiveProvider(
               if (subscriptions.get(changesRoot) === entry) {
                 entry.dispose();
                 subscriptions.delete(changesRoot);
-                stopUnusedConnectionListener();
               }
             },
             complete: () => undefined,
           },
         );
-        startedSubscriptions++;
         entry.dispose = () => {
           if (active) {
             active = false;
-            startedSubscriptions--;
             dispose();
           }
         };
@@ -425,18 +423,16 @@ export function createAngeeChangeLiveProvider(
       if (entry.consumers.size === 0 && subscriptions.get(changesRoot) === entry) {
         entry.dispose();
         subscriptions.delete(changesRoot);
-        stopUnusedConnectionListener();
       }
     };
   }
 
   return {
+    publish,
     setEnabled(next) {
       if (next === enabled) return;
       enabled = next;
-      retainedBeforeIdleReopen = undefined;
       if (!enabled) liveInvalidation?.clear();
-      else catchUpAfterEnable = true;
       subscriptions.forEach((entry) => {
         if (enabled) entry.start();
         else entry.dispose();
@@ -490,6 +486,7 @@ function liveChangeFromResult(
   return {
     model: stringValue(event?.model) ?? resource.modelLabel,
     id: stringValue(event?.id) || undefined,
+    action: stringValue(event?.action) ?? undefined,
     relatedRecords,
   };
 }
