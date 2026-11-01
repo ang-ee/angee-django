@@ -48,7 +48,7 @@ export function ProvidersPage(): React.ReactElement {
         id,
         redirectUri: connectCallbackRedirectUri(),
         next: routeHref("integrate.accounts"),
-      });
+      }, { reconciliation: ctx.reconciliation });
       const payload = result?.connect_account_start;
       if (!payload?.authorize_url) {
         throw new Error(payload?.error ?? t("providers.connect.startError"));

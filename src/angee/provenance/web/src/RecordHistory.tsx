@@ -1,5 +1,5 @@
 import type { ActionFieldName } from "@angee/gql/console/actions";
-import { useAuthoredQuery } from "@angee/refine";
+import { useAuthoredQuery, type MutationExecutionOptions } from "@angee/refine";
 import { useModelMetadata } from "@angee/metadata";
 import { Chip, Code, CodeBlock, ComparisonRows, EmptyState, ErrorBanner, LoadingPanel, PaneRow, PaneRows, PaneToolbar, RecordActionBar, RecordReference, ResourcePaneFooter, SectionEyebrow, StatusBadge, formatDateTime, formatJson, optionToken, useActionResultMutation, useChatter, useContainer, useStatusTone, type ActionDescriptor, type ComparisonRow, type StatusIconTone } from "@angee/ui";
 import { useEffect, useMemo, useRef, useState, createElement, type ComponentType, type ReactElement, type ReactNode } from "react";
@@ -124,7 +124,7 @@ export function RecordHistoryTimeline({
         setPage({ model, id, selected: clearSelection ? undefined : selected, offset });
         if (clearSelection) setActiveTab("provenance.history");
       }}
-      onRevert={compact ? undefined : (entry) => revert(id, { model, changeset: entry.id })}
+      onRevert={compact ? undefined : (entry, execution) => revert(id, { model, changeset: entry.id }, execution)}
       reverting={revertState.fetching}
     />
   );
@@ -137,7 +137,7 @@ export interface HistoryTimelineProps {
   fetching?: boolean;
   offset?: number;
   onPage?: (offset: number) => void;
-  onRevert?: (entry: HistoryEntry) => Promise<void> | void;
+  onRevert?: (entry: HistoryEntry, execution?: MutationExecutionOptions) => Promise<void> | void;
   reverting?: boolean;
 }
 
@@ -271,8 +271,8 @@ function EntryDetails({ entry, record, onRevert, reverting, t }: {
     placement: "toolbar",
     danger: true,
     confirm: { title: t("history.revertConfirm.title"), body: t("history.revertConfirm.body"), danger: true },
-    run: async () => {
-      await onRevert?.(entry);
+    run: async (context) => {
+      await onRevert?.(entry, { reconciliation: context.reconciliation });
     },
   };
   return (

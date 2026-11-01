@@ -71,7 +71,7 @@ export function usePartyContactActions(): React.ReactElement {
           validationErrors: { value: [t("party.contact.required")] },
         };
       }
-      return (await proposeManualContact(partyId, { platform, value, label })) ?? {
+      return (await proposeManualContact(partyId, { platform, value, label }, { reconciliation: context.reconciliation })) ?? {
         ok: false,
         message: t("party.contact.error"),
       };

@@ -13,7 +13,7 @@ import {
   ModelMetadataProvider,
 } from "@angee/metadata";
 import { withTestResourceInventory, testResourceQuery, testQueryField } from "@angee/metadata/testing";
-import { OperationDocumentsProvider } from "@angee/refine";
+import { OperationDocumentsProvider, type MutationReconciliationScope } from "@angee/refine";
 import type {
   SchemaFieldMetadata,
 } from "@angee/metadata";
@@ -31,6 +31,7 @@ const sdk = vi.hoisted(() => {
     reconciliations: [] as unknown[],
     batches: [] as string[],
     failDeleteId: null as string | null,
+    scope: { reconcile: vi.fn(async () => undefined) },
   };
 });
 
@@ -65,9 +66,9 @@ vi.mock("@angee/refine", async (importOriginal) => {
     ...actual,
     useReconcileMutationResponse: () => Object.assign(async (_data: unknown, _input: unknown, options: unknown) => {
       sdk.reconciliations.push(options);
-    }, { batch: async <T,>(run: () => Promise<T>) => {
+    }, { batch: async <T,>(run: (reconciliation?: MutationReconciliationScope) => Promise<T>) => {
       sdk.batches.push("start");
-      try { return await run(); } finally { sdk.batches.push("flush"); }
+      try { return await run(sdk.scope); } finally { sdk.batches.push("flush"); }
     } }),
     useAuthoredMutation: vi.fn(() => [
       vi.fn(async (variables: unknown) => {
@@ -179,7 +180,7 @@ describe("storage file/folder actions", () => {
     expect(sdk.refineMutations[0]?.calls).toHaveLength(2);
     expect(sdk.batches).toEqual(["start", "flush"]);
     expect(sdk.reconciliations).toEqual([
-      expect.objectContaining({ records: [{ model: "storage.File", id: "fil_1" }] }),
+      expect.objectContaining({ records: [{ model: "storage.File", id: "fil_1" }], reconciliation: sdk.scope }),
     ]);
   });
 

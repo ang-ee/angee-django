@@ -93,14 +93,14 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
     record: writableVault,
     permission: "write",
     args: [{ name: "body" }],
-    submit: async (values) => {
+    submit: async (values, context) => {
       const body = String(values.body ?? "").trim();
       if (!body) throw new Error(t("notes.bodyRequired"));
       if (!writableVault) throw new Error(t("notes.createError"));
       const input = { model_label: target.modelLabel, record_id: target.recordId, vault: writableVault.id, body, role };
       const fingerprint = JSON.stringify(input);
       if (pendingNote.current?.fingerprint !== fingerprint) pendingNote.current = { fingerprint, key: createClientKey() };
-      await createNote({ ...input, idempotency_key: pendingNote.current.key });
+      await createNote({ ...input, idempotency_key: pendingNote.current.key }, { reconciliation: context.reconciliation });
       pendingNote.current = null;
       return { ok: true, message: t("notes.added") };
     },

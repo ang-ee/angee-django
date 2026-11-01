@@ -67,16 +67,16 @@ export function useFileActions(): FileActions {
         await updateFile.mutateAsync({ id, values: { folder } });
       }),
     trashMany: (ids) =>
-      run(() => reconcile.batch(async () => {
+      run(() => reconcile.batch(async (reconciliation) => {
         for (const id of ids) {
           requireFileResource(resource);
-          await deleteWithPreview.remove(id);
+          await deleteWithPreview.remove(id, { reconciliation });
         }
       })),
     restoreMany: (ids) =>
-      run(() => reconcile.batch(async () => {
+      run(() => reconcile.batch(async (reconciliation) => {
         requireFileResource(resource);
-        for (const id of ids) await trashRecord.restore(id);
+        for (const id of ids) await trashRecord.restore(id, { reconciliation });
       })),
   };
 }

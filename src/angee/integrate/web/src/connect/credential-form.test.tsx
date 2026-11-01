@@ -114,7 +114,7 @@ describe("credentialCreateForm", () => {
       prompt: vi.fn<ActionContext["prompt"]>().mockResolvedValue(null),
     })).resolves.toBeUndefined();
 
-    expect(mocks.revealCredential).toHaveBeenCalledWith({ id: "credential-1" });
+    expect(mocks.revealCredential).toHaveBeenCalledWith({ id: "credential-1" }, { reconciliation: undefined });
     // The one-time reveal goes through the shared secret-reveal owner.
     expect(mocks.reveal).toHaveBeenCalledOnce();
     expect(mocks.reveal).toHaveBeenCalledWith({

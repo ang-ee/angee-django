@@ -33,7 +33,7 @@ export function useRecordFollowing(modelLabel: string, recordId: string) {
     acceptResponse: async (data) => {
       const result = data?.set_record_following;
       if (!result) return;
-      await acceptState({ follower_count: result.follower_count, is_following: result.is_following,
+      return await acceptState({ follower_count: result.follower_count, is_following: result.is_following,
         followers: result.followers, self_follower: result.follower });
     },
   });
