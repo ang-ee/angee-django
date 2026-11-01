@@ -97,17 +97,16 @@ class Timeline:
             fold = kind.fold(record)
             if fold is not None:
                 self.folding.add(kind.id)
-            fold_type, fold_pk = fold or (
-                models.Value(None, models.IntegerField()), models.Value(None, models.BigIntegerField()),
-            )
+            fold_type, fold_pk = fold or (models.Value(None), models.Value(None))
             self.branches[kind.id] = rows.annotate(
                 _timeline_kind=models.Value(kind.id, output_field=models.CharField()),
                 _timeline_type=models.Value(content_type.pk, output_field=models.IntegerField()),
                 _timeline_at=kind.at,
                 _timeline_pk=Cast("pk", output_field=models.BigIntegerField()),
                 _timeline_needs=kind.waiting_on_expression(rows, actor),
-                _timeline_fold_type=fold_type,
-                _timeline_fold_pk=fold_pk,
+                # Leading NULL-only UNION operands otherwise resolve as text on PostgreSQL.
+                _timeline_fold_type=Cast(fold_type, output_field=models.IntegerField()),
+                _timeline_fold_pk=Cast(fold_pk, output_field=models.BigIntegerField()),
             )
 
     @cached_property

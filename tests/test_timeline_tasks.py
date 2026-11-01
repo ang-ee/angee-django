@@ -133,7 +133,7 @@ def test_task_waiting_projection_matches_filter_without_changing_scope(comment_r
         ] * len(ids)
 
 
-@pytest.mark.parametrize("other_kind", [False, True])
+@pytest.mark.parametrize("other_kind", [0, 1, 2])
 def test_shared_source_preserves_same_model_occurrences_without_parent_policy_copies(
     comment_record, monkeypatch, other_kind,
 ) -> None:
@@ -150,7 +150,11 @@ def test_shared_source_preserves_same_model_occurrences_without_parent_policy_co
         def fold(self, record):
             return models.Value(task_type.pk, output_field=models.IntegerField()), models.F("pk")
 
-    kinds = (TaskKind(), SelfFold()) if other_kind else (SelfFold(),)
+    class OtherTaskKind(TaskKind):
+        id = "test.other_task"
+
+    # Two leading kinds with no fold must not fix PostgreSQL's UNION column to text.
+    kinds = (*(TaskKind(), OtherTaskKind())[:other_kind], SelfFold())
     monkeypatch.setattr(reading, "timeline_kinds", lambda: kinds)
     with CaptureQueriesContext(connection) as construction:
         timeline = Timeline(record, author)
@@ -158,16 +162,20 @@ def test_shared_source_preserves_same_model_occurrences_without_parent_policy_co
     assert not any(f"FROM {table}" in query["sql"] for query in construction)
     with CaptureQueriesContext(connection) as queries:
         page = timeline.page()
-    entry, = page.entries
-    assert entry.target_id == task.sqid and entry.needs_me
-    assert entry.kind == ("projects.task" if other_kind else "test.self_fold")
-    assert [(child.kind, child.count) for child in entry.children] == (
-        [("test.self_fold", 1)] if other_kind else []
+    assert [entry.kind for entry in page.entries] == (
+        ["projects.task", "test.other_task"] if other_kind == 2
+        else ["projects.task"] if other_kind else ["test.self_fold"]
     )
+    for entry in page.entries:
+        assert entry.target_id == task.sqid and entry.needs_me
+        assert [(child.kind, child.count) for child in entry.children] == (
+            [("test.self_fold", 1)] if other_kind else []
+        )
     assert {kind.id: kind.count for kind in page.kinds} == (
-        {"projects.task": 1, "test.self_fold": 0} if other_kind else {"test.self_fold": 1}
+        {"projects.task": 1, "test.other_task": 1, "test.self_fold": 0} if other_kind == 2
+        else {"projects.task": 1, "test.self_fold": 0} if other_kind else {"test.self_fold": 1}
     )
-    assert page.needs_me == 1 and not page.has_more and page.next_before is None
+    assert page.needs_me == max(1, other_kind) and not page.has_more and page.next_before is None
     statements = [query["sql"] for query in queries if 'WITH RECURSIVE "timeline_source" AS (' in query["sql"]]
     assert len(statements) == 3  # page, selected-parent child groups, and whole-scope counts
     for sql in statements:
