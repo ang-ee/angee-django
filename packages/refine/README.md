@@ -56,7 +56,11 @@ run a second path. Explicit `invalidationFilters`/`invalidationOptions` retain t
 native caller-requested refresh policy. `useReconcileMutationResponse().batch(run)`
 collects bulk item effects and flushes in `finally`; item failures preserve their
 native error, and authentication suspension discards buffered effects and settles
-waiting completions. Foreign live providers retain native direct refresh behavior.
+waiting completions. Form-owned exact `queryKeys` completion fallbacks join that
+batch once with declared effects; complete response acceptance excludes only the
+batch fallback, while later independent live changes still reconcile normally.
+Opaque custom reloads and explicit record-action `refresh: true` remain imperative.
+Foreign live providers retain native direct refresh behavior.
 
 A subscription's `ready` result is emitted after server subscription installation;
 it triggers authoritative catch-up through the same scheduler on first load,

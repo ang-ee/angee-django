@@ -3,6 +3,7 @@ import {
   extractActionOutcome,
   runActionResult,
   useActionMutation,
+  useReconcileMutationResponse,
   type AuthoredDocument,
   type ActionArguments,
   type ActionMutate,
@@ -36,7 +37,7 @@ export interface UseRecordActionOptions extends UseActionResultMutationOptions {
   defaultMessage?: string;
   /** Error thrown when the form action is invoked before a saved record exists. */
   missingRecordMessage?: string;
-  /** Refresh the form record after a successful run. Defaults to true. */
+  /** Default: coalesce the form read with mutation effects. True explicitly reloads; false skips it. */
   refresh?: boolean;
   /** Extra invalidation after the record refresh is requested. */
   afterSuccess?: (
@@ -60,10 +61,23 @@ export function recordActionId(context: ActionContext): string | undefined {
 async function completeRecordAction(
   context: ActionContext,
   result: ActionResult,
-  { refresh = true, afterSuccess }: Pick<UseRecordActionOptions, "refresh" | "afterSuccess">,
+  reconcile: ReturnType<typeof useReconcileMutationResponse>,
+  { refresh, afterSuccess }: Pick<UseRecordActionOptions, "refresh" | "afterSuccess">,
 ): Promise<void> {
-  if (refresh) context.refresh();
+  await refreshRecordAction(context, reconcile, refresh);
   await afterSuccess?.(context, result);
+}
+
+/** Form-owned automatic completion; explicit/custom refresh retains its imperative contract. */
+export async function refreshRecordAction(
+  context: Pick<ActionContext, "refresh" | "refreshQueryKey">,
+  reconcile: ReturnType<typeof useReconcileMutationResponse>,
+  refresh?: boolean,
+): Promise<void> {
+  if (refresh === true || (refresh !== false && !context.refreshQueryKey)) await context.refresh();
+  else if (refresh !== false && context.refreshQueryKey) {
+    await reconcile(undefined, undefined, { queryKeys: [context.refreshQueryKey] });
+  }
 }
 
 /** Build an `<Action run>` callback for actions that target the current record id.
@@ -73,6 +87,7 @@ export function useRecordAction(
   run: RecordActionRunner,
   options: UseRecordActionOptions = {},
 ): RecordAction {
+  const reconcile = useReconcileMutationResponse();
   const {
     afterSuccess,
     defaultMessage,
@@ -80,17 +95,17 @@ export function useRecordAction(
     refresh,
   } = options;
   return React.useCallback<RecordAction>(
-    async (context) => {
+    (context) => reconcile.batch(async () => {
       const id = recordActionId(context);
       if (!id) {
         if (missingRecordMessage) throw new Error(missingRecordMessage);
         return;
       }
       const result = (await run(id, context)) ?? defaultMessage;
-      await completeRecordAction(context, result, { refresh, afterSuccess });
+      await completeRecordAction(context, result, reconcile, { refresh, afterSuccess });
       return result;
-    },
-    [afterSuccess, defaultMessage, missingRecordMessage, refresh, run],
+    }),
+    [afterSuccess, defaultMessage, missingRecordMessage, reconcile, refresh, run],
   );
 }
 
@@ -105,6 +120,7 @@ export function useRecordActionMutation<TField extends string = string>(
   options?: UseRecordActionOptions,
 ): [RecordAction, { fetching: boolean; error: Error | null }] {
   const [mutate, state] = useActionOutcomeMutation<TField>(field, options);
+  const reconcile = useReconcileMutationResponse();
   const settleOptions = React.useMemo<ActionResultRunOptions | null>(() => {
     if (options?.settle === false) return null;
     if (options?.settle && typeof options.settle === "object") {
@@ -129,17 +145,16 @@ export function useRecordActionMutation<TField extends string = string>(
       if (settleOptions) {
         const outcome = await settleActionResult(mutateRecord);
         if (outcome?.ok) {
-          await completeRecordAction(context, outcome.message, options ?? {});
+          await completeRecordAction(context, outcome.message, reconcile, options ?? {});
         }
         return undefined;
       }
       return runActionResult(await mutateRecord());
     },
-    [mutate, options?.actionArguments, options?.afterSuccess, options?.refresh, settleActionResult, settleOptions],
+    [mutate, options?.actionArguments, options?.afterSuccess, options?.refresh, reconcile, settleActionResult, settleOptions],
   );
-  // Declared effects need not include the open record (and may be absent).
-  // Preserve the record-action refresh contract. Settled success already uses
-  // that same completion owner above; refusals must never run it.
+  // Settled success already queued the same exact fallback inside this batch;
+  // refusals must never run completion. Opaque/custom reloads remain imperative.
   return [useRecordAction(run, {
     ...options,
     afterSuccess: settleOptions ? undefined : options?.afterSuccess,

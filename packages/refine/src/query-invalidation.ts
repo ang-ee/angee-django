@@ -78,6 +78,10 @@ export interface QueryReconciliation {
   predicate?: (query: Query) => boolean;
   /** Only complete projections actually accepted by this response are excluded. */
   accepted?: ReadonlySet<string>;
+  /** Exact active reads supplied by their owner as automatic completion fallback. */
+  queryKeys?: readonly QueryKey[];
+  /** An accepted command settles before its derived reads. */
+  background?: boolean;
 }
 
 export interface AuthoredLiveInvalidation {
@@ -103,7 +107,9 @@ export function createAuthoredLiveInvalidation(
   queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries" | "getQueryCache">,
   nativeReadsChange: (query: Query, change: AuthoredLiveChange) => boolean = () => false,
 ): AuthoredLiveInvalidation {
-  let requests: QueryReconciliation[] = [];
+  type Request = QueryReconciliation & { fallbackAccepted?: ReadonlySet<string> };
+  let requests: Request[] = [];
+  let batches: { accepted: Set<string>; background: boolean; legacy: boolean }[] = [];
   let deliveries: (() => void)[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
   let firstAt: number | undefined;
@@ -111,9 +117,11 @@ export function createAuthoredLiveInvalidation(
   let generation = 0;
   const pending = new Set<{ resolve: () => void; reject: (error: unknown) => void }>();
   let waiting: { resolve: () => void; reject: (error: unknown) => void }[] = [];
-  const matches = (query: Query, request: QueryReconciliation) =>
+  const matches = (query: Query, request: Request) =>
     !request.accepted?.has(query.queryHash) && (
-      request.predicate?.(query) || request.changes.some((change) =>
+      request.queryKeys?.some((queryKey) => !request.fallbackAccepted?.has(query.queryHash)
+        && matchQuery({ queryKey, exact: true }, query))
+      || request.predicate?.(query) || request.changes.some((change) =>
         authoredQueryReadsLiveChange(query.meta, change) || nativeReadsChange(query, change))
     );
 
@@ -157,7 +165,15 @@ export function createAuthoredLiveInvalidation(
     }
   }
 
-  function reconcile(request: QueryReconciliation): Promise<void> {
+  function reconcile(effect: QueryReconciliation, local = true): Promise<void> {
+    // Remote events share the queue, but never grant local acceptance or
+    // change the settlement contract of a command currently collecting effects.
+    for (const batch of local ? batches : []) {
+      effect.accepted?.forEach((key) => batch.accepted.add(key));
+      if (effect.background) batch.background = true;
+      else if (!effect.queryKeys?.length) batch.legacy = true;
+    }
+    const request: Request = { ...effect, fallbackAccepted: local ? batches.at(-1)?.accepted : undefined };
     const predicate = (query: Query) => matches(query, request);
     void queryClient.cancelQueries({ predicate: (query) => query.state.fetchStatus !== "idle" && predicate(query) });
     void queryClient.invalidateQueries({ predicate, type: "all", refetchType: "none" });
@@ -179,6 +195,7 @@ export function createAuthoredLiveInvalidation(
     clear() {
       generation++;
       batchDepth = 0;
+      batches = [];
       if (timer !== undefined) clearTimeout(timer);
       requests = [];
       deliveries = [];
@@ -192,6 +209,8 @@ export function createAuthoredLiveInvalidation(
     async batch<T>(run: () => Promise<T>): Promise<T> {
       const started = generation;
       batchDepth++;
+      const scope = { accepted: new Set<string>(), background: false, legacy: false };
+      batches.push(scope);
       let failed = false;
       try {
         return await run();
@@ -201,9 +220,14 @@ export function createAuthoredLiveInvalidation(
       } finally {
         if (started === generation) {
           batchDepth--;
+          batches.pop();
           if (batchDepth === 0) {
-            try { await flush(); }
-            catch (error) { if (!failed) throw error; }
+            const refresh = flush();
+            if (scope.background && !scope.legacy) void refresh.catch(() => undefined);
+            else {
+              try { await refresh; }
+              catch (error) { if (!failed) throw error; }
+            }
           }
         }
       }
@@ -211,7 +235,7 @@ export function createAuthoredLiveInvalidation(
     reconcile,
     push(change, deliver) {
       if (deliver) deliveries.push(deliver);
-      void reconcile({ changes: [change] }).catch(() => undefined);
+      void reconcile({ changes: [change] }, false).catch(() => undefined);
     },
   };
 }
@@ -275,6 +299,8 @@ export interface MutationReconciliationOptions<TData, TVariables> {
   records?: Effects<TData, TVariables, AuthoredLiveChange>;
   invalidateModels?: readonly string[];
   invalidates?: Effects<TData, TVariables, NativeInvalidation>;
+  /** Exact read owned by a form; batches coalesce this fallback with declared effects. */
+  queryKeys?: readonly QueryKey[];
 }
 
 function effectValues<TData, TVariables, TValue>(
@@ -330,13 +356,14 @@ export function useReconcileMutationResponse() {
         return [];
       });
     });
-    if (changes.length === 0 && filters.length === 0 && customTargets.length === 0) return;
+    if (changes.length === 0 && filters.length === 0 && customTargets.length === 0 && !options.queryKeys?.length && !options.acceptResponse) return;
     const predicate = (query: Query) => filters.some((filter) => matchQuery(filter, query));
-    const request = { changes, predicate, accepted };
+    const exactFallback = (query: Query) => options.queryKeys?.some((queryKey) => matchQuery({ queryKey, exact: true }, query)) ?? false;
+    const request = { changes, predicate, accepted, queryKeys: options.queryKeys, background: Boolean(options.acceptResponse) };
     const scheduler = publish?.[mutationReconciliation];
     if (scheduler) {
       const refresh = Promise.all([
-        ...(changes.length || filters.length ? [scheduler.reconcile(request)] : []),
+        ...(changes.length || filters.length || options.queryKeys?.length || options.acceptResponse ? [scheduler.reconcile(request)] : []),
         ...customTargets.map((target) => invalidate(target)),
       ]);
       if (options.acceptResponse) void refresh.catch(() => undefined);
@@ -348,12 +375,12 @@ export function useReconcileMutationResponse() {
         await Promise.all([
           ...customTargets.map((target) => invalidate(target)),
           invalidateAuthoredQueriesMatching(client, (query) => !accepted.has(query.queryHash)
-            && (predicate(query) || changes.some((change) => authoredQueryReadsLiveChange(query.meta, change)))),
+            && (exactFallback(query) || predicate(query) || changes.some((change) => authoredQueryReadsLiveChange(query.meta, change)))),
         ]);
       } else {
         await Promise.all([
           ...targets.map((target) => invalidate(target)),
-          invalidateAuthoredQueriesMatching(client, (query) => changes.some((change) => authoredQueryReadsLiveChange(query.meta, change))),
+          invalidateAuthoredQueriesMatching(client, (query) => exactFallback(query) || changes.some((change) => authoredQueryReadsLiveChange(query.meta, change))),
         ]);
       }
     })();

@@ -33,7 +33,7 @@ import {
   type HttpError,
 } from "@refinedev/core";
 import { set, useForm, type FieldErrors } from "react-hook-form";
-import { replaceEqualDeep, useMutation, useQueryClient } from "@tanstack/react-query";
+import { replaceEqualDeep, useMutation, useQueryClient, type QueryKey } from "@tanstack/react-query";
 
 import type { UiTranslate } from "../../i18n";
 import { useToast } from "../../feedback";
@@ -181,6 +181,8 @@ export interface FormViewSaveSurface {
   applyPatch: (patch: Record<string, unknown>) => Promise<Row | null>;
   patchRecord: (patch: Record<string, unknown>) => void;
   reload: () => Promise<Row | null>;
+  /** Native projection identity for coalescing automatic action completion. */
+  refreshQueryKey?: QueryKey;
   afterFieldChange: (field: FieldDescriptor, value: unknown, scope?: string) => void;
   fieldReadOnly: (field: FieldDescriptor) => boolean;
   startFieldInteraction: (path: string) => void;
@@ -906,6 +908,7 @@ export function useFormViewSave({
     applyPatch,
     patchRecord,
     reload,
+    refreshQueryKey: nativeReadEnabled ? detailKey : undefined,
     afterFieldChange,
     fieldReadOnly,
     startFieldInteraction,

@@ -210,3 +210,10 @@ the toolbar's record page. Bounded client resources and `RowsListView` group the
 loaded collection through TanStack Table.
 
 [React documentation](https://docs.angee.ai/react/) · [Package reference](https://docs.angee.ai/react/reference/ui/)
+
+Native `FormView` supplies its exact selected detail key to record actions.
+Default successful action completion coalesces that read with declared mutation
+effects, including typed action dialogs. Complete accepted projections skip only
+their own automatic fallback. `refresh: true` requests an explicit reload;
+`refresh: false` omits default completion. Custom acknowledged sources keep their
+opaque imperative reload contract.

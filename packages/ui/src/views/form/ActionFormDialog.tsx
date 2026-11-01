@@ -1,7 +1,7 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { useWatch, type Control } from "react-hook-form";
-import type { ActionOutcome } from "@angee/refine";
+import { useReconcileMutationResponse, type ActionOutcome } from "@angee/refine";
 
 import { DialogForm } from "../../fragments/DialogForm";
 import { ErrorBanner } from "../../fragments/ErrorBanner";
@@ -31,7 +31,7 @@ export interface ActionFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Called once with the successful (`ok`) outcome — e.g. to reload or follow its record. */
-  onSucceeded?: (outcome: ActionOutcome) => void;
+  onSucceeded?: (outcome: ActionOutcome) => void | Promise<void>;
   /**
    * Render the fields in a saved record's page flow and the submit in its
    * record toolbar instead of a dialog; success does not close it.
@@ -89,6 +89,7 @@ function ActionArgsDialog({
 }: ActionFormDialogProps & { args: ActionArgs }): React.ReactElement {
   const t = useUiT();
   const toolbarHost = useRecordChromeContextMaybe()?.toolbarHost;
+  const reconcile = useReconcileMutationResponse();
   const definition = isActionFormDefinition(declaredArgs) ? declaredArgs : undefined;
   const args = isActionFormDefinition(declaredArgs) ? EMPTY_ARGS : declaredArgs;
   const argNames = React.useMemo(
@@ -99,12 +100,13 @@ function ActionArgsDialog({
   const actionForm = useActionForm<ArgValues, ActionOutcome>({
     defaultValues: definition?.defaultValues ?? argDefaultValues(args, context),
     resolver: definition?.resolver,
-    submit: async (collected) => {
+    submit: (collected) => reconcile.batch(async () => {
       const result = await action.submit?.(serializeActionArgValues(args, collected), context);
-      return result && "status" in result ? result : actionOutcomeSubmitResult(result);
-    },
-    onSuccess: (_values, outcome) => {
-      onSucceeded?.(outcome);
+      const submitted = result && "status" in result ? result : actionOutcomeSubmitResult(result);
+      if (submitted.status === "ok") await onSucceeded?.(submitted.data);
+      return submitted;
+    }),
+    onSuccess: () => {
       if (!inline) onOpenChange(false);
     },
     fieldNames: argNames,
