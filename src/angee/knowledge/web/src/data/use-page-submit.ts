@@ -17,7 +17,7 @@ export function usePageSubmit(): FormSubmit {
       const result = data?.update_page_body;
       if (!result?.ok || !result.markdown) return;
       const accepted = result.markdown;
-      await acceptQuery(KnowledgePage, { id: String(variables.page) }, (current) => {
+      return await acceptQuery(KnowledgePage, { id: String(variables.page) }, (current) => {
         const page = current?.pages_by_pk;
         if (!page || !page.markdown) return current;
         return { ...current, pages_by_pk: { ...page, title: accepted.title, revision: accepted.revision,

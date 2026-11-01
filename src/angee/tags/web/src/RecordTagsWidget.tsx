@@ -46,9 +46,9 @@ function RecordTagsWidget({ readOnly }: WidgetRenderProps): React.ReactElement |
       const previous = relationIdList(tags);
       const added = wanted.filter((id) => !previous.includes(id));
       const removed = previous.filter((id) => !wanted.includes(id));
-      await reconcile.batch(async () => {
-        if (added.length) await tag({ type, id, tags: added });
-        if (removed.length) await untag({ type, id, tags: removed });
+      await reconcile.batch(async (reconciliation) => {
+        if (added.length) await tag({ type, id, tags: added }, { reconciliation });
+        if (removed.length) await untag({ type, id, tags: removed }, { reconciliation });
       });
     } catch (error) {
       toast.danger({ title: errorMessage(error, t("record.error")) });

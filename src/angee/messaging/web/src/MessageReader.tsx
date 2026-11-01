@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useAuthoredMutation } from "@angee/refine";
+import { useAuthoredMutation, type QueryDataAcceptanceResult } from "@angee/refine";
 import { senderAvatarUrl, senderDisplayName } from "@angee/parties";
 import {
   Avatar,
@@ -29,7 +29,7 @@ const STAR_MODELS = ["messaging.MessageStar", "messaging.Message"];
 export interface MessageReaderProps {
   message: MessageReaderData;
   /** The host Query adopts this projection before derived reads reconcile. */
-  acceptResponse?: (message: Pick<MessageReaderData, "id" | "starred">) => Promise<void>;
+  acceptResponse?: (message: Pick<MessageReaderData, "id" | "starred">) => QueryDataAcceptanceResult | Promise<QueryDataAcceptanceResult>;
   /** The attachment shown beside the body. The host owns where this lives: route or local state. */
   previewPartId?: string | null;
   /** An attachment chip asks the host to preview a part; Close passes null. A host that
@@ -69,7 +69,7 @@ export function MessageReader({
     invalidateModels: STAR_MODELS,
     records: [{ model: "messaging.Message", id: message.id, action: "update" }],
     acceptResponse: acceptResponse ? async (data) => {
-      if (data?.set_inbox_message_starred) await acceptResponse(data.set_inbox_message_starred);
+      if (data?.set_inbox_message_starred) return await acceptResponse(data.set_inbox_message_starred);
     } : undefined,
   });
   const [starError, setStarError] = React.useState<string>();

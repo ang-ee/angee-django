@@ -123,7 +123,7 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
   });
   const settlePromotion = useActionResultRun({ linkTo: PROJECT_MODEL });
   const promote = useRecordAction(async (id, context) => {
-    await settlePromotion(() => promoteTask(id, { expected_revision: context.record?.revision }));
+    await settlePromotion(() => promoteTask(id, { expected_revision: context.record?.revision }, { reconciliation: context.reconciliation }));
   });
   const [dropTask] = useActionOutcomeMutation<ActionFieldName>("drop_task", {
     invalidateModels: [TASK_MODEL],
@@ -139,7 +139,7 @@ export function useTaskFormDeclaration(selection: TaskFormSelection = {}): React
       }
       return (await dropTask(id, {
         reason: dropReason(dropReasonOptions, values.reason),
-      })) ?? { ok: false, message: t("task.action.failed") };
+      }, { reconciliation: context.reconciliation })) ?? { ok: false, message: t("task.action.failed") };
     },
     [dropReasonOptions, dropTask, t],
   );

@@ -100,7 +100,7 @@ test("composer posts one atomic note command without a duplicate binding refetch
   expect(sdk.createNote).toHaveBeenCalledExactlyOnceWith({
     model_label: target.modelLabel, record_id: target.recordId, vault: "vlt_1", role: "notes",
     body: "New first line\nMore detail", idempotency_key: expect.any(String),
-  });
+  }, { reconciliation: undefined });
   expect(source.onCreated).toBeUndefined();
   expect(sdk.refetch).not.toHaveBeenCalled();
 });

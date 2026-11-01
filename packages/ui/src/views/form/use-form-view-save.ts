@@ -19,6 +19,7 @@ import {
   useAngeeResourceSave,
   useReconcileMutationResponse,
   type MutationRootArguments,
+  type QueryDataAcceptance,
 } from "@angee/refine";
 import {
   useOne,
@@ -560,7 +561,7 @@ export function useFormViewSave({
       createdLines?: boolean;
       notify?: boolean;
       message?: string;
-    } = {}): Promise<Row | null> => {
+    } = {}): Promise<{ record: Row | null; acceptance?: QueryDataAcceptance }> => {
       // Submitted values acknowledge the local draft only. Cache data always
       // comes from the returned projection, never from the input patch.
       const submitted = Object.fromEntries((options.submittedFields ?? [])
@@ -569,13 +570,14 @@ export function useFormViewSave({
       const complete = selectedFieldsPresent(saved, mutationFields);
       const acceptedKey = savedId === null ? null : detailKeyFor(savedId);
       let accepted: Row = { ...(record ?? {}), ...submitted, ...saved };
+      let queryAcceptance: QueryDataAcceptance | undefined;
       if (acknowledgedSource === undefined && acceptedKey) {
         // A field is replaceable only when its declared selection is present.
         // This preserves missing nested fields and never guesses a deep merge.
         const returnedFields = mutationFields.filter((field) => selectedFieldsPresent(saved, [field]));
         const returnedNames = returnedFields.flatMap((field) => typeof field === "string" ? [field] : Object.keys(field));
         const patch = Object.fromEntries(returnedNames.map((name) => [name, saved[name]]));
-        await acceptQueryData<GetOneResponse<RowRecord>>(acceptedKey, (current) => {
+        queryAcceptance = await acceptQueryData<GetOneResponse<RowRecord>>(acceptedKey, (current) => {
           if (complete) {
             accepted = saved;
             return { ...current, data: saved };
@@ -587,7 +589,7 @@ export function useFormViewSave({
         }, { complete });
       }
       editBasisRecordRef.current = accepted;
-      if (!mounted.current) return null;
+      if (!mounted.current) return { record: null, acceptance: queryAcceptance };
       const savedValues = options.acceptedValues
         ?? recordToValues(accepted, formFields, linesSeed(rowsFromRecord(accepted)));
       if (isCreate || acknowledgedSource !== undefined) {
@@ -647,7 +649,7 @@ export function useFormViewSave({
       resetHistory();
       activeFieldInteractions.current.clear();
       if (isCreate) manualSlugFieldsRef.current.clear();
-      return accepted;
+      return { record: accepted, acceptance: queryAcceptance };
     },
     [acknowledgedSource, acceptQueryData, dataResource, detailKeyFor, emptyValues, form, formFields, id, isCreate, linesConfig, linesField, linesSeed, mutationFields, record, reset, resetDefaultValues, resetHistory, rowsFromRecord, setValue, syncRecordValues],
   );
@@ -656,7 +658,11 @@ export function useFormViewSave({
       const savedId = rowPublicId(saved, dataResource) ?? (isCreate ? null : id ?? null);
       const acceptance: { record: Row | null } = { record: null };
       await reconcileMutationResponse(saved, undefined, {
-        acceptResponse: async () => { acceptance.record = await commitSavedRecord(saved, options); },
+        acceptResponse: async () => {
+          const committed = await commitSavedRecord(saved, options);
+          acceptance.record = committed.record;
+          return committed.acceptance;
+        },
         records: !submitOwner && dataResource
           ? [{ model: dataResource.modelLabel, ...(savedId !== null ? { id: savedId } : {}) }]
           : [],

@@ -78,10 +78,10 @@ export function useFolderActions(): FolderActions {
     remove: (id) =>
       run(async () => {
         requireFolderResource(resource);
-        await reconcile.batch(async () => {
-          await deleteWithPreview.remove(id);
+        await reconcile.batch(async (reconciliation) => {
+          await deleteWithPreview.remove(id, { reconciliation });
           await reconcile(undefined, undefined, {
-            invalidateModels: [FILE_MODEL], invalidates: fileInvalidations,
+            invalidateModels: [FILE_MODEL], invalidates: fileInvalidations, reconciliation,
           });
         });
       }),

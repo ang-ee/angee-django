@@ -53,7 +53,7 @@ describe("account verbs follow the row's server projection", () => {
     await act(async () => { await deactivate.run?.(context()); });
     expect(mocks.setActive).toHaveBeenCalledExactlyOnceWith("user-1", {
       active: false, confirmed: true, expected_revision: 4,
-    });
+    }, { reconciliation: undefined });
   });
 
   test("rename collects only name fields and sends the expected revision", async () => {
@@ -68,7 +68,7 @@ describe("account verbs follow the row's server projection", () => {
     expect(outcome).toEqual({ ok: true, message: "Account renamed." });
     expect(mocks.rename).toHaveBeenCalledExactlyOnceWith("user-1", {
       first_name: "Ada", last_name: "Lovelace", confirmed: true, expected_revision: 4,
-    });
+    }, { reconciliation: undefined });
   });
 });
 
@@ -81,7 +81,7 @@ describe("one-time sign-in reveal", () => {
     expect(result.current.confirm).toBeTruthy();
     expect(mocks.options).toHaveBeenCalledWith(expect.objectContaining({ transient: true }));
     await act(async () => { await result.current.run?.(context()); });
-    expect(mocks.authored).toHaveBeenCalledExactlyOnceWith({ id: "user-1", confirmed: true, expectedRevision: 4 });
+    expect(mocks.authored).toHaveBeenCalledExactlyOnceWith({ id: "user-1", confirmed: true, expectedRevision: 4 }, { reconciliation: undefined });
     const reveal = mocks.reveal.mock.calls[0]?.[0];
     expect(reveal.secrets).toEqual([
       expect.objectContaining({ name: "username", value: "ada" }),
@@ -98,7 +98,7 @@ describe("one-time sign-in reveal", () => {
     expect(result.current.visibleWhen?.(record)).toBe(false);
     expect(result.current.visibleWhen?.({ ...record, account_actions: ["ISSUE_PASSWORD"] })).toBe(true);
     await act(async () => { await result.current.run?.(context()); });
-    expect(mocks.authored).toHaveBeenCalledExactlyOnceWith({ id: "user-1" });
+    expect(mocks.authored).toHaveBeenCalledExactlyOnceWith({ id: "user-1" }, { reconciliation: undefined });
     expect(mocks.reveal).toHaveBeenCalledWith(expect.objectContaining({ secrets: [
       expect.objectContaining({ value: "grace" }),
       expect.objectContaining({ value: "first-secret" }),

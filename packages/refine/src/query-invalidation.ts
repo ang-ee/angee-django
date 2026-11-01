@@ -267,13 +267,22 @@ export function createAuthoredLiveInvalidation(
   };
 }
 
+/** Ephemeral evidence: the exact native Query and its existing accepted-write marker. */
+export interface QueryDataAcceptance {
+  readonly query: Query;
+  readonly marker: { readonly complete: boolean; readonly dataUpdateCount: number };
+}
+
+/** Void callbacks can accept local state but prove no native projection exclusion. */
+export type QueryDataAcceptanceResult = void | QueryDataAcceptance | readonly (QueryDataAcceptance | undefined)[];
+
 /** Imperative exact acceptance; caller owns its actor/lifecycle scope. Hooks use useAcceptQueryData. */
 export function acceptQueryData<TData>(
   client: QueryClient,
   queryKey: QueryKey,
   data: Updater<TData | undefined, TData | undefined>,
   options: { complete?: boolean } = {},
-): Promise<void> {
+): Promise<QueryDataAcceptance | undefined> {
   return acceptScopedQueryData(client, queryKey, data, options, () => true);
 }
 
@@ -283,7 +292,7 @@ async function acceptScopedQueryData<TData>(
   data: Updater<TData | undefined, TData | undefined>,
   { complete = true }: { complete?: boolean },
   isCurrent: () => boolean,
-): Promise<void> {
+): Promise<QueryDataAcceptance | undefined> {
   if (!isCurrent()) throw new CancelledError({ silent: true });
   await client.cancelQueries({ queryKey, exact: true });
   if (!isCurrent()) throw new CancelledError({ silent: true });
@@ -295,14 +304,17 @@ async function acceptScopedQueryData<TData>(
     adopted = next !== undefined && next !== current;
     return adopted ? next : undefined;
   });
+  let evidence: QueryDataAcceptance | undefined;
   if (adopted) {
     const query = client.getQueryCache().find({ queryKey, exact: true });
-    if (query) query.setOptions({ ...query.options, meta: {
-      ...query.meta,
-      angeeAcceptedResponse: { complete, dataUpdateCount: query.state.dataUpdateCount },
-    } });
+    if (query) {
+      const marker = { complete, dataUpdateCount: query.state.dataUpdateCount };
+      query.setOptions({ ...query.options, meta: { ...query.meta, angeeAcceptedResponse: marker } });
+      evidence = { query, marker };
+    }
   }
   if (!complete) await client.invalidateQueries({ queryKey, exact: true, refetchType: "none" });
+  return evidence;
 }
 
 /** Capture the originating render's actor generation, including delayed callbacks. */
@@ -314,7 +326,7 @@ export function useAcceptQueryData() {
     queryKey: QueryKey,
     data: Updater<TData | undefined, TData | undefined>,
     options: { complete?: boolean } = {},
-  ): Promise<void> => acceptScopedQueryData(client, queryKey, data, options,
+  ): Promise<QueryDataAcceptance | undefined> => acceptScopedQueryData(client, queryKey, data, options,
     () => generation === publish?.[mutationReconciliation]?.generation),
   [client, publish, generation]);
 }
@@ -322,7 +334,7 @@ export function useAcceptQueryData() {
 type NativeInvalidation = Parameters<ReturnType<typeof useInvalidate>>[0];
 type Effects<TData, TVariables, TValue> = readonly TValue[] | ((data: TData, variables: TVariables) => readonly TValue[]);
 export interface MutationReconciliationOptions<TData, TVariables> extends MutationExecutionOptions {
-  acceptResponse?: (data: TData, variables: TVariables) => void | Promise<void>;
+  acceptResponse?: (data: TData, variables: TVariables) => QueryDataAcceptanceResult | Promise<QueryDataAcceptanceResult>;
   records?: Effects<TData, TVariables, AuthoredLiveChange>;
   invalidateModels?: readonly string[];
   invalidates?: Effects<TData, TVariables, NativeInvalidation>;
@@ -357,14 +369,15 @@ export function useReconcileMutationResponse() {
     const targets = effectValues(options.invalidates, data, variables);
     const accepted = new Set<string>();
     if (options.acceptResponse) {
-      const before = new Map(client.getQueryCache().getAll().map((query) => [query.queryHash, query.meta?.angeeAcceptedResponse]));
-      await options.acceptResponse(data, variables);
+      const result = await options.acceptResponse(data, variables);
       if (generation !== publish?.[mutationReconciliation]?.generation) return;
-      client.getQueryCache().getAll().forEach((query) => {
-        const projection = recordValue(query.meta?.angeeAcceptedResponse);
-        if (projection?.complete === true && !query.state.isInvalidated
-          && projection !== before.get(query.queryHash)
-          && projection.dataUpdateCount === query.state.dataUpdateCount) accepted.add(query.queryHash);
+      const evidence = !result ? [] : "query" in result ? [result] : result;
+      evidence.forEach((entry) => {
+        if (!entry) return;
+        const { query, marker } = entry;
+        if (marker.complete && query.meta?.angeeAcceptedResponse === marker
+          && !query.state.isInvalidated && marker.dataUpdateCount === query.state.dataUpdateCount
+          && client.getQueryCache().find({ queryKey: query.queryKey, exact: true }) === query) accepted.add(query.queryHash);
       });
     }
     // Explicit native policies retain useInvalidate's full selector/options

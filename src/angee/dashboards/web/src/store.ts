@@ -122,7 +122,7 @@ function useAcceptDashboard() {
   return React.useCallback(async (payload: FullPayload | null | undefined, target: AuthoredVariables<typeof DashboardDocument>["target"]) => {
     saveResult(payload);
     if (!payload) return;
-    await acceptQuery(DashboardDocument, { target }, { dashboard: payload });
+    return await acceptQuery(DashboardDocument, { target }, { dashboard: payload });
   }, [acceptQuery]);
 }
 
@@ -133,7 +133,7 @@ function useCreatePersonal() {
     errorFrom: (data) => payloadError(data?.create_personal_dashboard),
     acceptResponse: async (data) => {
       const payload = data?.create_personal_dashboard;
-      await acceptDashboard(payload, { scope: "PERSONAL", id: saveResult(payload).persistedId });
+      return await acceptDashboard(payload, { scope: "PERSONAL", id: saveResult(payload).persistedId });
     },
   });
   return React.useCallback(async (input: { name: string; description?: string; idempotencyKey: string }) => {
@@ -165,7 +165,7 @@ function useDashboard(target: DashboardTarget) {
     errorFrom: (data) => payloadError(data?.duplicate_dashboard),
     acceptResponse: async (data) => {
       const payload = data?.duplicate_dashboard;
-      await acceptDashboard(payload, { scope: "PERSONAL", id: saveResult(payload).persistedId });
+      return await acceptDashboard(payload, { scope: "PERSONAL", id: saveResult(payload).persistedId });
     },
   });
   const createPersonal = useCreatePersonal();

@@ -171,7 +171,7 @@ export function RecordThreadConversation({
   ];
   const acceptMessage = async (message: RecordMessageRow | null | undefined) => {
     if (!message) return;
-    await feed.acceptResponse(message.is_trashed ? [] : [message], {
+    return await feed.acceptResponse(message.is_trashed ? [] : [message], {
       absent_ids: message.is_trashed ? [message.id] : [],
     });
   };
@@ -200,7 +200,7 @@ export function RecordThreadConversation({
       // the accepted row immediately; filtered reads reconcile their own predicate.
       const kindMatches = feedScope.messageTypes.length === 0 ||
         feedScope.messageTypes.includes(result.message.message_type.toLowerCase());
-      await latestFeed.acceptResponse([result.message], { insert: !activeSearch && kindMatches });
+      return await latestFeed.acceptResponse([result.message], { insert: !activeSearch && kindMatches });
     },
   });
   const [markReadMutation, markReadState] = useAuthoredMutation(MarkRecordThreadReadDocument, {
@@ -208,7 +208,7 @@ export function RecordThreadConversation({
     errorFrom: (data) => data?.mark_record_thread_read,
     acceptResponse: async (data) => {
       const result = data?.mark_record_thread_read;
-      if (result) await acceptState({ unread_count: result.unread_count, needaction_count: result.needaction_count });
+      if (result) return await acceptState({ unread_count: result.unread_count, needaction_count: result.needaction_count });
     },
   });
   const [markMessageDone] = useAuthoredMutation(MarkRecordMessageDoneDocument, {
@@ -217,8 +217,8 @@ export function RecordThreadConversation({
     acceptResponse: async (data) => {
       const result = data?.mark_record_message_done;
       if (!result) return;
-      await acceptMessage(result.message);
-      await acceptState({ thread: result.thread, unread_count: result.unread_count, needaction_count: result.needaction_count });
+      return [await acceptMessage(result.message),
+        await acceptState({ thread: result.thread, unread_count: result.unread_count, needaction_count: result.needaction_count })];
     },
   });
   const [updateMessage] = useAuthoredMutation(UpdateRecordMessageDocument, {
@@ -227,7 +227,7 @@ export function RecordThreadConversation({
     acceptResponse: async (data) => {
       const result = data?.update_record_message;
       if (!result) return;
-      await acceptMessage(result.message);
+      return await acceptMessage(result.message);
     },
   });
   const [deleteMessage] = useAuthoredMutation(DeleteRecordMessageDocument, {
@@ -236,7 +236,7 @@ export function RecordThreadConversation({
     acceptResponse: async (data) => {
       const result = data?.delete_record_message;
       if (!result?.deleted_message_id) return;
-      await feed.acceptResponse([], { absent_ids: [result.deleted_message_id] });
+      return await feed.acceptResponse([], { absent_ids: [result.deleted_message_id] });
     },
   });
   const [trashMessage] = useAuthoredMutation(TrashRecordMessageDocument, {
@@ -245,8 +245,8 @@ export function RecordThreadConversation({
     acceptResponse: async (data) => {
       const result = data?.trash_record_message;
       if (!result) return;
-      await acceptMessage(result.message);
-      await acceptState({ removed_message_count: result.removed_message_count });
+      return [await acceptMessage(result.message),
+        await acceptState({ removed_message_count: result.removed_message_count })];
     },
   });
   const [restoreMessage] = useAuthoredMutation(RestoreRecordMessageDocument, {
@@ -255,19 +255,19 @@ export function RecordThreadConversation({
     acceptResponse: async (data) => {
       const result = data?.restore_record_message;
       if (!result) return;
-      await acceptMessage(result.message);
-      await acceptState({ removed_message_count: result.removed_message_count });
+      return [await acceptMessage(result.message),
+        await acceptState({ removed_message_count: result.removed_message_count })];
     },
   });
   const [setReaction] = useAuthoredMutation(SetRecordMessageReactionDocument, {
     records: (_data, variables) => messageEffects(variables.messageId),
     errorFrom: (data) => data?.set_record_message_reaction,
-    acceptResponse: async (data) => { await acceptMessage(data?.set_record_message_reaction.message); },
+    acceptResponse: async (data) => acceptMessage(data?.set_record_message_reaction.message),
   });
   const [setStarred] = useAuthoredMutation(SetRecordMessageStarredDocument, {
     records: (_data, variables) => messageEffects(variables.messageId),
     errorFrom: (data) => data?.set_record_message_starred,
-    acceptResponse: async (data) => { await acceptMessage(data?.set_record_message_starred.message); },
+    acceptResponse: async (data) => acceptMessage(data?.set_record_message_starred.message),
   });
 
   const [postKind, setPostKind] = React.useState<RecordMessagePostKind>(stream?.postKind ?? "COMMENT");

@@ -63,10 +63,10 @@ export function useProjectFormDeclaration(selection: ProjectFormSelection = {}):
     invalidateModels: [PROJECT_MODEL],
     records: (_outcome, input) => [{ model: PROJECT_MODEL, id: String(input.id) }],
   });
-  const pauseProject = useRecordAction((id, context) => pause(id, { expected_revision: context.record?.revision }));
-  const resumeProject = useRecordAction((id, context) => resume(id, { expected_revision: context.record?.revision }));
-  const completeProject = useRecordAction((id, context) => complete(id, { expected_revision: context.record?.revision }));
-  const dropProject = useRecordAction((id, context) => drop(id, { expected_revision: context.record?.revision }));
+  const pauseProject = useRecordAction((id, context) => pause(id, { expected_revision: context.record?.revision }, { reconciliation: context.reconciliation }));
+  const resumeProject = useRecordAction((id, context) => resume(id, { expected_revision: context.record?.revision }, { reconciliation: context.reconciliation }));
+  const completeProject = useRecordAction((id, context) => complete(id, { expected_revision: context.record?.revision }, { reconciliation: context.reconciliation }));
+  const dropProject = useRecordAction((id, context) => drop(id, { expected_revision: context.record?.revision }, { reconciliation: context.reconciliation }));
   const standardActions = <>
     {(selection.verbs ?? ["pause", "resume", "complete", "drop"]).includes("pause") ? <Action
       id="pause" label={t("project.action.pause")} permission="write"

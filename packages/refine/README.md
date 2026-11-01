@@ -36,7 +36,12 @@ owner, including `transient` zero-GC/reset/single-flight handling for secret
 inputs and results. Both retain awaited refresh by default.
 `acceptResponse` opts a covered caller into completion after authoritative values
 have been adopted. `acceptQueryData` and `useSetAuthoredQueryData` cancel earlier
-exact reads and mark the projection they actually adopt. Actor-sensitive hooks
+exact reads and return evidence for the native projection they actually adopt.
+Return that evidence (or an array of actual setter results) from `acceptResponse`
+to exclude the response's complete projection from its own derived reconciliation.
+A void callback proves no query exclusion; unrelated concurrent acceptances are
+never inferred by scanning the cache. Partial evidence keeps the query stale.
+Actor-sensitive hooks
 compose `useAcceptQueryData`, which captures the originating Angee provider's
 generation and rejects delayed writes after suspension, including after exact
 cancellation. The plain imperative helper requires caller-owned lifecycle scope.
