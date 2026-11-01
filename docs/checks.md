@@ -136,17 +136,17 @@ Share source-addon compositions through their owning test apps:
 package docstrings own the adoption contract. Other reusable concrete
 compositions, including [`decisions`](../src/angee/decisions/testing/models.py)
 and [`messaging`](../src/angee/messaging/testing/models.py), register once
-through imports in the root conftest before database setup. The framework-generic
-[`composed_tables`](../src/angee/base/testing/fixtures.py) fixture uses native transactional
+through imports in the root conftest before database setup. The IAM-owned
+[`composed_tables`](../src/angee/iam/testing/fixtures.py) fixture uses native transactional
 isolation and synchronizes REBAC after each flush; use the native `db` fixture
 when a test needs neither transaction behavior nor permission synchronization.
 Composed hosts also install their schema during native database setup. Register
-`angee.base.testing.fixtures` through the root conftest's `pytest_plugins`; a runner
-that loads it explicitly must pass `-p django -p angee.base.testing.fixtures` in that
+`angee.iam.testing.fixtures` through the root conftest's `pytest_plugins`; a runner
+that loads it explicitly must pass `-p django -p angee.iam.testing.fixtures` in that
 order so pytest-django cannot shadow the shared `django_db_setup` override.
 Hosts installing provenance also register
 [`angee.provenance.testing.fixtures`](../src/angee/provenance/testing/fixtures.py)
-for test attribution; the generic framework plugin does not install that boundary.
+for test attribution; the IAM permission plugin does not install that boundary.
 A test that reaches a statement source needs the install-tier `provenance.Rule`
 principals parties declares: list
 [`angee.parties.testing.fixtures`](../src/angee/parties/testing/fixtures.py) in
@@ -162,6 +162,22 @@ through their native app lifecycle. Decisions-only suites use
 `angee.decisions.testing` drivers with central concrete models. Name Python
 test modules `test_<concern>.py` and tests
 `test_<behavior>` so native discovery and focused file selection agree.
+
+### Optional IAM source fixtures
+
+These native pytest-django source rosters intentionally bypass the framework's
+full-capability conftest. They use the selected environment's existing dependencies
+and native test-database lifecycle; they do not create or install a host:
+
+```sh
+uv run --locked python -m pytest --noconftest --ds=tests.permissionless_settings -q tests/test_permissionless_base.py
+uv run --locked python -m pytest --noconftest --ds=tests.iam_only_settings -q tests/test_permissionless_iam_composition.py
+```
+
+The first proves ordinary CRUD and generic-reference deletion without auth, IAM or
+REBAC imports. The second proves IAM-only capability activation and native
+abstract-target/QuerySet composition. Emitted protected-host runtime and final
+SQL authorization checks remain integration gates.
 
 ### Owner Search
 

@@ -7,7 +7,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied
 from rebac import SubjectRef
 
-from angee.base.querysets import AngeeQuerySet
+from angee.iam.querysets import ProtectedQuerySet
 from angee.provenance import evidence
 
 
@@ -16,7 +16,7 @@ def test_evidence_readers_preserve_selected_database(monkeypatch, reader):
     reference = evidence.EvidenceReference(model="contenttypes.ContentType", id="record")
     selected = SimpleNamespace(name="selected database")
     wrong = SimpleNamespace(name="wrong default database")
-    rows = AngeeQuerySet(model=ContentType)
+    rows = ProtectedQuerySet(model=ContentType)
     monkeypatch.setattr(evidence, "require_rebac_queryset", lambda model: rows)
     monkeypatch.setattr(evidence, "model_resource_type", lambda model: "evidence/test")
     observed = []
@@ -39,7 +39,7 @@ def test_evidence_readers_preserve_selected_database(monkeypatch, reader):
 
 def test_selected_database_does_not_waive_an_unreadable_participant(monkeypatch):
     reference = evidence.EvidenceReference(model="contenttypes.ContentType", id="record")
-    rows = AngeeQuerySet(model=ContentType)
+    rows = ProtectedQuerySet(model=ContentType)
     monkeypatch.setattr(evidence, "require_rebac_queryset", lambda model: rows)
     monkeypatch.setattr(evidence, "model_resource_type", lambda model: "evidence/test")
     calls = []

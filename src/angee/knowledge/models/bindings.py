@@ -22,13 +22,13 @@ from rebac import (
 from rebac.field_backing import canonical_model
 
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.merge_references import MergePolicy
-from angee.base.models.refs import RecordRefMixin
-from angee.base.models.trash import TrashMixin
-from angee.base.permissions import actor_user_id
 from angee.base.querysets import row_lock_paths
 from angee.base.refs import RecordRef, record_view_refs
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.refs import ProtectedRecordRefMixin
+from angee.iam.models.trash import ProtectedTrashMixin
+from angee.iam.permissions import actor_user_id
 from angee.provenance.context import changeset, changeset_model, require_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -189,7 +189,7 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
                         .select_for_update(of=row_lock_paths(type(owner)), no_key=True)
                         .get(pk=owner.pk)
                     )
-                    assert isinstance(owner, TrashMixin)
+                    assert isinstance(owner, ProtectedTrashMixin)
                     if owner.is_trashed:
                         raise ValidationError("Cannot bind a page in the trash.")
             binding, _created = bindings.get_or_create(**self._key(target, page=owner, vault=vault, role=role))
@@ -226,7 +226,7 @@ class RecordBindingManager[BindingT: RecordBinding](_RecordBindingManagerBase[Bi
         }
 
 
-class RecordBinding(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class RecordBinding(AuditMixin, ProtectedRecordRefMixin, HistoryMixin, ProtectedDataModel, concrete=True):
     """Role-keyed edge from a knowledge Page/Vault to any REBAC record.
 
     The target is canonicalized to its topmost REBAC-typed MTI ancestor. The

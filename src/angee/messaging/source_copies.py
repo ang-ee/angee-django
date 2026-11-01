@@ -3,7 +3,7 @@
 A source thread or message is one channel's occurrence. When evidence says two
 occurrences are the same (an RFC Message-ID received through two accounts, or a
 person's decision), the pair's ``same_as`` statement is the fact and
-:class:`~angee.base.models.merge.MergeableMixin` the mechanism: applying the statement
+:class:`~angee.iam.models.merge.ProtectedMergeableMixin` the mechanism: applying the statement
 folds the newer copy into the older through ``merged_into`` and nothing else
 moves, so reply transport, delivery, cursors and purge keep addressing the
 physical row. Readers collapse copies through
@@ -22,7 +22,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from rebac import system_context, to_subject_ref
 
-from angee.base.models.merge import MergeableMixin
+from angee.iam.models.merge import ProtectedMergeableMixin
 from angee.parties.models import Handle
 from angee.provenance.context import changeset
 from angee.provenance.evidence import EvidenceReference
@@ -35,7 +35,7 @@ SOURCE_IDENTITY_RULE = "messaging.source_identity"
 """The provenance rule that asserts email copies, and the reason its folds record."""
 
 
-class SourceCopyMixin(MergeableMixin, StatementsMixin, models.Model):
+class SourceCopyMixin(ProtectedMergeableMixin, StatementsMixin, models.Model):
     """A channel occurrence; an applied ``same_as`` statement folds it into its oldest copy."""
 
     channel_id: int | None

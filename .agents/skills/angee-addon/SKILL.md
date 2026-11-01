@@ -177,7 +177,7 @@ wires declarations only; the reference example throughout is `examples/src/examp
 - Model or `django.conf.settings` imports at `apps.py`/`autoconfig.py` module scope: settings merge runs before apps are ready, so only `ready()` and `settings(namespace)` may import ([Autoconfig](../../../docs/composer.md#autoconfig)).
 - A module named for a noun (`statements.py`) when the concern already has an owning module (`models.py`, `managers.py`, a verb module) ([Naming](../../../docs/backend/guidelines.md#naming)).
 - Customer, deployment or product names in framework-level code or fixtures; a consumer addon names its own product ([naming](../../../docs/guidelines.md#name-so-code-can-be-found-not-guessed)).
-- Caveated REBAC subjects in `permissions.zed`: actor-scoped querysets have no caveat context, so `angee.E024` rejects them (`src/angee/base/checks.py:37`); use field-backed conditional relations.
+- Caveated REBAC subjects in `permissions.zed`: actor-scoped querysets have no caveat context, so `angee.E024` rejects them (`src/angee/iam/checks.py:37`); use field-backed conditional relations.
 - An addon bundle under the `ui` i18n namespace or keys that override shared copy: the addon namespace equals its id and `ui` is reserved ([reserved namespace](../../../docs/frontend/guidelines.md#reserved-translation-namespace)).
 - A manifest typed by annotation (`const x: BaseAddon = {…}`) instead of `defineBaseAddon`, which owns validation of the declared shape ([frontend rules](../../../docs/frontend/guidelines.md#rules)).
 

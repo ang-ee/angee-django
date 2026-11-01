@@ -4,10 +4,10 @@ from django.db import models
 from django.db.migrations.state import ModelState
 from django.test.utils import isolate_apps
 
-from angee.base.models.base import AngeeDataModel
-from angee.base.models.merge import MergeableMixin
 from angee.base.models.merge_references import ForeignKeyReference, MergeContractMixin, MergePolicy
 from angee.base.models.trash import ArchiveMixin
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.merge import ProtectedMergeableMixin
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
 
@@ -23,12 +23,12 @@ def test_merge_base_preserves_existing_composed_field_state_and_mro() -> None:
             class Meta:
                 abstract = True
 
-        class Legacy(HistoryMixin, LegacyMergeable, ArchiveMixin, AngeeDataModel):
+        class Legacy(HistoryMixin, LegacyMergeable, ArchiveMixin, ProtectedDataModel):
             class Meta:
                 abstract = True
                 app_label = "merge_contract"
 
-        class Composed(HistoryMixin, MergeableMixin, ArchiveMixin, AngeeDataModel):
+        class Composed(HistoryMixin, ProtectedMergeableMixin, ArchiveMixin, ProtectedDataModel):
 
             _angee_base = AngeeHistoryMergeableUnscopedManager()
             class Meta:
@@ -44,7 +44,7 @@ def test_merge_base_preserves_existing_composed_field_state_and_mro() -> None:
         }
         assert before.options == after.options
         assert [base for base in Legacy.__mro__[1:] if base is not LegacyMergeable] == [
-            base for base in Composed.__mro__[1:] if base is not MergeableMixin
+            base for base in Composed.__mro__[1:] if base is not ProtectedMergeableMixin
         ]
 
 
@@ -67,20 +67,20 @@ def test_reference_contracts_continue_to_accept_plain_django_models() -> None:
         assert reference.holds(row)
         assert reference.lookup(row) == {"target_id": 7}
         assert reference.columns == ("target",)
-        assert not issubclass(Link, AngeeDataModel)
+        assert not issubclass(Link, ProtectedDataModel)
 
 
 def test_real_foreign_key_on_generic_edge_always_blocks_creation_undo():
     from django.contrib.contenttypes.fields import GenericForeignKey
 
-    from angee.base.models.refs import RecordRefMixin
+    from angee.iam.models.refs import ProtectedRecordRefMixin
 
     with isolate_apps():
         class Target(models.Model):
             class Meta:
                 app_label = "merge_contract"
 
-        class Edge(RecordRefMixin):
+        class Edge(ProtectedRecordRefMixin):
             target = models.ForeignKey(Target, on_delete=models.CASCADE)
             content_type = models.ForeignKey("contenttypes.ContentType", on_delete=models.CASCADE)
             object_id = models.PositiveIntegerField()

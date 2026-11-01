@@ -19,10 +19,10 @@ from import_export.utils import get_related_model
 
 from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.implementations import ImplDefaultsMixin
-from angee.base.models.refs import RecordRefMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.models.transitions import StateTransitions
 from angee.base.serialization import ASCII_JSON, canonical_json_sha256, json_safe
+from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.resources.entries import ResourceEntry, resolve_model
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.kinds import ResourceKindDeclarations
@@ -223,7 +223,7 @@ class AngeeResource(resources.ModelResource):
             for field in instance._meta.concrete_fields
             if not field.primary_key and (field.name in imported_fields or field.attname in imported_fields)
         }
-        if isinstance(instance, RecordRefMixin):
+        if isinstance(instance, ProtectedRecordRefMixin):
             reference = instance.record_ref_field()
             if reference.name in imported_fields:
                 self._update_fields.update((reference.ct_field, reference.fk_field))
@@ -790,7 +790,7 @@ def build_resource(
     if not isinstance(resource_class, type) or not issubclass(resource_class, AngeeResource):
         raise ImproperlyConfigured(f"{model._meta.label}.resource_class must subclass AngeeResource")
     custom_fields = {"_xref": fields.Field(attribute=None, column_name="_xref", readonly=True)}
-    if issubclass(model, RecordRefMixin):
+    if issubclass(model, ProtectedRecordRefMixin):
         prefix = model.record_ref_field().name
         if prefix in resource_class.fields:
             raise ImproperlyConfigured(f"{model._meta.label}: resource field {prefix!r} is owned by RecordRefMixin")

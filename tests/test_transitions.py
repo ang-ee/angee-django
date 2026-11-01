@@ -18,7 +18,6 @@ from angee.agents.models import AgentLifecycle, SessionStatus, TurnStatus
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceProvider
 from angee.base.exceptions import TransitionNotAllowed
 from angee.base.fields.state import StateField
-from angee.base.models.base import AngeeModel
 from angee.base.models.transitions import (
     StateTransitions,
     StateTransitionsMixin,
@@ -26,6 +25,7 @@ from angee.base.models.transitions import (
     save_state,
     transition,
 )
+from angee.iam.models.base import ProtectedModel
 from angee.integrate.models import IntegrationLifecycle
 from angee.integrate.testing.integration import Integration
 from tests.conftest import make_integration
@@ -71,7 +71,7 @@ def persist_after_review(instance: Any, source: Any, target: Any) -> None:
     save_state(instance, source, target)
 
 
-class TransitionTask(AngeeModel):
+class TransitionTask(ProtectedModel):
     """Concrete throwaway model used for guarded-transition tests."""
 
     class State(models.TextChoices):
@@ -187,7 +187,7 @@ def test_transition_host_requires_state_transitions_mixin() -> None:
 def test_composition_missing_declared_state_field_names_host_and_declaration() -> None:
     """Removing an abstract field cannot leave its inherited declaration dangling."""
 
-    class StateSource(AngeeModel):
+    class StateSource(ProtectedModel):
         state = StateField(choices_enum=TransitionTask.State, default=TransitionTask.State.DRAFT)
         state_transitions = StateTransitions(state, {})
 
@@ -720,7 +720,7 @@ def test_not_allowed_public_helper_raises_the_transition_error(transition_task_t
     assert "state transition from draft to archived" in str(error.value)
 
 
-class PolicyTask(AngeeModel):
+class PolicyTask(ProtectedModel):
     """Throwaway model exercising the settings-backed transition policy overlay."""
 
     class State(models.TextChoices):
@@ -847,7 +847,7 @@ def test_policy_marker_requires_a_policy_setting() -> None:
 
     with pytest.raises(ImproperlyConfigured):
 
-        class Unresolvable(AngeeModel):
+        class Unresolvable(ProtectedModel):
             """Model whose policy edge has no settings key to resolve it."""
 
             class State(models.TextChoices):

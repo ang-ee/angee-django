@@ -12,8 +12,8 @@ from django.db import models, transaction
 from django.utils import timezone
 from rebac import current_actor
 
-from angee.base.managers import AngeeManager
-from angee.base.querysets import AngeeQuerySet
+from angee.iam.managers import ProtectedManager
+from angee.iam.querysets import ProtectedQuerySet
 from angee.messaging.managers import MessageQuerySet
 
 if TYPE_CHECKING:
@@ -79,7 +79,7 @@ class NexusOverviewRows:
     due_count: int
 
 
-class TieQuerySet[TieT: Tie](AngeeQuerySet[TieT]):
+class TieQuerySet[TieT: Tie](ProtectedQuerySet[TieT]):
     """Party-pair scopes over the derived edge collection."""
 
     def around_party(self, party: Any) -> Self:
@@ -544,7 +544,7 @@ class TieQuerySet[TieT: Tie](AngeeQuerySet[TieT]):
         )
 
 
-_TieManagerBase = AngeeManager.from_queryset(TieQuerySet)
+_TieManagerBase = ProtectedManager.from_queryset(TieQuerySet)
 
 
 class TieManager[TieT: Tie](_TieManagerBase[TieT]):
@@ -722,7 +722,7 @@ class TieManager[TieT: Tie](_TieManagerBase[TieT]):
         return addressed_rows, reply_rows, mention_rows
 
 
-class CadenceManager[CadenceT: Cadence](AngeeManager[CadenceT]):
+class CadenceManager[CadenceT: Cadence](ProtectedManager[CadenceT]):
     """Own derived due-date refreshes for the human cadence collection."""
 
     def refresh_touch_due(self) -> None:

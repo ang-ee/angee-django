@@ -13,7 +13,7 @@ from django.utils import timezone
 from rebac import database_context
 from rebac.database import write_alias
 
-from angee.base.querysets import AngeeQuerySet
+from angee.iam.querysets import ProtectedQuerySet
 from angee.integrate.states import SyncFailure, SyncFailureKind, SyncFailureStatus
 
 if TYPE_CHECKING:
@@ -51,7 +51,7 @@ class SyncStateMixin(models.Model):
         stream = self.failure_stream
         type(stream).objects.db_manager(using).lock_current(stream)
         rows = type(self)._default_manager.db_manager(using).get_queryset()
-        assert isinstance(rows, AngeeQuerySet)
+        assert isinstance(rows, ProtectedQuerySet)
         return rows.lock_if_supported().get(pk=self.pk)
 
     def on_sync_state_saved(self, locked: Self) -> None:

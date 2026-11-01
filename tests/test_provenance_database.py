@@ -19,7 +19,7 @@ class DefaultRouter:
     db_for_write = db_for_read
 settings.configure(
     INSTALLED_APPS=['django.contrib.contenttypes', 'django.contrib.auth', 'rebac',
-                    'simple_history', 'angee.base', 'angee.provenance', 'angee.provenance.testing'],
+                    'simple_history', 'angee.base', 'angee.iam', 'angee.provenance', 'angee.provenance.testing'],
     SECRET_KEY='actual-storage-alias-test', AUTH_USER_MODEL='auth.User',
     PROVENANCE_CHANGESET_MODEL='provenance.Changeset', ANGEE_MERGE_GUARDS=[],
     PROVENANCE_POLICY='angee.provenance.contrib.angee.policy.AngeePolicy',
@@ -111,7 +111,7 @@ with transaction.atomic(using='selected'):
     assert locked._state.db == 'selected' and locked.value == 'selected'
 
 from django.core.exceptions import ImproperlyConfigured
-from angee.base.models.base import AngeeDataModel
+from angee.iam.models.base import ProtectedDataModel
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.statements import StatementsMixin
 try:
@@ -120,7 +120,7 @@ except ImproperlyConfigured:
     pass
 else:
     raise AssertionError('Angee replay requires co-located source/history/Changeset storage')
-class ReplayRow(StatementsMixin, HistoryMixin, AngeeDataModel):
+class ReplayRow(StatementsMixin, HistoryMixin, ProtectedDataModel):
     title = models.CharField(max_length=30)
     counter = models.IntegerField(default=0)
     history = ModelHistory(inherit=True, excluded_fields=['counter'])
@@ -148,9 +148,10 @@ with actor_context(actor), database_context('default'):
         selected_row.save(using='selected', update_fields=['title'])
         edited = context.current_changeset(required=True)
     assert edited._state.db == 'selected'
-    assert ReplayRow.history.using('selected').filter(changeset_id=edited.pk).exists()
-    version = ReplayRow.history.using('selected').filter(changeset_id=edited.pk).select_related('changeset').get()
-    assert version.changeset._state.db == 'selected'
+    assert ReplayRow.history.using('selected').filter(history_changeset_id=edited.pk).exists()
+    version = (ReplayRow.history.using('selected').filter(history_changeset_id=edited.pk)
+               .select_related('history_changeset').get())
+    assert version.history_changeset._state.db == 'selected'
     restored = version.get_instance(using='selected')
     assert restored._state.db == 'selected' and restored.counter == 7
     reverted = edited.revert()

@@ -13,9 +13,9 @@ from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from rebac.managers import TrackedQuerySet
 
-from angee.base.managers import AngeeManager, AngeeUnscopedManager
-from angee.base.models.base import AngeeModel
-from angee.base.querysets import AngeeQuerySet, AngeeUnscopedQuerySet
+from angee.iam.managers import ProtectedManager, ProtectedUnscopedManager
+from angee.iam.models.base import ProtectedModel
+from angee.iam.querysets import ProtectedQuerySet, ProtectedUnscopedQuerySet
 from tests.conftest import Drive, File, Integration
 from tests.tables import model_tables
 
@@ -29,7 +29,7 @@ SQLITE_ONLY = pytest.mark.skipif(
 )
 
 
-class SystemQueryThing(AngeeModel):
+class SystemQueryThing(ProtectedModel):
     """Concrete Angee model used to exercise the system queryset owner."""
 
     name = models.CharField(max_length=32)
@@ -40,7 +40,7 @@ class SystemQueryThing(AngeeModel):
         app_label = "tests"
 
 
-class GuardedSystemQuerySet(AngeeQuerySet["GuardedSystemQueryThing"]):
+class GuardedSystemQuerySet(ProtectedQuerySet["GuardedSystemQueryThing"]):
     """Test-local queryset whose write rule must survive system elevation."""
 
     def update(self, **kwargs: object) -> int:
@@ -51,7 +51,7 @@ class GuardedSystemQuerySet(AngeeQuerySet["GuardedSystemQueryThing"]):
         return super().update(**kwargs)
 
 
-class GuardedSystemManager(AngeeManager.from_queryset(GuardedSystemQuerySet)):  # type: ignore[misc]
+class GuardedSystemManager(ProtectedManager.from_queryset(GuardedSystemQuerySet)):  # type: ignore[misc]
     """Keep a manager-owned base predicate on elevated querysets."""
 
     def get_queryset(self) -> GuardedSystemQuerySet:
@@ -60,7 +60,7 @@ class GuardedSystemManager(AngeeManager.from_queryset(GuardedSystemQuerySet)):  
         return super().get_queryset().filter(selected=True)
 
 
-class GuardedSystemQueryThing(AngeeModel):
+class GuardedSystemQueryThing(ProtectedModel):
     """Concrete model proving system paths preserve domain queryset ownership."""
 
     name = models.CharField(max_length=32)
@@ -86,11 +86,11 @@ def test_locking_base_managers_preserve_unscoped_reads_and_default_owners(model:
     assert queryset._db == "default"
     assert queryset.query.select_for_update is True
     assert queryset.query.select_for_update_of == ("self",)
-    assert isinstance(manager, AngeeUnscopedManager)
-    assert isinstance(queryset, AngeeUnscopedQuerySet)
+    assert isinstance(manager, ProtectedUnscopedManager)
+    assert isinstance(queryset, ProtectedUnscopedQuerySet)
 
 
-@pytest.mark.parametrize("queryset_class", [AngeeQuerySet, AngeeUnscopedQuerySet])
+@pytest.mark.parametrize("queryset_class", [ProtectedQuerySet, ProtectedUnscopedQuerySet])
 def test_lock_preserves_queryset_policy_and_declares_native_write_intent(queryset_class: Any) -> None:
     """Lock intent preserves the queryset and hints without mutating the original."""
 
@@ -109,7 +109,7 @@ def test_lock_preserves_queryset_policy_and_declares_native_write_intent(queryse
     assert locked.query.select_for_update_of == ("self",)
 
 
-@pytest.mark.parametrize("queryset_class", [AngeeQuerySet, AngeeUnscopedQuerySet])
+@pytest.mark.parametrize("queryset_class", [ProtectedQuerySet, ProtectedUnscopedQuerySet])
 def test_lock_forwards_skip_locked_and_no_key(queryset_class: Any) -> None:
     """Both Angee queryset policies preserve the requested Django lock mode."""
 
@@ -192,7 +192,7 @@ def test_unscoped_locks_keep_native_base_manager_visibility(system_query_tables:
 
     selected = GuardedSystemQueryThing._base_manager.create(name="selected", selected=True)
     excluded = GuardedSystemQueryThing._base_manager.create(name="excluded", selected=False)
-    manager = AngeeUnscopedManager()
+    manager = ProtectedUnscopedManager()
     manager.model = GuardedSystemQueryThing
 
     with transaction.atomic():

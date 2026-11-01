@@ -12,13 +12,13 @@ from django.db.models import Q
 from django_provenance.querysets import ChangesetQuerySet as NativeChangesetQuerySet
 from simple_history.utils import get_history_manager_for_model
 
-from angee.base.querysets import AngeeQuerySet
+from angee.iam.querysets import ProtectedQuerySet
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.querysets import model_history
 from angee.provenance.statements import StatementsMixin
 
 
-class ChangesetQuerySet[T: models.Model](AngeeQuerySet[T], NativeChangesetQuerySet):
+class ChangesetQuerySet[T: models.Model](ProtectedQuerySet[T], NativeChangesetQuerySet):
     """Changeset scopes derived from the history contracts of records they touch."""
 
     def touching(self, record: Any) -> Self:

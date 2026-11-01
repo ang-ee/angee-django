@@ -42,21 +42,32 @@ from rebac.permissions_mixin import RebacPermissionsMixin
 from rebac.roles import ROLE_RELATION
 
 from angee.base.fields.state import StateField
-from angee.base.identity import canonical_subject_ref
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.identity import PublicIdentity
 from angee.base.models.locks import OptimisticLockMixin
-from angee.base.models.roles import role_anchor
 from angee.iam.choices import UserAccountAction as UserAccountAction
 from angee.iam.choices import UserKind as UserKind
 from angee.iam.exceptions import AccountExists as AccountExists
 from angee.iam.exceptions import AmbiguousAccountEmail as AmbiguousAccountEmail
-from angee.iam.identity import user_label
+from angee.iam.identity import canonical_subject_ref, user_label
 from angee.iam.managers import VIEWABLE_PEOPLE_MAX_LIMIT as VIEWABLE_PEOPLE_MAX_LIMIT
 from angee.iam.managers import VISIBLE_PEOPLE_DEFAULT_LIMIT as VISIBLE_PEOPLE_DEFAULT_LIMIT
 from angee.iam.managers import VISIBLE_PEOPLE_MAX_LIMIT as VISIBLE_PEOPLE_MAX_LIMIT
 from angee.iam.managers import UserManager as UserManager
 from angee.iam.managers import bounded_limit as bounded_limit
+from angee.iam.models.append_only import IAMAppendOnlyMixin as IAMAppendOnlyMixin
+from angee.iam.models.append_only import ProtectedAppendOnlyModel as ProtectedAppendOnlyModel
+from angee.iam.models.base import IAMProtectionMixin as IAMProtectionMixin
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.base import ProtectedModel as ProtectedModel
+from angee.iam.models.locks import IAMRowLockMixin as IAMRowLockMixin
+from angee.iam.models.locks import ProtectedRowLockMixin as ProtectedRowLockMixin
+from angee.iam.models.merge import IAMMergeableMixin as IAMMergeableMixin
+from angee.iam.models.merge import ProtectedMergeableMixin as ProtectedMergeableMixin
+from angee.iam.models.refs import IAMRecordRefMixin as IAMRecordRefMixin
+from angee.iam.models.refs import ProtectedRecordRefMixin as ProtectedRecordRefMixin
+from angee.iam.models.roles import role_anchor
+from angee.iam.models.trash import IAMTrashMixin as IAMTrashMixin
+from angee.iam.models.trash import ProtectedTrashMixin as ProtectedTrashMixin
 from angee.iam.querysets import UserQuerySet as UserQuerySet
 
 IAMKind = role_anchor("iam/kind", name="IAMKind")
@@ -73,7 +84,7 @@ def _require_confirmed(confirmed: bool, message: str) -> None:
         raise ValidationError({"confirmed": message})
 
 
-class Group(AngeeDataModel, concrete=True):
+class Group(ProtectedDataModel, concrete=True):
     """Named IAM principal set materialized into composed runtimes."""
 
     sqid_prefix = "igr_"
@@ -98,18 +109,31 @@ class Group(AngeeDataModel, concrete=True):
         """Select direct membership tuples for this group's canonical identity."""
 
         ref = to_object_ref(self)
-        return active_relationship_model().objects.using(self._state.db).filter(
-            resource_type=ref.resource_type, resource_id=ref.resource_id, relation=ROLE_RELATION,
-        ).order_by_subject()
+        return (
+            active_relationship_model()
+            .objects.using(self._state.db)
+            .filter(
+                resource_type=ref.resource_type,
+                resource_id=ref.resource_id,
+                relation=ROLE_RELATION,
+            )
+            .order_by_subject()
+        )
 
     def binding_rows(self) -> QuerySet[Any]:
         """Select bindings addressed to this group's declared member subject set."""
 
         subject = to_subject_ref(self)
-        return active_relationship_model().objects.using(self._state.db).filter(
-            subject_type=subject.subject_type, subject_id=subject.subject_id,
-            optional_subject_relation=subject.optional_relation,
-        ).order_by_resource()
+        return (
+            active_relationship_model()
+            .objects.using(self._state.db)
+            .filter(
+                subject_type=subject.subject_type,
+                subject_id=subject.subject_id,
+                optional_subject_relation=subject.optional_relation,
+            )
+            .order_by_resource()
+        )
 
     @staticmethod
     def member_subject(value: str, *, require_existing: bool = True) -> SubjectRef:
@@ -156,7 +180,7 @@ class Group(AngeeDataModel, concrete=True):
             )
 
 
-class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDataModel, concrete=True):
+class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, ProtectedDataModel, concrete=True):
     """Abstract swappable user model composed into Angee runtimes.
 
     ``kind=service`` rows are non-login principals for agents and automation:
@@ -165,7 +189,6 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, AngeeDa
     a revision, so account verbs and administrative updates refuse a stale
     expected revision.
     """
-
 
     sqid_prefix = "usr_"
 
@@ -514,7 +537,11 @@ class ServiceUserMixin(PublicIdentity, models.Model):
 
     service_user_prefix: ClassVar[str]
     user = models.OneToOneField(
-        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="%(class)s",
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="%(class)s",
     )
     """Non-login user authenticating, authorizing and attributing this row's actions."""
 
@@ -530,8 +557,14 @@ class ServiceUserMixin(PublicIdentity, models.Model):
         using = owner_rows.db
         with database_context(using), system_context(reason="iam.service_user.link"), transaction.atomic(using=using):
             owner = owner_rows.select_for_update().get(pk=self.pk)
-            user = get_user_model().objects.db_manager(using).ensure_service_user(
-                username=f"{self.service_user_prefix}-{self.public_id}", name=str(owner), user_id=owner.user_id,
+            user = (
+                get_user_model()
+                .objects.db_manager(using)
+                .ensure_service_user(
+                    username=f"{self.service_user_prefix}-{self.public_id}",
+                    name=str(owner),
+                    user_id=owner.user_id,
+                )
             )
             if owner.user_id != user.pk:
                 owner_rows.filter(pk=self.pk).update(user_id=user.pk)

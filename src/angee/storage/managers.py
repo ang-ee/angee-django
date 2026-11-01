@@ -35,9 +35,9 @@ from rebac.field_backing import resolve_field_backing
 from rebac.resources import model_resource_type
 from rebac.schema.introspection import permission_sources
 
-from angee.base.identity import canonical_subject_ref
-from angee.base.permissions import DirectRecordAccess
 from angee.base.querysets import row_lock_paths
+from angee.iam.identity import canonical_subject_ref
+from angee.iam.permissions import DirectRecordAccess
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.storage import exceptions
 from angee.storage.choices import FileVisibility, UploadState

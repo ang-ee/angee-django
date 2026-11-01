@@ -20,7 +20,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 | File or module | Owns | Reference |
 |---|---|---|
 | `<addon>/testing/models.py`, `tests/settings.py`, `tests/conftest.py` | concrete models of the bare host, the app roster, one-time registration | `src/angee/tags/testing/models.py:15-63`, `tests/settings.py:29-110`, `tests/conftest.py:645` |
-| `src/angee/base/testing/fixtures.py`, `permissions.py` | `django_db_setup` (`:17`), `composed_tables` (`:58`); `composed_permissions` (`permissions.py:41`) | module docstrings |
+| `src/angee/iam/testing/fixtures.py`, `permissions.py` | `django_db_setup` (`:17`), `composed_tables` (`:58`); `composed_permissions` (`permissions.py:41`) | module docstrings |
 | `tests/conftest.py` | actors and schema drivers: `create_user` (`:789`), `create_platform_admin` (`:974`), `vault_for` (`:795`), `addon_schema` (`:871`), `execute_schema` (`:893`), `result_data` (`:913`) | `tests/test_tags.py:46-55` |
 | `tests/test_<addon>*.py` (framework) / `<addon>/tests/test_*.py` (consumer) | the test modules, one per concern | `tests/test_tags.py`, `examples/src/example/notes/tests/` |
 | `tests/composed_host.py` | the composed-host subprocess that runs consumer `TransactionTestCase` modules in the framework suite | `tests/test_composed_note_workflow.py:17-40` |
@@ -183,7 +183,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 - Write a private REBAC-sync or table fixture beside `composed_tables`/`composed_permissions` ([source-addon test models](../../../docs/checks.md#source-addon-test-models)).
 - Register a second concrete model for a resource type, or create tables by hand instead of `tests/tables.py` `model_tables` ([environment and checks](references/environment.md)).
 - Ship admin-only GraphQL tests, or `force_login` without `backend="angee.iam.auth.ModelBackend"` ([GraphQL pitfalls](../angee-graphql/references/pitfalls.md), [authorization pitfalls](../angee-permissions/references/pitfalls.md)).
-- Add a caveated subject to make a conditional grant testable; use a field-backed relation (`angee.E024`, `src/angee/base/checks.py:37`).
+- Add a caveated subject to make a conditional grant testable; use a field-backed relation (`angee.E024`, `src/angee/iam/checks.py:37`).
 - Put `--nomigrations` or PostgreSQL settings into a module; mark PostgreSQL-only modules and let them skip on SQLite ([Python contracts](../../../docs/checks.md#python-and-composition-contracts)).
 - Pass a per-test timeout for a slow render, or copy provider setup instead of `createUiTestProviders`/`createRefineTestProviders` ([Frontend packages](../../../docs/checks.md#frontend-packages-and-addon-fragments)).
 - Import `test`/`expect` from `@playwright/test` in a spec or Page Object ([what ships](../../../docs/frontend/e2e.md#what-ships-in-the-framework)).
@@ -205,7 +205,7 @@ Validators: the new modules run standalone, the owning guards (`tests/test_layer
 - An abstract model imported while its app is absent keeps `app_label=None` for the whole process; the roster comment at `tests/settings.py:85-92` exists for that reason.
 - Patch an inherited manager method on `type(manager)`, not the instance; `db_manager()` copies lose an instance patch ([environment and checks](references/environment.md)).
 - A page rendered through the router must `findBy*` past the lazy boundary; importing the page component directly needs no wait ([page pitfalls](../angee-pages/references/pitfalls.md)).
-- A shared pytest plugin must defer model imports until the registry is populated (`src/angee/base/testing/permissions.py:19`, [what CI runs](../../../docs/checks.md#what-ci-actually-runs)).
+- A shared pytest plugin must defer model imports until the registry is populated (`src/angee/iam/testing/permissions.py:19`, [what CI runs](../../../docs/checks.md#what-ci-actually-runs)).
 - `composed_permissions` rewrites the synced schema with a forced overwrite into `tmp_path`; a module that edits a `.zed` on disk must do so under that fixture and never against the stack ([REBAC](../../../docs/backend/guidelines.md#rebac)).
 
 ## Read next
@@ -237,7 +237,7 @@ src/angee/tags/web/{vitest.config.ts,package.json,src/index.test.ts,src/views/Ta
 src/RecordTagsWidget.native.test.tsx}; src/angee/money/web/src/widgets/money.test.tsx;
 src/angee/workflows/web/src/{index.test.ts,TriggersPage.stories.tsx,TriggersPage.native.test.tsx,testing.ts};
 templates/addons/web/template/{vitest.config.ts,src/index.test.ts}.jinja; .github/workflows/reusable-checks.yml:60-80,
-240-300,440-520; src/angee/base/checks.py (E024 at :37).
+240-300,440-520; src/angee/iam/checks.py (E024 at :37).
 Doc/code mismatches: examples/e2e/playwright.config.ts cites docs/testing/e2e.md and packages/e2e/src/{index,pom}.ts cite
 docs/e2e.md; the file is docs/frontend/e2e.md. The consumer example ships no fragment tests (notes/web has only
 typecheck). No doc owns a story-authoring guide.

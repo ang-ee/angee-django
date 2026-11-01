@@ -24,10 +24,11 @@ from rebac import (
     system_context,
 )
 
-from angee.base.models.append_only import AppendOnlyQuerySet
-from angee.base.querysets import AngeeQuerySet, by_key
+from angee.base.querysets import by_key
 from angee.base.refs import RecordRef, record_view_refs
 from angee.base.signals import bulk_updated, changes_muted, mute_changes
+from angee.iam.models.append_only import ProtectedAppendOnlyQuerySet
+from angee.iam.querysets import ProtectedQuerySet
 from angee.jobs.enqueue import enqueue_task
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
@@ -78,7 +79,7 @@ def _record_failure(operation: str, *, using: str | None = None) -> Iterator[Non
         logger.exception("Workflow %s failed.", operation)
 
 
-class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
+class WorkflowRunQuerySet[T: WorkflowRun](ProtectedQuerySet[T]):
     """Own run locks and the delivery obligation every lock holder acquires."""
 
     def for_subject(self, record: Any) -> Any:
@@ -294,7 +295,7 @@ class WorkflowRunQuerySet[T: WorkflowRun](AngeeQuerySet[T]):
         )
 
 
-class StepRecordQuerySet[T: StepRecord](AppendOnlyQuerySet[T], AngeeQuerySet[T]):
+class StepRecordQuerySet[T: StepRecord](ProtectedAppendOnlyQuerySet[T], ProtectedQuerySet[T]):
     """Keep retained admission references immutable until their run is pruned."""
 
     def change_related_records(self) -> tuple[RecordRef, ...]:
@@ -317,7 +318,7 @@ class StepRecordQuerySet[T: StepRecord](AppendOnlyQuerySet[T], AngeeQuerySet[T])
             )
 
 
-class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
+class StepRunQuerySet[T: StepRun](ProtectedQuerySet[T]):
     """Own conditional step transitions and database-clock candidate scopes."""
 
     def _write_transition(self, **values: Any) -> int:
@@ -654,7 +655,7 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
         return self.filter(status=StepRunStatus.RUNNING, deadline_at__lt=Now())
 
 
-class StepAttemptQuerySet[T: StepAttempt](AngeeQuerySet[T]):
+class StepAttemptQuerySet[T: StepAttempt](ProtectedQuerySet[T]):
     """Own the one-way closure of an execution attempt."""
 
     def close(self, result: str, error: str = "", stacktrace: str = "") -> int:
@@ -694,7 +695,7 @@ def _database_timeout(
                 cursor.execute("SELECT set_config(%s, %s, true)", [setting, previous])
 
 
-class TriggerEventQuerySet[T: TriggerEvent](AngeeQuerySet[T]):
+class TriggerEventQuerySet[T: TriggerEvent](ProtectedQuerySet[T]):
     """Pending admission is a re-armed, never-admitted ledger fact."""
 
     def pending(self) -> Any:
@@ -702,7 +703,7 @@ class TriggerEventQuerySet[T: TriggerEvent](AngeeQuerySet[T]):
         return self.filter(Q(evaluated_at__isnull=True) | Q(changed_at__gt=F("evaluated_at")), admitted_at=None)
 
 
-class TriggerQuerySet[T: Trigger](AngeeQuerySet[T]):
+class TriggerQuerySet[T: Trigger](ProtectedQuerySet[T]):
     """Keep authored writes at the validating model; engine updates use explicit scope."""
 
     def _check_bulk_write(self) -> None:
@@ -720,5 +721,5 @@ class TriggerQuerySet[T: Trigger](AngeeQuerySet[T]):
         return super().bulk_create(*args, **kwargs)
 
 
-class WorkflowVersionQuerySet(AppendOnlyQuerySet[Any], AngeeHistoryQuerySet[Any]):
+class WorkflowVersionQuerySet(ProtectedAppendOnlyQuerySet[Any], AngeeHistoryQuerySet[Any]):
     """Prevent collection mutation of published graph documents."""

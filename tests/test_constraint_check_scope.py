@@ -16,11 +16,11 @@ from rebac.models import PermissionAuditEvent
 from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
-from angee.base.models.base import AngeeModel
-from angee.base.models.ownership import OwnerMixin
+from angee.iam.models.base import ProtectedModel
+from angee.iam.models.ownership import OwnerMixin
 
 
-class GuardedUniqueRow(AngeeModel):
+class GuardedUniqueRow(ProtectedModel):
     """A unique column only its keepers read and write; its owner writes the rest of the row."""
 
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
@@ -33,7 +33,7 @@ class GuardedUniqueRow(AngeeModel):
         rebac_resource_type = "scopedemo/guarded_unique_row"
 
 
-class OwnedUniqueRow(OwnerMixin, AngeeModel):
+class OwnedUniqueRow(OwnerMixin, ProtectedModel):
     """Owner-gated creation; an insert leaves the owner to its default."""
 
     code = models.CharField(max_length=40, unique=True)
@@ -43,7 +43,7 @@ class OwnedUniqueRow(OwnerMixin, AngeeModel):
         rebac_resource_type = "scopedemo/owned_unique_row"
 
 
-class PlainRow(AngeeModel):
+class PlainRow(ProtectedModel):
     """No rule that reads other rows."""
 
     title = models.CharField(max_length=40, default="row")

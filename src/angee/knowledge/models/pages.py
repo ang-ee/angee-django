@@ -32,12 +32,13 @@ from rebac.resources import model_resource_type
 from angee.base.fields.state import StateField
 from angee.base.lineage import concrete_child, concrete_child_models
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
 from angee.base.models.locks import OptimisticLockMixin
-from angee.base.models.trash import TrashMixin, TrashQuerySet
-from angee.base.permissions import actor_user_id
+from angee.base.models.trash import TrashQuerySet
 from angee.base.signals import send_created_batch
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.trash import ProtectedTrashMixin
+from angee.iam.permissions import actor_user_id
 from angee.knowledge.exceptions import (
     AmbiguousMatchError,
     SectionNotFoundError,
@@ -227,8 +228,8 @@ class PageManager[PageT: Page](_PageManagerBase[PageT]):
 
 
 class Page(
-    OptimisticLockMixin, TaggedModel, ThreadedModelMixin, HierarchyMixin, TrashMixin, AuditMixin, HistoryMixin,
-    AngeeDataModel, concrete=True
+    OptimisticLockMixin, TaggedModel, ThreadedModelMixin, HierarchyMixin, ProtectedTrashMixin, AuditMixin, HistoryMixin,
+    ProtectedDataModel, concrete=True
 ):
     """Universal addressable content node inside a vault.
 

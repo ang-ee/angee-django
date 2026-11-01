@@ -92,7 +92,7 @@ concern and for consumers of any contract the feature changes.
 - Walking `parent` in Python or a recursive CTE → `HierarchyMixin`; [Stack: backend](../../../docs/stack.md#backend) "Tree library choice".
 - A dotted-path column, `import_string` from writable data, an entry point or a private registry dict → `ImplClassField` + its base's named settings mapping; [Stack: backend](../../../docs/stack.md#backend) "Implementation-registry choice".
 - Reading `os.environ` or a private settings parser → `autoconfig.py` `SETTINGS`; [Autoconfig](../../../docs/composer.md#autoconfig).
-- A permission decision in a resolver, in React or in a Zed caveat → the model's Zed plus `authorized_permission_target`; [Boundary leaks](../../../docs/guidelines.md#boundary-leaks-and-detail-driven-policy), `angee.E024` (`src/angee/base/checks.py:31-37`).
+- A permission decision in a resolver, in React or in a Zed caveat → the model's Zed plus `authorized_permission_target`; [Boundary leaks](../../../docs/guidelines.md#boundary-leaks-and-detail-driven-policy), `angee.E024` (`src/angee/iam/checks.py:31-37`).
 - A hand-rolled page, table or form → `ListView`/`RowsListView`/`FormView` and `registerForm`; [Frontend rules](../../../docs/frontend/guidelines.md#rules) **Routes and pages stay thin**.
 
 ## Verify

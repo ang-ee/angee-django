@@ -16,16 +16,16 @@ from pydantic import JsonValue, TypeAdapter
 from rebac import actor_context, current_actor, database_context, system_context, to_subject_ref
 from rebac.actors import is_sudo
 
-from angee.base.models.append_only import AppendOnlyModel
-from angee.base.models.base import AngeeDataModel, AngeeModel
-from angee.base.models.derived import DerivedFrom
 from angee.base.models.locks import OptimisticLockMixin
-from angee.base.permissions import actor_user_id, require_rebac_queryset
 from angee.base.refs import RecordRef, record_view_refs
 from angee.base.signals import publish_change
 from angee.decisions.contracts import DecisionProposal
 from angee.decisions.managers import DecisionManager, DecisionRecordManager
 from angee.decisions.signals import decision_answered
+from angee.iam.models.append_only import ProtectedAppendOnlyModel
+from angee.iam.models.base import ProtectedDataModel, ProtectedModel
+from angee.iam.models.derived import ProtectedDerivedFrom
+from angee.iam.permissions import actor_user_id, require_rebac_queryset
 
 
 def _user(actor: Any, *, using: str, active: bool = True) -> Any:
@@ -40,7 +40,7 @@ def _user(actor: Any, *, using: str, active: bool = True) -> Any:
 
 
 
-class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=True):
+class Decision(OptimisticLockMixin, ProtectedAppendOnlyModel, ProtectedDataModel, concrete=True):
     """An immutable question; answering records choices without applying them."""
 
     sqid_prefix = "dcn_"
@@ -189,7 +189,7 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
                                     pk=reference.pk,
                                 )
                             )
-                            assert isinstance(record, AngeeModel)
+                            assert isinstance(record, ProtectedModel)
                             record.require_access("write", answering)
                             with actor_context(answering):
                                 actions.resolve(record, context={"actor": answering}, values=values[identity])
@@ -220,7 +220,7 @@ class Decision(OptimisticLockMixin, AppendOnlyModel, AngeeDataModel, concrete=Tr
         """Allow composed policy to refuse an answer before its verdict is retained."""
 
 
-class DecisionRecord(DerivedFrom, concrete=True):
+class DecisionRecord(ProtectedDerivedFrom, concrete=True):
     """A concern link: decision, canonical content type and object id, with no payload."""
 
     sqid_prefix = "dcr_"

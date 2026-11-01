@@ -11,18 +11,19 @@ from django.test import override_settings
 from django.test.utils import isolate_apps
 
 from angee.base.apps import BaseConfig
-from angee.base.checks import check_ownership
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.hooks import check_hook, check_hooks
 from angee.base.implementations import check_impl_registry
-from angee.base.managers import AngeeManager
-from angee.base.models.append_only import AppendOnlyModel, AppendOnlyQuerySet
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeModel
 from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
-from angee.base.models.ownership import OwnerMixin
-from angee.base.models.trash import TrashMixin, TrashQuerySet
+from angee.base.models.trash import TrashQuerySet
+from angee.iam.checks import check_ownership
+from angee.iam.managers import ProtectedManager
+from angee.iam.models.append_only import ProtectedAppendOnlyModel, ProtectedAppendOnlyQuerySet
+from angee.iam.models.base import ProtectedModel
+from angee.iam.models.ownership import OwnerMixin
+from angee.iam.models.trash import ProtectedTrashMixin
 from tests.proposals_models import Round
 from tests.test_impl import _BaseImpl
 
@@ -32,10 +33,10 @@ def test_append_only_default_manager_check(guarded: bool) -> None:
     """Django's model checks catch a concrete retained row with an ordinary manager."""
 
     with isolate_apps("django.contrib.contenttypes") as isolated:
-        class Retained(AppendOnlyModel):
-            objects = AngeeManager.from_queryset(AppendOnlyQuerySet)() if guarded else AngeeManager()
+        class Retained(ProtectedAppendOnlyModel):
+            objects = ProtectedManager.from_queryset(ProtectedAppendOnlyQuerySet)() if guarded else ProtectedManager()
 
-            class Meta(AppendOnlyModel.Meta):
+            class Meta(ProtectedAppendOnlyModel.Meta):
                 app_label = "contenttypes"
                 abstract = False
 
@@ -51,7 +52,7 @@ def test_trash_default_manager_check(guarded: bool) -> None:
     """A model storing the trash flag must offer the trash row scopes."""
 
     with isolate_apps("django.contrib.contenttypes") as isolated:
-        class Removable(TrashMixin):
+        class Removable(ProtectedTrashMixin):
             objects = TrashQuerySet.as_manager() if guarded else models.Manager()
 
             class Meta:
@@ -65,13 +66,13 @@ def test_trash_default_manager_check(guarded: bool) -> None:
 
 
 def test_installed_trash_models_compose_the_trash_scopes() -> None:
-    models_ = [model for model in apps.get_models() if issubclass(model, TrashMixin)]
+    models_ = [model for model in apps.get_models() if issubclass(model, ProtectedTrashMixin)]
     assert models_
     assert all(not [error for error in model.check() if error.id == "angee.E036"] for model in models_)
 
 
 def test_installed_append_only_default_managers_compose_guard() -> None:
-    models = [model for model in apps.get_models() if issubclass(model, AppendOnlyModel)]
+    models = [model for model in apps.get_models() if issubclass(model, ProtectedAppendOnlyModel)]
     assert models
     assert all(not [error for error in model.check() if error.id == "angee.E034"] for model in models)
 
@@ -252,7 +253,7 @@ def test_hierarchy_queryset_order_checks_every_declared_manager(ordering: str) -
 @pytest.mark.parametrize("mutation", ["valid", "missing", "wrong", "widened", "stored-parent", "wrong-parent"])
 def test_inherited_owner_gate_uses_the_concrete_parents_transfer_permission(tmp_path, monkeypatch, mutation):
     with isolate_apps("django.contrib.contenttypes") as isolated:
-        class OwnedParent(OwnerMixin, AngeeModel):
+        class OwnedParent(OwnerMixin, ProtectedModel):
             owner_transfer_permission = "reassign"
 
             class Meta:
@@ -306,7 +307,7 @@ definition tests/owned_child {
 
 def test_a_child_sharing_its_owners_definition_takes_its_transfer_gate(tmp_path, monkeypatch):
     with isolate_apps("django.contrib.contenttypes") as isolated:
-        class SharedParent(OwnerMixin, AngeeModel):
+        class SharedParent(OwnerMixin, ProtectedModel):
             class Meta:
                 app_label = "contenttypes"
                 rebac_resource_type = "tests/shared_parent"
@@ -341,7 +342,7 @@ def test_owner_names_only_the_owner_mixin_column(tmp_path, monkeypatch, owned, r
     with isolate_apps("django.contrib.contenttypes") as isolated:
         if owned:
 
-            class OwnedRow(OwnerMixin, AngeeModel):
+            class OwnedRow(OwnerMixin, ProtectedModel):
                 class Meta:
                     app_label = "contenttypes"
                     rebac_resource_type = "tests/row"
@@ -349,7 +350,7 @@ def test_owner_names_only_the_owner_mixin_column(tmp_path, monkeypatch, owned, r
             row = OwnedRow
         else:
 
-            class AttributedRow(AuditMixin, AngeeModel):
+            class AttributedRow(AuditMixin, ProtectedModel):
                 class Meta:
                     app_label = "contenttypes"
                     rebac_resource_type = "tests/row"

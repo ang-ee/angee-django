@@ -152,7 +152,7 @@ design-system shape that declares intent and composes owners.
 - Poll with `setInterval` or add a second cache; opt the model into `changes()` ([live updates](../../../docs/frontend/guidelines.md#rules)).
 - Register a module-global at runtime or keep an addon-local registry beside containers ([compose at build time](../../../docs/frontend/guidelines.md#rules)).
 - Put product copy in the `ui` namespace or override shared copy ([reserved namespace](../../../docs/frontend/guidelines.md#reserved-translation-namespace)).
-- Gate a page on a caveated REBAC subject: `angee.E024` rejects caveats (`src/angee/base/checks.py:37`); the permission owner declares a field-backed conditional relation and the page reads projected admission.
+- Gate a page on a caveated REBAC subject: `angee.E024` rejects caveats (`src/angee/iam/checks.py:37`); the permission owner declares a field-backed conditional relation and the page reads projected admission.
 
 ## Verify
 

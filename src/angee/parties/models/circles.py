@@ -8,9 +8,9 @@ from django.db import models
 
 from angee.base.fields.text import ColorField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.hierarchy import HierarchyMixin
-from angee.base.models.ownership import OwnerMixin
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.ownership import OwnerMixin
 from angee.parties.managers import (
     CircleManager,
 )
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     pass
 
 
-class Circle(HierarchyMixin, OwnerMixin, AngeeDataModel, concrete=True):
+class Circle(HierarchyMixin, OwnerMixin, ProtectedDataModel, concrete=True):
     """A private, overlapping grouping of parties — how the owner organises people.
 
     Circles are the curated counterpart of :class:`Folder` (which mirrors a synced
@@ -66,7 +66,7 @@ class Circle(HierarchyMixin, OwnerMixin, AngeeDataModel, concrete=True):
         return self.name
 
 
-class CircleMember(MembershipDecisionMixin, AuditMixin, AngeeDataModel, concrete=True):
+class CircleMember(MembershipDecisionMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """A party's reviewable membership of one circle.
 
     Membership is a plain decision row so a suggester (community detection, an

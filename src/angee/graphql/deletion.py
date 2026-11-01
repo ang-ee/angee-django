@@ -18,9 +18,7 @@ from django.db.models.deletion import (
 )
 from rebac import PermissionDenied, RebacMixin, current_actor, system_context
 
-from angee.base.models.base import AngeeModel
 from angee.base.models.identity import public_id_of
-from angee.base.permissions import require_rebac_queryset
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.contracts import DataResourceRoots, DataResourceTypeNames
 from angee.graphql.data.metadata import (
@@ -31,6 +29,8 @@ from angee.graphql.data.metadata import (
     resource_wire_field_name,
 )
 from angee.graphql.ids import RECORD_NOT_FOUND_MESSAGE, require_instance_for_id
+from angee.iam.models.base import ProtectedModel
+from angee.iam.permissions import require_rebac_queryset
 from graphql import GraphQLError
 
 _PREVIEW_LEAF_LIMIT = 50
@@ -201,7 +201,7 @@ class DeletePreview:
                     if not _is_root(instance, row)
                 ),
             )
-            if isinstance(row, AngeeModel) and (message := row.delete_blocker())
+            if isinstance(row, ProtectedModel) and (message := row.delete_blocker())
         ))
         groups = _PreviewRows.by_model(
             instance,
@@ -287,7 +287,7 @@ class DeletePreview:
                 has_blockers=False,
                 root=DeletePreviewNode.from_target(target, groups),
             )
-        if isinstance(target, AngeeModel) and (message := target.delete_blocker()):
+        if isinstance(target, ProtectedModel) and (message := target.delete_blocker()):
             preview.refusals = [message]
             preview.has_blockers = True
         return preview
@@ -362,7 +362,7 @@ def delete_by_public_id(
         if isinstance(instance, RebacMixin) and not instance.has_access("delete"):
             raise PermissionDenied("You are not allowed to delete this record.")
         if confirm:
-            if isinstance(instance, AngeeModel):
+            if isinstance(instance, ProtectedModel):
                 locked = instance.lock_for_delete(queryset=targets)
                 if locked is None:
                     raise ValidationError(RECORD_NOT_FOUND_MESSAGE, code="not_found")

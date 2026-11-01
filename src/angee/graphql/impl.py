@@ -16,8 +16,8 @@ from strawberry.utils.str_converters import to_snake_case
 from angee.base.fields import ImplClassField
 from angee.base.implementations import ImplChoice as BaseImplChoice
 from angee.base.implementations import impl_choices as registry_impl_choices
-from angee.base.models.implementations import readable_impl_defaults
 from angee.graphql.mixins import ImplementationChoicesMixin
+from angee.iam.implementations import readable_impl_defaults
 
 
 @strawberry.type

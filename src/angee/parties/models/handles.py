@@ -22,9 +22,9 @@ from rebac.database import write_alias
 
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
-from angee.base.models.merge import MergeableMixin
-from angee.base.permissions import instance_actor
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.merge import ProtectedMergeableMixin
+from angee.iam.permissions import instance_actor
 from angee.parties.connections import ConnectionHandle
 from angee.parties.managers import (
     HandleManager,
@@ -34,7 +34,7 @@ from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscope
 from angee.tags.models import TaggedModel
 
 
-class Handle(MergeableMixin, HistoryMixin, TaggedModel, AuditMixin, AngeeDataModel, concrete=True):
+class Handle(ProtectedMergeableMixin, HistoryMixin, TaggedModel, AuditMixin, ProtectedDataModel, concrete=True):
     """A reachable address or handle of a party on one platform.
 
     Keyed on ``(platform, value)`` and, when present, ``(platform, external_id)``

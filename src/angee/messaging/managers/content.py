@@ -11,8 +11,8 @@ from django.apps import apps
 from django.contrib.postgres.search import SearchQuery, SearchVector
 from django.db import NotSupportedError, connections, models, router, transaction
 
-from angee.base.managers import AngeeManager
 from angee.base.serialization import strip_null_bytes
+from angee.iam.managers import ProtectedManager
 from angee.messaging.querysets import (
     ChannelQuerySet as ChannelQuerySet,
 )
@@ -127,7 +127,7 @@ _SEARCH_CONFIG = "simple"
 _SEARCH_MAX_BYTES = 512 * 1024
 
 
-class FragmentManager[FragmentT: Fragment](AngeeManager[FragmentT]):
+class FragmentManager[FragmentT: Fragment](ProtectedManager[FragmentT]):
     """Content-addressed text store: one row per distinct (null-stripped) text."""
 
     def search_query(self, term: str, *, search_type: str = "plain") -> SearchQuery:
@@ -167,7 +167,7 @@ class FragmentManager[FragmentT: Fragment](AngeeManager[FragmentT]):
         return fragment
 
 
-_PartManagerBase = AngeeManager.from_queryset(PartQuerySet)
+_PartManagerBase = ProtectedManager.from_queryset(PartQuerySet)
 
 
 class PartManager[PartT: Part](_PartManagerBase[PartT]):
@@ -436,7 +436,7 @@ class PartManager[PartT: Part](_PartManagerBase[PartT]):
         return ordered
 
 
-class MessageEdgeManager[MessageEdgeT: MessageEdge](AngeeManager[MessageEdgeT]):
+class MessageEdgeManager[MessageEdgeT: MessageEdge](ProtectedManager[MessageEdgeT]):
     """Owns the cross-message graph — derived quote edges from shared fragments."""
 
     def _edge_fields(self, *, created_by_id: Any, fragment: Any = None, confidence: float = 1.0) -> dict[str, Any]:

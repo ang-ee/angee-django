@@ -33,19 +33,20 @@ from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.base.fields.ordering import FractionalRankExhausted, FractionalRankField
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
 from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.locks import ImmutableFieldsMixin, OptimisticLockMixin
-from angee.base.models.merge import MergeableMixin
 from angee.base.models.merge_references import MergePolicy
-from angee.base.models.ownership import ItemOwnershipMixin, OwnerMixin, OwnerQuerySet
-from angee.base.models.refs import RecordRefMixin
-from angee.base.models.trash import TRASH_FLAG_FIELD, TrashMixin, TrashQuerySet
-from angee.base.permissions import actor_user_id, candidate_relationships
+from angee.base.models.trash import TRASH_FLAG_FIELD, TrashQuerySet
 from angee.base.querysets import MergeableQuerySet
 from angee.base.serialization import strip_null_bytes
 from angee.base.validators import validate_value
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.merge import ProtectedMergeableMixin
+from angee.iam.models.ownership import ItemOwnershipMixin, OwnerMixin, OwnerQuerySet
+from angee.iam.models.refs import ProtectedRecordRefMixin
+from angee.iam.models.trash import ProtectedTrashMixin
+from angee.iam.permissions import actor_user_id, candidate_relationships
 from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.projects.access import require_binding_access, require_target_binding_access
 from angee.projects.events import (
@@ -602,7 +603,7 @@ class Project(
     OptimisticLockMixin,
     ThreadedModelMixin,
     HistoryMixin,
-    AngeeDataModel,
+    ProtectedDataModel,
     concrete=True,
 ):
     """A bounded endeavor whose access is owned by direct ReBAC grants."""
@@ -929,7 +930,7 @@ class _MilestoneManager[MilestoneT: Milestone](_MilestoneManagerBase[MilestoneT]
     """Preserve the native milestone scheduling queryset on manager reads."""
 
 
-class Milestone(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Milestone(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """A named marker reached within one project."""
 
     sqid_prefix = "mls_"
@@ -1041,7 +1042,7 @@ class Milestone(HistoryMixin, OptimisticLockMixin, ImmutableFieldsMixin, AuditMi
             raise ValidationError("A reached milestone cannot be deleted.")
 
 
-class ActivityType(AuditMixin, AngeeDataModel, concrete=True):
+class ActivityType(AuditMixin, ProtectedDataModel, concrete=True):
     """Resource-declared kinds of record task; tasks keep the stable key."""
 
     DEFAULT_KEY: ClassVar[str] = "todo"
@@ -1071,16 +1072,16 @@ class ActivityType(AuditMixin, AngeeDataModel, concrete=True):
 
 class Task(
     HierarchyMixin,
-    MergeableMixin,
-    TrashMixin,
-    RecordRefMixin,
+    ProtectedMergeableMixin,
+    ProtectedTrashMixin,
+    ProtectedRecordRefMixin,
     TaggedModel,
     ImmutableFieldsMixin,
     OwnerMixin,
     OptimisticLockMixin,
     ThreadedModelMixin,
     HistoryMixin,
-    AngeeDataModel,
+    ProtectedDataModel,
     concrete=True,
 ):
     """The platform's one table for a discrete human action."""
@@ -1823,7 +1824,7 @@ class Task(
                     raise ValidationError({"milestone": "Milestone must belong to the task's project."})
 
 
-class TaskRelation(HistoryMixin, AuditMixin, AngeeDataModel, concrete=True):
+class TaskRelation(HistoryMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """One canonical directed relation between two tasks."""
 
     sqid_prefix = "trl_"
@@ -1912,7 +1913,7 @@ class TaskRelation(HistoryMixin, AuditMixin, AngeeDataModel, concrete=True):
         return f"{self.task_id} {self.kind} {self.related_task_id}"
 
 
-class Participant(HistoryMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Participant(HistoryMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """A party's involvement in a project, never an access grant."""
 
     sqid_prefix = "ppt_"
@@ -1955,7 +1956,7 @@ class Participant(HistoryMixin, AuditMixin, AngeeDataModel, concrete=True):
         return f"{self.party_id} in {self.project_id}"
 
 
-class ProjectBinding(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=True):
+class ProjectBinding(HistoryMixin, AuditMixin, ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
     """One explicit projects-owned statement that a resource belongs to a project.
 
     The resource is stored at :func:`rebac.generic_target`. ``permissions.zed``
@@ -2022,7 +2023,7 @@ class ProjectBinding(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, c
         return f"{self.project_id} -> {self.content_type_id}:{self.object_id}"
 
 
-class Link(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=True):
+class Link(HistoryMixin, AuditMixin, ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
     """A URL-keyed external reference attached to a project or task."""
 
     merge_policy = MergePolicy.MOVE

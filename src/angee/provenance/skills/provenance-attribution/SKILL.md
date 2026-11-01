@@ -161,7 +161,7 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 ## Verify
 
 Done means: the generated runtime model exposes `history` (and `statements`) descriptors; a save in a test creates a
-historical row whose changeset is `current_changeset()`; `Changeset.objects.touching(record)` lists it; `angee.E038`
+historical row whose `history_changeset` is `current_changeset()`; `Changeset.objects.touching(record)` lists it; `angee.E038`
 (middleware order, `checks.py:34`) and the base `angee.E*` checks are clean; the fresh migration adds only the history and
 statement tables.
 

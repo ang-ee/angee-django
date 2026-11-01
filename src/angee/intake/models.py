@@ -32,10 +32,10 @@ from rebac.resources import model_resource_type
 from angee.base.exceptions import DomainError, RecordAccessSubjectRefused
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.locks import OptimisticLockMixin
-from angee.base.permissions import actor_user_id, instance_actor
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.permissions import actor_user_id, instance_actor
 from angee.intake.choices import NeedAccessAction as NeedAccessAction
 from angee.intake.choices import NeedImportance as NeedImportance
 from angee.intake.managers import NeedManager as NeedManager
@@ -82,7 +82,7 @@ def _require_user_create() -> None:
         raise PermissionDenied("Account create access is required.")
 
 
-class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """One external or manually-authored request attached to one semantic target."""
 
     resource_class = NeedResource

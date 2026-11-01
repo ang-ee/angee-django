@@ -18,11 +18,11 @@ from rebac import (
     system_context,
 )
 
-from angee.base.models.base import AngeeModel
 from angee.base.querysets import row_lock_paths
 from angee.base.refs import generic_pointer_target
 from angee.base.serialization import strip_null_bytes
 from angee.base.signals import mute_changes
+from angee.iam.models.base import ProtectedModel
 from angee.messaging.querysets import (
     ChannelQuerySet as ChannelQuerySet,
 )
@@ -363,7 +363,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
             thread = attachment.thread.canonical()
             attachment = edges.select_related("thread").get(thread=thread, role=role)
             target = attachment.require_threaded_target()
-            if isinstance(target, AngeeModel):
+            if isinstance(target, ProtectedModel):
                 target.require_access(target.thread_read_access)
             elif not target._message_read_allowed():
                 raise PermissionDenied("Reading a redirected chatter thread requires record read access.")

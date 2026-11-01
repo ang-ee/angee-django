@@ -12,9 +12,9 @@ from django.utils import timezone
 
 from angee.base.fields.encrypted import EncryptedField
 from angee.base.fields.text import DiagnosticTextField
-from angee.base.models.base import AngeeDataModel
-from angee.base.models.ownership import OwnerMixin
 from angee.base.serialization import canonical_json
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.ownership import OwnerMixin
 from angee.integrate.managers import (
     WebhookSubscriptionManager,
 )
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 _WEBHOOK_FAILURE_MESSAGE = "Webhook delivery failed."
 
 
-class WebhookSubscription(OwnerMixin, AngeeDataModel, concrete=True):
+class WebhookSubscription(OwnerMixin, ProtectedDataModel, concrete=True):
     """Outbound webhook endpoint owned by one user."""
 
     sqid_prefix = "whs_"

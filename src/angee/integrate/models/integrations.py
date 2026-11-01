@@ -29,12 +29,12 @@ from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.lineage import concrete_child, concrete_child_models
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.implementations import ImplDefaultsMixin
-from angee.base.models.ownership import OwnerMixin
 from angee.base.models.transitions import StateTransitions, save_state, transition
-from angee.base.permissions import actor_user_id, instance_actor
 from angee.graphql.capabilities import held_permissions
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.ownership import OwnerMixin
+from angee.iam.permissions import actor_user_id, instance_actor
 from angee.integrate.backends.base import ConnectionDiscovery
 from angee.integrate.choices import (
     IntegrationCreateMode,
@@ -74,7 +74,7 @@ _INTEGRATION_FAILURE_MESSAGE = INTEGRATION_FAILURE_MESSAGE
 _DISCOVERY_RETRY_EXHAUSTED_MESSAGE = "Connection discovery exhausted its retries; retry discovery to continue."
 
 
-class Vendor(ResourceLoadMixin, AuditMixin, AngeeDataModel, concrete=True):
+class Vendor(ResourceLoadMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """Admin-managed third-party catalogue (GitHub, Google, Slack, …).
 
     The single source of truth for "what is this third party" — branding and
@@ -124,7 +124,7 @@ def _save_connected(instance: Integration, source: Any, target: Any, **kwargs: A
     instance.refresh_from_db(using=instance._state.db)
 
 
-class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, AngeeDataModel, concrete=True):
+class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, ProtectedDataModel, concrete=True):
     """A product/workspace integration to a vendor account.
 
     The first-class "what we're connected to and what runs over it": it draws a

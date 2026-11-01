@@ -19,7 +19,6 @@ from django.test import override_settings
 from rebac import actor_context, generic_target, system_context
 
 from angee.base.fields.state import StateField
-from angee.base.models.derived import DerivedFrom
 from angee.extraction.acquisition import PageCarrier
 from angee.extraction.contracts import (
     DocumentPart,
@@ -29,6 +28,7 @@ from angee.extraction.contracts import (
 )
 from angee.extraction.managers import StaleExtraction
 from angee.extraction.profiles import EvidenceLayout, ExtractionProfile
+from angee.iam.models.derived import ProtectedDerivedFrom
 from angee.provenance.evidence import FactAuthority
 from angee.storage.models import File as AbstractFile
 from angee.workflows_extraction.steps import InferEvidenceInput, InferEvidenceStep
@@ -161,7 +161,7 @@ def test_retention_preserves_sources_parts_pages_and_typed_missing_values(eviden
     assert row.fact_authority("/documents/0/title") is FactAuthority.SOURCE
     assert row.fact_correction("/documents/0/title") is None
     source = row.sources.get()
-    assert isinstance(source, DerivedFrom)
+    assert isinstance(source, ProtectedDerivedFrom)
     target = generic_target(values["target"])
     assert (source.content_type, source.object_id) == (target.content_type, target.object_id)
     assert source.record == values["target"]

@@ -36,15 +36,15 @@ from angee.base.exceptions import DomainError
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel, AngeeModel
 from angee.base.models.identity import instance_from_public_id
 from angee.base.models.merge_references import MergePolicy
-from angee.base.models.ownership import OwnerMixin
-from angee.base.models.refs import RecordRefMixin
 from angee.base.models.scope import NullableScopeMixin
-from angee.base.permissions import actor_user_id
 from angee.base.refs import RecordRef, generic_pointer_model
 from angee.graphql.mixins import ChangeBroadcastMixin
+from angee.iam.models.base import ProtectedDataModel, ProtectedModel
+from angee.iam.models.ownership import OwnerMixin
+from angee.iam.models.refs import ProtectedRecordRefMixin
+from angee.iam.permissions import actor_user_id
 from angee.messaging.managers import (
     ThreadAttachmentManager,
     ThreadManager,
@@ -210,7 +210,7 @@ class ThreadedModelMixin(models.Model):
     """Reverse edge to this row's chatter attachments.
 
     This retained reverse relation supplies queries without Django collecting the
-    edge itself. ``RecordRefMixin.on_target_delete`` deletes the edge for instance
+    edge itself. ``ProtectedRecordRefMixin.on_target_delete`` deletes the edge for instance
     and queryset deletion alike.
 
     Record owners contribute read access in their ``permissions.extends.zed``:
@@ -917,7 +917,7 @@ class ChatterHistory(ModelHistory):
         if record is None:
             super().authorize_revert(first, last, previous, actor)
             return
-        if not isinstance(record, AngeeModel):
+        if not isinstance(record, ProtectedModel):
             raise ImproperlyConfigured("Reverting record chatter requires an Angee model host.")
         record.require_access("write", actor=actor)
 
@@ -955,7 +955,7 @@ class ChatterHistory(ModelHistory):
 
 class Thread(
     NullableScopeMixin,
-    ChangeBroadcastMixin, SourceCopyMixin, HistoryMixin, TaggedModel, OwnerMixin, AngeeDataModel, concrete=True
+    ChangeBroadcastMixin, SourceCopyMixin, HistoryMixin, TaggedModel, OwnerMixin, ProtectedDataModel, concrete=True
 ):
     """An aggregation of related messages — an email conversation or a social post.
 
@@ -1168,7 +1168,7 @@ class Thread(
         )
 
 
-class ThreadAttachment(HistoryMixin, AuditMixin, RecordRefMixin, AngeeDataModel, concrete=True):
+class ThreadAttachment(HistoryMixin, AuditMixin, ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
     """Polymorphic edge attaching one chatter thread to one model row."""
 
     history = ChatterHistory(inherit=True)

@@ -37,11 +37,11 @@ from rebac.backends import backend as rebac_backend
 from rebac.database import write_alias
 
 from angee.base.fields.state import StateField
-from angee.base.identity import public_subject_ref
-from angee.base.models.base import AngeeDataModel
-from angee.base.models.ownership import OwnerMixin
-from angee.base.models.trash import TrashMixin
-from angee.base.permissions import actor_user_id
+from angee.iam.identity import public_subject_ref
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.ownership import OwnerMixin
+from angee.iam.models.trash import ProtectedTrashMixin
+from angee.iam.permissions import actor_user_id
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryUnscopedManager
 from angee.storage import exceptions
@@ -70,7 +70,7 @@ from angee.tags.models import TaggedModel
 logger = logging.getLogger(__name__)
 
 
-class File(TaggedModel, TrashMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class File(TaggedModel, ProtectedTrashMixin, OwnerMixin, HistoryMixin, ProtectedDataModel, concrete=True):
     """A stored asset, deduplicated per drive by content hash.
 
     ``owner`` grants access; ``created_by`` retains upload attribution.

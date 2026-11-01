@@ -9,10 +9,10 @@ from typing import Any
 from django.db import models, transaction
 from rebac import database_context, system_context
 
-from angee.base.models.merge import MergeableMixin
 from angee.base.refs import generic_pointer_model
 from angee.base.signals import ModelChange, changes_muted
 from angee.graphql.publishing import broadcast_related_records
+from angee.iam.models.merge import ProtectedMergeableMixin
 from angee.timeline.kinds import TimelineKind, timeline_kinds
 
 log = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ def _records(row: Any, *, update_fields: Iterable[str] | None = None) -> list[mo
                 for model, ids in grouped.items():
                     canonical = (
                         set(model.canonical_ids(ids, using=using).values())
-                        if issubclass(model, MergeableMixin)
+                        if issubclass(model, ProtectedMergeableMixin)
                         else ids
                     )
                     for pk in canonical:

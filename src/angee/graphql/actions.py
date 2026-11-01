@@ -21,9 +21,9 @@ from strawberry.utils.str_converters import to_camel_case
 from strawberry_django.auth.utils import get_current_user
 
 from angee.base.exceptions import DomainError, TransitionNotAllowed
-from angee.base.permissions import require_rebac_queryset
 from angee.graphql.ids import PublicID, instance_for_id, public_id_value
 from angee.graphql.writes import instance_for_write
+from angee.iam.permissions import require_rebac_queryset
 from graphql import GraphQLError
 
 _ActionTarget = TypeVar("_ActionTarget", bound=models.Model)

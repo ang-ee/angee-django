@@ -11,20 +11,20 @@ from django.db import router, transaction
 from rebac import database_context, generic_target, system_context, to_subject_ref
 from rebac.actors import is_sudo
 
-from angee.base.managers import AngeeManager
 from angee.base.models.identity import public_id_of
-from angee.base.permissions import actor_user_id
 from angee.base.signals import mute_changes, publish_change
 from angee.decisions.contracts import DecisionProposal, DecisionRecordReference, DecisionRequest
 from angee.decisions.querysets import DecisionQuerySet as DecisionQuerySet
 from angee.decisions.querysets import DecisionRecordQuerySet as DecisionRecordQuerySet
+from angee.iam.managers import ProtectedManager
+from angee.iam.permissions import actor_user_id
 from angee.provenance.evidence import readable_records
 
 if TYPE_CHECKING:
     from angee.decisions.models import Decision
 
 
-_DecisionManagerBase = AngeeManager.from_queryset(DecisionQuerySet)
+_DecisionManagerBase = ProtectedManager.from_queryset(DecisionQuerySet)
 
 
 class DecisionManager[T: Decision](_DecisionManagerBase[T]):
@@ -93,4 +93,4 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
 
 
 
-DecisionRecordManager = AngeeManager.from_queryset(DecisionRecordQuerySet)
+DecisionRecordManager = ProtectedManager.from_queryset(DecisionRecordQuerySet)

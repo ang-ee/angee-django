@@ -8,9 +8,9 @@ from django.db import models
 
 from angee.base.fields import ImplClassField
 from angee.base.implementations import ImplBase
-from angee.base.managers import AngeeManager
 from angee.base.models.persistence import PersistenceMixin
-from angee.base.querysets import AngeeQuerySet
+from angee.iam.managers import ProtectedManager
+from angee.iam.querysets import ProtectedQuerySet
 from tests.typing_app.factory import OtherFactory
 
 factory_result = OtherFactory.from_queryset(1)
@@ -42,7 +42,7 @@ class FrameworkRecord(models.Model):
     title = models.CharField(max_length=64)
     count = models.IntegerField()
 
-    objects = AngeeManager()
+    objects = ProtectedManager()
 
 
 class TypingChangeset(models.Model):
@@ -65,12 +65,12 @@ class TypingChangeset(models.Model):
         pass
 
 
-class SystemRecordQuerySet[RecordT: SystemRecord](AngeeQuerySet[RecordT]):
+class SystemRecordQuerySet[RecordT: SystemRecord](ProtectedQuerySet[RecordT]):
     def selected(self) -> Self:
         return self.filter(count__gt=0)
 
 
-_SystemRecordManagerBase = AngeeManager.from_queryset(SystemRecordQuerySet)
+_SystemRecordManagerBase = ProtectedManager.from_queryset(SystemRecordQuerySet)
 
 
 class SystemRecordManager[RecordT: SystemRecord](_SystemRecordManagerBase[RecordT]):

@@ -9,10 +9,6 @@ from typing import Any, Self, TypeVar, cast
 from django.core.exceptions import EmptyResultSet, ValidationError
 from django.db import connections, models
 from django.db.models.functions import Coalesce
-from rebac import current_actor
-from rebac.managers import RebacQuerySet, TrackedQuerySet
-from rebac.watch import KEY_CHUNK
-from rebac.watch import by_key as native_by_key
 
 from angee.base.models.identity import instance_from_public_id
 from angee.base.pagination import KeysetOrder, KeysetPage, keyset_signer
@@ -57,24 +53,24 @@ def query_batch_size(queryset: models.QuerySet[Any], *, width: int = 1) -> int:
 
     limit = connections[queryset.db].features.max_query_params
     if limit is None:
-        return KEY_CHUNK
+        return 5000
     try:
         _, params = queryset.query.get_compiler(using=queryset.db).as_sql()
     except EmptyResultSet:
         params = ()
-    size = min(KEY_CHUNK, (limit - len(params)) // width)
+    size = min(5000, (limit - len(params)) // width)
     if size < 1:
         raise ValueError("The query leaves no database parameters for its keys.")
     return size
 
 
 def by_key(queryset: _QuerySetT, keys: Sequence[Any]) -> Iterator[_QuerySetT]:
-    """Compose REBAC key filtering with the database's native parameter budget."""
+    """Batch primary-key filtering with the database's native parameter budget."""
 
     if not keys:
-        yield from native_by_key(queryset, keys)
+        yield queryset.filter(pk__in=())
     for chunk in batched(keys, query_batch_size(queryset)):
-        yield from native_by_key(queryset, chunk)
+        yield queryset.filter(pk__in=chunk)
 
 
 def row_lock_paths(model: type[models.Model], of: tuple[str, ...] = ("self",)) -> tuple[str, ...]:
@@ -102,6 +98,10 @@ def _parent_link_paths(model: type[models.Model], prefix: str = "") -> tuple[str
 
 class CanonicalQuerySet(models.QuerySet[_ModelT]):
     """Terminal operational scope for cooperative queryset capabilities."""
+
+    def attributed_user_id(self) -> Any:
+        """A normal Django queryset carries no implicit user attribution."""
+        return None
 
     def canonical(self) -> Self:
         """All rows until an owning capability narrows the operational scope."""
@@ -183,49 +183,12 @@ class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
 
 class AngeeQuerySet(
     _AngeeQuerySetMixin[_ModelT],
-    RebacQuerySet[_ModelT],
 ):
     """QuerySet API shared by Angee source and runtime models."""
 
-    def readable_scalar_subquery(
-        self,
-        field: str,
-        *,
-        actor: Any = None,
-        default: Any = None,
-        output_field: models.Field | None = None,
-    ) -> models.Expression | models.Subquery:
-        """Project one correlated readable value, including under an elevated parent.
-
-        Add correlation predicates before calling. No actor yields no value;
-        callers own domain fallbacks and may explicitly coalesce an absent value.
-        """
-
-        actor = actor or self.actor() or current_actor()
-        readable = self.with_actor(actor).scoped() if actor is not None else self
-        # The selected field owns the scalar type; only the outer fallback needs
-        # a common output type (overriding Subquery changes empty-set compilation).
-        scalar = models.Subquery(readable.values(field)[:1])
-        if actor is None:
-            return models.Value(default, output_field=output_field or scalar.output_field)
-        if default is None:
-            return scalar
-        return Coalesce(
-            scalar,
-            models.Value(default),
-            output_field=output_field or scalar.output_field,
-        )
-
-    def readable_count_subquery(self, *, actor: Any = None) -> models.Expression | models.Subquery:
-        """Count a correlated actor-scoped row set, returning zero when empty."""
-
-        rows = self.order_by().annotate(_count_group=models.Value(1)).values("_count_group")
-        return rows.annotate(_count=models.Count("pk", distinct=True)).readable_scalar_subquery(
-            "_count",
-            actor=actor,
-            default=0,
-            output_field=models.IntegerField(),
-        )
+    def _keyset_cursor_scope(self, scope: tuple[Any, ...]) -> tuple[Any, ...]:
+        """Own collection identity; optional capabilities contribute their audience."""
+        return scope
 
     def keyset_page(
         self,
@@ -243,7 +206,7 @@ class AngeeQuerySet(
 
         The caller supplies a prepared, scoped queryset and canonical effective
         query identity in ``cursor_scope`` (root, filters and any variable order).
-        Database, model and actor are always included. The salt versions the
+        Database and model are always included; callers supply any audience identity. The salt versions the
         ordering contract. Cuts authorize nothing: each call reevaluates the
         readable queryset, including rows whose anchor was deleted or moved.
 
@@ -256,9 +219,8 @@ class AngeeQuerySet(
         if after_cursor is not None and (before_cursor is not None or through_cursor is not None):
             raise ValueError("after_cursor cannot combine with before_cursor or through_cursor.")
         limit = max(1, min(int(limit), 200))
-        actor = self.actor() or current_actor()
         signer = keyset_signer(
-            [self.db, self.model._meta.label_lower, *cursor_scope, str(actor)], salt=cursor_salt,
+            [self.db, self.model._meta.label_lower, *self._keyset_cursor_scope(cursor_scope)], salt=cursor_salt,
         )
         cursor = before_cursor if before_cursor is not None else after_cursor
         anchor = order.unsign(cursor, signer, self.model._meta.pk) if cursor is not None else None
@@ -314,26 +276,5 @@ class AngeeQuerySet(
         )
 
 
-class AngeeUnscopedQuerySet(
-    _AngeeQuerySetMixin[_ModelT],
-    TrackedQuerySet[_ModelT],
-):
-    """Angee queryset API for intentionally permission-naive managers.
-
-    Used by models without REBAC row policy and explicit Django base managers
-    whose unfiltered relation reads must retain native Django semantics. It
-    composes the library's tracked writes required by a declared base manager.
-    """
-
-    def scoped_for_aggregate(self) -> Self:
-        """Return this queryset for permission-naive aggregation.
-
-        The manager deliberately supplies no row authorization; aggregation
-        preserves that same explicit unscoped policy.
-        """
-
-        return self
-
-
-class MergeableUnscopedQuerySet(MergeableQuerySet[_ModelT], AngeeUnscopedQuerySet[_ModelT]):
+class MergeableUnscopedQuerySet(MergeableQuerySet[_ModelT], AngeeQuerySet[_ModelT]):
     """Explicit operational identity API for a model that owns merge redirects."""

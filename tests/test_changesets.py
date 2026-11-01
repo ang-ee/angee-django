@@ -63,7 +63,7 @@ def changesets() -> list[Any]:
 
 
 def changeset_of(row: Any) -> Any:
-    return row.history.get(history_type="+").changeset
+    return row.history.get(history_type="+").history_changeset
 
 
 def test_require_changeset_refuses_missing_storage_and_returns_the_open_owner(settings) -> None:

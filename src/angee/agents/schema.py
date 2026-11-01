@@ -25,7 +25,6 @@ from strawberry_django.utils.requests import get_request
 
 from angee.agents import provisioning
 from angee.agents.context import render_view_context
-from angee.base.identity import public_subject_ref
 from angee.graphql.actions import (
     ActionResult,
     action_target,
@@ -39,6 +38,7 @@ from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
 from angee.graphql.ids import PublicID
 from angee.graphql.node import AngeeNode
 from angee.graphql.subscriptions import changes
+from angee.iam.identity import public_subject_ref
 from angee.iam.permissions import ADMIN_PERMISSION_CLASSES as _ADMIN_PERMISSION_CLASSES
 from angee.iam.permissions import PlatformAdminPermission
 from angee.iam.schema import UserType

@@ -15,8 +15,8 @@ from rebac import (
 )
 
 from angee.base.models.hierarchy import HierarchyQuerySet
-from angee.base.models.ownership import OwnerQuerySet
 from angee.base.models.trash import ArchiveQuerySet, TrashQuerySet
+from angee.iam.models.ownership import OwnerQuerySet
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 from angee.storage.choices import UploadState
 

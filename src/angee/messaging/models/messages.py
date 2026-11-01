@@ -25,12 +25,12 @@ from rebac import (
 from angee.base.fields import ModelLabelField
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.locks import OptimisticLockMixin
-from angee.base.models.trash import TrashMixin
 from angee.base.refs import RecordRef
 from angee.base.serialization import strip_null_bytes
 from angee.graphql.mixins import ChangeBroadcastMixin
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.trash import ProtectedTrashMixin
 from angee.messaging.constants import DELIVERY_TASK_EXPIRES
 from angee.messaging.delivery import queue_message_delivery
 from angee.messaging.managers import (
@@ -52,7 +52,7 @@ if TYPE_CHECKING:
     from angee.messaging.models.threads import ThreadAttachment
 
 
-class MessageSubtype(AuditMixin, AngeeDataModel, concrete=True):
+class MessageSubtype(AuditMixin, ProtectedDataModel, concrete=True):
     """A typed chatter event category, mirroring Odoo's message subtypes.
 
     Subtypes classify system notifications and comments so followers can later
@@ -164,10 +164,10 @@ class Message(
     SourceCopyMixin,
     ResourceLoadMixin,
     TaggedModel,
-    TrashMixin,
+    ProtectedTrashMixin,
     OptimisticLockMixin,
     AuditMixin,
-    AngeeDataModel,
+    ProtectedDataModel,
     concrete=True,
 ):
     """One message — the unit of a thread. The root post is itself a Message.
@@ -190,7 +190,7 @@ class Message(
     text survives as immutable content-addressed fragments — no per-save history
     table doubling the hot write path.
 
-    Moderation is trash (:class:`~angee.base.models.trash.TrashMixin`): a trashed
+    Moderation is trash (:class:`~angee.iam.models.trash.ProtectedTrashMixin`): a trashed
     message is withheld from every reader but channel managers and admins, and
     record chatter leaves it out of every read but its moderators' removed list.
     """
@@ -857,7 +857,7 @@ class Message(
         return thread is None or not thread.is_record_attached()
 
 
-class Fragment(AuditMixin, AngeeDataModel, concrete=True):
+class Fragment(AuditMixin, ProtectedDataModel, concrete=True):
     """A content-addressed text node shared across messages.
 
     Email threads re-quote the same paragraphs in every reply; a hashed shared row
@@ -931,7 +931,7 @@ class Fragment(AuditMixin, AngeeDataModel, concrete=True):
         return (self.text[:60] + "…") if len(self.text) > 60 else self.text
 
 
-class Part(AuditMixin, AngeeDataModel, concrete=True):
+class Part(AuditMixin, ProtectedDataModel, concrete=True):
     """One recursive body node of a message (the MIME/JMAP part shape, one model).
 
     ``type``/``role`` is a genuine discriminator, not MTI: a ``multipart/*`` is a
@@ -1020,7 +1020,7 @@ class Part(AuditMixin, AngeeDataModel, concrete=True):
         return f"{self.type} ({self.role})"
 
 
-class MessageEdge(AuditMixin, AngeeDataModel, concrete=True):
+class MessageEdge(AuditMixin, ProtectedDataModel, concrete=True):
     """One typed cross-message relation — the unified quote/reference graph.
 
     ``Message.parent`` stays the single-parent reply pointer and ``Thread`` is
@@ -1091,7 +1091,7 @@ class MessageEdge(AuditMixin, AngeeDataModel, concrete=True):
         return f"{self.src_id} -{self.kind}-> {self.dst_id}"
 
 
-class Participant(AuditMixin, AngeeDataModel, concrete=True):
+class Participant(AuditMixin, ProtectedDataModel, concrete=True):
     """A Handle-keyed membership of a thread/message — the queryable recipient row.
 
     The raw to/cc/bcc stays in ``Message.metadata`` as the lossless source; this is
@@ -1162,7 +1162,7 @@ class Participant(AuditMixin, AngeeDataModel, concrete=True):
         return f"{self.handle_id} ({self.role})"
 
 
-class Reaction(AuditMixin, AngeeDataModel, concrete=True):
+class Reaction(AuditMixin, ProtectedDataModel, concrete=True):
     """One attributed reaction to a message, keyed by the reactor's parties ``Handle``.
 
     This is the single per-actor reaction store: ``MessageManager.set_reaction``
@@ -1240,7 +1240,7 @@ class Reaction(AuditMixin, AngeeDataModel, concrete=True):
         return cleaned
 
 
-class MessageStar(AuditMixin, AngeeDataModel, concrete=True):
+class MessageStar(AuditMixin, ProtectedDataModel, concrete=True):
     """A user's Odoo-style star/favorite marker on a message."""
 
 

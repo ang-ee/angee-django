@@ -7,7 +7,7 @@ from rebac import PermissionDenied, RebacMixin, SubjectRef, to_subject_ref
 from rebac.actors import is_sudo
 from rebac.resources import model_for_subject_type, model_resource_type
 
-from angee.base.permissions import require_record_access
+from angee.iam.permissions import require_record_access
 
 
 class AngeePolicy(Policy):

@@ -13,7 +13,7 @@ from rebac import database_context, system_context
 
 from angee.agents.constants import BUILTIN_MCP_ANGEE
 from angee.agents.grants import sync_resource_reader_grants
-from angee.base.managers import AngeeManager
+from angee.iam.managers import ProtectedManager
 from angee.mcp.server import mcp_server
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 
@@ -43,7 +43,7 @@ class MCPServerManager[ServerT: MCPServer](AngeeHistoryManager[ServerT]):
         return servers[0]
 
 
-class MCPToolManager[ToolT: MCPTool](AngeeManager[ToolT]):
+class MCPToolManager[ToolT: MCPTool](ProtectedManager[ToolT]):
     """Own deterministic catalogue synchronization and grant-row identities."""
 
     def authorization_ids(self, server_sqid: str, tool_names: Iterable[str]) -> dict[str, str]:

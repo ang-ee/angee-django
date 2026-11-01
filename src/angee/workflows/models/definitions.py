@@ -15,10 +15,10 @@ from rebac import database_context
 from rebac.database import write_alias
 
 from angee.base.fields.text import ModelLabelField
-from angee.base.models.append_only import AppendOnlyModel
-from angee.base.models.base import AngeeDataModel
-from angee.base.models.ownership import OwnerMixin
 from angee.iam.models import ServiceUserMixin
+from angee.iam.models.append_only import ProtectedAppendOnlyModel
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.ownership import OwnerMixin
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.resources.mixins import ResourceLoadMixin
@@ -33,11 +33,11 @@ from angee.workflows.triggers import TriggerGrantTarget
 logger = logging.getLogger(__name__)
 
 
-class Workflow(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class Workflow(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, ProtectedDataModel, concrete=True):
     """Editable identity and draft, pointing to one immutable published version.
 
     A workflow is a grant root with transferable ownership
-    (:class:`~angee.base.models.ownership.OwnerMixin`); ``created_by`` stays attribution.
+    (:class:`~angee.iam.models.ownership.OwnerMixin`); ``created_by`` stays attribution.
     An install without a user-backed actor leaves it ownerless, for platform
     administrators to manage or transfer.
     """
@@ -110,7 +110,7 @@ class Workflow(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, An
 WorkflowVersionManager = AngeeHistoryManager.from_queryset(WorkflowVersionQuerySet)
 
 
-class WorkflowVersion(AppendOnlyModel, AngeeDataModel, concrete=True):
+class WorkflowVersion(ProtectedAppendOnlyModel, ProtectedDataModel, concrete=True):
     """Immutable normalized graph document selected when a run starts."""
 
     sqid_prefix = "wfv_"

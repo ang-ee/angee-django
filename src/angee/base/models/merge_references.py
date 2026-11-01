@@ -18,10 +18,6 @@ from django.db.models import DO_NOTHING, Exists, OuterRef, Q
 from django.db.models.deletion import get_candidate_relations_to_delete
 from django.db.models.functions import Cast
 from django.utils import timezone
-from rebac import model_identities
-from rebac.actors import model_can_resolve_subject
-from rebac.models import active_relationship_model
-from rebac.resources import model_resource_type
 
 from angee.base.lineage import concrete_lineage
 from angee.base.models.append_only import AppendOnlyModel
@@ -436,26 +432,6 @@ def references(model: type[models.Model]) -> tuple[Reference, ...]:
 
     return tuple(_references(model))
 
-
-def named_in_relationships(record: models.Model) -> bool:
-    """Return whether stored REBAC relationships name any row retiring ``record`` deletes.
-
-    The delete takes the record's multi-table parents and children with it, and
-    REBAC cleans every identity those rows carry, as a resource or as a subject.
-    Relations backed by fields follow a moved key; stored rows (a direct share,
-    a membership) would go with the retired record.
-    """
-
-    model = type(record)
-    rows = active_relationship_model().objects.db_manager(hints={"instance": record})
-    identities = set()
-    for owner in concrete_lineage(model):
-        if not model_resource_type(owner) and not model_can_resolve_subject(owner):
-            continue
-        row = owner._base_manager.db_manager(hints={"instance": record}).filter(pk=record.pk).first()
-        if row is not None:
-            identities.update(model_identities(owner, row))
-    return rows.referencing(identities).exists()
 
 
 def _state(row: models.Model, identity: tuple[str, ...]) -> dict[str, Any]:

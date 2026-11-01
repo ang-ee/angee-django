@@ -6,13 +6,13 @@ import logging
 
 from django.db import models
 
-from angee.base.models.base import AngeeDataModel
+from angee.iam.models.base import ProtectedDataModel
 from angee.resources.mixins import ResourceLoadMixin
 
 logger = logging.getLogger(__name__)
 
 
-class MimeType(ResourceLoadMixin, AngeeDataModel, concrete=True):
+class MimeType(ResourceLoadMixin, ProtectedDataModel, concrete=True):
     """Reference row for one MIME type.
 
     The master-tier taxonomy seed is the source of truth; rows are read-only

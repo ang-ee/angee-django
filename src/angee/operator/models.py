@@ -14,11 +14,11 @@ read or written. They are type anchors, nothing more.
 
 from __future__ import annotations
 
-from angee.base.models.base import AngeeModel
-from angee.base.models.roles import role_anchor
+from angee.iam.models.base import ProtectedModel
+from angee.iam.models.roles import role_anchor
 
 
-class OperatorConnection(AngeeModel, concrete=True):
+class OperatorConnection(ProtectedModel, concrete=True):
     """Table-less REBAC type anchor for the operator daemon connection."""
 
 
@@ -34,5 +34,5 @@ OperatorRole = role_anchor("operator/role")
 The const-backed ``admin`` relation on ``operator/role`` (``permissions.zed``)
 registers through this anchor's ``rebac_resource_type`` (``rebac.E009``), so a
 platform admin resolves as an effective operator-admin through the const. See
-:func:`angee.base.models.roles.role_anchor`.
+:func:`angee.iam.models.roles.role_anchor`.
 """

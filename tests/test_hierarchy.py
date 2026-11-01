@@ -23,7 +23,7 @@ from django.db.models.signals import pre_save
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
-from angee.base.querysets import AngeeQuerySet
+from angee.iam.querysets import ProtectedQuerySet
 from tests.hierdemo.models import HierNode, PlainManagerHierNode, ScopedHierNode
 from tests.scopedemo.models import Scope
 
@@ -108,7 +108,7 @@ def test_hierarchy_path_writes_preserve_downstream_queryset_guards(monkeypatch: 
     def deny(*args: Any, **kwargs: Any) -> int:
         raise PermissionDenied("downstream write guard")
 
-    monkeypatch.setattr(AngeeQuerySet, "update", deny)
+    monkeypatch.setattr(ProtectedQuerySet, "update", deny)
     with pytest.raises(PermissionDenied, match="downstream write guard"):
         HierNode()._write_hierarchy_path(HierNode.objects.filter(pk=1), "/000000000001/")
 

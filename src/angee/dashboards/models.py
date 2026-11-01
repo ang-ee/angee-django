@@ -11,10 +11,8 @@ from rebac import PermissionDenied, current_actor, database_context, system_cont
 
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.locks import ImmutableFieldsMixin, OptimisticLockMixin
-from angee.base.models.ownership import OwnerMixin
-from angee.base.models.trash import ArchiveMixin, TrashMixin
+from angee.base.models.trash import ArchiveMixin
 from angee.dashboards.exceptions import DashboardConflictError as DashboardConflictError
 from angee.dashboards.managers import DashboardManager as DashboardManager
 from angee.dashboards.managers import DashboardWidgetManager as DashboardWidgetManager
@@ -25,6 +23,9 @@ from angee.dashboards.validators import DASHBOARD_SCHEMA_VERSION, MAX_COLUMNS, M
 from angee.dashboards.validators import canonical_dashboard_snapshot as canonical_dashboard_snapshot
 from angee.dashboards.validators import validate_dashboard_queries as validate_dashboard_queries
 from angee.dashboards.validators import widget_visibility_answers as widget_visibility_answers
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.ownership import OwnerMixin
+from angee.iam.models.trash import ProtectedTrashMixin
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.resources.mixins import ResourceLoadMixin
 
@@ -33,10 +34,10 @@ class Dashboard(
     ImmutableFieldsMixin,
     OptimisticLockMixin,
     ResourceLoadMixin,
-    TrashMixin,
+    ProtectedTrashMixin,
     OwnerMixin,
     HistoryMixin,
-    AngeeDataModel,
+    ProtectedDataModel,
     concrete=True,
 ):
     """One installed baseline or actor-owned complete dashboard snapshot."""
@@ -189,7 +190,7 @@ class Dashboard(
         super().after_resource_load(loaded, tier=tier, source=source)
 
 
-class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, HistoryMixin, AngeeDataModel, concrete=True):
+class DashboardWidget(ResourceLoadMixin, ArchiveMixin, AuditMixin, HistoryMixin, ProtectedDataModel, concrete=True):
     """One versioned widget specification inside a snapshot."""
 
     sqid_prefix = "dsw_"

@@ -22,13 +22,13 @@ from rebac.database import write_alias
 from angee.base.exceptions import exception_text
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
-from angee.base.models.base import AngeeDataModel
 from angee.base.models.merge_references import MergePolicy
-from angee.base.models.refs import RecordRefMixin
 from angee.base.querysets import row_lock_paths
 from angee.base.refs import RecordRef
 from angee.base.serialization import strip_null_bytes
 from angee.base.signals import publish_change
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.jobs.enqueue import enqueue_task
 from angee.workflows.definition import GraphEdge, GraphNode
 from angee.workflows.managers import WorkflowRunManager
@@ -89,7 +89,7 @@ class RunGraph:
     edges: tuple[RunGraphEdge, ...]
 
 
-class WorkflowRun(RecordRefMixin, AngeeDataModel, concrete=True):
+class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
     """One actor's execution of one immutable graph against an optional record."""
 
     merge_policy = MergePolicy.KEEP

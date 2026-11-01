@@ -6,15 +6,15 @@ from django.db import models
 
 from angee.base.fields.state import StateField
 from angee.base.fields.text import ModelLabelField
-from angee.base.models.base import AngeeModel
 from angee.base.models.identity import instance_from_public_id
+from angee.iam.models.base import ProtectedModel
 from angee.resources.entries import resolve_model
 from angee.resources.exceptions import ResourceLoadError
 from angee.resources.managers import ResourceManager
 from angee.resources.tiers import ResourceTier
 
 
-class Resource(AngeeModel, concrete=True):
+class Resource(ProtectedModel, concrete=True):
     """Ledger row linking source resource xrefs to imported targets."""
 
 

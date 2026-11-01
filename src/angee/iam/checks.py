@@ -9,8 +9,8 @@ from django.core import checks
 from rebac.resources import model_resource_type
 from rebac.schema import FieldBinding
 
-from angee.base.models.ownership import OwnerMixin
-from angee.base.permissions import declared_rebac_definition, effective_rebac_schema
+from angee.iam.models.ownership import OwnerMixin
+from angee.iam.permissions import declared_rebac_definition, effective_rebac_schema
 
 
 def check_rebac_caveats(

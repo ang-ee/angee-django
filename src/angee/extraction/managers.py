@@ -12,11 +12,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import generic_target, system_context, to_subject_ref
 
-from angee.base.managers import AngeeManager
-from angee.base.models.append_only import AppendOnlyQuerySet
 from angee.base.models.identity import public_id_of
-from angee.base.permissions import actor_user_id
-from angee.base.querysets import AngeeQuerySet
 from angee.base.refs import RecordRef
 from angee.base.serialization import canonical_json_sha256, strip_null_bytes
 from angee.base.validators import validate
@@ -31,6 +27,10 @@ from angee.extraction.contracts import (
 )
 from angee.extraction.enums import ExtractionErrorCode, ExtractionRole, ExtractionStatus
 from angee.extraction.pointers import json_pointer_value, result_selectors
+from angee.iam.managers import ProtectedManager
+from angee.iam.models.append_only import ProtectedAppendOnlyQuerySet
+from angee.iam.permissions import actor_user_id
+from angee.iam.querysets import ProtectedQuerySet
 from angee.provenance.evidence import EvidenceReference, readable_records
 
 if TYPE_CHECKING:
@@ -41,14 +41,14 @@ class StaleExtraction(ValidationError):
     """The requested revision is no longer the lineage head."""
 
 
-class EvidenceQuerySet[EvidenceT: models.Model](AppendOnlyQuerySet[EvidenceT], AngeeQuerySet[EvidenceT]):
+class EvidenceQuerySet[EvidenceT: models.Model](ProtectedAppendOnlyQuerySet[EvidenceT], ProtectedQuerySet[EvidenceT]):
     """Close generic insertion as well as edits and deletion."""
 
     def validate_insert(self) -> None:
         raise ValueError("Extraction evidence can only be inserted by its retention owner.")
 
 
-EvidenceManager = AngeeManager.from_queryset(EvidenceQuerySet)
+EvidenceManager = ProtectedManager.from_queryset(EvidenceQuerySet)
 
 
 class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):

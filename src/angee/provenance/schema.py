@@ -27,10 +27,8 @@ from rebac.resources import model_for_subject_type, model_resource_type
 from simple_history.utils import get_history_manager_for_model
 from strawberry.scalars import JSON
 
-from angee.base.identity import public_subject_ref
 from angee.base.models.base import record_display_label
 from angee.base.models.identity import public_id_for, public_id_of
-from angee.base.permissions import require_rebac_queryset
 from angee.base.refs import generic_pointer_model
 from angee.base.serialization import json_safe
 from angee.graphql.actions import ActionResult, action_guard, authorized_permission_target
@@ -40,6 +38,8 @@ from angee.graphql.data.metadata import (
     attach_data_resource_contribution,
 )
 from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
+from angee.iam.identity import public_subject_ref
+from angee.iam.permissions import require_rebac_queryset
 from angee.provenance.context import changeset_model
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory, record_history
 from angee.provenance.evidence import FactAuthority
@@ -184,8 +184,9 @@ class HistorySummaryType(HistoryAttribution):
 class HistoryEntryType(HistoryAttribution):
     """One changeset with the record's authorized deltas and replay eligibility."""
 
-    changes: list[HistoryFieldChangeType]
-    statements: list[HistoryStatementType]
+    # None distinguishes unavailable retained values from a truthful empty projection.
+    changes: list[HistoryFieldChangeType] | None
+    statements: list[HistoryStatementType] | None
     merge: HistoryMergeType | None
     can_revert: bool
 
@@ -365,18 +366,23 @@ class RecordHistory:
         merges = self._merges(page)
         actors = _actor_projections(page)
         revertable = self.record.revertable_changesets(page, actor=self.actor)
-        return [
-            HistoryEntryType(
-                **_attribution(changeset, *actors.get(changeset.actor_ref, (None, None))),
-                changes=[
-                    change for state in versions.get(changeset.pk, ()) for change in self._changes(state, redacted)
-                ],
-                statements=self._statements(statements.get(changeset.pk, ()), redacted),
-                merge=merges.get(changeset.pk),
-                can_revert=changeset.pk in revertable,
+        entries: list[HistoryEntryType] = []
+        for changeset in page:
+            deltas = [self._changes(state, redacted) for state in versions.get(changeset.pk, ())]
+            statement_versions = statements.get(changeset.pk, ())
+            complete_statements = all(
+                (owner := model_history(table)) is not None and owner.source_state_complete(version)
+                for table, version in statement_versions
             )
-            for changeset in page
-        ]
+            available = all(delta is not None for delta in deltas)
+            entries.append(HistoryEntryType(
+                **_attribution(changeset, *actors.get(changeset.actor_ref, (None, None))),
+                changes=[change for delta in deltas if delta is not None for change in delta] if available else None,
+                statements=self._statements(statement_versions, redacted) if complete_statements else None,
+                merge=merges.get(changeset.pk),
+                can_revert=available and complete_statements and changeset.pk in revertable,
+            ))
+        return entries
 
     def page(self, limit: int, offset: int, selected: PublicID | None = None) -> RecordHistoryType:
         changesets = self.changesets()
@@ -410,16 +416,16 @@ class RecordHistory:
                 .using(self.using)
                 .filter(
                     predicate,
-                    changeset_id__in=changeset_ids,
+                    history_changeset_id__in=changeset_ids,
                 )
                 .annotate(_angee_predecessor_id=models.Subquery(predecessor))
-                .order_by("changeset_id", key, "history_id")
+                .order_by("history_changeset_id", key, "history_id")
             )
             boundaries = []
             predecessor_ids = set()
             for (changeset_id, _pk), versions in groupby(
                 rows.iterator(),
-                key=lambda row: (row.changeset_id, getattr(row, key)),
+                key=lambda row: (row.history_changeset_id, getattr(row, key)),
             ):
                 boundary = list(versions)
                 predecessor_id = boundary[0]._angee_predecessor_id
@@ -443,12 +449,12 @@ class RecordHistory:
                 statement_model.history.using(self.using)
                 .filter(
                     predicate,
-                    changeset_id__in=changeset_ids,
+                    history_changeset_id__in=changeset_ids,
                 )
                 .order_by("history_id")
             )
             for version in versions:
-                grouped[version.changeset_id].append((statement_model, version))
+                grouped[version.history_changeset_id].append((statement_model, version))
         return dict(grouped)
 
     def _prime_statement_references(
@@ -493,7 +499,7 @@ class RecordHistory:
 
         snapshots: defaultdict[type[models.Model], dict[tuple[Any, Any | None], Any | None]] = defaultdict(dict)
         for table, _first, last, _previous in (state for states in versions.values() for state in states):
-            snapshots[table][getattr(last, table._meta.pk.attname), last.changeset_id] = last
+            snapshots[table][getattr(last, table._meta.pk.attname), last.history_changeset_id] = last
         for statement_model, version in (row for rows in statements.values() for row in rows):
             snapshots[statement_model.statement_subject_model].setdefault((version.subject_id, None), None)
 
@@ -534,7 +540,7 @@ class RecordHistory:
         self,
         state: _Version,
         redactions: dict[tuple[type[models.Model], Any, Any | None], frozenset[str]],
-    ) -> list[HistoryFieldChangeType]:
+    ) -> list[HistoryFieldChangeType] | None:
         """Project the history owner's native diff through its redaction decision."""
 
         table, first, last, previous = state
@@ -542,8 +548,10 @@ class RecordHistory:
         history = model_history(table)
         if history is None:
             return []
+        if not history.source_state_complete(first, last, previous):
+            return None
         hidden = redactions.get(
-            (table, pk, last.changeset_id),
+            (table, pk, last.history_changeset_id),
             redactions[table, pk, None],
         )
         projected: list[HistoryFieldChangeType] = []
@@ -574,7 +582,7 @@ class RecordHistory:
         for statement_model, version in versions:
             subject_model = statement_model.statement_subject_model
             redacted = redactions.get(
-                (subject_model, version.subject_id, version.changeset_id),
+                (subject_model, version.subject_id, version.history_changeset_id),
                 redactions[subject_model, version.subject_id, None],
             )
             declaration = statement_model.statement_aspects[version.aspect]
@@ -628,12 +636,12 @@ class RecordHistory:
             for table in record.history_tables():
                 key = table._meta.pk.attname
                 redirected = "merged_into" in {field.name for field in table._meta.fields}
-                fields = ("changeset_id", key, "history_type", *(("merged_into_id",) if redirected else ()))
+                fields = ("history_changeset_id", key, "history_type", *(("merged_into_id",) if redirected else ()))
                 rows = (
                     get_history_manager_for_model(table)
                     .using(self.using)
                     .filter(
-                        changeset_id__in=changeset_ids,
+                        history_changeset_id__in=changeset_ids,
                     )
                     .values_list(*fields)
                 )

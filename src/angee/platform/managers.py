@@ -14,8 +14,8 @@ from django.db import DatabaseError, transaction
 from django_compose.components import AppSelection, InstalledComponents, inspect_apps, installed_components
 from rebac import database_context, system_context
 
-from angee.base.managers import AngeeManager
 from angee.base.serialization import canonical_json_sha256
+from angee.iam.managers import ProtectedManager
 from angee.platform import composed
 from angee.platform.discovery import (
     available_addons,
@@ -91,7 +91,7 @@ class AddonChangePreview:
     settings_text: str = field(default="", repr=False)
 
 
-class AddonManager[T: Addon](AngeeManager[T]):
+class AddonManager[T: Addon](ProtectedManager[T]):
     """Manager owning reflection, authored roots, and native dependency jobs."""
 
     def enable(self, name: str, revision: str | None = None) -> InstallResult:

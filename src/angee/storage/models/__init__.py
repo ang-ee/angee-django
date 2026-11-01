@@ -1,6 +1,6 @@
 """Storage model declarations and required historical public imports."""
 
-from angee.base.models.roles import role_anchor
+from angee.iam.models.roles import role_anchor
 from angee.storage.choices import (
     FileVisibility,
     UploadState,

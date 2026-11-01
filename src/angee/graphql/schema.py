@@ -36,9 +36,8 @@ from strawberry.types.union import StrawberryUnion
 from strawberry_django_hasura import hasura_config
 
 from angee.base.addons import addon_facts, is_angee_addon, optional_addon_module
-from angee.base.exceptions import DomainError, classify_error, validation_error
+from angee.base.exceptions import DomainError, validation_error
 from angee.base.models.locks import StaleRevisionError
-from angee.base.permissions import require_rebac_queryset
 from angee.graphql.data.contracts import DataResourceMetadata
 from angee.graphql.data.metadata import (
     data_resource_contributions,
@@ -52,6 +51,8 @@ from angee.graphql.introspection import (
     surface_name,
 )
 from angee.graphql.view_as import ViewAsReadOnlyExtension
+from angee.iam.exceptions import classify_error
+from angee.iam.permissions import require_rebac_queryset
 from graphql import (
     GraphQLError,
     GraphQLObjectType,
