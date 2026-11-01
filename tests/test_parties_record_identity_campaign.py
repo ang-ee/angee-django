@@ -1,17 +1,21 @@
 """Follower identity is reachable through record read, without private contact access."""
 
+from collections import Counter
+
 import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
-from rebac import actor_context, system_context
+from rebac import actor_context, resource_id_attr, system_context
 from rebac.backends import backend
+from rebac.resources import model_for_resource_type, model_resource_type
 
 from angee.messaging.testing.models import Party, Person, ThreadFollower
 from angee.nexus.testing.models import Cadence, Tie
 from tests.chatterdemo.models import ChatterDoc
 from tests.conftest import execute_schema, result_data
 from tests.messaging_campaign import grant
+from tests.queries import is_rebac_revision_read
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
 from tests.t3_campaign import messaging_access_schema as messaging_access_schema
@@ -62,13 +66,42 @@ def test_record_follower_sql_is_bounded_and_unfollow_revokes_parent_and_child(re
         str(query.query)
         with CaptureQueriesContext(connection) as queries:
             assert list(query.values_list("pk", flat=True)) == [person.pk]
-        # Native exact-PK inference uses a point lower bound: one shared revision
-        # read, actor sets and one application SELECT, without general arrow preparation.
-        assert len(queries) == 3, queries.captured_queries
-        # Each MTI path performs exactly one application row SELECT.
-        assert sum(
-            query["sql"].startswith(f'SELECT "{model._meta.db_table}".') for query in queries.captured_queries
-        ) == 1
+        # One native source-fact batch accompanies the original revision,
+        # actor-set and identity-only application reads. MTI query identities
+        # belong to their stored field, not the scalar conversion owner.
+        resource_type = model_resource_type(model)
+        assert resource_type is not None
+        source_model = model_for_resource_type(resource_type)
+        assert source_model is not None
+        identity = resource_id_attr(source_model)
+        source_field = source_model._meta.pk if identity == "pk" else source_model._meta.get_field(identity)
+        assert source_field is not None
+        row_field = model._meta.pk
+        assert row_field is not None
+        quote = connection.ops.quote_name
+        source_prefix = (
+            f"SELECT {quote(source_field.model._meta.db_table)}.{quote(source_field.column)} AS {quote(identity)},"
+        )
+        row_prefix = f"SELECT {quote(row_field.model._meta.db_table)}.{quote(row_field.column)} AS {quote('pk')} FROM "
+        phases = Counter()
+        for query in queries.captured_queries:
+            sql = query["sql"]
+            if sql.startswith(source_prefix):
+                phases["source_preparation"] += 1
+            elif is_rebac_revision_read(sql):
+                phases["schema_revision"] += 1
+            elif sql.startswith("SELECT DISTINCT "):
+                phases["actor_sets"] += 1
+            elif sql.startswith(row_prefix):
+                phases["application"] += 1
+            else:
+                pytest.fail(f"Unexpected statement in exact follower read: {sql}")
+        assert phases == {
+            "source_preparation": 1,
+            "schema_revision": 1,
+            "actor_sets": 1,
+            "application": 1,
+        }, queries.captured_queries
     before = relationship_snapshot()
     with system_context(reason="tests.t3.unfollow"):
         record.message_unsubscribe(party=person)
