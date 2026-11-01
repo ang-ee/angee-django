@@ -13,7 +13,7 @@ import {
   type Row,
 } from "@angee/metadata";
 import {
-  acceptQueryData,
+  useAcceptQueryData,
   publicGraphQLErrorsFromUnknown,
   selectedFieldsPresent,
   useAngeeResourceSave,
@@ -270,6 +270,7 @@ export function useFormViewSave({
     return writable ? new Set(writable) : null;
   }, [formFields, isCreate, modelMetadata, submitOwner]);
   const queryClient = useQueryClient();
+  const acceptQueryData = useAcceptQueryData();
   const canonicalInvalidateModels = useCanonicalResourceModelLabels(invalidateModels);
   const dependentInvalidations = useResourceInvalidates(canonicalInvalidateModels);
   const reconcileMutationResponse = useReconcileMutationResponse();
@@ -572,7 +573,7 @@ export function useFormViewSave({
         const returnedFields = mutationFields.filter((field) => selectedFieldsPresent(saved, [field]));
         const returnedNames = returnedFields.flatMap((field) => typeof field === "string" ? [field] : Object.keys(field));
         const patch = Object.fromEntries(returnedNames.map((name) => [name, saved[name]]));
-        await acceptQueryData<GetOneResponse<RowRecord>>(queryClient, acceptedKey, (current) => {
+        await acceptQueryData<GetOneResponse<RowRecord>>(acceptedKey, (current) => {
           if (complete) {
             accepted = saved;
             return { ...current, data: saved };
@@ -646,7 +647,7 @@ export function useFormViewSave({
       if (isCreate) manualSlugFieldsRef.current.clear();
       return accepted;
     },
-    [acknowledgedSource, dataResource, detailKeyFor, emptyValues, form, formFields, id, isCreate, linesConfig, linesField, linesSeed, mutationFields, queryClient, record, reset, resetDefaultValues, resetHistory, rowsFromRecord, setValue, syncRecordValues],
+    [acknowledgedSource, acceptQueryData, dataResource, detailKeyFor, emptyValues, form, formFields, id, isCreate, linesConfig, linesField, linesSeed, mutationFields, record, reset, resetDefaultValues, resetHistory, rowsFromRecord, setValue, syncRecordValues],
   );
   const acceptSavedRecord = React.useCallback(
     async (saved: Row, options: Parameters<typeof commitSavedRecord>[1] = {}): Promise<void> => {

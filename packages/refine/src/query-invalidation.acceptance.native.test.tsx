@@ -1,0 +1,75 @@
+// @vitest-environment happy-dom
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { isCancelledError, QueryObserver } from "@tanstack/react-query";
+import { afterEach, expect, test, vi } from "vitest";
+import type { ReactNode } from "react";
+
+import { createAngeeChangeLiveProvider } from "./provider";
+import { acceptQueryData, useAcceptQueryData, useReconcileMutationResponse } from "./query-invalidation";
+import { createRefineTestProviders } from "./testing";
+
+const { Provider, createClient, clearClients } = createRefineTestProviders();
+afterEach(() => { cleanup(); clearClients(); vi.clearAllTimers(); vi.useRealTimers(); });
+
+test("actual complete acceptance settles before held derived reads without rereading its exact projection", async () => {
+  vi.useFakeTimers();
+  const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  const detailKey = ["accepted-detail"];
+  const detailRead = vi.fn(async () => ({ title: "old" }));
+  let release!: (value: string) => void;
+  const derivedRead = vi.fn(() => new Promise<string>((resolve) => { release = resolve; }));
+  client.setQueryData(detailKey, { title: "old" });
+  client.setQueryData(["derived"], "old total");
+  const detail = new QueryObserver(client, { queryKey: detailKey, queryFn: detailRead, meta: { angeeModels: ["notes.Note"] } });
+  const derived = new QueryObserver(client, { queryKey: ["derived"], queryFn: derivedRead, meta: { angeeModels: ["notes.Note"] } });
+  const stopDetail = detail.subscribe(() => undefined);
+  const stopDerived = derived.subscribe(() => undefined);
+  const liveProvider = createAngeeChangeLiveProvider({ subscribe: () => () => undefined, on: () => () => undefined } as never, [], { queryClient: client });
+  const wrapper = ({ children }: { children: ReactNode }) => <Provider queryClient={client} liveProvider={liveProvider}>{children}</Provider>;
+  const hook = renderHook(() => useReconcileMutationResponse(), { wrapper });
+  try {
+    await act(async () => {
+      await hook.result.current({ title: "accepted" }, {}, {
+        invalidateModels: ["notes.Note"],
+        acceptResponse: (data) => acceptQueryData(client, detailKey, data),
+      });
+    });
+    expect(client.getQueryData(detailKey)).toEqual({ title: "accepted" });
+    expect(detailRead).not.toHaveBeenCalled();
+    expect(derived.getCurrentResult().isStale).toBe(true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    expect(detailRead).not.toHaveBeenCalled();
+    expect(derivedRead).toHaveBeenCalledOnce();
+    expect(derived.getCurrentResult().fetchStatus).toBe("fetching");
+    await act(async () => { release("new total"); await vi.advanceTimersByTimeAsync(0); });
+    expect(derived.getCurrentResult().data).toBe("new total");
+  } finally { liveProvider.setEnabled(false); stopDetail(); stopDerived(); }
+});
+
+
+test.each(["before", "during"])("actor suspension %s exact cancellation rejects the captured old acceptance", async (when) => {
+  const client = createClient();
+  const liveProvider = createAngeeChangeLiveProvider({ subscribe: () => () => undefined, on: () => () => undefined } as never, [], { queryClient: client });
+  const wrapper = ({ children }: { children: ReactNode }) => <Provider queryClient={client} liveProvider={liveProvider}>{children}</Provider>;
+  const hook = renderHook(() => useAcceptQueryData(), { wrapper });
+  const oldAccept = hook.result.current;
+  let release!: () => void;
+  const cancelled = new Promise<void>((resolve) => { release = resolve; });
+  if (when === "during") vi.spyOn(client, "cancelQueries").mockImplementationOnce(() => cancelled);
+  const suspend = () => {
+    liveProvider.setEnabled(false);
+    client.removeQueries();
+    liveProvider.setEnabled(true);
+    hook.rerender();
+  };
+  if (when === "before") act(suspend);
+  const completion = oldAccept(["private-detail"], { secret: "old actor" });
+  const failure = completion.catch((error: unknown) => error);
+  if (when === "during") act(suspend);
+  release();
+  expect(isCancelledError(await failure)).toBe(true);
+  expect(client.getQueryData(["private-detail"])).toBeUndefined();
+  await act(async () => { await hook.result.current(["private-detail"], { secret: "current actor" }); });
+  expect(client.getQueryData(["private-detail"])).toEqual({ secret: "current actor" });
+  liveProvider.setEnabled(false);
+});

@@ -3,6 +3,7 @@ import {
   canonicalModelLabel,
   createAngeeAccessControlProvider,
   dataResourcesFromAngeeSchemaMetadata,
+  refineResourceIdentifier,
   defineAngeeSchemaMetadata,
   mergeModelLabelInventory,
   schemaFieldMetadataFromAngeeSchemaMetadata,
@@ -262,7 +263,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
       refineLiveProvider?.setEnabled(false);
       resetSessionQueries(queryClient);
       if (userId === null) refineLiveProvider?.setEnabled(true);
-      const identity = await queryClient.fetchQuery(identityQueryOptions(refineAuthProvider));
+      const identity = await queryClient.fetchQuery(identityQueryOptions(refineAuthProvider, queryClient));
       if (userId !== null && (identity?.id !== userId || !identity.realUser)) {
         throw new Error("Preview identity was not returned.");
       }
@@ -536,7 +537,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
     const searchStr = useRouterState({ select: (state) => state.location.searchStr });
     const activeRoute = useActiveRoute(routes);
     // The rail, menus and palette show what the session's identity holds; Refine fetches it into the shared entry.
-    const identity = useQuery({ ...identityQueryOptions(refineAuthProvider), enabled: false }, queryClient);
+    const identity = useQuery({ ...identityQueryOptions(refineAuthProvider, queryClient), enabled: false }, queryClient);
     const navigation = projection.navigationFor(sessionPermitted(identity.data));
     const match = projection.activeMenu(pathname, activeRoute?.name, searchStr, navigation);
     const activeMenuId = match?.item.id ?? null;
@@ -611,7 +612,7 @@ export function createApp(input: CreateAppInput): AngeeApp {
         resources={labeledResources}
         routerProvider={routerProvider}
         options={{
-          liveMode: refineLiveProvider ? "auto" : "off",
+          liveMode: refineLiveProvider ? "manual" : "off",
           syncWithLocation: false,
           reactQuery: { clientConfig: queryClient },
         }}
@@ -799,7 +800,9 @@ function createLiveProviderForSchema(
   return createAngeeHasuraLiveProvider({
     ...liveOptions,
     queryClient,
-    resources: dataResourcesFromAngeeSchemaMetadata(schema.metadata),
+    resources: dataResourcesFromAngeeSchemaMetadata(schema.metadata).map((resource) => ({
+      ...resource, resourceIdentifier: refineResourceIdentifier(resource),
+    })),
   });
 }
 

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import { useCustom, useInfiniteList, useInvalidate, useList, useMany, useOne } from "@refinedev/core";
+import { useCustom, useInfiniteList, useInvalidate, useList, useMany, useOne, useUpdate } from "@refinedev/core";
 import { parse } from "graphql";
 import type { ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
@@ -243,5 +243,40 @@ test.each([false, undefined])("native invalidation joins an initial request with
       f.attempts.forEach((attempt) => attempt.resolve(response()));
       await refreshed;
     });
+  }
+});
+
+
+test("delegated pessimistic completion preserves unrelated reads and cannot roll them back on refusal", async () => {
+  const f = fixture();
+  let rejectWrite!: (error: Error) => void;
+  const write = new Promise<never>((_resolve, reject) => { rejectWrite = reject; });
+  const wrapper = ({ children }: { children: ReactNode }) => <Provider
+    dataProvider={{ ...f.provider, update: () => write }} queryClient={f.client}>{children}</Provider>;
+  const hook = renderHook(() => ({
+    query: useList({ resource: "notes" }).query,
+    update: useUpdate({ mutationMode: "pessimistic", invalidates: [], errorNotification: false }),
+  }), { wrapper });
+  let completion: Promise<unknown> | undefined;
+  try {
+    await waitFor(() => expect(f.attempts).toHaveLength(1));
+    await act(async () => { f.attempts[0]?.resolve(response("initial")); });
+    await waitFor(() => expect(hook.result.current.query.isSuccess).toBe(true));
+    act(() => { void hook.result.current.query.refetch(); });
+    await waitFor(() => expect(f.attempts).toHaveLength(2));
+    act(() => {
+      completion = hook.result.current.update.mutateAsync({ resource: "notes", id: "another", values: { title: "edit" } });
+    });
+    const failed = expect(completion).rejects.toThrow("permission denied");
+    await act(async () => { await Promise.resolve(); });
+    expect(f.attempts[1]?.signal?.aborted).toBe(false);
+    await act(async () => { f.attempts[1]?.resolve(response("fresh")); });
+    await waitFor(() => expect(hook.result.current.query.data?.data).toEqual([{ id: "fresh" }]));
+    await act(async () => { rejectWrite(new Error("permission denied")); await failed; });
+    expect(hook.result.current.query.data?.data).toEqual([{ id: "fresh" }]);
+  } finally {
+    rejectWrite(new Error("fixture cleanup"));
+    f.attempts.forEach((attempt) => attempt.resolve(response()));
+    await completion?.catch(() => undefined);
   }
 });

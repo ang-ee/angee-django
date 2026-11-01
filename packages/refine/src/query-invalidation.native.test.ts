@@ -3,6 +3,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import {
   authoredQueryReadsChange,
+  acceptQueryData,
   createAuthoredLiveInvalidation,
   invalidateAuthoredQueries,
 } from "./query-invalidation";
@@ -360,4 +361,61 @@ test("a live change cancels a populated in-flight refresh at once; its late resp
     stale.resolve([]);
     unsubscribe(); cache.clear();
   }
+});
+
+
+test("complete acceptance cancels an obsolete exact snapshot and partial/no-op writes stay distinguishable", async () => {
+  const cache = client();
+  const obsolete = pending<{ title: string }>();
+  const key = ["detail", { fields: ["title"] }];
+  const read = cache.fetchQuery({ queryKey: key, queryFn: () => obsolete.promise });
+  await acceptQueryData(cache, key, { title: "accepted" });
+  obsolete.resolve({ title: "old" });
+  await read.catch(() => undefined);
+  expect(cache.getQueryData(key)).toEqual({ title: "accepted" });
+  const query = cache.getQueryCache().find({ queryKey: key, exact: true });
+  const count = query?.state.dataUpdateCount;
+  await acceptQueryData(cache, key, (current) => current);
+  expect(query?.state.dataUpdateCount).toBe(count);
+  await acceptQueryData(cache, key, { title: "partial" }, { complete: false });
+  expect(query?.state.isInvalidated).toBe(true);
+  expect(query?.meta?.angeeAcceptedResponse).toMatchObject({ complete: false });
+  cache.clear();
+});
+
+test("an explicit batch flushes successful item effects once after a later item fails", async () => {
+  const cache = client();
+  let reads = 0;
+  const observer = new QueryObserver(cache, {
+    queryKey: ["batch"], queryFn: async () => ++reads,
+    meta: { angeeModels: ["notes.Note"] },
+  });
+  const stop = observer.subscribe(() => undefined);
+  await observer.refetch();
+  const before = reads;
+  const live = createAuthoredLiveInvalidation(cache);
+  const failure = new Error("second item denied");
+  try {
+    await expect(live.batch(async () => {
+      await live.reconcile({ changes: [{ model: "notes.Note", id: "first" }] });
+      expect(reads).toBe(before);
+      throw failure;
+    })).rejects.toBe(failure);
+    expect(reads).toBe(before + 1);
+  } finally { live.clear(); stop(); cache.clear(); }
+});
+
+test("authentication suspension settles buffered reconciliation without replaying it", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const invalidate = vi.spyOn(cache, "invalidateQueries");
+  const live = createAuthoredLiveInvalidation(cache);
+  const generation = live.generation;
+  const settled = live.reconcile({ changes: [{ model: "notes.Note" }] });
+  live.clear();
+  await settled;
+  await vi.advanceTimersByTimeAsync(300);
+  expect(live.generation).toBe(generation + 1);
+  expect(invalidate.mock.calls.filter(([filters]) => filters?.refetchType === "active")).toHaveLength(0);
+  cache.clear();
 });
