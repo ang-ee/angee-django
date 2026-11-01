@@ -34,13 +34,12 @@ test("route identity starts the native form read without a preview and resets va
     getList: vi.fn(async () => ({ data: [], total: 0 })),
   } satisfies RefineTestDataProvider;
   const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ["/"] }) });
-  const onChanged = vi.fn();
   function Tree({ id, filename }: { id: string; filename?: string }) {
     return (
       <Provider resources={[resource]} dataProvider={provider} options={{ reactQuery: { clientConfig: { defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } } } }}>
         <RouterContextProvider router={router}>
           <AppRuntimeProvider runtime={{ icons: baseIcons, widgets: defaultWidgets }}>
-            <ModalsHost><ToastProvider><FileDetail id={id} filename={filename} onChanged={onChanged} /></ToastProvider></ModalsHost>
+            <ModalsHost><ToastProvider><FileDetail id={id} filename={filename} /></ToastProvider></ModalsHost>
           </AppRuntimeProvider>
         </RouterContextProvider>
       </Provider>
@@ -65,5 +64,4 @@ test("route identity starts the native form read without a preview and resets va
   expect(screen.getByDisplayValue("Beta")).toBe(loaded);
   expect(getOne).toHaveBeenCalledTimes(2);
   expect(update).not.toHaveBeenCalled();
-  expect(onChanged).not.toHaveBeenCalled();
 });

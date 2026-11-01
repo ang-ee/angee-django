@@ -36,7 +36,8 @@ function useRecordPagesRead(context: ChatterViewContext, role?: string) {
     content.edge?.model === RECORD_BINDING_MODEL && content.bindingRole !== undefined ? [content.bindingRole] : []));
   const variables = useMemo(() => ({ modelLabel, recordId, role: null }), [modelLabel, recordId]);
   const query = useAuthoredQuery(KnowledgeRecordPages, variables, {
-    enabled: Boolean(modelLabel && recordId), models: BINDING_MODELS,
+    enabled: Boolean(modelLabel && recordId), models: [...BINDING_MODELS, ...PAGE_READ_MODELS, modelLabel],
+    records: [{ model: modelLabel, id: recordId }], relatedModels: [RECORD_BINDING_MODEL],
   });
   const bindings = query.data?.record_knowledge_bindings.filter((binding) => binding.page !== null
     && (role === undefined ? !claimedRoles.has(binding.role) : binding.role === role));
@@ -85,8 +86,24 @@ function RecordPagesGroup({ context, role, label }: { context: ChatterViewContex
   const pagesQuery = useAuthoredQuery(KnowledgePages, { limit: 20, offset: 0, where, order: [{ title: "asc" }] }, {
     enabled: canBind && open && Boolean(metadata), models: [PAGE_MODEL],
   });
-  const [bind, bindState] = useAuthoredResourceMutation(KnowledgeBindRecord, { invalidateModels: BINDING_MODELS });
-  const [unbind, unbindState] = useAuthoredResourceMutation(KnowledgeUnbindRecord, { invalidateModels: BINDING_MODELS });
+  const [bind, bindState] = useAuthoredResourceMutation(KnowledgeBindRecord, {
+    invalidateModels: BINDING_MODELS,
+    records: (data, { input }) => data?.bind_knowledge_record ? [{ model: RECORD_BINDING_MODEL,
+      id: data.bind_knowledge_record.id, action: "create", relatedRecords: [
+        { model: input.model_label, id: input.record_id },
+        ...(input.page ? [{ model: PAGE_MODEL, id: input.page }] : []),
+      ] }] : [],
+  });
+  const [unbind, unbindState] = useAuthoredResourceMutation(KnowledgeUnbindRecord, {
+    invalidateModels: BINDING_MODELS,
+    records: (_data, { input }) => {
+      const binding = bindings?.find((row) => row.page === input.page && row.role === input.role);
+      return binding ? [{ model: RECORD_BINDING_MODEL, id: binding.id, action: "delete", relatedRecords: [
+        { model: input.model_label, id: input.record_id },
+        ...(input.page ? [{ model: PAGE_MODEL, id: input.page }] : []),
+      ] }] : [];
+    },
+  });
   const busy = bindState.fetching || unbindState.fetching;
 
   async function changeBinding(page: string, remove: boolean, bindingRole = role ?? "related"): Promise<void> {
@@ -162,7 +179,8 @@ function usePageDetail(context: ChatterViewContext) {
 
 function usePageRecordBindings(context: ChatterViewContext) {
   const page = pageId(context);
-  return useAuthoredQuery(KnowledgePageRecordBindings, { page }, { enabled: Boolean(page), models: BINDING_MODELS });
+  return useAuthoredQuery(KnowledgePageRecordBindings, { page }, { enabled: Boolean(page), models: BINDING_MODELS,
+    records: [{ model: PAGE_MODEL, id: page }], relatedModels: [RECORD_BINDING_MODEL] });
 }
 
 function PageBacklinks({ context }: { context: ChatterViewContext }): ReactElement {

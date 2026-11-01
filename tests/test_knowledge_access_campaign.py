@@ -1,14 +1,19 @@
 """Knowledge reads fail closed and authored actions retain replay semantics."""
 
+from contextlib import ExitStack
+
 import pytest
 from django.contrib.contenttypes.models import ContentType
-from django.db import connection, connections, router
+from django.db import connection, connections, router, transaction
+from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 from rebac.models import active_relationship_model
 
+from angee.base.refs import RecordRef
 from angee.graphql.access import ChangeReadGate
 from angee.graphql.events import ChangePayload
+from angee.knowledge import signals as knowledge_signals
 from angee.knowledge.schema import schemas
 from angee.provenance.context import changeset, changeset_model
 from tests.conftest import (
@@ -56,6 +61,70 @@ def test_record_note_is_atomic_and_replays_the_original_binding(composed_permiss
         assert replay.pk == binding.pk
         assert Page.objects.filter(vault=vault).count() == 1
         assert MarkdownPage.objects.get(pk=binding.page_id).body == "A note\nDetails"
+
+
+def test_binding_changes_identify_the_parent_without_loading_page_content(composed_permissions):
+    owner = create_user("binding-change-owner")
+    vault = vault_for(owner, name="Notes")
+    target = vault_for(owner, name="Target")
+    with actor_context(owner):
+        page = Page.objects.create_in(vault, title="Note")
+        binding = RecordBinding.objects.upsert(page=page, target=target, role="notes")
+        reference = RecordRef.from_instance(target)
+        assert reference in binding.change_related_records()
+        for action in ("create", "delete"):
+            event = ChangePayload.from_instance(binding, action=action, update_fields=None)
+            assert (reference.model_label, reference.public_id) in {
+                (related.model, related.id) for related in event.related_records
+            }
+            visible = ChangeReadGate(RecordBinding, to_subject_ref(owner)).filter(event)
+            assert visible is not None
+            assert (reference.model_label, reference.public_id) in {
+                (related.model, related.id) for related in visible.related_records
+            }
+
+
+@pytest.mark.parametrize("rolled_back", [False, True])
+def test_binding_retarget_observes_only_old_and_new_parent_scopes_after_commit(
+    composed_permissions, monkeypatch, rolled_back,
+):
+    owner = create_user("binding-retarget-owner")
+    vault = vault_for(owner, name="Notes")
+    before_target = vault_for(owner, name="Before")
+    after_target = vault_for(owner, name="After")
+    unrelated = vault_for(owner, name="Unrelated")
+    with actor_context(owner):
+        page = Page.objects.create_in(vault, title="Moved note")
+        binding = RecordBinding.objects.upsert(page=page, target=before_target, role="notes")
+        untouched = RecordBinding.objects.upsert(page=page, target=unrelated, role="notes")
+    delivered = []
+
+    def queue_identity(instance, *, action, update_fields):
+        assert action == "update" and update_fields is None
+        reference = instance.record_ref
+        transaction.on_commit(lambda: delivered.append(reference), using=instance._state.db)
+
+    monkeypatch.setattr(knowledge_signals, "publish_change", queue_identity)
+    with TestCase.captureOnCommitCallbacks(execute=True):
+        try:
+            with changeset(), transaction.atomic(), ExitStack() as contexts:
+                knowledge_signals.binding_merge_scopes(
+                    type(before_target), survivor=after_target, merged=(before_target,), contexts=contexts,
+                )
+                with system_context(reason="test.binding.native_retarget"):
+                    RecordBinding._base_manager.filter(pk=binding.pk).update(object_id=after_target.pk)
+                assert delivered == []
+                if rolled_back:
+                    raise RuntimeError("Refused later in the fold")
+        except RuntimeError:
+            if not rolled_back:
+                raise
+    assert delivered == ([] if rolled_back else [RecordRef.from_instance(before_target), RecordRef.from_instance(after_target)])
+    with system_context(reason="test.binding.retarget_result"):
+        binding.refresh_from_db()
+        untouched.refresh_from_db()
+        assert binding.object_id == (before_target.pk if rolled_back else after_target.pk)
+        assert untouched.object_id == unrelated.pk
 
 
 @pytest.mark.parametrize("missing_end", ["vault", "target"])

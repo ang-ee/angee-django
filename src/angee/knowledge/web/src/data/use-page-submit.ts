@@ -3,7 +3,7 @@ import { rowValueAtPath } from "@angee/metadata";
 import { acknowledgeFormSubmit, formSubmitError, useAuthoredResourceMutation, type FormSubmit } from "@angee/ui";
 
 import { useKnowledgeT } from "../i18n";
-import { KnowledgePage, KnowledgeUpdatePageBody, PAGE_READ_MODELS } from "./documents";
+import { KnowledgePage, KnowledgeUpdatePageBody, PAGE_MODEL, PAGE_READ_MODELS } from "./documents";
 
 /** Adapt Knowledge's atomic, hash-guarded body write to the native form contract. */
 export function usePageSubmit(): FormSubmit {
@@ -11,6 +11,7 @@ export function usePageSubmit(): FormSubmit {
   const acceptQuery = useSetAuthoredQueryData();
   const [write] = useAuthoredResourceMutation(KnowledgeUpdatePageBody, {
     invalidateModels: PAGE_READ_MODELS,
+    records: (_data, input) => [{ model: PAGE_MODEL, id: String(input.page) }],
     shouldInvalidate: (data) => data?.update_page_body.ok === true,
     acceptResponse: async (data, variables) => {
       const result = data?.update_page_body;
@@ -21,7 +22,7 @@ export function usePageSubmit(): FormSubmit {
         if (!page || !page.markdown) return current;
         return { ...current, pages_by_pk: { ...page, title: accepted.title, revision: accepted.revision,
           markdown: { ...page.markdown, body: accepted.body, body_hash: accepted.body_hash, word_count: accepted.word_count } } };
-      });
+      }, { complete: false });
     },
   });
   return async (data, context) => {

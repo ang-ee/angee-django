@@ -39,10 +39,12 @@ export function useTriageActions(queueId: string): readonly ActionDescriptor[] {
   const [accept] = useAuthoredResourceMutation(AcceptTaskDocument, {
     invalidateModels: [TASK_MODEL],
     shouldInvalidate: (data) => data?.accept_task.ok === true,
+    records: (_data, input) => [{ model: TASK_MODEL, id: input.task }],
   });
   const [decline] = useAuthoredResourceMutation(DeclineTaskDocument, {
     invalidateModels: [TASK_MODEL],
     shouldInvalidate: (data) => data?.decline_task.ok === true,
+    records: (_data, input) => [{ model: TASK_MODEL, id: input.task }],
   });
   const [snooze] = useActionOutcomeMutation<ActionFieldName>("snooze_task", {
     idArgument: "task",

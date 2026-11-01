@@ -2928,6 +2928,8 @@ def test_resubscribe_preserves_follower_policy(composed_tables: None) -> None:
         ticket = ThreadedTicket.objects.create(title="Resub case")
         first = ticket.message_subscribe(user=watcher, notification_policy="muted", subtype_keys=("comment",))
         assert first.notification_policy == "muted"
+        original_updated_at = first.updated_at
+        original_receipt = first.last_read_message_id
 
         # A bare re-subscribe preserves the muted policy and subtype filter.
         again = ticket.message_subscribe(user=watcher)
@@ -2935,6 +2937,12 @@ def test_resubscribe_preserves_follower_policy(composed_tables: None) -> None:
         assert again.pk == first.pk
         assert again.notification_policy == "muted"
         assert again.subtype_keys == ["comment"]
+        assert again.updated_at == original_updated_at
+        assert again.last_read_message_id == original_receipt
+        same = ticket.message_subscribe(user=watcher, notification_policy="muted", subtype_keys=("comment",))
+        same.refresh_from_db()
+        assert same.updated_at == original_updated_at
+        assert same.last_read_message_id == original_receipt
 
         # An explicit value still updates it.
         changed = ticket.message_subscribe(user=watcher, notification_policy="email")

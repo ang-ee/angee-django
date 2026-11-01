@@ -5,7 +5,8 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { useRecordThreadQuery } from "./useRecordThreadQuery";
+import { RecordThreadDocument, SetRecordFollowingDocument } from "./documents";
+import { useRecordThreadQuery, useRecordFollowing } from "./useRecordThreadQuery";
 
 const { Provider, createClient, clearClients } = createRefineTestProviders();
 afterEach(() => { cleanup(); clearClients(); });
@@ -23,14 +24,14 @@ test("a parent ledger event refreshes its discussion and follow reads without a 
     [{ schemaName: "console", modelLabel: "notes.Note", roots: { list: "notes", changes: "noteChanged" } }],
     { queryClient: client });
   const { result } = renderHook(() => ({
-    discussion: useRecordThreadQuery({ modelLabel: "notes.Note", recordId: "nte_1", messageLimit: 50 }),
-    follow: useRecordThreadQuery({ modelLabel: "notes.Note", recordId: "nte_1", messageLimit: 1 }),
-    other: useRecordThreadQuery({ modelLabel: "notes.Note", recordId: "nte_2", messageLimit: 50 }),
+    discussion: useRecordThreadQuery({ modelLabel: "notes.Note", recordId: "nte_1" }),
+    follow: useRecordThreadQuery({ modelLabel: "notes.Note", recordId: "nte_1" }),
+    other: useRecordThreadQuery({ modelLabel: "notes.Note", recordId: "nte_2" }),
   }), { wrapper: ({ children }: { children: ReactNode }) =>
     <Provider queryClient={client} dataProvider={{ custom }} liveProvider={liveProvider}>{children}</Provider>,
   });
   await waitFor(() => expect(result.current.other.data?.record_thread.unread_count).toBe(0));
-  expect(custom).toHaveBeenCalledTimes(3);
+  expect(custom).toHaveBeenCalledTimes(2);
   expect(subscribe).toHaveBeenCalledTimes(1);
 
   count = 1;
@@ -42,7 +43,7 @@ test("a parent ledger event refreshes its discussion and follow reads without a 
     expect(result.current.follow.data?.record_thread.unread_count).toBe(1);
   });
   expect(result.current.other.data?.record_thread.unread_count).toBe(0);
-  expect(custom).toHaveBeenCalledTimes(5);
+  expect(custom).toHaveBeenCalledTimes(3);
 });
 
 test("an unsaved record neither reads nor subscribes", () => {
@@ -54,4 +55,39 @@ test("an unsaved record neither reads nor subscribes", () => {
   });
   expect(custom).not.toHaveBeenCalled();
   expect(subscribe).not.toHaveBeenCalled();
+});
+
+
+test("a follow accepts its projection while omitted thread state still reconciles", async () => {
+  let reads = 0;
+  let finishRefresh!: () => void;
+  const refresh = new Promise<void>((resolve) => { finishRefresh = resolve; });
+  const custom = vi.fn(async ({ meta }: { meta?: { gqlQuery?: unknown; gqlMutation?: unknown } }) => {
+    if (meta?.gqlMutation === SetRecordFollowingDocument) return { data: { set_record_following: {
+      error: null, error_code: null, follower_count: 1, is_following: true,
+      follower: null, followers: [],
+    } } };
+    expect(meta?.gqlQuery).toBe(RecordThreadDocument);
+    reads += 1;
+    if (reads > 1) await refresh;
+    return { data: { record_thread: { error_code: null, is_following: reads > 1,
+      follower_count: reads > 1 ? 1 : 0, notifications: reads > 1 ? [] : [{ id: "old-derived-row" }],
+    } } };
+  });
+  const { result } = renderHook(() => ({
+    read: useRecordThreadQuery({ modelLabel: "notes.Note", recordId: "nte_1" }),
+    write: useRecordFollowing("notes.Note", "nte_1"),
+  }), { wrapper: ({ children }: { children: ReactNode }) => <Provider dataProvider={{ custom }}>{children}</Provider> });
+  await waitFor(() => expect(result.current.read.data?.record_thread.is_following).toBe(false));
+  let settled = false;
+  await act(async () => {
+    await result.current.write[0]({ modelLabel: "notes.Note", recordId: "nte_1", following: true });
+    settled = true;
+  });
+  expect(settled).toBe(true);
+  expect(result.current.read.data?.record_thread.is_following).toBe(true);
+  expect(result.current.read.data?.record_thread.notifications).toHaveLength(1);
+  await waitFor(() => expect(reads).toBe(2));
+  await act(async () => { finishRefresh(); });
+  await waitFor(() => expect(result.current.read.data?.record_thread.notifications).toEqual([]));
 });

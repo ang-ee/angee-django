@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, Self, cast
 
+from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
@@ -25,7 +26,7 @@ from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin
 from angee.base.permissions import actor_user_id
 from angee.base.querysets import row_lock_paths
-from angee.base.refs import RecordRef
+from angee.base.refs import RecordRef, record_view_refs
 from angee.provenance.context import changeset, changeset_model, require_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
@@ -285,6 +286,12 @@ class RecordBinding(AuditMixin, RecordRefMixin, HistoryMixin, AngeeDataModel, co
             ),
         )
         indexes = (models.Index(fields=("content_type", "object_id", "role")),)
+
+    def change_related_records(self) -> tuple[RecordRef, ...]:
+        """Identify both ends of this edge, including their inherited record views."""
+        model = apps.get_model("knowledge", "Page" if self.page_id is not None else "Vault")
+        owner = RecordRef.from_model(model, self.page_id if self.page_id is not None else self.vault_id)
+        return record_view_refs(self.record_ref, owner, using=self._state.db)
 
     @classmethod
     def knowledge_owner(

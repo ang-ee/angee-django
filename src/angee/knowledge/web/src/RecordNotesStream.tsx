@@ -42,7 +42,9 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
   const variables = useMemo(() => ({ modelLabel: target.modelLabel, recordId: target.recordId, role }),
     [target.modelLabel, target.recordId, role]);
   const bindings = useAuthoredQuery(KnowledgeRecordNotes, variables, {
-    enabled: Boolean(target.modelLabel && target.recordId), models: BINDING_MODELS,
+    enabled: Boolean(target.modelLabel && target.recordId), models: [...BINDING_MODELS, target.modelLabel],
+    records: [{ model: target.modelLabel, id: target.recordId }],
+    relatedModels: [RECORD_BINDING_MODEL],
   });
   const canBind = bindings.data?.record_knowledge_can_bind ?? false;
   const vaultById = useAuthoredQuery(KnowledgeVault, { id: typeof vault === "string" ? vault : "" }, {
@@ -53,7 +55,17 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
   });
   const vaultQuery = typeof vault === "string" ? vaultById : vaultByResource;
   const writableVault = typeof vault === "string" ? vaultById.data?.vaults_by_pk : vaultByResource.data?.knowledge_vault_for_resource;
-  const [createNote] = useAuthoredResourceMutation(KnowledgeCreateRecordNote, { invalidateModels: BINDING_MODELS });
+  const [createNote] = useAuthoredResourceMutation(KnowledgeCreateRecordNote, {
+    invalidateModels: BINDING_MODELS,
+    records: (data, input) => {
+      const binding = data?.create_record_note;
+      return binding?.page ? [
+        { model: RECORD_BINDING_MODEL, id: binding.id, action: "create",
+          relatedRecords: [{ model: input.model_label, id: input.record_id }, { model: PAGE_MODEL, id: binding.page }] },
+        { model: PAGE_MODEL, id: binding.page, action: "create" },
+      ] : [];
+    },
+  });
   const pendingNote = useRef<{ fingerprint: string; key: string } | null>(null);
 
   if (bindings.isPending && !bindings.data) return <SkeletonStatus label={t("notes.loading")} className="space-y-3 p-4">
@@ -106,7 +118,6 @@ export function RecordNotesStream({ target, role, vault, heading, composer }: Re
       createAction,
       createComposer: { bodyArg: "body", prompt: composer?.prompt ?? t("notes.prompt"),
         audience: composer?.audience },
-      onCreated: () => { void bindings.refetch(); },
     }} />
   </>;
 }

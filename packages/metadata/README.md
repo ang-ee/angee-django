@@ -21,6 +21,12 @@ returns the parsed `resource.roots` object, including its native nullable root
 values; it still returns `null` without metadata, `undefined` for an optional
 missing model, and throws for a required missing model.
 
+`useResourceInvalidates` maps declared model effects to native Refine resources.
+Known written record identities narrow detail invalidation while lists and many
+queries retain server-owned membership and totals. Model-only effects retain the
+resource-wide fallback. Authored and generated mutation adapters share this
+mapping; transport and scheduling remain in `@angee/refine`.
+
 Plain Node tools import `@angee/metadata/headless` to reuse the same Valibot
 parser, reference indexes, and relation-selection semantics without importing
 React. The wire owner is [`src/artifact-schema.ts`](src/artifact-schema.ts); the
