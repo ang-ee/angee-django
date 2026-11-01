@@ -16,10 +16,10 @@ from rebac import actor_context, system_context
 from angee.decisions import schema as decisions_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest, RecordActions
 from angee.decisions.testing.models import Decision
-from angee.graphql.data.hasura import hasura_model_resource, public_pk_decoder
+from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.node import AngeeNode
 from angee.graphql.publishing import connect_publishers, disconnect_publishers
-from angee.graphql.schema import SchemaParts
+from angee.projects.testing.models import Task
 from angee.workflows.decision_steps import apply_proposals
 from tests.conftest import addon_schema, create_platform_admin, create_user, execute_schema, result_data, vault_for
 from tests.linesdemo.models import Document, DocumentLine, Tag
@@ -32,7 +32,7 @@ def linked_tags(line):
 
 
 @pytest.fixture
-def many_to_many(composed_tables, monkeypatch):
+def many_to_many(composed_tables):
     actor = create_platform_admin("relation-answerer")
     with system_context(reason="test.decision_many_to_many"):
         document = Document.objects.create(title="Document")
@@ -40,21 +40,6 @@ def many_to_many(composed_tables, monkeypatch):
         tags = tuple(Tag.objects.create(name=name) for name in ("First", "Second", "Hidden"))
         line.tags.set(tags[:1])
 
-    @strawberry_django.type(DocumentLine)
-    class LineType(AngeeNode):
-        label: str
-
-        @strawberry_django.field
-        def tags(self) -> list[str]:
-            return [tag.public_id for tag in self.tags.all()]
-
-    resource = hasura_model_resource(
-        LineType, model=DocumentLine, name="decision_lines", filterable=("id",), sortable=("id",),
-        aggregatable=("id",), writable=("label", "tags"), field_id_decode={"tags": public_pk_decoder(Tag)},
-    )
-    monkeypatch.setattr("angee.decisions.contracts.schema_parts_for", lambda app: {
-        "console": SchemaParts(mutation=(resource.mutation,)),
-    })
     return actor, line, tags
 
 
@@ -65,7 +50,8 @@ def test_many_to_many_proposals_replace_or_clear_after_the_scalar_save(many_to_m
     identities = [] if clear else [tag.public_id for tag in tags[1:]]
     proposal = DecisionProposal(alternatives=[{
         "key": "apply", "label": "Apply", "outcome": "done", "actions": {line.public_id: {"fields": {
-            "label": {"set": "After"}, "tags": {"choose": {}} if choose else {"set": identities},
+            "label": {"set": "After"}, "quantity": {"set": "7"},
+            "tags": {"choose": {}} if choose else {"set": identities},
         }}},
     }])
     values = {line.public_id: {"tags": identities}} if choose else {}
@@ -75,6 +61,7 @@ def test_many_to_many_proposals_replace_or_clear_after_the_scalar_save(many_to_m
         line, context={"actor": actor, "related_records": related}, values=values.get(line.public_id),
     )
     assert resolved["tags"] == (() if clear else tags[1:])
+    assert resolved["quantity"] == 7
     assert related == ([] if clear else list(tags[1:]))
     links = Mock()
     links.with_actor.return_value.all.return_value = [SimpleNamespace(record_public_id=line.public_id, record=line)]
@@ -93,6 +80,7 @@ def test_many_to_many_proposals_replace_or_clear_after_the_scalar_save(many_to_m
         models.signals.m2m_changed.disconnect(relation_changed, sender=DocumentLine.tags.through)
     line.refresh_from_db()
     assert line.label == "After"
+    assert line.quantity == 7
     assert set(linked_tags(line)) == (set() if clear else set(tags[1:]))
     ctx.record.assert_called_once_with(line, operation="changed")
 
@@ -146,11 +134,11 @@ def test_one_to_many_proposals_stay_refused(many_to_many, choose):
         )
 
 
-def test_many_to_many_requires_an_updatable_resource(many_to_many, monkeypatch):
+@pytest.mark.parametrize("name", ["id", "kind", "created_at"])
+def test_native_identity_state_and_server_owned_fields_stay_refused(many_to_many, name):
     actor, line, _tags = many_to_many
-    monkeypatch.setattr("angee.decisions.contracts.schema_parts_for", lambda app: {})
-    with pytest.raises(ValueError, match="does not expose writes to tags"):
-        RecordActions(fields={"tags": {"set": []}}).resolve(line, context={"actor": actor})
+    with pytest.raises(ValueError, match="editable model field"):
+        RecordActions(fields={name: {"set": None}}).resolve(line, context={"actor": actor})
 
 
 def test_many_to_many_is_not_written_when_scalar_full_clean_fails(many_to_many):
@@ -211,6 +199,35 @@ def admit(records, concerned, **changes):
         }
     )
     return Decision.objects.ask(request, actor=issuer)
+
+
+def test_workflow_proposals_can_write_fields_excluded_from_graphql_updates(records):
+    storage_schema = importlib.import_module("angee.storage.schema")
+    _issuer, reviewer, _outsider, _vaults, drives = records
+    drive = drives[0]
+    assert "slug" not in storage_schema._DRIVE_RESOURCE.updatable_fields
+    decision = admit(records, [drive], proposal={drive.sqid: {"fields": {"slug": {"set": "workflow-renamed"}}}})
+    answered = decision.decide(actor=reviewer, chosen=["confirm"])
+
+    assert apply_proposals(answered, actor=reviewer) == "done"
+    drive.refresh_from_db()
+    assert drive.slug == "workflow-renamed"
+
+
+def test_application_rechecks_field_permission_even_when_the_actor_can_write_the_record(records):
+    _issuer, owner, assignee, _vaults, _drives = records
+    with system_context(reason="test.decision_assignment"):
+        task = Task.objects.create(title="Assigned task", owner=owner, assignee=assignee)
+    decision = admit(records, [task], assignees=(assignee,), proposal={
+        task.sqid: {"fields": {"assignee": {"set": owner.sqid}}},
+    })
+    answered = decision.decide(actor=assignee, chosen=["confirm"])
+    assert task.with_actor(assignee).has_access("write")
+
+    with pytest.raises(ValidationError, match="cannot write assignee"):
+        apply_proposals(answered, actor=assignee)
+    task.refresh_from_db()
+    assert task.assignee_id == assignee.pk
 
 
 @pytest.mark.parametrize("count", [1, 2, 3])
@@ -285,7 +302,7 @@ def test_confirmation_has_no_write_and_owner_transfer_is_checked_at_admission(re
     actions = RecordActions.model_validate(decision.proposal["alternatives"][0]["actions"][record.sqid])
     assert actions.resolve(record, context={"actor": records[1]}) == {}
     assert actions.model_dump()["fields"] == {"name": {}}
-    with pytest.raises(ValueError, match="owner"):
+    with pytest.raises(ValueError, match="editable model field name: owner"):
         RecordActions(fields={"owner": {"set": records[1].sqid}}).resolve(record, context={"actor": records[1]})
 
 
