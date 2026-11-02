@@ -12,7 +12,13 @@ from angee.decisions import schema as decision_schema
 from angee.decisions.testing.drivers import seed_decision
 from angee.decisions.testing.models import Decision, DecisionRecord
 from angee.graphql.data.hasura import hasura_model_resource
-from angee.iam.graphql.relations import with_record_reference_access
+from angee.iam.graphql.capabilities import permission_annotations
+from angee.iam.graphql.relations import (
+    RecordReferenceNode,
+    _record_reference_hint,
+    actor_scoped_relation_expression,
+    with_record_reference_access,
+)
 from angee.iam.models.refs import ProtectedRecordRefMixin
 from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, result_data, vault_for
 from tests.tables import model_tables
@@ -38,23 +44,42 @@ def referenced_decisions(composed_tables):
     return owner, outsider, records, decisions
 
 
+@pytest.fixture
+def content_type_discoveries(monkeypatch):
+    original = models.QuerySet.filter
+    discoveries = []
+
+    def filter_types(queryset, *args, **kwargs):
+        source = kwargs.get("pk__in")
+        if queryset.model is ContentType and isinstance(source, models.QuerySet) and source.model is DecisionRecord:
+            discoveries.append(source)
+        return original(queryset, *args, **kwargs)
+
+    monkeypatch.setattr(models.QuerySet, "filter", filter_types)
+    return discoveries
+
+
 @pytest.mark.parametrize("position", [0, 1])
-def test_record_id_filters_do_not_confuse_equal_keys_from_different_models(referenced_decisions, position):
+def test_record_id_filters_do_not_confuse_equal_keys_from_different_models(
+    referenced_decisions, content_type_discoveries, position,
+):
     """Public identity filters work alone and retain the model in SQL decoding."""
     owner, outsider, records, decisions = referenced_decisions
     schema = addon_schema(decision_schema.schemas, "console")
-    query = """query($id: String!) {
-      decision_records(where: {record_id: {_eq: $id}}) { id }
-      decision_records_aggregate(where: {record_id: {_eq: $id}}) { aggregate { count } }
-    }"""
     variables = {"id": records[position].sqid}
-    assert result_data(execute_schema(schema, query, variables, user=owner)) == {
-        "decision_records": [{"id": decisions[position].sqid}],
-        "decision_records_aggregate": {"aggregate": {"count": 1}},
-    }
-    assert result_data(execute_schema(schema, query, variables, user=outsider)) == {
-        "decision_records": [], "decision_records_aggregate": {"aggregate": {"count": 0}},
-    }
+    selections = (
+        ("decision_records", "decision_records(where: {record_id: {_eq: $id}}) { id }",
+         [{"id": decisions[position].sqid}], []),
+        ("decision_records_aggregate",
+         "decision_records_aggregate(where: {record_id: {_eq: $id}}) { aggregate { count } }",
+         {"aggregate": {"count": 1}}, {"aggregate": {"count": 0}}),
+    )
+    for name, selection, owner_rows, outsider_rows in selections:
+        query = f"query($id: String!) {{ {selection} }}"
+        for actor, expected in ((owner, owner_rows), (outsider, outsider_rows)):
+            content_type_discoveries.clear()
+            assert result_data(execute_schema(schema, query, variables, user=actor)) == {name: expected}
+            assert len(content_type_discoveries) == 1
 
 
 def test_record_model_filter_composes_with_identity_and_decision_filter(referenced_decisions):
@@ -157,29 +182,66 @@ def test_record_reference_guard_uses_the_declared_string_key_and_current_actor(c
             assert list(rebound.values_list("_angee_record_readable", flat=True)) == [False, True, False]
 
 
-def test_unselected_reference_fields_do_not_discover_targets(referenced_decisions, monkeypatch):
+def test_unselected_reference_fields_do_not_discover_targets(referenced_decisions, content_type_discoveries):
     owner, _outsider, _records, decisions = referenced_decisions
-    manager = ContentType.objects
-    original = manager.filter
-    discoveries = []
-
-    def filter_types(*args, **kwargs):
-        source = kwargs.get("pk__in")
-        if isinstance(source, models.QuerySet) and source.model is DecisionRecord:
-            discoveries.append(source)
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(manager, "filter", filter_types)
     schema = addon_schema(decision_schema.schemas, "console")
     data = result_data(execute_schema(schema, "{ decision_records(order_by: {id: asc}) { id } }", user=owner))
     assert [row["id"] for row in data["decision_records"]] == [row.sqid for row in decisions]
-    assert discoveries == []
+    assert content_type_discoveries == []
 
 
-def test_reference_annotation_declaration_is_query_free(referenced_decisions):
+def test_reference_node_and_hint_declaration_are_query_free(referenced_decisions):
     owner, _outsider, _records, _decisions = referenced_decisions
     with actor_context(owner), CaptureQueriesContext(connection) as queries:
-        with_record_reference_access(DecisionRecord.objects.order_by("pk"))
+        rows = DecisionRecord.objects.with_actor(owner)
+        assert RecordReferenceNode.get_queryset(rows, None) is rows
+        hint = _record_reference_hint(None)
+    assert isinstance(hint, models.Expression)
+    assert list(queries) == []
+
+
+def test_explicit_reference_annotation_discovers_once(referenced_decisions, content_type_discoveries):
+    owner, _outsider, _records, _decisions = referenced_decisions
+    with actor_context(owner):
+        with_record_reference_access(DecisionRecord.objects.with_actor(owner))
+    assert len(content_type_discoveries) == 1
+
+
+@pytest.fixture
+def reference_compile_queries(referenced_decisions):
+    owner, _outsider, _records, _decisions = referenced_decisions
+    with actor_context(owner):
+        rows = models.QuerySet(model=DecisionRecord)
+        reference = with_record_reference_access(rows)
+        scoped_reference = with_record_reference_access(DecisionRecord.objects.with_actor(owner))
+        related_id = actor_scoped_relation_expression(rows, "decision__id")
+        assert related_id is not None
+        relation = rows.annotate(_related_id=related_id)
+        permissions = rows.annotate(**permission_annotations(DecisionRecord, ("read",)))
+        yield reference, scoped_reference, relation, permissions
+
+
+def test_reference_permission_and_relation_sql_compilation_does_not_discover_targets(reference_compile_queries):
+    with CaptureQueriesContext(connection) as queries:
+        for prepared in reference_compile_queries:
+            compiler = prepared.query.get_compiler(using=prepared.db)
+            compiler.as_sql()
+            compiler.as_sql()
+    reference_table = DecisionRecord._meta.db_table.lower()
+    assert all(
+        "django_content_type" not in query["sql"].lower() and reference_table not in query["sql"].lower()
+        for query in queries
+    )
+
+
+# REBAC lane R1 removes _Scope.as_sql's render-time reads; strict xfail marks that handoff.
+@pytest.mark.xfail(strict=True, reason="R1: _Scope.as_sql prepares at render")
+def test_reference_permission_and_relation_sql_compilation_is_query_free(reference_compile_queries):
+    with CaptureQueriesContext(connection) as queries:
+        for prepared in reference_compile_queries:
+            compiler = prepared.query.get_compiler(using=prepared.db)
+            compiler.as_sql()
+            compiler.as_sql()
     assert list(queries) == []
 
 
@@ -229,22 +291,24 @@ def test_selected_reference_readability_groups_by_boolean_not_target_identity(re
     assert list(grouped) == [{"_angee_record_readable": True, "total": 2}]
 
 
-def test_selected_and_filtered_projection_discovers_for_each_sql_render(referenced_decisions, monkeypatch):
+def test_selected_and_filtered_projection_resolves_target_types_once(referenced_decisions, content_type_discoveries):
     owner, _outsider, _records, _decisions = referenced_decisions
-    original = models.QuerySet.filter
-    discoveries = []
-
-    def filter_types(queryset, *args, **kwargs):
-        source = kwargs.get("pk__in")
-        if queryset.model is ContentType and isinstance(source, models.QuerySet) and source.model is DecisionRecord:
-            discoveries.append(source)
-        return original(queryset, *args, **kwargs)
-
-    monkeypatch.setattr(models.QuerySet, "filter", filter_types)
     prepared = with_record_reference_access(DecisionRecord.objects.with_actor(owner))
-    values = list(prepared.filter(_angee_record_readable=True).values_list("_angee_record_readable", flat=True))
+    filtered = prepared.filter(_angee_record_readable=True).values_list("_angee_record_readable", flat=True)
+    assert len(content_type_discoveries) == 1
+    values = list(filtered)
     assert values == [True, True]
-    assert len(discoveries) == 2  # SELECT and WHERE each compile the native expression.
+    assert len(content_type_discoveries) == 1
+
+
+def test_nested_reference_projection_does_not_rediscover_targets(referenced_decisions, content_type_discoveries):
+    owner, _outsider, _records, _decisions = referenced_decisions
+    with actor_context(owner):
+        prepared = with_record_reference_access(DecisionRecord.objects.with_actor(owner))
+        assert len(content_type_discoveries) == 1
+        nested = DecisionRecord.objects.filter(pk__in=prepared.values("pk"))
+        assert nested.count() == 2
+    assert len(content_type_discoveries) == 1
 
 
 @isolate_apps()

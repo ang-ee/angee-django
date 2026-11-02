@@ -36,11 +36,10 @@ _UNCACHED = object()
 class _ActorScopedSubquery(models.Expression):
     """An uncorrelated scope projected only when the containing SQL uses it.
 
-    Keep the lazy actor-bound queryset outside Django's expression tree until
-    SQL compilation. Otherwise every alias, queryset clone and optimizer pass
-    copies its entire permission graph, including aliases the query never uses.
-    The native aggregate scope still owns authorization and live frontier checks;
-    neither SQL nor permission answers are cached across evaluations.
+    Keep the actor-bound queryset outside Django's expression tree until SQL
+    compilation. Resolve its native aggregate scope before rendering. REBAC's
+    own scope expression still consults live policy while compiling SQL until
+    its rendering path is made query-free.
     """
 
     contains_subquery = True
@@ -56,42 +55,47 @@ class _ActorScopedSubquery(models.Expression):
         self.queryset = queryset
         self.field_name = field_name
 
+    def resolve_expression(
+        self, query: Any = None, allow_joins: bool = True, reuse: Any = None,
+        summarize: bool = False, for_save: bool = False,
+    ) -> _ActorScopedSubquery:
+        resolved = cast(
+            _ActorScopedSubquery,
+            super().resolve_expression(query, allow_joins, reuse, summarize, for_save),
+        )
+        resolved.queryset = self.queryset.using(self.queryset.db).scoped_for_aggregate()
+        return resolved
+
     def as_sql(self, compiler: Any, connection: Any) -> tuple[str, Any]:
-        queryset = self.queryset.using(connection.alias).scoped_for_aggregate()
+        queryset = self.queryset
+        if queryset.db != connection.alias or not queryset._rebac_scope_applied:
+            queryset = queryset.using(connection.alias).scoped_for_aggregate()
         return models.Subquery(queryset.order_by().values(self.field_name)).as_sql(compiler, connection)
 
     def get_group_by_cols(self) -> list[Any]:
         return []
 
 
-RECORD_REFERENCE_ANNOTATIONS = {"_angee_record_readable": models.F("_angee_record_readable")}
-
-
 class _RecordReferenceAccess(models.Expression):
-    """The existing source population's target privacy, compiled only when used.
+    """Discover present target types once when the annotation resolves.
 
     The actor is an authored snapshot: bind it before calling this owner, and
     redeclare this annotation after an actor change. Native expression children
     carry the containing row's columns through aliases, clones and optimizer paths.
-    Source discovery runs for each SQL render that uses this expression. No
-    permission answer or compiled SQL is retained between evaluations.
+    Discovery uses the source queryset's alias. A type first referenced after
+    resolution, or present only on a later compiling alias, remains unreadable.
+    On another alias, target scopes are rebuilt and ContentType IDs are rendered
+    as subqueries; the discovered set itself stays fixed and fails closed.
     """
 
     contains_subquery = True
+    targets: tuple[tuple[int, str, str, _ActorScopedSubquery], ...] | None = None
+    content_type_alias: str | None = None
 
-    def __init__(self, queryset: models.QuerySet[Any]) -> None:
-        if not issubclass(queryset.model, ProtectedRecordRefMixin):
-            raise ImproperlyConfigured("Record-reference access requires ProtectedRecordRefMixin.")
-        reference = queryset.model.record_ref_field()
-        key_field = queryset.model._meta.get_field(reference.fk_field)
-        if not isinstance(key_field, models.Field):
-            raise ImproperlyConfigured("A record reference must store its object id in a forward field.")
+    def __init__(self, *, actor: Any) -> None:
         super().__init__(output_field=models.BooleanField())
-        self.queryset = queryset
-        self.actor = relation_actor(queryset)
-        self.reference = reference
-        self.key_field = key_field
-        self.columns: list[Any] = [models.F(reference.ct_field_attname), models.F(reference.fk_field)]
+        self.actor = actor
+        self.columns: list[Any] = []
 
     def get_source_expressions(self) -> list[Any]:
         return self.columns
@@ -99,30 +103,74 @@ class _RecordReferenceAccess(models.Expression):
     def set_source_expressions(self, expressions: Sequence[Combinable | models.Expression]) -> None:
         self.columns = list(expressions)
 
-    def as_sql(self, compiler: Any, connection: Any) -> tuple[str, Any]:
-        source = self.queryset.using(connection.alias)
-        reference_rows = source.scoped_for_aggregate() if isinstance(source, RebacQuerySet) else source
-        content_types = (
-            ContentType.objects.using(connection.alias)
-            .filter(
-                pk__in=reference_rows.order_by().values_list(self.reference.ct_field, flat=True),
+    def resolve_expression(
+        self, query: Any = None, allow_joins: bool = True, reuse: Any = None,
+        summarize: bool = False, for_save: bool = False,
+    ) -> _RecordReferenceAccess:
+        if self.targets is not None:
+            return cast(
+                _RecordReferenceAccess,
+                super().resolve_expression(query, allow_joins, reuse, summarize, for_save),
             )
-            .order_by("app_label", "model")
+        model = query.model
+        if not issubclass(model, ProtectedRecordRefMixin):
+            raise ImproperlyConfigured("Record-reference access requires ProtectedRecordRefMixin.")
+        reference = model.record_ref_field()
+        key_field = model._meta.get_field(reference.fk_field)
+        if not isinstance(key_field, models.Field):
+            raise ImproperlyConfigured("A record reference must store its object id in a forward field.")
+        self.columns = [models.F(reference.ct_field_attname), models.F(reference.fk_field)]
+        resolved = cast(
+            _RecordReferenceAccess,
+            super().resolve_expression(query, allow_joins, reuse, summarize, for_save),
         )
+        source = model._default_manager.get_queryset()
+        # Bare pointer models may use an ordinary manager; their source has no REBAC scope.
+        if isinstance(source, RebacQuerySet) and self.actor is not None:
+            source = require_rebac_queryset(model).with_actor(self.actor).with_action("read")
+        elif self.actor is None:
+            source = source.none()
+        alias = source.db
+        source = source.using(alias)
+        if isinstance(source, RebacQuerySet):
+            source = source.scoped_for_aggregate()
+        content_types = ContentType.objects.db_manager(alias).filter(
+            pk__in=source.order_by().values_list(reference.ct_field, flat=True),
+        ).order_by("app_label", "model")
+        targets = []
+        for content_type in content_types:
+            target_model = content_type.model_class()
+            if target_model is None or not model_resource_type(target_model):
+                continue
+            queryset = require_rebac_queryset(target_model).using(alias).with_actor(self.actor).with_action("read")
+            keys = queryset.order_by().annotate(_angee_reference_key=Cast("pk", output_field=key_field))
+            targets.append((
+                content_type.pk,
+                target_model._meta.app_label,
+                target_model._meta.model_name,
+                _ActorScopedSubquery(keys, "_angee_reference_key").resolve_expression(query),
+            ))
+        resolved.targets = tuple(targets)
+        resolved.content_type_alias = alias
+        return resolved
+
+    def as_sql(self, compiler: Any, connection: Any) -> tuple[str, Any]:
         branches = []
         content_type_column, object_id_column = self.columns
-        for content_type in content_types:
-            model = content_type.model_class()
-            if model is None:
-                continue
-            targets = require_rebac_queryset(model).with_actor(self.actor).with_action("read")
-            keys = targets.order_by().annotate(_angee_reference_key=Cast("pk", output_field=self.key_field))
+        for content_type_id, app_label, model_name, keys in self.targets or ():
+            target_type: int | models.Subquery = content_type_id
+            if connection.alias != self.content_type_alias:
+                target_type = models.Subquery(
+                    ContentType.objects.using(connection.alias)
+                    .filter(app_label=app_label, model=model_name)
+                    .values("pk")[:1]
+                )
             branch = WhereNode(connector="AND")
-            branch.add(content_type_column.get_lookup("exact")(content_type_column, content_type.pk), "AND")
+            branch.add(content_type_column.get_lookup("exact")(content_type_column, target_type), "AND")
             branch.add(
                 object_id_column.get_lookup("in")(
                     object_id_column,
-                    _ActorScopedSubquery(keys, "_angee_reference_key"),
+                    keys,
                 ),
                 "AND",
             )
@@ -135,6 +183,14 @@ class _RecordReferenceAccess(models.Expression):
         return compiler.compile(predicate)
 
 
+def _record_reference_hint(info: Info | None) -> _RecordReferenceAccess:
+    del info
+    return _RecordReferenceAccess(actor=current_actor())
+
+
+RECORD_REFERENCE_ANNOTATIONS = {"_angee_record_readable": _record_reference_hint}
+
+
 def with_record_reference_access(
     queryset: models.QuerySet[Any],
     *,
@@ -142,12 +198,11 @@ def with_record_reference_access(
 ) -> models.QuerySet[Any]:
     """Declare current target privacy, selecting it for explicit Python consumers.
 
-    Schema preparation uses an alias; selected reference fields promote it through
-    their native annotation hints. Discovery retains this source population, even
-    when callers later narrow their queryset. Bind the actor before declaration;
+    Record filters use an alias; selected reference fields declare their own
+    expression through the native annotation hint. Bind the actor before declaration;
     reapplying this helper after changing actor refreshes the captured projection.
     """
-    annotation = {"_angee_record_readable": _RecordReferenceAccess(queryset)}
+    annotation = {"_angee_record_readable": _RecordReferenceAccess(actor=relation_actor(queryset))}
     return queryset.annotate(**annotation) if select else queryset.alias(**annotation)
 
 
@@ -155,15 +210,14 @@ def with_record_reference_access(
 class RecordReferenceNode(ProtectedNode):
     """Project a generic reference only while its current target is readable.
 
-    ``get_queryset`` declares a lazy target-read alias; selected reference fields
-    promote it into the rows' own query. A row
-    loaded another way (a to-one fallback, a mutation result) answers the same
+    Selected reference fields request their native annotation hint. A row loaded
+    another way (a to-one fallback, a mutation result) answers the same
     annotation on a one-row queryset under the current actor.
     """
 
     @classmethod
     def get_queryset(cls, queryset: models.QuerySet[Any], info: Info) -> models.QuerySet[Any]:
-        return with_record_reference_access(queryset, select=False)
+        return queryset
 
     def reference_model(self) -> str | None:
         row = cast(Any, self)

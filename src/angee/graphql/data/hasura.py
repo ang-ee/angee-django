@@ -1551,7 +1551,7 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         queryset = _relation_scalar_queryset(queryset, relation_paths)
         transform = resource_extensions(model).prepare_queryset
         if transform is not None:
-            queryset = transform(queryset, node, record_ref_requires_read)
+            queryset = transform(queryset, node, False)
         elif record_ref_requires_read:
             raise ImproperlyConfigured("A record-reference read guard requires a declared resource contributor.")
         return with_filter_aliases(queryset)
@@ -1559,6 +1559,11 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     def prepare_filters(queryset: models.QuerySet[Any], predicate: models.Q) -> models.QuerySet[Any]:
         """Build only expressions referenced by the native, resolved predicate."""
         selected = predicate.referenced_base_fields
+        if record_ref_requires_read and selected.intersection(record_ref_filters or ()):
+            transform = resource_extensions(model).prepare_queryset
+            if transform is None:
+                raise ImproperlyConfigured("A record-reference read guard requires a declared resource contributor.")
+            queryset = transform(queryset, node, True)
         aliases: dict[str, BaseExpression] = {}
         for name, expression in expressions.items():
             if name not in selected or name in model_filter_aliases:
