@@ -20,12 +20,12 @@ export const StepDecisionDocument = graphql(`
 `);
 
 export const RecordTimelineDocument = graphql(`
-  query RecordTimeline($records: [TimelineRecordInput!]!, $runLimit: Int = 20) {
+  query RecordTimeline($records: [TimelineRecordInput!]!, $runLimit: Int = 20, $drillIn: Boolean! = false) {
     record_timeline(records: $records, run_limit: $runLimit) {
-      open_decision_count
+      open_decision_count @skip(if: $drillIn)
       records {
       record_model record_id
-      decisions { ...DecisionCardFields }
+      decisions @skip(if: $drillIn) { ...DecisionCardFields }
       runs {
         id display_name status origin subject_model subject_id outcome_label failure_reason created_at finished_at stopped_at output can_cancel
         run_as { display_name }

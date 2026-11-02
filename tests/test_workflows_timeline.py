@@ -431,19 +431,35 @@ def test_stop_error_hold_disables_retry_and_removes_the_future_plan(execution, r
 
 
 @pytest.mark.parametrize(
-    ("projection", "decision_reads", "run_selections"),
+    ("projection", "decision_reads", "run_selections", "variables"),
     [
-        ("records { record_id runs { id status } }", 0, 1),
-        ("records { record_id }", 0, 0),
-        ("open_decision_count", 1, 0),
-        ("has_runs", 0, 1),
+        ("records { record_id runs { id status } }", 0, 1, {}),
+        ("records { record_id }", 0, 0, {}),
+        ("open_decision_count", 1, 0, {}),
+        ("has_runs", 0, 1, {}),
+    ] + [
+        (
+            "open_decision_count @" + directive + "(if:$recordLevel) records { record_id "
+            "decisions @" + directive + "(if:$recordLevel) { id permissions } "
+            "runs { id graph { nodes { step_run { id decision { id permissions } } } } } }",
+            2 if included else 0,
+            1,
+            variables,
+        )
+        for directive, variables, included in [
+            ("include", {}, True),
+            ("include", {"recordLevel": True}, True),
+            ("include", {"recordLevel": False}, False),
+            ("skip", {"recordLevel": True}, False),
+            ("skip", {"recordLevel": False}, True),
+        ]
     ],
 )
 def test_record_timeline_executes_only_requested_projections(
-    schema, review, monkeypatch, projection, decision_reads, run_selections,
+    schema, review, monkeypatch, projection, decision_reads, run_selections, variables,
 ):
     actor, _, _, question = review
-    start_review(review)
+    run, step = start_review(review)
 
     calls = {"decisions": 0, "runs": 0}
     original_decisions = DecisionQuerySet.open_for
@@ -461,13 +477,25 @@ def test_record_timeline_executes_only_requested_projections(
     monkeypatch.setattr(WorkflowRunQuerySet, "about", runs)
     data = result_data(execute_schema(
         schema,
-        "query($records:[TimelineRecordInput!]!) { record_timeline(records:$records) { "
-        + projection + " } }",
-        {"records": [{"model": question.review_subject._meta.label, "id": question.review_subject.sqid}]},
+        "query($records:[TimelineRecordInput!]!"
+        + (", $recordLevel:Boolean=true" if "$recordLevel" in projection else "")
+        + ") { record_timeline(records:$records) { " + projection + " } }",
+        {"records": [{"model": question.review_subject._meta.label, "id": question.review_subject.sqid}], **variables},
         user=actor,
     ))["record_timeline"]
     assert data
     assert calls == {"decisions": decision_reads, "runs": run_selections}
+
+    if "graph" in projection:
+        record = data["records"][0]
+        assert ("open_decision_count" in data) is bool(decision_reads)
+        assert ("decisions" in record) is bool(decision_reads)
+        assert [item["id"] for item in record["runs"]] == [run.sqid]
+        projected_steps = [node["step_run"] for node in record["runs"][0]["graph"]["nodes"] if node["step_run"]]
+        assert [item["id"] for item in projected_steps] == [step.sqid]
+        decision = projected_steps[0]["decision"]
+        assert decision["id"] == questions(step)[0].sqid
+        assert "permissions" in decision
 
 
 def test_record_timeline_aliases_use_child_projection_info_and_share_record_batches(
