@@ -213,7 +213,9 @@ class AngeeQuerySet(
         ``before`` is exclusive; ``through`` is an inclusive fixed lower cut.
         ``after`` discovers the nearest newer page and cannot combine with either.
         Return rows newest-first and distinguish an exhausted fixed window from
-        history below that window, even when the window is now empty.
+        history below that window, even when the window is now empty. Metadata
+        describes the authorized page/cut observations; these separate reads do
+        not promise one database snapshot or the latest concurrent changes.
         """
 
         if after_cursor is not None and (before_cursor is not None or through_cursor is not None):
@@ -261,6 +263,19 @@ class AngeeQuerySet(
                 has_older_than_through=below,
                 has_newer_than_before=self.filter(order.after(anchor)).exists() if anchor is not None else False,
             )
+        if ascending or (
+            has_more and not below and (
+                selected[limit].pk == rows[-1].pk
+                or order.position(selected[limit]) == order.position(rows[-1])
+            )
+        ):
+            # Join multiplicity can repeat an identity with SQL-equal collated
+            # annotations, or repeat the complete tuple, without proving older.
+            has_older = self.filter(order.before(order.position(rows[-1]))).exists()
+        else:
+            # A descending window covers the older suffix down to its inclusive
+            # lower cut. Extra rows or the authorized below-cut probe cover it.
+            has_older = has_more or below
         # Re-fetch the bounded identities through the original queryset so callers
         # retain a composable queryset instead of inheriting this method's probe list.
         return KeysetPage(
@@ -268,7 +283,7 @@ class AngeeQuerySet(
             count=count,
             older_cursor=order.sign(rows[-1], signer),
             newer_cursor=order.sign(rows[0], signer),
-            has_older=self.filter(order.before(order.position(rows[-1]))).exists(),
+            has_older=has_older,
             has_newer=self.filter(order.after(order.position(rows[0]))).exists(),
             has_more_in_window=has_more,
             has_older_than_through=below,
