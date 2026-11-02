@@ -180,5 +180,31 @@ def test_shared_source_preserves_same_model_occurrences_without_parent_policy_co
     assert len(statements) == 3  # page, selected-parent child groups, and whole-scope counts
     for sql in statements:
         assert sql.count('"timeline_source" AS (') == 1
-        assert sql.count("UNION ALL") == len(kinds) - 1
+        child_groups = 'SELECT "timeline_source"."_timeline_fold_type"' in sql and "GROUP BY" in sql
+        assert sql.count("UNION ALL") == (0 if child_groups else len(kinds) - 1)
+        if child_groups:
+            assert '"_timeline_needs"' not in sql
+            assert '"_timeline_at"' not in sql
+            assert '"_timeline_type"' not in sql
         assert '"rebac_schemageneration"' in sql
+
+
+def test_child_groups_keep_the_original_source_database(comment_record, monkeypatch) -> None:
+    record, author, writer = comment_record.record, comment_record.author, comment_record.writer
+    with actor_context(writer):
+        task = Task.objects.schedule(record.with_actor(writer), title="Fold on source database")
+    task_type = ContentType.objects.get_for_model(Task)
+
+    class SelfFold(TaskKind):
+        id = "test.self_fold"
+
+        def fold(self, record):
+            return models.Value(task_type.pk, output_field=models.IntegerField()), models.F("pk")
+
+    monkeypatch.setattr(reading, "timeline_kinds", lambda: (TaskKind(), SelfFold()))
+    timeline = Timeline(record, author)
+    # A union executes on its original first branch's database. Selecting only
+    # folding branches must not adopt that subset's first branch alias instead.
+    timeline.branches["test.self_fold"] = timeline.branches["test.self_fold"].using("unselected_fold_alias")
+    children = timeline._children({"projects.task": {task.pk}})
+    assert [(child.kind, child.count) for child in children[task_type.pk, task.pk]] == [("test.self_fold", 1)]
