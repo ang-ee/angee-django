@@ -268,6 +268,16 @@ scope.
 For containerized stacks, use the declared service/job environment; a host shell
 without the runtime dependencies cannot run these commands directly.
 
+For cross-process signed-cursor diagnostics, match the running operator's signing
+configuration and the original effective actor/query scope before interpreting a
+signature failure. A plain management shell can read the `settings.yaml`
+development default while the service receives `YAMLCONF_SECRET_KEY`; use native
+`angee secret reveal` to supply the service value directly to the child environment
+without printing or retaining it. Verify the expected service configuration and
+context, then reuse the original cursor through the
+[native signer](../src/angee/base/pagination.py); do not regenerate it or bypass
+validation.
+
 After a model change, run native compose and author
 required native history before provision. Compose emits GraphQL SDL through its
 capability integration. Vite dev and build await shared `@angee/app` generation
