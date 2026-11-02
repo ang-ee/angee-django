@@ -221,8 +221,14 @@ class Timeline:
         selected = models.Q(_timeline_pk__in=[])
         for kind, pks in ids.items():
             selected |= models.Q(_timeline_kind=kind, _timeline_pk__in=pks)
-        rows = with_cte(self.source, select=self._source_rows().filter(
-            scope, _timeline_kind__in=sorted(self.folding),
+        columns = ("_timeline_kind", "_timeline_pk", "_timeline_fold_type", "_timeline_fold_pk")
+        # Only folding kinds can contribute children. Keep the original source's
+        # execution alias even when this subset has a different first model.
+        source = CTE(_union(
+            [self.branches[kind] for kind in sorted(self.folding)], *columns,
+        ).using(self._source_rows().db), name="timeline_source")
+        rows = with_cte(source, select=_native(source.queryset(), *columns).filter(
+            scope,
         ).exclude(selected)).values(
             "_timeline_fold_type", "_timeline_fold_pk", "_timeline_kind",
         ).annotate(_timeline_count=models.Count("_timeline_pk", distinct=True)).order_by("_timeline_kind")
