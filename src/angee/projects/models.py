@@ -9,7 +9,7 @@ from typing import Any, ClassVar, Self, cast
 
 from django.apps import apps
 from django.conf import settings
-from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connections, models, router, transaction
@@ -31,6 +31,7 @@ from rebac.field_backing import canonical_model
 
 from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.base.fields.ordering import FractionalRankExhausted, FractionalRankField
+from angee.base.fields.relations import GenericRelation
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet

@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from django.conf import settings
-from django.contrib.contenttypes.fields import GenericRelation
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from rebac import ObjectRef
 
+from angee.base.fields.relations import GenericRelation
 from angee.base.fields.state import StateField
 from angee.iam.models.base import ProtectedDataModel
 from angee.iam.models.ownership import OwnerMixin

@@ -8,7 +8,7 @@ from typing import Any, ClassVar
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
@@ -33,7 +33,7 @@ from rebac.backends import backend
 from rebac.resources import model_resource_type
 
 from angee.base.exceptions import DomainError
-from angee.base.fields.relations import RetainedGenericRelation
+from angee.base.fields.relations import GenericRelation, RetainedGenericRelation
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.identity import instance_from_public_id

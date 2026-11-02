@@ -35,7 +35,7 @@ from collections.abc import Iterable
 from operator import attrgetter
 from typing import Any, ClassVar, Self
 
-from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.db import models
@@ -43,6 +43,7 @@ from rebac import GenericTarget, generic_target
 from rebac.field_backing import canonical_model
 from rebac.resources import model_for_resource_type, model_resource_type
 
+from angee.base.fields.relations import GenericRelation
 from angee.base.fields.text import ColorField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.identity import instance_from_public_id

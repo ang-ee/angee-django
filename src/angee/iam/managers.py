@@ -221,7 +221,19 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
             try:
                 with transaction.atomic(using=using):
                     with system_context(reason="iam.person.validate"):
-                        user.full_clean()
+                        user.full_clean(validate_unique=False)
+                        # Django's unique-field checks select their own read alias;
+                        # this factory's candidate must be checked on its write alias.
+                        for field in user._meta.concrete_fields:
+                            if not field.unique or field.primary_key:
+                                continue
+                            value = field.value_from_object(user)
+                            if value is None:
+                                continue
+                            if type(user)._default_manager.using(using).filter(**{field.name: value}).exists():
+                                raise ValidationError({
+                                    field.name: [user.unique_error_message(type(user), (field.name,))],
+                                })
                     user.sudo(reason=reason).save(using=using)
             except IntegrityError, ValidationError:
                 if self.db_manager(using)._person_email_matches(email).exists():

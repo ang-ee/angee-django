@@ -16,6 +16,8 @@ path must target that model, and the arm must filter `visibility: record`. For
 example, if `example/record` owns the canonical row:
 
 ```python
+from angee.base.fields.relations import GenericRelation
+
 file_attachments = GenericRelation("storage.FileAttachment", related_query_name="example_record")
 ```
 
