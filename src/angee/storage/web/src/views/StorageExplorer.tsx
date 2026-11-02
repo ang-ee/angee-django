@@ -114,14 +114,17 @@ export function StorageExplorer({ openFile: receivedOpenFile, openFileId, folder
   });
   // Dropping a file on a navigator node moves it: the Trash node trashes, All
   // files moves to the drive root, any folder node moves into that folder.
-  const handleFileDrop = useCallback(
-    (nodeId: string, file: FileDragData) => {
+  const fileDrop = useMutation({
+    mutationFn: async ({ nodeId, file }: { nodeId: string; file: FileDragData }) => {
       const actions = fileActionsRef.current;
-      if (nodeId === TRASH_SCOPE) void actions.trash(file.id);
-      else if (nodeId === ALL_SCOPE) void actions.move(file.id, null);
-      else void actions.move(file.id, nodeId);
+      if (nodeId === TRASH_SCOPE) await actions.trash(file.id, { errorNotification: false });
+      else await actions.move(file.id, nodeId === ALL_SCOPE ? null : nodeId, { errorNotification: false });
     },
-    [],
+    onError: (error) => toast.danger({ title: errorMessage(error, t("action.failed")) }),
+  });
+  const handleFileDrop = useCallback(
+    (nodeId: string, file: FileDragData) => fileDrop.mutate({ nodeId, file }),
+    [fileDrop.mutate],
   );
   const driveRootPicker = useMemo(
     () => ({
