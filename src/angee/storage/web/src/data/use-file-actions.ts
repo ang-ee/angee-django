@@ -1,7 +1,7 @@
 import { useReconcileMutationResponse } from "@angee/refine";
 import { type Row } from "@angee/metadata";
 import {
-  useUpdate, type BaseRecord, type HttpError, type UpdateParams, } from "@refinedev/core";
+  useUpdate, type BaseRecord, type HttpError, } from "@refinedev/core";
 import { useBusyRun, useDeleteWithPreview, useTrashRecord } from "@angee/ui";
 import {
   refineResourceName,
@@ -13,6 +13,7 @@ import type {
 } from "@angee/metadata";
 
 type DeleteOptions = Parameters<ReturnType<typeof useDeleteWithPreview>["remove"]>[1];
+type MoveOptions = Pick<Parameters<ReturnType<typeof useUpdate<RowRecord, HttpError, Record<string, unknown>>>["mutateAsync"]>[0], "errorNotification">;
 
 export interface FileActions {
   busy: boolean;
@@ -21,7 +22,7 @@ export interface FileActions {
   /** Pull a file back out of the Trash. */
   restore: (id: string) => Promise<boolean>;
   /** Move a file into a folder by public id, or `null` for the root. */
-  move: (id: string, folder: string | null, options?: Pick<UpdateParams<RowRecord, HttpError, Record<string, unknown>>, "errorNotification">) => Promise<void>;
+  move: (id: string, folder: string | null, options?: MoveOptions) => Promise<void>;
   /** Soft-delete many files in one pass, refetching once. */
   trashMany: (ids: Iterable<string>, options?: DeleteOptions) => Promise<boolean>;
   /** Restore many files in one pass, refetching once. */

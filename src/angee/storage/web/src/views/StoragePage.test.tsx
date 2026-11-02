@@ -414,7 +414,7 @@ describe("StoragePage explorer wiring", () => {
     } else {
       await waitFor(() => expect(sdkMocks.trash).toHaveBeenCalledWith("file-a", { errorNotification: false }));
     }
-    if (outcome === "throw") await waitFor(() => expect(screen.getByText("Deletion refused")).toBeTruthy());
+    if (outcome === "throw") await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Deletion refused"));
     if (outcome === "success") await waitFor(() => expect(close).toHaveBeenCalledTimes(1));
     else expect(close).not.toHaveBeenCalled();
   });
@@ -429,7 +429,7 @@ describe("StoragePage explorer wiring", () => {
     fireEvent.click(trashButton);
     await waitFor(() => expect(sdkMocks.trashMany).toHaveBeenCalledTimes(1));
     expect(sdkMocks.trashMany).toHaveBeenCalledWith(expect.any(Set), { errorNotification: false });
-    if (outcome === "throw") await waitFor(() => expect(screen.getByText("Deletion refused")).toBeTruthy());
+    if (outcome === "throw") await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Deletion refused"));
     if (outcome === "success") await waitFor(() => expect(sdkMocks.clearSelection).toHaveBeenCalledTimes(1));
     else expect(sdkMocks.clearSelection).not.toHaveBeenCalled();
   });
@@ -847,7 +847,9 @@ function treeRow(id: string): HTMLElement {
     : storageData.folders.find((row) => row.id === id && row.drive === rootPickerValue())?.name
       ?? storageData.files.find((row) => row.id === id)?.filename;
   if (!label) throw new Error(`Unknown fixture row ${id}`);
-  return screen.getByText(label).closest<HTMLElement>('[role="treeitem"]')!;
+  const matches = screen.getAllByText(label, { exact: true }).map((element) => element.closest<HTMLElement>('[role="treeitem"]')).filter((row) => row !== null);
+  expect(matches).toHaveLength(1);
+  return matches[0]!;
 }
 
 function treeAttribute(name: string): string | null {
