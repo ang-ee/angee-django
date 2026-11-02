@@ -97,8 +97,8 @@ vi.mock("@refinedev/core", async (importOriginal) => {
           const result = { data: response(input) };
           if (kind === "deletePreview" && (input as { values?: { id?: string } }).values?.id === sdk.blockedDeleteId) {
             Object.assign(result.data as object, {
-              deleteFilePreview: { ...deletePreview, hasBlockers: true, totalDeletedCount: 0 },
-              deleteFolderPreview: { ...deletePreview, hasBlockers: true, totalDeletedCount: 0 },
+              deleteFilePreview: { ...deletePreview, has_blockers: true, total_deleted_count: 0 },
+              deleteFolderPreview: { ...deletePreview, has_blockers: true, total_deleted_count: 0 },
             });
           }
           const lifecycle = options.mutationOptions as { onSuccess?: (result: { data: unknown }, input: unknown) => Promise<void> } | undefined;
@@ -109,12 +109,12 @@ vi.mock("@refinedev/core", async (importOriginal) => {
       };
     };
   const deletePreview = {
-    totalDeletedCount: 1,
+    total_deleted_count: 1,
     deleted: [],
     updated: [],
     blocked: [],
-    hasBlockers: false,
-    root: { label: "record", objectLabel: "Record", objectId: "row_1", children: [] },
+    has_blockers: false,
+    root: { label: "record", object_label: "Record", object_id: "row_1", children: [] },
   };
   return {
     ...actual,

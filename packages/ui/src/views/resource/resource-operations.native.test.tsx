@@ -15,7 +15,7 @@ import { useDeleteWithPreview } from "./resource-operations";
 const resource = testDataResource("notes.Note", { roots: { deletePreview: "delete_note_preview" } });
 const unrelated = testDataResource("storage.File");
 const DELETE = gql`mutation DeleteNote($id: ID!, $confirm: Boolean!) {
-  delete_note_preview(id: $id, confirm: $confirm) { totalDeletedCount }
+  delete_note_preview(id: $id, confirm: $confirm) { total_deleted_count }
 }`;
 const { Provider, clearClients } = createUiTestProviders({
   resources: [resource, unrelated], apiUrl: "test://delete-preview",
@@ -35,8 +35,8 @@ test.each(["success", "refused", "blocked"] as const)("delete preview refreshes 
     if (refused) throw new Error("Deletion refused");
     deleted = completed;
     return { data: { delete_note_preview: {
-      totalDeletedCount: completed ? 1 : 0, deleted: [], updated: [], blocked: [], hasBlockers: outcome === "blocked",
-      root: { label: "notes.Note", objectLabel: "Retained", objectId: "note-1", children: [] },
+      total_deleted_count: completed ? 1 : 0, deleted: [], updated: [], blocked: [], has_blockers: outcome === "blocked",
+      root: { label: "notes.Note", object_label: "Retained", object_id: "note-1", children: [] },
     } } };
   });
   function Providers({ children }: { children: ReactNode }) {
@@ -63,7 +63,7 @@ test.each(["success", "refused", "blocked"] as const)("delete preview refreshes 
   });
   await waitFor(() => expect(result.current.list.result.total).toBe(completed ? 0 : 1));
   if (completed) await waitFor(() => expect(result.current.detail.result).toBeNull());
-  if (outcome === "blocked") expect(screen.getByText("Some related records block deletion.")).toBeTruthy();
+  if (outcome === "blocked") expect(screen.getByRole("alert").textContent).toContain("Some related records block deletion.");
   expect(getList).toHaveBeenCalledTimes(completed ? 2 : 1);
   expect(getOne.mock.calls.filter(([params]) => params.id === "note-1")).toHaveLength(completed ? 2 : 1);
   expect(getOne.mock.calls.filter(([params]) => params.id === "file-1")).toHaveLength(1);
