@@ -5,6 +5,7 @@
 import { createNamespaceT } from "@angee/ui";
 
 export const enStorageMessages: Record<string, string> = {
+  "action.failed": "The action failed.",
   "record.loading": "Loading attached files",
   "record.loadingDrives": "Loading upload destinations",
   "record.empty": "No files attached",

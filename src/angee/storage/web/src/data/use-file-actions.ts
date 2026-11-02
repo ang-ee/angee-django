@@ -12,18 +12,20 @@ import type {
   DataResourceMetadata,
 } from "@angee/metadata";
 
+type DeleteOptions = Parameters<ReturnType<typeof useDeleteWithPreview>["remove"]>[1];
+
 export interface FileActions {
   busy: boolean;
   /** Soft-delete a file into the Trash. */
-  trash: (id: string) => Promise<void>;
+  trash: (id: string, options?: DeleteOptions) => Promise<boolean>;
   /** Pull a file back out of the Trash. */
-  restore: (id: string) => Promise<void>;
+  restore: (id: string) => Promise<boolean>;
   /** Move a file into a folder by public id, or `null` for the root. */
   move: (id: string, folder: string | null) => Promise<void>;
   /** Soft-delete many files in one pass, refetching once. */
-  trashMany: (ids: Iterable<string>) => Promise<void>;
+  trashMany: (ids: Iterable<string>, options?: DeleteOptions) => Promise<boolean>;
   /** Restore many files in one pass, refetching once. */
-  restoreMany: (ids: Iterable<string>) => Promise<void>;
+  restoreMany: (ids: Iterable<string>) => Promise<boolean>;
 }
 
 /**
@@ -51,32 +53,36 @@ export function useFileActions(): FileActions {
 
   return {
     busy,
-    trash: (id) =>
+    trash: (id, options) =>
       run(async () => {
         requireFileResource(resource);
-        await deleteWithPreview.remove(id);
+        return deleteWithPreview.remove(id, options);
       }),
     restore: (id) =>
       run(async () => {
         requireFileResource(resource);
-        await trashRecord.restore(id);
+        return trashRecord.restore(id);
       }),
     move: (id, folder) =>
       run(async () => {
         requireFileResource(resource);
         await updateFile.mutateAsync({ id, values: { folder } });
       }),
-    trashMany: (ids) =>
+    trashMany: (ids, options) =>
       run(() => reconcile.batch(async (reconciliation) => {
         for (const id of ids) {
           requireFileResource(resource);
-          await deleteWithPreview.remove(id, { reconciliation });
+          if (!(await deleteWithPreview.remove(id, { ...options, reconciliation }))) return false;
         }
+        return true;
       })),
     restoreMany: (ids) =>
       run(() => reconcile.batch(async (reconciliation) => {
         requireFileResource(resource);
-        for (const id of ids) await trashRecord.restore(id, { reconciliation });
+        for (const id of ids) {
+          if (!(await trashRecord.restore(id, { reconciliation }))) return false;
+        }
+        return true;
       })),
   };
 }

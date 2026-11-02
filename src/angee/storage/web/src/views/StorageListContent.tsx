@@ -1,7 +1,8 @@
 import { useCallback, useMemo, type ReactElement } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { useRouterState } from "@tanstack/react-router";
 import type { DataResourceMetadata } from "@angee/metadata";
-import { Glyph, recordNavigationHref, SelectionBarAction, useRouteHref, type ListViewNavigationScope, type ResourceListSnapshot } from "@angee/ui";
+import { errorMessage, useToast, Glyph, recordNavigationHref, SelectionBarAction, useRouteHref, type ListViewNavigationScope, type ResourceListSnapshot } from "@angee/ui";
 
 import { ALL_SCOPE, TRASH_SCOPE, type StorageFileRow } from "../data/file-rows";
 import type { FileActions } from "../data/use-file-actions";
@@ -21,6 +22,16 @@ export function StorageListContent({ controller, fileResource, navigationScope, 
 }): ReactElement {
   const t = useStorageT();
   const routeHref = useRouteHref();
+  const toast = useToast();
+  const bulkAction = useMutation({
+    mutationFn: async ({ ids, clear, restore }: { ids: ReadonlySet<string>; clear: () => void; restore: boolean }) => {
+      const completed = restore
+        ? await fileActions.restoreMany(ids)
+        : await fileActions.trashMany(ids, { errorNotification: false });
+      if (completed) clear();
+    },
+    onError: (error) => toast.danger({ title: errorMessage(error, t("action.failed")) }),
+  });
   const driveId = controller.rootId;
   const effectiveScope = controller.selectedId ?? ALL_SCOPE;
   const baseFilter = useMemo(
@@ -63,7 +74,7 @@ export function StorageListContent({ controller, fileResource, navigationScope, 
         <SelectionBarAction
           surface="brand"
           pending={fileActions.busy}
-          onClick={() => void fileActions.restoreMany(ids).then(clear)}
+          onClick={() => bulkAction.mutate({ ids, clear, restore: true })}
         >
           <Glyph name="restore" />
           {t("bulk.restore")}
@@ -72,13 +83,13 @@ export function StorageListContent({ controller, fileResource, navigationScope, 
         <SelectionBarAction
           surface="brand"
           pending={fileActions.busy}
-          onClick={() => void fileActions.trashMany(ids).then(clear)}
+          onClick={() => bulkAction.mutate({ ids, clear, restore: false })}
         >
           <Glyph name="trash" />
           {t("bulk.trash")}
         </SelectionBarAction>
       ),
-    [effectiveScope, fileActions, t],
+    [bulkAction.mutate, effectiveScope, fileActions, t],
   );
   return <FileBrowserContent baseFilter={baseFilter} rowHref={rowHref} bulkActions={renderBulkActions}
     onListStateChange={onListStateChange} uploads={uploads} uploadTarget={controller.uploadTarget} />;
