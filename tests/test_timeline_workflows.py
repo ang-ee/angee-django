@@ -120,11 +120,12 @@ def test_waiting_run_folds_readable_children_and_computes_attention(review) -> N
     assert {"kind": "decisions.decision", "count": 1} in line["children"]
     assert {"kind": "provenance.change", "count": 1} in line["children"]
     assert data["timeline_attention"] == data["timeline"]["needs_me"] == 1
-    folded_groups = [
+    selections = [
         query["sql"] for query in queries.captured_queries
-        if 'SELECT "timeline_source"."_timeline_fold_type"' in query["sql"] and "GROUP BY" in query["sql"]
+        if 'WITH RECURSIVE "timeline_source" AS' in query["sql"]
     ]
-    assert len(folded_groups) == 1
+    assert len(selections) == 1
+    assert '"timeline_selected" AS' in selections[0] and 'INNER JOIN "timeline_selected"' in selections[0]
 
     bystander = create_user("timeline-fold-bystander")
     with system_context(reason="test.timeline.fold_reader"):

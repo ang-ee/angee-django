@@ -176,17 +176,14 @@ def test_shared_source_preserves_same_model_occurrences_without_parent_policy_co
         else {"projects.task": 1, "test.self_fold": 0} if other_kind else {"test.self_fold": 1}
     )
     assert page.needs_me == max(1, other_kind) and not page.has_more and page.next_before is None
-    statements = [query["sql"] for query in queries if 'WITH RECURSIVE "timeline_source" AS (' in query["sql"]]
-    assert len(statements) == 3  # page, selected-parent child groups, and whole-scope counts
-    for sql in statements:
-        assert sql.count('"timeline_source" AS (') == 1
-        child_groups = 'SELECT "timeline_source"."_timeline_fold_type"' in sql and "GROUP BY" in sql
-        assert sql.count("UNION ALL") == (0 if child_groups else len(kinds) - 1)
-        if child_groups:
-            assert '"_timeline_needs"' not in sql
-            assert '"_timeline_at"' not in sql
-            assert '"_timeline_type"' not in sql
-        assert '"rebac_schemageneration"' in sql
+    statements = [query["sql"] for query in queries if 'WITH RECURSIVE "timeline_source" AS' in query["sql"]]
+    assert len(statements) == 1
+    sql, = statements
+    assert sql.count('"timeline_source" AS') == 1
+    assert sql.count('"timeline_lines" AS') == 1
+    assert sql.count('"timeline_page" AS') == 1
+    assert sql.count("UNION ALL") == len(kinds) + 1  # source kinds and three tagged result branches
+    assert '"rebac_schemageneration"' in sql
 
 
 def test_child_groups_keep_the_original_source_database(comment_record, monkeypatch) -> None:
@@ -203,8 +200,8 @@ def test_child_groups_keep_the_original_source_database(comment_record, monkeypa
 
     monkeypatch.setattr(reading, "timeline_kinds", lambda: (TaskKind(), SelfFold()))
     timeline = Timeline(record, author)
-    # A union executes on its original first branch's database. Selecting only
-    # folding branches must not adopt that subset's first branch alias instead.
+    # The shared source executes on its first branch's database even when a
+    # folding branch has another alias.
     timeline.branches["test.self_fold"] = timeline.branches["test.self_fold"].using("unselected_fold_alias")
-    children = timeline._children({"projects.task": {task.pk}})
-    assert [(child.kind, child.count) for child in children[task_type.pk, task.pk]] == [("test.self_fold", 1)]
+    page = timeline.page()
+    assert [(child.kind, child.count) for child in page.entries[0].children] == [("test.self_fold", 1)]

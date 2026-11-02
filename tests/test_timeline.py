@@ -21,6 +21,7 @@ from angee.timeline import schema as timeline_schema
 from angee.timeline.kinds import timeline_kinds
 from angee.timeline.reading import Timeline
 from tests.conftest import addon_schema, create_platform_admin, execute_schema, result_data, vault_for
+from tests.messaging_campaign import comment_record as comment_record  # noqa: F401 - shared record fixture
 
 KINDS = [
     "angee.provenance.timeline.timeline_kinds",
@@ -129,10 +130,36 @@ def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: No
     assert attention["kinds"] == page["kinds"]
     one = read_timeline(vault, owner, limit=1)["timeline"]
     assert one["has_more"] and one["next_before"]
+    clamped = Timeline(vault, owner).page(limit=0)
+    assert len(clamped.entries) == 1 and clamped.has_more
+    assert {kind.id: kind.count for kind in clamped.kinds} == counts
+    assert clamped.needs_me == page["needs_me"]
     rest = read_timeline(vault, owner, before=one["next_before"])["timeline"]
     assert [one["entries"][0], *rest["entries"]] == page["entries"]
     assert one["kinds"] == rest["kinds"] == page["kinds"]
     assert read_timeline(vault, owner, kinds=["workflows.run"])["timeline"]["entries"] == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("activity_catalog")
+@override_settings(ANGEE_TIMELINE_KINDS=KINDS)
+def test_sparse_non_admin_page_has_one_bounded_selection_statement(comment_record, composed_permissions: None) -> None:
+    record, actor = comment_record.record, comment_record.author
+    assert not actor.is_superuser
+    timeline = Timeline(record, actor)
+    assert {kind.id for kind in timeline.kinds} == {kind.id for kind in timeline_kinds()}
+    with CaptureQueriesContext(connection) as queries:
+        timeline.page()
+    selections = [
+        query["sql"] for query in queries
+        if 'WITH RECURSIVE "timeline_source" AS' in query["sql"]
+    ]
+    assert len(selections) == 1  # Hydration and kind-owned admission reads are outside this budget.
+    sql, = selections
+    assert sql.count("UNION ALL") == len(timeline.kinds) + 1
+    assert all(kind.id in sql for kind in timeline.kinds)
+    # Placeholder ceiling until the first measured SQLite and PostgreSQL runs; lower it to the observed maximum.
+    assert len(sql.encode("utf-8")) <= 65_536
 
 
 def timeline_entries(record, actor=None, *, kind=None):
