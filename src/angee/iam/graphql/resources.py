@@ -18,7 +18,6 @@ from angee.graphql.data.extensions import ResourceExtensions
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.iam.graphql.access import assert_no_gated_read_fields
 from angee.iam.graphql.relations import (
-    RecordReferenceNode,
     actor_scoped_relation_expression,
     with_record_reference_access,
 )
@@ -47,7 +46,7 @@ def _validate_fields(model, fields, owner, reason):
 
 
 def _prepare_queryset(rows, node, required):
-    if issubclass(node, RecordReferenceNode) or required:
+    if required:
         return with_record_reference_access(rows, select=False)
     return rows
 
