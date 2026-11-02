@@ -61,6 +61,7 @@ export interface KeysetFeedPage<TRow extends KeysetRow, TMetadata = undefined> {
 interface KeysetFeedReads<TRow extends KeysetRow, TMetadata = undefined> {
   queryKey: QueryKey;
   pageSize: number;
+  /** Full current rows in the same authorized scope and projection as revalidate. */
   window: (
     before: string | null,
     through: string | null,
@@ -78,7 +79,7 @@ interface KeysetFeedReads<TRow extends KeysetRow, TMetadata = undefined> {
 
 /**
  * Loaded history lives only in native InfiniteData. Refetch walks each original
- * fixed window and revalidates all IDs owned by that page when revalidation is
+ * fixed window and revalidates its owned IDs not observed in those reads when revalidation is
  * supplied. Without it, native sequential reads replace pages on refetch.
  * A moved row in a revalidated feed keeps its native-page owner; the derived
  * presentation applies the server's order.
@@ -183,8 +184,7 @@ export function keysetFeedOptions<TRow extends KeysetRow, TMetadata = undefined>
         if (!previous) throw new Error("Keyset feed lost its retained page context.");
         const earlierIds = new Set(previous.pages.slice(0, index).flatMap((page) => page.rows.map((row) => row.id)));
         const mine = [...new Set(oldPage.rows.map((row) => row.id).filter((id) => !earlierIds.has(id)))];
-        const fresh: TRow[] = [];
-        const freshIds = new Set<string>();
+        const observed = new Map<string, TRow>();
         const visited = new Set<string | null>();
         let before = newer ? oldPage.before ?? null : older;
         let page: KeysetFeedWindow<TRow, TMetadata>;
@@ -195,10 +195,8 @@ export function keysetFeedOptions<TRow extends KeysetRow, TMetadata = undefined>
           firstWindow ??= page;
           context.signal.throwIfAborted();
           for (const row of page.rows) {
-            if (!owned.has(row.id) && !freshIds.has(row.id)) {
-              freshIds.add(row.id);
-              fresh.push(row);
-            }
+            // The later full observation wins within this producing page.
+            observed.set(row.id, row);
           }
           before = page.older_cursor;
           if (page.has_more_in_window && (before === null || visited.has(before))) {
@@ -206,16 +204,22 @@ export function keysetFeedOptions<TRow extends KeysetRow, TMetadata = undefined>
           }
         } while (page.has_more_in_window);
 
-        const survivors: TRow[] = [];
-        for (let offset = 0; offset < mine.length; offset += reads.pageSize) {
-          const ids = mine.slice(offset, offset + reads.pageSize);
+        // Window omission is not absence: moved or hidden owned rows still
+        // require the adapter's exact permission-filtered partition.
+        const survivors = mine.flatMap((id) => {
+          const row = observed.get(id);
+          return row ? [row] : [];
+        });
+        const unobserved = mine.filter((id) => !observed.has(id));
+        for (let offset = 0; offset < unobserved.length; offset += reads.pageSize) {
+          const ids = unobserved.slice(offset, offset + reads.pageSize);
           const result = await reads.revalidate(ids, context);
           context.signal.throwIfAborted();
           assertRevalidationPartition(ids, result);
           survivors.push(...result.rows);
         }
         return {
-          rows: [...survivors, ...fresh],
+          rows: [...survivors, ...[...observed.values()].filter((row) => !owned.has(row.id))],
           through: oldPage.through,
           hasOlder: page.has_older_than_through,
           count: page.count,

@@ -172,6 +172,7 @@ function fixture(gcTime = Infinity) {
       const lower = cut(through);
       const matching = all.filter((row) => (upper === null || row.position < upper) && (lower === null || row.position >= lower));
       const messages = matching.slice(0, limit).map((row) => ({ ...row }));
+      calls.at(-1)!.ids = messages.map((row) => row.id);
       const oldest = messages.at(-1)?.position;
       return {
         rows: messages, count: all.length, older_cursor: cursor(oldest),
@@ -235,13 +236,33 @@ describe("native message history retention", () => {
         message(7, { visible: false }),
         message(50, { id: "message-5" }), message(4), message(3), message(2), message(1),
       ]);
+      feed.calls.length = 0;
       await feed.invalidate();
+      expect(feed.calls.filter((call) => call.kind === "revalidate").flatMap((call) => call.ids!))
+        .toEqual(["message-8", "message-7", "message-6", "message-5"]);
       expect(feed.ids()).toEqual(["message-5", "message-8"]);
       expect(orderedRows(feed.read()).at(-1)?.body).toBe("edited below loaded history");
       expect(feed.read()!.pages.flatMap((page) => page.rows.map((row) => row.id))).toEqual(["message-8", "message-5"]);
       while (feed.observer.getCurrentResult().hasNextPage) await feed.observer.fetchNextPage({ cancelRefetch: false });
       expect(feed.ids()).toEqual(["message-5", "message-4", "message-3", "message-2", "message-1", "message-8"]);
       expect(feed.read()!.pages.flatMap((page) => page.rows)).toHaveLength(6);
+    } finally { feed.close(); }
+  });
+
+  test("a retained row observed twice within its own window uses the later full row", async () => {
+    const feed = fixture();
+    try {
+      await feed.observer.refetch();
+      const originals = Array.from({ length: 8 }, (_, index) => message(8 - index));
+      feed.set([message(10), message(9), message(9.5, { id: "message-8", body: "first" }), ...originals.slice(1)]);
+      feed.beforeWindow((before) => {
+        if (before === "opaque:9.5") feed.set([message(10), message(9), message(8, { body: "later" }), ...originals.slice(1)]);
+      });
+      feed.calls.length = 0;
+      await feed.invalidate();
+      expect(orderedRows(feed.read()).find((row) => row.id === "message-8")?.body).toBe("later");
+      expect(feed.calls.filter((call) => call.kind === "revalidate")).toEqual([]);
+      expect(feed.read()!.pages[0]!.through).toBe("opaque:7");
     } finally { feed.close(); }
   });
 
@@ -298,7 +319,7 @@ describe("native message history retention", () => {
     try {
       await feed.observer.refetch(); await feed.observer.fetchNextPage();
       const previous = feed.read();
-      feed.set([message(8), message(4)]); feed.invalidPartition(partition);
+      feed.set([message(8), message(0, { id: "message-7" }), message(4)]); feed.invalidPartition(partition);
       await expect(feed.observer.refetch({ throwOnError: true })).rejects.toThrow("partition");
       expect(feed.read()).toBe(previous);
       expect(feed.observer.getCurrentResult().isRefetchError).toBe(true);
@@ -324,10 +345,14 @@ describe("native message history retention", () => {
       const windows = feed.calls.filter((call) => call.kind === "window");
       const validations = feed.calls.filter((call) => call.kind === "revalidate");
       expect(windows).toHaveLength(6);
-      expect(validations).toHaveLength(3);
+      expect(validations).toHaveLength(0);
       expect(windows.every((call) => call.limit === 2)).toBe(true);
       expect(validations.every((call) => call.ids!.length <= 2)).toBe(true);
-      expect(new Set(validations.flatMap((call) => call.ids!)).size).toBe(6);
+      const retained = new Set([8, 7, 6, 5, 4, 3].map((id) => `message-${id}`));
+      const checked = feed.calls.flatMap((call) => call.ids ?? []).filter((id) => retained.has(id));
+      expect(checked.sort()).toEqual([...retained].sort());
+      // All six retained IDs were observed through their own fixed windows.
+      expect(feed.ids()).toEqual(Array.from({ length: 12 }, (_, index) => `message-${14 - index}`));
     } finally { feed.close(); }
   });
 
