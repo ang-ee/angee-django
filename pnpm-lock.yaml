@@ -2051,6 +2051,9 @@ importers:
       '@refinedev/core':
         specifier: ^5.0.12
         version: 5.0.12(patch_hash=7c7da03ed7017213b72a2c6e00ef66bf25459233ab0486a94ff166c02e5f1591)(@tanstack/react-query@5.101.2(react@19.2.7))(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@tanstack/react-query':
+        specifier: ^5.101.2
+        version: 5.101.2(react@19.2.7)
       '@vidstack/react':
         specifier: ^1.12.13
         version: 1.15.6(@types/react@19.2.17)(react@19.2.7)
