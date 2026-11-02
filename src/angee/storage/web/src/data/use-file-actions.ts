@@ -13,7 +13,7 @@ import type {
 } from "@angee/metadata";
 
 type DeleteOptions = Parameters<ReturnType<typeof useDeleteWithPreview>["remove"]>[1];
-type MoveOptions = Pick<Parameters<ReturnType<typeof useUpdate<RowRecord, HttpError, Record<string, unknown>>>["mutateAsync"]>[0], "errorNotification">;
+type MoveOptions = Pick<NonNullable<Parameters<ReturnType<typeof useUpdate<RowRecord, HttpError, Record<string, unknown>>>["mutateAsync"]>[0]>, "errorNotification">;
 
 export interface FileActions {
   busy: boolean;
