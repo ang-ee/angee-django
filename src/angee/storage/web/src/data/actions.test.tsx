@@ -166,6 +166,7 @@ describe("storage file/folder actions", () => {
     await act(async () => {
       await result.current.trash("fil_1");
       await result.current.move("fil_1", "fld_1");
+      await result.current.move("fil_1", null, { errorNotification: false });
       await result.current.trashMany(["fil_2", "fil_3"]);
       await result.current.restore("fil_1");
     });
@@ -177,6 +178,7 @@ describe("storage file/folder actions", () => {
     ]);
     expect(updateFile?.calls).toEqual([
       { id: "fil_1", values: { folder: "fld_1" } },
+      { id: "fil_1", values: { folder: null }, errorNotification: false },
     ]);
     expect(sdk.authoredCalls).toEqual([{ id: "fil_1" }]);
     expect(sdk.batches).toEqual(["start", "flush"]);
