@@ -1684,6 +1684,9 @@ schema-derived admission on protected edges. [`angee.base.refs`](../../src/angee
 identities and public reference values. Its public projection uses the minimal
 [`model identity contract`](../../src/angee/base/models/identity.py), without
 importing the composed model toolkit.
+Reverse generic relations use
+[`angee.base.fields.relations.GenericRelation`](../../src/angee/base/fields/relations.py)
+so content types resolve on the query database.
 [`RetainedGenericRelation`](../../src/angee/base/fields/relations.py) owns the
 native reverse relation's exclusion from automatic collection.
 Each edge declares `on_target_delete` as `CASCADE`, `PROTECT`, or `SET_NULL`; a

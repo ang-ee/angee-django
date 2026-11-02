@@ -24,7 +24,7 @@ class FileAttachment(AuditMixin, ProtectedRecordRefMixin, HistoryMixin, Protecte
     """Polymorphic edge attaching one :class:`File` to any model row.
 
     Consumers attach explicitly through :meth:`FileAttachmentManager.attach` or
-    declare a ``GenericRelation("storage.FileAttachment")`` on the target for an
+    declare an :class:`angee.base.fields.relations.GenericRelation` on the target for an
     ergonomic reverse accessor. Declare that reverse relation on the topmost
     REBAC-typed MTI ancestor that :func:`rebac.generic_target` keys the edge on,
     so the delete collector filters at the write content type (the placement
