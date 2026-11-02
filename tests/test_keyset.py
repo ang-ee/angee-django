@@ -1,15 +1,18 @@
 """Keyset paging is independent of Messaging models, public IDs and chronology."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
 from django.core import signing
-from django.db import models
-from django.db.models.functions import Substr
+from django.db import connection, models
+from django.db.models.functions import Collate, Substr
+from django.test.utils import CaptureQueriesContext, isolate_apps
 from rebac import SubjectRef
 
 from angee.base.pagination import InvalidKeysetCursor, KeysetOrder
+from angee.base.querysets import AngeeQuerySet
+from tests.tables import model_tables
 from tests.test_system_queryset import SystemQueryThing, system_query_tables  # noqa: F401
 
 
@@ -36,6 +39,8 @@ def test_native_integer_keys_traverse_ties_and_keep_deleted_cuts() -> None:
     assert list(empty.rows) == []
     assert empty.count == 3
     assert empty.has_more_in_window is False
+    assert empty.has_older is False
+    assert empty.has_newer is False
     assert empty.has_older_than_through is True
     assert list(queryset.keyset_page(before_cursor=first.older_cursor, **options).rows) == list(
         reversed(rows[1:3])
@@ -113,3 +118,95 @@ def test_projected_final_key_preserves_native_cuts_and_cursor_values() -> None:
     cut = projected.unsign(token, signer, SystemQueryThing._meta.pk)
     assert list(queryset.filter(projected.before(cut)).order_by(*projected.ordering)) == list(reversed(rows[:2]))
     assert list(queryset.filter(projected.after(cut)).order_by(*projected.ordering)) == rows[3:]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("system_query_tables")
+@pytest.mark.parametrize("case", ["head", "before", "through", "both", "around", "after", "end", "moved-cut"])
+def test_older_metadata_uses_the_same_complete_order_and_authorized_scope(case: str) -> None:
+    """Window evidence and strict older cuts agree for every native orientation."""
+    at = datetime(2026, 1, 1, tzinfo=UTC)
+    rows = [SystemQueryThing._base_manager.create(name=str(index)) for index in range(7)]
+    SystemQueryThing._base_manager.update(created_at=at)
+    queryset = SystemQueryThing._base_manager.exclude(pk=rows[0].pk)
+    order = KeysetOrder("created_at")
+    options = {"order": order, "cursor_scope": ("older-evidence",), "limit": 2}
+    first = queryset.keyset_page(**options)
+    second = queryset.keyset_page(before_cursor=first.older_cursor, **options)
+    cuts = {}
+    if case in {"before", "both", "moved-cut"}:
+        cuts["before_cursor"] = first.older_cursor
+    if case in {"through", "both"}:
+        cuts["through_cursor"] = second.older_cursor
+    if case == "end":
+        cuts["before_cursor"] = second.older_cursor
+    if case == "around":
+        cuts["around"] = queryset.get(pk=rows[3].pk)
+    if case == "after":
+        cuts["after_cursor"] = second.newer_cursor
+    if case == "moved-cut":
+        SystemQueryThing._base_manager.filter(pk=rows[-2].pk).update(created_at=at - timedelta(days=1))
+    page = queryset.keyset_page(**cuts, **options)
+    selected = list(page.rows)
+    assert selected
+    assert page.has_older is queryset.filter(order.before(order.position(selected[-1]))).exists()
+    assert page.has_newer is queryset.filter(order.after(order.position(selected[0]))).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("older", [False, True])
+@pytest.mark.parametrize("collated", [False, True])
+def test_duplicate_join_boundary_does_not_prove_a_strictly_older_row(older: bool, collated: bool) -> None:
+    """A genuine join repeats one complete tuple across the limit boundary."""
+    if collated and connection.vendor != "sqlite":
+        pytest.skip("SQLite's native nocase collation exercises unequal Python tie values.")
+    with isolate_apps("tests"):
+        class KeysetParent(models.Model):
+            created_at = models.DateTimeField()
+
+            class Meta:
+                app_label = "tests"
+
+        class KeysetOccurrence(models.Model):
+            parent = models.ForeignKey(KeysetParent, on_delete=models.CASCADE, related_name="occurrences")
+            label = models.CharField(max_length=8, default="a")
+
+            class Meta:
+                app_label = "tests"
+
+        with model_tables((KeysetParent, KeysetOccurrence)):
+            at = datetime(2026, 1, 1, tzinfo=UTC)
+            newest = KeysetParent.objects.create(created_at=at)
+            KeysetOccurrence.objects.bulk_create([
+                KeysetOccurrence(parent=newest, label="a"), KeysetOccurrence(parent=newest, label="A"),
+            ])
+            if older:
+                previous = KeysetParent.objects.create(created_at=at - timedelta(days=1))
+                KeysetOccurrence.objects.create(parent=previous)
+            queryset = AngeeQuerySet(model=KeysetParent).filter(occurrences__isnull=False)
+            if collated:
+                queryset = queryset.annotate(band=Collate("occurrences__label", "nocase"))
+            order = KeysetOrder("created_at", tie_breakers=("band",) if collated else ())
+            with CaptureQueriesContext(connection) as reads:
+                page = queryset.keyset_page(order=order, cursor_scope=("join",), limit=1)
+            assert page.has_more_in_window is True
+            assert page.has_older is older
+            assert page.count == (3 if older else 2)
+            assert list(page.rows.values_list("pk", flat=True)) == [newest.pk, newest.pk]
+            # Count, selection, strict-older fallback and newer probe remain.
+            assert len(reads) == 4
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("system_query_tables")
+def test_distinct_descending_page_omits_the_redundant_older_probe() -> None:
+    """The bounded extra tuple itself proves an older continuation."""
+    for index in range(3):
+        SystemQueryThing._base_manager.create(name=str(index))
+    with CaptureQueriesContext(connection) as reads:
+        page = SystemQueryThing._base_manager.keyset_page(
+            order=KeysetOrder("created_at"), cursor_scope=("probe-count",), limit=1,
+        )
+    assert page.has_more_in_window and page.has_older
+    # Count, bounded selection and the unchanged newer probe only.
+    assert len(reads) == 3
