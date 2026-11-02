@@ -102,11 +102,13 @@ export function useTrashRecord(resource: DataResourceMetadata | null | undefined
     : {};
   const [trashRecord, trashState] = useAuthoredResourceMutation(TrashRecord, {
     ...options,
+    errorNotification: false,
     shouldInvalidate: (data) => data?.trash_record.ok === true,
     records: (_data, variables) => resource ? [{ model: resource.modelLabel, id: variables.target_id }] : [],
   });
   const [restoreRecord, restoreState] = useAuthoredResourceMutation(RestoreRecord, {
     ...options,
+    errorNotification: false,
     shouldInvalidate: (data) => data?.restore_record.ok === true,
     records: (_data, variables) => resource ? [{ model: resource.modelLabel, id: variables.target_id }] : [],
   });

@@ -22,7 +22,7 @@ export interface FolderActions {
   /** Rename a folder. */
   rename: (id: string, name: string) => Promise<void>;
   /** Delete a folder; its files fall back to the drive root. */
-  remove: (id: string) => Promise<void>;
+  remove: (id: string, options?: Parameters<ReturnType<typeof useDeleteWithPreview>["remove"]>[1]) => Promise<boolean>;
 }
 
 /**
@@ -75,14 +75,15 @@ export function useFolderActions(): FolderActions {
         requireFolderResource(resource);
         await updateFolder.mutateAsync({ id, values: { name } });
       }),
-    remove: (id) =>
+    remove: (id, options) =>
       run(async () => {
         requireFolderResource(resource);
-        await reconcile.batch(async (reconciliation) => {
-          await deleteWithPreview.remove(id, { reconciliation });
+        return reconcile.batch(async (reconciliation) => {
+          if (!(await deleteWithPreview.remove(id, { ...options, reconciliation }))) return false;
           await reconcile(undefined, undefined, {
             invalidateModels: [FILE_MODEL], invalidates: fileInvalidations, reconciliation,
           });
+          return true;
         });
       }),
   };

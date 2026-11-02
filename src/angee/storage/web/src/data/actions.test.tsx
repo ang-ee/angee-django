@@ -31,6 +31,8 @@ const sdk = vi.hoisted(() => {
     reconciliations: [] as unknown[],
     batches: [] as string[],
     failDeleteId: null as string | null,
+    refuseRestoreId: null as string | null,
+    blockedDeleteId: null as string | null,
     scope: { reconcile: vi.fn(async () => undefined) },
   };
 });
@@ -54,7 +56,7 @@ vi.mock("@angee/ui", async (importOriginal) => {
       trash: vi.fn(async () => true),
       restore: vi.fn(async (id: string) => {
         sdk.authoredCalls.push({ id });
-        return true;
+        return id !== sdk.refuseRestoreId;
       }),
     })),
   };
@@ -93,6 +95,12 @@ vi.mock("@refinedev/core", async (importOriginal) => {
             throw new Error("Deletion refused");
           }
           const result = { data: response(input) };
+          if (kind === "deletePreview" && (input as { values?: { id?: string } }).values?.id === sdk.blockedDeleteId) {
+            Object.assign(result.data as object, {
+              deleteFilePreview: { ...deletePreview, hasBlockers: true, totalDeletedCount: 0 },
+              deleteFolderPreview: { ...deletePreview, hasBlockers: true, totalDeletedCount: 0 },
+            });
+          }
           const lifecycle = options.mutationOptions as { onSuccess?: (result: { data: unknown }, input: unknown) => Promise<void> } | undefined;
           await lifecycle?.onSuccess?.(result, input);
           return result;
@@ -125,6 +133,7 @@ vi.mock("@refinedev/core", async (importOriginal) => {
   };
 });
 
+import { ToastProvider } from "@angee/ui";
 import { useFileActions } from "./use-file-actions";
 import { useFolderActions } from "./use-folder-actions";
 
@@ -136,6 +145,8 @@ describe("storage file/folder actions", () => {
     sdk.reconciliations.length = 0;
     sdk.batches.length = 0;
     sdk.failDeleteId = null;
+    sdk.refuseRestoreId = null;
+    sdk.blockedDeleteId = null;
   });
 
   test("file actions use refine mutations and confirm soft deletes", async () => {
@@ -182,6 +193,40 @@ describe("storage file/folder actions", () => {
     expect(sdk.reconciliations).toEqual([
       expect.objectContaining({ records: [{ model: "storage.File", id: "fil_1" }], reconciliation: sdk.scope }),
     ]);
+  });
+
+  test("bulk restore stops on the shared owner's reported refusal", async () => {
+    sdk.refuseRestoreId = "fil_2";
+    const { result } = renderHook(() => useFileActions(), { wrapper: MetadataWrapper });
+    await act(async () => {
+      await expect(result.current.restoreMany(["fil_1", "fil_2", "fil_3"])).resolves.toBe(false);
+    });
+    expect(sdk.authoredCalls).toEqual([{ id: "fil_1" }, { id: "fil_2" }]);
+    expect(sdk.batches).toEqual(["start", "flush"]);
+  });
+
+  test("bulk trash does not treat a blocked confirmation as deletion", async () => {
+    sdk.blockedDeleteId = "fil_2";
+    const { result } = renderHook(() => useFileActions(), { wrapper: MetadataWrapper });
+    await act(async () => {
+      await expect(result.current.trashMany(["fil_1", "fil_2", "fil_3"], { errorNotification: false })).resolves.toBe(false);
+    });
+    expect(sdk.refineMutations[0]?.calls).toHaveLength(2);
+    expect(sdk.refineMutations[0]?.calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ errorNotification: false }),
+    ]));
+    expect(sdk.reconciliations).toHaveLength(1);
+    expect(sdk.batches).toEqual(["start", "flush"]);
+  });
+
+  test("a blocked folder deletion preserves the folder and does not reconcile its files", async () => {
+    sdk.blockedDeleteId = "fld_2";
+    const { result } = renderHook(() => useFolderActions(), { wrapper: MetadataWrapper });
+    await act(async () => {
+      await expect(result.current.remove("fld_2")).resolves.toBe(false);
+    });
+    expect(sdk.reconciliations).toEqual([]);
+    expect(sdk.batches).toEqual(["start", "flush"]);
   });
 
   test("folder actions use refine mutations and confirm removes", async () => {
@@ -302,7 +347,7 @@ function MetadataWrapper({ children }: { children: ReactNode }): ReactElement {
   return (
     <OperationDocumentsProvider documents={STORAGE_OPERATION_DOCUMENTS}>
       <ModelMetadataProvider metadata={STORAGE_METADATA}>
-        {children}
+        <ToastProvider>{children}</ToastProvider>
       </ModelMetadataProvider>
     </OperationDocumentsProvider>
   );

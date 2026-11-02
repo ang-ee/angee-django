@@ -1,4 +1,6 @@
 import { useCallback } from "react";
+import { useToast } from "../../feedback";
+import { useUiT } from "../../i18n";
 import {
   refineResourceIdentifier,
   refineResourceName,
@@ -86,7 +88,8 @@ export function useDeletePreviewOperation(
 
 export interface UseDeleteWithPreviewResult extends UseAngeeDeletePreviewResult {
   available: boolean;
-  remove: (id: string, execution?: MutationExecutionOptions) => Promise<void>;
+  /** Resolves false when confirmation has no result or is blocked; rejects transport failures. */
+  remove: (id: string, execution?: MutationExecutionOptions & Parameters<UseAngeeDeletePreviewResult["mutate"]>[1]) => Promise<boolean>;
 }
 
 /**
@@ -100,23 +103,31 @@ export function useDeleteWithPreview(
   resource: DataResourceMetadata | null,
 ): UseDeleteWithPreviewResult {
   const operation = useDeletePreviewOperation(resource);
+  const toast = useToast();
+  const t = useUiT();
   const preview = useAngeeDeletePreview(operation.target, {
     document: operation.document,
   });
   const reconcileMutationResponse = useReconcileMutationResponse();
-  const remove = useCallback(async (id: string, execution?: MutationExecutionOptions): Promise<void> => {
+  const remove = useCallback(async (id: string, execution?: MutationExecutionOptions & Parameters<UseAngeeDeletePreviewResult["mutate"]>[1]): Promise<boolean> => {
     if (!resource || !operation.target) {
       throw new Error("Delete preview is unavailable for this resource.");
     }
-    await preview.mutate({ id, confirm: true });
+    const { errorNotification, ...reconciliation } = execution ?? {};
+    const result = await preview.mutate({ id, confirm: true }, { errorNotification });
+    if (!result || result.hasBlockers) {
+      toast.danger({ title: t("deletePreview.failedTitle"), description: t(result ? "deletePreview.blockedGeneric" : "deletePreview.emptyPreview") });
+      return false;
+    }
     await reconcileMutationResponse(undefined, undefined, {
-      ...execution,
+      ...reconciliation,
       records: [{ model: resource.modelLabel, id }],
       invalidates: [refineInvalidationParams({
         resource: refineResourceIdentifier(resource), dataProviderName: resource.schemaName, id,
       })],
     });
-  }, [operation.target, preview.mutate, reconcileMutationResponse, resource]);
+    return true;
+  }, [operation.target, preview.mutate, reconcileMutationResponse, resource, t, toast]);
   return {
     ...preview,
     available: Boolean(resource && operation.target && operation.document),
