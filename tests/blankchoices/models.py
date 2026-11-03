@@ -1,14 +1,14 @@
-"""Exercise a consumer donor without adding billing vocabulary to the framework."""
+"""Exercise a consumer donor with a field unique to the blank-choice fixture."""
 
 from django_compose.models import Composable
 
 from angee.parties.fields import CountryCodeField
 
 
-class PartyBilling(Composable, extends="parties.Party"):
-    """The real blank tax-country declaration contributed onto Party."""
+class PartyBlankChoice(Composable, extends="parties.Party"):
+    """Contribute a blank country choice onto Party for grouping tests."""
 
-    tax_country = CountryCodeField(blank=True, default="")
+    blank_choice_country = CountryCodeField(blank=True, default="")
 
     class Meta:
         abstract = True
