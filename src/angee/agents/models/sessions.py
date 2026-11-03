@@ -235,7 +235,9 @@ class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
         """Cancel open turns after the caller locks and authorizes this session."""
 
         with system_context(reason="agents.session.close"):
-            for turn in self.turns.lock_if_supported().open().order_by("index"):
+            turn_model = type(self)._meta.apps.get_model("agents", "AgentTurn")
+            turns = turn_model._default_manager.db_manager(self._state.db).filter(session_id=self.pk)
+            for turn in turns.lock_if_supported().open().order_by("index"):
                 turn.mark_canceled()
             if self.status != SessionStatus.CLOSED:
                 self.mark_closed()
@@ -259,7 +261,13 @@ class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
                     reason="agents.session.cancel_turn",
                 ),
             ):
-                current = locked.turns.lock_if_supported().get(pk=turn.pk)
+                turn_model = type(locked)._meta.apps.get_model("agents", "AgentTurn")
+                current = (
+                    turn_model._default_manager.db_manager(using)
+                    .filter(session_id=locked.pk)
+                    .lock_if_supported()
+                    .get(pk=turn.pk)
+                )
                 if current.status in OPEN_TURN_STATUSES:
                     active = current.status in ACTIVE_TURN_STATUSES
                     current.mark_canceled()
@@ -377,7 +385,9 @@ class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
     def _enqueue_pending_turn(self) -> None:
         """Send the next delivery on commit when this locked session has queued work."""
 
-        if self.status != SessionStatus.CLOSED and self.turns.filter(status=TurnStatus.PENDING).exists():
+        turn_model = type(self)._meta.apps.get_model("agents", "AgentTurn")
+        turns = turn_model._default_manager.db_manager(self._state.db).filter(session_id=self.pk)
+        if self.status != SessionStatus.CLOSED and turns.filter(status=TurnStatus.PENDING).exists():
             self.enqueue_execution(robust=True)
 
     @transition(

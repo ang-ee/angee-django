@@ -141,7 +141,12 @@ def run_until(run: Any, *, node: str | None = None, max_steps: int = 100) -> Any
         if run.is_terminal:
             return run
         with system_context(reason="workflows.testing inspect ready rows"):
-            ready = list(run.step_runs.filter(status=StepRunStatus.READY).order_by("pk"))
+            ready = list(
+                apps.get_model("workflows", "StepRun")
+                ._default_manager.db_manager(run._state.db)
+                .filter(run_id=run.pk, status=StepRunStatus.READY)
+                .order_by("pk")
+            )
         if not ready or any(step_run.node_key == node for step_run in ready):
             return run
         for step_run in ready:
@@ -168,7 +173,11 @@ class RunFactory:
         run = start_run(self.workflow, actor=self.actor, **kwargs)
         run_until(run, node=node)
         with system_context(reason="workflows.testing inspect target"):
-            step_run = run.step_runs.get(node_key=node)
+            step_run = (
+                apps.get_model("workflows", "StepRun")
+                ._default_manager.db_manager(run._state.db)
+                .get(run_id=run.pk, node_key=node)
+            )
         if step_run.status != status and step_run.status == StepRunStatus.READY:
             runner.execute(step_run.pk)
             with system_context(reason="workflows.testing inspect settlement"):

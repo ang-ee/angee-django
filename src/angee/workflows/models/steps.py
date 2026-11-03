@@ -383,7 +383,10 @@ class StepRun(ProtectedDataModel, concrete=True):
         with system_context(reason="workflows.effect_policy"):
             return (
                 not self.step.effect_idempotent
-                and self.attempts.filter(
+                and apps.get_model("workflows", "StepAttempt")
+                ._default_manager.db_manager(self._state.db)
+                .filter(
+                    step_run_id=self.pk,
                     page_index=self.page_index,
                     effect_started_at__isnull=False,
                 ).exists()
@@ -407,7 +410,13 @@ class StepRun(ProtectedDataModel, concrete=True):
         ):
             return "This step cannot be retried in place."
         others = sorted(
-            row.node_key for row in run.step_runs.all() if row.pk != self.pk and definition.unrouted_failure([row])
+            row.node_key
+            for row in (
+                apps.get_model("workflows", "StepRun")
+                ._default_manager.db_manager(run._state.db)
+                .filter(run_id=run.pk)
+            )
+            if row.pk != self.pk and definition.unrouted_failure([row])
         )
         return f"Other unrouted failures remain: {', '.join(others)}." if others else None
 

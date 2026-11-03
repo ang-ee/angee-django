@@ -11,6 +11,7 @@ from uuid import uuid4
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import generic_target, system_context, to_subject_ref
+from rebac.resources import model_resource_type
 
 from angee.base.models.identity import public_id_of
 from angee.base.refs import RecordRef
@@ -232,6 +233,7 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
                 }
             )
         reference = RecordRef.from_instance(target)
+        # Keep the resource-type component for existing lineage identities.
         lineage_identity = canonical_json_sha256(
             {
                 "original_source": reference.public_id
@@ -241,7 +243,7 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
                 "target": {
                     "model_label": reference.model_label,
                     "object_id": str(reference.object_id),
-                    "resource_type": reference.resource_type,
+                    "resource_type": model_resource_type(type(target)) or "",
                 },
             }
         )
@@ -497,7 +499,12 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
                 except ValidationError:
                     raise ValidationError("Extraction output does not match its retained schema.") from None
             if base is not None:
-                retained_parts = list(base.parts.order_by("position"))
+                retained_parts = list(
+                    self.model._meta.apps.get_model("extraction", "ExtractionPart")
+                    ._default_manager.db_manager(base._state.db)
+                    .filter(extraction_id=base.pk)
+                    .order_by("position")
+                )
                 if len(retained_parts) != len(parts):
                     raise ValidationError("The retained base has different evidence parts.")
                 for part, retained in zip(parts, retained_parts, strict=True):
@@ -582,7 +589,11 @@ class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):
                     "provider_metadata": row.provider_metadata,
                     "carrier_file_id": row.carrier_file_id,
                 }
-                for row in base.pages.order_by("position")
+                for row in registry.get_model("extraction", "ExtractionPage")
+                ._default_manager.db_manager(base._state.db)
+                .filter(extraction_id=base.pk)
+                .select_related("source")
+                .order_by("position")
             ]
         for name, rows in (("ExtractionPage", pages), ("ExtractionPart", parts)):
             child_model = registry.get_model("extraction", name)

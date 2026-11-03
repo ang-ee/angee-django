@@ -189,7 +189,7 @@ def test_shared_source_preserves_same_model_occurrences_without_parent_policy_co
 def test_child_groups_keep_the_original_source_database(comment_record, monkeypatch) -> None:
     record, author, writer = comment_record.record, comment_record.author, comment_record.writer
     with actor_context(writer):
-        task = Task.objects.schedule(record.with_actor(writer), title="Fold on source database")
+        Task.objects.schedule(record.with_actor(writer), title="Fold on source database")
     task_type = ContentType.objects.get_for_model(Task)
 
     class SelfFold(TaskKind):

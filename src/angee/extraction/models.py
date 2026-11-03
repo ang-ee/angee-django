@@ -407,13 +407,27 @@ class Extraction(RetainedEvidence, AuditMixin, ProtectedDataModel, concrete=True
 
         Required non-retired claims fail in ``preserve_authority`` when their
         position is absent. Source ordering and acquisition telemetry are not identity.
+        It reads under the caller's system context and ignores instance actor pins.
         """
         positions: dict[tuple[Any, ...], list[int]] = {}
-        for part in current.parts.order_by("position"):
+        part_model = type(self)._meta.apps.get_model("extraction", "ExtractionPart")
+        current_parts = (
+            part_model._default_manager.db_manager(current._state.db)
+            .filter(extraction_id=current.pk)
+            .select_related("source", "source__file", "source__message_part")
+            .order_by("position")
+        )
+        for part in current_parts:
             positions.setdefault(part.carrier_identity, []).append(part.position)
+        own_parts = (
+            part_model._default_manager.db_manager(self._state.db)
+            .filter(extraction_id=self.pk)
+            .select_related("source", "source__file", "source__message_part")
+            .order_by("position")
+        )
         return {
             part.position: matches[0]
-            for part in self.parts.order_by("position")
+            for part in own_parts
             if len(matches := positions.get(part.carrier_identity, [])) == 1
         }
 

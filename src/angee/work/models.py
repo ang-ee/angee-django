@@ -372,7 +372,10 @@ _StageBaseManagerBase = ProtectedUnscopedManager.from_queryset(StageBaseQuerySet
 
 
 class StageBaseManager[StageT: Stage](
-    _StageBaseManagerBase[StageT], _ProtectedRowLockBaseManager[StageT], TrackedManager[StageT], StageManagerPrimitive[StageT],
+    _StageBaseManagerBase[StageT],
+    _ProtectedRowLockBaseManager[StageT],
+    TrackedManager[StageT],
+    StageManagerPrimitive[StageT],
 ):
     """Unfiltered Work stages preserving row-lock and generic stage contracts."""
 

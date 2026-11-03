@@ -423,7 +423,13 @@ class WorkflowManager[T: Workflow](AngeeHistoryManager[T]):
                 version = published
             else:
                 with system_context(reason="workflows.publish"):
-                    number = current.versions.aggregate(number=Max("number"))["number"] or 0
+                    number = (
+                        apps.get_model("workflows", "WorkflowVersion")
+                        ._default_manager.db_manager(owner.db)
+                        .filter(workflow_id=current.pk)
+                        .aggregate(number=Max("number"))["number"]
+                        or 0
+                    )
                     version = current.versions.create(
                         number=number + 1,
                         document=document,
@@ -570,7 +576,13 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             if request_key is not None and (existing := owner.filter(request_key=request_key).first()) is not None:
                 return replay(existing)
             if parent is not None and (
-                parent.is_terminal or not parent.step_runs.fenced(parent_step).lock_if_supported(no_key=True).exists()
+                parent.is_terminal
+                or not apps.get_model("workflows", "StepRun")
+                ._default_manager.db_manager(owner.db)
+                .filter(run_id=parent.pk)
+                .fenced(parent_step)
+                .lock_if_supported(no_key=True)
+                .exists()
             ):
                 raise Superseded("The parent attempt cannot admit a child.")
             version = version or workflow.published
@@ -636,7 +648,13 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             parent = self.filter(pk=run_id, status__in=RunStatus.terminal_values()).first()
             if parent is None:
                 return
-            awaited = parent.step_runs.exclude(awaited_run_id=None).values("awaited_run_id")
+            awaited = (
+                apps.get_model("workflows", "StepRun")
+                ._default_manager.db_manager(parent._state.db)
+                .filter(run_id=parent.pk)
+                .exclude(awaited_run_id=None)
+                .values("awaited_run_id")
+            )
             abandoned = self.filter(parent_step__run=parent, relation=RunRelation.OWNED).exclude(pk__in=awaited)
             for child_id in abandoned.order_by("pk").values_list("pk", flat=True):
                 with self.hold_owned(child_id) as children:
@@ -914,13 +932,14 @@ class StepRunManager[T: StepRun](_StepRunManagerBase[T]):
             if accept_duplicate and actor is None:
                 raise PermissionDenied("A duplicate-effect acknowledgement requires an actor.")
             with system_context(reason="workflows.retry_step"):
-                current = run.step_runs.filter(pk=step_run.pk).lock_if_supported(no_key=True).get()
+                steps = owner.filter(run_id=run.pk)
+                current = steps.filter(pk=step_run.pk).lock_if_supported(no_key=True).get()
                 current.run = run
                 if blocker := current.retry_blocker:
                     raise ValidationError(blocker)
                 if current.requires_duplicate_acknowledgement and not accept_duplicate:
                     raise ValidationError("Retry requires accepting a possible duplicate effect.")
-                run.step_runs.filter(pk=current.pk).to_ready(
+                steps.filter(pk=current.pk).to_ready(
                     acknowledged_by_id=actor_user_id(to_subject_ref(actor)) if accept_duplicate else None,
                     reset_dispatches=True,
                 )

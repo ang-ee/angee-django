@@ -10,6 +10,8 @@ from angee.iam.graphql import records
 from angee.iam.identity import public_subject_ref
 from angee.workflows import schema as workflow_schema
 from angee.workflows import tasks
+from angee.workflows.runner import runner
+from angee.workflows.steps import StepMode
 from angee.workflows.testing.drivers import load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun, Workflow, WorkflowRun
 from tests.conftest import SchemaAddon, create_user, execute_schema, result_data
@@ -85,6 +87,52 @@ def test_workflow_operator_retries_and_reprocesses_another_users_run(operator_ru
     replacement = WorkflowRun.objects.reprocess(run, actor=operator)
     assert replacement.run_as_id == operator.pk != starter.pk
     assert replacement.reprocess_of_id == run.pk
+
+
+def test_non_admin_retry_plans_successor_of_settled_io_sibling(execution, register_step):
+    """Reopening a failed run plans work settled by an IO sibling after failure."""
+    admin, _sent = execution
+    starter = create_user("retry-successor-starter")
+    operator = create_user("retry-successor-operator")
+
+    class FinishingSibling(Echo):
+        key = "retry_successor_sibling"
+        mode = StepMode.IO
+
+        def run(self, ctx):
+            failed = StepRun.system_queryset().get(run=ctx.run, node_key="failed")
+            assert runner.execute(failed.pk)
+            return ctx.done(ctx.input)
+
+    register_step(FinishingSibling)
+    workflow = load_workflow(
+        {
+            "nodes": {
+                "entry": {"step": "echo", "next": {"done": ["failed", "sibling"]}},
+                "failed": {"step": "reject"},
+                "sibling": {"step": FinishingSibling.key, "next": {"done": "successor"}},
+                "successor": {"step": "echo"},
+            },
+            "results": [{"from": "successor"}],
+        },
+        key="retry-successor", actor=admin,
+    )
+    workflow.with_actor(admin).grant_record_access("starter", starter)
+    workflow.with_actor(admin).grant_record_access("operator", operator)
+    run = start_run(workflow, actor=starter)
+    assert runner.execute(StepRun.system_queryset().get(run=run, node_key="entry").pk)
+    assert runner.execute(StepRun.system_queryset().get(run=run, node_key="sibling").pk)
+    run.refresh_from_db()
+    assert run.status == "failed"
+    assert not StepRun.system_queryset().filter(run=run, node_key="successor").exists()
+
+    failed = StepRun.system_queryset().get(run=run, node_key="failed")
+    retried = StepRun.objects.retry_step(failed, actor=operator)
+    assert not operator.is_superuser
+    assert retried.status == "ready"
+    run.refresh_from_db()
+    assert run.status == "running"
+    assert StepRun.system_queryset().get(run=run, node_key="successor").status == "ready"
 
 
 @pytest.mark.parametrize("revoke_before_delivery", [False, True])

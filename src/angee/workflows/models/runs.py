@@ -139,7 +139,12 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
 
     def change_related_records(self) -> tuple[RecordRef, ...]:
         """Invalidate the records this execution has worked on."""
-        return self.records.all().change_related_records()
+        return (
+            apps.get_model("workflows", "StepRecord")
+            ._default_manager.db_manager(self._state.db)
+            .filter(run_id=self.pk)
+            .change_related_records()
+        )
 
     def __str__(self) -> str:
         """Identify an execution by its workflow and start time."""
@@ -195,7 +200,9 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
             return self.output["error"]
         with system_context(reason="workflows.failure_reason"):
             rows = (
-                self.step_runs.filter(status=StepRunStatus.FAILED)
+                apps.get_model("workflows", "StepRun")
+                ._default_manager.db_manager(self._state.db)
+                .filter(run_id=self.pk, status=StepRunStatus.FAILED)
                 .order_by(
                     "rank",
                     "map_index",
@@ -281,7 +288,7 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
         a bad plan cannot poison the transaction recording the durable failure.
         """
         run = self
-        step_runs = self.step_runs
+        step_runs = self.step_runs.system_context(reason="workflows.advance")
         with system_context(reason="workflows.advance"):
             terminal = run.is_terminal
             if terminal and settlement is None:

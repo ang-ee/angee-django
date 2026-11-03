@@ -1514,8 +1514,9 @@ def test_public_user_change_subscription_only_yields_the_actor(
         readable_fields=readable_fields,
     )
 
-    async def subscribe(model: type[Any]):
+    async def subscribe(model: type[Any], *, ready: asyncio.Event):
         assert model is User
+        ready.set()
         yield other_change
         yield actor_change
 
@@ -1533,9 +1534,11 @@ def test_public_user_change_subscription_only_yields_the_actor(
 
     events = asyncio.run(collect())
 
-    assert [str(event.id) for event in events] == [public_id_of(actor)]
-    assert events[0].changed_fields == ["password", "preferences"]
-    assert events[0].changed_values == {"preferences": actor.preferences}
+    assert [event.action for event in events] == ["ready", "update"]
+    changes = [event for event in events if event.action != "ready"]
+    assert [str(event.id) for event in changes] == [public_id_of(actor)]
+    assert changes[0].changed_fields == ["password", "preferences"]
+    assert changes[0].changed_values == {"preferences": actor.preferences}
 
 
 @pytest.mark.django_db
@@ -1949,7 +1952,7 @@ os.environ.pop("DJANGO_SETTINGS_MODULE", None)
 from django.conf import settings
 from angee.integrate.autoconfig import SETTINGS as INTEGRATE_SETTINGS
 settings.configure(
-    INSTALLED_APPS=["django.contrib.contenttypes", "rebac", "native_oidc"],
+    INSTALLED_APPS=["django.contrib.auth", "django.contrib.contenttypes", "rebac", "native_oidc"],
     AUTH_USER_MODEL="native_oidc.User",
     DATABASES={alias: {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
                for alias in ("default", "secondary")},

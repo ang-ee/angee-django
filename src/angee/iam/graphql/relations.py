@@ -37,7 +37,8 @@ class _ActorScopedSubquery(models.Expression):
     """An uncorrelated scope projected only when the containing SQL uses it.
 
     Keep the actor-bound queryset outside Django's expression tree until SQL
-    compilation. Resolve its native aggregate scope before rendering. REBAC's
+    compilation. Resolve its native aggregate scope while rendering, so an
+    unused alias never builds a permission graph. REBAC's
     own scope expression still consults live policy while compiling SQL until
     its rendering path is made query-free.
     """
@@ -55,21 +56,8 @@ class _ActorScopedSubquery(models.Expression):
         self.queryset = queryset
         self.field_name = field_name
 
-    def resolve_expression(
-        self, query: Any = None, allow_joins: bool = True, reuse: Any = None,
-        summarize: bool = False, for_save: bool = False,
-    ) -> _ActorScopedSubquery:
-        resolved = cast(
-            _ActorScopedSubquery,
-            super().resolve_expression(query, allow_joins, reuse, summarize, for_save),
-        )
-        resolved.queryset = self.queryset.using(self.queryset.db).scoped_for_aggregate()
-        return resolved
-
     def as_sql(self, compiler: Any, connection: Any) -> tuple[str, Any]:
-        queryset = self.queryset
-        if queryset.db != connection.alias or not queryset._rebac_scope_applied:
-            queryset = queryset.using(connection.alias).scoped_for_aggregate()
+        queryset = self.queryset.using(connection.alias).scoped_for_aggregate()
         return models.Subquery(queryset.order_by().values(self.field_name)).as_sql(compiler, connection)
 
     def get_group_by_cols(self) -> list[Any]:

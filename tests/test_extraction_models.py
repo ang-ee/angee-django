@@ -26,7 +26,7 @@ from angee.extraction.contracts import (
     Result,
     Source,
 )
-from angee.extraction.managers import StaleExtraction
+from angee.extraction.managers import ExtractionManager, StaleExtraction
 from angee.extraction.profiles import EvidenceLayout, ExtractionProfile
 from angee.iam.models.derived import ProtectedDerivedFrom
 from angee.provenance.evidence import FactAuthority
@@ -170,6 +170,36 @@ def test_retention_preserves_sources_parts_pages_and_typed_missing_values(eviden
     with pytest.raises(KeyError):
         row.selected_line(reference.identity, "unknown")
     assert ExtractionLineage.objects.get(pk=row.lineage_id).head_id == row.pk
+
+
+def test_revision_retains_pages_and_authority_when_base_reader_lacks_source_content(evidence, monkeypatch):
+    """System retention reads child evidence even when the supplied base is pinned to a viewer."""
+    retain, values = evidence
+    admin = create_platform_admin("retention-source-admin")
+    first = retain(
+        actor=admin,
+        pages=(PageCarrier(source_position=0, page_position=0, width=40, height=60, dpi=100),),
+    )
+    viewer = get_user_model().objects.create_user(username="retention-base-viewer")
+    first.with_actor(admin).grant_record_access("viewer", viewer)
+    assert first.with_actor(viewer).has_access("read")
+    assert not values["target"].with_actor(viewer).has_access("read")
+    assert not ExtractionPage.system_queryset().get(extraction=first).with_actor(viewer).has_access("read")
+    assert not ExtractionPart.system_queryset().get(extraction=first).with_actor(viewer).has_access("read")
+
+    original = ExtractionManager._retain_prepared
+
+    def pinned_base(manager, prepared, sources, pages, parts, base, mapping, retirement, **kwargs):
+        return original(
+            manager, prepared, sources, pages, parts, base.with_actor(viewer), mapping, retirement, **kwargs
+        )
+
+    monkeypatch.setattr(ExtractionManager, "_retain_prepared", pinned_base)
+    second = retain(actor=admin, base=first, request_key="reader-pinned-revision")
+    assert second.revision == 2
+    assert list(second.pages.values_list("source_page", flat=True)) == [0]
+    assert second.authority_carrier_positions(first) == {0: 0}
+    assert second.claims == first.claims
 
 
 def test_revision_reuses_one_protected_part_carrier(evidence):
