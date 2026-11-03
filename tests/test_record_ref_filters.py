@@ -6,12 +6,13 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, models
 from django.test.utils import CaptureQueriesContext, isolate_apps
-from rebac import actor_context
+from rebac import actor_context, system_context
 
 from angee.decisions import schema as decision_schema
 from angee.decisions.testing.drivers import seed_decision
 from angee.decisions.testing.models import Decision, DecisionRecord
 from angee.graphql.data.hasura import hasura_model_resource
+from angee.graphql.schema import GraphQLSchemas
 from angee.iam.graphql.capabilities import permission_annotations
 from angee.iam.graphql.relations import (
     RecordReferenceNode,
@@ -20,7 +21,8 @@ from angee.iam.graphql.relations import (
     with_record_reference_access,
 )
 from angee.iam.models.refs import ProtectedRecordRefMixin
-from tests.conftest import Page, Vault, addon_schema, create_user, execute_schema, result_data, vault_for
+from angee.knowledge import schema as knowledge_schema
+from tests.conftest import Page, SchemaAddon, Vault, addon_schema, create_user, execute_schema, result_data, vault_for
 from tests.tables import model_tables
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -57,6 +59,41 @@ def content_type_discoveries(monkeypatch):
 
     monkeypatch.setattr(models.QuerySet, "filter", filter_types)
     return discoveries
+
+
+def test_related_reads_distinguish_system_bypass_from_missing_actor(composed_tables):
+    """Related projections and public-ID filters honor REBAC relation precedence."""
+    owner = create_user("relation-scope-owner")
+    outsider = create_user("relation-scope-outsider")
+    vault = vault_for(owner)
+    with actor_context(owner):
+        page = Page.objects.create_in(vault, title="Related page")
+
+    schemas = GraphQLSchemas([SchemaAddon(knowledge_schema.schemas)])
+    condition = schemas.resource_filter(Page, {"vault": {"_eq": str(vault.sqid)}})
+
+    def related_values(source):
+        expression = actor_scoped_relation_expression(source, "vault__name")
+        return list(
+            source.with_actor(owner)
+            .filter(pk=page.pk)
+            .annotate(related_name=expression)
+            .values_list("related_name", flat=True)
+        )
+
+    def related_ids(source):
+        return list(condition(source).with_actor(owner).filter(pk=page.pk).values_list("pk", flat=True))
+
+    source = Page.objects.all()
+    assert related_values(source) == [None]
+    assert related_ids(source) == []
+
+    with system_context(reason="tests.related_read.bypass"):
+        assert related_values(source) == [vault.name]
+        assert related_ids(source) == [page.pk]
+        pinned = source.with_actor(outsider)
+        assert related_values(pinned) == [None]
+        assert related_ids(pinned) == []
 
 
 @pytest.mark.parametrize("position", [0, 1])

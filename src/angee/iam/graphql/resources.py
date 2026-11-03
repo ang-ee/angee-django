@@ -38,7 +38,13 @@ def _aggregate(rows):
 
 
 def _relation_queryset(model, source):
-    return require_rebac_queryset(model).with_actor(relation_actor(source)).with_action("read")
+    """Carry a related read's actor through REBAC's projection scope."""
+
+    actor = relation_actor(source)
+    rows = require_rebac_queryset(model)
+    if actor is not None:
+        rows = rows.with_actor(actor)
+    return rows.with_action("read").scoped_for_aggregate()
 
 
 def _validate_fields(model, fields, owner, reason):

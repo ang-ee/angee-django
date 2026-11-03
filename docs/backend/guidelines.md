@@ -1470,6 +1470,12 @@ open fresh evaluator scopes for authorization and change-feed reads.
   Server predicates compose the same owner's `held_permissions(record, names)`.
   View-as therefore reports the target's permissions. Clients consume these
   answers; they never reconstruct authority from roles or identity.
+- **Relation read scopes follow REBAC's precedence.** A source-pinned actor
+  scopes first, then an ambient `sudo()` or system scope bypasses, then the
+  ambient actor scopes; without any of these the read fails closed. Relation
+  guards follow this rule, so a source pinned to an outsider stays scoped under
+  system scope, and a queryset's own system pin does not carry through to its
+  related reads.
 
 - **A status field is read/write-asymmetric** — GraphQL serializes it on read as
   the uppercase enum NAME (`ACTIVE`) but the writable `Patch.status` `String`

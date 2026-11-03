@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -26,7 +25,7 @@ from rebac.models import SchemaRelation
 from angee.graphql.checks import check_graphql_schemas
 from angee.graphql.schema import GraphQLSchemas, SchemaParts
 from angee.graphql.sdl import SchemaIntegration
-from tests.composed_host import COMPOSED_TEST_TIMEOUT
+from tests.composed_host import COMPOSED_TEST_TIMEOUT, assert_composed_report
 
 
 def _environment(tmp_path: Path) -> dict[str, str]:
@@ -65,7 +64,7 @@ def test_native_composed_test_runner_does_not_require_provenance(tmp_path: Path)
         timeout=COMPOSED_TEST_TIMEOUT, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}
+    assert_composed_report(report, vendor="sqlite")
 
 
 @pytest.mark.django_db

@@ -1,6 +1,5 @@
 """Compose the comment reply flow against the selected database lane."""
 
-import json
 import os
 import subprocess
 import sys
@@ -8,7 +7,7 @@ from pathlib import Path
 
 from django.db import connection
 
-from tests.composed_host import COMPOSED_TEST_TIMEOUT
+from tests.composed_host import COMPOSED_TEST_TIMEOUT, assert_composed_report
 
 
 def test_composed_workflows_posts(tmp_path: Path) -> None:
@@ -29,4 +28,4 @@ def test_composed_workflows_posts(tmp_path: Path) -> None:
         cwd=root, env=env, capture_output=True, text=True, timeout=COMPOSED_TEST_TIMEOUT, check=False,
     )
     assert result.returncode == 0, f"composed comment replies failed:\n{result.stdout}\n{result.stderr}"
-    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "postgresql" if postgresql else "sqlite"}
+    assert_composed_report(report, vendor="postgresql" if postgresql else "sqlite")

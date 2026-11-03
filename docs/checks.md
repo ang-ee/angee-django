@@ -106,6 +106,7 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 [locking races](../tests/test_agent_sessions_concurrency.py), plus
 [connection discovery races](../tests/test_integrate_discovery_concurrency.py),
 [cross-addon reply and inbound joins](../tests/test_framework_integration.py),
+[task project ordering locks](../tests/test_task_project_ordering.py),
 [delivery contracts](../tests/test_messaging_delivery.py) with PostgreSQL
 [sweep, claim-fence and held-action races](../tests/test_messaging_delivery_concurrency.py), and the
 [comment reply workflow and scheduling races](../tests/test_workflows_posts.py). The selection
@@ -424,7 +425,7 @@ pushes to `main`. The current tiers are:
   Their cost is per-test fixture setup, a `rebac sync` before every test; making
   that setup cheaper is how the limit comes down.
 - **PostgreSQL:** in three shards of its own beside the SQLite ones, split the
-  same way and with a 40-minute limit, the named workflow, decision and agent session
+  same way and with a 40-minute limit, the named workflow, decision, project and agent session
   selection runs with `-n 4 --dist loadfile --nomigrations` and prints its 25
   slowest test durations; each shard writes JUnit output and checks that it did
   not skip tests. Its server runs with `max_locks_per_transaction = 256`, since

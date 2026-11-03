@@ -201,7 +201,7 @@ jobs:
           docker restart ${{ job.services.postgres.id }}
           until docker exec ${{ job.services.postgres.id }} pg_isready -U postgres -d angee; do sleep 1; done
           docker exec ${{ job.services.postgres.id }} psql -U postgres -d angee -tAc "SHOW max_locks_per_transaction"
-      - name: Verify workflow, decision and agent session contracts execute on PostgreSQL
+      - name: Verify workflow, decision, project and agent session contracts execute on PostgreSQL
         # These source tests register bare concrete Django models, so PostgreSQL
         # must create their tables in one sync-app pass.
         # Review concurrency includes simultaneous all seats, a requester-less
@@ -238,7 +238,7 @@ jobs:
             tests/test_decisions_lifecycle.py tests/test_decisions_concurrency.py \
             tests/test_agent_sessions.py tests/test_agent_sessions_concurrency.py \
             tests/test_integrate_discovery_concurrency.py \
-            tests/test_framework_integration.py \
+            tests/test_framework_integration.py tests/test_task_project_ordering.py \
             tests/test_messaging_delivery.py tests/test_messaging_delivery_concurrency.py
           uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'
       - name: Test the full provenance engine on PostgreSQL

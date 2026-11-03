@@ -35,6 +35,16 @@ varied up to 1.8 times between runs; over 600 s times 1.8 is over 1,080 s.
 """
 
 
+def assert_composed_report(report: Path, *, vendor: str) -> None:
+    """Check the native runner outcome, including PostgreSQL's inner skip gate."""
+
+    outcome = json.loads(report.read_text())
+    assert outcome["failures"] == 0
+    assert outcome["vendor"] == vendor
+    if vendor == "postgresql":
+        assert outcome["skipped"] == 0
+
+
 def run_composed_tests(
     tmp_path: Path,
     test_label: str,
@@ -74,7 +84,7 @@ def run_composed_tests(
         check=False,
     )
     assert result.returncode == 0, f"composed tests failed:\n{result.stdout}\n{result.stderr}"
-    assert json.loads(report.read_text())["failures"] == 0
+    assert_composed_report(report, vendor="postgresql" if test_postgresql else "sqlite")
 
 
 def boot(
@@ -474,6 +484,13 @@ def run(args: argparse.Namespace) -> None:
         class ComposedTestRunner(DiscoverRunner):
             """Prepare the generated host's schema before Django checks its models."""
 
+            skipped = 0
+
+            def run_suite(self, suite: TestSuite, **kwargs: Any) -> Any:
+                result = super().run_suite(suite, **kwargs)
+                self.skipped = len(result.skipped)
+                return result
+
             def setup_databases(self, **kwargs: Any) -> Any:
                 databases = super().setup_databases(**kwargs)
                 if "default" in kwargs.get("aliases", ()):
@@ -523,8 +540,11 @@ def run(args: argparse.Namespace) -> None:
         # model graph together, including contenttypes and REBAC's witness table;
         # mixed sync/migrate ordering leaves generated foreign keys dangling.
         settings.MIGRATION_MODULES = {config.label: None for config in apps.get_app_configs()}
-        failures = ComposedTestRunner(verbosity=1, interactive=False).run_tests(args.test_label)
-        args.output.write_text(json.dumps({"failures": failures, "vendor": connection.vendor}) + "\n")
+        runner = ComposedTestRunner(verbosity=1, interactive=False)
+        failures = runner.run_tests(args.test_label)
+        args.output.write_text(
+            json.dumps({"failures": failures, "skipped": runner.skipped, "vendor": connection.vendor}) + "\n"
+        )
         raise SystemExit(bool(failures))
     if args.action == "state":
         from django.apps import apps
