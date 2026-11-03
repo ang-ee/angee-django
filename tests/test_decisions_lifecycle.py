@@ -57,6 +57,30 @@ def test_one_question_lifecycle_and_audit(people):
     assert Decision.system_queryset().count() == 1
 
 
+@pytest.mark.parametrize("empty_values", (None, {}))
+def test_direct_decide_still_checks_act_and_skips_records_when_values_empty(people, monkeypatch, empty_values):
+    requester, reviewer, _other, outsider, _subject = people
+    question = Decision.objects.ask(request_for(people), actor=requester)
+    require_access = Decision.require_access
+    checked = []
+
+    def check(self, permission, actor=None):
+        checked.append(permission)
+        return require_access(self, permission, actor)
+
+    def unexpected_record_read(*_args, **_kwargs):
+        pytest.fail("An empty verdict's record links must not be loaded")
+
+    monkeypatch.setattr(Decision, "require_access", check)
+    monkeypatch.setattr(type(question.records), "with_actor", unexpected_record_read)
+    with pytest.raises(PermissionDenied):
+        question.decide(actor=outsider, chosen=["complete"], values=empty_values)
+    assert checked == ["act"]
+    answered = question.decide(actor=reviewer, chosen=["complete"], values=empty_values)
+    assert answered.verdict == ["complete"]
+    assert checked == ["act", "act"]
+
+
 @pytest.mark.parametrize("assignments", [{}, {"assignees": ()}])
 def test_unassigned_question_accepts_only_an_active_admin_answer(people, assignments):
     requester, reviewer, other, outsider, subject = people

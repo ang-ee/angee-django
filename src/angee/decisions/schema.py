@@ -135,9 +135,9 @@ class DecisionMutation:
     def decide(
         self, info: strawberry.Info, id: PublicID, chosen: list[str], revision: int, values: JSON | None = None,
     ) -> DecideResult:
-        decision = authorized_permission_target(info, Decision, id, "act")
+        decision, act_proof = authorized_permission_target(info, Decision, id, "act", with_proof=True)
         actor = get_current_user(info)
-        answered = decision.decide(actor=actor, revision=revision, chosen=chosen, values=values)
+        answered = decision.decide(actor=actor, revision=revision, chosen=chosen, values=values, act_proof=act_proof)
         return DecideResult(ok=True, message="Decision recorded.", id=answered.sqid, decision_row=answered)
 
 
