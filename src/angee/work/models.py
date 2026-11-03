@@ -26,7 +26,6 @@ from django.utils import timezone
 from django_choices_field import IntegerChoicesField
 from django_compose.models import Composable
 from rebac import PermissionDenied, current_actor, database_context, system_context
-from rebac.actors import is_sudo
 from rebac.managers import TrackedManager
 
 from angee.base.fields.state import StateField
@@ -1514,7 +1513,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         """Check stored work blockers under the shared trash owner's row lock."""
 
         super().validate_trash()
-        if not is_sudo():
+        if not self.effective_actor()[1]:
             self.validate_action("remove")
 
     def remove(self, *, reason: str = "", expected_revision: int | None = None) -> Any:
@@ -1641,7 +1640,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
             raise ValidationError({"canonical": "Choose a task as the canonical record."})
         if self.pk is None or canonical.pk is None:
             raise ValidationError("Both duplicate and canonical tasks must be saved.")
-        if is_sudo():
+        if self.effective_actor()[1]:
             canonical.fold([self], duplicate_triage=True)
         else:
             canonical.with_actor(instance_actor(self)).merge(records=[self.sqid], duplicate_triage=True)
@@ -1713,7 +1712,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         """Read current stage facts and apply the Stage owner's reservation check.
 
         Saves and hand verbs hold the task row lock until their transaction ends.
-        Only direct system writes and explicit rule writes bypass reservations;
+        Only writes under the instance's system authority and explicit rule writes bypass reservations;
         hand verbs always validate, including when called under sudo. Partial
         saves that omit stage keep the persisted stage as the projection target.
         """
@@ -1737,7 +1736,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         changed = previous_id != target_id
         if changed and manual and following is not None and not following.ordinary_entry_available:
             raise ValidationError({"stage": "Hand verbs cannot enter a rule-owned stage."})
-        if manual or not (getattr(self, "_work_internal_status", False) or is_sudo()):
+        if manual or not (getattr(self, "_work_internal_status", False) or self.effective_actor()[1]):
             Stage.validate_transition(
                 previous, following, allow_system_entry=allow_system_entry, adding=self._state.adding
             )

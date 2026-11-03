@@ -29,6 +29,33 @@ def test_direct_stage_write_refuses_rule_owned_entry_and_exit(work_case, field, 
     assert persisted_state(task) == before
 
 
+def test_pinned_actor_under_system_cannot_enter_rule_owned_stage(work_case):
+    actor, queue = work_case
+    task = make_task(queue)
+    with system_context(reason="test.work.pinned_rule_stage"):
+        reserved = Stage.objects.create(queue=queue, name="Rule", category="completed", rule_owned=True)
+        before = persisted_state(task)
+        task.with_actor(actor)
+        task.stage = reserved
+        with pytest.raises(ValidationError, match="rule-owned"):
+            task.save(update_fields=["stage"])
+        assert persisted_state(task) == before
+
+
+def test_pinned_actor_under_system_cannot_trash_rule_owned_stage(work_case):
+    actor, queue = work_case
+    task = make_task(queue)
+    with system_context(reason="test.work.pinned_trash_stage"):
+        reserved = Stage.objects.create(queue=queue, name="Rule", category="completed", rule_owned=True)
+        task.stage = reserved
+        task.save(update_fields=["stage"])
+        before = persisted_state(task)
+        with pytest.raises(ValidationError, match="Only a rule can move a task out of a rule-owned stage"):
+            task.with_actor(actor).trash(reason="Requested removal")
+        assert persisted_state(task) == before
+        assert not Task._base_manager.get(pk=task.pk).is_trashed
+
+
 def test_stale_task_cannot_leave_a_stage_that_a_rule_entered(work_case):
     actor, queue = work_case
     stale = make_task(queue)
