@@ -15,6 +15,7 @@ from rebac import system_context
 
 from angee.base.signals import change_published
 from angee.jobs.enqueue import celery_app
+from angee.workflows import tasks
 from angee.workflows.runner import runner
 from angee.workflows.states import StepRunStatus
 from angee.workflows.steps import Step
@@ -32,6 +33,15 @@ def capture_tasks(*, error: Exception | None = None) -> Iterator[list[tuple[str,
 
     with patch.object(celery_app, "send_task", send):
         yield sent
+
+
+def deliver_decision_wakes(sent: Sequence[tuple[str, dict[str, Any]]], decision_id: int) -> list[int]:
+    """Replay captured decision-wake sends through the real Celery task body."""
+    delivered = []
+    for name, envelope in sent:
+        if name == "workflows.wake_decisions" and envelope["kwargs"].get("decision_id") == decision_id:
+            delivered.append(tasks.wake_decisions.apply(kwargs=envelope["kwargs"], throw=True).get())
+    return delivered
 
 
 @contextmanager
@@ -131,8 +141,8 @@ def run_until(run: Any, *, node: str | None = None, max_steps: int = 100) -> Any
     """Execute ready rows until terminal or before the requested node executes.
 
     A waiting run with no ready row returns to the caller, which controls time
-    and calls the production tick when appropriate. Task sends should be captured
-    at ``current_app.send_task`` by the adopting test suite.
+    and calls the production tick when appropriate. The worker delivers answered-
+    decision wakes; tests replay captured sends with ``deliver_decision_wakes``.
     """
 
     for _ in range(max_steps):

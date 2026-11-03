@@ -2105,7 +2105,8 @@ bridge advisory lock as polling and delivery settlement.
 - **Reviews retain one current decision per step.**
   [`DecisionStep`](../../src/angee/workflows/decision_steps.py) asks through
   `ctx.ask(request, state=...)`; `StepRun.decision` retains the question.
-  The answer wakes the step after commit, with a tick sweep for missed delivery.
+  The answer enqueues `workflows.wake_decisions` after commit on the decision's
+  database; the worker wakes the step, and the tick recovers failed or skipped wakes.
   A continuation may ask again after an answer when its reviewed facts changed;
   the previous question remains a native execution record associated with its run.
   Open questions cannot be replaced. Check the owning record's revision before

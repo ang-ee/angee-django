@@ -95,8 +95,8 @@ EXPECTED_SETTINGS = {
 }
 
 EXPECTED_TEST_DRIVERS = (
-    "RunFactory", "capture_tasks", "decide", "load_workflow", "observe", "publish_draft", "register_steps",
-    "run_until", "start_run",
+    "RunFactory", "capture_tasks", "decide", "deliver_decision_wakes", "load_workflow", "observe",
+    "publish_draft", "register_steps", "run_until", "start_run",
 )
 
 

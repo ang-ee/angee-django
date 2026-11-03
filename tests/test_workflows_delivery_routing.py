@@ -11,11 +11,13 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, database_context, system_context, to_subject_ref
 from rebac.roles import grant as grant_role
 
+from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.provenance.context import changeset
 from angee.workflows import tasks
+from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.signals import isolated_run_cleanup, run_stopping
 from angee.workflows.steps import Step
-from angee.workflows.testing.drivers import register_steps
+from angee.workflows.testing.drivers import capture_tasks, deliver_decision_wakes, register_steps
 from tests.composed_host import run_composed_tests
 from tests.test_timeline_routing import CallbackRoutingContract, write_callback_addon
 from tests.workflow_steps import Echo
@@ -47,6 +49,25 @@ class Finish(Step[None, None, None]):
         return ctx.done(ctx.input)
 
 
+class RoutingReview(DecisionStep[None, None, None]):
+    key = "delivery_review"
+    outcomes = {"approved": "Approved"}
+
+    def ask(self, ctx):
+        return ctx.ask(
+            DecisionRequest(
+                kind="delivery_review",
+                records=(ctx.subject,),
+                assignees=(ctx.actor,),
+                proposal=DecisionProposal(
+                    alternatives=[
+                        {"key": "approve", "label": "Approve", "outcome": "approved"},
+                    ]
+                ),
+            )
+        )
+
+
 class WorkflowWriteRouter:
     def db_for_write(self, model, **hints):
         return "producer" if model._meta.app_label == "workflows" else None
@@ -63,6 +84,46 @@ class DeliveryRoutingContract(CallbackRoutingContract):
         ]
         self.assertTrue(values, (name, identity, send.call_args_list))
         return values[-1]
+
+    def test_answered_decision_wake_uses_the_producer_commit_and_database(self):
+        alias = "producer"
+        Run = apps.get_model("workflows", "WorkflowRun")
+        StepRun = apps.get_model("workflows", "StepRun")
+        Decision = apps.get_model("decisions", "Decision")
+        actor = self.users[alias]
+        draft = {
+            "nodes": {"review": {"step": RoutingReview.key}},
+            "results": [{"from": "review", "when": ["approved"], "as": "approved"}],
+        }
+
+        with capture_tasks() as sent, register_steps(RoutingReview):
+            workflow = self._workflow(alias, "decision-routing", draft, subject_model=self.Record._meta.label)
+            with database_context(alias), actor_context(actor), changeset(fresh=True, using=alias):
+                run = Run.objects.db_manager(alias).start(workflow, actor=actor, subject=self.records[alias])
+            step = self._step(run, node_key="review")
+            execute = next(
+                payload["kwargs"]
+                for name, payload in sent
+                if name == "workflows.execute" and payload["kwargs"]["step_run_id"] == step.pk
+            )
+            self.assertTrue(tasks.execute.apply(kwargs=execute, throw=True).get())
+            step.refresh_from_db(using=alias)
+            self.assertEqual((step.status, step.waiting_kind), ("waiting", "decision"))
+            decision = Decision.system_queryset().using(alias).get(pk=step.decision_id)
+            before = len(sent)
+
+            with database_context("default"), transaction.atomic(using="default"):
+                with changeset(fresh=True, using=alias), transaction.atomic(using=alias):
+                    decision.decide(actor=actor, chosen=["approve"], revision=decision.revision)
+                    self.assertEqual(sent[before:], [])
+                wakes = [payload for name, payload in sent[before:] if name == "workflows.wake_decisions"]
+                self.assertEqual(len(wakes), 1)
+                self.assertEqual(wakes[0]["kwargs"], {"decision_id": decision.pk, "using": alias})
+
+            with CaptureQueriesContext(connections["default"]) as default_queries, database_context("default"):
+                self.assertEqual(deliver_decision_wakes(sent[before:], decision.pk), [1])
+            self.assertEqual(list(default_queries), [])
+            self.assertEqual(StepRun.system_queryset().using(alias).get(pk=step.pk).status, "ready")
 
     def test_actual_cancel_delivery_and_legacy_router_recheck_permissions(self):
         with patch("angee.jobs.enqueue.celery_app.send_task") as send:

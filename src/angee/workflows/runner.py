@@ -294,12 +294,14 @@ class Runner:
                 candidates = candidates.filter(awaited_run_id=run_id)
             return self._each_candidate(candidates, self._wake)
 
-    def wake_decisions(self, decision_id: Any = None) -> int:
-        """Signal and sweep share the run-lock owner and commit-time dispatch."""
-        candidates = self.step_model.objects.answered_decisions()
-        if decision_id is not None:
-            candidates = candidates.filter(decision_id=decision_id)
-        return self._each_candidate(candidates, self._wake)
+    def wake_decisions(self, decision_id: Any = None, *, using: str | None = None) -> int:
+        """Worker delivery and sweep share the run-lock owner on the selected database."""
+        using = router.db_for_write(self.step_model) if using is None else using
+        with database_context(using):
+            candidates = self.step_model.objects.db_manager(using).answered_decisions()
+            if decision_id is not None:
+                candidates = candidates.filter(decision_id=decision_id)
+            return self._each_candidate(candidates, self._wake)
 
     def wake_records(self, *, content_type_id: int | None = None, object_id: Any = None) -> int:
         """Share after-commit delivery and pending-watch tick recovery with every wake kind."""
