@@ -110,15 +110,35 @@ _RECORDS = hasura_model_resource(
 
 
 @strawberry.type
+class DecideResult(ActionResult):
+    """The accepted decision projection alongside the action's refusal contract."""
+
+    decision_row: strawberry.Private[Any] = None
+
+    @strawberry.field
+    def decision(self, info: strawberry.Info) -> DecisionType | None:
+        """Return the answer only through the caller's optimized read scope."""
+        if self.decision_row is None:
+            return None
+        actor = get_current_user(info)
+        rows = (
+            Decision.objects.db_manager(self.decision_row._state.db)
+            .with_actor(actor).filter(pk=self.decision_row.pk)
+        )
+        return optimize(DecisionType.get_queryset(rows, info), info).first()
+
+
+@strawberry.type
 class DecisionMutation:
     @strawberry.mutation
-    @action_guard("Could not decide.", camel_case_keys=False)
+    @action_guard("Could not decide.", camel_case_keys=False, result_type=DecideResult)
     def decide(
         self, info: strawberry.Info, id: PublicID, chosen: list[str], revision: int, values: JSON | None = None,
-    ) -> ActionResult:
+    ) -> DecideResult:
         decision = authorized_permission_target(info, Decision, id, "act")
-        decision = decision.decide(actor=get_current_user(info), revision=revision, chosen=chosen, values=values)
-        return ActionResult(ok=True, message="Decision recorded.", id=decision.sqid)
+        actor = get_current_user(info)
+        answered = decision.decide(actor=actor, revision=revision, chosen=chosen, values=values)
+        return DecideResult(ok=True, message="Decision recorded.", id=answered.sqid, decision_row=answered)
 
 
 @strawberry.type
