@@ -96,6 +96,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      - name: Authorize private git sources for uv
+        env:
+          ADDON_SOURCES_TOKEN: ${{ secrets.ADDON_SOURCES_TOKEN }}
+        run: |
+          if [ -n "$ADDON_SOURCES_TOKEN" ]; then
+            git config --global url."https://x-access-token:${ADDON_SOURCES_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ inputs.python-version }}
@@ -119,6 +126,13 @@ jobs:
         group: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v5
+      - name: Authorize private git sources for uv
+        env:
+          ADDON_SOURCES_TOKEN: ${{ secrets.ADDON_SOURCES_TOKEN }}
+        run: |
+          if [ -n "$ADDON_SOURCES_TOKEN" ]; then
+            git config --global url."https://x-access-token:${ADDON_SOURCES_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ inputs.python-version }}
@@ -153,6 +167,13 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v5
+      - name: Authorize private git sources for uv
+        env:
+          ADDON_SOURCES_TOKEN: ${{ secrets.ADDON_SOURCES_TOKEN }}
+        run: |
+          if [ -n "$ADDON_SOURCES_TOKEN" ]; then
+            git config --global url."https://x-access-token:${ADDON_SOURCES_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ inputs.python-version }}
@@ -285,6 +306,13 @@ jobs:
           ref: ${{ github.repository == 'ang-ee/angee-messaging-bridges' && github.sha || inputs.bridges-ref }}
           path: stack/workspaces/src/angee-messaging-bridges
           token: ${{ secrets.BRIDGES_TOKEN || github.token }}
+      - name: Authorize private git sources for uv
+        env:
+          ADDON_SOURCES_TOKEN: ${{ secrets.ADDON_SOURCES_TOKEN }}
+        run: |
+          if [ -n "$ADDON_SOURCES_TOKEN" ]; then
+            git config --global url."https://x-access-token:${ADDON_SOURCES_TOKEN}@github.com/".insteadOf "https://github.com/"
+          fi
       - name: Check out declared consumer addon sources
         if: ${{ inputs.consumer-path != '' }}
         env:
