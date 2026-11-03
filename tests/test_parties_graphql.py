@@ -612,10 +612,13 @@ def test_statement_reference_reads_have_a_page_query_budget(
             )
     schema = _schema("public")
     query = "query Statements { party_statements { asserted_by evidence { model id } } }"
-    # The same count for 2 and 8 rows is the invariant: the page's evidence and asserting
-    # principals are admitted in batches, and each actor-scoped batch carries rebac's own
-    # platform-admin probe; nothing scales with the statement count.
-    with django_assert_num_queries(15):
+    # The same count for 2 and 8 rows is the invariant: evidence and asserting
+    # principals are admitted in batches. StatementQuerySet.for_reader scopes the
+    # subject (parties/party read) and the handle member (parties/handle read);
+    # recovery REBAC memoizes actor-set decisions per permission root, so the handle
+    # scope repeats the subject scope's two-statement role/group traversal (+2, REBAC
+    # follow-up: share actor-set decisions across roots).
+    with django_assert_num_queries(17):
         rows = _data(execute_schema(schema, query, user=admin))["party_statements"]
     assert len(rows) == row_count
 
@@ -634,13 +637,16 @@ def test_merge_metadata_follows_parent_and_person_projection(composed_tables: No
     admin = _platform_admin("party-merge-fields-admin")
     with system_context(reason="parties.merge_fields.seed"):
         person = Person.objects.create(display_name="Readable person", created_by=admin)
-    data = _data(execute_schema(
-        _schema("public"),
-        """query MergeFields($id: String!) {
+    data = _data(
+        execute_schema(
+            _schema("public"),
+            """query MergeFields($id: String!) {
           parent: parties_by_pk(id: $id) { merge_scalar_fields }
           person: people_by_pk(id: $id) { merge_scalar_fields }
         }""",
-        variables={"id": person.sqid}, user=admin,
-    ))
+            variables={"id": person.sqid},
+            user=admin,
+        )
+    )
     assert data["parent"]["merge_scalar_fields"] == list(person.merge_common_scalar_fields)
     assert data["person"]["merge_scalar_fields"] == list(person.merge_scalar_fields)
