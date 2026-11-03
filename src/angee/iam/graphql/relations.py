@@ -247,6 +247,8 @@ def actor_scoped_relation_expression(
     becomes SQL ``NULL``. Direct relation keys use the same guard, merging every
     unreadable target into one null bucket without losing source rows. Paths
     with no protected target need no override and return ``None``.
+    Relation guards use REBAC's projection scope: ambient system scope bypasses,
+    while a missing actor fails closed.
     ``value`` substitutes a model-owned expression for the path's scalar value;
     sort aliases compose the same guard around each referenced path.
     """
@@ -278,7 +280,10 @@ def actor_scoped_relation_expression(
         if not model_resource_type(related_model):
             traversed.append(part)
             continue
-        related_queryset = require_rebac_queryset(related_model).with_actor(actor).with_action("read")
+        related_queryset = require_rebac_queryset(related_model)
+        if actor is not None:
+            related_queryset = related_queryset.with_actor(actor)
+        related_queryset = related_queryset.with_action("read")
 
         if isinstance(relation, (models.ForeignKey, models.OneToOneField)):
             lookup = "__".join((*traversed, relation.attname))

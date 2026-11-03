@@ -1,6 +1,5 @@
 """Dispatch the example's new cases through the shared composed-host script."""
 
-import json
 import os
 import subprocess
 import sys
@@ -8,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.composed_host import COMPOSED_TEST_TIMEOUT
+from tests.composed_host import COMPOSED_TEST_TIMEOUT, assert_composed_report
 
 
 @pytest.mark.parametrize("case", ("NotesOwnerCampaign", "NotesOwnerDenormalizedCampaign"))
@@ -39,4 +38,4 @@ def test_example_note_owner_gate(tmp_path, case):
         check=False,
     )
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
-    assert json.loads(report.read_text()) == {"failures": 0, "vendor": "sqlite"}
+    assert_composed_report(report, vendor="sqlite")

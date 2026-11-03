@@ -50,6 +50,13 @@ class TaskProjectOrderingTests(WorkCase):
                 context_value=SimpleNamespace(request=request),
             )
 
+    def test_graphql_move_under_system_context_refetches_related_fields(self):
+        row = self.ordered_task("Moving", 0)
+        with system_context(reason="tests.task_order.graphql_move"):
+            result = self.execute_move(row)
+        self.assertIsNone(result.errors, result.errors)
+        self.assertEqual(result.data["update_project_tasks_by_pk"]["id"], row.sqid)
+
     def test_hidden_other_assignee_rank_is_not_a_lane_midpoint_collision(self):
         before = self.ordered_task("Before", 0, assignee=self.owner)
         hidden = self.ordered_task(
@@ -357,4 +364,9 @@ class TaskProjectOrderingTests(WorkCase):
 
 
 def test_task_project_ordering(tmp_path: Path):
-    run_composed_tests(tmp_path, "tests.test_task_project_ordering.TaskProjectOrderingTests", app="angee.work")
+    run_composed_tests(
+        tmp_path,
+        "tests.test_task_project_ordering.TaskProjectOrderingTests",
+        app="angee.work",
+        test_postgresql=connection.vendor == "postgresql",
+    )
