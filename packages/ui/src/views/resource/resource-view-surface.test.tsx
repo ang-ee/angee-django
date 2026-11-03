@@ -19,6 +19,7 @@ import type {
 } from "@angee/metadata";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { OperationDocumentsProvider, type GroupByBatchScope } from "@angee/refine";
+import type { ReactElement, ReactNode } from "react";
 
 import { ToastProvider } from "../../feedback";
 import { ResourceViewProvider, useResourceView } from "./resource-view-context";
@@ -170,6 +171,13 @@ afterEach(() => {
   tableMocks.subgroupPages = [];
 });
 
+function renderSurface(ui: ReactElement): ReturnType<typeof render> {
+  const client = new QueryClient();
+  return render(ui, { wrapper: ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={client}><ToastProvider>{children}</ToastProvider></QueryClientProvider>
+  ) });
+}
+
 describe("useClientResourceViewSurface", () => {
   test("client row-model pagination retains page sizes above the server cap", () => {
     tableMocks.rows = Array.from({ length: 250 }, (_, index) => ({
@@ -177,13 +185,9 @@ describe("useClientResourceViewSurface", () => {
       title: `Note ${index + 1}`,
       status: "active",
     }));
-    render(
-      <ToastProvider>
-        <ResourceViewProvider scope="local" initialState={{ pageSize: 200 }}>
-          <ClientSurfaceProbe />
-        </ResourceViewProvider>
-      </ToastProvider>,
-    );
+    renderSurface(<ResourceViewProvider scope="local" initialState={{ pageSize: 200 }}>
+      <ClientSurfaceProbe />
+    </ResourceViewProvider>);
 
     expect(screen.getByTestId("client-page-size").textContent).toBe(
       "200:200:200",
@@ -208,17 +212,13 @@ function ClientSurfaceProbe(): React.ReactElement {
 
 describe("useResourceViewSurface", () => {
   test("row query filters follow cleared resource-view facets after mount", async () => {
-    render(
-      <ToastProvider>
-        <ResourceViewProvider
-          resource="notes.Note"
-          scope="local"
-          initialState={{ filter: { status: "active" } }}
-        >
-          <SurfaceProbe />
-        </ResourceViewProvider>
-      </ToastProvider>,
-    );
+    renderSurface(<ResourceViewProvider
+      resource="notes.Note"
+      scope="local"
+      initialState={{ filter: { status: "active" } }}
+    >
+      <SurfaceProbe />
+    </ResourceViewProvider>);
 
     expect(tableMocks.activeFilters.at(-1)).toEqual({
       status: { _eq: "active" },
@@ -233,13 +233,9 @@ describe("useResourceViewSurface", () => {
 
   test("server pagination clamps oversized native state before query and navigation", async () => {
     const onListStateChange = vi.fn();
-    render(
-      <ToastProvider>
-        <ResourceViewProvider scope="local" initialState={{ pageSize: 200 }}>
-          <SurfaceProbe onListStateChange={onListStateChange} />
-        </ResourceViewProvider>
-      </ToastProvider>,
-    );
+    renderSurface(<ResourceViewProvider scope="local" initialState={{ pageSize: 200 }}>
+      <SurfaceProbe onListStateChange={onListStateChange} />
+    </ResourceViewProvider>);
 
     await waitFor(() =>
       expect(screen.getByTestId("flat-page-size").textContent).toBe("100:100"),
@@ -282,15 +278,13 @@ describe("useGroupedResourceViewSurface", () => {
   test("fetches the last valid nested page after a live count shrinks", async () => {
     tableMocks.subgroupTotal = 5;
     const probe = () => (
-      <ToastProvider>
-        <OperationDocumentsProvider documents={{ console: { groups: { "notes.Note": {} } } }}>
-          <ResourceViewProvider scope="local" initialState={{ pageSize: 2 }}>
-            <NestedPageProbe />
-          </ResourceViewProvider>
-        </OperationDocumentsProvider>
-      </ToastProvider>
+      <OperationDocumentsProvider documents={{ console: { groups: { "notes.Note": {} } } }}>
+        <ResourceViewProvider scope="local" initialState={{ pageSize: 2 }}>
+          <NestedPageProbe />
+        </ResourceViewProvider>
+      </OperationDocumentsProvider>
     );
-    const { rerender } = render(probe());
+    const { rerender } = renderSurface(probe());
     fireEvent.click(await screen.findByRole("button", { name: "open root" }));
     fireEvent.click(await screen.findByRole("button", { name: "last subgroup page" }));
     await waitFor(() => expect(tableMocks.subgroupPages.at(-1)).toBe(3));
@@ -348,27 +342,19 @@ function renderGroupedProbe(
   filter: Record<string, unknown>,
   onListStateChange: (state: ResourceListSnapshot<Row>) => void,
 ): void {
-  // The grouped batch read shares TanStack Query's cache, so it needs a client.
-  render(
-    <QueryClientProvider client={new QueryClient()}>
-      <ToastProvider>
-        <OperationDocumentsProvider
-          documents={{
-            console: {
-              groups: {
-                "notes.Note":
-                  "query NoteGroups { notes_groups { key { status } aggregate { count } } }",
-              },
-            },
-          }}
-        >
-          <ResourceViewProvider resource="notes.Note" scope="local">
-            <GroupedProbe filter={filter} onListStateChange={onListStateChange} />
-          </ResourceViewProvider>
-        </OperationDocumentsProvider>
-      </ToastProvider>
-    </QueryClientProvider>,
-  );
+  renderSurface(<OperationDocumentsProvider
+    documents={{
+      console: {
+        groups: {
+          "notes.Note": "query NoteGroups { notes_groups { key { status } aggregate { count } } }",
+        },
+      },
+    }}
+  >
+    <ResourceViewProvider resource="notes.Note" scope="local">
+      <GroupedProbe filter={filter} onListStateChange={onListStateChange} />
+    </ResourceViewProvider>
+  </OperationDocumentsProvider>);
 }
 
 function GroupedProbe({
