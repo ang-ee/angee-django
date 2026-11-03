@@ -135,7 +135,7 @@ def _permission_annotation(
 ) -> Any:
     del info
     actor = actor if actor is not None else current_actor()
-    queryset = model._default_manager.all()
+    queryset = require_rebac_queryset(model)
     return permission_expression(queryset if actor is None else queryset.with_actor(actor), name)
 
 
