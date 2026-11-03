@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any
 
 from django.apps import AppConfig, apps
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from rebac import (
@@ -32,9 +31,6 @@ from rebac.schema import Definition, Schema, resolve_schema_path
 from rebac.schema.introspection import relation_dependencies
 from rebac.schema.parser import parse_zed
 
-from angee.base.models.identity import instance_from_public_id
-from angee.iam.roles import platform_admin_role, subject_has_role
-
 if TYPE_CHECKING:
     from rebac import RebacMixin
 
@@ -42,7 +38,7 @@ if TYPE_CHECKING:
 def is_authenticated(user: Any) -> bool:
     """Return whether ``user`` is a real authenticated session user."""
 
-    return not isinstance(user, AnonymousUser) and bool(getattr(user, "is_authenticated", False))
+    return bool(getattr(user, "is_authenticated", False))
 
 
 def is_platform_admin(user: Any) -> bool:
@@ -50,12 +46,18 @@ def is_platform_admin(user: Any) -> bool:
 
     if not is_authenticated(user):
         return False
+    # Schema declarations load before app population; angee.iam.roles imports rebac.models.
+    from angee.iam.roles import platform_admin_role
+
     role = platform_admin_role()
     return role is not None and current_actor_has_role(role)
 
 
 def current_actor_has_role(role: ObjectRef) -> bool:
     """Return whether the ambient REBAC actor is an effective member of ``role``."""
+
+    # Schema declarations load before app population; angee.iam.roles imports rebac.models.
+    from angee.iam.roles import subject_has_role
 
     return subject_has_role(current_actor(), role)
 
@@ -69,9 +71,7 @@ def declared_grants(model: type[models.Model]) -> dict[str, str]:
     declaration: dict[str, str] = {}
     for relation, permission in raw.items():
         if not isinstance(relation, str) or not relation:
-            raise ImproperlyConfigured(
-                f"{model._meta.label}.rebac_grantable relation names must be non-empty strings."
-            )
+            raise ImproperlyConfigured(f"{model._meta.label}.rebac_grantable relation names must be non-empty strings.")
         if not isinstance(permission, str) or not permission:
             raise ImproperlyConfigured(f"{model._meta.label}.rebac_grantable[{relation!r}] must name a permission.")
         declaration[relation] = permission
@@ -124,7 +124,7 @@ def bind_rebac_schema(app_config: AppConfig, path: Path | None) -> None:
 def merged_schema_relpath(package: str) -> Path:
     """Return the permission artifact address relative to compiler output."""
 
-    return Path('permissions') / f'{package}.zed'
+    return Path("permissions") / f"{package}.zed"
 
 
 def effective_rebac_definition(model: type[models.Model]) -> Definition | None:
@@ -153,11 +153,18 @@ def effective_rebac_schema(app_config: AppConfig) -> Schema | None:
         return None
     status = schema_path.stat()
     signature = (
-        schema_path, status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns,
+        schema_path,
+        status.st_dev,
+        status.st_ino,
+        status.st_size,
+        status.st_mtime_ns,
+        status.st_ctime_ns,
     )
     if signature != binding.signature:
         binding = replace(
-            binding, signature=signature, schema=parse_zed(schema_path.read_text(encoding="utf-8")),
+            binding,
+            signature=signature,
+            schema=parse_zed(schema_path.read_text(encoding="utf-8")),
         )
         app_config.__dict__[_SCHEMA_BINDING] = binding
     return binding.schema
@@ -250,6 +257,9 @@ def prove_target[M: models.Model](
 ) -> tuple[M | None, PermissionProof | None]:
     """Resolve one actor-scoped target and issue proof only for a row it admits."""
 
+    # Schema declarations load before app population; the identity module declares a model.
+    from angee.base.models.identity import instance_from_public_id
+
     queryset: models.QuerySet[M] = require_rebac_queryset(model)
     if narrow is not None:
         queryset = narrow(queryset)
@@ -285,7 +295,7 @@ def actor_user_id(actor: Any) -> Any | None:
         return None
     try:
         return pk.to_python(actor.subject_id)
-    except (TypeError, ValueError, ValidationError):
+    except TypeError, ValueError, ValidationError:
         return None
 
 
@@ -341,7 +351,9 @@ class CandidateRelationships:
         """Whether ``subject`` may perform ``action`` on the candidate these relations describe."""
 
         return check_new(
-            subject=to_subject_ref(subject), action=action, resource_type=self.resource_type,
+            subject=to_subject_ref(subject),
+            action=action,
+            resource_type=self.resource_type,
             relationships=self.relationships,
         ).allowed
 

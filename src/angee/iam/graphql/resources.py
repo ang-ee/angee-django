@@ -58,8 +58,10 @@ def _validate_delete(instance):
 
 def _preview_queryset(model, actor):
     actor = actor if actor is not None else current_actor()
-    rows = require_rebac_queryset(model).with_actor(actor).with_action("read")
-    return rows if actor is not None else rows.none()
+    if actor is None:
+        # The base manager is unscoped, so the empty preview resolves no actor.
+        return model._base_manager.none()
+    return require_rebac_queryset(model).with_actor(actor).with_action("read")
 
 
 def _declaration_queryset(model):
