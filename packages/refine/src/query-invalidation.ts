@@ -116,17 +116,16 @@ export type ReconciliationPublish = NonNullable<LiveProvider["publish"]> & {
 
 /**
  * One native reconciliation owner: server/unscoped effects use a bounded queue;
- * explicit command collectors flush independently. Live changes restart only
- * data-less reads; retained reads finish before a coalesced follow-up. Ready
- * recovery lets even data-less reads finish before its follow-up. Local commands
- * still cancel matching reads on arrival.
+ * explicit command collectors flush independently. Live changes and ready
+ * recovery let every in-flight read finish before a coalesced follow-up. Only
+ * local commands cancel matching reads on arrival.
  * Query owns retries, errors and row state.
  */
 export function createAuthoredLiveInvalidation(
   queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries" | "getQueryCache">,
   nativeReadsChange: (query: Query, change: AuthoredLiveChange) => boolean = () => false,
 ): AuthoredLiveInvalidation {
-  type Request = QueryReconciliation & { fallbackAccepted?: ReadonlySet<string>; live: boolean; settle?: boolean };
+  type Request = QueryReconciliation & { fallbackAccepted?: ReadonlySet<string>; live: boolean };
   type Round = { promise: Promise<void>; resolve: () => void; reject: (error: unknown) => void };
   type Deferred = { changes: AuthoredLiveChange[]; full: boolean; dirty: boolean; active: boolean;
     next: Round; current?: Round };
@@ -167,8 +166,8 @@ export function createAuthoredLiveInvalidation(
         retireDeferred(query, entry);
       }
     }
-    void queryClient.cancelQueries({ predicate: (query) => (!request.live || !request.settle && query.state.data === undefined)
-      && query.state.fetchStatus !== "idle" && predicate(query) });
+    if (!request.live) void queryClient.cancelQueries({ predicate: (query) =>
+      query.state.fetchStatus !== "idle" && predicate(query) });
     void queryClient.invalidateQueries({ predicate, type: "all", refetchType: "none" });
   }
 
@@ -238,8 +237,7 @@ export function createAuthoredLiveInvalidation(
       return [query, effects.some((group) => group.length === 0) ? [] : uniqueChanges(effects.flat())] as const;
     }));
     const held = queries.filter((query) => !batch.some((request) => !request.live && matches(query, request))
-      && (deferred.has(query) || query.state.fetchStatus !== "idle" && (query.state.data !== undefined
-        || batch.some((request) => request.settle && matches(query, request)))));
+      && (deferred.has(query) || query.state.fetchStatus !== "idle"));
     const heldSet = new Set(held);
     const immediate = queries.filter((query) => !heldSet.has(query));
     immediate.forEach((query) => { if (query.meta) query.meta.angeeChanges = changesByQuery.get(query); });
@@ -278,8 +276,8 @@ export function createAuthoredLiveInvalidation(
     }
   }
 
-  function reconcile(request: QueryReconciliation, live = false, settle = false): Promise<void> {
-    const queued = { ...request, live, settle };
+  function reconcile(request: QueryReconciliation, live = false): Promise<void> {
+    const queued = { ...request, live };
     prepare(queued);
     requests.push(queued);
     const now = performance.now();
@@ -314,7 +312,7 @@ export function createAuthoredLiveInvalidation(
         (query.state.data !== undefined || query.state.fetchStatus !== "idle")
         && (authoredQueryReadsLiveChange(query.meta, change) || nativeReadsChange(query, change))
       }));
-      if (stale.size) void reconcile({ changes: [], predicate: (query) => stale.has(query) }, true, true)
+      if (stale.size) void reconcile({ changes: [], predicate: (query) => stale.has(query) }, true)
         .catch(() => undefined);
     },
     clear() {
@@ -565,7 +563,7 @@ async function invalidateAuthoredQueriesMatching(
   predicate: (query: Query) => boolean,
 ): Promise<void> {
   // Native invalidation joins an initial in-flight request instead of restarting
-  // it. Cancel that snapshot first so an event cannot be lost when it settles.
+  // it. Cancel that snapshot so a local command's effect is not lost on settle.
   await queryClient.cancelQueries({
     predicate: (query) => predicate(query)
       && query.state.data === undefined

@@ -50,6 +50,37 @@ test("actual complete acceptance settles before held derived reads without rerea
   } finally { liveProvider.setEnabled(false); stopDetail(); stopDerived(); }
 });
 
+test("local command still cancels a data-less read on arrival", async () => {
+  const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  let finish!: (value: string) => void;
+  const first = new Promise<string>((resolve) => { finish = resolve; });
+  let signal!: AbortSignal;
+  let reads = 0;
+  const observer = new QueryObserver(client, {
+    queryKey: ["command-detail"], meta: { angeeModels: ["notes.Note"] },
+    queryFn: ({ signal: current }: { signal: AbortSignal }) => {
+      if (++reads === 1) { signal = current; return first; }
+      return Promise.resolve("current");
+    },
+  });
+  const stop = observer.subscribe(() => undefined);
+  const scheduler = createAuthoredLiveInvalidation(client);
+  try {
+    await scheduler.batch(async (scope) => {
+      await scope!.reconcile({ changes: [{ model: "notes.Note", id: "n1" }] });
+      expect(signal.aborted).toBe(true);
+    });
+    expect(reads).toBe(2);
+    expect(observer.getCurrentResult().data).toBe("current");
+    finish("obsolete");
+    await first;
+    expect(observer.getCurrentResult().data).toBe("current");
+  } finally {
+    finish("cleanup");
+    scheduler.clear(); stop(); client.clear();
+  }
+});
+
 
 test.each(["before", "during"])("actor suspension %s exact cancellation rejects the captured old acceptance", async (when) => {
   const client = createClient();

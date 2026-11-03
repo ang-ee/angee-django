@@ -1069,8 +1069,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   schema. Local mutations and subscription events enter the provider's shared
   [reconciler](../../packages/refine/src/query-invalidation.ts). Local commands
   cancel matching reads on arrival and can adopt a sufficient response at its
-  exact native Query key. Live changes cancel only data-less fetches; reads
-  holding data settle, then refetch once for the coalesced changes. Affected
+  exact native Query key. Live changes never cancel an in-flight read, with or
+  without data; it settles, then refetches once for coalesced changes. Affected
   derived reads run in a bounded burst. Native Refine resource keys and authored
   query keys stay distinct; `createApp` uses native manual live mode so Refine
   does not schedule a second refresh per push.
