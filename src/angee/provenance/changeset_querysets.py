@@ -9,11 +9,11 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.db.models import Q
-from django_provenance.querysets import ChangesetQuerySet as NativeChangesetQuerySet
 from simple_history.utils import get_history_manager_for_model
 
 from angee.iam.querysets import ProtectedQuerySet
 from angee.provenance.contrib.angee.history import HistoryMixin
+from angee.provenance.engine.querysets import ChangesetQuerySet as NativeChangesetQuerySet
 from angee.provenance.querysets import model_history
 from angee.provenance.statements import StatementsMixin
 

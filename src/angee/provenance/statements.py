@@ -20,12 +20,6 @@ from django.db import models, router, transaction
 from django.db.models import Exists, F, OuterRef, Q
 from django.db.models.query import ModelIterable
 from django.utils import timezone
-from django_provenance.base import ChangesetAttribution
-from django_provenance.statements import Aspect as NativeAspect
-from django_provenance.statements import StatementEditMixin, StatementWriteMixin
-from django_provenance.statements import StatementLinkMixin as NativeStatementLinkMixin
-from django_provenance.statements import StatementRecords as NativeStatementRecords
-from django_provenance.statements import StatementSourceMixin as NativeStatementSourceMixin
 from rebac import (
     PermissionDenied,
     RebacMixin,
@@ -58,6 +52,12 @@ from angee.provenance.contrib.angee.history import HistoryDocumentMixin, History
 from angee.provenance.contrib.angee.managers import AngeeHistoryUnscopedManager
 from angee.provenance.contrib.angee.policy import angee_policy
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet, AngeeHistoryUnscopedQuerySet
+from angee.provenance.engine.base import ChangesetAttribution
+from angee.provenance.engine.statements import Aspect as NativeAspect
+from angee.provenance.engine.statements import StatementEditMixin, StatementWriteMixin
+from angee.provenance.engine.statements import StatementLinkMixin as NativeStatementLinkMixin
+from angee.provenance.engine.statements import StatementRecords as NativeStatementRecords
+from angee.provenance.engine.statements import StatementSourceMixin as NativeStatementSourceMixin
 from angee.provenance.evidence import (
     EvidenceReference,
     FactAuthority,

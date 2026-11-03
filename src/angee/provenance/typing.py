@@ -150,7 +150,7 @@ class ProvenancePlugin(Plugin):
         # Like django-stubs' get_user_model, the helper's module depends on the
         # configured model module, including generated concrete declarations.
         if (
-            file.fullname not in {"angee.provenance.context", "django_provenance.context"}
+            file.fullname not in {"angee.provenance.context", "angee.provenance.engine.context"}
             or (model := self.configured_model()) is None
         ):
             return []
@@ -161,9 +161,9 @@ class ProvenancePlugin(Plugin):
             "angee.provenance.context.changeset_model",
             "angee.provenance.context.current_changeset",
             "angee.provenance.context.require_changeset",
-            "django_provenance.context.changeset_model",
-            "django_provenance.context.current_changeset",
-            "django_provenance.context.require_changeset",
+            "angee.provenance.engine.context.changeset_model",
+            "angee.provenance.engine.context.current_changeset",
+            "angee.provenance.engine.context.require_changeset",
         }:
             return partial(self.configured_changeset, fullname=fullname)
         return None

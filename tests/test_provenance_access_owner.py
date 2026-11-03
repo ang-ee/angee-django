@@ -6,7 +6,6 @@ import pytest
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
-from django_provenance.policy import Policy
 from rebac import PermissionDenied, actor_context, system_context, to_subject_ref
 
 from angee.iam.models.base import ProtectedModel
@@ -14,6 +13,7 @@ from angee.iam.permissions import require_record_access
 from angee.projects.testing.models import Project
 from angee.provenance.context import changeset, changeset_model_label, current_changeset
 from angee.provenance.contrib.angee.policy import angee_policy
+from angee.provenance.engine.policy import Policy
 from tests.conftest import create_user
 
 

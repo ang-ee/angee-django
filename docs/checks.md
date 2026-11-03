@@ -147,6 +147,24 @@ order so pytest-django cannot shadow the shared `django_db_setup` override.
 Hosts installing provenance also register
 [`angee.provenance.testing.fixtures`](../src/angee/provenance/testing/fixtures.py)
 for test attribution; the IAM permission plugin does not install that boundary.
+A separate plain-Django host runs the relocated engine's original assertions
+without the framework source-model conftest. It uses the same checkout and lock,
+but its own app registry and fixture migration history:
+
+```sh
+env -u DATABASE_URL uv run --locked python -m pytest -q -p no:cacheprovider --confcutdir=tests/provenance_engine --ds=tests.provenance_engine.settings tests/provenance_engine
+env -u DATABASE_URL uv run --locked python -m django check --settings=tests.provenance_engine.settings
+env -u DATABASE_URL uv run --locked python -m django makemigrations --check --dry-run --settings=tests.provenance_engine.settings
+PYTHONPATH=src:. uv run --locked python -m mypy --config-file tests/provenance_engine/mypy.toml -p angee.provenance.engine
+```
+
+The default suite excludes this subtree because Django settings are fixed per
+pytest process. The isolated host routes `provenance` migrations to its own
+`storage/migrations` fixture; the addon ships no migration history. CI runs the
+full isolated suite on SQLite and its three PostgreSQL-only cases in the
+PostgreSQL shard, with a zero-skip gate there. The host check, migration-drift
+check and strict engine type check also run in CI.
+
 A test that reaches a statement source needs the install-tier `provenance.Rule`
 principals parties declares: list
 [`angee.parties.testing.fixtures`](../src/angee/parties/testing/fixtures.py) in

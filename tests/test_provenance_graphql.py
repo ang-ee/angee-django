@@ -16,7 +16,6 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.db import connection, models
 from django.test.utils import CaptureQueriesContext, isolate_apps
-from django_provenance.exceptions import ReplayRefused
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 from rebac.backends import reset_backend
 from rebac.schema import parse_zed
@@ -32,6 +31,7 @@ from angee.messaging.testing.models import Channel
 from angee.parties import schema as parties_schema
 from angee.provenance import schema as provenance_schema
 from angee.provenance.context import changeset, current_changeset
+from angee.provenance.engine.exceptions import ReplayRefused
 from angee.provenance.evidence import EvidenceReference
 from angee.provenance.statements import (
     SourceKind,

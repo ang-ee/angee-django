@@ -11,9 +11,6 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.core.exceptions import ValidationError
 from django.db import models, router, transaction
-from django_provenance.base import AbstractChangeset
-from django_provenance.context import actor_context as provenance_actor_context
-from django_provenance.replay import ordered_states
 from rebac import (
     RebacMixin,
     RelationshipTuple,
@@ -45,6 +42,9 @@ from angee.provenance.context import is_current_changeset
 from angee.provenance.contrib.angee.exceptions import ChangesetRequired
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.policy import angee_policy
+from angee.provenance.engine.base import AbstractChangeset
+from angee.provenance.engine.context import actor_context as provenance_actor_context
+from angee.provenance.engine.replay import ordered_states
 from angee.provenance.managers import ChangesetManager
 from angee.provenance.querysets import model_history
 

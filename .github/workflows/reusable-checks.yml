@@ -107,6 +107,19 @@ jobs:
         with:
           python-version: ${{ inputs.python-version }}
       - run: uv run --locked python -m ruff check . --no-cache
+      - name: Type-check the isolated provenance engine
+        env:
+          PYTHONPATH: src:.
+        run: uv run --locked python -m mypy --config-file tests/provenance_engine/mypy.toml -p angee.provenance.engine
+      - name: Check the isolated provenance engine host
+        run: |
+          env -u DATABASE_URL uv run --locked python -m django check --settings=tests.provenance_engine.settings
+          env -u DATABASE_URL uv run --locked python -m django makemigrations --check --dry-run --settings=tests.provenance_engine.settings
+      - name: Test the provenance engine on SQLite
+        run: >-
+          env -u DATABASE_URL uv run --locked python -m pytest -q -p no:cacheprovider
+          --confcutdir=tests/provenance_engine --ds=tests.provenance_engine.settings
+          tests/provenance_engine
       - run: uv run --locked python -m mypy src
         env:
           PYTHONPATH: src
@@ -225,6 +238,18 @@ jobs:
             tests/test_framework_integration.py \
             tests/test_messaging_delivery.py tests/test_messaging_delivery_concurrency.py
           uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'
+      - name: Test provenance engine concurrency on PostgreSQL
+        if: ${{ !cancelled() && matrix.group == 1 }}
+        env:
+          PROVENANCE_TEST_DATABASE_HOST: 127.0.0.1
+          PROVENANCE_TEST_DATABASE_NAME: angee
+          PROVENANCE_TEST_DATABASE_USER: postgres
+          PROVENANCE_TEST_DATABASE_PASSWORD: postgres
+        run: |
+          env -u DATABASE_URL uv run --locked python -m pytest -q -p no:cacheprovider \
+            --confcutdir=tests/provenance_engine --ds=tests.provenance_engine.settings \
+            -m postgresql --junitxml=provenance-engine-postgres.xml tests/provenance_engine
+          uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("provenance-engine-postgres.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert len(cases) == 3 and skipped == 0, f"expected 3 executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print("Provenance engine PostgreSQL tests=3, skipped=0")'
 
   # One verdict under the check name pull requests and callers already know:
   # a failed, cancelled or timed-out shard fails it.

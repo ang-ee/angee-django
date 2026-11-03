@@ -55,7 +55,19 @@ def identity_policy(composed_tables):
         reset_backend()
 
 
-@pytest.mark.usefixtures("identity_policy")
+@pytest.fixture
+def scopedemo_registration():
+    """Remove this test's runtime models after its temporary tables are dropped."""
+
+    registered = apps.all_models["scopedemo"]
+    existing = set(registered)
+    yield
+    for name in set(registered) - existing:
+        del registered[name]
+    apps.clear_cache()
+
+
+@pytest.mark.usefixtures("identity_policy", "scopedemo_registration")
 def test_distinct_parent_identity_scopes_statements_and_inverse_without_colliding_children():
     class IdentityParent(StatementsMixin, HistoryMixin, ProtectedDataModel):
         title = models.CharField(max_length=80)

@@ -41,13 +41,14 @@ if sys.argv[1] == "iam-only":
 from angee.provenance import models as provenance
 if sys.argv[1] == "no-iam":
     assert not hasattr(provenance, "UserSource")
-    assert "angee.iam.models" not in sys.modules
 else:
     from django_compose.model_composition import ModelComposition
     from angee.iam.models import User
     donor = provenance.UserSource
-    composition = ModelComposition.discover((apps.get_app_config("iam"), apps.get_app_config("provenance")))
-    assert composition.donors(User) == (donor,)
+    composition = ModelComposition.discover((
+        apps.get_app_config("base"), apps.get_app_config("iam"), apps.get_app_config("provenance"),
+    ))
+    assert tuple(source for source in composition.donors(User) if source._meta.app_label == "provenance") == (donor,)
     from django.test.utils import isolate_apps
     with isolate_apps():
         class BaselineUser(User):

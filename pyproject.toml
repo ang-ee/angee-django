@@ -207,6 +207,7 @@ python_files = ["test_*.py"]
 testpaths = ["tests", "src/angee/resources/tests"]
 pythonpath = ["src", "examples/src", "."]
 addopts = "-ra --strict-markers --import-mode=importlib -p no:randomly"
+markers = ["postgresql: requires PostgreSQL locking and concurrency behavior"]
 
 [tool.ruff]
 line-length = 120
