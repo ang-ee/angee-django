@@ -21,6 +21,7 @@ from angee.base.models.identity import public_id_of
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.graphql.capabilities import held_permissions
 from angee.iam.graphql.node import ProtectedNode
 from angee.integrate import scheduler, tasks
 from angee.integrate.connect import complete_account_connect, complete_external_account_link
@@ -39,7 +40,15 @@ from angee.integrate.session_runner import run_bridge_session_job
 from angee.integrate.signals import discovery_finished
 from angee.integrate.streams import BridgeSyncError
 from angee.jobs.celery import app as celery_app
-from tests.conftest import Credential, create_platform_admin, execute_schema, make_addon, make_integration, result_data
+from tests.conftest import (
+    Credential,
+    Integration,
+    create_platform_admin,
+    execute_schema,
+    make_addon,
+    make_integration,
+    result_data,
+)
 from tests.integrate_fixtures import CONNECTION_CLASSES, ConnectionBridge, LiveConnectionAdapter
 
 pytestmark = pytest.mark.usefixtures("composed_tables")
@@ -518,6 +527,23 @@ def test_credential_only_live_attachment_keeps_the_session_desire(sent_tasks, mo
         assert row.discovery_ready
         assert row.subscription_state["desired"] == row.LiveState.LIVE
         assert sent_tasks == []
+
+
+def test_resume_permission_uses_pinned_actor_inside_system_scope(bridge):
+    admin = create_platform_admin("resume-permission-scope")
+    with system_context(reason="test resume permission scope"):
+        assert held_permissions(bridge, ("resume",), model=Integration) == frozenset()
+        with actor_context(admin):
+            assert held_permissions(bridge, ("resume",), model=Integration) == {"resume"}
+            pinned = Integration.objects.with_actor(admin).get(pk=bridge.pk)
+        with actor_context(bridge.owner):
+            assert held_permissions(bridge, ("resume",), model=Integration) == frozenset()
+            assert held_permissions(pinned, ("resume",), model=Integration) == {"resume"}
+        owner_pinned = Integration.objects.with_actor(bridge.owner).get(pk=bridge.pk)
+        with actor_context(admin):
+            assert held_permissions(owner_pinned, ("resume",), model=Integration) == frozenset()
+    with actor_context(admin):
+        assert held_permissions(owner_pinned, ("resume",), model=Integration) == frozenset()
 
 
 def test_non_admin_owner_can_retry_discovery_but_cannot_resume(bridge):

@@ -1465,11 +1465,15 @@ open fresh evaluator scopes for authorization and change-feed reads.
   idempotency argument.
 - **Permission answers reuse the authorization owner.** Declare a type's
   `permissions` through [`permissions_field(names)`](../../src/angee/iam/graphql/capabilities.py);
-  it reports only the declared Zed permissions held by the current actor,
+  it reports only declared Zed permissions held by the record's actor,
   validates names at schema build and batches list evaluation in SQL.
   Server predicates compose the same owner's `held_permissions(record, names)`.
-  View-as therefore reports the target's permissions. Clients consume these
-  answers; they never reconstruct authority from roles or identity.
+  It resolves that actor through `instance_actor`: the row's pinned actor, else
+  the innermost ambient actor. Instance or ambient elevation never grants a
+  capability and never hides that actor; without an actor, none is held.
+  Request-loaded GraphQL rows are pinned to the requester, so view-as reports
+  the target's permissions. Clients consume these answers; they never
+  reconstruct authority from roles or identity.
 
 - **A status field is read/write-asymmetric** — GraphQL serializes it on read as
   the uppercase enum NAME (`ACTIVE`) but the writable `Patch.status` `String`
