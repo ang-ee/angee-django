@@ -70,7 +70,9 @@ class DecisionKind(TimelineKind):
         return result
 
     def records(self, row: Any) -> Iterable[RecordIdentity]:
-        links = row.records.model.system_queryset().filter(decision_id=row.pk).select_related("content_type")
+        links = row.records.model.system_queryset().using(row._state.db).filter(
+            decision_id=row.pk,
+        ).select_related("content_type")
         for link in links:
             if (model := link.content_type.model_class()) is not None:
                 yield model, link.object_id
