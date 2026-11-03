@@ -285,6 +285,29 @@ def test_graphql_uses_channels_redis_when_redis_url_is_set(
     }
 
 
+@pytest.mark.parametrize(
+    ("broker_url", "expected_backend"),
+    [
+        ("redis://127.0.0.1:6379/1", "channels_redis.core.RedisChannelLayer"),
+        ("rediss://redis.example.test/1", "channels_redis.core.RedisChannelLayer"),
+        ("memory://", "channels.layers.InMemoryChannelLayer"),
+    ],
+)
+def test_graphql_uses_redis_broker_when_no_channel_url_is_set(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, broker_url: str, expected_backend: str,
+) -> None:
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    monkeypatch.delenv("CHANNEL_REDIS_URL", raising=False)
+    monkeypatch.setenv("CELERY_BROKER_URL", broker_url)
+
+    settings = _compose(tmp_path)
+
+    layer = settings["CHANNEL_LAYERS"]["default"]
+    assert layer["BACKEND"] == expected_backend
+    if expected_backend == "channels_redis.core.RedisChannelLayer":
+        assert layer["CONFIG"]["hosts"] == [broker_url]
+
+
 def test_jobs_use_celery_broker_url_from_environment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

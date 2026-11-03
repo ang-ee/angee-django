@@ -289,6 +289,11 @@ scope.
 For containerized stacks, use the declared service/job environment; a host shell
 without the runtime dependencies cannot run these commands directly.
 
+The optional Redis channel-layer cross-process test uses
+`ANGEE_TEST_CHANNEL_REDIS_URL` to select a disposable Redis database. It skips
+when the variable is unset or Redis is unreachable. Use a database separate
+from the running stack's channel layer and Celery broker.
+
 For cross-process signed-cursor diagnostics, match the running operator's signing
 configuration and the original effective actor/query scope before interpreting a
 signature failure. A plain management shell can read the `settings.yaml`
