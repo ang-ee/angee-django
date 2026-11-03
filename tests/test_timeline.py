@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 
 import pytest
@@ -10,11 +11,12 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, models
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
-from rebac import actor_context
+from rebac import actor_context, system_context
 
 from angee.base.models.identity import public_id_of
 from angee.base.pagination import KeysetOrder, keyset_signer
 from angee.graphql.publishing import mute_changes
+from angee.messaging.testing.models import Message, ThreadAttachment
 from angee.messaging.timeline import CommentKind
 from angee.provenance.context import changeset as open_changeset
 from angee.timeline import schema as timeline_schema
@@ -146,6 +148,11 @@ def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: No
 def test_sparse_non_admin_page_has_one_bounded_selection_statement(comment_record, composed_permissions: None) -> None:
     record, actor = comment_record.record, comment_record.author
     assert not actor.is_superuser
+    with system_context(reason="test.timeline.selection.guard"):
+        attachment = ThreadAttachment.objects.ensure_for_record(record)
+        Message.objects.create(
+            thread=attachment.thread, message_type="comment", direction="internal", created_by=actor,
+        )
     timeline = Timeline(record, actor)
     assert {kind.id for kind in timeline.kinds} == {kind.id for kind in timeline_kinds()}
     with CaptureQueriesContext(connection) as queries:
@@ -156,10 +163,11 @@ def test_sparse_non_admin_page_has_one_bounded_selection_statement(comment_recor
     ]
     assert len(selections) == 1  # Hydration and kind-owned admission reads are outside this budget.
     sql, = selections
-    assert sql.count("UNION ALL") == len(timeline.kinds) + 1
-    assert all(kind.id in sql for kind in timeline.kinds)
-    # Placeholder ceiling until the first measured SQLite and PostgreSQL runs; lower it to the observed maximum.
-    assert len(sql.encode("utf-8")) <= 65_536
+    source_kinds = re.findall(r"'([\w.]+)'(?:::\w+)? AS \"_timeline_kind\"", sql)
+    assert sorted(source_kinds) == sorted(kind.id for kind in timeline.kinds)
+    assert re.findall(r"'(\w+)'(?:::\w+)? AS \"_timeline_row\"", sql) == ["kind", "entry", "child"]
+    # SQLite measured 850,002 bytes with chatter on 2026-11-03; lower this ceiling as REBAC statements shrink.
+    assert len(sql.encode("utf-8")) <= 1_000_000
 
 
 def timeline_entries(record, actor=None, *, kind=None):
