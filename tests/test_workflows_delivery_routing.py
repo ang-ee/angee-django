@@ -11,6 +11,8 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, database_context, system_context, to_subject_ref
 from rebac.roles import grant as grant_role
 
+from angee.decisions.contracts import DecisionProposal, DecisionRequest
+from angee.decisions.timeline import DecisionKind
 from angee.provenance.context import changeset
 from angee.workflows import tasks
 from angee.workflows.signals import isolated_run_cleanup, run_stopping
@@ -222,6 +224,32 @@ class DeliveryRoutingContract(CallbackRoutingContract):
             return Workflow.objects.db_manager(alias).install_definition(
                 key=key, name=key, draft=draft, actor=self.users[alias], subject_model=subject_model
             )
+
+    def test_decision_timeline_records_read_only_the_producer(self):
+        Decision = apps.get_model("decisions", "Decision")
+        actor = self.users["producer"]
+        subject = self.records["producer"]
+        with (
+            database_context("producer"),
+            system_context(reason="tests.delivery.decision"),
+            changeset(fresh=True, using="producer"),
+        ):
+            grant_role(actor=actor, role="angee/role:admin")
+            decision = Decision.objects.db_manager("producer").ask(
+                DecisionRequest(
+                    kind="delivery_routing",
+                    records=(subject,),
+                    assignees=(actor,),
+                    proposal=DecisionProposal.model_validate({
+                        "alternatives": [{"key": "accept", "label": "Accept", "outcome": "accepted"}],
+                    }),
+                ),
+                actor=actor,
+            )
+        with CaptureQueriesContext(connections["default"]) as default_queries, database_context("default"):
+            records = tuple(DecisionKind().records(decision))
+        self.assertEqual(records, ((self.Record, subject.pk),))
+        self.assertEqual(list(default_queries), [])
 
     def test_cancel_wake_dispatch_execute_continuation_reaches_terminal_on_producer(self):
         Run = apps.get_model("workflows", "WorkflowRun")
