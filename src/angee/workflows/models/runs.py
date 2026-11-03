@@ -290,7 +290,9 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
         a bad plan cannot poison the transaction recording the durable failure.
         """
         run = self
-        step_runs = self.step_runs.system_context(reason="workflows.advance")
+        # The run may be actor-pinned. The enclosing system scope owns this
+        # model-manager read and its audit, including retries by non-admins.
+        step_runs = apps.get_model("workflows", "StepRun").objects.using(self._state.db).filter(run_id=self.pk)
         with system_context(reason="workflows.advance"):
             terminal = run.is_terminal
             if terminal and settlement is None:
@@ -318,8 +320,6 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
                 # changes, but the terminal run and graph plan stay untouched.
                 if not terminal:
                     with transaction.atomic(using=self._state.db):
-                        # The reverse manager needs its connecting FK to populate
-                        # Django's known-related-object cache without one query per row.
                         rows = list(
                             step_runs.only(
                                 "run_id",
