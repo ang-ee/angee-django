@@ -81,8 +81,11 @@ test("an unrelated row event does not starve an exact record's pending first req
     expect(firstSignal.aborted).toBe(false);
     live.push({ model: "workflows.Decision", id: "wdc_current" });
     await vi.advanceTimersByTimeAsync(300);
+    expect(requests).toBe(1);
+    expect(firstSignal.aborted).toBe(false);
+    first.resolve(1);
+    await vi.advanceTimersByTimeAsync(0);
     expect(requests).toBe(2);
-    expect(firstSignal.aborted).toBe(true);
     await vi.waitFor(() => expect(observer.getCurrentResult().data).toBe(2));
   } finally {
     first.resolve(1);
@@ -127,8 +130,11 @@ test("a related child refreshes an exact parent without unrelated-child starvati
       relatedRecords: [{ model: "workflows.WorkflowRun", id: "wfr_current" }],
     });
     await vi.advanceTimersByTimeAsync(300);
+    expect(requests).toBe(1);
+    expect(firstSignal.aborted).toBe(false);
+    first.resolve(1);
+    await vi.advanceTimersByTimeAsync(0);
     expect(requests).toBe(2);
-    expect(firstSignal.aborted).toBe(true);
     await vi.waitFor(() => expect(observer.getCurrentResult().data).toBe(2));
   } finally {
     first.resolve(1);
@@ -380,7 +386,7 @@ test("slow retained reads commit within one latency and quiet gap while later ch
   }
 });
 
-test("a live change still cancels a matching data-less fetch before the quiet gap", async () => {
+test("a live change lets a matching data-less fetch settle before one follow-up", async () => {
   vi.useFakeTimers();
   const cache = client();
   const live = createAuthoredLiveInvalidation(cache);
@@ -398,16 +404,54 @@ test("a live change still cancels a matching data-less fetch before the quiet ga
   const unsubscribe = observer.subscribe(() => undefined);
   try {
     live.push({ model: "notes.Note", id: "note_1" });
-    expect(signal.aborted).toBe(true);
+    expect(signal.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(300);
+    expect(reads).toBe(1);
+    old.resolve(["stale"]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signal.aborted).toBe(false);
     expect(reads).toBe(2);
     expect(observer.getCurrentResult().data).toEqual(["fresh"]);
-    old.resolve(["stale"]);
-    await old.promise;
-    expect(observer.getCurrentResult().data).toEqual(["fresh"]);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(reads).toBe(2);
   } finally {
     old.resolve([]);
     live.clear(); unsubscribe(); cache.clear();
+  }
+});
+
+test("17 live changes over several seconds keep one data-less read alive and share one follow-up", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const live = createAuthoredLiveInvalidation(cache);
+  const first = pending<string>();
+  const signals: AbortSignal[] = [];
+  let reads = 0;
+  const observer = new QueryObserver(cache, {
+    queryKey: ["bill-timeline"], meta: { angeeModels: ["accounting.Invoice"] },
+    queryFn: ({ signal }: { signal: AbortSignal }) => {
+      signals.push(signal);
+      return ++reads === 1 ? first.promise : Promise.resolve("latest timeline");
+    },
+  });
+  const stop = observer.subscribe(() => undefined);
+  try {
+    for (let index = 0; index < 17; index++) {
+      live.push({ model: "accounting.Invoice", id: "bill_1", action: "update" });
+      await vi.advanceTimersByTimeAsync(400);
+      expect(reads).toBe(1);
+      expect(signals[0]?.aborted).toBe(false);
+    }
+    first.resolve("earlier timeline");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads).toBe(2);
+    expect(signals.every((signal) => !signal.aborted)).toBe(true);
+    expect(observer.getCurrentResult().data).toBe("latest timeline");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(reads).toBe(2);
+  } finally {
+    first.resolve("cleanup");
+    live.clear(); stop(); cache.clear();
   }
 });
 
@@ -624,6 +668,118 @@ test("ready during targeted keyset revalidation waits, then fully rereads once",
     expect(window).toHaveBeenCalledTimes(1);
   } finally {
     targeted.resolve({ rows: [row], absent_ids: [] });
+    live.clear(); stop(); cache.clear();
+  }
+});
+
+test("coalesced live updates revalidate only retained keyset rows", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const key = ["live-feed", "retained"];
+  const rows = ["message-1", "message-2", "message-3"].map((id) => ({ id, body: "old" }));
+  const windowResult: KeysetFeedWindow<(typeof rows)[number]> = {
+    rows, count: rows.length, older_cursor: null, has_older: false,
+    has_more_in_window: false, has_older_than_through: false,
+  };
+  const window = vi.fn(async () => windowResult);
+  const revalidate = vi.fn(async (ids: string[]) => ({
+    rows: rows.filter((row) => ids.includes(row.id)).map((row) => ({ ...row, body: "fresh" })),
+    absent_ids: [] as string[],
+  }));
+  cache.setQueryData(key, {
+    pages: [{ rows, through: null, hasOlder: false, count: rows.length }],
+    pageParams: [{ start: true }],
+  });
+  const options = keysetFeedOptions(cache, {
+    queryKey: key, pageSize: 3, revalidateModels: ["messaging.Message"], window, revalidate,
+  });
+  const observer = new InfiniteQueryObserver(cache, { ...options, meta: { angeeModels: ["messaging.Message"] } });
+  const stop = observer.subscribe(() => undefined);
+  const live = createAuthoredLiveInvalidation(cache);
+  try {
+    live.push({ model: "messaging.Message", id: "message-1", action: "update" });
+    live.push({ model: "messaging.Message", id: "message-3", action: "update" });
+    live.push({ model: "messaging.Message", id: "message-1", action: "update" });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(revalidate.mock.calls[0]?.[0]).toEqual(["message-1", "message-3"]);
+    expect(window).not.toHaveBeenCalled();
+    expect(observer.getCurrentResult().data?.pages[0]?.rows.map((row) => row.body))
+      .toEqual(["fresh", "old", "fresh"]);
+  } finally {
+    live.clear(); stop(); cache.clear();
+  }
+});
+
+test("a data-less keyset load revalidates its newly held row after a live update", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const key = ["live-feed", "first-load"];
+  const row = { id: "message-1", body: "old" };
+  const initial: KeysetFeedWindow<typeof row> = {
+    rows: [row], count: 1, older_cursor: null, has_older: false,
+    has_more_in_window: false, has_older_than_through: false,
+  };
+  const first = pending<KeysetFeedWindow<typeof row>>();
+  const window = vi.fn(() => first.promise);
+  const revalidate = vi.fn(async (ids: string[]) => ({
+    rows: ids.map((id) => ({ id, body: "fresh" })), absent_ids: [] as string[],
+  }));
+  const options = keysetFeedOptions(cache, {
+    queryKey: key, pageSize: 2, revalidateModels: ["messaging.Message"], window, revalidate,
+  });
+  const observer = new InfiniteQueryObserver(cache, { ...options, meta: { angeeModels: ["messaging.Message"] } });
+  const stop = observer.subscribe(() => undefined);
+  const live = createAuthoredLiveInvalidation(cache);
+  try {
+    expect(window).toHaveBeenCalledTimes(1);
+    live.push({ model: "messaging.Message", id: row.id, action: "update" });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(window).toHaveBeenCalledTimes(1);
+    expect(revalidate).not.toHaveBeenCalled();
+    first.resolve(initial);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(window).toHaveBeenCalledTimes(1);
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(revalidate.mock.calls[0]?.[0]).toEqual([row.id]);
+    expect(observer.getCurrentResult().data?.pages[0]?.rows).toEqual([{ id: row.id, body: "fresh" }]);
+  } finally {
+    first.resolve(initial);
+    live.clear(); stop(); cache.clear();
+  }
+});
+
+test.each([
+  ["unheld update", "message-2", "update"],
+  ["create", "message-1", "create"],
+  ["delete", "message-1", "delete"],
+] as const)("a live %s fully rereads the keyset window", async (_case, id, action) => {
+  vi.useFakeTimers();
+  const cache = client();
+  const key = ["live-feed", action, id];
+  const row = { id: "message-1" };
+  const windowResult: KeysetFeedWindow<typeof row> = {
+    rows: [row], count: 1, older_cursor: null, has_older: false,
+    has_more_in_window: false, has_older_than_through: false,
+  };
+  const window = vi.fn(async () => windowResult);
+  const revalidate = vi.fn(async () => ({ rows: [row], absent_ids: [] }));
+  cache.setQueryData(key, {
+    pages: [{ rows: [row], through: null, hasOlder: false, count: 1 }],
+    pageParams: [{ start: true }],
+  });
+  const options = keysetFeedOptions(cache, {
+    queryKey: key, pageSize: 2, revalidateModels: ["messaging.Message"], window, revalidate,
+  });
+  const observer = new InfiniteQueryObserver(cache, { ...options, meta: { angeeModels: ["messaging.Message"] } });
+  const stop = observer.subscribe(() => undefined);
+  const live = createAuthoredLiveInvalidation(cache);
+  try {
+    live.push({ model: "messaging.Message", id, action });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(window).toHaveBeenCalledTimes(1);
+    expect(revalidate).not.toHaveBeenCalled();
+  } finally {
     live.clear(); stop(); cache.clear();
   }
 });

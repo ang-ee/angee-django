@@ -84,12 +84,12 @@ retained reads with observers refetch after the quiet gap; cached reads without
 observers are marked stale and refetch on next mount. Ready never cancels a read
 or reaches user data callbacks. Recovery costs one fetch per affected read per
 ready window; a read covering two models whose readies arrive in separate
-windows refetches once for each model. Actual row changes still cancel data-less
-reads and let reads holding data settle before a follow-up; local commands still
-cancel on arrival. This transport has no replay cursor or total row ordering guarantee,
-and occurrence IDs are not row versions. Later events may revalidate an accepted
-response because an echo cannot be distinguished safely from a newer remote
-write.
+windows refetches once for each model. Actual row changes never cancel an
+in-flight read, with or without data; it settles before a coalesced follow-up.
+Only local commands cancel on arrival. This transport has no replay cursor or
+total row ordering guarantee, and occurrence IDs are not row versions. Later
+events may revalidate an accepted response because an echo cannot be
+distinguished safely from a newer remote write.
 
 Keyset feed state remains native `InfiniteData`. `acceptResponse` replaces full
 returned rows in retained pages; `insert: true` requires domain proof of current

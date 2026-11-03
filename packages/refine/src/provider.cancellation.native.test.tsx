@@ -132,17 +132,23 @@ test("authored writes do not consume a Query cancellation signal", async () => {
 });
 
 
-test("live changes abort actual HTTP on arrival and keep the replacement read", async () => {
+test("live changes let data-less HTTP settle before one follow-up", async () => {
   const f = fixture();
   const live = createAuthoredLiveInvalidation(f.client);
   const hook = renderHook(() => useAuthoredQuery(DOCUMENT, {}, { models: ["example.Note"] }), { wrapper: f.wrapper });
   try {
     await waitFor(() => expect(f.attempts).toHaveLength(1));
     act(() => { live.push({ model: "example.Note", id: "one" }); });
-    expect(f.attempts[0]?.signal?.aborted).toBe(true);
+    expect(f.attempts[0]?.signal?.aborted).toBe(false);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(1);
+    await act(async () => { f.attempts[0]?.resolve(response("earlier")); });
     await waitFor(() => expect(f.attempts).toHaveLength(2));
     await act(async () => { f.attempts[1]?.resolve(response()); });
     await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "current" }]));
+    expect(f.attempts[0]?.signal?.aborted).toBe(false);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(2);
   } finally {
     live.clear();
     f.attempts.forEach((attempt) => attempt.resolve(response()));
@@ -299,6 +305,31 @@ test("ready retries once after an older data-less read fails", async () => {
   }
 });
 
+test("a live change retries once after a data-less read fails", async () => {
+  const f = fixture();
+  const { live, subscribeNotes, change } = liveReadyFixture(f.client);
+  const subscription = subscribeNotes();
+  const hook = renderHook(() => useAuthoredQuery(DOCUMENT, {}, { models: ["example.Note"] }), { wrapper: f.wrapper });
+  try {
+    await waitFor(() => expect(f.attempts).toHaveLength(1));
+    act(() => { change(); });
+    expect(f.attempts[0]?.signal?.aborted).toBe(false);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(1);
+    await act(async () => { f.attempts[0]?.reject(new Error("controlled read failure")); });
+    await waitFor(() => expect(f.attempts).toHaveLength(2));
+    await act(async () => { f.attempts[1]?.resolve(response("recovered")); });
+    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "recovered" }]));
+    expect(f.attempts[0]?.signal?.aborted).toBe(false);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(2);
+  } finally {
+    live.unsubscribe(subscription);
+    f.attempts.forEach((attempt) => attempt.resolve(response()));
+    hook.unmount();
+  }
+});
+
 test("ready does not restart a data-less read after its last observer unmounts", async () => {
   const f = fixture();
   const { live, subscribeNotes, ready } = liveReadyFixture(f.client);
@@ -319,7 +350,28 @@ test("ready does not restart a data-less read after its last observer unmounts",
   }
 });
 
-test("ready and a live change share one replacement after the change cancels a data-less read", async () => {
+test("a live change leaves unmount as the only abort and does not refetch", async () => {
+  const f = fixture();
+  const { live, subscribeNotes, change } = liveReadyFixture(f.client);
+  const subscription = subscribeNotes();
+  const hook = renderHook(() => useAuthoredQuery(DOCUMENT, {}, { models: ["example.Note"] }), { wrapper: f.wrapper });
+  try {
+    await waitFor(() => expect(f.attempts).toHaveLength(1));
+    act(() => { change(); });
+    expect(f.attempts[0]?.signal?.aborted).toBe(false);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(1);
+    hook.unmount();
+    expect(f.attempts[0]?.signal?.aborted).toBe(true);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(1);
+  } finally {
+    live.unsubscribe(subscription);
+    f.attempts.forEach((attempt) => attempt.resolve(response()));
+  }
+});
+
+test("ready and a live change share one follow-up after a data-less read settles", async () => {
   const f = fixture();
   const { live, subscribeNotes, ready, change } = liveReadyFixture(f.client);
   const subscription = subscribeNotes();
@@ -327,10 +379,14 @@ test("ready and a live change share one replacement after the change cancels a d
   try {
     await waitFor(() => expect(f.attempts).toHaveLength(1));
     act(() => { ready(); change(); });
-    expect(f.attempts[0]?.signal?.aborted).toBe(true);
+    expect(f.attempts[0]?.signal?.aborted).toBe(false);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(1);
+    await act(async () => { f.attempts[0]?.resolve(response("before registration")); });
     await waitFor(() => expect(f.attempts).toHaveLength(2));
     await act(async () => { f.attempts[1]?.resolve(response("changed")); });
     await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "changed" }]));
+    expect(f.attempts[0]?.signal?.aborted).toBe(false);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
     expect(f.attempts).toHaveLength(2);
   } finally {
