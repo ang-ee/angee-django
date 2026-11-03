@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 from django.db import connection, transaction
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from rebac import system_context
 
@@ -30,6 +31,9 @@ from tests.conftest import (
 
 class SchedulerBridge(Bridge, Integration):
     """Concrete bridge fixture driven by the integrate scheduler tests."""
+
+    created_at = Integration.created_at
+    updated_at = Integration.updated_at
 
     class Meta(Bridge.Meta):
         """Django model options for the scheduler bridge fixture."""
@@ -133,6 +137,19 @@ def _scan_only_the_fixture_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     """
 
     monkeypatch.setattr(integrate_scheduler, "models_with", lambda *, base: (SchedulerBridge,))
+
+
+@pytest.mark.django_db
+def test_scheduler_bridge_deferred_timestamp_reads_parent(composed_tables: None) -> None:
+    """The child mask preserves Django's descriptor for the parent timestamp."""
+
+    del composed_tables
+    with system_context(reason="test scheduler bridge parent timestamp"):
+        bridge = make_integration("deferred-timestamp", model=SchedulerBridge)
+        deferred = SchedulerBridge.objects.only("pk").get(pk=bridge.pk)
+        with CaptureQueriesContext(connection) as queries:
+            assert deferred.created_at == bridge.created_at
+    assert len(queries) == 1
 
 
 @pytest.mark.django_db(transaction=True)
