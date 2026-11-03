@@ -12,6 +12,7 @@ from django.db import connections, models
 from django.db.models.functions import Cast
 from django_cte import CTE, with_cte
 from rebac import database_context, to_subject_ref
+from rebac.managers import share_scoped_definitions
 
 from angee.base.models.identity import public_id_for
 from angee.base.pagination import KeysetOrder, keyset_signer
@@ -124,8 +125,12 @@ class Timeline:
         materialized = connection.vendor == "postgresql" or (
             connection.vendor == "sqlite" and connection.Database.sqlite_version_info >= (3, 35, 0)
         )
+        # The branches share one actor: REBAC hoists the permission definitions
+        # they have in common (target permissions, recursive closures) to the
+        # union once, through stock django-cte, instead of each operand
+        # re-expanding them.
         return CTE(
-            _union(list(self.branches.values()), *_SOURCE_COLUMNS),
+            share_scoped_definitions(_union(list(self.branches.values()), *_SOURCE_COLUMNS)),
             name="timeline_source", materialized=True if materialized else None,
         )
 
