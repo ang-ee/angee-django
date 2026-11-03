@@ -199,16 +199,13 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
             resource_type = model_resource_type(model)
             assert resource_type is not None
             for action in ("read", "read_private"):
-                scoped = model.objects.with_actor(f.reader).with_action(action).scoped()
-                # Each fresh scope reads the schema revision and expands the actor's
-                # memberships (2). Read then prepares 23 arrow sources (a filed task
-                # reaches each of its declared subject types' direct holders, its
-                # removal authority's project write and its subject task's owner);
-                # Private reads need only the final row SELECT.
-                expected_queries = 26 if action == "read" else 3
+                # Recovery REBAC compiles arrow sources into the row SELECT. A fresh
+                # scope reads one schema revision and one actor set before that SELECT.
+                expected_queries = 3
                 counts = []
                 for size in (2, 50):
                     ids = [row.pk for row in rows[:size]]
+                    scoped = model.objects.with_actor(f.reader).with_action(action).scoped()
                     query = scoped.filter(pk__in=ids).values_list("pk", flat=True)
                     sql, parameters = query.query.sql_with_params()
                     assert "SELECT" in sql and parameters
@@ -216,20 +213,19 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
                         f"{sql}\n-- parameters: {parameters!r}\n",
                         encoding="utf-8",
                     )
-                    # A fresh scope per measurement: one scope keeps the rows it decided,
-                    # so a repeated statement would skip its arrow sources.
+                    # A fresh scope per measurement: a scoped queryset keeps the actor sets
+                    # it decided, so reusing one would skip the actor-set read.
                     with evaluator_scope(), CaptureQueriesContext(connection) as captured:
                         result = set(query)
                     counts.append(len(captured))
                     assert len(captured) == expected_queries, captured.captured_queries
-                    # The application row SELECT, and, for a party read, the arrow source of a
-                    # record task about a party.
+                    # Source facts remain inside the single application row SELECT.
                     assert (
                         sum(
                             query["sql"].startswith(f'SELECT "{model._meta.db_table}".')
                             for query in captured.captured_queries
                         )
-                        == (2 if model is Party and action == "read" else 1)
+                        == 1
                     )
                     assert result == (set(ids) if action == "read" else set())
                 assert counts[0] == counts[1]
