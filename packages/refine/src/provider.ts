@@ -389,10 +389,10 @@ export function createAngeeChangeLiveProvider(
             next: (result) => {
               if (!active || !enabled) return;
               const payload = recordValue(recordValue(result.data)?.[changesRoot]);
-              // This is emitted only after the server joins the model's group.
-              // Connection ack precedes subscription installation and is not ready.
+              // Each ready closes the registration or reconnect gap for reads
+              // in flight and retained snapshots without cancelling either.
               if (payload?.action === "ready") {
-                liveInvalidation?.push({ model: resource.modelLabel });
+                liveInvalidation?.ready(resource.modelLabel);
                 return;
               }
               // One upstream result is one change, however many consumers share it.

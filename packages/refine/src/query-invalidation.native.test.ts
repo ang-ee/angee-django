@@ -1,6 +1,7 @@
 import { InfiniteQueryObserver, isCancelledError, QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, expect, test, vi } from "vitest";
 
+import { keysetFeedOptions, type KeysetFeedRevalidation, type KeysetFeedWindow } from "./dialect/keyset-feed";
 import {
   authoredQueryReadsChange,
   acceptQueryData,
@@ -520,6 +521,109 @@ test("a full live refresh stays full when targeted changes join across flushes",
     expect(observer.getCurrentResult().data).toBe("fresh");
   } finally {
     old.resolve("cleanup");
+    live.clear(); stop(); cache.clear();
+  }
+});
+
+test("ready merged with a row change fully rereads a held keyset feed", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const key = ["ready-feed", "same-window"];
+  const row = { id: "message-1" };
+  const windowResult: KeysetFeedWindow<typeof row> = {
+    rows: [row], count: 1, older_cursor: null, has_older: false,
+    has_more_in_window: false, has_older_than_through: false,
+  };
+  const first = pending<KeysetFeedWindow<typeof row>>();
+  const seen: unknown[] = [];
+  let windows = 0;
+  let signal!: AbortSignal;
+  const revalidate = vi.fn(async () => ({ rows: [row], absent_ids: [] }));
+  cache.setQueryData(key, {
+    pages: [{ rows: [row], through: null, hasOlder: false, count: 1 }],
+    pageParams: [{ start: true }],
+  });
+  const options = keysetFeedOptions(cache, {
+    queryKey: key, pageSize: 2, revalidateModels: ["messaging.Message"], revalidate,
+    window(_before, _through, _limit, context) {
+      windows++;
+      seen.push(context.meta?.angeeChanges);
+      if (windows === 1) { signal = context.signal; return first.promise; }
+      return Promise.resolve(windowResult);
+    },
+  });
+  const observer = new InfiniteQueryObserver(cache, { ...options, meta: { angeeModels: ["messaging.Message"] } });
+  const stop = observer.subscribe(() => undefined);
+  const live = createAuthoredLiveInvalidation(cache);
+  try {
+    void observer.refetch();
+    live.push({ model: "messaging.Message", id: row.id, action: "update" });
+    live.ready("messaging.Message");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(windows).toBe(1);
+    expect(signal.aborted).toBe(false);
+    first.resolve(windowResult);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(windows).toBe(2);
+    expect(seen).toEqual([undefined, []]);
+    expect(revalidate).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(windows).toBe(2);
+  } finally {
+    first.resolve(windowResult);
+    live.clear(); stop(); cache.clear();
+  }
+});
+
+test("ready during targeted keyset revalidation waits, then fully rereads once", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const key = ["ready-feed", "later-window"];
+  const row = { id: "message-1" };
+  const windowResult: KeysetFeedWindow<typeof row> = {
+    rows: [row], count: 1, older_cursor: null, has_older: false,
+    has_more_in_window: false, has_older_than_through: false,
+  };
+  const targeted = pending<KeysetFeedRevalidation<typeof row>>();
+  const seen: unknown[] = [];
+  let signal!: AbortSignal;
+  const window = vi.fn(async (_before: string | null, _through: string | null, _limit: number,
+    context: { meta?: { angeeChanges?: unknown } }) => {
+    seen.push(context.meta?.angeeChanges);
+    return windowResult;
+  });
+  const revalidate = vi.fn((_ids: string[], context: { signal: AbortSignal }) => {
+    signal = context.signal;
+    return targeted.promise;
+  });
+  cache.setQueryData(key, {
+    pages: [{ rows: [row], through: null, hasOlder: false, count: 1 }],
+    pageParams: [{ start: true }],
+  });
+  const options = keysetFeedOptions(cache, {
+    queryKey: key, pageSize: 2, revalidateModels: ["messaging.Message"], window, revalidate,
+  });
+  const observer = new InfiniteQueryObserver(cache, { ...options, meta: { angeeModels: ["messaging.Message"] } });
+  const stop = observer.subscribe(() => undefined);
+  const live = createAuthoredLiveInvalidation(cache);
+  try {
+    live.push({ model: "messaging.Message", id: row.id, action: "update" });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(window).not.toHaveBeenCalled();
+    live.ready("messaging.Message");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(signal.aborted).toBe(false);
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(window).not.toHaveBeenCalled();
+    targeted.resolve({ rows: [row], absent_ids: [] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(window).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual([[]]);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(window).toHaveBeenCalledTimes(1);
+  } finally {
+    targeted.resolve({ rows: [row], absent_ids: [] });
     live.clear(); stop(); cache.clear();
   }
 });

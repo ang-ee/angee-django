@@ -397,7 +397,7 @@ describe("Angee Hasura provider defaults", () => {
     expect(subscribe).not.toHaveBeenCalled();
   });
 
-  test("server readiness restarts stale first reads and recovers retained rows after resume", async () => {
+  test("server readiness recovers older first reads and retained rows after resume without cancellation", async () => {
     vi.useFakeTimers();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     const attempts: { signal: AbortSignal; resolve: (rows: string[]) => void }[] = [];
@@ -417,31 +417,102 @@ describe("Angee Hasura provider defaults", () => {
     const ready = { data: { noteChanged: { model: "notes.Note", id: "", action: "ready" } } };
     try {
       expect(queryFn).toHaveBeenCalledOnce();
-      // A connection ack has no authority to restart reads. Only server ready does.
+      // The read predates the model-group request; ready closes that gap.
       expect(on).not.toHaveBeenCalled();
       nthSink(sinks, 0).next(ready);
-      expect(attempts[0]?.signal.aborted).toBe(true);
+      expect(attempts[0]?.signal.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(300);
-      expect(queryFn).toHaveBeenCalledTimes(2);
-      attempts[0]?.resolve(["obsolete"]);
-      attempts[1]?.resolve(["fresh"]);
+      expect(queryFn).toHaveBeenCalledOnce();
+      attempts[0]?.resolve(["older snapshot"]);
       await vi.advanceTimersByTimeAsync(0);
-      expect(observer.getCurrentResult().data).toEqual(["fresh"]);
+      expect(queryFn).toHaveBeenCalledTimes(2);
+      expect(attempts[0]?.signal.aborted).toBe(false);
+      attempts[1]?.resolve(["recovered"]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(observer.getCurrentResult().data).toEqual(["recovered"]);
       expect(callback).not.toHaveBeenCalled();
       provider.setEnabled(false);
       provider.setEnabled(true);
-      nthSink(sinks, 0).next(ready); // disposed subscription cannot recover the new actor
+      nthSink(sinks, 0).next(ready); // disposed subscription cannot affect the new actor
       expect(queryFn).toHaveBeenCalledTimes(2);
       nthSink(sinks, 1).next(ready);
       await vi.advanceTimersByTimeAsync(300);
-      attempts[2]?.resolve(["recovered"]);
+      expect(queryFn).toHaveBeenCalledTimes(3);
+      attempts[2]?.resolve(["resumed"]);
       await vi.advanceTimersByTimeAsync(0);
-      expect(observer.getCurrentResult().data).toEqual(["recovered"]);
+      expect(observer.getCurrentResult().data).toEqual(["resumed"]);
+      nthSink(sinks, 1).next({ data: { noteChanged: {
+        model: "notes.Note", id: "note_1", action: "update",
+      } } });
+      await vi.advanceTimersByTimeAsync(300);
+      expect(queryFn).toHaveBeenCalledTimes(4);
+      attempts[3]?.resolve(["changed row"]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(observer.getCurrentResult().data).toEqual(["changed row"]);
     } finally {
       provider.setEnabled(false);
       attempts.forEach((attempt) => attempt.resolve([]));
       provider.unsubscribe(subscription);
       stopObserver();
+      client.clear();
+    }
+  });
+
+  test("staggered model readies each recover their read while the other model refetches", async () => {
+    vi.useFakeTimers();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    const noteAttempts: { signal: AbortSignal; resolve: (value: string) => void }[] = [];
+    const tagAttempts: { signal: AbortSignal; resolve: (value: string) => void }[] = [];
+    const noteQuery = vi.fn(({ signal }: { signal: AbortSignal }) => new Promise<string>((resolve) => {
+      noteAttempts.push({ signal, resolve });
+    }));
+    const tagQuery = vi.fn(({ signal }: { signal: AbortSignal }) => new Promise<string>((resolve) => {
+      tagAttempts.push({ signal, resolve });
+    }));
+    const notes = new QueryObserver(client, {
+      queryKey: ["notes"], queryFn: noteQuery, meta: { angeeModels: ["notes.Note"] },
+    });
+    const tags = new QueryObserver(client, {
+      queryKey: ["tags"], queryFn: tagQuery, meta: { angeeModels: ["tags.Tag"] },
+    });
+    const stopNotes = notes.subscribe(() => undefined);
+    const stopTags = tags.subscribe(() => undefined);
+    const { subscribe, sinks } = recordingClient();
+    const provider = createAngeeChangeLiveProvider({ subscribe, on: vi.fn() } as never, [
+      resource({ changes: "noteChanged" }),
+      resource({ changes: "tagChanged", list: "tags", model: "tags.Tag" }),
+    ], { queryClient: client });
+    const noteSubscription = provider.subscribe({ channel: "notes", types: ["*"], callback: vi.fn(), params: { resource: "notes" } });
+    const tagSubscription = provider.subscribe({ channel: "tags", types: ["*"], callback: vi.fn(), params: { resource: "tags" } });
+    try {
+      expect(noteQuery).toHaveBeenCalledOnce();
+      expect(tagQuery).toHaveBeenCalledOnce();
+      nthSink(sinks, 0).next({ data: { noteChanged: { model: "notes.Note", id: "", action: "ready" } } });
+      await vi.advanceTimersByTimeAsync(300);
+      noteAttempts[0]?.resolve("old note");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(noteQuery).toHaveBeenCalledTimes(2);
+      nthSink(sinks, 1).next({ data: { tagChanged: { model: "tags.Tag", id: "", action: "ready" } } });
+      await vi.advanceTimersByTimeAsync(300);
+      expect(noteQuery).toHaveBeenCalledTimes(2);
+      expect(tagQuery).toHaveBeenCalledOnce();
+      tagAttempts[0]?.resolve("old tag");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(tagQuery).toHaveBeenCalledTimes(2);
+      expect(noteAttempts[1]?.signal.aborted).toBe(false);
+      noteAttempts[1]?.resolve("new note");
+      tagAttempts[1]?.resolve("new tag");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(notes.getCurrentResult().data).toBe("new note");
+      expect(tags.getCurrentResult().data).toBe("new tag");
+    } finally {
+      provider.setEnabled(false);
+      provider.unsubscribe(noteSubscription);
+      provider.unsubscribe(tagSubscription);
+      noteAttempts.forEach((attempt) => attempt.resolve(""));
+      tagAttempts.forEach((attempt) => attempt.resolve(""));
+      stopNotes();
+      stopTags();
       client.clear();
     }
   });
