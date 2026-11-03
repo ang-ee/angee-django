@@ -14,6 +14,7 @@ from rebac import system_context
 from angee.base.models.audit import AuditMixin, retained_set_null
 from angee.base.models.hierarchy import HierarchyQuerySet
 from angee.base.querysets import ClosedUpdateQuerySet
+from angee.iam.managers import ProtectedManager
 from angee.iam.models.append_only import (
     ProtectedAppendOnlyBaseQuerySet,
     ProtectedAppendOnlyModel,
@@ -33,7 +34,7 @@ class RetainedEvidence(ProtectedAppendOnlyModel, AuditMixin):
     """Minimal audited row exercising the shared collection policy."""
 
     name = models.CharField(max_length=64)
-    objects = models.Manager.from_queryset(RetainedEvidenceQuerySet)()
+    objects = ProtectedManager.from_queryset(RetainedEvidenceQuerySet)()
 
     class Meta:
         app_label = "base"

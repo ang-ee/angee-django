@@ -2,14 +2,31 @@
 
 import pytest
 from django.core.exceptions import ValidationError
-from rebac import actor_context
+from rebac import actor_context, system_context
+from rebac.managers import RebacManager, RebacQuerySet
 
-from angee.base.models.trash import TRASH_REASON_MAX_LENGTH
+from angee.base.models.trash import TRASH_REASON_MAX_LENGTH, TrashQuerySet
 from angee.base.signals import bulk_updated
 from tests.conftest import create_user
 from tests.core_persistence import TrashRow
 
 pytestmark = pytest.mark.django_db
+
+
+@pytest.fixture(autouse=True)
+def trash_owner_scope():
+    with system_context(reason="tests.trash.owner"):
+        yield
+
+
+def test_protected_trash_queryset_keeps_actor_system_and_trash_scopes():
+    actor = create_user("trash-queryset-actor")
+    rows = TrashRow.objects.all()
+    assert isinstance(TrashRow._default_manager, RebacManager)
+    assert isinstance(rows, TrashQuerySet)
+    assert isinstance(rows, RebacQuerySet)
+    assert isinstance(TrashRow.system_queryset().trashed(), TrashQuerySet)
+    assert isinstance(rows.with_actor(actor).trash_targets().untrashed(), TrashQuerySet)
 
 
 def test_trash_stamps_the_actor_time_and_reason_and_restore_clears_them():
