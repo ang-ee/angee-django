@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
+
+from angee.base.serialization import canonical_json as canonical_json
 
 
 def json_safe(value: Any) -> Any:
@@ -36,10 +37,6 @@ def json_safe(value: Any) -> Any:
     if isinstance(value, (bytes, memoryview)):
         return {"$type": "bytes", "value": base64.b64encode(bytes(value)).decode("ascii")}
     raise TypeError(f"No lossless encoding for {type(value).__name__}.")
-
-
-def canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
 
 
 def creation_fingerprint(value: Any) -> str:

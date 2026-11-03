@@ -135,7 +135,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 AUTH_USER_MODEL = "iam.User"
 AUTHENTICATION_BACKENDS = ["angee.iam.auth.ModelBackend"]
 PROVENANCE_POLICY = "angee.provenance.contrib.angee.policy.AngeePolicy"
-PROVENANCE_CHANGESET_MODEL = "provenance.Changeset"
+ANGEE_CHANGESET_MODEL = "provenance.Changeset"
 REBAC_BACKEND = "local"
 REBAC_LOCAL_BACKEND_STORAGE = "registry"
 REBAC_STRICT_MODE = True
@@ -148,6 +148,3 @@ CELERY_BROKER_URL = "memory://"
 
 # Apply source app declarations without emitting models or replacing this registry.
 apply_app_settings(globals(), enabled_apps(INSTALLED_APPS, group="angee.addons"))
-
-# Historical migration identity; runtime selection is native provenance.
-ANGEE_CHANGESET_MODEL = PROVENANCE_CHANGESET_MODEL

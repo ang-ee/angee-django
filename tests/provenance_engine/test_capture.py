@@ -4,7 +4,7 @@ from django.test import override_settings
 from simple_history.signals import post_create_historical_record
 from simple_history.utils import bulk_update_with_history
 
-from angee.provenance.engine.context import ChangesetRequired, changeset
+from angee.provenance.context import ChangesetRequired, changeset
 from tests.provenance_engine.capture_app.models import Child, DetailedNote, Explicit, Note, NoteProxy
 from tests.provenance_engine.storage.models import Changeset
 
@@ -195,7 +195,7 @@ def test_custom_history_without_source_identity_requires_explicit_colocation(mon
     from django.test.utils import isolate_apps
 
     from angee.provenance.engine.base import ChangesetAttribution
-    from angee.provenance.engine.history import ModelHistory
+    from angee.provenance.history import ModelHistory
 
     with isolate_apps():
 
@@ -207,7 +207,7 @@ def test_custom_history_without_source_identity_requires_explicit_colocation(mon
             ModelHistory().source_database_attributes(LegacyHistory, using="other")
         assert ModelHistory(use_base_model_db=True).source_database_attributes(LegacyHistory, using="other") == {}
         monkeypatch.setattr(
-            "angee.provenance.engine.history.get_history_manager_for_model",
+            "angee.provenance.history.get_history_manager_for_model",
             lambda model: SimpleNamespace(model=LegacyHistory),
         )
         with pytest.raises(ValueError, match="must remain on its source database"):
@@ -238,7 +238,7 @@ def test_mti_parent_capture_uses_its_own_identity(using):
 
 
 def test_bulk_history_of_attributed_rows_uses_current_capture_attribution(actor):
-    from angee.provenance.engine.context import current_changeset
+    from angee.provenance.context import current_changeset
     from tests.provenance_engine.capture_app.models import AttributedNote
 
     with changeset():

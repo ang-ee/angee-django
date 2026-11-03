@@ -2,7 +2,7 @@ import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 
-from angee.provenance.engine.context import changeset
+from angee.provenance.context import changeset
 from tests.provenance_engine.replay_app.models import Folder
 
 

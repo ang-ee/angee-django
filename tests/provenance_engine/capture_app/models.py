@@ -1,7 +1,8 @@
 from django.db import models
 
 from angee.provenance.engine.base import ChangesetAttribution
-from angee.provenance.engine.history import CaptureManager, HistoryMixin, ModelHistory
+from angee.provenance.history import CaptureManager, ModelHistory
+from angee.provenance.history import ReplayHistoryMixin as HistoryMixin
 
 
 class Note(HistoryMixin, models.Model):

@@ -1,7 +1,7 @@
 import pytest
 from django.db import transaction
 
-from angee.provenance.engine.context import changeset, current_changeset
+from angee.provenance.context import changeset, current_changeset
 from angee.provenance.engine.exceptions import CreationKeyConflict
 from angee.provenance.engine.managers import ChangesetManager
 from tests.provenance_engine.replay_app.models import Folder

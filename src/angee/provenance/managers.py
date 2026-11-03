@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any
 
 from angee.iam.managers import ProtectedManager
 from angee.provenance.changeset_querysets import ChangesetQuerySet as ChangesetQuerySet
-from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from angee.provenance.contrib.angee.serialization import creation_fingerprint
 from angee.provenance.engine.managers import ChangesetManager as NativeChangesetManager
 
@@ -19,8 +18,6 @@ _ChangesetManagerBase = ProtectedManager.from_queryset(ChangesetQuerySet)
 
 class ChangesetManager[ChangesetT: Changeset](_ChangesetManagerBase[ChangesetT], NativeChangesetManager):
     """Native atomic claims with Angee's historical content and error contracts."""
-
-    creation_conflict = CreationKeyConflict
 
     @staticmethod
     def creation_fingerprint(value: Any) -> str:

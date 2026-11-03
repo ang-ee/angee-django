@@ -4,7 +4,7 @@ import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.test import override_settings
 
-from angee.provenance.engine.context import changeset, current_changeset
+from angee.provenance.context import changeset, current_changeset
 from angee.provenance.engine.policy import Policy
 from tests.provenance_engine.replay_app.models import Entry, Folder
 from tests.provenance_engine.storage.models import Changeset

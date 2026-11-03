@@ -3,6 +3,7 @@
 from importlib import import_module
 
 from django.apps import AppConfig
+from django.core import checks
 
 
 class ProvenanceEngineTestConfig(AppConfig):
@@ -19,6 +20,8 @@ class ProvenanceEngineTestConfig(AppConfig):
         self.models_module = import_module("tests.provenance_engine.storage.models")
 
     def ready(self):
-        """Register the relocated engine's native configuration checks."""
+        """Register the addon's one configuration sequence in the fixture host."""
 
-        from angee.provenance.engine import checks  # noqa: F401
+        from angee.provenance.checks import check_configuration
+
+        checks.register(check_configuration, checks.Tags.models)

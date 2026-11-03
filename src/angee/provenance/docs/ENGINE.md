@@ -1,8 +1,9 @@
 # Provenance engine contracts
 
-The capture and statement engine lives in `angee.provenance.engine` inside the
-`angee.provenance` addon. The addon is the sole Django app with label `provenance`.
-Its existing public modules compose the engine with Angee policy; see the
+Native capture lives in the addon's `context`, `history` and `querysets` modules;
+plain-Django storage, replay and statement contracts remain in `engine`.
+The addon is the sole Django app with label `provenance`.
+Its public modules compose these owners with Angee policy; see the
 [addon README](../README.md) for the application contract.
 
 ## 1. Scope and ownership
@@ -22,7 +23,7 @@ Restoring database state never claims to undo remote side effects.
 
 ## 2. Public configuration and host policy
 
-Declare `PROVENANCE_CHANGESET_MODEL = "provenance.Changeset"` to select the
+Declare `ANGEE_CHANGESET_MODEL = "provenance.Changeset"` to select the
 composed concrete storage. Django's native swappable migrations require this
 setting explicitly; system check E004 reports a missing declaration. The addon
 subclasses `angee.provenance.engine.base.AbstractChangeset`. That abstract
@@ -102,8 +103,13 @@ diffs and replay refuse the incomplete snapshots they require. Capture never rew
 
 Existing historical schemas require a host-owned migration: rename the old
 historical `changeset` attribution field to `history_changeset`, then recreate
-any source `changeset` field using native simple-history field copying. Source
-values overwritten by the old implementation cannot be recovered from those
+any source `changeset` field using native simple-history field copying. On
+PostgreSQL, renaming that FK column does not necessarily rename its implicit
+index. Before adding the new source `changeset` field, inspect the retained
+historical table's indexes and explicitly rename the attribution index or drop
+the obsolete one; otherwise the new FK index can collide with the old name.
+Keep the resulting names in the host migration so the schema remains repeatable.
+Source values overwritten by the old implementation cannot be recovered from those
 rows; leave their completeness marker False. Rows from models without this
 collision may be marked complete only after their retained source projection
 is verified. Never seed missing source values from current state or attribution.
@@ -222,7 +228,7 @@ The original plain-Django assertions now live under `tests/provenance_engine/`
 with an isolated settings module. The framework's addon tests exercise its
 Angee policy and composed storage.
 
-Capture-only hosts can compose `history.CaptureHistoryMixin` with their own replay/removal owner. `history.HistoryMixin` retains the standalone composition with `HistoryReplayMixin`; capture does not require adopting native deletion policy.
+Capture-only hosts can compose `history.CaptureHistoryMixin` with their own replay/removal owner. `history.ReplayHistoryMixin` retains the standalone composition with `HistoryReplayMixin`; capture does not require adopting native deletion policy.
 
 `Aspect[Subject]` binds candidate and native apply callbacks to their owning
 Django model subtype. `StatementRecords[Subject]` preserves that binding across

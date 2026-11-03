@@ -4,7 +4,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied, ValidationError
 from django.test import override_settings
 
-from angee.provenance.engine.checks import check_configuration
+from angee.provenance.checks import check_configuration
 from angee.provenance.engine.policy import Policy, get_policy
 from tests.provenance_engine.storage.models import Changeset
 
@@ -40,13 +40,13 @@ def test_policy_settings_are_lazy_and_validated():
         with pytest.raises(ImproperlyConfigured):
             get_policy()
         assert "provenance.E002" in {error.id for error in check_configuration()}
-    with override_settings(PROVENANCE_CHANGESET_MODEL="missing.Model", PROVENANCE_STRICT="true"):
+    with override_settings(ANGEE_CHANGESET_MODEL="missing.Model", PROVENANCE_STRICT="true"):
         assert {"provenance.E001", "provenance.E003"} <= {error.id for error in check_configuration()}
 
 
 def test_missing_swappable_setting_has_actionable_system_check():
-    with override_settings(PROVENANCE_CHANGESET_MODEL=None):
-        del settings.PROVENANCE_CHANGESET_MODEL
+    with override_settings(ANGEE_CHANGESET_MODEL=None):
+        del settings.ANGEE_CHANGESET_MODEL
         assert "provenance.E004" in {error.id for error in check_configuration()}
 
 

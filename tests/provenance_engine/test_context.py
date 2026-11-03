@@ -4,7 +4,7 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.db import connections, router, transaction
 
-from angee.provenance.engine.context import (
+from angee.provenance.context import (
     actor_context,
     actor_reference,
     changeset,
@@ -184,14 +184,14 @@ def test_explicit_database_binding_refuses_conflicting_capture_and_join():
 
 
 def test_unconfigured_storage_fails_closed(settings):
-    from angee.provenance.engine.context import ChangesetRequired
+    from angee.provenance.context import ChangesetRequired
 
-    settings.PROVENANCE_CHANGESET_MODEL = ""
+    settings.ANGEE_CHANGESET_MODEL = ""
     with changeset(fresh=True):
         assert current_changeset() is None
         with pytest.raises(ChangesetRequired):
             current_changeset(required=True)
-    del settings.PROVENANCE_CHANGESET_MODEL
+    del settings.ANGEE_CHANGESET_MODEL
     assert current_changeset() is None
     with pytest.raises(ChangesetRequired):
         current_changeset(required=True)
@@ -228,7 +228,7 @@ def test_direct_delete_uses_signal_database_inside_unbound_boundary(monkeypatch)
 def test_unrecorded_changeset_does_not_touch_its_selected_database(monkeypatch):
     from django.db import router
 
-    from angee.provenance.engine.context import current_changeset
+    from angee.provenance.context import current_changeset
 
     native = router.db_for_write
     monkeypatch.setattr(

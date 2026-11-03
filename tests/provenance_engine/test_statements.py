@@ -3,7 +3,7 @@
 import pytest
 from django.core.exceptions import PermissionDenied, ValidationError
 
-from angee.provenance.engine.context import changeset, current_changeset
+from angee.provenance.context import changeset, current_changeset
 from angee.provenance.engine.policy import Policy
 from angee.provenance.engine.statements import SourceKind
 from tests.provenance_engine.statements_app.models import Link, Member, Principal, Subject
@@ -184,7 +184,12 @@ def test_initial_assertion_revert_withdraws_and_preserves_unasserted_value(actor
 
 
 def test_evidence_facts_and_references_follow_host_read_policy(actor, subject, django_user_model):
-    from angee.provenance.engine.evidence import EvidenceFact, EvidenceReference
+    from angee.provenance.evidence import (
+        RetainedEvidenceFact as EvidenceFact,
+    )
+    from angee.provenance.evidence import (
+        RetainedEvidenceReference as EvidenceReference,
+    )
 
     reference = EvidenceReference.from_record(subject)
     with changeset(actor=actor):
@@ -467,9 +472,9 @@ def test_shared_write_engine_canonicalizes_reference_content_for_host_storage(
     using,
     representation,
 ):
-    from angee.provenance.engine.context import actor_reference
-    from angee.provenance.engine.querysets import model_history
+    from angee.provenance.context import actor_reference
     from angee.provenance.engine.statements import StatementManager
+    from angee.provenance.querysets import model_history
     from tests.provenance_engine.statements_app.models import Code, TypedReference
 
     class CurrentRowManager(StatementManager):
@@ -543,7 +548,7 @@ def test_shared_write_engine_canonicalizes_reference_content_for_host_storage(
 @pytest.mark.django_db(databases=["default", "other"], transaction=True)
 @pytest.mark.parametrize("invalid", ["missing", "unsaved", "wrong-database"])
 def test_shared_write_engine_rejects_invalid_references_before_host_storage(invalid):
-    from angee.provenance.engine.context import actor_reference
+    from angee.provenance.context import actor_reference
     from tests.provenance_engine.statements_app.models import Code, TypedReference
 
     person = Principal.objects.create(name="Editor", kind=SourceKind.PERSON)

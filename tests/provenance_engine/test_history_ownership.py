@@ -7,7 +7,7 @@ from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from simple_history.utils import bulk_update_with_history
 
-from angee.provenance.engine.context import changeset, current_changeset
+from angee.provenance.context import changeset, current_changeset
 from angee.provenance.engine.exceptions import ReplayRefused
 from tests.provenance_engine.capture_app.models import DomainChangesetNote
 from tests.provenance_engine.storage.models import Changeset

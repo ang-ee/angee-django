@@ -1,6 +1,6 @@
 from django.db import models
 
-from angee.provenance.engine.history import HistoryMixin
+from angee.provenance.history import ReplayHistoryMixin as HistoryMixin
 
 
 class Folder(HistoryMixin):

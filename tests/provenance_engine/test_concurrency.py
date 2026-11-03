@@ -5,7 +5,7 @@ import pytest
 from django.core.exceptions import ValidationError
 from django.db import close_old_connections, connections, transaction
 
-from angee.provenance.engine.context import changeset, current_changeset
+from angee.provenance.context import changeset, current_changeset
 from tests.provenance_engine.replay_app.models import Folder
 from tests.provenance_engine.storage.models import Changeset
 

@@ -12,7 +12,7 @@ import pytest
 
 @pytest.mark.parametrize("order", ["iam-first", "provenance-first", "no-iam", "iam-only"])
 def test_iam_principal_donor_is_optional_and_order_independent(order: str) -> None:
-    script = '''
+    script = """
 import os
 import sys
 os.environ.pop("DJANGO_SETTINGS_MODULE", None)
@@ -27,7 +27,7 @@ settings.configure(
     INSTALLED_APPS=["django.contrib.contenttypes", "django.contrib.auth", "rebac", "simple_history",
                     "angee.base", "angee.graphql", *selected],
     DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
-    SECRET_KEY="optional-iam-donor", PROVENANCE_CHANGESET_MODEL="provenance.Changeset",
+    SECRET_KEY="optional-iam-donor", ANGEE_CHANGESET_MODEL="provenance.Changeset",
 )
 import django
 django.setup()
@@ -67,11 +67,16 @@ else:
             for active in (False, True):
                 user = ComposedUser(kind=kind, is_active=active)
                 assert user.source_kind == ("person" if kind == "person" and active else None)
-'''
+"""
     root = Path(__file__).resolve().parents[1]
     environment = {**os.environ, "PYTHONPATH": os.pathsep.join((str(root), str(root / "src")))}
     result = subprocess.run(
-        [sys.executable, "-c", script, order], cwd=root, env=environment,
-        text=True, capture_output=True, timeout=60, check=False,
+        [sys.executable, "-c", script, order],
+        cwd=root,
+        env=environment,
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr

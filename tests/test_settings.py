@@ -1,4 +1,5 @@
 """Angee settings policy composes the native package and configuration owners."""
+
 from __future__ import annotations
 
 import importlib
@@ -38,7 +39,11 @@ def _compose(directory: Path) -> dict[str, Any]:
 
 
 def _write_addon(
-    root: Path, name: str, *, depends_on: tuple[str, ...] = (), autoconfig: str = "SETTINGS = {}\n",
+    root: Path,
+    name: str,
+    *,
+    depends_on: tuple[str, ...] = (),
+    autoconfig: str = "SETTINGS = {}\n",
 ) -> None:
     package = root / name
     package.mkdir()
@@ -46,8 +51,7 @@ def _write_addon(
     write_addon_distribution(package, name, depends_on=depends_on)
     (package / "autoconfig.py").write_text(autoconfig)
     (package / "apps.py").write_text(
-        "from django.apps import AppConfig\nclass TestConfig(AppConfig):\n"
-        f"    name = {name!r}\n",
+        f"from django.apps import AppConfig\nclass TestConfig(AppConfig):\n    name = {name!r}\n",
     )
 
 
@@ -57,7 +61,6 @@ def test_base_is_installed_exactly_once(tmp_path: Path) -> None:
     settings = _compose(tmp_path)
     installed = settings["INSTALLED_APPS"]
     assert installed.count(BASE_APP) == 1
-
 
 
 def test_resources_root_expands_framework_dependencies(tmp_path: Path) -> None:
@@ -83,9 +86,7 @@ def test_resources_root_expands_framework_dependencies(tmp_path: Path) -> None:
     assert "angee.provenance" not in installed
     assert "CELERY_TASK_SOFT_TIME_LIMIT" not in settings
     assert "ANGEE_CHANGESET_MODEL" not in settings
-    assert "PROVENANCE_CHANGESET_MODEL" not in settings
     assert "PROVENANCE_POLICY" not in settings
-
 
 
 def test_iam_user_is_the_default_auth_model(tmp_path: Path) -> None:
@@ -100,7 +101,6 @@ def test_iam_user_is_the_default_auth_model(tmp_path: Path) -> None:
     assert RESOURCES_APP in installed
     assert settings["AUTH_USER_MODEL"] == "iam.User"
     assert "angee.iam" in installed
-
 
 
 @pytest.mark.parametrize(
@@ -133,7 +133,6 @@ def test_iam_admin_role_default_preserves_project_policy(
         assert app_settings.REBAC_UNIVERSAL_ADMIN_ROLE == expected
 
 
-
 def test_graphql_public_pk_is_sqid(tmp_path: Path) -> None:
     """Composed GraphQL filters expose sqid as the public pk name."""
 
@@ -141,7 +140,6 @@ def test_graphql_public_pk_is_sqid(tmp_path: Path) -> None:
 
     assert settings["STRAWBERRY_DJANGO"]["DEFAULT_PK_FIELD_NAME"] == "sqid"
     assert settings["STRAWBERRY_DJANGO"]["MAP_AUTO_ID_AS_GLOBAL_ID"] is False
-
 
 
 def test_iam_installs_csrf_middleware_for_session_graphql(tmp_path: Path) -> None:
@@ -159,7 +157,6 @@ def test_iam_installs_csrf_middleware_for_session_graphql(tmp_path: Path) -> Non
     assert session_at < csrf_at < auth_at < actor_at < bearer_at
 
 
-
 def test_django_security_headers_lead_and_csp_middleware_applies_view_policies(tmp_path: Path) -> None:
     """Every response passes Django's SecurityMiddleware first; its CSP middleware is composed too."""
 
@@ -167,7 +164,6 @@ def test_django_security_headers_lead_and_csp_middleware_applies_view_policies(t
 
     assert middleware[0] == "django.middleware.security.SecurityMiddleware"
     assert "django.middleware.csp.ContentSecurityPolicyMiddleware" in middleware
-
 
 
 def test_iam_auth_throttling_comes_from_axes(tmp_path: Path) -> None:
@@ -186,7 +182,6 @@ def test_iam_auth_throttling_comes_from_axes(tmp_path: Path) -> None:
     ]
     assert settings["AUTHENTICATION_BACKENDS"][0] == "axes.backends.AxesStandaloneBackend"
     assert "rebac.W001" in settings["SILENCED_SYSTEM_CHECKS"]
-
 
 
 def test_addons_are_sorted_by_declared_dependencies(tmp_path: Path) -> None:
@@ -208,7 +203,6 @@ def test_addons_are_sorted_by_declared_dependencies(tmp_path: Path) -> None:
     assert iam_at < notes_at
 
 
-
 def test_rebac_strict_mode_is_explicitly_pinned(tmp_path: Path) -> None:
     """Composed hosts keep REBAC strict mode enabled by default."""
 
@@ -217,14 +211,12 @@ def test_rebac_strict_mode_is_explicitly_pinned(tmp_path: Path) -> None:
     assert settings["REBAC_STRICT_MODE"] is True
 
 
-
 def test_rebac_bare_prefetch_lint_is_quiet_by_default(tmp_path: Path) -> None:
     """Composed hosts disable the structural REBAC relation audit by default."""
 
     settings = _compose(tmp_path)
 
     assert settings["REBAC_LINT_BARE_PREFETCH"] is False
-
 
 
 def test_rebac_bare_prefetch_lint_can_be_enabled_by_project(tmp_path: Path) -> None:
@@ -238,7 +230,6 @@ def test_rebac_bare_prefetch_lint_can_be_enabled_by_project(tmp_path: Path) -> N
     _configure(settings, tmp_path)
 
     assert settings["REBAC_LINT_BARE_PREFETCH"] is True
-
 
 
 def test_auth_user_model_comes_from_iam_autoconfig(
@@ -256,7 +247,6 @@ def test_auth_user_model_comes_from_iam_autoconfig(
         "angee.iam.auth.ModelBackend",
     ]
     assert settings["AUTH_USER_MODEL"] == "iam.User"
-
 
 
 def test_graphql_ide_default_is_debug_only(tmp_path: Path) -> None:
@@ -279,7 +269,6 @@ def test_graphql_ide_default_is_debug_only(tmp_path: Path) -> None:
     assert debug_settings["ANGEE_GRAPHQL_IDE"] == "graphiql"
 
 
-
 def test_graphql_uses_channels_redis_when_redis_url_is_set(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -296,7 +285,6 @@ def test_graphql_uses_channels_redis_when_redis_url_is_set(
     }
 
 
-
 def test_jobs_use_celery_broker_url_from_environment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -311,7 +299,6 @@ def test_jobs_use_celery_broker_url_from_environment(
     assert settings["CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP"] is True
 
 
-
 def _addon_test_config(name: str) -> AppConfig:
     """Return an ``AppConfig`` for a temp addon package.
 
@@ -322,7 +309,6 @@ def _addon_test_config(name: str) -> AppConfig:
     module = importlib.import_module(name)
     config_cls = getattr(importlib.import_module(f"{name}.apps"), "TestConfig")
     return config_cls(name, module)
-
 
 
 def test_capability_owners_ignore_unbound_conventional_annotations(
@@ -352,7 +338,6 @@ def test_capability_owners_ignore_unbound_conventional_annotations(
     assert tool_registrar(config) is None
 
 
-
 def test_bare_settings_use_addon_owned_defaults(settings, tmp_path: Path):
     """Source tests share production policy and provider defaults with fixture additions."""
 
@@ -380,7 +365,6 @@ def test_bare_settings_use_addon_owned_defaults(settings, tmp_path: Path):
     assert "pydantic" in settings.ANGEE_AGENT_RUNTIME_CLASSES
     assert "stub" in settings.ANGEE_VCS_BACKEND_CLASSES
     assert "stub" in settings.ANGEE_POSTS_FEED_BACKEND_CLASSES
-
 
 
 @pytest.mark.parametrize("include_messaging", [False, True])
@@ -415,7 +399,11 @@ def test_public_origin_joins_csrf_trusted_origins(tmp_path: Path, monkeypatch: p
 
 @pytest.mark.parametrize(("project", "environment", "expected"), [(None, None, 60), (30, None, 30), (30, "15", 15)])
 def test_server_statement_timeout_preserves_project_and_environment_policy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, project: int | None, environment: str | None, expected: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    project: int | None,
+    environment: str | None,
+    expected: int,
 ) -> None:
     monkeypatch.delenv("ANGEE_WEB_STATEMENT_TIMEOUT", raising=False)
     if environment is not None:
@@ -437,10 +425,13 @@ def test_data_directory_belongs_to_base_defaults(tmp_path: Path) -> None:
 
 
 def test_graphql_ide_rejects_competing_defaults_and_preserves_authored_choice(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _write_addon(
-        tmp_path, "custom_ide", depends_on=("angee.graphql",),
+        tmp_path,
+        "custom_ide",
+        depends_on=("angee.graphql",),
         autoconfig="SETTINGS = {'ANGEE_GRAPHQL_IDE': 'custom'}\n",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -453,7 +444,9 @@ def test_graphql_ide_rejects_competing_defaults_and_preserves_authored_choice(
 
 @pytest.mark.parametrize("environment", [False, True])
 def test_native_environment_values_reach_declared_and_derived_capability_settings(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, environment: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    environment: bool,
 ) -> None:
     (tmp_path / "settings.yaml").write_text("ANYMAIL:jsonenv: true\n")
     values = {
@@ -468,8 +461,10 @@ def test_native_environment_values_reach_declared_and_derived_capability_setting
             monkeypatch.setenv(name, value)
     namespace = {
         "INSTALLED_APPS": ["angee.jobs", "angee.graphql", "angee.operator", "angee.messaging"],
-        "CELERY_BROKER_URL": "redis://project.example.test/0", "CHANNEL_REDIS_URL": "redis://project.example.test/1",
-        "ANGEE_OPERATOR_URL": "https://project.example.test", "ANYMAIL": {"MAILGUN_API_KEY": "project"},
+        "CELERY_BROKER_URL": "redis://project.example.test/0",
+        "CHANNEL_REDIS_URL": "redis://project.example.test/1",
+        "ANGEE_OPERATOR_URL": "https://project.example.test",
+        "ANYMAIL": {"MAILGUN_API_KEY": "project"},
     }
     _configure(namespace, tmp_path)
     assert namespace["CELERY_BROKER_URL"] == (

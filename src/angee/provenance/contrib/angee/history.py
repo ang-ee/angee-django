@@ -35,10 +35,10 @@ from angee.base.models.persistence import PersistenceMixin
 from angee.iam.models.trash import ProtectedTrashMixin
 from angee.iam.permissions import candidate_relationships
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
-from angee.provenance.engine.history import HistoryAttribution
 from angee.provenance.engine.replay import HistoryScopeMixin
 from angee.provenance.history import (
     _UNLOADED,
+    HistoryAttribution,
 )
 from angee.provenance.history import (
     HistoryMixin as CaptureHistoryMixin,
@@ -321,9 +321,13 @@ class ModelHistory(CaptureHistory):
         restored = previous.instance
         if row is None:
             for parent in model._meta.get_parent_list():
-                stored = parent._base_manager.using(using).filter(
-                    pk=restored._get_pk_val(parent._meta),
-                ).first()
+                stored = (
+                    parent._base_manager.using(using)
+                    .filter(
+                        pk=restored._get_pk_val(parent._meta),
+                    )
+                    .first()
+                )
                 if stored is None:
                     raise ValidationError(
                         f"{parent._meta.label} {restored._get_pk_val(parent._meta)}: the MTI parent is unavailable."
@@ -432,7 +436,8 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
 
         tables = {*super().history_tables(), *concrete_lineage(type(self))}
         return tuple(
-            table for table in sorted(tables, key=lambda table: table._meta.label_lower)
+            table
+            for table in sorted(tables, key=lambda table: table._meta.label_lower)
             if model_history(table) is not None
         )
 
@@ -489,7 +494,9 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
         predicate = self.history_scope()[table]
         keys = set(table._base_manager.using(self._state.db).filter(predicate).values_list("pk", flat=True))
         keys.update(
-            get_history_manager_for_model(table).using(self._state.db).filter(predicate)
+            get_history_manager_for_model(table)
+            .using(self._state.db)
+            .filter(predicate)
             .values_list(table._meta.pk.attname, flat=True)
         )
         return keys
@@ -510,19 +517,23 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
             and changeset.outcome == changeset.Outcome.SUCCESS
         }
         merge_labels = {
-            changeset.record_ref.model_label.lower() for changeset in page.values()
+            changeset.record_ref.model_label.lower()
+            for changeset in page.values()
             if changeset.activity == changeset.Activity.MERGE
         }
         table_keys = {
             table._meta.label_lower: {str(key) for key in self._history_table_keys(table)}
-            for table in self.history_tables() if table._meta.label_lower in merge_labels
+            for table in self.history_tables()
+            if table._meta.label_lower in merge_labels
         }
         admitted = {
             changeset.pk
             for changeset in page.values()
             if changeset.activity == changeset.Activity.MERGE
-            and str(changeset.record_ref.object_id) in table_keys.get(
-                changeset.record_ref.model_label.lower(), set(),
+            and str(changeset.record_ref.object_id)
+            in table_keys.get(
+                changeset.record_ref.model_label.lower(),
+                set(),
             )
         }
         candidates = {pk: changeset for pk, changeset in page.items() if pk not in admitted}

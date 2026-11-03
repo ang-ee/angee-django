@@ -9,7 +9,7 @@ from pathlib import Path
 def test_old_colocated_history_migrates_capture_metadata_and_preserves_replay(tmp_path):
     # Two interpreters share the same real database. The first uses the old
     # simple-history field bases and serializer; the second uses the adapter.
-    script = r'''
+    script = r"""
 import hashlib
 import json
 import sys
@@ -20,7 +20,7 @@ settings.configure(
     INSTALLED_APPS=['django.contrib.contenttypes', 'django.contrib.auth', 'rebac',
                     'simple_history', 'angee.base', 'angee.iam', 'angee.provenance', 'angee.provenance.testing'],
     SECRET_KEY='retained-history-upgrade', AUTH_USER_MODEL='auth.User',
-    PROVENANCE_CHANGESET_MODEL='provenance.Changeset', ANGEE_MERGE_GUARDS=[],
+    ANGEE_CHANGESET_MODEL='provenance.Changeset', ANGEE_MERGE_GUARDS=[],
     PROVENANCE_POLICY='angee.provenance.contrib.angee.policy.AngeePolicy',
     REBAC_LOCAL_BACKEND_STORAGE='registry',
     DATABASES={alias: {'ENGINE':'django.db.backends.sqlite3', 'NAME':str(root / (alias + '.sqlite3'))}
@@ -140,12 +140,15 @@ else:
     row = Row._base_manager.using('selected').get(pk=1)
     assert row.title == 'before'
     assert get_history_manager_for_model(Row).using('selected').filter(history_changeset_id=inverse.pk).exists()
-'''
-    environment = {key: value for key, value in os.environ.items() if key != 'DJANGO_SETTINGS_MODULE'}
-    for mode in ('old', 'new'):
+"""
+    environment = {key: value for key, value in os.environ.items() if key != "DJANGO_SETTINGS_MODULE"}
+    for mode in ("old", "new"):
         result = subprocess.run(
-            [sys.executable, '-c', script, mode, str(tmp_path)],
-            cwd=Path(__file__).resolve().parents[1], env=environment,
-            capture_output=True, text=True, timeout=60,
+            [sys.executable, "-c", script, mode, str(tmp_path)],
+            cwd=Path(__file__).resolve().parents[1],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
         assert result.returncode == 0, result.stdout + result.stderr
