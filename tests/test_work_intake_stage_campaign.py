@@ -13,6 +13,7 @@ from angee.projects.testing.models import Link, Queue, Stage, Task
 from angee.spaces.testing.models import Membership
 from tests.conftest import Need, Page, RecordBinding, Vault
 from tests.messaging_campaign import grant
+from tests.queries import is_rebac_revision_read
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
 from tests.t3_campaign import messaging_access_schema as messaging_access_schema
@@ -177,31 +178,43 @@ def test_trash_revokes_public_read_bindings_and_follower_delivery(queue_case, ca
     assert not ThreadNotification._base_manager.filter(message=message, user=public_reader).exists()
 
 
-def test_stage_position_orders_the_task_list_by_the_queue_workflow(queue_case, django_assert_num_queries):
+def test_stage_position_orders_the_task_list_by_the_queue_workflow(queue_case):
     people, queue, task = queue_case
     with system_context(reason="tests.t3.stage_order"):
         early = Stage.objects.create(queue=queue, name="Earlier", category="unstarted", position=1)
         late = Stage.objects.create(queue=queue, name="Later", category="started", position=100)
         Task._base_manager.filter(pk=task.pk).update(stage=late)
         first = Task.objects.create(queue=queue, stage=early, title="First", owner=people["owner"])
-    # Resolve the native permission predicate before measuring the ordered SELECT.
-    query = (
-        Task.objects.with_actor(people["member"])
-        .scoped()
-        .filter(pk__in=(first.pk, task.pk))
-        .order_by("stage__position")
-    )
-    list(query.values_list("pk", flat=True))
-    # The fetch-only column guard shares one schema operation. Together with
-    # scoping: one shared revision read, actor sets, seventeen arrow sources (a record
-    # task reaches each declared subject type's direct holders, and a trashed
-    # task its trash authority), ordered SELECT. None grows with the rows.
-    with django_assert_num_queries(20) as queries:
-        assert list(query.values_list("pk", flat=True)) == [first.pk, task.pk]
-    # One SELECT orders by stage position; the task arrow source reads the table on its own.
-    ordered = [
-        query["sql"] for query in queries.captured_queries
-        if query["sql"].startswith(f'SELECT "{Task._meta.db_table}".')
-        and f'ORDER BY "{Stage._meta.db_table}"."position"' in query["sql"]
-    ]
-    assert len(ordered) == 1, ordered
+        early_ids = [first.pk]
+        late_ids = [task.pk]
+        for index in range(10):
+            early_ids.append(
+                Task.objects.create(queue=queue, stage=early, title=f"Earlier {index}", owner=people["owner"]).pk
+            )
+            late_ids.append(
+                Task.objects.create(queue=queue, stage=late, title=f"Later {index}", owner=people["owner"]).pk
+            )
+    counts = []
+    for ids, expected in (
+        ((first.pk, task.pk), [first.pk, task.pk]),
+        (tuple(early_ids + late_ids), early_ids + late_ids),
+    ):
+        # Both sizes use REBAC's set plan. A fresh scope measures its actor-set
+        # decision, revision and ordered application SELECT together.
+        query = Task.objects.with_actor(people["member"]).scoped().filter(pk__in=ids).order_by("stage__position", "pk")
+        with CaptureQueriesContext(connection) as queries:
+            assert list(query.values_list("pk", flat=True)) == expected
+        # Recovery REBAC compiles task arrows into the ordered SELECT. The
+        # predicate and stage ordering survive in that one application read.
+        assert sum(is_rebac_revision_read(item["sql"]) for item in queries) == 1
+        assert sum(item["sql"].startswith("SELECT DISTINCT ") for item in queries) == 1
+        ordered = [
+            item["sql"]
+            for item in queries
+            if item["sql"].startswith(f'SELECT "{Task._meta.db_table}".')
+            and f'ORDER BY "{Stage._meta.db_table}"."position"' in item["sql"]
+        ]
+        assert len(ordered) == 1, queries.captured_queries
+        assert "WITH RECURSIVE" in ordered[0] and "EXISTS(" in ordered[0]
+        counts.append(len(queries))
+    assert counts == [3, 3], counts
