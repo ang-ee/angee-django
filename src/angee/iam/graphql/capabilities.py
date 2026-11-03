@@ -12,31 +12,35 @@ import strawberry
 import strawberry_django
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
-from rebac import current_actor
+from rebac import SubjectRef, current_actor
 from rebac import permission_expression as native_permission_expression
 from rebac.relation_loading import relation_actor
 from strawberry.extensions import FieldExtension
 from strawberry.types.field import StrawberryField
 from strawberry_django.fields.field import StrawberryDjangoField
 
-from angee.iam.permissions import declared_rebac_definition, require_rebac_queryset
+from angee.iam.permissions import declared_rebac_definition, instance_actor, require_rebac_queryset
 
 _ACTOR = "_angee_permission_actor"
 
 
-def permission_annotations(model: type[models.Model], names: Iterable[str]) -> dict[str, Any]:
+def permission_annotations(
+    model: type[models.Model], names: Iterable[str], *, actor: SubjectRef | None = None
+) -> dict[str, Any]:
     """Batch named permission answers in the list query through native SQL scopes.
 
     Strawberry fields add these as optimizer hints. Authored collection resolvers
     can use the same annotations before materializing rows for held_permissions.
+    ``actor`` defaults to the ambient actor; held_permissions supplies the
+    record's pinned or ambient actor explicitly.
     No result cache outlives the returned rows, and the actor stamp prevents reuse
     of a projection under another identity.
     """
 
-    actor = current_actor()
+    actor = actor if actor is not None else current_actor()
     annotations: dict[str, Any] = {_ACTOR: models.Value(str(actor))}
     for name in names:
-        annotations[f"_angee_permission_{name}"] = _permission_annotation(model, name)
+        annotations[f"_angee_permission_{name}"] = _permission_annotation(model, name, actor=actor)
         annotations[f"_angee_permission_owner_{name}"] = models.Value(model._meta.label_lower)
     return annotations
 
@@ -47,17 +51,17 @@ def held_permissions(
     *,
     model: type[models.Model] | None = None,
 ) -> frozenset[str]:
-    """Return declared permission names held by the ambient actor on this row.
+    """Return declared permission names held by the row's pinned or ambient actor.
 
     List projections reuse SQL annotations; single records use the same
     annotations on a one-row queryset. Neither instance-local nor ambient
-    elevation grants a capability: the permission scopes pin the concrete
-    ambient actor. Without an actor no capabilities are granted.
+    elevation grants a capability: the permission scopes pin the resolved
+    actor. Without an actor no capabilities are granted.
     ``model`` may name an MTI ancestor owning the requested permission; its row
     shares the record's primary key.
     """
 
-    actor = current_actor()
+    actor = instance_actor(record)
     if actor is None:
         return frozenset()
     owner = _permission_model(type(record), model)
@@ -68,7 +72,7 @@ def held_permissions(
         or values.get(f"_angee_permission_owner_{name}", record._meta.label_lower) != owner._meta.label_lower
         for name in names
     ):
-        annotations = permission_annotations(owner, names)
+        annotations = permission_annotations(owner, names, actor=actor)
         values = (
             require_rebac_queryset(owner)
             .system_context(reason="graphql.permissions")
@@ -126,9 +130,13 @@ def _permission_model(model: type[models.Model], owner: type[models.Model] | Non
     return owner
 
 
-def _permission_annotation(model: type[models.Model], name: str, info: Any = None) -> Any:
+def _permission_annotation(
+    model: type[models.Model], name: str, info: Any = None, *, actor: SubjectRef | None = None
+) -> Any:
     del info
-    return permission_expression(model._default_manager.all(), name)
+    actor = actor if actor is not None else current_actor()
+    queryset = model._default_manager.all()
+    return permission_expression(queryset if actor is None else queryset.with_actor(actor), name)
 
 
 def permission_expression(queryset: models.QuerySet[Any], name: str) -> models.Expression:
