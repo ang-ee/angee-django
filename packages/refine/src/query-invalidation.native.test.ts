@@ -327,39 +327,200 @@ test("a continuous change stream still flushes within the max wait", async () =>
   }
 });
 
-test("a live change cancels a populated in-flight refresh at once; its late response never commits", async () => {
+test("slow retained reads commit within one latency and quiet gap while later changes share one follow-up", async () => {
   vi.useFakeTimers();
   const cache = client();
   const live = createAuthoredLiveInvalidation(cache);
-  const stale = pending<string[]>();
-  let revision = "initial";
-  let staleSignal!: AbortSignal;
+  const queryKey = ["notes", "slow-live"];
+  cache.setQueryData(queryKey, ["initial"]);
+  let revision = 0;
+  const signals: AbortSignal[] = [];
   const observer = new QueryObserver(cache, {
-    queryKey: ["notes", "live"],
+    queryKey,
     meta: { angeeModels: ["notes.Note"] },
-    queryFn: ({ signal }: { signal: AbortSignal }) => {
-      if (revision === "stale") { staleSignal = signal; return stale.promise; }
-      return Promise.resolve([revision]);
+    queryFn: ({ signal }: { signal: AbortSignal }) => new Promise<string[]>((resolve) => {
+      const value = revision;
+      signals.push(signal);
+      setTimeout(() => resolve([`revision-${value}`]), 1200);
+    }),
+  });
+  const unsubscribe = observer.subscribe(() => undefined);
+  try {
+    revision = 1;
+    live.push({ model: "notes.Note", id: "note_1" });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(signals).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(100);
+    revision = 2;
+    live.push({ model: "notes.Note", id: "note_2" });
+    await vi.advanceTimersByTimeAsync(400);
+    revision = 3;
+    live.push({ model: "notes.Note", id: "note_3" });
+    await vi.advanceTimersByTimeAsync(700);
+    // 1200 ms read latency exceeds the 400 ms event gap. Its first snapshot
+    // still commits by 1200 ms + the initial 300 ms quiet gap.
+    expect(observer.getCurrentResult().data).toEqual(["revision-1"]);
+    expect(signals[0]?.aborted).toBe(false);
+    expect(signals).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(200);
+    revision = 4;
+    live.push({ model: "notes.Note", id: "note_4" });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(observer.getCurrentResult().data).toEqual(["revision-3"]);
+    expect(signals).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(signals.every((signal) => !signal.aborted)).toBe(true);
+    expect(signals).toHaveLength(3);
+    expect(observer.getCurrentResult().fetchStatus).toBe("idle");
+    expect(observer.getCurrentResult().data).toEqual(["revision-4"]);
+  } finally {
+    live.clear();
+    unsubscribe(); cache.clear();
+  }
+});
+
+test("a live change still cancels a matching data-less fetch before the quiet gap", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const live = createAuthoredLiveInvalidation(cache);
+  const old = pending<string[]>();
+  let signal!: AbortSignal;
+  let reads = 0;
+  const observer = new QueryObserver(cache, {
+    queryKey: ["notes", "empty-live"], meta: { angeeModels: ["notes.Note"] },
+    queryFn: ({ signal: current }: { signal: AbortSignal }) => {
+      reads++;
+      if (reads === 1) { signal = current; return old.promise; }
+      return Promise.resolve(["fresh"]);
     },
   });
   const unsubscribe = observer.subscribe(() => undefined);
   try {
-    await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["initial"]));
-    revision = "stale";
-    void observer.refetch();
-    await vi.waitFor(() => expect(staleSignal).toBeDefined());
-    revision = "current";
-    live.push({ model: "notes.Note", id: "note_revoked" });
-    // Cancelled on arrival, before the coalesced flush.
-    expect(staleSignal.aborted).toBe(true);
-    stale.resolve(["initial", "revoked"]);
-    await vi.advanceTimersByTimeAsync(100);
-    expect(observer.getCurrentResult().data).toEqual(["initial"]);
+    live.push({ model: "notes.Note", id: "note_1" });
+    expect(signal.aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(300);
-    await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(["current"]));
+    expect(reads).toBe(2);
+    expect(observer.getCurrentResult().data).toEqual(["fresh"]);
+    old.resolve(["stale"]);
+    await old.promise;
+    expect(observer.getCurrentResult().data).toEqual(["fresh"]);
   } finally {
-    stale.resolve([]);
-    unsubscribe(); cache.clear();
+    old.resolve([]);
+    live.clear(); unsubscribe(); cache.clear();
+  }
+});
+
+test("an awaited command settles after one live follow-up while later changes continue", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const reads = [pending<string>(), pending<string>(), pending<string>()];
+  const key = ["slow-live-command"];
+  cache.setQueryData(key, "initial");
+  let attempts = 0;
+  const slow = new QueryObserver(cache, {
+    queryKey: key, meta: { angeeModels: ["notes.Note"] },
+    queryFn: () => reads[attempts++]!.promise,
+  });
+  const commandRead = new QueryObserver(cache, {
+    queryKey: ["command-result"], meta: { angeeModels: ["notes.Tag"] },
+    queryFn: async () => "current",
+  });
+  const stops = [slow.subscribe(() => undefined), commandRead.subscribe(() => undefined)];
+  const live = createAuthoredLiveInvalidation(cache);
+  try {
+    void slow.refetch();
+    expect(attempts).toBe(1);
+    live.push({ model: "notes.Note", id: "note_1" });
+    let settled = false;
+    const command = live.reconcile({ changes: [{ model: "notes.Tag", id: "tag_1" }] })
+      .then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(settled).toBe(false);
+    reads[0]!.resolve("first");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(attempts).toBe(2);
+    live.push({ model: "notes.Note", id: "note_2" });
+    await vi.advanceTimersByTimeAsync(300);
+    reads[1]!.resolve("follow-up");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(attempts).toBe(3);
+    expect(settled).toBe(true);
+    reads[2]!.resolve("later");
+    await command;
+  } finally {
+    reads.forEach((read) => read.resolve("cleanup"));
+    live.clear(); stops.forEach((stop) => stop()); cache.clear();
+  }
+});
+
+test("local command reconciliation still cancels a populated in-flight read on arrival", async () => {
+  const cache = client();
+  const old = pending<string>();
+  const key = ["command-cancel"];
+  cache.setQueryData(key, "initial");
+  let signal!: AbortSignal;
+  let attempts = 0;
+  const observer = new QueryObserver(cache, {
+    queryKey: key, meta: { angeeModels: ["notes.Note"] },
+    queryFn: ({ signal: current }: { signal: AbortSignal }) => {
+      attempts++;
+      if (attempts === 1) { signal = current; return old.promise; }
+      return Promise.resolve("fresh");
+    },
+  });
+  const stop = observer.subscribe(() => undefined);
+  const live = createAuthoredLiveInvalidation(cache);
+  try {
+    void observer.refetch();
+    await live.batch(async (scope) => {
+      await scope!.reconcile({ changes: [{ model: "notes.Note", id: "note_1" }] });
+      expect(signal.aborted).toBe(true);
+    });
+    expect(attempts).toBe(2);
+    expect(observer.getCurrentResult().data).toBe("fresh");
+    old.resolve("obsolete");
+    await old.promise;
+    expect(observer.getCurrentResult().data).toBe("fresh");
+  } finally {
+    old.resolve("cleanup");
+    live.clear(); stop(); cache.clear();
+  }
+});
+
+test("a full live refresh stays full when targeted changes join across flushes", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const old = pending<string>();
+  const key = ["feed"];
+  cache.setQueryData(key, "initial");
+  let attempts = 0;
+  let received: unknown;
+  const observer = new QueryObserver(cache, {
+    queryKey: key, meta: { angeeModels: ["notes.Note"] },
+    queryFn: ({ meta }) => {
+      attempts++;
+      if (attempts === 1) return old.promise;
+      received = meta?.angeeChanges;
+      return Promise.resolve("fresh");
+    },
+  });
+  const stop = observer.subscribe(() => undefined);
+  const live = createAuthoredLiveInvalidation(cache,
+    (query, change) => query.queryKey[0] === "feed" && change.model === "notes.Tag");
+  try {
+    void observer.refetch();
+    live.push({ model: "notes.Note", id: "note_1", action: "update" });
+    await vi.advanceTimersByTimeAsync(300);
+    live.push({ model: "notes.Tag", id: "tag_1", action: "update" });
+    await vi.advanceTimersByTimeAsync(300);
+    old.resolve("old");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(received).toEqual([]);
+    expect(attempts).toBe(2);
+    expect(observer.getCurrentResult().data).toBe("fresh");
+  } finally {
+    old.resolve("cleanup");
+    live.clear(); stop(); cache.clear();
   }
 });
 
