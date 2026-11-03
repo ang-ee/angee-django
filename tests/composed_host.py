@@ -135,6 +135,7 @@ def boot(
         "INSTALLED_APPS": installed_apps,
         "DATABASES": {"default": database},
         "ANGEE_MONEY_REFERENCE_CURRENCY": "USD",
+        "ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER": True,
     }, sort_keys=True), encoding="utf-8")
     if os.environ.get("PYTHONPATH"):
         python_paths.append(os.environ["PYTHONPATH"])
@@ -518,7 +519,6 @@ def run(args: argparse.Namespace) -> None:
         if not args.test_postgresql:
             assert settings.DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3"
             assert settings.DATABASES["default"]["NAME"] == ":memory:"
-        settings.ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER = True
         # This disposable host has no migration history. Sync the whole current
         # model graph together, including contenttypes and REBAC's witness table;
         # mixed sync/migrate ordering leaves generated foreign keys dangling.
