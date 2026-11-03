@@ -16,16 +16,14 @@ from rebac.resources import model_resource_type
 from angee.base.signals import connect_for_models
 from angee.decisions.signals import decision_answered
 from angee.iam.service_users import deactivate_service_user
+from angee.jobs.enqueue import enqueue_task
 
 logger = logging.getLogger(__name__)
 
 
 def wake_decision(sender: Any, *, decision: Any, **kwargs: Any) -> None:
-    """Dispatch settled decisions after commit, once the runner's model owners exist."""
-    # The runner composes managers that import this module's run_stopping signal.
-    from angee.workflows.runner import runner
-
-    transaction.on_commit(lambda: runner.wake_decisions(decision.pk), robust=True)
+    """Enqueue the wake once the verdict commits; the worker wakes the waiting step."""
+    enqueue_task("workflows.wake_decisions", kwargs={"decision_id": decision.pk}, robust=True)
 
 
 def deactivate_workflow_principal(sender: Any, *, instance: Any, **kwargs: Any) -> None:
