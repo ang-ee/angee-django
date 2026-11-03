@@ -52,10 +52,12 @@ SETTINGS = {
 
 
 def settings(namespace: Mapping[str, Any]) -> dict[str, Any]:
-    """Isolate local projects' cookies; browsers share localhost cookies across ports.
+    """Derive IAM's REBAC depth and isolate cookies shared on localhost ports.
 
+    An explicit REBAC_DEPTH_LIMIT wins; otherwise SQLite defaults to eight and
+    another or unset engine defaults to sixteen. Browsers share localhost cookies
+    across ports, so local projects use names based on the stable project path.
     Production and explicit cookie names retain their host-defined behavior.
-    The project path is stable across process reloads and source workspaces.
     """
 
     result = {"REBAC_DEPTH_LIMIT": int(namespace.get(

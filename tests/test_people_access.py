@@ -58,7 +58,8 @@ def test_record_readers_use_effective_people_index(
             return {"reader": "share"}
 
     target = SimpleNamespace()
-    monkeypatch.setattr(schema, "AngeeModel", TargetModel)
+    # c7732c91a made the IAM console accept protected models, not neutral base models.
+    monkeypatch.setattr(schema, "ProtectedModel", TargetModel)
     monkeypatch.setattr(schema, "model_for_resource_type", lambda resource: TargetModel)
     calls: list[tuple[object, ...]] = []
     def authorized(*args: object) -> tuple[object, list[str]]:
@@ -96,7 +97,8 @@ def test_record_readers_accepts_a_role_only_model(
             return {}
 
     target = SimpleNamespace()
-    monkeypatch.setattr(schema, "AngeeModel", RoleOnlyModel)
+    # c7732c91a moved the record target type guard to IAM's ProtectedModel.
+    monkeypatch.setattr(schema, "ProtectedModel", RoleOnlyModel)
     monkeypatch.setattr(schema, "model_for_resource_type", lambda _type: RoleOnlyModel)
     monkeypatch.setattr(schema, "authorized_permission_target", lambda *_args: target)
     monkeypatch.setattr(schema, "rebac_backend", lambda: SimpleNamespace(lookup_subjects=lambda **_kwargs: ()))

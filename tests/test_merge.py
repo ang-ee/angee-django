@@ -13,7 +13,7 @@ import pytest
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import router
+from django.db import models, router
 from django.db.models import DO_NOTHING
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
@@ -32,7 +32,10 @@ from angee.base.models.merge_references import (
     references,
 )
 from angee.base.signals import bulk_updated
+from angee.iam import refs as iam_refs
 from angee.iam.graphql import records
+from angee.iam.models import base as iam_model_base
+from angee.iam.models import merge as iam_model_merge
 from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.messaging.testing.models import Directory, Participant, Party, Reaction
 from angee.projects.testing.models import Link, Project, Queue, Task
@@ -375,10 +378,11 @@ def test_a_share_on_a_multi_table_child_row_is_seen_from_its_parent() -> None:
     with system_context(reason="merge test mti share"):
         child = MtiChild.objects.create(title="Shared", detail="child")
         parent = MtiParent._base_manager.get(pk=child.pk)
-        assert not merge_module.named_in_relationships(parent)
+        # c7732c91a moved stored relationship retention to IAM.
+        assert not iam_refs.named_in_relationships(parent)
         share = RelationshipTuple(resource=to_object_ref(child), relation="reader", subject=to_subject_ref(reader))
         write_relationships([share])
-        assert merge_module.named_in_relationships(parent)
+        assert iam_refs.named_in_relationships(parent)
 
 
 def _links(tag: Any, title: str) -> Any:
@@ -473,14 +477,21 @@ def test_a_record_named_in_stored_relationships_is_retained_by_its_merge(monkeyp
     owner, reader = create_user("merge-share-owner"), create_user("merge-share-reader")
     with system_context(reason="merge test share"):
         project = Project.objects.create(title="Shared", owner=owner)
-        assert not merge_module.named_in_relationships(project)
+        # c7732c91a moved the relationship reader and retained() hook to IAM.
+        assert not iam_refs.named_in_relationships(project)
         project.system_grant_record_access("reader", reader)
-        assert merge_module.named_in_relationships(project)
+        assert iam_refs.named_in_relationships(project)
 
     mobile, mobil, _ada, _bob = _vocabulary()
-    monkeypatch.setattr(merge_module, "named_in_relationships", lambda record: record.pk == mobil.pk)
-    # A record with evidence (`retained()`) is kept as a redirect instead of deleted,
-    # so the stored relationship outlives the merge and nothing refuses it.
+
+    # c7732c91a moved the merge refusal and retained() checks to separate IAM bindings.
+    def named(record: models.Model) -> bool:
+        return record.pk == mobil.pk
+
+    monkeypatch.setattr(iam_model_base, "named_in_relationships", named)
+    monkeypatch.setattr(iam_model_merge, "named_in_relationships", named)
+    # A named record with retention evidence stays as a redirect; the IAM merge
+    # refusal must consult that retention before rejecting its stored relationship.
     with actor_context(_curator("merge-shared")):
         Tag.objects.get(pk=mobile.pk).merge(records=[public_id_of(mobil)])
     with system_context(reason="merge test read"):

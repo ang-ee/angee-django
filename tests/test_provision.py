@@ -99,7 +99,8 @@ def test_provision_sync_replaces_invalid_historical_subject_sets_before_checks()
         with pytest.raises(SchemaError, match="names a permission"):
             call_command("check", verbosity=0)
         command = Command()
-        apps.get_app_config("base").compose_provision(
+        # c7732c91a moved REBAC provisioning to IAM's native app config.
+        apps.get_app_config("iam").compose_provision(
             provision.ProvisionContext("default", command.stdout, command.stderr),
         )
         provision.run_step(command, ["check"])

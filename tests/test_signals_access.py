@@ -42,6 +42,7 @@ from angee.graphql.schema import DEFAULT_SCHEMA_NAME, GraphQLSchemas
 from angee.graphql.subscriptions import changes
 from angee.iam.graphql import access
 from angee.iam.graphql.access import ChangeReadGate
+from angee.iam.models.base import ProtectedModel
 from tests.conftest import SchemaAddon
 from tests.tables import model_tables
 
@@ -91,8 +92,9 @@ def test_audit_mixin_stamps_from_rebac_actor_inside_save() -> None:
             db_table = GlobalUser._meta.db_table
             managed = False
 
-    class AuditStamped(TimestampMixin, AuditMixin, models.Model):
-        """Concrete audit model used to test model-owned stamping."""
+    # c7732c91a made protected models own actor attribution for audit stamping.
+    class AuditStamped(AuditMixin, ProtectedModel):
+        """Protected audit model used to test model-owned stamping."""
 
         id = models.CharField(max_length=32, primary_key=True)
         name = models.CharField(max_length=64)
@@ -102,20 +104,39 @@ def test_audit_mixin_stamps_from_rebac_actor_inside_save() -> None:
 
             app_label = "auth"
 
+    class NeutralStamped(TimestampMixin, AuditMixin, models.Model):
+        """Neutral audit model with no implicit actor attribution."""
+
+        id = models.CharField(max_length=32, primary_key=True)
+        name = models.CharField(max_length=64)
+
+        class Meta:
+            app_label = "auth"
+
     creator = GlobalUser.objects.create_user(username="audit-creator")
     editor = GlobalUser.objects.create_user(username="audit-editor")
 
-    with model_tables((AuditStamped,)):
+    with model_tables((AuditStamped, NeutralStamped)):
         with actor_context(creator):
             row = AuditStamped.objects.create(id="known", name="first")
+            # c7732c91a leaves a neutral row's audit fields unstamped.
+            neutral = NeutralStamped.objects.create(id="neutral", name="first")
+        neutral.refresh_from_db()
+        assert neutral.created_by_id is None
+        assert neutral.updated_by_id is None
         row.refresh_from_db()
         assert row.created_by_id == creator.pk
         assert row.updated_by_id == creator.pk
         previous_updated_at = timezone.now() - datetime.timedelta(days=1)
-        AuditStamped.objects.filter(pk=row.pk).update(updated_at=previous_updated_at)
+        # c7732c91a made protected bulk writes require an explicit system boundary.
+        AuditStamped.objects.system_context(reason="audit test backdate").filter(pk=row.pk).update(
+            updated_at=previous_updated_at,
+        )
         row.refresh_from_db()
 
         with actor_context(editor):
+            # Protected rows resolve their pinned actor before the ambient one; rebind the editor.
+            row = row.with_actor(editor)
             row.name = "second"
             row.save(update_fields={"name"})
         row.refresh_from_db()

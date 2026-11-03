@@ -9,9 +9,9 @@ from django.apps import apps
 from django.db import models
 from rebac import MissingActorError, RebacMixin, SubjectRef, system_context
 
-from angee.base import identity as identity_module
 from angee.base.identity import public_data_id_field
 from angee.base.models.identity import instance_from_public_id, public_id_for, public_id_of
+from angee.iam import identity as identity_module
 from angee.iam.identity import canonical_subject_ref, public_subject_ref
 from angee.iam.models.base import ProtectedDataModel, ProtectedModel
 from tests.tables import model_tables
@@ -95,6 +95,7 @@ def test_subject_identity_converts_only_at_the_public_boundary(
 ) -> None:
     """Model subjects store PKs while transport subjects retain opaque public ids."""
 
+    # c7732c91a moved subject identity conversion from base to IAM.
     monkeypatch.setattr(identity_module, "model_for_resource_type", lambda _resource_type: PublicIdThing)
     canonical = SubjectRef.of("tests/public-id-thing", "42")
     public = public_subject_ref(canonical)

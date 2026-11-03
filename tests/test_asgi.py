@@ -16,6 +16,7 @@ from django.db.backends.signals import connection_created
 from django.urls import path
 
 from angee.graphql import asgi
+from angee.iam import asgi as iam_asgi
 from angee.iam.graphql.consumers import IAMGraphQLWSConsumer
 from angee.server.signals import WEB_STATEMENT_TIMEOUT_UID, connect_web_statement_timeout
 from tests.conftest import make_addon
@@ -141,13 +142,16 @@ def test_websocket_addon_wrappers_are_optional_and_run_after_authentication(
     settings.DEBUG = True
     settings.ALLOWED_HOSTS = ["localhost"]
     seen: list[str] = []
-    addons = [SimpleNamespace(name=name) for name in ("routes", *wrapper_names)]
+    # 28ce9633a made authentication an IAM WebSocket contribution.
+    addons = [SimpleNamespace(name=name) for name in ("routes", "angee.iam", *wrapper_names)]
     monkeypatch.setattr("django.apps.apps.get_app_configs", lambda: addons)
 
     def contribution_module(config: Any, module: str, **options: Any) -> Any:
         assert module == "asgi"
         if config.name == "routes":
             return SimpleNamespace(__name__="routes.asgi", websocket_urlpatterns=[path("ws", endpoint)])
+        if config.name == "angee.iam":
+            return iam_asgi
 
         def wrap(inner: Any) -> Any:
             async def middleware(scope: Any, receive: Any, send: Any) -> None:

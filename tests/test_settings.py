@@ -77,10 +77,11 @@ def test_resources_root_expands_framework_dependencies(tmp_path: Path) -> None:
     base_at = installed.index(BASE_APP)
     resources_at = installed.index(RESOURCES_APP)
 
-    assert base_at < resources_at < compose_at
+    # c7732c91a made resources depend on IAM, whose closure includes base.
+    iam_at = installed.index("angee.iam")
+    assert base_at < iam_at < resources_at < compose_at
     assert GRAPHQL_APP not in installed
-    assert "angee.iam" not in installed
-    assert "REBAC_UNIVERSAL_ADMIN_ROLE" not in settings
+    assert settings["REBAC_UNIVERSAL_ADMIN_ROLE"] == "angee/role:admin"
     assert "angee.jobs" not in installed
     assert "simple_history" not in installed
     assert "angee.provenance" not in installed
@@ -197,9 +198,9 @@ def test_addons_are_sorted_by_declared_dependencies(tmp_path: Path) -> None:
     resources_at = installed.index(RESOURCES_APP)
     notes_at = installed.index("example.notes")
 
-    assert base_at < resources_at < compose_at
-    assert base_at < graphql_at < iam_at
-    assert resources_at < iam_at
+    # c7732c91a inverted the resources/IAM edge and removed IAM's GraphQL edge.
+    assert base_at < iam_at < resources_at < compose_at
+    assert base_at < graphql_at < compose_at
     assert iam_at < notes_at
 
 
