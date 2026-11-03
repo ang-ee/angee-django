@@ -10,9 +10,16 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize("operation", [
-    "explicit-source", "separate-history", "bound-history", "failed-bulk", "protected-delete",
-])
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "explicit-source",
+        "separate-history",
+        "bound-history",
+        "failed-bulk",
+        "protected-delete",
+    ],
+)
 def test_native_capture_preserves_database_owners_without_host_imports(tmp_path: Path, operation: str) -> None:
     _capture_database_owner_contract(tmp_path, operation)
 
@@ -67,10 +74,14 @@ class RetainedRow(models.Model):
 """)
     if angee_adapter:
         models_path = package / "models.py"
-        models_path.write_text(models_path.read_text().replace(
-            "from angee.provenance.history import HistoryMixin, ModelHistory",
-            "from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory",
-        ).replace("use_base_model_db=False", "use_base_model_db=True"))
+        models_path.write_text(
+            models_path.read_text()
+            .replace(
+                "from angee.provenance.history import HistoryMixin, ModelHistory",
+                "from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory",
+            )
+            .replace("use_base_model_db=False", "use_base_model_db=True")
+        )
     script = """
 import os
 import sys
@@ -114,7 +125,7 @@ settings.configure(
     DATABASES={name: {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}
                for name in ("default", "secondary")},
     DATABASE_ROUTERS=[StorageRouter()],
-    PROVENANCE_CHANGESET_MODEL="native_capture.Changeset",
+    ANGEE_CHANGESET_MODEL="native_capture.Changeset",
     SECRET_KEY="native-capture-test",
     USE_TZ=True,
 )

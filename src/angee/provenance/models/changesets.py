@@ -38,12 +38,12 @@ from angee.base.signals import bulk_updated
 from angee.iam.managers import ProtectedUnscopedManager
 from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.iam.permissions import actor_user_id, instance_actor
+from angee.provenance.context import actor_context as provenance_actor_context
 from angee.provenance.context import is_current_changeset
 from angee.provenance.contrib.angee.exceptions import ChangesetRequired
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.policy import angee_policy
 from angee.provenance.engine.base import AbstractChangeset
-from angee.provenance.engine.context import actor_context as provenance_actor_context
 from angee.provenance.engine.replay import ordered_states
 from angee.provenance.managers import ChangesetManager
 from angee.provenance.querysets import model_history

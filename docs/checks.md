@@ -163,7 +163,10 @@ pytest process. The isolated host routes `provenance` migrations to its own
 `storage/migrations` fixture; the addon ships no migration history. CI runs the
 full isolated suite on SQLite and its three PostgreSQL-only cases in the
 PostgreSQL shard, with a zero-skip gate there. The host check, migration-drift
-check and strict engine type check also run in CI.
+check and strict engine type check also run in CI. The PostgreSQL shard runs
+all 120 isolated-host cases with an exact-count, zero-skip JUnit gate; the
+quality job runs framework mypy before the isolated engine steps and evaluates
+those steps after a mypy failure.
 
 A test that reaches a statement source needs the install-tier `provenance.Rule`
 principals parties declares: list

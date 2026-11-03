@@ -11,7 +11,9 @@ import pytest
 @pytest.mark.parametrize("outcome", ["success", "failure"])
 def test_actual_changeset_storage_uses_selected_database_and_restores_scope(outcome):
     root = Path(__file__).resolve().parents[1]
-    script = f"expected_outcome = {outcome!r}\n" + """
+    script = (
+        f"expected_outcome = {outcome!r}\n"
+        + """
 from django.conf import settings
 class DefaultRouter:
     def db_for_read(self, model, **hints):
@@ -21,7 +23,7 @@ settings.configure(
     INSTALLED_APPS=['django.contrib.contenttypes', 'django.contrib.auth', 'rebac',
                     'simple_history', 'angee.base', 'angee.iam', 'angee.provenance', 'angee.provenance.testing'],
     SECRET_KEY='actual-storage-alias-test', AUTH_USER_MODEL='auth.User',
-    PROVENANCE_CHANGESET_MODEL='provenance.Changeset', ANGEE_MERGE_GUARDS=[],
+    ANGEE_CHANGESET_MODEL='provenance.Changeset', ANGEE_MERGE_GUARDS=[],
     PROVENANCE_POLICY='angee.provenance.contrib.angee.policy.AngeePolicy',
     REBAC_LOCAL_BACKEND_STORAGE='registry', DATABASE_ROUTERS=[DefaultRouter()],
     DATABASES={alias: {'ENGINE':'django.db.backends.sqlite3', 'NAME':':memory:'}
@@ -162,9 +164,14 @@ with actor_context(actor), database_context('default'):
     assert (default_row.title, default_row.counter) == ('default untouched', 99)
 
 """
-    environment = {key: value for key, value in os.environ.items() if key != 'DJANGO_SETTINGS_MODULE'}
+    )
+    environment = {key: value for key, value in os.environ.items() if key != "DJANGO_SETTINGS_MODULE"}
     result = subprocess.run(
-        [sys.executable, '-c', script], cwd=root, env=environment,
-        capture_output=True, text=True, timeout=60,
+        [sys.executable, "-c", script],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
     assert result.returncode == 0, result.stdout + result.stderr

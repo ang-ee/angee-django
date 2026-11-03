@@ -65,7 +65,7 @@ class Migration(migrations.Migration):
                 "ordering": ("-recorded_at", "-pk"),
                 "permissions": (("export_changeset", "Can export lossless changeset history"),),
                 "abstract": False,
-                "swappable": "PROVENANCE_CHANGESET_MODEL",
+                "swappable": "ANGEE_CHANGESET_MODEL",
                 "indexes": [
                     models.Index(fields=["-recorded_at", "-id"], name="provenance_changeset_recorded"),
                     models.Index(

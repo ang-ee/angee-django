@@ -13,7 +13,7 @@ from simple_history.utils import get_history_manager_for_model
 
 from angee.iam.querysets import ProtectedQuerySet
 from angee.provenance.contrib.angee.history import HistoryMixin
-from angee.provenance.engine.querysets import ChangesetQuerySet as NativeChangesetQuerySet
+from angee.provenance.querysets import ChangesetQuerySet as NativeChangesetQuerySet
 from angee.provenance.querysets import model_history
 from angee.provenance.statements import StatementsMixin
 
@@ -34,7 +34,8 @@ class ChangesetQuerySet[T: models.Model](ProtectedQuerySet[T], NativeChangesetQu
         )
         for table, content_type in content_types.items():
             predicate |= Q(
-                activity="merge", origin_content_type=content_type,
+                activity="merge",
+                origin_content_type=content_type,
                 origin_object_id__in=[str(key) for key in record._history_table_keys(table)],
             )
         return predicate
@@ -64,9 +65,12 @@ class ChangesetQuerySet[T: models.Model](ProtectedQuerySet[T], NativeChangesetQu
             def include(table: type[models.Model], column: str, keys: Iterable[Any]) -> None:
                 field = record._history_identity_field(table, column)
                 ids.update(
-                    type(record)._base_manager.using(self.db)
-                    .filter(**{f"{field.name}__in": keys}).values_list("pk", flat=True)
+                    type(record)
+                    ._base_manager.using(self.db)
+                    .filter(**{f"{field.name}__in": keys})
+                    .values_list("pk", flat=True)
                 )
+
             for table, columns in record.history_identity_columns().items():
                 if not issubclass(table, StatementsMixin):
                     continue
@@ -93,11 +97,15 @@ class ChangesetQuerySet[T: models.Model](ProtectedQuerySet[T], NativeChangesetQu
                         include(table, table._meta.pk.attname, origin_ids)
                         continue
                     for column in record.history_identity_columns()[table]:
-                        keys = set(table._base_manager.using(self.db).filter(pk__in=origin_ids)
-                                   .values_list(column, flat=True))
-                        keys.update(get_history_manager_for_model(table).using(self.db)
-                                    .filter(**{f"{table._meta.pk.attname}__in": origin_ids})
-                                    .values_list(column, flat=True))
+                        keys = set(
+                            table._base_manager.using(self.db).filter(pk__in=origin_ids).values_list(column, flat=True)
+                        )
+                        keys.update(
+                            get_history_manager_for_model(table)
+                            .using(self.db)
+                            .filter(**{f"{table._meta.pk.attname}__in": origin_ids})
+                            .values_list(column, flat=True)
+                        )
                         include(table, column, keys)
             return ids
 

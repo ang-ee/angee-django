@@ -11,7 +11,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
-        migrations.swappable_dependency(settings.PROVENANCE_CHANGESET_MODEL),
+        migrations.swappable_dependency(settings.ANGEE_CHANGESET_MODEL),
     ]
 
     operations = [
@@ -95,7 +95,7 @@ class Migration(migrations.Migration):
                         null=True,
                         on_delete=django.db.models.deletion.PROTECT,
                         related_name="+",
-                        to=settings.PROVENANCE_CHANGESET_MODEL,
+                        to=settings.ANGEE_CHANGESET_MODEL,
                     ),
                 ),
                 (
@@ -149,7 +149,7 @@ class Migration(migrations.Migration):
                         null=True,
                         on_delete=django.db.models.deletion.PROTECT,
                         related_name="+",
-                        to=settings.PROVENANCE_CHANGESET_MODEL,
+                        to=settings.ANGEE_CHANGESET_MODEL,
                     ),
                 ),
                 (
@@ -193,7 +193,7 @@ class Migration(migrations.Migration):
                         null=True,
                         on_delete=django.db.models.deletion.PROTECT,
                         related_name="+",
-                        to=settings.PROVENANCE_CHANGESET_MODEL,
+                        to=settings.ANGEE_CHANGESET_MODEL,
                     ),
                 ),
                 (

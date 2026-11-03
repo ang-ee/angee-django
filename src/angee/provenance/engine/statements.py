@@ -20,12 +20,13 @@ from django.db.models import Q
 from simple_history.manager import HistoryDescriptor
 from simple_history.models import HistoricalRecords
 
-from angee.provenance.engine.context import actor_context, actor_reference, current_actor
-from angee.provenance.engine.evidence import evidence_values
-from angee.provenance.engine.history import HistoryMixin, ModelHistory
+from angee.provenance.context import actor_context, actor_reference, current_actor
 from angee.provenance.engine.policy import get_policy
-from angee.provenance.engine.querysets import HistoryQuerySet
 from angee.provenance.engine.replay import HistoryReplayMixin
+from angee.provenance.evidence import evidence_values
+from angee.provenance.history import ModelHistory
+from angee.provenance.history import ReplayHistoryMixin as HistoryMixin
+from angee.provenance.querysets import HistoryQuerySet
 
 
 class SourceKind(models.TextChoices):

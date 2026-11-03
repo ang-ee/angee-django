@@ -16,7 +16,7 @@ from django.db import models, router, transaction
 from django.utils import timezone
 from simple_history.utils import get_history_manager_for_model
 
-from .context import (
+from angee.provenance.context import (
     actor_context,
     actor_reference,
     changeset,
@@ -25,9 +25,10 @@ from .context import (
     current_changeset,
     current_reason,
 )
+from angee.provenance.querysets import model_history
+
 from .managers import ChangesetManager
 from .policy import get_policy
-from .querysets import model_history
 from .replay import ordered_states
 from .serialization import canonical_json, json_safe
 
@@ -216,7 +217,7 @@ class AbstractChangeset(models.Model):
         return statement_application()
 
     def revert(self, *, actor: Any = None) -> Any:
-        from .querysets import model_history
+        from angee.provenance.querysets import model_history
 
         actor = actor if actor is not None else current_actor()
         using = self._state.db or router.db_for_write(type(self), instance=self)

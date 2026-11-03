@@ -6,8 +6,11 @@ as a dependency and compose its model mixins. The model foundation has no
 provenance dependency.
 
 [`context.py`](context.py), [`history.py`](history.py) and [`querysets.py`](querysets.py)
-retain public import paths for the relocated [`engine/`](engine/) owners.
-Its context module owns logical boundaries and commit-aware persistence.
+own logical boundaries, capture and querysets directly. The remaining
+[`engine/`](engine/) modules hold storage, replay and plain-Django extension
+contracts used by the isolated swappable-model host. Historical Angee imports
+resolve directly to the conventional addon modules.
+The context owner keeps commit-aware persistence.
 Its native transaction adapter tracks the identity of an `on_commit` callback
 in Django's callback queue: savepoint rollback removes that callback, while
 release retains it. This lets the next captured write recreate a rolled-back
@@ -37,10 +40,14 @@ The [permission schema](permissions.zed) owns direct access. Other actor types
 contribute additive permission fragments from their own addons. Attribution never
 grants access to touched records; history reads follow those records' permissions.
 
-Runtime storage is selected by `PROVENANCE_CHANGESET_MODEL`, with the default
-owned by [addon autoconfig](autoconfig.py). `ANGEE_CHANGESET_MODEL` remains the
-historical Django swappable-migration identity and must point to the same model;
-a disagreement fails the system check. Existing consumer history-FK migrations
+Runtime storage is selected by `ANGEE_CHANGESET_MODEL`, with the default
+owned by [addon autoconfig](autoconfig.py). It is also Django's historical
+swappable-migration identity. Do not set the retired
+`PROVENANCE_CHANGESET_MODEL` anywhere, including through
+`YAMLCONF_PROVENANCE_CHANGESET_MODEL`: system check `provenance.E005` treats even
+its presence as an error. The composer fingerprint changes with this setting
+contract, so a stack recomposes after integration.
+Existing consumer history-FK migrations
 must depend on `migrations.swappable_dependency(settings.ANGEE_CHANGESET_MODEL)`.
 Django's `makemigrations` owns the initial schema; see the
 [runtime migration policy](../../../docs/composer.md#project-migration-history).

@@ -1,5 +1,5 @@
 """Attributed history and retained statements for ordinary Django applications.
 
-Import model mixins from ``angee.provenance.engine.history`` and statement declarations
-from ``angee.provenance.engine.statements`` inside a Django app's models module.
+Import capture mixins from ``angee.provenance.history`` and standalone statement
+declarations from ``angee.provenance.engine.statements`` in a model module.
 """

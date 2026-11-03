@@ -27,7 +27,7 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         "DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'\n"
         f"COMPOSE_OUTPUT_DIR = Path({str(runtime)!r})\n"
         "COMPOSE_OUTPUT_MODULE = 'runtime'\n"
-        "PROVENANCE_CHANGESET_MODEL = 'typing_history.Changeset'\n"
+        "ANGEE_CHANGESET_MODEL = 'typing_history.Changeset'\n"
         "configure(globals())\n"
     )
     env = dict(os.environ)
@@ -182,23 +182,30 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
         check=False,
     )
     assert positive.returncode == 0, positive.stdout + positive.stderr
+
     # Reuse actual incremental state, then change only the owner queryset's
     # return type in the isolated authored fixture. Native snapshot/dependency
     # edges must invalidate generated manager signatures and donor accesses.
     def check_valid() -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [*command, str(valid), str(runtime / "typing_history" / "models.py"), str(fixture / "models.py")],
-            cwd=tmp_path, env=env, capture_output=True, text=True, check=False,
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
         )
 
     cached = check_valid()
     assert cached.returncode == 0, cached.stdout + cached.stderr
     queryset_source = fixture / "querysets.py"
     original = queryset_source.read_text()
-    queryset_source.write_text(original.replace(
-        "    def handles(self) -> Self:\n        return self",
-        "    def handles(self) -> int:\n        return 1",
-    ))
+    queryset_source.write_text(
+        original.replace(
+            "    def handles(self) -> Self:\n        return self",
+            "    def handles(self) -> int:\n        return 1",
+        )
+    )
     changed = check_valid()
     assert changed.returncode == 1, changed.stdout + changed.stderr
     assert '"int" has no attribute "get"' in changed.stdout, changed.stdout
@@ -206,7 +213,12 @@ def test_native_history_projection_preserves_runtime_and_type_checks(tmp_path: P
     restored = check_valid()
     assert restored.returncode == 0, restored.stdout + restored.stderr
     negative = subprocess.run(
-        [*command, str(invalid)], cwd=tmp_path, env=env, capture_output=True, text=True, check=False,
+        [*command, str(invalid)],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert negative.returncode == 1, negative.stdout + negative.stderr
     assert negative.stdout.count(": error:") == 20, negative.stdout

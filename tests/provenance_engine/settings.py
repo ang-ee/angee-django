@@ -14,7 +14,7 @@ INSTALLED_APPS = [
     "tests.provenance_engine.replay_app",
     "tests.provenance_engine.statements_app",
 ]
-PROVENANCE_CHANGESET_MODEL = "provenance.Changeset"
+ANGEE_CHANGESET_MODEL = "provenance.Changeset"
 MIGRATION_MODULES = {"provenance": "tests.provenance_engine.storage.migrations"}
 PROVENANCE_STRICT = True
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]

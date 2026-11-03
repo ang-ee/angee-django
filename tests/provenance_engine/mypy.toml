@@ -15,8 +15,7 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = [
-    "angee.provenance.engine.history",
+    "angee.provenance.history",
     "angee.provenance.engine.statements",
-    "angee.provenance.engine.tasks",
 ]
 allow_subclassing_any = true

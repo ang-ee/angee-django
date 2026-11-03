@@ -2,8 +2,8 @@
 
 import pytest
 
-from angee.provenance.engine.context import changeset
-from angee.provenance.engine.querysets import model_history
+from angee.provenance.context import changeset
+from angee.provenance.querysets import model_history
 from tests.provenance_engine.capture_app.models import Note
 
 

@@ -8,7 +8,7 @@ from pathlib import Path
 def test_capture_only_history_save_has_the_native_model_signature(tmp_path):
     source = """
 from typing import assert_type
-from angee.provenance.engine.history import CaptureHistoryMixin
+from angee.provenance.history import CaptureHistoryMixin
 
 def save(row: CaptureHistoryMixin) -> None:
     assert_type(row.save_without_historical_record(using="default", update_fields=["title"]), None)

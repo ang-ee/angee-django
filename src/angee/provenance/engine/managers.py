@@ -7,9 +7,10 @@ from typing import TYPE_CHECKING, Any
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connections, models, transaction
 
-from .context import current_changeset, discard_changeset_claim, require_changeset
+from angee.provenance.context import current_changeset, discard_changeset_claim, require_changeset
+from angee.provenance.querysets import ChangesetQuerySet as ChangesetQuerySet
+
 from .exceptions import CreationKeyConflict
-from .querysets import ChangesetQuerySet as ChangesetQuerySet
 from .serialization import creation_fingerprint
 
 if TYPE_CHECKING:

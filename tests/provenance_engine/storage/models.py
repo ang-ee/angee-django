@@ -9,4 +9,4 @@ class Changeset(AbstractChangeset):
     class Meta(AbstractChangeset.Meta):
         abstract = False
         app_label = "provenance"
-        swappable = "PROVENANCE_CHANGESET_MODEL"
+        swappable = "ANGEE_CHANGESET_MODEL"

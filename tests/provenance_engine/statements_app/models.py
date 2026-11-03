@@ -1,6 +1,5 @@
 from django.db import models
 
-from angee.provenance.engine.history import HistoryMixin
 from angee.provenance.engine.statements import (
     Aspect,
     PairAspect,
@@ -10,6 +9,7 @@ from angee.provenance.engine.statements import (
     StatementsMixin,
     StatementSourceMixin,
 )
+from angee.provenance.history import ReplayHistoryMixin as HistoryMixin
 
 
 class Principal(StatementSourceMixin):

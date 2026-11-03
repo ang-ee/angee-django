@@ -149,10 +149,7 @@ class ProvenancePlugin(Plugin):
     def get_additional_deps(self, file: MypyFile) -> list[tuple[int, str, int]]:
         # Like django-stubs' get_user_model, the helper's module depends on the
         # configured model module, including generated concrete declarations.
-        if (
-            file.fullname not in {"angee.provenance.context", "angee.provenance.engine.context"}
-            or (model := self.configured_model()) is None
-        ):
+        if file.fullname != "angee.provenance.context" or (model := self.configured_model()) is None:
             return []
         return [(PRI_MYPY, model.__module__, -1)]
 
@@ -161,9 +158,6 @@ class ProvenancePlugin(Plugin):
             "angee.provenance.context.changeset_model",
             "angee.provenance.context.current_changeset",
             "angee.provenance.context.require_changeset",
-            "angee.provenance.engine.context.changeset_model",
-            "angee.provenance.engine.context.current_changeset",
-            "angee.provenance.engine.context.require_changeset",
         }:
             return partial(self.configured_changeset, fullname=fullname)
         return None

@@ -59,7 +59,11 @@ PROJECT_SETTINGS_TEMPLATE = ROOT / "templates" / "projects" / "web" / "template"
 SHARED_SERVICES = {"operator", "postgres", "redis", "django", "celery-worker"}
 DJANGO_READY = {
     "cmd": [
-        "uv", "run", "--no-sync", "python", "-c",
+        "uv",
+        "run",
+        "--no-sync",
+        "python",
+        "-c",
         "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/ready', timeout=2).close()",
     ],
     "interval": "5s",
@@ -566,8 +570,11 @@ def _render_project_settings(
             '{% if addons_profile == "full" %}': addons_profile == "full",
             "{% if framework_workspace %}": framework_workspace,
             "{% if include_arp %}": include_arp,
-            '{% if framework_source_path and not framework_workspace and framework != "baked" %}':
-                bool(framework_source_path) and not framework_workspace and framework != "baked",
+            '{% if framework_source_path and not framework_workspace and framework != "baked" %}': bool(
+                framework_source_path
+            )
+            and not framework_workspace
+            and framework != "baked",
         },
     )
     replacements = {
@@ -600,11 +607,11 @@ def _render_project_pyproject(
     text = _render_project_settings_conditionals(
         text,
         conditions={
-            '{% if framework_source_path and framework != "baked" %}':
-                bool(framework_source_path) and framework != "baked",
-            '{% if framework_workspace %}': framework_workspace,
+            '{% if framework_source_path and framework != "baked" %}': bool(framework_source_path)
+            and framework != "baked",
+            "{% if framework_workspace %}": framework_workspace,
             '{% if addons_profile == "full" %}': addons_profile == "full",
-            '{% if include_arp %}': include_arp,
+            "{% if include_arp %}": include_arp,
         },
     )
     replacements = {
@@ -690,8 +697,10 @@ def test_both_stacks_render_shared_root_agent_instructions() -> None:
 
     # The stack overlay overwrites the project's root AGENTS.md, so the stack contract
     # ends by including the project host body the project template renders on its own.
-    assert SHARED_AGENTS.read_text(encoding="utf-8").rstrip().endswith(
-        '{% include "../../projects/_shared/AGENTS.md.jinja" %}'
+    assert (
+        SHARED_AGENTS.read_text(encoding="utf-8")
+        .rstrip()
+        .endswith('{% include "../../projects/_shared/AGENTS.md.jinja" %}')
     )
     assert _inline_includes(DEV_AGENTS_TEMPLATE).count("# Angee Project Host") == 1
 
@@ -793,7 +802,7 @@ def test_local_django_baked_mode_uses_the_shared_environment() -> None:
     assert "uv sync" not in " ".join(stack["services"]["django"]["command"])
     assert stack["jobs"]["provision"]["command"][-3:] == ["provision", "--wait-db", "60"]
     command = stack["jobs"]["frontend-build"]["command"][-1]
-    assert '\"packages/*\",\"src/angee/*/web\"' in command
+    assert '"packages/*","src/angee/*/web"' in command
     assert "sources/angee" not in command
 
 
@@ -969,7 +978,8 @@ def test_project_python_dependencies_use_native_package_metadata() -> None:
         assert "angee-runtime" not in rendered
     _rendered, source = _render_project_pyproject(framework_source_path="workspaces/src/angee")
     assert source["tool"]["uv"]["sources"]["angee"] == {
-        "path": "workspaces/src/angee", "editable": True,
+        "path": "workspaces/src/angee",
+        "editable": True,
     }
 
 
@@ -1066,7 +1076,7 @@ def _run_probe_command(tmp_path: Path, manage_source: str) -> subprocess.Complet
         call_command("rebac", "sync", verbosity=0)
         sys.argv = [str(target / "manage.py"), "captureprobe"]
         runpy.run_path(sys.argv[0], run_name="__main__")
-        Changeset = apps.get_model(settings.PROVENANCE_CHANGESET_MODEL)
+        Changeset = apps.get_model(settings.ANGEE_CHANGESET_MODEL)
         context = Changeset._base_manager.get()
         history = apps.get_model("notes", "Note").history.get()
         assert history.history_changeset_id == context.pk
@@ -1135,7 +1145,14 @@ def test_dev_stack_has_explicit_lifecycle_job_graph() -> None:
         assert jobs["compose"]["command"] == ["uv", "run", "--no-sync", "python", "manage.py", "compose"]
         assert jobs["compose"]["depends_on"] == ["py-sync"]
         assert jobs["provision"]["command"] == [
-            "uv", "run", "--no-sync", "python", "manage.py", "provision", "--wait-db", "60",
+            "uv",
+            "run",
+            "--no-sync",
+            "python",
+            "manage.py",
+            "provision",
+            "--wait-db",
+            "60",
         ]
         assert jobs["provision"]["depends_on"] == (
             ["compose", "postgres"] if jobs["provision"]["runtime"] == "container" else ["compose"]
@@ -1185,9 +1202,7 @@ def test_dev_stack_external_postgres_uses_server_without_stack_resources(
     assert "pgdata" not in stack["persist"]
     assert stack["secrets"]["db-password"] == {"required": True}
     assert "${ports.postgres}" not in json.dumps(stack)
-    assert stack["jobs"]["provision"]["depends_on"] == (
-        ["compose"]
-    )
+    assert stack["jobs"]["provision"]["depends_on"] == (["compose"])
     assert stack["services"]["redis"] == bundled["services"]["redis"]
     assert stack["ports"].get("redis") == bundled["ports"].get("redis")
 
@@ -2003,7 +2018,9 @@ def test_process_render_is_development_even_when_serve_validator_is_bypassed() -
 
 @pytest.mark.parametrize("application", ("angee.server.application", "custom.asgi.application"))
 def test_production_serve_workers_use_configured_app_cpu_count_and_reject_one(
-    monkeypatch: pytest.MonkeyPatch, settings: Any, application: str,
+    monkeypatch: pytest.MonkeyPatch,
+    settings: Any,
+    application: str,
 ) -> None:
     from django.core.management.base import CommandError
 
@@ -2016,8 +2033,12 @@ def test_production_serve_workers_use_configured_app_cpu_count_and_reject_one(
 
     monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: started.append({"app": app, **kwargs}))
     options = {
-        "require_provisioned": False, "workers": 0, "production": True, "host": "0.0.0.0",
-        "port": 8000, "forwarded_allow_ips": "10.0.0.2",
+        "require_provisioned": False,
+        "workers": 0,
+        "production": True,
+        "host": "0.0.0.0",
+        "port": 8000,
+        "forwarded_allow_ips": "10.0.0.2",
     }
     serve.Command().handle(**options)
     module, _, attribute = application.rpartition(".")
@@ -2392,7 +2413,7 @@ def test_stack_install_roots_compose_the_shared_pnpm_policy() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text()
     assert "COPY packages ./packages" in dockerfile
     assert "COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./" in dockerfile
-    for surface in [workspace, yaml.safe_load(template[template.index("allowBuilds:"):])]:
+    for surface in [workspace, yaml.safe_load(template[template.index("allowBuilds:") :])]:
         assert "overrides" not in surface
         assert "packageExtensions" not in surface
         assert "patchedDependencies" not in surface
@@ -2414,8 +2435,8 @@ def test_js_dependencies_author_only_an_absent_lock_and_fail_closed(tmp_path: Pa
         '#!/bin/sh\nprintf "%s\\n" "$*" >>"$PROBE_OUTPUT"\n'
         'if [ "$2" = --lockfile-only ]; then\n'
         '  [ "$PROBE_STATE" != author-fails ] || exit 7\n'
-        '  : >pnpm-lock.yaml\n'
-        'fi\n'
+        "  : >pnpm-lock.yaml\n"
+        "fi\n"
         '[ "$PROBE_STATE" != drift ] || exit 9\n'
     )
     pnpm.chmod(0o755)
@@ -2427,9 +2448,12 @@ def test_js_dependencies_author_only_an_absent_lock_and_fail_closed(tmp_path: Pa
     if retained:
         lockfile.write_text("existing lock")
     result = subprocess.run(
-        ["/bin/sh", "-c", command], cwd=tmp_path,
+        ["/bin/sh", "-c", command],
+        cwd=tmp_path,
         env={"PATH": str(tmp_path), "PROBE_OUTPUT": str(output), "PROBE_STATE": state},
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     expected = [] if retained else ["install --lockfile-only --no-frozen-lockfile"]
     if state != "author-fails":
@@ -2444,12 +2468,18 @@ def test_py_sync_cold_bootstrap_needs_only_native_uv(tmp_path: Path) -> None:
     """The sync branch works before any Angee or Django package is importable."""
     command = _render_dev_stack()["jobs"]["py-sync"]["command"]
     uv = tmp_path / "uv"
-    uv.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$PROBE_OUTPUT\"\n")
+    uv.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" > "$PROBE_OUTPUT"\n')
     uv.chmod(0o755)
     output = tmp_path / "argv"
-    result = subprocess.run(command, cwd=tmp_path, executable="/bin/sh",
+    result = subprocess.run(
+        command,
+        cwd=tmp_path,
+        executable="/bin/sh",
         env={"PATH": str(tmp_path), "ANGEE_DEPENDENCY_ACTION": "sync", "PROBE_OUTPUT": str(output)},
-        capture_output=True, text=True, check=False)
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     assert result.returncode == 0, result.stderr
     assert output.read_text().splitlines() == ["sync", "--locked"]
 
@@ -2459,7 +2489,7 @@ def test_project_template_delegates_native_bootstrap() -> None:
     launcher = (directory / "manage.py.jinja").read_text()
     assert "from django_compose.management import execute" in launcher
     assert 'os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")' in launcher
-    assert 'angee.management' not in launcher
+    assert "angee.management" not in launcher
     assert (directory / "settings.py").read_text() == "from angee.base.conf import configure\n\nconfigure(globals())\n"
 
 

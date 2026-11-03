@@ -118,8 +118,13 @@ class AdmissionRoutingCases(TransactionTestCase):
                 # and opposite second-thread attachment truth across databases.
                 chatter_project = project
                 if alias == "default":
-                    chatter_project = apps.get_model("projects", "Project").objects.db_manager(alias).create(
-                        title="Default chatter decoy", owner=manager,
+                    chatter_project = (
+                        apps.get_model("projects", "Project")
+                        .objects.db_manager(alias)
+                        .create(
+                            title="Default chatter decoy",
+                            owner=manager,
+                        )
                     )
                 note = chatter_project.with_actor(manager).message_post(f"{alias} chatter")
                 self.assertEqual(note.thread_id, 1)
@@ -128,10 +133,14 @@ class AdmissionRoutingCases(TransactionTestCase):
                 else:
                     apps.get_model("messaging", "Thread").objects.db_manager(alias).create(created_by=manager)
                 apps.get_model("projects", "Task").objects.db_manager(alias).create(
-                    title=f"{alias} provision task", project=project,
+                    title=f"{alias} provision task",
+                    project=project,
                 )
                 apps.get_model("work", "Queue").objects.db_manager(alias).create(
-                    name=f"{alias} Questions", key="QUEST", owner=manager, provision_stages=False,
+                    name=f"{alias} Questions",
+                    key="QUEST",
+                    owner=manager,
+                    provision_stages=False,
                 )
                 fixtures[alias] = manager, round, proposal, party, message
         self.assertEqual([row.pk for row in fixtures["default"]], [row.pk for row in fixtures["producer"]])
@@ -160,24 +169,34 @@ class AdmissionRoutingCases(TransactionTestCase):
 
     def provision_snapshot(self, alias):
         labels = (
-            "proposals.Round", "proposals.Topic", "proposals.Proposal", "projects.Project",
-            "projects.Milestone", "projects.ProjectBinding", "storage.Drive",
+            "proposals.Round",
+            "proposals.Topic",
+            "proposals.Proposal",
+            "projects.Project",
+            "projects.Milestone",
+            "projects.ProjectBinding",
+            "storage.Drive",
         )
         return {
-            label: list(apps.get_model(label)._base_manager.using(alias).order_by("pk").values())
-            for label in labels
+            label: list(apps.get_model(label)._base_manager.using(alias).order_by("pk").values()) for label in labels
         }
 
     def provision_inputs(self):
-        project = apps.get_model("projects", "Project")._base_manager.using("producer").get(
-            pk=self.round.project_id,
+        project = (
+            apps.get_model("projects", "Project")
+            ._base_manager.using("producer")
+            .get(
+                pk=self.round.project_id,
+            )
         )
         responder = get_user_model()._base_manager.using("producer").get(pk=self.proposal.responder_id)
         template = {
-            "name": "Producer provision", "opening_policy": "drafts_and_tracks",
+            "name": "Producer provision",
+            "opening_policy": "drafts_and_tracks",
             "last_call_at": timezone.now() + timedelta(days=1),
             "submission_deadline": timezone.now() + timedelta(days=2),
-            "opens_after": "Questions", "topics": [{"key": "delivery", "name": "Delivery"}],
+            "opens_after": "Questions",
+            "topics": [{"key": "delivery", "name": "Delivery"}],
         }
         return project, responder, template
 
@@ -201,18 +220,31 @@ class AdmissionRoutingCases(TransactionTestCase):
                 replay = self.Round.objects.provision(project, template, actor, [responder])
                 self.assertEqual(created.pk, replay.pk)
                 task_round = self.Round.objects.provision(
-                    task, {**template, "name": "Producer task provision"}, actor, [responder],
+                    task,
+                    {**template, "name": "Producer task provision"},
+                    actor,
+                    [responder],
                 )
                 self.assertEqual(task_round.task_id, task.pk)
         actual = self.Round._base_manager.using("producer").get(pk=created.pk)
         self.assertEqual((actual.project_id, actual.facilitator_id), (project.pk, actor.pk))
-        milestone = apps.get_model("projects", "Milestone")._base_manager.using("producer").get(
-            project=project, name="Questions",
+        milestone = (
+            apps.get_model("projects", "Milestone")
+            ._base_manager.using("producer")
+            .get(
+                project=project,
+                name="Questions",
+            )
         )
         self.assertEqual(actual.opens_after_id, milestone.pk)
         self.assertEqual(
-            list(apps.get_model("proposals", "Topic")._base_manager.using("producer")
-                 .filter(round=actual).values_list("key", flat=True)), ["delivery"],
+            list(
+                apps.get_model("proposals", "Topic")
+                ._base_manager.using("producer")
+                .filter(round=actual)
+                .values_list("key", flat=True)
+            ),
+            ["delivery"],
         )
         self.assertEqual(self.Proposal._base_manager.using("producer").filter(round=actual).count(), 1)
         self.assertEqual(self.provision_snapshot("default"), before_default)
@@ -220,11 +252,15 @@ class AdmissionRoutingCases(TransactionTestCase):
         with CaptureQueriesContext(connections["default"]) as rollback_queries, database_context("default"):
             with self.assertRaisesRegex(RuntimeError, "rollback provision"):
                 with (
-                    transaction.atomic(using="producer"), actor_context(actor),
+                    transaction.atomic(using="producer"),
+                    actor_context(actor),
                     changeset(fresh=True, using="producer"),
                 ):
                     self.Round.objects.provision(
-                        project, {**template, "name": "Rollback producer"}, actor, [responder],
+                        project,
+                        {**template, "name": "Rollback producer"},
+                        actor,
+                        [responder],
                     )
                     raise RuntimeError("rollback provision")
         self.assertEqual(self.provision_snapshot("producer"), before_producer)
@@ -238,20 +274,34 @@ class AdmissionRoutingCases(TransactionTestCase):
         actor = self.user
         root = self.enterContext(TemporaryDirectory(prefix="proposal-track-routing-"))
         for alias in ("default", "producer"):
-            with database_context(alias), system_context(reason="tests.proposals.track.drive"), changeset(
-                fresh=True, using=alias,
+            with (
+                database_context(alias),
+                system_context(reason="tests.proposals.track.drive"),
+                changeset(
+                    fresh=True,
+                    using=alias,
+                ),
             ):
-                backend = apps.get_model("storage", "Backend").objects.db_manager(alias).create(
-                    slug="proposal-local", label=alias, backend_class="local",
-                    backend_config={"root": root, "base_url": "/media/"},
+                backend = (
+                    apps.get_model("storage", "Backend")
+                    .objects.db_manager(alias)
+                    .create(
+                        slug="proposal-local",
+                        label=alias,
+                        backend_class="local",
+                        backend_config={"root": root, "base_url": "/media/"},
+                    )
                 )
                 apps.get_model("storage", "Drive").objects.db_manager(alias).create(
-                    slug=settings.ANGEE_STORAGE_DEFAULT_DRIVE, name=alias, backend=backend,
+                    slug=settings.ANGEE_STORAGE_DEFAULT_DRIVE,
+                    name=alias,
+                    backend=backend,
                 )
         wrong_responder = self.selected(responder, "default")
         mixed_refs = (
             (self.selected(project, "default"), actor, [responder]),
-            (project, self.manager, [responder]), (project, actor, [wrong_responder]),
+            (project, self.manager, [responder]),
+            (project, actor, [wrong_responder]),
         )
         queue_model = apps.get_model("work", "Queue")
         producer_queue = queue_model._base_manager.using("producer").get(key="QUEST")
@@ -267,15 +317,25 @@ class AdmissionRoutingCases(TransactionTestCase):
                 ):
                     with self.assertRaises(ValidationError):
                         self.Round.objects.db_manager("producer").provision(
-                            project, template, actor, [responder], **kwargs,
+                            project,
+                            template,
+                            actor,
+                            [responder],
+                            **kwargs,
                         )
                 for ref_target, ref_facilitator, ref_responders in mixed_refs:
                     with self.assertRaises(ValidationError):
                         self.Round.objects.db_manager("producer").provision(
-                            ref_target, template, ref_facilitator, ref_responders,
+                            ref_target,
+                            template,
+                            ref_facilitator,
+                            ref_responders,
                         )
                 round = self.Round.objects.provision(
-                    project, {**template, "tracks": True}, actor, [responder],
+                    project,
+                    {**template, "tracks": True},
+                    actor,
+                    [responder],
                     configuration={"clarification_queue": producer_queue},
                 )
                 self.assertEqual(round.clarification_queue_id, producer_queue.pk)
@@ -292,7 +352,8 @@ class AdmissionRoutingCases(TransactionTestCase):
         self.assertTrue(drive.owns_items)
         binding_model = apps.get_model("projects", "ProjectBinding")
         binding = binding_model._base_manager.using("producer").get(
-            project=track, **generic_target(drive).lookups(binding_model, "target"),
+            project=track,
+            **generic_target(drive).lookups(binding_model, "target"),
         )
         self.assertEqual(binding._state.db, "producer")
         self.assertEqual(self.provision_snapshot("default"), before_default)
@@ -300,11 +361,15 @@ class AdmissionRoutingCases(TransactionTestCase):
         with CaptureQueriesContext(connections["default"]) as rollback_queries, database_context("default"):
             with self.assertRaisesRegex(RuntimeError, "rollback track"):
                 with (
-                    transaction.atomic(using="producer"), actor_context(actor),
+                    transaction.atomic(using="producer"),
+                    actor_context(actor),
                     changeset(fresh=True, using="producer"),
                 ):
                     self.Round.objects.provision(
-                        project, {**template, "name": "Rollback track", "tracks": True}, actor, [responder],
+                        project,
+                        {**template, "name": "Rollback track", "tracks": True},
+                        actor,
+                        [responder],
                     )
                     raise RuntimeError("rollback track")
         self.assertEqual(self.provision_snapshot("producer"), before_producer)
@@ -315,7 +380,8 @@ class AdmissionRoutingCases(TransactionTestCase):
         round, message, party = (self.selected(row) for row in (self.round, self.message, self.party))
         user = self.user
         with (
-            CaptureQueriesContext(connections["default"]) as default_queries, database_context("default"),
+            CaptureQueriesContext(connections["default"]) as default_queries,
+            database_context("default"),
         ):
             with actor_context(user), changeset(fresh=True, using="producer"):
                 target = self.selected(self.proposal).with_actor(user)
@@ -340,7 +406,8 @@ class AdmissionRoutingCases(TransactionTestCase):
         round, message, party = (self.selected(row) for row in (self.round, self.message, self.party))
         before = self.snapshot("producer")
         with (
-            CaptureQueriesContext(connections["default"]) as default_queries, database_context("default"),
+            CaptureQueriesContext(connections["default"]) as default_queries,
+            database_context("default"),
         ):
             for refs in ((self.message, round, party), (message, self.round, party), (message, round, self.party)):
                 with self.assertRaises(ValidationError):
@@ -367,7 +434,8 @@ class AdmissionRoutingCases(TransactionTestCase):
         explicit = self.Receipt.objects.using("default").get(pk=11)
         routed = self.Receipt.objects.using("default").get(pk=11)
         with (
-            CaptureQueriesContext(connections["default"]) as default_queries, database_context("default"),
+            CaptureQueriesContext(connections["default"]) as default_queries,
+            database_context("default"),
         ):
             with actor_context(user), changeset(fresh=True, using="producer"):
                 row = self.Receipt.objects.using("producer").get(pk=11)
@@ -406,7 +474,7 @@ def test_native_proposal_admission_routing(tmp_path: Path):
     write_addon_distribution(addon, "example.proposal_admission", depends_on=("angee.proposals_work",))
     (addon / "models.py").write_text(
         "from django.db import models\n"
-        "from angee.provenance.engine.history import HistoryMixin, ModelHistory\n"
+        "from angee.provenance.history import ModelHistory, ReplayHistoryMixin as HistoryMixin\n"
         "from angee.base.models.locks import ImmutableFieldsMixin\n"
         "class Receipt(ImmutableFieldsMixin, HistoryMixin):\n"
         " identity = models.CharField(max_length=80)\n"
