@@ -153,7 +153,7 @@ def boot(
 
 
 def resource_values() -> dict[str, Any]:
-    """Check declared literals, excluding dataset padding, with emitted fields."""
+    """Check model literals with emitted fields and parse custom declarations."""
 
     from django.apps import apps
     from django.core.exceptions import FieldDoesNotExist, ValidationError
@@ -161,7 +161,9 @@ def resource_values() -> dict[str, Any]:
     from django_compose.components import installed_components
 
     from angee.base.addons import is_angee_addon
-    from angee.resources.entries import GRANT_KIND, ResourceEntry, resource_manifest_for
+    from angee.base.implementations import resolve_impl_class
+    from angee.resources.entries import GRANT_KIND, ROW_KIND, ResourceEntry, resource_manifest_for
+    from angee.resources.kinds import ResourceEntryKind
 
     failures: list[str] = []
     checked_values = 0
@@ -173,6 +175,9 @@ def resource_values() -> dict[str, Any]:
             for declaration in declarations:
                 entry = ResourceEntry.from_declaration(addon, tier, declaration)
                 if entry.kind == GRANT_KIND:
+                    continue
+                if entry.kind != ROW_KIND:
+                    resolve_impl_class(ResourceEntryKind, entry.kind).read(entry)
                     continue
                 for group in entry.read_groups():
                     try:
