@@ -305,7 +305,7 @@ export interface AngeeChangeLiveProvider extends LiveProvider {
   setEnabled: (enabled: boolean) => void;
 }
 
-type AuthoredQueryInvalidationClient = Pick<QueryClient, "cancelQueries" | "invalidateQueries" | "getQueryCache">;
+type AuthoredQueryInvalidationClient = Pick<QueryClient, "invalidateQueries" | "getQueryCache">;
 
 export function createAngeeChangeLiveProvider(
   client: Pick<GraphQLWsClient, "subscribe" | "on"> | undefined,

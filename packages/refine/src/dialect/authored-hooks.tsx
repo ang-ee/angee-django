@@ -159,7 +159,7 @@ export function useInvalidateAuthoredModels(): (
   }, [queryClient]);
 }
 
-/** Cancel older snapshots before accepting a complete typed result at its exact native key. */
+/** Accept at the exact native key immediately, restoring it if an older read settles later. */
 export function useSetAuthoredQueryData(): <TDocument extends AuthoredDocument>(
   document: TDocument,
   variables: AuthoredVariables<TDocument> | undefined,

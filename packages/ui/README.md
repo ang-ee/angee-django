@@ -127,9 +127,10 @@ edit baseline's revision and create retries reuse one key until acceptance or a
 `CREATION_KEY_CONFLICT`. A stale revision keeps local edits until an explicit reload
 and discard. Custom submit owners receive `baselineRecord` and `idempotencyKey`
 and retain responsibility for their own operation arguments and mutation effects.
-Native saves cancel earlier exact detail reads, adopt complete returned selections
-in the native cache and RHF baseline, then schedule collection and dependent reads
-through Refine's shared reconciliation owner. Later edits remain dirty. Partial
+Native saves immediately adopt complete returned selections in the native cache
+and RHF baseline. An earlier exact read is never cancelled; if its stale result
+settles later, the accepted response is restored. Collection and dependent reads
+reconcile through Refine's shared owner. Later edits remain dirty. Partial
 responses update only complete selected fields in an existing cache, leave that
 query stale and request an authoritative read; they never seed a complete detail.
 Authored resource mutations compose the same lifecycle through `acceptResponse`
