@@ -68,8 +68,19 @@ test.each([
   const held = attempts.at(-1)!;
   act(() => { deliver({ data: { fileChanged: { model: "storage.File", id: "file-other", action: "update" } } }); });
   const broad = declaration === "broad" || declaration.startsWith("shared-");
-  expect(held.signal?.aborted).toBe(broad);
-  if (broad) { liveProvider.setEnabled(false); return; }
+  expect(held.signal?.aborted).toBe(broad && !retained);
+  if (broad) {
+    if (retained) {
+      await act(async () => { held.resolve(response()); });
+      await waitFor(() => expect(attempts).toHaveLength(3));
+      expect(attempts[2]?.signal?.aborted).toBe(false);
+      await act(async () => { attempts[2]!.resolve(response()); });
+      await waitFor(() => expect(hook.result.current.result.data).toHaveLength(initialCount));
+      expect(attempts).toHaveLength(3);
+    }
+    liveProvider.setEnabled(false);
+    return;
+  }
   await act(async () => { held.resolve(response()); });
   await waitFor(() => expect(hook.result.current.query.isSuccess).toBe(true));
   expect(hook.result.current.result.data).toHaveLength(initialCount);
@@ -80,11 +91,13 @@ test.each([
   act(() => { deliver({ data: { fileChanged: { model: "storage.File", id: declaration === "exact" ? "file-current" : "file-child", action,
     ...(declaration === "related" ? { relatedRecords: [{ model: "notes.Target", id: "target-current" }] } : {}),
   } } }); });
-  expect(obsolete.signal?.aborted).toBe(true);
+  expect(obsolete.signal?.aborted).toBe(false);
+  await act(async () => { obsolete.resolve(response()); });
   await waitFor(() => expect(attempts).toHaveLength(beforeRefresh + 2));
   await act(async () => { attempts.at(-1)!.resolve(action === "delete" ? Response.json({ data: {
     [resource.roots.list!]: [], [`${resource.roots.list!}_aggregate`]: { aggregate: { count: 0 } },
   } }) : response(1)); });
   await waitFor(() => expect(hook.result.current.result.data).toHaveLength(action === "delete" ? 0 : 1));
+  expect(attempts).toHaveLength(beforeRefresh + 2);
   liveProvider.setEnabled(false);
 });

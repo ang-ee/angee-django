@@ -72,6 +72,10 @@ const LIVE_WINDOW_MS = 300;
 /** Longest a continuous stream may defer its first buffered change. */
 const LIVE_MAX_WAIT_MS = 2000;
 
+function uniqueChanges(changes: readonly AuthoredLiveChange[]): AuthoredLiveChange[] {
+  return [...new Map(changes.map((change) => [JSON.stringify(change), change])).values()];
+}
+
 export interface QueryReconciliation {
   changes: readonly AuthoredLiveChange[];
   /** Native resource keys remain a distinct adapter from authored metadata. */
@@ -110,14 +114,26 @@ export type ReconciliationPublish = NonNullable<LiveProvider["publish"]> & {
 
 /**
  * One native reconciliation owner: server/unscoped effects use a bounded queue;
- * explicit command collectors flush independently. Cancel earlier snapshots and
- * retain committed data honestly stale. Query owns retries, errors and row state.
+ * explicit command collectors flush independently. Live changes restart only
+ * data-less reads; retained reads finish before a coalesced follow-up. Local
+ * commands still cancel matching reads on arrival.
+ * Query owns retries, errors and row state.
  */
 export function createAuthoredLiveInvalidation(
   queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries" | "getQueryCache">,
   nativeReadsChange: (query: Query, change: AuthoredLiveChange) => boolean = () => false,
 ): AuthoredLiveInvalidation {
-  type Request = QueryReconciliation & { fallbackAccepted?: ReadonlySet<string> };
+  type Request = QueryReconciliation & { fallbackAccepted?: ReadonlySet<string>; live: boolean };
+  type Round = { promise: Promise<void>; resolve: () => void; reject: (error: unknown) => void };
+  type Deferred = { changes: AuthoredLiveChange[]; full: boolean; dirty: boolean; active: boolean;
+    next: Round; current?: Round };
+  function round(): Round {
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<void>((done, fail) => { resolve = done; reject = fail; });
+    void promise.catch(() => undefined);
+    return { promise, resolve, reject };
+  }
   let requests: Request[] = [];
   let deliveries: (() => void)[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -125,6 +141,13 @@ export function createAuthoredLiveInvalidation(
   let generation = 0;
   const pending = new Set<{ resolve: () => void; reject: (error: unknown) => void }>();
   let waiting: { resolve: () => void; reject: (error: unknown) => void }[] = [];
+  const deferred = new Map<Query, Deferred>();
+  function retireDeferred(query: Query, entry: Deferred): void {
+    entry.active = false;
+    if (deferred.get(query) === entry) deferred.delete(query);
+    entry.current?.resolve();
+    entry.next.resolve();
+  }
   const matches = (query: Query, request: Request) =>
     !request.accepted?.has(query.queryHash) && (
       request.queryKeys?.some((queryKey) => !request.fallbackAccepted?.has(query.queryHash)
@@ -135,8 +158,69 @@ export function createAuthoredLiveInvalidation(
 
   function prepare(request: Request): void {
     const predicate = (query: Query) => matches(query, request);
-    void queryClient.cancelQueries({ predicate: (query) => query.state.fetchStatus !== "idle" && predicate(query) });
+    if (!request.live) {
+      for (const [query, entry] of deferred) {
+        if (!predicate(query)) continue;
+        retireDeferred(query, entry);
+      }
+    }
+    void queryClient.cancelQueries({ predicate: (query) => (request.live ? query.state.data === undefined : true)
+      && query.state.fetchStatus !== "idle" && predicate(query) });
     void queryClient.invalidateQueries({ predicate, type: "all", refetchType: "none" });
+  }
+
+  function deferRefresh(query: Query, incoming: readonly AuthoredLiveChange[]): Promise<void> {
+    const queued = deferred.get(query);
+    if (queued) {
+      queued.changes.push(...incoming);
+      queued.full ||= incoming.length === 0;
+      queued.dirty = true;
+      return queued.next.promise;
+    }
+    const entry: Deferred = { changes: [...incoming], full: incoming.length === 0,
+      dirty: true, active: true, next: round() };
+    deferred.set(query, entry);
+    const started = generation;
+    const first = entry.next.promise;
+    void (async () => {
+      try {
+        // A paused offline fetch holds this follow-up until it resumes. A
+        // settled fetch may commit, fail, or be cancelled without covering
+        // changes that arrived after it began.
+        await query.promise?.catch(() => undefined);
+        while (entry.active && entry.dirty && started === generation) {
+          const current = entry.next;
+          entry.current = current;
+          entry.next = round();
+          entry.dirty = false;
+          const roundChanges = entry.full ? [] : uniqueChanges(entry.changes);
+          entry.changes = [];
+          entry.full = false;
+          if (query.meta) query.meta.angeeChanges = roundChanges;
+          try {
+            // Join a fetch started by another owner after settle instead of
+            // cancelling it; this round still completes after that fetch.
+            await queryClient.invalidateQueries({ predicate: (candidate) => candidate === query, type: "all", refetchType: "active" },
+              { cancelRefetch: false });
+            current.resolve();
+          } catch (error) {
+            current.reject(error);
+            entry.next.reject(error);
+            throw error;
+          } finally {
+            if (query.meta?.angeeChanges === roundChanges) delete query.meta.angeeChanges;
+            entry.current = undefined;
+          }
+        }
+      } finally {
+        // Remove in the same continuation that exits the loop. A new flush
+        // must never join an entry whose last round has already finished.
+        if (deferred.get(query) === entry) deferred.delete(query);
+        entry.active = false;
+        entry.next.resolve();
+      }
+    })().catch(() => undefined);
+    return first;
   }
 
   // One native refresh implementation serves independent command collections
@@ -146,22 +230,28 @@ export function createAuthoredLiveInvalidation(
     const predicate = (query: Query) => batch.some((request) => matches(query, request));
     const queries = queryClient.getQueryCache().findAll({ predicate });
     const changesByQuery = new Map(queries.map((query) => {
-      const effects = batch.filter((request) => matches(query, request)).flatMap((request) => request.changes)
-        .filter((change) => authoredQueryReadsLiveChange(query.meta, change));
-      const changes = [...new Map(effects.map((change) => [JSON.stringify(change), change])).values()];
-      if (query.meta) query.meta.angeeChanges = changes;
-      return [query, changes] as const;
+      const effects = batch.filter((request) => matches(query, request)).map((request) => request.changes
+        .filter((change) => authoredQueryReadsLiveChange(query.meta, change)));
+      return [query, effects.some((group) => group.length === 0) ? [] : uniqueChanges(effects.flat())] as const;
     }));
-    const refreshed = queryClient.invalidateQueries({ predicate, type: "all", refetchType: "active" });
+    const held = queries.filter((query) => !batch.some((request) => !request.live && matches(query, request))
+      && (deferred.has(query) || query.state.data !== undefined && query.state.fetchStatus !== "idle"));
+    const heldSet = new Set(held);
+    const immediate = queries.filter((query) => !heldSet.has(query));
+    immediate.forEach((query) => { if (query.meta) query.meta.angeeChanges = changesByQuery.get(query); });
+    const refreshed = queryClient.invalidateQueries({ predicate: (query) => predicate(query) && !heldSet.has(query),
+      type: "all", refetchType: "active" });
+    const followUps = held.map((query) => deferRefresh(query, changesByQuery.get(query) ?? []));
     try {
       callbacks.forEach((deliver) => deliver());
       await refreshed;
     } finally {
-      for (const query of queries) {
+      for (const query of immediate) {
         const meta = query.meta;
         if (meta && meta.angeeChanges === changesByQuery.get(query)) delete meta.angeeChanges;
       }
     }
+    await Promise.all(followUps);
   }
 
   async function flush(): Promise<void> {
@@ -184,9 +274,10 @@ export function createAuthoredLiveInvalidation(
     }
   }
 
-  function reconcile(request: QueryReconciliation): Promise<void> {
-    prepare(request);
-    requests.push(request);
+  function reconcile(request: QueryReconciliation, live = false): Promise<void> {
+    const queued = { ...request, live };
+    prepare(queued);
+    requests.push(queued);
     const now = performance.now();
     firstAt ??= now;
     if (timer !== undefined) clearTimeout(timer);
@@ -221,6 +312,7 @@ export function createAuthoredLiveInvalidation(
       pending.forEach(({ resolve }) => resolve());
       pending.clear();
       waiting = [];
+      for (const [query, entry] of deferred) retireDeferred(query, entry);
     },
     async batch<T>(run: (reconciliation?: MutationReconciliationScope) => Promise<T>): Promise<T> {
       const started = generation;
@@ -235,7 +327,7 @@ export function createAuthoredLiveInvalidation(
           effect.accepted?.forEach((key) => accepted.add(key));
           if (effect.background) background = true;
           else if (!effect.queryKeys?.length) legacy = true;
-          const request = { ...effect, fallbackAccepted: accepted };
+          const request = { ...effect, fallbackAccepted: accepted, live: false };
           prepare(request);
           collected.push(request);
           return Promise.resolve();
@@ -262,7 +354,7 @@ export function createAuthoredLiveInvalidation(
     reconcile,
     push(change, deliver) {
       if (deliver) deliveries.push(deliver);
-      void reconcile({ changes: [change] }).catch(() => undefined);
+      void reconcile({ changes: [change] }, true).catch(() => undefined);
     },
   };
 }
