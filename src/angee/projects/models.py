@@ -234,8 +234,8 @@ class TaskOrderingQuerySet[TaskT: Task](models.QuerySet[TaskT]):
         """Lock selected source and destination contexts before native tracked writes.
 
         Django evaluates project/parent expressions once for the selected rows.
-        Freeze those destinations through native CASE expressions so a later
-        subquery change cannot write into a context outside this lock set.
+        Freeze those destinations so a later subquery change cannot write into
+        a context outside this lock set.
         """
 
         if not self.model.ORDERING_FIELDS.intersection(kwargs):
@@ -264,11 +264,21 @@ class TaskOrderingQuerySet[TaskT: Task](models.QuerySet[TaskT]):
             for index, name in enumerate(destinations, 1):
                 field = self.model._meta.get_field(name)
                 assert isinstance(field, models.ForeignKey)
-                contexts[name] = tuple(row[index] for row in selected)
-                kwargs[field.attname] = models.Case(*(
-                    models.When(pk=row[0], then=models.Value(row[index], output_field=field.target_field))
-                    for row in selected
-                ), default=models.Value(None), output_field=field.target_field)
+                values = tuple(row[index] for row in selected)
+                contexts[name] = values
+                if all(value is None for value in values):
+                    # Django casts neither integer output fields nor typed NULL Values here.
+                    # PostgreSQL infers an all-NULL CASE as text, so write native NULL.
+                    kwargs[field.attname] = None
+                else:
+                    kwargs[field.attname] = models.Case(
+                        *(
+                            models.When(pk=row[0], then=models.Value(row[index], output_field=field.target_field))
+                            for row in selected
+                        ),
+                        default=models.Value(None),
+                        output_field=field.target_field,
+                    )
             project_ids, parent_ids = contexts.get("project", ()), contexts.get("parent", ())
         with rows._ordering_write(kwargs, project_ids=project_ids, parent_ids=parent_ids) as locked:
             return super(TaskOrderingQuerySet, locked).update(**kwargs)
