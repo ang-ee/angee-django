@@ -326,6 +326,13 @@ def test_retry_names_other_unrouted_failures_without_reopening_the_run(execution
     assert runner.execute(retained_step(run).pk)
     assert runner.execute(retained_step(run, "sibling").pk)
     before = terminal_fields(run)
+    graph = WorkflowRun.objects.with_actor(actor).get(pk=run.pk).graph(
+        actor, step_fields=frozenset({"can_retry"}),
+    )
+    failed = {node.node.key: node.step_run for node in graph.nodes}
+    assert not failed["failed"].can_retry(actor) and not failed["sibling"].can_retry(actor)
+    assert "sibling" in failed["failed"].retry_blocker
+    assert "failed" in failed["sibling"].retry_blocker
     for target, other in (("failed", "sibling"), ("sibling", "failed")):
         with pytest.raises(ValidationError, match=other):
             StepRun.objects.retry_step(retained_step(run, target), actor=actor)

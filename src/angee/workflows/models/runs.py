@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import traceback
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -14,6 +15,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import DatabaseError, OperationalError, models, transaction
+from django.db.models import Prefetch
 from django.db.models.functions import Now
 from django.utils.functional import cached_property
 from rebac import database_context, system_context, to_subject_ref
@@ -30,7 +32,7 @@ from angee.base.signals import publish_change
 from angee.iam.models.base import ProtectedDataModel
 from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.jobs.enqueue import enqueue_task
-from angee.workflows.definition import GraphEdge, GraphNode
+from angee.workflows.definition import MAP_BODY_SUFFIX, GraphEdge, GraphNode
 from angee.workflows.managers import WorkflowRunManager
 from angee.workflows.models.definitions import WorkflowVersion
 from angee.workflows.querysets import RETRYABLE_SQLSTATES, _record_failure, _sqlstate
@@ -417,19 +419,80 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
                     run.refresh_from_db(using=self._state.db)
                     publish_change(run, action="update", update_fields=None)
 
-    def graph(self, actor: Any) -> RunGraph:
-        """Read this run's frozen topology with two actor-scoped execution queries."""
+    def _graph_steps(
+        self,
+        actor: Any,
+        fields: frozenset[str],
+        related_querysets: Mapping[str, models.QuerySet[Any]],
+    ) -> Any:
+        """Scope and batch only the step details selected by a graph reader."""
+        model = self.step_runs.model
+        queryset = cast(Any, model.objects.db_manager(self._state.db).with_actor(actor)).filter(run_id=self.pk)
+        if "requires_duplicate_acknowledgement" in fields:
+            queryset = queryset.annotate(_effect_started=model.effect_started_expression())
+        related = {
+            "awaited_run": apps.get_model("workflows", "WorkflowRun"),
+            "child_runs": apps.get_model("workflows", "WorkflowRun"),
+            "decision": apps.get_model("decisions", "Decision"),
+            "records": apps.get_model("workflows", "StepRecord"),
+        }
+        prefetches = [
+            Prefetch(
+                name,
+                queryset=related_querysets.get(name, target.objects.db_manager(self._state.db).with_actor(actor)),
+            )
+            for name, target in related.items()
+            if name in fields
+        ]
+        return queryset.prefetch_related(*prefetches) if prefetches else queryset
+
+    def graph(
+        self,
+        actor: Any,
+        *,
+        step_fields: frozenset[str] = frozenset(),
+        map_fields: frozenset[str] = frozenset(),
+        related_querysets: Mapping[str, models.QuerySet[Any]] | None = None,
+    ) -> RunGraph:
+        """Read frozen topology, batching the step details requested by the caller."""
         if actor is None:
             raise PermissionDenied("A run graph requires a reader.")
         self.require_access("read", actor)
         definition = self.policy_version.definition
         topology = definition.topology()
-        steps = cast(Any, self.step_runs.model.objects.db_manager(self._state.db).with_actor(actor)).filter(
-            run_id=self.pk
-        )
+        related_querysets = related_querysets or {}
+        steps = self._graph_steps(actor, step_fields, related_querysets)
         rows = {row.node_key: row for row in steps.nodes()}
         for row in rows.values():
             row.run = self
+        map_rows: dict[str, list[Any]] = {}
+        if "map_steps" in step_fields:
+            for row in (
+                self._graph_steps(actor, map_fields, related_querysets)
+                .filter(node_key__endswith=MAP_BODY_SUFFIX)
+                .order_by("node_key", "map_index")
+            ):
+                row.run = self
+                map_rows.setdefault(row.node_key.removesuffix(MAP_BODY_SUFFIX), []).append(row)
+            for key, row in rows.items():
+                row._graph_map_steps = map_rows.get(key, [])
+                row._graph_map_actor = actor
+        if "can_retry" in step_fields or "can_retry" in map_fields:
+            permission = (to_subject_ref(actor), self.with_actor(actor).has_access("write"))
+            graph_rows = (*rows.values(), *(item for group in map_rows.values() for item in group))
+            for row in graph_rows:
+                row._graph_retry_permission = permission
+            if permission[1]:
+                with system_context(reason="workflows.retry_policy"):
+                    failures = tuple(
+                        (pk, key)
+                        for pk, key in self.step_runs.model._default_manager.db_manager(self._state.db)
+                        .filter(run_id=self.pk, status=StepRunStatus.FAILED)
+                        .values_list("pk", "node_key")
+                        if definition.retry_allowed(key)
+                    )
+                for row in graph_rows:
+                    row._graph_unrouted_failures = failures
         plan = definition.plan(
             rows.values(),
             terminal=self.stopped_at is not None or self.is_terminal and self.status != RunStatus.FAILED,

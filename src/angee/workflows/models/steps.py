@@ -15,7 +15,7 @@ from django.db import models, transaction
 from django.db.models.fields.json import KeyTextTransform, KeyTransform
 from django.db.models.functions import Coalesce, Concat, Length, Now, Substr
 from django.db.models.lookups import IsNull
-from rebac import system_context
+from rebac import system_context, to_subject_ref
 
 from angee.base.exceptions import exception_text
 from angee.base.fields.state import StateField
@@ -380,6 +380,8 @@ class StepRun(ProtectedDataModel, concrete=True):
     @property
     def requires_duplicate_acknowledgement(self) -> bool:
         """Whether any attempt on this page may have made a non-idempotent effect."""
+        if "_effect_started" in self.__dict__:
+            return not self.step.effect_idempotent and bool(self.__dict__["_effect_started"])
         with system_context(reason="workflows.effect_policy"):
             return (
                 not self.step.effect_idempotent
@@ -391,6 +393,18 @@ class StepRun(ProtectedDataModel, concrete=True):
                     effect_started_at__isnull=False,
                 ).exists()
             )
+
+    @classmethod
+    def effect_started_expression(cls) -> models.Exists:
+        """Project the current-page effect marker with the step rows."""
+        attempt = apps.get_model("workflows", "StepAttempt")
+        return models.Exists(
+            attempt.objects.system_context(reason="workflows.effect_policy").filter(
+                step_run_id=models.OuterRef("pk"),
+                page_index=models.OuterRef("page_index"),
+                effect_started_at__isnull=False,
+            )
+        )
 
     @property
     def retry_blocker(self) -> str | None:
@@ -409,21 +423,33 @@ class StepRun(ProtectedDataModel, concrete=True):
             and not definition.retry_allowed(self.node_key)
         ):
             return "This step cannot be retried in place."
-        others = sorted(
-            row.node_key
-            for row in (
-                apps.get_model("workflows", "StepRun")
-                ._default_manager.db_manager(run._state.db)
-                .filter(run_id=run.pk)
+        failures = self.__dict__.get("_graph_unrouted_failures")
+        if failures is None:
+            failures = (
+                (row.pk, row.node_key)
+                for row in (
+                    apps.get_model("workflows", "StepRun")
+                    ._default_manager.db_manager(run._state.db)
+                    .filter(run_id=run.pk)
+                )
+                if definition.unrouted_failure([row])
             )
-            if row.pk != self.pk and definition.unrouted_failure([row])
-        )
+        others = sorted(key for pk, key in failures if pk != self.pk)
         return f"Other unrouted failures remain: {', '.join(others)}." if others else None
 
     def can_retry(self, actor: Any) -> bool:
         """Expose retry eligibility without granting generic writes to engine rows."""
-        if not self.run.with_actor(actor).has_access("write"):
+        run = self.run
+        cached = self.__dict__.get("_graph_retry_permission")
+        allowed = (
+            cached[1]
+            if actor is not None and cached is not None and cached[0] == to_subject_ref(actor)
+            else run.with_actor(actor).has_access("write")
+        )
+        if not allowed:
             return False
+        if "_graph_unrouted_failures" in self.__dict__:
+            return self.retry_blocker is None
         with system_context(reason="workflows.retry_policy"):
             return self.retry_blocker is None
 
