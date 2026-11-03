@@ -37,7 +37,9 @@ remains a native execution record of the asking step's `created` operation,
 accessible through `ctx.decision(id)` in that run. Reading another run's question
 as evidence does not make it this run's question. An open question cannot be
 replaced. The built-in `ask_decision` resolves the symbolic `subject` key in
-configured actions to the run's subject public identity.
+configured actions to the run's subject public identity. Answering enqueues
+`workflows.wake_decisions` on the decision database's commit; the worker wakes
+the waiting step, and the tick recovers a failed or skipped wake.
 
 [`apply_proposals`](decision_steps.py) is the shared application path: as the run actor
 it sets fields through normal validated model saves, resolves relation sets through

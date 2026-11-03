@@ -16,9 +16,15 @@ from rebac import actor_context, system_context
 from rebac.roles import grant as grant_role
 
 from angee.base.fields.identity import SqidField
-from angee.jobs.enqueue import celery_app
 from angee.workflows.context import StepContext
-from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
+from angee.workflows.testing.drivers import (
+    capture_tasks,
+    decide,
+    deliver_decision_wakes,
+    load_workflow,
+    run_until,
+    start_run,
+)
 from angee.workflows_integrate.archive_steps import ArchiveExecute, ArchiveExtractor, ArchiveMappingUnit
 
 
@@ -76,7 +82,7 @@ class ArchiveWorkflowTests(TransactionTestCase):
     """Install both resource rows, review mappings and execute their map bodies."""
 
     def setUp(self):
-        self.enterContext(patch.object(celery_app, "send_task"))
+        self.sent = self.enterContext(capture_tasks())
         call_command("rebac", "sync", verbosity=0)
         self.enterContext(patch.dict(settings.ANGEE_WORKFLOW_ARCHIVE_EXTRACTOR_CLASSES, {
             "test_file": f"{__name__}.TestFileExtractor",
@@ -172,6 +178,7 @@ class ArchiveWorkflowTests(TransactionTestCase):
                     decision = apps.get_model("decisions.Decision").objects.get(pk=gate.decision_id)
                     self.assertEqual(gate.state["mappings"][str(self.target.sqid)][0]["extractor"], f"test_{suffix}")
                 decide(decision, actor=self.actor, chosen=[str(self.target.sqid)])
+                self.assertEqual(deliver_decision_wakes(self.sent, decision.pk), [1])
                 run_until(run)
                 with system_context(reason="archive result assertion"):
                     run.refresh_from_db()
@@ -214,6 +221,7 @@ class ArchiveWorkflowTests(TransactionTestCase):
             gate = run.step_runs.get(node_key="gate")
             decision = apps.get_model("decisions.Decision").objects.get(pk=gate.decision_id)
         decide(decision, actor=self.actor, chosen=["skip"])
+        self.assertEqual(deliver_decision_wakes(self.sent, decision.pk), [1])
         run_until(run)
         with system_context(reason="skip archive result"):
             run.refresh_from_db()
@@ -237,6 +245,7 @@ class ArchiveWorkflowTests(TransactionTestCase):
                 gate = run.step_runs.get(node_key="gate")
                 decision = apps.get_model("decisions.Decision").objects.get(pk=gate.decision_id)
             decide(decision, actor=self.actor, chosen=[str(self.target.sqid)])
+            self.assertEqual(deliver_decision_wakes(self.sent, decision.pk), [1])
             run_until(run)
             with system_context(reason="partial archive results"):
                 run.refresh_from_db()

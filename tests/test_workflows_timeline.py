@@ -26,7 +26,7 @@ from angee.workflows.decision_steps import AskDecision, DecisionStep
 from angee.workflows.querysets import WorkflowRunQuerySet
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
-from angee.workflows.testing.drivers import load_workflow, run_until, start_run
+from angee.workflows.testing.drivers import deliver_decision_wakes, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Trigger, WorkflowRun
 from angee.workflows.timeline import TimelineSelection
 from tests.conftest import create_user, execute_schema, result_data, vault_for
@@ -269,7 +269,7 @@ def test_timeline_projects_run_subject_trigger_records_and_decision(schema, trig
 
 
 def test_symbolic_subject_actions_ask_hold_apply_and_record_both_directions(review, register_step, schema):
-    actor, people, _, question = review
+    actor, people, sent, question = review
     register_step(AskDecision)
     target = question.review_subject
     workflow = load_workflow({"nodes": {"ask": {"step": "ask_decision", "config": {
@@ -284,6 +284,7 @@ def test_symbolic_subject_actions_ask_hold_apply_and_record_both_directions(revi
     decision = step.decision
     assert target.sqid in decision.proposal["alternatives"][0]["actions"]
     decision.decide(actor=people[0], chosen=["rename"])
+    assert deliver_decision_wakes(sent, decision.pk) == [1]
     run_until(run)
     target.refresh_from_db()
     assert target.name == "Chosen" and run.status == "succeeded" and run.outcome == "renamed"

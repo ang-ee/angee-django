@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from angee.workflows import schema as workflow_schema
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
-from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
+from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepRun, Workflow
 from tests.conftest import addon_schema, create_user, execute_schema, result_data, vault_for
 from tests.test_workflows_children import child_graph as child_graph
@@ -432,7 +432,7 @@ def test_drill_in_map_record_reference_queries_are_bounded(schema, execution, re
 
 
 def test_drill_in_decision_card_queries_are_bounded(schema, review):
-    actor, people, _, question = review
+    actor, people, sent, question = review
     query = """query($id: String!) { workflowrun_by_pk(id: $id) {
       graph { nodes { step_run { records { id record_model record_id } decision {
         id permissions records { id record_model record_id }
@@ -454,6 +454,7 @@ def test_drill_in_decision_card_queries_are_bounded(schema, review):
             step = StepRun.system_queryset().get(run=run, node_key=f"node_{index}")
             decision = step.decision
             decide(decision, actor=people[0], chosen=["approve"])
+            assert deliver_decision_wakes(sent, decision.pk) == [1]
         run_until(run)
         with CaptureQueriesContext(connection) as queries:
             nodes = result_data(execute_schema(schema, query, {"id": run.sqid}, user=actor))[
