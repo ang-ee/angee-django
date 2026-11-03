@@ -50,7 +50,7 @@ test("actual complete acceptance settles before held derived reads without rerea
   } finally { liveProvider.setEnabled(false); stopDetail(); stopDerived(); }
 });
 
-test("local command still cancels a data-less read on arrival", async () => {
+test("local command lets a data-less read settle before one follow-up", async () => {
   const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   let finish!: (value: string) => void;
   const first = new Promise<string>((resolve) => { finish = resolve; });
@@ -66,15 +66,16 @@ test("local command still cancels a data-less read on arrival", async () => {
   const stop = observer.subscribe(() => undefined);
   const scheduler = createAuthoredLiveInvalidation(client);
   try {
-    await scheduler.batch(async (scope) => {
+    const command = scheduler.batch(async (scope) => {
       await scope!.reconcile({ changes: [{ model: "notes.Note", id: "n1" }] });
-      expect(signal.aborted).toBe(true);
     });
+    expect(signal.aborted).toBe(false);
+    expect(reads).toBe(1);
+    finish("obsolete");
+    await command;
     expect(reads).toBe(2);
     expect(observer.getCurrentResult().data).toBe("current");
-    finish("obsolete");
-    await first;
-    expect(observer.getCurrentResult().data).toBe("current");
+    expect(signal.aborted).toBe(false);
   } finally {
     finish("cleanup");
     scheduler.clear(); stop(); client.clear();
@@ -82,15 +83,17 @@ test("local command still cancels a data-less read on arrival", async () => {
 });
 
 
-test.each(["before", "during"])("actor suspension %s exact cancellation rejects the captured old acceptance", async (when) => {
+test.each(["before", "during"])("actor suspension %s acceptance prevents an old actor's late write", async (when) => {
   const client = createClient();
   const liveProvider = createAngeeChangeLiveProvider({ subscribe: () => () => undefined, on: () => () => undefined } as never, [], { queryClient: client });
   const wrapper = ({ children }: { children: ReactNode }) => <Provider queryClient={client} liveProvider={liveProvider}>{children}</Provider>;
   const hook = renderHook(() => useAcceptQueryData(), { wrapper });
   const oldAccept = hook.result.current;
-  let release!: () => void;
-  const cancelled = new Promise<void>((resolve) => { release = resolve; });
-  if (when === "during") vi.spyOn(client, "cancelQueries").mockImplementationOnce(() => cancelled);
+  let release!: (value: { secret: string }) => void;
+  const pendingRead = new Promise<{ secret: string }>((resolve) => { release = resolve; });
+  const read = when === "during"
+    ? client.fetchQuery({ queryKey: ["private-detail"], queryFn: () => pendingRead }).catch(() => undefined)
+    : Promise.resolve();
   const suspend = () => {
     liveProvider.setEnabled(false);
     client.removeQueries();
@@ -99,10 +102,14 @@ test.each(["before", "during"])("actor suspension %s exact cancellation rejects 
   };
   if (when === "before") act(suspend);
   const completion = oldAccept(["private-detail"], { secret: "old actor" });
-  const failure = completion.catch((error: unknown) => error);
-  if (when === "during") act(suspend);
-  release();
-  expect(isCancelledError(await failure)).toBe(true);
+  if (when === "before") expect(isCancelledError(await completion.catch((error: unknown) => error))).toBe(true);
+  else {
+    await completion;
+    expect(client.getQueryData(["private-detail"])).toEqual({ secret: "old actor" });
+    act(suspend);
+  }
+  release({ secret: "old read" });
+  await read;
   expect(client.getQueryData(["private-detail"])).toBeUndefined();
   await act(async () => { await hook.result.current(["private-detail"], { secret: "current actor" }); });
   expect(client.getQueryData(["private-detail"])).toEqual({ secret: "current actor" });

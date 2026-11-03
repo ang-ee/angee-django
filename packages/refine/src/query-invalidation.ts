@@ -49,7 +49,7 @@ export function authoredQueryReadsLiveChange(meta: unknown, change: AuthoredLive
 
 /** Refetch every active authored read registered against one of the moved models. */
 export async function invalidateAuthoredQueries(
-  queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries">,
+  queryClient: Pick<QueryClient, "getQueryCache" | "invalidateQueries">,
   modelLabels: readonly string[],
 ): Promise<void> {
   return invalidateAuthoredQueriesMatching(
@@ -116,16 +116,16 @@ export type ReconciliationPublish = NonNullable<LiveProvider["publish"]> & {
 
 /**
  * One native reconciliation owner: server/unscoped effects use a bounded queue;
- * explicit command collectors flush independently. Live changes and ready
- * recovery let every in-flight read finish before a coalesced follow-up. Only
- * local commands cancel matching reads on arrival.
+ * explicit command collectors flush independently. Commands, live changes and
+ * ready recovery never cancel a read: in-flight reads finish before a coalesced
+ * follow-up, and idle retained reads refetch at the command's flush.
  * Query owns retries, errors and row state.
  */
 export function createAuthoredLiveInvalidation(
-  queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries" | "getQueryCache">,
+  queryClient: Pick<QueryClient, "invalidateQueries" | "getQueryCache">,
   nativeReadsChange: (query: Query, change: AuthoredLiveChange) => boolean = () => false,
 ): AuthoredLiveInvalidation {
-  type Request = QueryReconciliation & { fallbackAccepted?: ReadonlySet<string>; live: boolean };
+  type Request = QueryReconciliation & { fallbackAccepted?: ReadonlySet<string> };
   type Round = { promise: Promise<void>; resolve: () => void; reject: (error: unknown) => void };
   type Deferred = { changes: AuthoredLiveChange[]; full: boolean; dirty: boolean; active: boolean;
     next: Round; current?: Round };
@@ -160,14 +160,6 @@ export function createAuthoredLiveInvalidation(
 
   function prepare(request: Request): void {
     const predicate = (query: Query) => matches(query, request);
-    if (!request.live) {
-      for (const [query, entry] of deferred) {
-        if (!predicate(query)) continue;
-        retireDeferred(query, entry);
-      }
-    }
-    if (!request.live) void queryClient.cancelQueries({ predicate: (query) =>
-      query.state.fetchStatus !== "idle" && predicate(query) });
     void queryClient.invalidateQueries({ predicate, type: "all", refetchType: "none" });
   }
 
@@ -236,13 +228,12 @@ export function createAuthoredLiveInvalidation(
         .filter((change) => authoredQueryReadsLiveChange(query.meta, change)));
       return [query, effects.some((group) => group.length === 0) ? [] : uniqueChanges(effects.flat())] as const;
     }));
-    const held = queries.filter((query) => !batch.some((request) => !request.live && matches(query, request))
-      && (deferred.has(query) || query.state.fetchStatus !== "idle"));
+    const held = queries.filter((query) => deferred.has(query) || query.state.fetchStatus !== "idle");
     const heldSet = new Set(held);
     const immediate = queries.filter((query) => !heldSet.has(query));
     immediate.forEach((query) => { if (query.meta) query.meta.angeeChanges = changesByQuery.get(query); });
     const refreshed = queryClient.invalidateQueries({ predicate: (query) => predicate(query) && !heldSet.has(query),
-      type: "all", refetchType: "active" });
+      type: "all", refetchType: "active" }, { cancelRefetch: false });
     const followUps = held.map((query) => deferRefresh(query, changesByQuery.get(query) ?? []));
     try {
       callbacks.forEach((deliver) => deliver());
@@ -276,8 +267,8 @@ export function createAuthoredLiveInvalidation(
     }
   }
 
-  function reconcile(request: QueryReconciliation, live = false): Promise<void> {
-    const queued = { ...request, live };
+  function reconcile(request: QueryReconciliation): Promise<void> {
+    const queued = { ...request };
     prepare(queued);
     requests.push(queued);
     const now = performance.now();
@@ -312,7 +303,7 @@ export function createAuthoredLiveInvalidation(
         (query.state.data !== undefined || query.state.fetchStatus !== "idle")
         && (authoredQueryReadsLiveChange(query.meta, change) || nativeReadsChange(query, change))
       }));
-      if (stale.size) void reconcile({ changes: [], predicate: (query) => stale.has(query) }, true)
+      if (stale.size) void reconcile({ changes: [], predicate: (query) => stale.has(query) })
         .catch(() => undefined);
     },
     clear() {
@@ -340,7 +331,7 @@ export function createAuthoredLiveInvalidation(
           effect.accepted?.forEach((key) => accepted.add(key));
           if (effect.background) background = true;
           else if (!effect.queryKeys?.length) legacy = true;
-          const request = { ...effect, fallbackAccepted: accepted, live: false };
+          const request = { ...effect, fallbackAccepted: accepted };
           prepare(request);
           collected.push(request);
           return Promise.resolve();
@@ -367,7 +358,7 @@ export function createAuthoredLiveInvalidation(
     reconcile,
     push(change, deliver) {
       if (deliver) deliveries.push(deliver);
-      void reconcile({ changes: [change] }, true).catch(() => undefined);
+      void reconcile({ changes: [change] }).catch(() => undefined);
     },
   };
 }
@@ -381,7 +372,7 @@ export interface QueryDataAcceptance {
 /** Void callbacks can accept local state but prove no native projection exclusion. */
 export type QueryDataAcceptanceResult = void | QueryDataAcceptance | readonly (QueryDataAcceptance | undefined)[];
 
-/** Imperative exact acceptance; caller owns its actor/lifecycle scope. Hooks use useAcceptQueryData. */
+/** Imperative exact acceptance with recovery from an older read; caller owns its actor/lifecycle scope. */
 export function acceptQueryData<TData>(
   client: QueryClient,
   queryKey: QueryKey,
@@ -399,10 +390,9 @@ async function acceptScopedQueryData<TData>(
   isCurrent: () => boolean,
 ): Promise<QueryDataAcceptance | undefined> {
   if (!isCurrent()) throw new CancelledError({ silent: true });
-  await client.cancelQueries({ queryKey, exact: true });
-  if (!isCurrent()) throw new CancelledError({ silent: true });
+  const pendingRead = client.getQueryCache().find({ queryKey, exact: true })?.promise;
   let adopted = false;
-  client.setQueryData<TData>(queryKey, (current) => {
+  const acceptedValue = client.setQueryData<TData>(queryKey, (current) => {
     const next = typeof data === "function"
       ? (data as (current: TData | undefined) => TData | undefined)(current)
       : data;
@@ -416,6 +406,21 @@ async function acceptScopedQueryData<TData>(
       const marker = { complete, dataUpdateCount: query.state.dataUpdateCount };
       query.setOptions({ ...query.options, meta: { ...query.meta, angeeAcceptedResponse: marker } });
       evidence = { query, marker };
+      if (pendingRead) {
+        // Accept now. The earlier fetch may still publish its old snapshot;
+        // restore accepted values in call order so a later acceptance wins.
+        void pendingRead.then(() => {
+          if (!isCurrent() || client.getQueryCache().find({ queryKey, exact: true }) !== query
+            || query.state.dataUpdateCount === marker.dataUpdateCount) return;
+          client.setQueryData<TData>(queryKey, acceptedValue);
+          marker.dataUpdateCount = query.state.dataUpdateCount;
+          query.setOptions({ ...query.options, meta: { ...query.meta, angeeAcceptedResponse: marker } });
+          // setQueryData clears invalidation; a partial projection still needs
+          // its exact authoritative revalidation after this older read settles.
+          if (!complete) void client.invalidateQueries({ queryKey, exact: true, refetchType: "none" })
+            .catch(() => undefined);
+        }, () => undefined);
+      }
     }
   }
   if (!complete) await client.invalidateQueries({ queryKey, exact: true, refetchType: "none" });
@@ -525,22 +530,11 @@ export function useReconcileMutationResponse() {
       else await refresh;
       return;
     }
-    const refresh = (async () => {
-      if (options.acceptResponse) {
-        await Promise.all([
-          ...customTargets.map((target) => invalidate(target)),
-          invalidateAuthoredQueriesMatching(client, (query) => !accepted.has(query.queryHash)
-            && (exactFallback(query) || predicate(query) || changes.some((change) => authoredQueryReadsLiveChange(query.meta, change)))),
-        ]);
-      } else {
-        await Promise.all([
-          ...targets.map((target) => invalidate(target)),
-          ...(changes.length || options.queryKeys?.length
-            ? [invalidateAuthoredQueriesMatching(client, (query) => exactFallback(query) || changes.some((change) => authoredQueryReadsLiveChange(query.meta, change)))]
-            : []),
-        ]);
-      }
-    })();
+    const refresh = Promise.all([
+      ...customTargets.map((target) => invalidate(target)),
+      invalidateAuthoredQueriesMatching(client, (query) => !accepted.has(query.queryHash)
+        && (exactFallback(query) || predicate(query) || changes.some((change) => authoredQueryReadsLiveChange(query.meta, change)))),
+    ]);
     if (options.acceptResponse) void refresh.catch(() => undefined);
     else await refresh;
   }, [client, invalidate, publish, resources, generation]);
@@ -554,24 +548,14 @@ export function useReconcileMutationResponse() {
   }), [reconcile, publish, generation]);
 }
 
-/**
- * The cancelling protocol for model-wide and exact-row invalidation outside
- * the provider-owned live scheduler (mutations included).
- */
+/** Model-wide and exact-row invalidation compose the same settle-then-refetch owner. */
 async function invalidateAuthoredQueriesMatching(
-  queryClient: Pick<QueryClient, "cancelQueries" | "invalidateQueries">,
+  queryClient: Pick<QueryClient, "getQueryCache" | "invalidateQueries">,
   predicate: (query: Query) => boolean,
 ): Promise<void> {
-  // Native invalidation joins an initial in-flight request instead of restarting
-  // it. Cancel that snapshot so a local command's effect is not lost on settle.
-  await queryClient.cancelQueries({
-    predicate: (query) => predicate(query)
-      && query.state.data === undefined
-      && query.state.fetchStatus !== "idle",
-  });
-  return queryClient.invalidateQueries({
-    predicate,
-    type: "all",
-    refetchType: "active",
+  // This imperative helper receives only a QueryClient, not the provider's
+  // actor-scoped scheduler; its private batch owns this call's completion.
+  return createAuthoredLiveInvalidation(queryClient).batch(async (scope) => {
+    await scope?.reconcile({ changes: [], predicate });
   });
 }

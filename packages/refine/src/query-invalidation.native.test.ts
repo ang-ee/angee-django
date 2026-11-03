@@ -1,4 +1,4 @@
-import { InfiniteQueryObserver, isCancelledError, QueryClient, QueryObserver } from "@tanstack/react-query";
+import { InfiniteQueryObserver, QueryClient, QueryObserver } from "@tanstack/react-query";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { keysetFeedOptions, type KeysetFeedRevalidation, type KeysetFeedWindow } from "./dialect/keyset-feed";
@@ -142,7 +142,7 @@ test("a related child refreshes an exact parent without unrelated-child starvati
   }
 });
 
-test("a model event during the initial request replaces its snapshot and discards a late response", async () => {
+test("imperative model invalidation lets the initial request settle before one fresh read", async () => {
   const cache = client();
   const old = pending<string[]>();
   let requests = 0;
@@ -154,7 +154,6 @@ test("a model event during the initial request replaces its snapshot and discard
       requests++;
       if (requests === 1) {
         oldSignal = signal;
-        // The transport deliberately ignores abort, as Hasura may do.
         return old.promise;
       }
       return Promise.resolve(["survivor"]);
@@ -164,13 +163,13 @@ test("a model event during the initial request replaces its snapshot and discard
   const unsubscribe = observer.subscribe(() => undefined);
   try {
     const invalidated = invalidateAuthoredQueries(cache, ["notes.Note"]);
-    // Cancellation must happen before awaiting the old transport.
-    expect(oldSignal.aborted).toBe(true);
+    expect(oldSignal.aborted).toBe(false);
+    expect(requests).toBe(1);
+    old.resolve(["survivor", "revoked"]);
     await invalidated;
     expect(requests).toBe(2);
     expect(observer.getCurrentResult().data).toEqual(["survivor"]);
-    old.resolve(["survivor", "revoked"]);
-    await old.promise;
+    expect(oldSignal.aborted).toBe(false);
     expect(observer.getCurrentResult().data).toEqual(["survivor"]);
     expect(cache.getQueryState(options.queryKey)?.isInvalidated).toBe(false);
   } finally {
@@ -179,7 +178,7 @@ test("a model event during the initial request replaces its snapshot and discard
   }
 });
 
-test.each([true, false])("empty %s-disabled/inactive initial requests cancel without refetching", async (disabled) => {
+test.each([true, false])("empty %s-disabled/inactive initial requests settle without refetching", async (disabled) => {
   const cache = client();
   const old = pending<string[]>();
   let requests = 0;
@@ -194,18 +193,19 @@ test.each([true, false])("empty %s-disabled/inactive initial requests cancel wit
   };
   const observer = disabled ? new QueryObserver(cache, { ...options, enabled: false }) : undefined;
   const unsubscribe = observer?.subscribe(() => undefined);
-  const request = cache.fetchQuery(options).catch((error: unknown) => error);
+  const request = cache.fetchQuery(options);
   try {
-    await invalidateAuthoredQueries(cache, ["notes.Note"]);
-    expect(signal.aborted).toBe(true);
-    expect(isCancelledError(await request)).toBe(true);
+    const invalidated = invalidateAuthoredQueries(cache, ["notes.Note"]);
+    expect(signal.aborted).toBe(false);
     expect(requests).toBe(1);
+    old.resolve(["old-session"]);
+    expect(await request).toEqual(["old-session"]);
+    await invalidated;
     expect(cache.getQueryState(options.queryKey)).toMatchObject({
-      data: undefined, fetchStatus: "idle", isInvalidated: true,
+      data: ["old-session"], fetchStatus: "idle", isInvalidated: true,
     });
     expect(cache.getQueryCache().find({ queryKey: options.queryKey })?.getObserversCount()).toBe(disabled ? 1 : 0);
-    old.resolve(["old-session"]); await old.promise;
-    expect(cache.getQueryData(options.queryKey)).toBeUndefined();
+    expect(signal.aborted).toBe(false);
   } finally {
     old.resolve([]);
     unsubscribe?.(); cache.clear();
@@ -246,7 +246,7 @@ test("populated disabled/inactive queries retain data and unrelated initial quer
   }
 });
 
-test("successive events cancel a retained infinite refresh and commit the latest complete pages", async () => {
+test("successive imperative invalidations retain an infinite refresh and finish with current pages", async () => {
   const cache = client();
   const old = pending<{ rows: string[]; next: number | undefined }>();
   const started = pending<void>();
@@ -270,10 +270,10 @@ test("successive events cancel a retained infinite refresh and commit the latest
     await started.promise;
     revision = "current";
     const second = invalidateAuthoredQueries(cache, ["notes.Note"]);
+    expect(oldSignal.aborted).toBe(false);
+    old.resolve({ rows: ["revoked"], next: 1 });
     await Promise.all([first, second]);
-    expect(oldSignal.aborted).toBe(true);
-    expect(observer.getCurrentResult().data?.pages.flatMap((page) => page.rows)).toEqual(["current-0", "current-1"]);
-    old.resolve({ rows: ["revoked"], next: 1 }); await old.promise;
+    expect(oldSignal.aborted).toBe(false);
     expect(observer.getCurrentResult().data?.pages.flatMap((page) => page.rows)).toEqual(["current-0", "current-1"]);
   } finally {
     old.resolve({ rows: [], next: undefined });
@@ -498,36 +498,43 @@ test("an awaited command settles after one live follow-up while later changes co
   }
 });
 
-test("local command reconciliation still cancels a populated in-flight read on arrival", async () => {
+test("a slow in-flight read commits before one local-command follow-up supersedes it", async () => {
   const cache = client();
   const old = pending<string>();
-  const key = ["command-cancel"];
+  const fresh = pending<string>();
+  const key = ["command-settle"];
   cache.setQueryData(key, "initial");
   let signal!: AbortSignal;
   let attempts = 0;
+  const seen: string[] = [];
   const observer = new QueryObserver(cache, {
     queryKey: key, meta: { angeeModels: ["notes.Note"] },
     queryFn: ({ signal: current }: { signal: AbortSignal }) => {
       attempts++;
       if (attempts === 1) { signal = current; return old.promise; }
-      return Promise.resolve("fresh");
+      return fresh.promise;
     },
   });
-  const stop = observer.subscribe(() => undefined);
+  const stop = observer.subscribe((result) => { if (result.data) seen.push(result.data); });
   const live = createAuthoredLiveInvalidation(cache);
   try {
     void observer.refetch();
-    await live.batch(async (scope) => {
+    const command = live.batch(async (scope) => {
       await scope!.reconcile({ changes: [{ model: "notes.Note", id: "note_1" }] });
-      expect(signal.aborted).toBe(true);
     });
+    expect(signal.aborted).toBe(false);
+    expect(attempts).toBe(1);
+    old.resolve("obsolete");
+    await vi.waitFor(() => expect(attempts).toBe(2));
+    expect(seen).toContain("obsolete");
+    expect(observer.getCurrentResult().data).toBe("obsolete");
+    expect(signal.aborted).toBe(false);
+    fresh.resolve("fresh");
+    await command;
     expect(attempts).toBe(2);
     expect(observer.getCurrentResult().data).toBe("fresh");
-    old.resolve("obsolete");
-    await old.promise;
-    expect(observer.getCurrentResult().data).toBe("fresh");
   } finally {
-    old.resolve("cleanup");
+    old.resolve("cleanup"); fresh.resolve("cleanup");
     live.clear(); stop(); cache.clear();
   }
 });
@@ -785,15 +792,32 @@ test.each([
 });
 
 
-test("complete acceptance cancels an obsolete exact snapshot and partial/no-op writes stay distinguishable", async () => {
+test("complete acceptance resolves before an older exact read and restores its stale settle", async () => {
   const cache = client();
   const obsolete = pending<{ title: string }>();
   const key = ["detail", { fields: ["title"] }];
-  const read = cache.fetchQuery({ queryKey: key, queryFn: () => obsolete.promise });
-  await acceptQueryData(cache, key, { title: "accepted" });
-  obsolete.resolve({ title: "old" });
-  await read.catch(() => undefined);
+  let signal!: AbortSignal;
+  const read = cache.fetchQuery({ queryKey: key, queryFn: ({ signal: current }) => {
+    signal = current;
+    return obsolete.promise;
+  } });
+  const acceptance = acceptQueryData(cache, key, { title: "accepted" });
+  expect(signal.aborted).toBe(false);
+  const evidence = await acceptance;
   expect(cache.getQueryData(key)).toEqual({ title: "accepted" });
+  obsolete.resolve({ title: "old" });
+  await read;
+  await Promise.resolve();
+  expect(signal.aborted).toBe(false);
+  expect(cache.getQueryData(key)).toEqual({ title: "accepted" });
+  expect(evidence?.marker.dataUpdateCount).toBe(evidence?.query.state.dataUpdateCount);
+  cache.clear();
+});
+
+test("partial and no-op acceptance remain distinguishable", async () => {
+  const cache = client();
+  const key = ["detail", { fields: ["title"] }];
+  await acceptQueryData(cache, key, { title: "accepted" });
   const query = cache.getQueryCache().find({ queryKey: key, exact: true });
   const count = query?.state.dataUpdateCount;
   await acceptQueryData(cache, key, (current) => current);
@@ -802,6 +826,47 @@ test("complete acceptance cancels an obsolete exact snapshot and partial/no-op w
   expect(query?.state.isInvalidated).toBe(true);
   expect(query?.meta?.angeeAcceptedResponse).toMatchObject({ complete: false });
   cache.clear();
+});
+
+test("partial acceptance stays stale after an older read settles until its exact follow-up", async () => {
+  const cache = client();
+  const key = ["partial-detail"];
+  const obsolete = pending<{ title: string }>();
+  const authoritative = pending<{ title: string }>();
+  let reads = 0;
+  let signal!: AbortSignal;
+  cache.setQueryData(key, { title: "before" });
+  const observer = new QueryObserver(cache, { queryKey: key,
+    meta: { angeeModels: ["notes.Note"] },
+    queryFn: ({ signal: current }) => {
+      if (++reads === 1) { signal = current; return obsolete.promise; }
+      return authoritative.promise;
+    },
+  });
+  const stop = observer.subscribe(() => undefined);
+  try {
+    const oldRead = observer.refetch();
+    await acceptQueryData(cache, key, { title: "partial" }, { complete: false });
+    expect(cache.getQueryData(key)).toEqual({ title: "partial" });
+    expect(observer.getCurrentQuery().state.isInvalidated).toBe(true);
+    const revalidated = invalidateAuthoredQueries(cache, ["notes.Note"]);
+    obsolete.resolve({ title: "old" });
+    await oldRead;
+    await Promise.resolve();
+    expect(signal.aborted).toBe(false);
+    expect(reads).toBe(2);
+    expect(cache.getQueryData(key)).toEqual({ title: "partial" });
+    expect(observer.getCurrentQuery().state.isInvalidated).toBe(true);
+    authoritative.resolve({ title: "fresh" });
+    await revalidated;
+    expect(cache.getQueryData(key)).toEqual({ title: "fresh" });
+    expect(observer.getCurrentQuery().state.isInvalidated).toBe(false);
+    expect(reads).toBe(2);
+  } finally {
+    obsolete.resolve({ title: "cleanup" });
+    authoritative.resolve({ title: "cleanup" });
+    stop(); cache.clear();
+  }
 });
 
 test("an explicit batch flushes successful item effects once after a later item fails", async () => {

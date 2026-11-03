@@ -159,7 +159,6 @@ export function useResourceViewSurface<TRow extends Row = Row>({
     modelMetadata,
     rows,
     enabled: active && resourceView.state.view === "board",
-    refetchRows: refetchRows ?? (() => {}),
   });
   const list = React.useMemo(
     () => ({

@@ -371,7 +371,7 @@ describe("Angee Hasura provider defaults", () => {
       predicate: expect.any(Function),
       type: "all",
       refetchType: "active",
-    }));
+    }, { cancelRefetch: false }));
     const predicate = invalidateQueries.mock.calls.find(([filters]) => filters.refetchType === "active")?.[0]?.predicate as
       | ((query: { meta: unknown }) => boolean)
       | undefined;
@@ -755,7 +755,7 @@ describe("Angee Hasura provider defaults", () => {
       predicate: expect.any(Function),
       type: "all",
       refetchType: "active",
-    }));
+    }, { cancelRefetch: false }));
     const predicate = invalidateQueries.mock.calls.find(([filters]) => filters.refetchType === "active")?.[0]?.predicate as
       | ((query: { meta: unknown }) => boolean)
       | undefined;

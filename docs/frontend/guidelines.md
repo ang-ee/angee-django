@@ -1067,13 +1067,20 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **One reconciliation owner for writes and live changes.** Opt a model into
   cross-actor delivery with `changes(Model, field="<model>Changed")` in its
   schema. Local mutations and subscription events enter the provider's shared
-  [reconciler](../../packages/refine/src/query-invalidation.ts). Local commands
-  cancel matching reads on arrival and can adopt a sufficient response at its
-  exact native Query key. Live changes never cancel an in-flight read, with or
-  without data; it settles, then refetches once for coalesced changes. Affected
-  derived reads run in a bounded burst. Native Refine resource keys and authored
+  [reconciler](../../packages/refine/src/query-invalidation.ts). No read is
+  cancelled by reconciliation: commands, live changes and ready let in-flight
+  reads settle, then refetch once for coalesced effects. Idle retained reads
+  refetch immediately for explicit batches and the exported invalidation helper;
+  provider-scheduled commands without a batch flush within the 300 ms quiet gap.
+  A command can immediately adopt a sufficient response at its exact native
+  Query key, restoring it if an older read settles later. Affected derived
+  reads run in a bounded burst. Native Refine resource keys and authored
   query keys stay distinct; `createApp` uses native manual live mode so Refine
-  does not schedule a second refresh per push.
+  does not schedule a second refresh per push. Actor switches reset queries;
+  explicit keyset and dashboard store restarts and user-triggered refetches
+  retain TanStack's cancelling defaults. Caller-declared
+  `invalidationOptions` targets keep their native options, including an
+  explicit choice to cancel.
   Declare authored `models`, exact `records` and related interests from the
   owners the resolver actually reads. Unknown effects retain model fallback.
   Do not add a page-local invalidator, polling loop or second row cache.
@@ -1099,7 +1106,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   refusals and native pending/error behavior. A response-backed write supplies
   `acceptResponse` and actually adopts the accepted projection using
   `useSetAuthoredQueryData` or the shared resource/form adapter. Exact acceptance
-  cancels stale earlier reads before the form/composer acknowledges its baseline;
+  adopts the response and acknowledges its baseline immediately, restoring
+  the accepted value if an earlier read later publishes an old snapshot;
   sufficient complete projections avoid their redundant reread while derived
   reads reconcile in the background. An accepted partial projection declares
   `complete: false`: retain its values as stale and revalidate that exact read.

@@ -68,16 +68,15 @@ test.each([
   const held = attempts.at(-1)!;
   act(() => { deliver({ data: { fileChanged: { model: "storage.File", id: "file-other", action: "update" } } }); });
   const broad = declaration === "broad" || declaration.startsWith("shared-");
-  expect(held.signal?.aborted).toBe(broad && !retained);
+  expect(held.signal?.aborted).toBe(false);
   if (broad) {
-    if (retained) {
-      await act(async () => { held.resolve(response()); });
-      await waitFor(() => expect(attempts).toHaveLength(3));
-      expect(attempts[2]?.signal?.aborted).toBe(false);
-      await act(async () => { attempts[2]!.resolve(response()); });
-      await waitFor(() => expect(hook.result.current.result.data).toHaveLength(initialCount));
-      expect(attempts).toHaveLength(3);
-    }
+    const beforeRefresh = attempts.length;
+    await act(async () => { held.resolve(response()); });
+    await waitFor(() => expect(attempts).toHaveLength(beforeRefresh + 1));
+    expect(attempts.at(-1)?.signal?.aborted).toBe(false);
+    await act(async () => { attempts.at(-1)!.resolve(response()); });
+    await waitFor(() => expect(hook.result.current.result.data).toHaveLength(initialCount));
+    expect(attempts).toHaveLength(beforeRefresh + 1);
     liveProvider.setEnabled(false);
     return;
   }

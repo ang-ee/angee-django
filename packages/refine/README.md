@@ -35,18 +35,18 @@ Authored and generated-action mutations share one native execution and retention
 owner, including `transient` zero-GC/reset/single-flight handling for secret
 inputs and results. Both retain awaited refresh by default.
 `acceptResponse` opts a covered caller into completion after authoritative values
-have been adopted. `acceptQueryData` and `useSetAuthoredQueryData` cancel earlier
-exact reads and return evidence for the native projection they actually adopt.
+have been adopted. `acceptQueryData` and `useSetAuthoredQueryData` adopt immediately
+and return evidence for the native projection. If an earlier exact read later
+publishes a stale result, the accepted value is restored; a partial projection
+remains stale until its exact authoritative revalidation.
 Return that evidence (or an array of actual setter results) from `acceptResponse`
 to exclude the response's complete projection from its own derived reconciliation.
 A void callback proves no query exclusion; unrelated concurrent acceptances are
 never inferred by scanning the cache. Partial evidence keeps the query stale.
-Actor-sensitive hooks
-compose `useAcceptQueryData`, which captures the originating Angee provider's
-generation and rejects delayed writes after suspension, including after exact
-cancellation. The plain imperative helper requires caller-owned lifecycle scope.
-Use `{ complete: false }`
-for partial writes so derived data remains stale. A callback that adopts no data
+Actor-sensitive hooks compose `useAcceptQueryData`, which captures the originating Angee provider's
+generation and rejects delayed writes after suspension, including recovery from
+an earlier read. The plain imperative helper requires caller-owned lifecycle scope.
+Use `{ complete: false }` for partial writes so derived data remains stale. A callback that adopts no data
 must not be used as a speed switch. `records` and `relatedRecords` retain exact
 canonical row effects, with `invalidateModels` as the broad fallback.
 
@@ -84,10 +84,16 @@ retained reads with observers refetch after the quiet gap; cached reads without
 observers are marked stale and refetch on next mount. Ready never cancels a read
 or reaches user data callbacks. Recovery costs one fetch per affected read per
 ready window; a read covering two models whose readies arrive in separate
-windows refetches once for each model. Actual row changes never cancel an
-in-flight read, with or without data; it settles before a coalesced follow-up.
-Only local commands cancel on arrival. This transport has no replay cursor or
-total row ordering guarantee, and occurrence IDs are not row versions. Later
+windows refetches once for each model. No read is cancelled by reconciliation:
+commands, live changes and ready let in-flight reads settle, then refetch once
+for coalesced effects. Idle retained reads refetch immediately for explicit
+batches and the exported invalidation helper; provider-scheduled commands
+without a batch flush within the 300 ms quiet gap. Actor switches reset queries
+in `create-app.tsx`; explicit keyset and dashboard store restarts, and
+user-triggered refetches retain TanStack's cancelling defaults because they
+replace the actor's or user's read, rather than reconcile a change. This
+transport has no replay cursor or total row ordering guarantee, and occurrence
+IDs are not row versions. Later
 events may revalidate an accepted response because an echo cannot be
 distinguished safely from a newer remote write.
 

@@ -88,16 +88,20 @@ test.each(readers)("%s cancellation reaches the real Hasura fetch on last unmoun
   }
 });
 
-test("initial model invalidation aborts actual HTTP before its replacement snapshot", async () => {
+test("initial model invalidation lets actual HTTP settle before one replacement", async () => {
   const f = fixture();
   const hook = renderHook(() => useAuthoredQuery(DOCUMENT, {}, { models: ["example.Note"] }), { wrapper: f.wrapper });
   try {
     await waitFor(() => expect(f.attempts).toHaveLength(1));
     let refreshed!: Promise<void>;
     act(() => { refreshed = invalidateAuthoredQueries(f.client, ["example.Note"]); });
+    expect(f.attempts[0]?.signal?.aborted).toBe(false);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(1);
+    await act(async () => { f.attempts[0]?.resolve(response("earlier")); });
     await waitFor(() => expect(f.attempts).toHaveLength(2));
-    expect(f.attempts[0]?.signal?.aborted).toBe(true);
     await act(async () => { f.attempts[1]?.resolve(response()); await refreshed; });
+    expect(f.attempts[0]?.signal?.aborted).toBe(false);
     await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "current" }]));
   } finally { f.attempts.forEach((attempt) => attempt.resolve(response())); }
 });

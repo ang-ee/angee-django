@@ -54,15 +54,11 @@ export function useClientResourceViewSurface<TRow extends Row = Row>({
     () => (run.result.data ?? []) as readonly RowRecord[] as readonly TRow[],
     [run.result.data],
   );
-  const refetchRows = React.useCallback(() => {
-    void run.query.refetch();
-  }, [run.query.refetch]);
   const boardLaneState = useBoardLaneState<TRow>({
     laneSource,
     modelMetadata,
     rows: allRows,
     enabled: active && resourceView.state.view === "board",
-    refetchRows,
   });
   // The fetched page is capped; the only signal the in-browser set is actually
   // incomplete is the resource's own total exceeding the cap (a page that
