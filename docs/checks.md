@@ -108,7 +108,10 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 [cross-addon reply and inbound joins](../tests/test_framework_integration.py),
 [delivery contracts](../tests/test_messaging_delivery.py) with PostgreSQL
 [sweep, claim-fence and held-action races](../tests/test_messaging_delivery_concurrency.py), and the
-[comment reply workflow and scheduling races](../tests/test_workflows_posts.py). The selection
+[comment reply workflow and scheduling races](../tests/test_workflows_posts.py).
+It also runs [task ordering](../tests/test_task_rank_allocation.py),
+[record tasks](../tests/test_projects_record_tasks.py), and the
+[projects access campaign](../tests/test_projects_wave3_campaign.py). The selection
 runs with four xdist workers grouped by file, `--nomigrations`, a JUnit report,
 and a zero-skip gate. Pytest-django creates a separate PostgreSQL test database
 for each worker. The composed-host subprocess tests use Django's test runner to
@@ -424,8 +427,8 @@ pushes to `main`. The current tiers are:
   Their cost is per-test fixture setup, a `rebac sync` before every test; making
   that setup cheaper is how the limit comes down.
 - **PostgreSQL:** in three shards of its own beside the SQLite ones, split the
-  same way and with a 40-minute limit, the named workflow, decision and agent session
-  selection runs with `-n 4 --dist loadfile --nomigrations` and prints its 25
+  same way and with a 40-minute limit, the named workflow, decision, project
+  and agent session selection runs with `-n 4 --dist loadfile --nomigrations` and prints its 25
   slowest test durations; each shard writes JUnit output and checks that it did
   not skip tests. Its server runs with `max_locks_per_transaction = 256`, since
   each worker creates every table in one transaction. The `uv` job passes only
