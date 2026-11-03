@@ -40,6 +40,7 @@ settings.configure(
     AUTH_USER_MODEL='iam.User',
     SECRET_KEY='iam-selected', ANGEE_MERGE_GUARDS=[],
     REBAC_LOCAL_BACKEND_STORAGE='registry', REBAC_UNIVERSAL_ADMIN_ROLE='angee/role:admin',
+    ANGEE_REBAC_FORCE_OVERWRITE=False,
     DATABASE_ROUTERS=[DefaultRouter()],
     DATABASES={alias: {'ENGINE': 'django.db.backends.sqlite3', 'NAME': ':memory:'}
                for alias in ('default', 'selected')},
@@ -108,11 +109,16 @@ import angee.iam
 config = IAMConfig('angee.iam', angee.iam)
 calls = []
 context = SimpleNamespace(database='selected', call=lambda *args, **kwargs: calls.append((args, kwargs)))
+sync_call = (('rebac', 'sync'), {
+    'database': 'selected', 'prune_stale': True, 'yes': True,
+    'force_overwrite': False, 'skip_checks': True,
+})
 config.compose_provision(context)
-assert calls == []
+assert calls == [sync_call]
+calls.clear()
 settings.ANGEE_BOOTSTRAP_ADMIN_PASSWORD = 'explicit-secret'
 config.compose_provision(context)
-assert calls == [(('bootstrap_admin',), {'database': 'selected'})]
+assert calls == [sync_call, (('bootstrap_admin',), {'database': 'selected'})]
 '''
     result = subprocess.run(
         [sys.executable, '-c', script], cwd=Path(__file__).resolve().parents[1],

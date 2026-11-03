@@ -176,7 +176,8 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
             raise ValueError("System person creation requires a named reason.")
         if not self.normalize_email(email):
             raise ValidationError({"email": ["An email address is required."]})
-        with system_context(reason=reason):
+        using = self._db or router.db_for_write(self.model)
+        with database_context(using), system_context(reason=reason):
             user = self._create_person(
                 username,
                 email,
@@ -203,7 +204,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
         """Own validation, uniqueness, persistence and the transactional event."""
 
         using = self._db or router.db_for_write(self.model)
-        with transaction.atomic(using=using):
+        with database_context(using), transaction.atomic(using=using):
             if self.db_manager(using)._person_email_matches(email).exists():
                 raise AccountExists
             user = self.model(
