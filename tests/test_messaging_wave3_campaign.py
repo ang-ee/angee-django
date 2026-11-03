@@ -55,22 +55,21 @@ def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half
     with system_context(reason="tests.t3.gate_under_system"), CaptureQueriesContext(connection) as gate_queries:
         assert record.thread_reader_ids([*accounts, accounts[0], to_subject_ref(accounts[0])]) == expected
     chunks = [q for q in gate_queries if q["sql"].startswith("SELECT") and "EXISTS(" in q["sql"]]
-    # Native check_many checks a lower bound for every
-    # batch and an upper bound for its recursive denials. Here exactly half
-    # are denied in every batch; this is two statements per 50, not per user.
+    # Recovery REBAC's check_many emits one lower-bound EXISTS column per
+    # recipient in batches of 50. Its 64,000-character SQL limit splits each
+    # batch into 26 + 24 columns (denormalized) or 19 + 19 + 12 (registry).
+    # Memberships are inside those columns; this read needs no upper bound.
     batches = size // 50
-    assert len(chunks) == 2 * batches
-    # The compiled backend also decides actor memberships together, once per
-    # batch. This exact guard catches its cache evicting part of a live batch
-    # and rebuilding those recipients' memberships individually.
+    checks_per_batch = 2 if campaign_access == "denormalized" else 3
+    assert len(chunks) == checks_per_batch * batches
     tuple_table = connection.ops.quote_name(active_relationship_model()._meta.db_table)
     memberships = [
         q for q in gate_queries if q["sql"].startswith("SELECT DISTINCT") and f"FROM {tuple_table}" in q["sql"]
     ]
-    assert len(memberships) == batches
+    assert not memberships
     witnesses = sum(is_rebac_revision_read(query["sql"]) for query in gate_queries)
     assert witnesses == 1
-    assert len(gate_queries) == 3 * batches + witnesses
+    assert len(gate_queries) == len(chunks) + witnesses
     with (
         system_context(reason="tests.t3.fanout_under_system"),
         patch.object(ChatterDoc, "thread_reader_allowed", side_effect=AssertionError("Per-account read gate")),
@@ -87,7 +86,8 @@ def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half
     # Django owns the INSERT chunk size; the native write gate adds one revision
     # read. The remaining overhead is four row reads and BEGIN/COMMIT.
     fields = [
-        field for field in ThreadNotification._meta.concrete_fields
+        field
+        for field in ThreadNotification._meta.concrete_fields
         if not field.generated and not isinstance(field, models.AutoField)
     ]
     insert_size = connection.ops.bulk_batch_size(fields, [None] * count)
