@@ -25,7 +25,7 @@ from angee.decisions.signals import decision_answered
 from angee.iam.models.append_only import ProtectedAppendOnlyModel
 from angee.iam.models.base import ProtectedDataModel, ProtectedModel
 from angee.iam.models.derived import ProtectedDerivedFrom
-from angee.iam.permissions import actor_user_id, require_rebac_queryset
+from angee.iam.permissions import PermissionProof, actor_user_id, require_rebac_queryset
 
 
 def _user(actor: Any, *, using: str, active: bool = True) -> Any:
@@ -143,15 +143,25 @@ class Decision(OptimisticLockMixin, ProtectedAppendOnlyModel, ProtectedDataModel
         chosen: Sequence[str],
         revision: int | None = None,
         values: object = None,
+        act_proof: PermissionProof | None = None,
     ) -> Any:
-        """Record one final verdict. Proposal actions belong to the asker."""
+        """Record one final verdict; direct callers prove act unless given a matching guard proof.
+
+        The guard checks before the row lock, so external grant changes can race it.
+        Revision and open checks still run under the lock.
+        """
         using = self._state.db or router.db_for_write(type(self), instance=self)
         answering = _user(actor, using=using)
         rows = type(self).objects.db_manager(using)
         with database_context(using), transaction.atomic(using=using):
             with system_context(reason="decisions.decide"):
                 row = rows.filter(pk=self.pk).lock_if_supported().get()
-                row.require_access("act", answering)
+                if act_proof is None:
+                    row.require_access("act", answering)
+                elif not act_proof.matches(self, answering, "act"):
+                    raise PermissionDenied("The act proof does not match this decision and actor.")
+                else:
+                    row.with_actor(answering)
                 if revision is not None:
                     row.require_revision(revision)
                 if not row.is_open:
@@ -160,7 +170,11 @@ class Decision(OptimisticLockMixin, ProtectedAppendOnlyModel, ProtectedDataModel
                     values = TypeAdapter(dict[str, dict[str, JsonValue]]).validate_python(
                         {} if values is None else values
                     )
-                    links = {link.record_public_id: link for link in row.records.with_actor(answering).all()}
+                    links = (
+                        {link.record_public_id: link for link in row.records.with_actor(answering).all()}
+                        if values
+                        else {}
+                    )
                     selected = DecisionProposal.model_validate(row.proposal).choose(
                         chosen,
                         values=values,

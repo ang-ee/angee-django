@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Any, TypeVar, cast
+from typing import Any, Literal, TypeVar, cast, overload
 
 import strawberry
 from django.core.exceptions import NON_FIELD_ERRORS, ImproperlyConfigured
@@ -20,7 +20,7 @@ from strawberry_django.auth.utils import get_current_user
 from angee.graphql.actions import ActionTargetUnavailable
 from angee.graphql.ids import PublicID, instance_for_id, public_id_value
 from angee.iam.graphql.writes import instance_for_write
-from angee.iam.permissions import require_rebac_queryset
+from angee.iam.permissions import PermissionProof, prove_target
 
 _ActionTarget = TypeVar("_ActionTarget", bound=models.Model)
 
@@ -76,6 +76,7 @@ def authorized_action_target(
     return _require_action_permission(instance, model, id, permission)
 
 
+@overload
 def authorized_permission_target(
     info: strawberry.Info,
     model: type[_ActionTarget],
@@ -83,19 +84,46 @@ def authorized_permission_target(
     permission: str,
     *,
     narrow: Callable[[models.QuerySet[_ActionTarget]], models.QuerySet[_ActionTarget]] | None = None,
-) -> _ActionTarget:
+    with_proof: Literal[True],
+) -> tuple[_ActionTarget, PermissionProof]: ...
+
+
+@overload
+def authorized_permission_target(
+    info: strawberry.Info,
+    model: type[_ActionTarget],
+    id: PublicID,
+    permission: str,
+    *,
+    narrow: Callable[[models.QuerySet[_ActionTarget]], models.QuerySet[_ActionTarget]] | None = None,
+    with_proof: Literal[False] = False,
+) -> _ActionTarget: ...
+
+
+def authorized_permission_target(
+    info: strawberry.Info,
+    model: type[_ActionTarget],
+    id: PublicID,
+    permission: str,
+    *,
+    narrow: Callable[[models.QuerySet[_ActionTarget]], models.QuerySet[_ActionTarget]] | None = None,
+    with_proof: bool = False,
+) -> _ActionTarget | tuple[_ActionTarget, PermissionProof]:
     """Resolve a target through the exact requested permission scope.
 
     ``narrow`` lets the verb's owner keep rows another verb owns out of the
-    lookup; a narrowed-away row reads as not found.
+    lookup; a narrowed-away row reads as not found. ``with_proof`` returns
+    evidence for a model verb to reuse the permission proved by this lookup
+    without repeating the point check.
     """
 
     user = session_user(info)
-    scoped: models.QuerySet[_ActionTarget] = require_rebac_queryset(model).with_actor(user).with_action(permission)
-    if narrow is not None:
-        scoped = narrow(scoped)
-    instance = instance_for_id(model, id, queryset=scoped)
-    return _require_action_permission(instance, model, id, permission)
+    instance, proof = prove_target(model, id, user, permission, narrow=narrow)
+    instance = _require_action_permission(instance, model, id, permission, check=not with_proof)
+    if with_proof:
+        assert proof is not None
+        return instance, proof
+    return instance
 
 
 def _require_action_permission(
@@ -103,8 +131,13 @@ def _require_action_permission(
     model: type[_ActionTarget],
     id: PublicID,
     permission: str,
+    *,
+    check: bool = True,
 ) -> _ActionTarget:
-    """Preserve the shared not-found and row-permission result contract."""
+    """Preserve the shared not-found and row-permission result contract.
+
+    ``check=False`` consumes a successful exact-permission scoped lookup.
+    """
 
     if instance is None:
         raise ActionTargetUnavailable(
@@ -116,7 +149,7 @@ def _require_action_permission(
         )
     if not isinstance(instance, RebacMixin):
         raise ImproperlyConfigured(f"{model._meta.label} requires RebacMixin for an authorized action.")
-    if not instance.has_access(permission):
+    if check and not instance.has_access(permission):
         raise ActionTargetUnavailable(
             {
                 NON_FIELD_ERRORS: [

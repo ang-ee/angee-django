@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
 from os import PathLike
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -32,6 +32,7 @@ from rebac.schema import Definition, Schema, resolve_schema_path
 from rebac.schema.introspection import relation_dependencies
 from rebac.schema.parser import parse_zed
 
+from angee.base.models.identity import instance_from_public_id
 from angee.iam.roles import platform_admin_role, subject_has_role
 
 if TYPE_CHECKING:
@@ -207,6 +208,64 @@ def require_record_access(instance: RebacMixin, permission: str, actor: Any = No
         target = instance._meta.label if instance._state.adding else to_object_ref(instance)
         raise PermissionDenied(f"Denied: the current actor lacks {permission!r} on {target}.")
     return actor
+
+
+_PERMISSION_PROOF_ISSUER = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class PermissionProof:
+    """Evidence issued only after an actor-scoped target lookup admitted one action."""
+
+    target: models.Model
+    actor: SubjectRef
+    permission: str
+    _seal: object = field(init=False, repr=False, compare=False)
+    _target_pk: Any = field(init=False, repr=False)
+    _target_db: str | None = field(init=False, repr=False)
+
+    def __init__(self, target: models.Model, actor: SubjectRef, permission: str) -> None:
+        raise PermissionDenied("A permission proof must come from an authorized target lookup.")
+
+    def matches(self, target: models.Model, actor: Any, permission: str) -> bool:
+        """Only the exact resolved row, actor and action may consume this proof."""
+
+        return (
+            getattr(self, "_seal", None) is _PERMISSION_PROOF_ISSUER
+            and self.target is target
+            and target.pk == self._target_pk
+            and target._state.db == self._target_db
+            and self.actor == to_subject_ref(actor)
+            and self.permission == permission
+        )
+
+
+def prove_target[M: models.Model](
+    model: type[M],
+    id: Any,
+    actor: Any,
+    permission: str,
+    *,
+    narrow: Callable[[models.QuerySet[M]], models.QuerySet[M]] | None = None,
+) -> tuple[M | None, PermissionProof | None]:
+    """Resolve one actor-scoped target and issue proof only for a row it admits."""
+
+    queryset: models.QuerySet[M] = require_rebac_queryset(model)
+    if narrow is not None:
+        queryset = narrow(queryset)
+    if not isinstance(queryset, RebacQuerySet):
+        raise ImproperlyConfigured(f"{model._meta.label} requires a RebacQuerySet target scope.")
+    target = instance_from_public_id(model, str(id or ""), queryset=queryset.with_actor(actor).with_action(permission))
+    if target is None:
+        return None, None
+    proof = object.__new__(PermissionProof)
+    object.__setattr__(proof, "target", target)
+    object.__setattr__(proof, "actor", to_subject_ref(actor))
+    object.__setattr__(proof, "permission", permission)
+    object.__setattr__(proof, "_seal", _PERMISSION_PROOF_ISSUER)
+    object.__setattr__(proof, "_target_pk", target.pk)
+    object.__setattr__(proof, "_target_db", target._state.db)
+    return target, proof
 
 
 def actor_user_id(actor: Any) -> Any | None:
