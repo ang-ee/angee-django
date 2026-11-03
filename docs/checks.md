@@ -416,8 +416,11 @@ pushes to `main`. The current tiers are:
   `pyproject.toml`; native lockfiles own resolved versions. The suite's package
   metadata guard checks that the collection requirements match its workspace
   member distributions.
-  Framework composed-host tests create their own temporary hosts in the SQLite
-  suite; the stack job does not repeat that framework suite.
+  Framework composed-host tests, including `test_full_model_graph.py`, create
+  temporary hosts in the SQLite suite. `test_composed_note_workflow.py` also runs
+  in the PostgreSQL selection above. The full-profile stack job installs the
+  blank-choice test addon and runs `test_full_model_graph.py` on its first shard
+  against every installed addon; it does not repeat the rest of the framework suite.
 
 A test missing from the durations still runs: pytest-split gives it the average
 duration and places it in exactly one shard. Refresh the file when a shard nears

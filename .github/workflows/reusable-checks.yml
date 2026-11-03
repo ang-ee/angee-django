@@ -412,6 +412,10 @@ jobs:
         working-directory: stack
         # One environment keeps plugin entry points consistent with imported code.
         run: uv add --dev --requirements "$GITHUB_WORKSPACE/check-tools.txt" --no-sync
+      - name: Include the blank-choice composition fixture
+        if: ${{ inputs.addons-profile == 'full' && matrix.group == 1 }}
+        working-directory: stack
+        run: uv add --dev --editable --no-workspace "$GITHUB_WORKSPACE/stack/workspaces/src/angee/tests/blankchoices" --no-sync
       - name: Compose the runtime and SDL (no database needed)
         working-directory: stack
         run: |
@@ -425,6 +429,10 @@ jobs:
         working-directory: stack
         run: |
           uv run --no-sync python manage.py provision
+      - name: Check the full installed model graph
+        if: ${{ inputs.addons-profile == 'full' && matrix.group == 1 }}
+        working-directory: stack/workspaces/src/angee
+        run: uv run --no-sync --project "$GITHUB_WORKSPACE/stack" python -m pytest -q -p no:cacheprovider tests/test_full_model_graph.py
       - name: Lint the consumer with the framework policy
         if: ${{ inputs.consumer-path != '' && matrix.group == 1 }}
         working-directory: stack

@@ -15,13 +15,15 @@ Address = apps.get_model("parties", "Address")
 
 
 class BlankCountryGroupsTests(TransactionTestCase):
-    """Blank tax and postal countries remain enum keys with string drills."""
+    """Blank party and postal countries remain enum keys with string drills."""
 
-    def test_party_billing_and_address_blank_buckets(self):
+    def test_party_and_address_blank_buckets(self):
         reader = get_user_model().objects.create_user(username="country-reader")
         with system_context(reason="test.blank_country_groups.seed"):
             party = Party.objects.create(display_name="Blank country", created_by=reader)
-            known_party = Party.objects.create(display_name="Known country", tax_country="DE", created_by=reader)
+            known_party = Party.objects.create(
+                display_name="Known country", blank_choice_country="DE", created_by=reader
+            )
             Address.objects.create(party=party, country="", created_by=reader)
             Address.objects.create(party=known_party, country="DE", created_by=reader)
 
@@ -30,7 +32,7 @@ class BlankCountryGroupsTests(TransactionTestCase):
         request = RequestFactory().post("/graphql/blank_choices/")
         request.user = reader
         for model, name, field in (
-            (Party, "billing_parties", "tax_country"),
+            (Party, "blank_choice_parties", "blank_choice_country"),
             (Address, "country_addresses", "country"),
         ):
             with self.subTest(model=model._meta.label):

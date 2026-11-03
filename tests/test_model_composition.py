@@ -295,7 +295,7 @@ def test_native_history_mti_reference_has_a_migration_dependency(modules):
         title="parent",
         extra=2,
         history_user_id=None,
-        changeset_id=None,
+        history_changeset_id=None,
     )
     assert snapshot.instance.pk == 7
     assert snapshot.instance.extra == 2
@@ -306,7 +306,7 @@ def test_native_history_mti_reference_has_a_migration_dependency(modules):
         state = ModelState.from_model(model)
         if state.name == "HistoricalChild":
             state.fields.pop("history_user")
-            state.fields.pop("changeset")
+            state.fields.pop("history_changeset")
         target.add_model(state)
     changes = MigrationAutodetector(ProjectState(), target)._detect_changes()
     operations = changes[config.label][0].operations
