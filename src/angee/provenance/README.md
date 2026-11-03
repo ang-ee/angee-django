@@ -1,12 +1,12 @@
 # Provenance
 
-The addon composes native `django-provenance` attribution, capture, replay and
-typed statement engines with Angee permission, identity and serving policies. Addons opting into these capabilities declare `angee.provenance`
+The addon owns attribution, capture, replay and typed statement engines alongside
+Angee permission, identity and serving policies. Addons opting into these capabilities declare `angee.provenance`
 as a dependency and compose its model mixins. The model foundation has no
 provenance dependency.
 
 [`context.py`](context.py), [`history.py`](history.py) and [`querysets.py`](querysets.py)
-retain historical import paths for the native `django_provenance` owners.
+retain public import paths for the relocated [`engine/`](engine/) owners.
 Its context module owns logical boundaries and commit-aware persistence.
 Its native transaction adapter tracks the identity of an `on_commit` callback
 in Django's callback queue: savepoint rollback removes that callback, while
@@ -43,7 +43,7 @@ historical Django swappable-migration identity and must point to the same model;
 a disagreement fails the system check. Existing consumer history-FK migrations
 must depend on `migrations.swappable_dependency(settings.ANGEE_CHANGESET_MODEL)`.
 Django's `makemigrations` owns the initial schema; see the
-[runtime migration policy](../../../docs/composer.md#addon-owned-runtime-migrations).
+[runtime migration policy](../../../docs/composer.md#project-migration-history).
 
 ## Boundaries
 
@@ -71,7 +71,7 @@ Angee uses native capture-only mixins so its record and trash owners retain remo
 admission. Its explicit storage/document callbacks preserve historical tables,
 column identity, JSON bytes and in-place current statement row identities.
 The addon retains its simple-history fork dependency for the native
-`get_instance(using=...)` snapshot-routing contract; the generic library also
+`get_instance(using=...)` snapshot-routing contract; the generic engine also
 supports plain simple-history independently.
 
 A boundary stores one changeset row per writing thread and actor under its
@@ -142,14 +142,24 @@ attributes capture independently of copied source fields, including a source
 legacy values lost by the former shared-column capture. Lossless export, diffs
 and replay refuse incomplete snapshots. ModelHistory requires
 `use_base_model_db=True`; actual table aliases retain source identity without
-adding source_database columns. Existing hosts must rename the old historical
-changeset field to history_changeset and recreate copied source changeset fields
+adding source_database columns. Hosts still carrying the prior historical schema
+must rename the old historical changeset field to history_changeset and recreate
+copied source changeset fields
 where declared. Mark legacy projections complete only when their source values
 were retained; never backfill lost values from current state or attribution.
-The native [capture transition](https://github.com/ang-ee/django-provenance/blob/main/docs/SPEC.md)
+The [capture transition](docs/ENGINE.md)
 owns that migration contract. Historical Python imports remain compatibility
 aliases to these native owners. Statement last-writer attribution remains its
 separate source contract.
+
+The engine code was folded back from the former `django-provenance` library at commit
+`9be73feaf71e14e2fd1315745854fee6ec48b56e`. The addon is the sole app with
+label `provenance` and ships no migrations. Each composed project owns its native
+`runtime/provenance/migrations` history through django-compose's `MIGRATION_MODULES`
+routing. The library app was never installed in those projects, and their runtime
+migrations do not import it, so existing databases need no migration or table
+change for this code move. The [engine contracts](docs/ENGINE.md) retain the
+library's detailed capture, replay and statement behavior.
 
 `Changeset.document()` exports deterministic canonical JSON of a closed changeset
 for a trusted archive caller under a system boundary. It includes native history

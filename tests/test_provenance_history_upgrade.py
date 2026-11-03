@@ -41,7 +41,7 @@ from rebac.models.schema_write import schema_changes
 from angee.iam.models.base import ProtectedDataModel
 from angee.provenance.context import changeset, current_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
-from django_provenance.base import ChangesetAttribution as LegacyAttribution
+from angee.provenance.engine.base import ChangesetAttribution as LegacyAttribution
 from angee.provenance.history import _ChangesetHistory
 from angee.base.serialization import canonical_json, json_safe
 from angee.provenance.testing.models import Changeset
@@ -113,6 +113,7 @@ else:
     import copy
     capture = history_model._meta.get_field('history_changeset')
     legacy_capture = copy.copy(capture)
+    legacy_capture.db_column = 'changeset_id'
     legacy_capture.set_attributes_from_name('changeset')
     with connections['selected'].schema_editor() as editor:
         editor.alter_field(history_model, legacy_capture, capture)

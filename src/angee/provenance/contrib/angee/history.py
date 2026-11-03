@@ -11,8 +11,6 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, Obje
 from django.db import models
 from django.db.models import F, Q
 from django.db.models.fields.reverse_related import ManyToOneRel
-from django_provenance.history import HistoryAttribution
-from django_provenance.replay import HistoryScopeMixin
 from rebac import (
     PermissionDenied,
     RebacMixin,
@@ -37,6 +35,8 @@ from angee.base.models.persistence import PersistenceMixin
 from angee.iam.models.trash import ProtectedTrashMixin
 from angee.iam.permissions import candidate_relationships
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryUnscopedManager
+from angee.provenance.engine.history import HistoryAttribution
+from angee.provenance.engine.replay import HistoryScopeMixin
 from angee.provenance.history import (
     _UNLOADED,
 )

@@ -406,7 +406,7 @@ def test_native_proposal_admission_routing(tmp_path: Path):
     write_addon_distribution(addon, "example.proposal_admission", depends_on=("angee.proposals_work",))
     (addon / "models.py").write_text(
         "from django.db import models\n"
-        "from django_provenance.history import HistoryMixin, ModelHistory\n"
+        "from angee.provenance.engine.history import HistoryMixin, ModelHistory\n"
         "from angee.base.models.locks import ImmutableFieldsMixin\n"
         "class Receipt(ImmutableFieldsMixin, HistoryMixin):\n"
         " identity = models.CharField(max_length=80)\n"

@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from django_provenance.managers import ChangesetManager as NativeChangesetManager
-
 from angee.iam.managers import ProtectedManager
 from angee.provenance.changeset_querysets import ChangesetQuerySet as ChangesetQuerySet
 from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from angee.provenance.contrib.angee.serialization import creation_fingerprint
+from angee.provenance.engine.managers import ChangesetManager as NativeChangesetManager
 
 if TYPE_CHECKING:
     from angee.provenance.models import Changeset
