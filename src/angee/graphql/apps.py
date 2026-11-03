@@ -46,12 +46,13 @@ class GraphQLConfig(AppConfig):
         from django_compose.serving import mode
 
         from angee.graphql import field_types  # noqa: F401
-        from angee.graphql.checks import check_graphql_schemas
+        from angee.graphql.checks import check_graphql_channel_layer, check_graphql_schemas
         from angee.graphql.publishing import connect_change_publishers
 
         checks.register(check_settings, checks.Tags.models)
 
         checks.register(check_graphql_schemas)
+        checks.register(check_graphql_channel_layer)
         if getattr(settings, "COMPOSE_SNAPSHOT", None) is not None and mode() is None:
             connect_change_publishers()
         # Compose connects in SchemaIntegration after all ready callbacks. Bare
