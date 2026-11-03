@@ -358,7 +358,7 @@ jobs:
           path.write_text(yaml.safe_dump(workspace, sort_keys=False))
           # Native uv reads each collection's pyproject and workspace sources.
           subprocess.run([
-              "uv", "add", "--editable",
+              "uv", "add", "--editable", "--no-workspace",
               *(str(Path("workspaces/src") / source["path"]) for source in sources),
           ], check=True)
           PY
