@@ -232,7 +232,8 @@ def test_native_related_reference_projects_without_implicit_view_expansion(
     monkeypatch: pytest.MonkeyPatch, legacy: bool,
 ) -> None:
     """Wire projection preserves exactly the views declared by the model owner."""
-    reference = RecordRef("external.Record", 7, "external_7", "")
+    # c7732c91a left generic pointers permission-neutral with three identity fields.
+    reference = RecordRef("external.Record", 7, "external_7")
 
     class ReferencingRow(models.Model):
         class Meta:

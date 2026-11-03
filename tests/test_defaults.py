@@ -27,6 +27,9 @@ def test_base_defaults_do_not_install_http_or_execution_policy(tmp_path: Path, m
         "CELERY_TASK_SOFT_TIME_LIMIT",
         "ANGEE_CHANGESET_MODEL",
         "PROVENANCE_POLICY",
+        # c7732c91a moved permission defaults out of base's settings contribution.
+        "REBAC_DEPTH_LIMIT",
+        "REBAC_STRICT_MODE",
     ):
         assert name not in namespace
 
@@ -68,12 +71,14 @@ def test_rebac_depth_uses_explicit_settings_before_backend_defaults(
     # Deployment settings use native YAMLCONF_*; direct REBAC_* inputs are retired.
     monkeypatch.setenv("DJANGO_COMPOSE_MODE", "write")
     monkeypatch.delenv("YAMLCONF_REBAC_DEPTH_LIMIT", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     if environment_depth is not None:
         monkeypatch.setenv("YAMLCONF_REBAC_DEPTH_LIMIT", environment_depth)
         (tmp_path / "settings.yaml").write_text("REBAC_DEPTH_LIMIT:jsonenv: true\n")
     namespace = {
         "__file__": str(tmp_path / "settings.py"),
-        "INSTALLED_APPS": ["angee.base"],
+        # c7732c91a moved REBAC_DEPTH_LIMIT derivation to the IAM addon.
+        "INSTALLED_APPS": ["angee.iam"],
         "COMPOSE_OUTPUT_DIR": tmp_path / "runtime",
     }
     if engine is not None:

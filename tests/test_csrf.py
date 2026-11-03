@@ -68,15 +68,13 @@ def test_development_cookie_names_are_stable_and_isolated(tmp_path: Path) -> Non
     assert first == settings({"DEBUG": True, "BASE_DIR": tmp_path / "first"})
     assert first["SESSION_COOKIE_NAME"] != second["SESSION_COOKIE_NAME"]
     assert first["CSRF_COOKIE_NAME"] != second["CSRF_COOKIE_NAME"]
-    assert settings({"DEBUG": False, "BASE_DIR": tmp_path}) == {}
-    assert (
-        settings(
-            {
-                "DEBUG": True,
-                "BASE_DIR": tmp_path,
-                "SESSION_COOKIE_NAME": "explicit",
-                "CSRF_COOKIE_NAME": "explicit_csrf",
-            }
-        )
-        == {}
-    )
+    # c7732c91a moved depth into IAM; cookie-free results equal its depth-only result.
+    assert settings({"DEBUG": False, "BASE_DIR": tmp_path}) == settings({})
+    assert settings(
+        {
+            "DEBUG": True,
+            "BASE_DIR": tmp_path,
+            "SESSION_COOKIE_NAME": "explicit",
+            "CSRF_COOKIE_NAME": "explicit_csrf",
+        }
+    ) == settings({})

@@ -64,7 +64,8 @@ def test_revert_creation_preserves_a_document_with_a_later_live_child() -> None:
     with actor_context(owner), changeset(fresh=True, change_reason="Plan later delivery"):
         milestone = Milestone.objects.create(project=project, name="Later delivery")
 
-    with actor_context(owner), pytest.raises(ValidationError, match="live references or grants prevent removal"):
+    # c7732c91a split base's live-reference refusal from IAM's stored-grant refusal.
+    with actor_context(owner), pytest.raises(ValidationError, match="live references prevent removal"):
         creation.with_actor(owner).revert()
 
     assert Project._base_manager.filter(pk=project.pk).exists()

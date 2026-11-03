@@ -70,14 +70,15 @@ from angee.agents_runtime_pydantic.toolsets import (
     _assert_in_process_compatible,
 )
 from angee.base.models.audit import AuditMixin
+from angee.iam.models.base import ProtectedModel
 from angee.mcp.graphql import _CompiledTool
 from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
 
 User = get_user_model()
 
 
-class AgentToolWriteProbe(AuditMixin, models.Model):
-    """A neutral audit row proving which user an in-process write attributes."""
+class AgentToolWriteProbe(AuditMixin, ProtectedModel):
+    """Protected audit row proving which user an in-process write attributes."""
 
     label = models.CharField(max_length=100)
 
@@ -153,6 +154,7 @@ def test_native_tool_grants_run_as_agent_service_user_and_regate(
         return await sync_to_async(visible, thread_sensitive=True)()
 
     async def write_probe(label: str) -> dict[str, int | None]:
+        # c7732c91a gives IAM's protected base responsibility for audit attribution.
         probe = await sync_to_async(AgentToolWriteProbe.objects.create, thread_sensitive=True)(label=label)
         return {"created_by_id": probe.created_by_id}
 
@@ -683,7 +685,9 @@ def test_graphql_read_hint_cannot_override_structural_mutation_posture(
     with pytest.raises(ImproperlyConfigured, match="disagrees with its mutation"):
         async_to_sync(native.get_tools)(_native_context())
     assert attempted == []
-    assert not AgentToolWriteProbe.objects.filter(label="must never run").exists()
+    # c7732c91a requires an explicit scope to inspect every protected probe row.
+    with system_context(reason="test structural posture inspection"):
+        assert not AgentToolWriteProbe.objects.filter(label="must never run").exists()
 
 
 def test_tool_search_activation_replays_from_persisted_history() -> None:

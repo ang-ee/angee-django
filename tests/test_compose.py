@@ -406,7 +406,8 @@ def test_tailwind_sources_resolve_workspace_package_links(tmp_path: Path) -> Non
 ])
 def test_capability_models_render_with_native_permission_meta(label, name, resource_type):
     config = apps.get_app_config(label)
-    composition = ModelComposition.discover((config,))
+    # c7732c91a made IAM donors extend base contracts, so discovery needs both owners.
+    composition = ModelComposition.discover((apps.get_app_config("base"), config))
     source = render_models(composition, label, declarations={
         model: model_declaration(composition, model, (PermissionIntegration(),))
         for model in composition.ordered_models

@@ -166,7 +166,10 @@ resource = hasura_model_resource(GroupNode, model=Group, name="probe_groups",
 schemas = {"public": {"query": resource.query, "types": resource.types,
     "subscription": changes(Group, field="probeGroupChanged")}}
 """)
-    write_addon_distribution(package, 'publisher_probe', depends_on=('angee.graphql',), metadata_root=root)
+    # 28ce9633a removed auth from GraphQL's closure; this probe declares the app its schema imports.
+    write_addon_distribution(
+        package, 'publisher_probe', depends_on=('angee.graphql', 'django.contrib.auth'), metadata_root=root,
+    )
     runtime = root / 'runtime'
     boot(Path.cwd(), runtime, [root], include_examples=False, root_apps=['publisher_probe'])
     projection = runtime / 'schemas/publishers.json'
