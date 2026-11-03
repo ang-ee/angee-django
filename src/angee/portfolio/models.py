@@ -42,6 +42,9 @@ from angee.resources.mixins import ResourceLoadMixin
 if TYPE_CHECKING:
     from angee.projects.models import Project
 
+PortfolioRole = role_anchor("portfolio/role")
+"""Table-less REBAC anchor for the const-backed portfolio-admin namespace."""
+
 
 class ProductLifecycle(models.TextChoices):
     """Phases in a Product's existence, never progress toward completion."""
@@ -660,7 +663,3 @@ class TaskPortfolio(Composable, extends="projects.Task"):
         """Abstract donor options folded into the concrete Task table."""
 
         abstract = True
-
-
-PortfolioRole = role_anchor("portfolio/role")
-"""Table-less REBAC anchor for the const-backed portfolio-admin namespace."""

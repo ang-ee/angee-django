@@ -12,7 +12,7 @@ from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.querysets import _AngeeQuerySetMixin, by_key
 
-_ModelT = TypeVar("_ModelT", bound=models.Model)
+_ModelT = TypeVar("_ModelT", bound=PersistenceMixin)
 
 
 class RetainedReferenceQuerySet(_AngeeQuerySetMixin[_ModelT]):
@@ -29,7 +29,7 @@ class RetainedReferenceQuerySet(_AngeeQuerySetMixin[_ModelT]):
 def retained_set_null(collector: Any, field: Any, sub_objs: Iterable[models.Model], using: str) -> None:
     """Schedule retained-edge removal as system work inside Django's delete transaction."""
 
-    rows: RetainedReferenceQuerySet[models.Model] = RetainedReferenceQuerySet(model=field.model, using=using)
+    rows: RetainedReferenceQuerySet[PersistenceMixin] = RetainedReferenceQuerySet(model=field.model, using=using)
     if isinstance(sub_objs, models.QuerySet):
         rows.query = sub_objs.query.chain()
         collector.add_field_update(field, None, rows)

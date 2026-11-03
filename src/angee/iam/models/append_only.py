@@ -1,5 +1,7 @@
 """IAM tracked persistence composed with the neutral append-only invariant."""
 
+from typing import ClassVar, Self
+
 from django.db import models
 
 from angee.base.models.append_only import AppendOnlyBaseQuerySet, AppendOnlyModel, AppendOnlyQuerySet
@@ -26,7 +28,7 @@ _ProtectedAppendOnlyBaseManager = models.Manager.from_queryset(ProtectedAppendOn
 class ProtectedAppendOnlyModel(AppendOnlyModel, concrete=False):
     """Source declaration retaining native REBAC base-manager requirements."""
 
-    _angee_base = _ProtectedAppendOnlyBaseManager()
+    _angee_base: ClassVar[models.Manager[Self]] = _ProtectedAppendOnlyBaseManager()
 
     class Meta:
         abstract = True

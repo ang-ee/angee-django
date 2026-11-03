@@ -23,12 +23,13 @@ from rebac import PermissionDenied, current_actor
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.hierarchy import HierarchyMixin
+from angee.base.models.persistence import require_composed_type
 from angee.base.models.scope import NullableScopeMixin
 from angee.iam.models.base import ProtectedDataModel
 from angee.iam.models.ownership import OwnerMixin
 from angee.messaging.models import AudienceMember, NotificationPolicy, ThreadAudienceMixin
 from angee.parties.mixins import MembershipDecisionMixin
-from angee.spaces.managers import GroupManager, MembershipManager, ThreadSpaceManager
+from angee.spaces.managers import GroupManager, MembershipManager, MembershipQuerySet, ThreadSpaceManager
 
 
 class Group(NullableScopeMixin, ThreadAudienceMixin, HierarchyMixin, OwnerMixin, ProtectedDataModel, concrete=True):
@@ -68,9 +69,9 @@ class Group(NullableScopeMixin, ThreadAudienceMixin, HierarchyMixin, OwnerMixin,
         """Read participating roster parties; messaging owns delivery and read checks."""
 
         membership_model = apps.get_model("spaces", "Membership")
+        memberships = require_composed_type(membership_model.system_queryset(), MembershipQuerySet)
         rows = (
-            membership_model.system_queryset()
-            .confirmed()
+            memberships.confirmed()
             .filter(
                 group_id=self.pk,
                 role__in=(

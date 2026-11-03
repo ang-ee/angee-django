@@ -25,6 +25,7 @@ if os.environ.get("ANGEE_PROJECT_DIR"):
 os.environ.setdefault("DJANGO_COMPOSE_WAIT", str(composed_test_timeout))
 
 ASGI_APPLICATION: str
+ANGEE_REBAC_FORCE_OVERWRITE: bool
 ANGEE_WEB_STATEMENT_TIMEOUT: int
 CELERY_TASK_SOFT_TIME_LIMIT: int
 CELERY_TASK_TIME_LIMIT: int

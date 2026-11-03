@@ -26,8 +26,8 @@ from angee.work.models import Stage as AbstractWorkStage
 class Queue(AbstractQueue, Group):
     """Native work queue shared by task access and lifecycle fixtures."""
 
-    created_at = Group.created_at
-    updated_at = Group.updated_at
+    created_at = Group.created_at  # type: ignore[assignment]  # django-stubs class field descriptor conflicts with its instance value.
+    updated_at = Group.updated_at  # type: ignore[assignment]  # django-stubs class field descriptor conflicts with its instance value.
 
     class Meta(AbstractQueue.Meta):
         abstract = False

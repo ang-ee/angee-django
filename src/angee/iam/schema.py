@@ -1156,7 +1156,7 @@ class IAMGroupMembershipMutation:
             return group.remove_member(subject, caveat_name=caveat_name)
 
 
-schemas = {
+schemas: dict[str, dict[str, list[object]]] = {
     "public": {
         "query": [IAMQuery],
         "mutation": [IAMMutation],

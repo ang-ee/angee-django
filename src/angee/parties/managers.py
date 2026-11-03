@@ -40,6 +40,7 @@ from rebac.actors import is_sudo, to_subject_ref
 from rebac.database import write_alias
 
 from angee.base.hooks import resolve_hooks
+from angee.base.models.persistence import require_composed_type
 from angee.base.querysets import by_key
 from angee.base.serialization import canonical_json
 from angee.iam.permissions import actor_user_id
@@ -71,6 +72,7 @@ from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.evidence import EvidenceReference
 from angee.provenance.statements import (
     SourceKind,
+    StatementManager,
     StatementSourceMixin,
     StatementSubjectManager,
 )
@@ -1766,6 +1768,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             )
             parent = apps.get_model("parties", "Party")._base_manager.db_manager(using).get(pk=person.pk)
             apps.get_model("integrate", "RecordLink").objects.db_manager(using).bind_target(link, parent)
+            person_statements = require_composed_type(person.statements, StatementManager)
             for subject, aspect, values in (
                 (
                     parent,
@@ -1780,11 +1783,12 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 (
                     person,
                     "name",
-                    {name: getattr(parsed, name) for name in person.statements.model.statement_aspects["name"].fields},
+                    {name: getattr(parsed, name) for name in person_statements.model.statement_aspects["name"].fields},
                 ),
                 (person, "dates", {"birthday": parsed.birthday, "anniversary": parsed.anniversary}),
             ):
-                subject.statements.set(aspect=aspect, values=values, asserted_by=source, link=link)
+                statements = require_composed_type(subject.statements, StatementManager)
+                statements.set(aspect=aspect, values=values, asserted_by=source, link=link)
             supported_handles = []
             for platform, points in (("email", parsed.emails), ("phone", parsed.phones)):
                 for value, label, preferred in points:

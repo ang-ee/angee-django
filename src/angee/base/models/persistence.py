@@ -6,9 +6,22 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Any, Self
 
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 
 from angee.base.querysets import ClosedUpdateQuerySet, row_lock_paths
+
+
+def require_composed_type[T](value: object, expected: type[T]) -> T:
+    """Require the manager or queryset class declared by a composed owner."""
+
+    # django-compose's generated managers type get_queryset() as Any.
+    if not isinstance(value, expected):
+        raise ImproperlyConfigured(
+            f"Expected composed {expected.__module__}.{expected.__qualname__}; "
+            f"received {type(value).__module__}.{type(value).__qualname__}."
+        )
+    return value
 
 
 class PersistenceMixin(models.Model):
@@ -69,6 +82,6 @@ class PersistenceMixin(models.Model):
     @classmethod
     def retained_reference_update(cls, selected: models.QuerySet[Any], **values: Any) -> int:
         """Dispatch a Django collector update through this model's persistence owner."""
-        rows = cls._base_manager.db_manager(selected.db, hints=selected._hints).get_queryset()
+        rows = cls._base_manager.db_manager(selected.db, hints=selected._hints).get_queryset()  # type: ignore[attr-defined]  # django-stubs omits QuerySet._hints.
         rows.query = selected.query.chain()
         return rows.owner_update(**values) if isinstance(rows, ClosedUpdateQuerySet) else rows.update(**values)

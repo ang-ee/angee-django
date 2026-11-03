@@ -6,7 +6,8 @@ from django.db import models
 from django_compose.typing import CompositionContext
 from mypy.nodes import GDEF, PlaceholderNode, SymbolTableNode, TypeInfo
 from mypy.plugin import AttributeContext, DynamicClassDefContext
-from mypy.types import Instance
+from mypy.subtypes import is_subtype
+from mypy.types import CallableType, Instance, get_proper_type
 from mypy.types import Type as MypyType
 from mypy_django_plugin.lib import helpers
 
@@ -25,6 +26,19 @@ class IAMCompositionContext(CompositionContext):
 class IAMPlugin(BasePlugin):
     context_class = IAMCompositionContext
 
+    def _system_queryset(self, ctx: AttributeContext) -> MypyType:
+        """Keep the protected declaration when manager typing is less specific."""
+
+        declared = get_proper_type(ctx.default_attr_type)
+        projected = get_proper_type(super()._system_queryset(ctx))
+        if (
+            isinstance(declared, CallableType)
+            and isinstance(projected, CallableType)
+            and is_subtype(projected.ret_type, declared.ret_type)
+        ):
+            return projected
+        return ctx.default_attr_type
+
     def get_class_attribute_hook(self, fullname: str) -> Callable[[AttributeContext], MypyType] | None:
         class_name, _, name = fullname.rpartition(".")
         if name == "system_queryset":
@@ -33,7 +47,7 @@ class IAMPlugin(BasePlugin):
             if (
                 symbol is not None
                 and symbol.node is not None
-                and symbol.node.fullname == ("angee.iam.models.base.ProtectedModel.system_queryset")
+                and symbol.node.fullname == ("angee.iam.models.base.ProtectedPersistenceMixin.system_queryset")
             ):
                 return self._system_queryset
         return super().get_class_attribute_hook(fullname)

@@ -17,6 +17,15 @@ from __future__ import annotations
 from angee.iam.models.base import ProtectedModel
 from angee.iam.models.roles import role_anchor
 
+OperatorRole = role_anchor("operator/role")
+"""Table-less REBAC type anchor for the ``operator/role`` namespace.
+
+The const-backed ``admin`` relation on ``operator/role`` (``permissions.zed``)
+registers through this anchor's ``rebac_resource_type`` (``rebac.E009``), so a
+platform admin resolves as an effective operator-admin through the const. See
+:func:`angee.iam.models.roles.role_anchor`.
+"""
+
 
 class OperatorConnection(ProtectedModel, concrete=True):
     """Table-less REBAC type anchor for the operator daemon connection."""
@@ -26,13 +35,3 @@ class OperatorConnection(ProtectedModel, concrete=True):
         abstract = True
         managed = False
         rebac_resource_type = "operator/connection"
-
-
-OperatorRole = role_anchor("operator/role")
-"""Table-less REBAC type anchor for the ``operator/role`` namespace.
-
-The const-backed ``admin`` relation on ``operator/role`` (``permissions.zed``)
-registers through this anchor's ``rebac_resource_type`` (``rebac.E009``), so a
-platform admin resolves as an effective operator-admin through the const. See
-:func:`angee.iam.models.roles.role_anchor`.
-"""

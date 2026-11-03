@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 from django.db import models
 from rebac import RebacMixin
@@ -33,7 +33,7 @@ _ProtectedRowLockBaseManager = models.Manager.from_queryset(_ProtectedRowLockBas
 class ProtectedRowLockMixin(RowLockMixin, concrete=False):
     """Apply IAM's pinned authority to generic system-row invariants."""
 
-    _angee_base = _ProtectedRowLockBaseManager()
+    _angee_base: ClassVar[models.Manager[Self]] = _ProtectedRowLockBaseManager()  # type: ignore[assignment]  # Distinct from_queryset manager classes on the base and IAM mixins have incompatible nominal types.
 
     class Meta:
         abstract = True

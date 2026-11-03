@@ -27,7 +27,7 @@ from rebac.models import active_relationship_model
 from rebac.resources import model_resource_type, resource_id_attr
 
 from angee.base.models.base import AngeeDataModel, AngeeModel
-from angee.base.models.persistence import PersistenceMixin
+from angee.base.models.persistence import PersistenceMixin, require_composed_type
 from angee.base.signals import record_access_revoked
 from angee.iam.managers import ProtectedManager, ProtectedUnscopedManager
 from angee.iam.permissions import (
@@ -56,9 +56,9 @@ class ProtectedPersistenceMixin(PersistenceMixin):
         abstract = True
 
     @classmethod
-    def system_queryset(cls, *, lock: tuple[str, ...] | None = None) -> Any:
+    def system_queryset(cls, *, lock: tuple[str, ...] | None = None) -> ProtectedQuerySet[Self]:
         """Keep the declared queryset while admitting owner-controlled system work."""
-        rows = super().system_queryset(lock=lock)
+        rows = require_composed_type(super().system_queryset(lock=lock), ProtectedQuerySet)
         return rows.system_context(reason=f"{cls._meta.label_lower}.system_queryset")
 
 

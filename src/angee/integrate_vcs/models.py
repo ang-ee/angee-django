@@ -17,6 +17,7 @@ from angee.base.fields.encrypted import EncryptedField
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
+from angee.base.models.persistence import require_composed_type
 from angee.iam.managers import ProtectedManager
 from angee.iam.models.base import ProtectedDataModel
 from angee.integrate.models import Bridge, IntegrationCreateMode
@@ -260,10 +261,12 @@ class Source(AuditMixin, ProtectedDataModel, concrete=True):
     def refresh(self) -> int:
         """Re-enumerate over REST into the kind's output rows; return the row count."""
 
-        manager = type(self).target_for_kind(self.kind)._default_manager.db_manager(
-            self._state.db, hints={"instance": self},
+        manager = require_composed_type(
+            type(self).target_for_kind(self.kind)._default_manager.db_manager(
+                self._state.db, hints={"instance": self},
+            ),
+            registry.VcsOutputManager,
         )
-        assert isinstance(manager, registry.VcsOutputManager)
         return manager.sync_from_source(self)
 
     @contextmanager

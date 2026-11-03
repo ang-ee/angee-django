@@ -236,7 +236,7 @@ class Queue(ImmutableFieldsMixin, ProtectedModel, inherits="spaces.Group"):
         validators=(MinValueValidator(1),),
     )
 
-    objects = QueueManager()
+    objects = QueueManager()  # type: ignore[assignment]  # django-compose typing retains the parent manager on an inherited child.
 
     class Meta:
         """Django model options for the materialized queue child."""

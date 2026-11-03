@@ -46,6 +46,7 @@ from angee.base.fields.ordering import FractionalRankField
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin, retained_set_null
 from angee.base.models.locks import ImmutableFieldsMixin, OptimisticLockMixin
+from angee.base.models.persistence import require_composed_type
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.iam.identity import user_label_expression, user_label_queryset
 from angee.iam.models.base import ProtectedDataModel, ProtectedModel
@@ -89,6 +90,9 @@ _TRACK_SYSTEM_ACTOR = SubjectRef.of("proposals/system", "track")
 
 _CLARIFICATION_SYSTEM_ACTOR = SubjectRef.of("proposals/system", "clarification")
 """Anonymous attribution shared by clarification content and nested history."""
+
+ProposalsRole = role_anchor("proposals/role")
+"""Table-less REBAC anchor for global proposal-viewer membership."""
 
 
 class ClarificationWidenBlocked(DomainError, ValidationError):
@@ -478,8 +482,7 @@ class Round(
         relationships = active_relationship_model().objects.using(self._state.db)
         for rows, owned in self._build_collections():
             if owned:
-                assert isinstance(rows, OwnerQuerySet)
-                if rows.filter(owner_id=requester).exists():
+                if require_composed_type(rows, OwnerQuerySet).filter(owner_id=requester).exists():
                     raise RecordAccessSubjectRefused()
             shares = relationships.filter(
                 resource_type=model_resource_type(rows.model),
@@ -578,8 +581,7 @@ class Round(
             relationships = active_relationship_model().objects
             for rows, track_rows in collections:
                 if track_rows:
-                    assert isinstance(rows, OwnerQuerySet)
-                    rows.release(user)
+                    require_composed_type(rows, OwnerQuerySet).release(user)
                 resource_type = model_resource_type(rows.model)
                 assert resource_type is not None
                 identifiers = [str(pk) for pk in rows.order_by().values_list("pk", flat=True)]
@@ -2414,10 +2416,6 @@ class FileProposalAccess(Composable, extends="storage.File"):
         super().validate_record_access_subject(relation, subject)
         with system_context(reason="proposals.file.subject"):
             self.drive.validate_record_access_subject(relation, subject)
-
-
-ProposalsRole = role_anchor("proposals/role")
-"""Table-less REBAC anchor for global proposal-viewer membership."""
 
 
 class Answer(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ProtectedDataModel, concrete=True):

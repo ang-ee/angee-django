@@ -25,6 +25,7 @@ from angee.base.exceptions import exception_text
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.models.merge_references import MergePolicy
+from angee.base.models.persistence import require_composed_type
 from angee.base.querysets import row_lock_paths
 from angee.base.refs import RecordRef
 from angee.base.serialization import strip_null_bytes
@@ -35,7 +36,7 @@ from angee.jobs.enqueue import enqueue_task
 from angee.workflows.definition import MAP_BODY_SUFFIX, GraphEdge, GraphNode
 from angee.workflows.managers import WorkflowRunManager
 from angee.workflows.models.definitions import WorkflowVersion
-from angee.workflows.querysets import RETRYABLE_SQLSTATES, _record_failure, _sqlstate
+from angee.workflows.querysets import RETRYABLE_SQLSTATES, StepRunQuerySet, _record_failure, _sqlstate
 from angee.workflows.signals import run_stopping
 from angee.workflows.states import (
     CANCELED_OUTCOME,
@@ -534,7 +535,8 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
         transitioning = not self.is_terminal
         if transitioning:
             self._write_state(status=str(RunStatus.CANCELED), outcome=CANCELED_OUTCOME, output={}, actor=actor)
-        changed = self.step_runs.cancel_open()
+        step_runs = require_composed_type(self.step_runs.all(), StepRunQuerySet)
+        changed = step_runs.cancel_open()
         if not transitioning and (changed or stopped):
             with _record_failure("run change publication", using=self._state.db):
                 self.refresh_from_db(using=self._state.db)

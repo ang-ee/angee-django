@@ -21,6 +21,7 @@ from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
+from angee.base.models.persistence import require_composed_type
 from angee.iam.models.base import ProtectedModel
 from angee.integrate.backends.base import BridgeImpl, ConnectionDiscovery, IntegrationImpl, LiveBridgeImpl
 from angee.integrate.choices import (
@@ -33,6 +34,7 @@ from angee.integrate.errors import (
 )
 from angee.integrate.live import PairingProjection, PairingState, armed_material_key
 from angee.integrate.locks import bridge_advisory_lock, bridge_is_locked, bridge_session_is_hosted
+from angee.integrate.querysets import IntegrationQuerySet
 from angee.integrate.states import (
     StreamState,
 )
@@ -257,7 +259,10 @@ class Bridge(ProtectedModel, concrete=False, demands="integrate.Integration"):
 
         using = write_alias(type(self), using=self._state.db, instance=self)
 
-        scope = queryset if queryset is not None else type(self).objects.db_manager(using).all()
+        scope = require_composed_type(
+            queryset if queryset is not None else type(self).objects.db_manager(using).all(),
+            IntegrationQuerySet,
+        )
         return scope.live_account_owners(
             self,
             impl_key,

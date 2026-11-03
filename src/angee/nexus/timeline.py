@@ -9,6 +9,8 @@ from django.apps import apps
 from django.db import models
 from rebac import system_context
 
+from angee.base.models.persistence import require_composed_type
+from angee.parties.querysets import PartyQuerySet
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind
 
 CORRESPONDENCE_KIND = "nexus.correspondence"
@@ -40,7 +42,7 @@ class CorrespondenceKind(TimelineKind):
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
         party = apps.get_model("parties", "Party")
         with system_context(reason="nexus.timeline_membership"):
-            parties = party.system_queryset().canonical()
+            parties = require_composed_type(party.system_queryset(), PartyQuerySet).canonical()
             parties = parties.in_circle(record, confirmed_only=True) \
                 if isinstance(record, apps.get_model("parties", "Circle")) else parties.filter(pk=record.pk)
             # The readable message owns its envelope; private handle or membership

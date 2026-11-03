@@ -326,12 +326,14 @@ class RecordBinding(AuditMixin, ProtectedRecordRefMixin, HistoryMixin, Protected
         for row in rows:
             values = {name: getattr(row, name) for name in fields}
             current = cls.from_db(using, fields, [values[name] for name in fields])
+            assert isinstance(current, cls)
             scopes = list(current._change_scope_records())
             before = previous.get(row.pk)
             if before is not None:
                 deferred = before.get_deferred_fields()
                 old_values = {name: getattr(before, name) if name not in deferred else values[name] for name in fields}
                 old = cls.from_db(using, fields, [old_values[name] for name in fields])
+                assert isinstance(old, cls)
                 scopes.extend(old._change_scope_records())
             identities = tuple(dict.fromkeys(scopes))
             projected.append((current, identities))

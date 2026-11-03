@@ -7,11 +7,14 @@ from typing import Any
 import pytest
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+from django.contrib.sessions.backends.db import SessionStore
+from django.contrib.sessions.models import Session
 from django.core.exceptions import ValidationError
 from django.db import connection, connections, models
 from django.db.models.deletion import ProtectedError
 from django.db.models.signals import pre_delete
 from django.test.utils import CaptureQueriesContext, isolate_apps
+from django.utils import timezone
 from django.utils.module_loading import import_string
 from rebac import ObjectRef, generic_target, system_context
 from rebac.resources import model_resource_type
@@ -19,9 +22,9 @@ from rebac.resources import model_resource_type
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.lineage import concrete_child, concrete_child_accessor, concrete_child_models
 from angee.base.models import refs as record_refs
-from angee.base.models.refs import delete_record_refs, record_edges_by_target
+from angee.base.models.refs import delete_record_refs
 from angee.base.refs import RecordRef, generic_pointer_model, generic_pointer_target, record_view_refs
-from angee.iam.models.refs import ProtectedRecordRefMixin
+from angee.iam.models.refs import ProtectedRecordRefMixin, record_edges_by_target
 from angee.iam.refs import ancestor_object_refs
 from angee.knowledge import schema as knowledge_schema
 from angee.projects.testing.models import Link, Task
@@ -34,6 +37,7 @@ from tests.mtidemo.models import (
     MtiParentProxy,
 )
 from tests.recordrefdemo.models import (
+    CustomColumnEdge,
     RecordRefCustomEdge,
     RecordRefNullableEdge,
     RecordRefPlainTarget,
@@ -384,6 +388,39 @@ def test_target_delete_nulls_declared_record_edges_from_a_queryset(
     assert (edge.content_type_id, edge.object_id) == (None, None)
 
 
+def test_target_delete_skips_edges_with_incompatible_object_id_fields(
+    record_ref_tables: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deleting a string-keyed session must not query a numeric generic pointer."""
+
+    del record_ref_tables
+    monkeypatch.setattr(record_refs, "record_edges_by_target", lambda: {Session: (RecordRefTargetEdge,)})
+    session = Session.objects.create(session_key="non_numeric_session_key", session_data="", expire_date=timezone.now())
+
+    session.delete()
+
+    assert not Session.objects.filter(pk=session.pk).exists()
+
+
+def test_auth_session_delete_keeps_compatible_string_edge_protection(record_ref_tables: None) -> None:
+    """A string generic pointer can protect the same opaque session key."""
+
+    del record_ref_tables
+    store = SessionStore()
+    store["actor"] = "test"
+    store.save(must_create=True)
+    session = Session.objects.get(session_key=store.session_key)
+    with system_context(reason="record-ref auth session protection"):
+        edge = CustomColumnEdge.objects.create(target=session)
+        with pytest.raises(ProtectedError):
+            session.delete()
+        edge.delete()
+        session.delete()
+
+    assert not Session.objects.filter(session_key=store.session_key).exists()
+
+
 def test_declared_target_models_read_the_schema_target_relations(composed_permissions: None) -> None:
     """An edge's accepted target types are the schema's `target`-backed relations, by label."""
 
@@ -396,7 +433,7 @@ def test_declared_target_models_read_the_schema_target_relations(composed_permis
 
 
 def test_record_edges_invert_the_declared_targets_into_resource_metadata(composed_permissions: None) -> None:
-    """A type carries every edge accepting its canonical type; its resource lists them."""
+    """IAM's declared-target index matches the edges in protected resource metadata."""
 
     del composed_permissions
     index = record_edges_by_target()
@@ -407,7 +444,8 @@ def test_record_edges_invert_the_declared_targets_into_resource_metadata(compose
         "messaging.ThreadAttachment",
         "projects.Link",
         "projects.Task",
-        "storage.FileAttachment", "tags.TagAssignment",
+        "storage.FileAttachment",
+        "tags.TagAssignment",
     ]
     assert FileAttachment.declares_target(MtiChild) and FileAttachment.declares_target(MtiChildProxy)
     assert not FileAttachment.declares_target(File) and not RecordBinding.declares_target(RecordRefPlainTarget)

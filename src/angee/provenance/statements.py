@@ -39,7 +39,7 @@ from angee.base.models.base import record_display_label
 from angee.base.models.identity import SqidMixin
 from angee.base.models.locks import OptimisticLockMixin
 from angee.base.models.merge_references import MergeContractMixin
-from angee.base.models.persistence import PersistenceMixin
+from angee.base.models.persistence import PersistenceMixin, require_composed_type
 from angee.base.models.timestamps import TimestampMixin, update_fields_with_auto_now
 from angee.base.models.trash import TrashQuerySet
 from angee.base.querysets import by_key, query_batch_size
@@ -584,7 +584,7 @@ class StatementPairManager[T: StatementPair](_StatementPairManagerBase[T]):
             self._db = instance._state.db
 
     def get_queryset(self) -> AngeeHistoryQuerySet[T]:
-        rows = super().get_queryset()
+        rows = require_composed_type(super().get_queryset(), AngeeHistoryQuerySet)
         return (
             rows if self.instance is None else rows.filter(models.Q(left=self.instance) | models.Q(right=self.instance))
         )

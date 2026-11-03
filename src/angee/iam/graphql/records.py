@@ -10,7 +10,7 @@ from angee.iam.graphql.merge import MergeMutation
 from angee.iam.graphql.sharing import RecordAccessMutation, RecordAccessOption, RecordAccessQuery, RecordAccessType
 from angee.iam.graphql.trash import TrashMutation
 
-schemas = {
+schemas: dict[str, dict[str, list[object]]] = {
     "public": {
         "mutation": [MergeMutation, TrashMutation],
     },

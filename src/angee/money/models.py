@@ -49,6 +49,11 @@ from angee.resources.mixins import ResourceLoadMixin
 REFERENCE_CURRENCY_SETTING = "ANGEE_MONEY_REFERENCE_CURRENCY"
 """The project setting naming the ISO-4217 code every :class:`CurrencyRate` is relative to."""
 
+MoneyRole = role_anchor("money/role")
+"""The ``money/role`` anchor: its const ``admin`` arm resolves a platform admin as
+an effective money manager. See :func:`angee.iam.models.roles.role_anchor`.
+"""
+
 
 def reference_currency_code() -> str:
     """Return the configured reference currency code, or fail fast.
@@ -444,9 +449,3 @@ class CurrencyRate(HistoryMixin, ProtectedRecordRefMixin, ArchiveMixin, Protecte
         """Return a readable label for Django displays."""
 
         return f"{self.currency_id}@{self.date}={self.rate}"
-
-
-MoneyRole = role_anchor("money/role")
-"""The ``money/role`` anchor: its const ``admin`` arm resolves a platform admin as
-an effective money manager. See :func:`angee.iam.models.roles.role_anchor`.
-"""

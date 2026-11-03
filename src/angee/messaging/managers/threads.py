@@ -363,8 +363,9 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
             thread = attachment.thread.canonical()
             attachment = edges.select_related("thread").get(thread=thread, role=role)
             target = attachment.require_threaded_target()
+            read_access = target.thread_read_access
             if isinstance(target, ProtectedModel):
-                target.require_access(target.thread_read_access)
+                target.require_access(read_access)
             elif not target._message_read_allowed():
                 raise PermissionDenied("Reading a redirected chatter thread requires record read access.")
         return attachment

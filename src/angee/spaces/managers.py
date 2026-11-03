@@ -13,6 +13,7 @@ from rebac.resources import model_resource_type
 
 from angee.base.fields.state import enum_member_for
 from angee.base.models.hierarchy import HierarchyQuerySet
+from angee.base.models.persistence import require_composed_type
 from angee.iam.managers import ProtectedManager
 from angee.iam.querysets import ProtectedQuerySet
 from angee.messaging.managers import ThreadManager, ThreadQuerySet
@@ -111,7 +112,8 @@ class MembershipManager[MembershipT: Membership](_MembershipManagerBase[Membersh
                 raise ValidationError("Roster members must share their group's database.")
         with database_context(using), transaction.atomic(using=using):
             type(group).system_queryset(lock=("self",)).using(using).get(pk=group.pk)
-            memberships = self.get_queryset().using(using).lock_if_supported().filter(group=group, party=party)
+            memberships = require_composed_type(self.get_queryset().using(using), MembershipQuerySet)
+            memberships = memberships.lock_if_supported().filter(group=group, party=party)
             membership = memberships.first()
             if membership is not None:
                 if provisioned_by is None and not membership.has_access("write"):
