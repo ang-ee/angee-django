@@ -71,6 +71,13 @@ explicit exports. File metadata merges and dedup reach belong to the File row.
 `get_or_ingest_bytes` and `get_or_ingest_stream` return `(file, created)`;
 `created` identifies this attempt's inserted winner, not exclusive future use.
 Automatic acquisition cleanup uses the native grant lock and honors direct
-sharing, committed row edits, attachments and protected references through
-`purge_if_unretained`; a creation flag alone never
-authorizes removal of a shared carrier.
+sharing, committed row edits, and every live reverse FK or one-to-one relation
+targeting `storage.File` whose `on_delete` is not `DO_NOTHING`, including
+`FileAttachment.file`. Referencing owners declare the field on their own model;
+storage discovers it from the concrete File model's relation metadata without
+importing the owner. History rows with `DO_NOTHING` and generic content-type
+references do not retain a file. The reference check uses the write database and
+the referencing model's base manager, so a restricted default queryset cannot
+hide a live reference. A creation flag alone never authorizes removal of a
+shared carrier. Direct `purge()` remains the deliberate hard-delete operation
+and follows each relation's `on_delete` policy.

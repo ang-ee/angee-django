@@ -7,25 +7,31 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import connection
+from django.db.models.deletion import ProtectedError
 from rebac import system_context
 
 from angee.extraction.acquisition import PartCarrier
 from angee.extraction.managers import ExtractionManager
 from angee.integrate_iphone.backup import SQLITE_HEADER, SQLITE_HEADER_LENGTH, IosBackup
+from angee.messaging.testing.models import Handle
 from angee.storage.managers import FileManager
 from angee.storage.models import File as AbstractFile
 from angee.storage_integrate_iphone.mounts import IphoneBackupMountBackend
 from tests.conftest import File, Folder, Mount
 from tests.test_extraction_models import evidence as evidence
 from tests.test_integrate_iphone import CAMERA_DOMAIN, CAMERA_PATH, build_iphone_backup
+from tests.test_storage import PNG_BYTES
 from tests.test_storage import drive as drive
+from tests.test_storage import image_drive as image_drive
 
 
 def test_ingest_creation_status_distinguishes_a_shared_winner(drive):
     with system_context(reason="test native ingestion receipt"):
         first, created = File.objects.get_or_ingest_bytes(b"receipt", filename="receipt.txt", drive_id=str(drive.sqid))
         winner, created_again = File.objects.get_or_ingest_bytes(
-            b"receipt", filename="other.txt", drive_id=str(drive.sqid),
+            b"receipt",
+            filename="other.txt",
+            drive_id=str(drive.sqid),
         )
         assert created and not created_again and winner.pk == first.pk
 
@@ -159,10 +165,16 @@ def test_created_receipt_does_not_authorize_removal_after_dedup_sharing(drive, m
     with system_context(reason="test shared dedup winner retention"):
         other = get_user_model().objects.create_user(username="other-ingest-owner")
         original, created = File.objects.get_or_ingest_bytes(
-            b"shared receipt", filename="shared.txt", drive_id=str(drive.sqid), owner_id=drive.alice.pk,
+            b"shared receipt",
+            filename="shared.txt",
+            drive_id=str(drive.sqid),
+            owner_id=drive.alice.pk,
         )
         shared, another_created = File.objects.get_or_ingest_bytes(
-            b"shared receipt", filename="same.txt", drive_id=str(drive.sqid), owner_id=other.pk,
+            b"shared receipt",
+            filename="same.txt",
+            drive_id=str(drive.sqid),
+            owner_id=other.pk,
         )
         assert created and not another_created and shared.pk == original.pk
         assert not original.purge_if_unretained()
@@ -172,13 +184,59 @@ def test_created_receipt_does_not_authorize_removal_after_dedup_sharing(drive, m
 def test_cleanup_preserves_committed_edits_after_creation(drive):
     with system_context(reason="test modified acquisition retention"):
         original, created = File.objects.get_or_ingest_bytes(
-            b"edited receipt", filename="edited.txt", drive_id=str(drive.sqid),
+            b"edited receipt",
+            filename="edited.txt",
+            drive_id=str(drive.sqid),
         )
         current = File.objects.get(pk=original.pk)
         current.title = "Kept by another caller"
         current.save(update_fields=["title", "updated_at"])
         assert created and not original.purge_if_unretained()
         assert File.objects.filter(pk=current.pk).exists()
+
+
+def test_cleanup_purges_a_file_without_references(drive):
+    with system_context(reason="test unreferenced acquisition cleanup"):
+        file = File.objects.ingest_bytes(b"unreferenced", filename="unreferenced.txt", drive_id=str(drive.sqid))
+        assert file.purge_if_unretained()
+        assert not File.objects.filter(pk=file.pk).exists()
+
+
+def test_declared_avatar_reference_retains_acquisition(image_drive):
+    with system_context(reason="test declared file reference retention"):
+        file = File.objects.ingest_image(PNG_BYTES)
+        handle = Handle.objects.create(platform="email", value="avatar@example.test", created_by=image_drive.alice)
+        assert handle.set_avatar(file)
+        assert not file.attachments.exists()
+        assert not file.purge_if_unretained()
+        assert File.objects.filter(pk=file.pk).exists()
+        handle.refresh_from_db()
+        assert handle.avatar_id == file.pk
+
+
+def test_cleared_avatar_history_does_not_retain_acquisition(image_drive):
+    with system_context(reason="test cleared avatar acquisition cleanup"):
+        file = File.objects.ingest_image(PNG_BYTES)
+        handle = Handle.objects.create(platform="email", value="cleared@example.test", created_by=image_drive.alice)
+        assert handle.set_avatar(file)
+        assert handle.set_avatar(None)
+        assert Handle.history.filter(id=handle.pk, avatar_id=file.pk).exists()
+        assert file.purge_if_unretained()
+        assert not File.objects.filter(pk=file.pk).exists()
+
+
+def test_protected_purge_rolls_back_partial_work(drive, monkeypatch):
+    with system_context(reason="test protected acquisition rollback"):
+        file = File.objects.ingest_bytes(b"protected", filename="protected.txt", drive_id=str(drive.sqid))
+
+        def reject_after_write(self):
+            File._base_manager.filter(pk=self.pk).update(title="transient")
+            raise ProtectedError("referenced", [self])
+
+        monkeypatch.setattr(File, "purge", reject_after_write)
+        assert not file.purge_if_unretained()
+        file.refresh_from_db()
+        assert file.title == ""
 
 
 def test_scoped_folder_prune_uses_native_ancestry_without_widening_deletion(drive):
@@ -195,7 +253,10 @@ def test_folder_prune_retains_a_trashed_files_parent(drive):
     with system_context(reason="test retained folder protection"):
         folder = Folder.objects.ensure_path(drive, ("retained",))
         file = File.objects.ingest_bytes(
-            b"retained file", filename="retained.txt", drive_id=str(drive.sqid), folder_id=str(folder.sqid),
+            b"retained file",
+            filename="retained.txt",
+            drive_id=str(drive.sqid),
+            folder_id=str(folder.sqid),
         )
         file.delete()
         assert Folder.objects.prune_missing(drive, ()) == 0
