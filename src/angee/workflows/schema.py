@@ -17,6 +17,7 @@ from rebac.graphql.strawberry_django import optimize
 from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
+from strawberry.types.nodes import SelectedField, Selection
 from strawberry_django.auth.utils import get_current_user
 from strawberry_django.queryset import run_type_get_queryset
 
@@ -30,13 +31,14 @@ from angee.graphql.ids import PublicID, optional_public_id, require_instance_for
 from angee.graphql.impl import ImplChoice
 from angee.graphql.subscriptions import changes
 from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
-from angee.iam.graphql.capabilities import permission_expression, permissions_field
+from angee.iam.graphql.capabilities import permission_annotations, permission_expression, permissions_field
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import (
     RECORD_REFERENCE_ANNOTATIONS,
     RecordReferenceNode,
     actor_scoped_to_many,
     actor_scoped_to_one,
+    with_record_reference_access,
 )
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.identity import user_public_id
@@ -59,6 +61,8 @@ WorkflowRun = apps.get_model("workflows", "WorkflowRun")
 StepRun = apps.get_model("workflows", "StepRun")
 StepAttempt = apps.get_model("workflows", "StepAttempt")
 StepRecord = apps.get_model("workflows", "StepRecord")
+Decision = apps.get_model("decisions", "Decision")
+DecisionRecord = apps.get_model("decisions", "DecisionRecord")
 StepWatch = apps.get_model("workflows", "StepWatch")
 Trigger = apps.get_model("workflows", "Trigger")
 TriggerEvent = apps.get_model("workflows", "TriggerEvent")
@@ -72,6 +76,29 @@ _STEP_POLICY_VERSION = Prefetch(
     queryset=WorkflowVersion.system_queryset().only("document"),
     to_attr="policy_version",
 )
+
+
+def _selected_children(selections: list[Selection], name: str) -> list[Selection]:
+    """Find a selected field's children through GraphQL fragments and aliases."""
+    children: list[Selection] = []
+    for selection in selections:
+        if isinstance(selection, SelectedField):
+            if selection.name == name:
+                children.extend(selection.selections)
+        else:
+            children.extend(_selected_children(selection.selections, name))
+    return children
+
+
+def _selected_names(selections: list[Selection]) -> frozenset[str]:
+    """Collect direct field names, including fields carried by fragments."""
+    return frozenset(
+        name
+        for selection in selections
+        for name in (
+            (selection.name,) if isinstance(selection, SelectedField) else _selected_names(selection.selections)
+        )
+    )
 
 
 @strawberry_django.type(Workflow)
@@ -155,8 +182,44 @@ class WorkflowRunType(RecordReferenceNode):
 
     @strawberry_django.field(only=["version_id", "status", "stopped_at"], prefetch_related=[_RUN_POLICY_VERSION])
     def graph(self, info: strawberry.Info) -> WorkflowRunGraph:
-        """Read one run's bounded graph; list selections cost about five queries per row."""
-        return cast(WorkflowRunGraph, cast(Any, self).graph(get_current_user(info)))
+        """Read one run's bounded graph with its selected step details."""
+        run = cast(Any, self)
+        actor = get_current_user(info)
+        nodes = _selected_children(_selected_children(info.selected_fields, "graph"), "nodes")
+        steps = _selected_children(nodes, "step_run")
+        map_steps = _selected_children(steps, "map_steps")
+        selected = _selected_names(steps) | _selected_names(map_steps)
+        related_querysets = {}
+        if "records" in selected:
+            related_querysets["records"] = with_record_reference_access(
+                StepRecord.objects.db_manager(run._state.db).with_actor(actor)
+            )
+        if "decision" in selected:
+            decision = Decision.objects.db_manager(run._state.db).with_actor(actor)
+            details = [*_selected_children(steps, "decision"), *_selected_children(map_steps, "decision")]
+            names = _selected_names(details)
+            if "permissions" in names:
+                decision = decision.annotate(**permission_annotations(Decision, ("act",)))
+            nested = []
+            if "records" in names:
+                nested.append(Prefetch(
+                    "records", queryset=with_record_reference_access(
+                        DecisionRecord.objects.db_manager(run._state.db).with_actor(actor)
+                    ),
+                ))
+            for name in ("requester", "assignees", "answered_by"):
+                if name in names:
+                    model = Decision._meta.get_field(name).related_model
+                    nested.append(Prefetch(
+                        name, queryset=model.objects.db_manager(run._state.db).with_actor(actor),
+                    ))
+            related_querysets["decision"] = decision.prefetch_related(*nested)
+        return cast(WorkflowRunGraph, run.graph(
+            actor,
+            step_fields=_selected_names(steps),
+            map_fields=_selected_names(map_steps),
+            related_querysets=related_querysets,
+        ))
 
     @strawberry_django.field(only=["status", "stopped_at"])
     def can_cancel(self, info: strawberry.Info) -> bool:
@@ -244,7 +307,11 @@ class StepRunType(ProtectedNode):
     @strawberry_django.field(only=["node_key", "run_id"])
     def map_steps(self, info: strawberry.Info) -> list[StepRunType]:
         """Map item execution stays beneath its authored parent in the timeline."""
-        return cast(Any, self).map_rows().with_actor(get_current_user(info)).order_by("map_index")
+        row = cast(Any, self)
+        actor = get_current_user(info)
+        if "_graph_map_steps" in row.__dict__ and row.__dict__.get("_graph_map_actor") == actor:
+            return row.__dict__["_graph_map_steps"]
+        return row.map_rows().with_actor(actor).order_by("map_index")
 
     @strawberry_django.field(only=["status", "waiting_kind", "node_key", "run_id"])
     def can_retry(self, info: strawberry.Info) -> bool:
