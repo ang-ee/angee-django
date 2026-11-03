@@ -245,6 +245,21 @@ def test_part_database_load_eagerly_fetches_content_without_creating_a_cache(
 
 
 @pytest.mark.django_db(transaction=True)
+def test_part_file_reference_retains_acquisition(part_tree: tuple[Message, dict[str, Part]], tmp_path: Path) -> None:
+    """A Part's declared file link retains its file without a storage attachment."""
+
+    _message, parts = part_tree
+    with system_context(reason="messaging part file retention"), mute_changes():
+        _storage_drive(tmp_path, owner=None)
+        file = File.objects.ingest_bytes(b"Part only", filename="part.txt")
+        Part.objects.filter(pk=parts["attachment"].pk).update(file_id=file.pk)
+        assert not file.attachments.exists()
+        assert not file.purge_if_unretained()
+        assert File.objects.filter(pk=file.pk).exists()
+        assert Part.objects.get(pk=parts["attachment"].pk).file_id == file.pk
+
+
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     "cache_state",
     ["complete", "deferred_parent", "uncached_fragment"],
@@ -285,9 +300,12 @@ def test_native_part_projection_does_not_load_unselected_content(part_tree: tupl
     """Traversal reuses a narrow authorized prefetch without forcing fragments or files."""
     message, parts = part_tree
     with system_context(reason="test.messaging.narrow_part_navigation"):
-        message = Message._base_manager.prefetch_related(Prefetch(
-            "parts", queryset=Part._base_manager.only("message_id", "parent_id", "position", "sqid"),
-        )).get(pk=message.pk)
+        message = Message._base_manager.prefetch_related(
+            Prefetch(
+                "parts",
+                queryset=Part._base_manager.only("message_id", "parent_id", "position", "sqid"),
+            )
+        ).get(pk=message.pk)
     with CaptureQueriesContext(connection) as queries:
         ordered = Part.objects.reading_order_for_message(message)
         assert [row.pk for row in ordered] == [row.pk for row in parts.values()]

@@ -20,6 +20,7 @@ from django.core.exceptions import (
 from django.core.files.base import File as DjangoFile
 from django.db import DEFAULT_DB_ALIAS, IntegrityError, models, transaction
 from django.db.models.deletion import ProtectedError
+from django.db.models.fields.reverse_related import ManyToOneRel
 from django.db.models.signals import post_save
 from django.urls import reverse
 from django.utils import timezone
@@ -634,28 +635,41 @@ class File(TaggedModel, ProtectedTrashMixin, OwnerMixin, HistoryMixin, Protected
             return 1, {self._meta.label: 1}
 
     def purge_if_unretained(self) -> bool:
-        """Discard an unused acquisition only while references and direct shares retain none."""
+        """Discard an unchanged acquisition only if no references or direct shares retain it.
+
+        A referencing owner declares retention with a Django FK or one-to-one
+        relation to File whose deletion policy is not DO_NOTHING. Check its
+        reverse relation on the write database and direct record grants separately.
+        """
 
         with database_context(write_alias(type(self), using=self._state.db, instance=self)):
             self.require_access("delete")
             rows = type(self).objects.db_manager(
                 write_alias(type(self), using=self._state.db, instance=self), hints={"instance": self}
             )
-            with database_context(rows.db), transaction.atomic(using=rows.db):
-                if not rows.filter(pk=self.pk).exists():
-                    return False
+            with database_context(rows.db):
                 try:
-                    locked = self.lock_for_record_access(using=rows.db)
-                except type(self).DoesNotExist:
-                    return False
-                if locked.updated_at != self.updated_at or locked.owner_id != self.owner_id:
-                    return False
-                if locked.attachments.exists():
-                    return False
-                if type(locked).get_rebac_grantable() and locked.direct_record_access():
-                    return False
-                try:
-                    locked.purge()
+                    with transaction.atomic(using=rows.db):
+                        if not rows.filter(pk=self.pk).exists():
+                            return False
+                        try:
+                            locked = self.lock_for_record_access(using=rows.db)
+                        except type(self).DoesNotExist:
+                            return False
+                        if locked.updated_at != self.updated_at or locked.owner_id != self.owner_id:
+                            return False
+                        for relation in type(locked)._meta.get_fields(include_hidden=True):
+                            if not isinstance(relation, ManyToOneRel) or relation.on_delete is models.DO_NOTHING:
+                                continue
+                            if (
+                                relation.related_model._base_manager.db_manager(rows.db)
+                                .filter(**{relation.field.name: locked})
+                                .exists()
+                            ):
+                                return False
+                        if type(locked).get_rebac_grantable() and locked.direct_record_access():
+                            return False
+                        locked.purge()
                 except ProtectedError:
                     return False
             return True
