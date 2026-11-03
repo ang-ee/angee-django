@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactElement, type ReactNode } from "react";
 import * as v from "valibot";
+import { useAuthoredQuery, useSetAuthoredQueryData } from "@angee/refine";
 import { holdsPermission, useSchemaFieldMetadata, modelMetadataForLabel } from "@angee/metadata";
 import {
   Button, Card, Checkbox, ErrorBanner, FieldDescriptorControl, JsonValueSchema, MetaGrid, RadioGroup, RecordReference,
@@ -7,7 +8,7 @@ import {
   actionFormSubmitResult, formSubmitError, titleCase, useAuthoredResourceMutation, useRevealedRecordField,
 } from "@angee/ui";
 import { DecisionContext, DecisionContextSchema, FactValue } from "./DecisionContext";
-import { DECISION_MODELS, DecideDocument, type Decision } from "./documents.console";
+import { DECISION_MODELS, DecideDocument, DecisionDocument, type Decision } from "./documents.console";
 import { useDecisionsT } from "./i18n";
 import { ProposalSchema, VerdictValuesSchema } from "./proposal";
 import { DecisionProvider, DecisionOriginOutlet } from "./origin";
@@ -25,8 +26,13 @@ export interface DecisionCardProps {
 }
 
 /** One card in the inbox, a record timeline and a record selection. */
-export function DecisionCard({ decision, selfId, highlighted, compact, detail = false, inStep, onEditField, actions }: DecisionCardProps): ReactElement {
+export function DecisionCard({ decision: incomingDecision, selfId, highlighted, compact, detail = false, inStep, onEditField, actions }: DecisionCardProps): ReactElement {
   const t = useDecisionsT();
+  const accepted = useAuthoredQuery(DecisionDocument, { id: incomingDecision.id }, {
+    enabled: false,
+  }).data?.decisions_by_pk;
+  const acceptDecision = useSetAuthoredQueryData();
+  const decision = accepted && accepted.revision > incomingDecision.revision ? accepted : incomingDecision;
   const ref = useRef<HTMLElement>(null);
   const closedRef = useRef<HTMLParagraphElement>(null);
   const domId = useId();
@@ -42,7 +48,7 @@ export function DecisionCard({ decision, selfId, highlighted, compact, detail = 
   }, [highlighted]);
   const open = decision.is_open;
   const verdict = v.safeParse(v.array(v.string()), decision.verdict);
-  const [choice, setChoice] = useState({ revision: decision.revision, keys: [] as string[], values: {} as v.InferOutput<typeof VerdictValuesSchema>, accepted: false });
+  const [choice, setChoice] = useState({ revision: decision.revision, keys: [] as string[], values: {} as v.InferOutput<typeof VerdictValuesSchema> });
   const chosen = choice.revision === decision.revision ? choice.keys : [];
   const alternatives = proposal.success ? proposal.output.alternatives : [];
   const chooseFields = alternatives.filter((alternative) => chosen.includes(alternative.key)).flatMap((alternative) =>
@@ -54,21 +60,33 @@ export function DecisionCard({ decision, selfId, highlighted, compact, detail = 
     if (value !== undefined) (values[id] ??= {})[field] = value;
   }
   const complete = chosen.length > 0 && chooseFields.every(({ id, field }) => Object.hasOwn(values[id] ?? {}, field));
-  const setChosen = (keys: string[]) => setChoice((current) => ({ ...current, revision: decision.revision, keys, accepted: false }));
+  const setChosen = (keys: string[]) => setChoice((current) => ({ ...current, revision: decision.revision, keys }));
   const [error, setError] = useState<string>();
   useEffect(() => {
-    setChoice((current) => current.revision === decision.revision ? current : { revision: decision.revision, keys: [], values: {}, accepted: false });
+    setChoice((current) => current.revision === decision.revision ? current : { revision: decision.revision, keys: [], values: {} });
     setError(undefined);
   }, [decision.revision]);
   const [busy, setBusy] = useState(false);
-  const locked = busy || (choice.revision === decision.revision && choice.accepted);
-  useEffect(() => { if (!open && choice.accepted) closedRef.current?.focus(); }, [open, choice.accepted]);
+  const [acceptedRevision, setAcceptedRevision] = useState<number>();
+  const locked = busy || acceptedRevision === decision.revision;
+  const focusAfterLocalAnswer = useRef(false);
+  useEffect(() => {
+    if (!open && focusAfterLocalAnswer.current) {
+      closedRef.current?.focus();
+      focusAfterLocalAnswer.current = false;
+    }
+  }, [open, acceptedRevision]);
   const [decide] = useAuthoredResourceMutation(DecideDocument, {
-    dataProviderName: "console", shouldInvalidate: (data) => data?.decide.ok === true, invalidateModels: [...new Set([...DECISION_MODELS,
+    shouldInvalidate: (data) => data?.decide.ok === true, invalidateModels: [...new Set([...DECISION_MODELS,
       ...decision.records.flatMap((record) => record.record_model ? [record.record_model] : []),
       ...(proposal.success ? proposal.output.alternatives.flatMap((alternative) => Object.values(alternative.actions)
         .flatMap((action) => action.model ? [action.model] : [])) : []),
     ])],
+    acceptResponse: (data) => {
+      const answered = data?.decide.decision;
+      if (!data?.decide.ok || !answered) return;
+      return acceptDecision(DecisionDocument, { id: answered.id }, { decisions_by_pk: answered });
+    },
   });
   const context = v.safeParse(DecisionContextSchema, decision.context);
   const references = context.success ? [...context.output.references, ...context.output.facts.flatMap((fact) => fact.evidence)] : [];
@@ -79,8 +97,10 @@ export function DecisionCard({ decision, selfId, highlighted, compact, detail = 
     try {
       const result = await decide({ id: decision.id, revision: decision.revision, chosen, values })
         .then((data) => actionFormSubmitResult(data, "decide")).catch(formSubmitError);
-      if (result.status === "ok") setChoice({ revision: decision.revision, keys: chosen, values, accepted: true });
-      else setError(result.status === "conflict" ? t("decision.conflict")
+      if (result.status === "ok") {
+        focusAfterLocalAnswer.current = true;
+        setAcceptedRevision(decision.revision);
+      } else setError(result.status === "conflict" ? t("decision.conflict")
         : [...new Set([...result.issues.formErrors, ...Object.values(result.issues.fieldErrors).flat()])].join(" "));
     } finally { setBusy(false); }
   };
@@ -108,7 +128,8 @@ export function DecisionCard({ decision, selfId, highlighted, compact, detail = 
         <span key={alternative.key}>{index ? "; " : ""}{alternative.label}{Object.entries(alternative.actions).flatMap(([id, action]) => Object.entries(action.fields)
           .filter(([field, operation]) => operation.choose && Object.hasOwn(supplied.output[id] ?? {}, field))
           .map(([field]) => <span key={`${id}:${field}`}>: {fieldValue(id, field, supplied.output[id]![field]!, action.model)}</span>))}</span>)}</>
-      : t("decision.chose", { labels: decision.verdict_label })}</span></p>;
+      : t("decision.chose", { labels: decision.verdict_label })}</span>
+      {decision.answered_at ? <>{" · "}<RelativeTime value={decision.answered_at} /></> : null}</p>;
     if (!detail) return summary;
     // The decision's page: the question's origin, reason, every alternative with the chosen
     // ones marked and their retained values, then the records and facts it was decided on.
