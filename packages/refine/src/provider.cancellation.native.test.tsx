@@ -7,7 +7,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { useAuthoredQuery } from "./dialect/authored-hooks";
 import { useAngeeListBatch } from "./dialect/hooks";
-import { createAngeeHasuraDataProvider } from "./provider";
+import { createAngeeChangeLiveProvider, createAngeeHasuraDataProvider } from "./provider";
 import { createAuthoredLiveInvalidation, invalidateAuthoredQueries } from "./query-invalidation";
 import { createRefineTestProviders } from "./testing";
 import type { TypedDocumentNode } from "./typed-document";
@@ -32,6 +32,31 @@ function fixture() {
   const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   const wrapper = ({ children }: { children: ReactNode }) => <Provider dataProvider={provider} queryClient={client}>{children}</Provider>;
   return { attempts, fetch, provider, client, wrapper };
+}
+
+function liveReadyFixture(client: ReturnType<typeof fixture>["client"]) {
+  const sinks: ((result: { data: unknown }) => void)[] = [];
+  const subscribe = vi.fn((_payload: unknown, sink: { next: (result: { data: unknown }) => void }) => {
+    sinks.push(sink.next);
+    return vi.fn();
+  });
+  const live = createAngeeChangeLiveProvider(
+    { subscribe, on: vi.fn(() => () => undefined) } as never,
+    [{ schemaName: "console", modelLabel: "example.Note", roots: { list: "notes", changes: "noteChanged" } }],
+    { queryClient: client },
+  );
+  const subscribeNotes = () => live.subscribe({ channel: "notes", types: ["*"], callback: vi.fn(), params: { resource: "notes" } });
+  function ready(index = 0) {
+    const next = sinks[index];
+    if (!next) throw new Error(`No upstream subscription at index ${index}`);
+    next({ data: { noteChanged: { model: "example.Note", id: "", action: "ready" } } });
+  }
+  function change(index = 0) {
+    const next = sinks[index];
+    if (!next) throw new Error(`No upstream subscription at index ${index}`);
+    next({ data: { noteChanged: { model: "example.Note", id: "one", action: "update" } } });
+  }
+  return { live, subscribe, subscribeNotes, ready, change };
 }
 
 const readers = [
@@ -121,6 +146,197 @@ test("live changes abort actual HTTP on arrival and keep the replacement read", 
   } finally {
     live.clear();
     f.attempts.forEach((attempt) => attempt.resolve(response()));
+  }
+});
+
+test("ready recovers an HTTP read started after subscribe but before registration", async () => {
+  const f = fixture();
+  const { live, subscribe, subscribeNotes, ready } = liveReadyFixture(f.client);
+  const subscription = subscribeNotes();
+  const hook = renderHook(() => useAuthoredQuery(DOCUMENT, {}, { models: ["example.Note"] }), { wrapper: f.wrapper });
+  try {
+    expect(subscribe).toHaveBeenCalledOnce();
+    await waitFor(() => expect(f.attempts).toHaveLength(1));
+    act(() => { ready(); });
+    expect(f.attempts[0]?.signal?.aborted).toBe(false);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(1);
+    await act(async () => { f.attempts[0]?.resolve(response("pre-registration")); });
+    await waitFor(() => expect(f.attempts).toHaveLength(2));
+    expect(f.attempts[0]?.signal?.aborted).toBe(false);
+    await act(async () => { f.attempts[1]?.resolve(response("registered")); });
+    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "registered" }]));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(2);
+  } finally {
+    live.unsubscribe(subscription);
+    f.attempts.forEach((attempt) => attempt.resolve(response()));
+    hook.unmount();
+  }
+});
+
+test("ready lets an older data-less HTTP read settle before one recovery refetch", async () => {
+  const f = fixture();
+  const hook = renderHook(() => useAuthoredQuery(DOCUMENT, {}, { models: ["example.Note"] }), { wrapper: f.wrapper });
+  await waitFor(() => expect(f.attempts).toHaveLength(1));
+  const { live, subscribeNotes, ready } = liveReadyFixture(f.client);
+  const subscription = subscribeNotes();
+  try {
+    act(() => { ready(); });
+    expect(f.attempts[0]?.signal?.aborted).toBe(false);
+    expect(f.client.getQueryCache().getAll().some((query) => query.state.isInvalidated)).toBe(true);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(1);
+    await act(async () => { f.attempts[0]?.resolve(response("older snapshot")); });
+    await waitFor(() => expect(f.attempts).toHaveLength(2));
+    expect(f.attempts[0]?.signal?.aborted).toBe(false);
+    await act(async () => { f.attempts[1]?.resolve(response("recovered")); });
+    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "recovered" }]));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(2);
+  } finally {
+    live.unsubscribe(subscription);
+    f.attempts.forEach((attempt) => attempt.resolve(response()));
+    hook.unmount();
+  }
+});
+
+test("a second ready on the same sink refetches a retained HTTP read once", async () => {
+  const f = fixture();
+  const { live, subscribe, subscribeNotes, ready } = liveReadyFixture(f.client);
+  const subscription = subscribeNotes();
+  const hook = renderHook(() => useAuthoredQuery(DOCUMENT, {}, { models: ["example.Note"] }), { wrapper: f.wrapper });
+  try {
+    await waitFor(() => expect(f.attempts).toHaveLength(1));
+    act(() => { ready(); });
+    await act(async () => { f.attempts[0]?.resolve(response("retained")); });
+    await waitFor(() => expect(f.attempts).toHaveLength(2));
+    await act(async () => { f.attempts[1]?.resolve(response("registered")); });
+    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "registered" }]));
+    act(() => { ready(); });
+    expect(f.client.getQueryCache().getAll().some((query) => query.state.isInvalidated)).toBe(true);
+    await waitFor(() => expect(f.attempts).toHaveLength(3));
+    expect(subscribe).toHaveBeenCalledOnce();
+    expect(f.attempts[0]?.signal?.aborted).toBe(false);
+    await act(async () => { f.attempts[2]?.resolve(response("after reconnect")); });
+    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "after reconnect" }]));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(3);
+  } finally {
+    live.setEnabled(false);
+    live.unsubscribe(subscription);
+    f.attempts.forEach((attempt) => attempt.resolve(response()));
+    hook.unmount();
+  }
+});
+
+test("ready refetches a read that settled between subscribe and registration", async () => {
+  const f = fixture();
+  const { live, subscribeNotes, ready } = liveReadyFixture(f.client);
+  const subscription = subscribeNotes();
+  const hook = renderHook(() => useAuthoredQuery(DOCUMENT, {}, { models: ["example.Note"] }), { wrapper: f.wrapper });
+  try {
+    await waitFor(() => expect(f.attempts).toHaveLength(1));
+    await act(async () => { f.attempts[0]?.resolve(response("before ready")); });
+    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "before ready" }]));
+    act(() => { ready(); });
+    await waitFor(() => expect(f.attempts).toHaveLength(2));
+    await act(async () => { f.attempts[1]?.resolve(response("after ready")); });
+    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "after ready" }]));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(2);
+  } finally {
+    live.unsubscribe(subscription);
+    f.attempts.forEach((attempt) => attempt.resolve(response()));
+    hook.unmount();
+  }
+});
+
+test("the first native list consumer recovers its pre-registration read", async () => {
+  const f = fixture();
+  const { live, subscribe, ready } = liveReadyFixture(f.client);
+  const wrapper = ({ children }: { children: ReactNode }) => <Provider
+    dataProvider={f.provider} queryClient={f.client} liveProvider={live}
+    resources={[{ name: "notes" }]} options={{ liveMode: "manual" }}>{children}</Provider>;
+  const hook = renderHook(() => useList({ resource: "notes" }).query, { wrapper });
+  try {
+    await waitFor(() => expect(subscribe).toHaveBeenCalledOnce());
+    await waitFor(() => expect(f.attempts).toHaveLength(1));
+    expect(subscribe.mock.invocationCallOrder[0]).toBeLessThan(f.fetch.mock.invocationCallOrder[0]!);
+    act(() => { ready(); });
+    expect(f.attempts[0]?.signal?.aborted).toBe(false);
+    await act(async () => { f.attempts[0]?.resolve(response("pre-registration")); });
+    await waitFor(() => expect(f.attempts).toHaveLength(2));
+    await act(async () => { f.attempts[1]?.resolve(response("registered")); });
+    await waitFor(() => expect(hook.result.current.data?.data).toEqual([{ id: "registered" }]));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(2);
+  } finally {
+    f.attempts.forEach((attempt) => attempt.resolve(response()));
+    hook.unmount();
+  }
+});
+
+test("ready retries once after an older data-less read fails", async () => {
+  const f = fixture();
+  const { live, subscribeNotes, ready } = liveReadyFixture(f.client);
+  const subscription = subscribeNotes();
+  const hook = renderHook(() => useAuthoredQuery(DOCUMENT, {}, { models: ["example.Note"] }), { wrapper: f.wrapper });
+  try {
+    await waitFor(() => expect(f.attempts).toHaveLength(1));
+    act(() => { ready(); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(1);
+    await act(async () => { f.attempts[0]?.reject(new Error("controlled read failure")); });
+    await waitFor(() => expect(f.attempts).toHaveLength(2));
+    await act(async () => { f.attempts[1]?.resolve(response("recovered")); });
+    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "recovered" }]));
+    expect(f.attempts).toHaveLength(2);
+  } finally {
+    live.unsubscribe(subscription);
+    f.attempts.forEach((attempt) => attempt.resolve(response()));
+    hook.unmount();
+  }
+});
+
+test("ready does not restart a data-less read after its last observer unmounts", async () => {
+  const f = fixture();
+  const { live, subscribeNotes, ready } = liveReadyFixture(f.client);
+  const subscription = subscribeNotes();
+  const hook = renderHook(() => useAuthoredQuery(DOCUMENT, {}, { models: ["example.Note"] }), { wrapper: f.wrapper });
+  try {
+    await waitFor(() => expect(f.attempts).toHaveLength(1));
+    act(() => { ready(); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(1);
+    hook.unmount();
+    expect(f.attempts[0]?.signal?.aborted).toBe(true);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(1);
+  } finally {
+    live.unsubscribe(subscription);
+    f.attempts.forEach((attempt) => attempt.resolve(response()));
+  }
+});
+
+test("ready and a live change share one replacement after the change cancels a data-less read", async () => {
+  const f = fixture();
+  const { live, subscribeNotes, ready, change } = liveReadyFixture(f.client);
+  const subscription = subscribeNotes();
+  const hook = renderHook(() => useAuthoredQuery(DOCUMENT, {}, { models: ["example.Note"] }), { wrapper: f.wrapper });
+  try {
+    await waitFor(() => expect(f.attempts).toHaveLength(1));
+    act(() => { ready(); change(); });
+    expect(f.attempts[0]?.signal?.aborted).toBe(true);
+    await waitFor(() => expect(f.attempts).toHaveLength(2));
+    await act(async () => { f.attempts[1]?.resolve(response("changed")); });
+    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "changed" }]));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(2);
+  } finally {
+    live.unsubscribe(subscription);
+    f.attempts.forEach((attempt) => attempt.resolve(response()));
+    hook.unmount();
   }
 });
 

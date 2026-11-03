@@ -1067,25 +1067,33 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **One reconciliation owner for writes and live changes.** Opt a model into
   cross-actor delivery with `changes(Model, field="<model>Changed")` in its
   schema. Local mutations and subscription events enter the provider's shared
-  [reconciler](../../packages/refine/src/query-invalidation.ts): cancel earlier
-  matching reads, adopt a sufficient response at its exact native Query key,
-  then schedule affected derived reads in one bounded burst. Native Refine
-  resource keys and authored query keys stay distinct; `createApp` uses native
-  manual live mode so Refine does not schedule a second refresh per push.
+  [reconciler](../../packages/refine/src/query-invalidation.ts). Local commands
+  cancel matching reads on arrival and can adopt a sufficient response at its
+  exact native Query key. Live changes cancel only data-less fetches; reads
+  holding data settle, then refetch once for the coalesced changes. Affected
+  derived reads run in a bounded burst. Native Refine resource keys and authored
+  query keys stay distinct; `createApp` uses native manual live mode so Refine
+  does not schedule a second refresh per push.
   Declare authored `models`, exact `records` and related interests from the
   owners the resolver actually reads. Unknown effects retain model fallback.
   Do not add a page-local invalidator, polling loop or second row cache.
-- **Registration readiness closes the initial-read race by reconciling reads.**
+- **Registration readiness closes read and reconnect gaps without cancellation.**
   The [live provider](../../packages/refine/src/provider.ts) consumes the server's
-  `ready` control after actual model-group registration, on initial subscription,
-  reconnect and resume. It cancels loading reads and marks retained matching
-  resource/authored reads stale through the same scheduler. Controls never reach
-  user data callbacks. A websocket connection acknowledgement is too early.
-  This transport has no replay cursor, total order or row revision guarantee;
-  keep authorized scope reconciliation on readiness and delivery gaps. Generic
-  `changed_values` are not complete GraphQL projections and must not be merged
-  into cached rows by inference. Silence after deletion or revocation is not
-  authoritative absence; only the actor-scoped read owner can establish it.
+  `ready` control after model-group registration on initial subscription,
+  reconnect and resume. Every ready marks matching reads that hold data or are
+  in flight stale, including reads sent between the subscription request and
+  registration. It never cancels a read: in-flight reads, even without data,
+  settle before one coalesced refetch; observed idle retained reads refetch
+  after the quiet gap. Cached reads without observers are marked stale and
+  refetch on next mount. Ready never reaches user data callbacks. Recovery
+  costs one fetch per affected read per ready window; a read covering two models
+  whose readies arrive in separate windows refetches once for each model. A
+  websocket connection acknowledgement precedes group registration.
+  This transport has no replay cursor, total order or row revision guarantee,
+  so recovery rereads the authorized scope. Generic `changed_values` are not
+  complete GraphQL projections and must not be merged into cached rows by
+  inference. Silence after deletion or revocation is not authoritative absence;
+  only the actor-scoped read owner can establish it.
 - **Mutation completion follows the returned contract.** Authored hooks decode
   result envelopes through `errorFrom` before reconciliation, preserving domain
   refusals and native pending/error behavior. A response-backed write supplies

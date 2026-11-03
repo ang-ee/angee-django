@@ -76,13 +76,20 @@ fallback, while independent live changes still reconcile normally.
 Opaque custom reloads and explicit record-action `refresh: true` remain imperative.
 Foreign live providers retain native direct refresh behavior.
 
-A subscription's `ready` result is emitted after server subscription installation;
-it triggers authoritative catch-up through the same scheduler on first load,
-reconnect and authentication recovery. Socket connection acknowledgment alone
-cannot close the HTTP/subscription gap. There is no replay cursor or total row
-ordering guarantee, and occurrence IDs are not row versions. Later events may
-revalidate an accepted response because an echo cannot be distinguished safely
-from a newer remote write.
+A subscription's `ready` result acknowledges model-group registration. The
+provider handles every ready, including reconnect on the same sink and resume.
+It marks every matching read that holds data or is in flight stale. In-flight
+reads, including those without data, settle before one coalesced refetch; idle
+retained reads with observers refetch after the quiet gap; cached reads without
+observers are marked stale and refetch on next mount. Ready never cancels a read
+or reaches user data callbacks. Recovery costs one fetch per affected read per
+ready window; a read covering two models whose readies arrive in separate
+windows refetches once for each model. Actual row changes still cancel data-less
+reads and let reads holding data settle before a follow-up; local commands still
+cancel on arrival. This transport has no replay cursor or total row ordering guarantee,
+and occurrence IDs are not row versions. Later events may revalidate an accepted
+response because an echo cannot be distinguished safely from a newer remote
+write.
 
 Keyset feed state remains native `InfiniteData`. `acceptResponse` replaces full
 returned rows in retained pages; `insert: true` requires domain proof of current
