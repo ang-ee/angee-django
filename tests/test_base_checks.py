@@ -24,6 +24,7 @@ from angee.iam.models.append_only import ProtectedAppendOnlyModel, ProtectedAppe
 from angee.iam.models.base import ProtectedModel
 from angee.iam.models.ownership import OwnerMixin
 from angee.iam.models.trash import ProtectedTrashMixin
+from angee.iam.querysets import ProtectedQuerySet
 from tests.proposals_models import Round
 from tests.test_impl import _BaseImpl
 
@@ -52,8 +53,11 @@ def test_trash_default_manager_check(guarded: bool) -> None:
     """A model storing the trash flag must offer the trash row scopes."""
 
     with isolate_apps("django.contrib.contenttypes") as isolated:
+        class ProtectedTrashQuerySet(TrashQuerySet, ProtectedQuerySet):
+            pass
+
         class Removable(ProtectedTrashMixin):
-            objects = TrashQuerySet.as_manager() if guarded else models.Manager()
+            objects = ProtectedManager.from_queryset(ProtectedTrashQuerySet)() if guarded else models.Manager()
 
             class Meta:
                 app_label = "contenttypes"
