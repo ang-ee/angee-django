@@ -321,6 +321,17 @@ def test_an_unconsumed_input_extension_value_fails_fast_without_a_row(composed_t
     assert _titles() == []
 
 
+def test_expected_revision_requires_a_revisioned_model(composed_tables: None) -> None:
+    """A write cannot compare a revision the target model does not own."""
+
+    document, owner = _owned_document("Kept")
+    with actor_context(owner), pytest.raises(ImproperlyConfigured, match="does not support expected_revision"):
+        AngeeHasuraWriteBackend(Document).update(cast(Any, None), document.sqid, {}, expected_revision=1)
+
+    document.refresh_from_db()
+    assert document.title == "Kept"
+
+
 def test_input_extension_fields_are_writable_in_resource_metadata() -> None:
     """Every field of the final insert/set input is creatable/updatable, extensions included."""
 

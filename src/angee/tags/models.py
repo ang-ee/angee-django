@@ -61,6 +61,11 @@ from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHistoryMergeableUnscopedManager
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 
+TagRole = role_anchor("tags/role", name="TagRole")
+"""The ``tags/role`` anchor: its const ``admin`` arm resolves a platform admin as
+an effective tags manager. See :func:`angee.iam.models.roles.role_anchor`.
+"""
+
 
 class TagQuerySet[TagT: Tag](
     MergeableQuerySet[TagT],
@@ -344,9 +349,3 @@ class TaggedModel(InputExtensionsMixin):
             assert assignment_model is not None and issubclass(assignment_model, TagAssignment)
             assignment_model.objects.set_for(self, tags)
         super().apply_input_extensions(**values)
-
-
-TagRole = role_anchor("tags/role", name="TagRole")
-"""The ``tags/role`` anchor: its const ``admin`` arm resolves a platform admin as
-an effective tags manager. See :func:`angee.iam.models.roles.role_anchor`.
-"""

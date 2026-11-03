@@ -27,6 +27,7 @@ from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import record_display_label
 from angee.base.models.merge_references import MergePolicy, references
+from angee.base.models.persistence import require_composed_type
 from angee.base.serialization import canonical_json
 from angee.iam.models.base import ProtectedDataModel
 from angee.iam.models.refs import ProtectedRecordRefMixin
@@ -36,6 +37,7 @@ from angee.integrate.managers import (
 )
 from angee.integrate.mixins import SyncStateMixin
 from angee.integrate.models.bridges import Bridge
+from angee.integrate.querysets import RecordLinkQuerySet
 from angee.integrate.states import (
     ConflictKeep,
     LinkStatus,
@@ -179,7 +181,10 @@ class SyncStream(SyncStateMixin, AuditMixin, ProtectedDataModel, concrete=True):
             links = links.with_actor(actor)
         if open_only:
             prefetched = getattr(self, "open_failure_links", None)
-            links = prefetched if prefetched is not None else links.with_open_failures()
+            if prefetched is not None:
+                links = prefetched
+            else:
+                links = require_composed_type(links, RecordLinkQuerySet).with_open_failures()
         else:
             links = links.only("stream_id", "inbound", "outbox_last_error").order_by("pk")
         rows = list(self.failures(open_only=open_only))

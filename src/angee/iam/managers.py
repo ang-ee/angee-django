@@ -26,6 +26,7 @@ from rebac.memberships import grant as grant_membership
 from rebac.resources import model_resource_type
 
 from angee.base.models.identity import instance_from_public_id
+from angee.base.models.persistence import require_composed_type
 from angee.iam.choices import UserKind
 from angee.iam.events import person_created
 from angee.iam.exceptions import AccountExists, AmbiguousAccountEmail
@@ -311,7 +312,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
 
         using = self._db or router.db_for_write(self.model)
         with database_context(using), system_context(reason="iam.service_user.sync"), transaction.atomic(using=using):
-            rows = self.db_manager(using).get_queryset()
+            rows = require_composed_type(self.db_manager(using).get_queryset(), UserQuerySet)
             if user_id is None:
                 user, created = rows.get_or_create(
                     username=username,

@@ -270,9 +270,15 @@ def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> Non
         if edge in cleanup_edges:
             continue
         pointer = edge.record_ref_field()
-        rows = edge._base_manager.using(using).filter(
-            **{pointer.ct_field: content_type, pointer.fk_field: object_id}
-        )
+        object_id_field = edge._meta.get_field(pointer.fk_field)
+        if not isinstance(object_id_field, models.Field):
+            raise ImproperlyConfigured(f"{edge._meta.label}'s generic object ID must be a concrete field.")
+        try:
+            prepared_id = object_id_field.get_prep_value(object_id)
+        except TypeError, ValueError, ValidationError:
+            # A generic edge with a numeric object ID cannot reference a string-keyed target.
+            continue
+        rows = edge._base_manager.using(using).filter(**{pointer.ct_field: content_type, pointer.fk_field: prepared_id})
         policy = edge.on_target_delete
         if policy is models.PROTECT:
             protected: set[models.Model] = set(rows)

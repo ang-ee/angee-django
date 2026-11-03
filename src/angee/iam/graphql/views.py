@@ -7,7 +7,7 @@ import logging
 from typing import Any
 
 from django.core.exceptions import PermissionDenied
-from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.http import HttpRequest, HttpResponseBase, JsonResponse
 from graphql import GraphQLError, get_operation_ast, parse
 
 from angee.base.models.identity import public_id_of
@@ -18,8 +18,8 @@ logger = logging.getLogger("angee.iam.graphql.view_as")
 
 
 class IAMGraphQLView(AngeeGraphQLView):
-    def dispatch(self, request: HttpRequest, *args: Any, **kwargs: Any) -> HttpResponse:
-        def view(active: HttpRequest) -> HttpResponse:
+    def dispatch(self, request: HttpRequest, *args: Any, **kwargs: Any) -> HttpResponseBase:
+        def view(active: HttpRequest) -> HttpResponseBase:
             return super(IAMGraphQLView, self).dispatch(active, *args, **kwargs)
 
         try:

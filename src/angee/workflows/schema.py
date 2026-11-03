@@ -42,6 +42,7 @@ from angee.iam.graphql.relations import (
 )
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.identity import user_public_id
+from angee.iam.permissions import require_rebac_queryset
 from angee.iam.schema import UserType
 from angee.provenance.evidence import readable_evidence
 from angee.workflows.definition import Body, Definition, Issue
@@ -200,7 +201,7 @@ class WorkflowRunType(RecordReferenceNode):
             names = _selected_names(details)
             if "permissions" in names:
                 decision = decision.annotate(**permission_annotations(Decision, ("act",)))
-            nested = []
+            nested: list[Prefetch[str]] = []
             if "records" in names:
                 nested.append(Prefetch(
                     "records", queryset=with_record_reference_access(
@@ -210,8 +211,10 @@ class WorkflowRunType(RecordReferenceNode):
             for name in ("requester", "assignees", "answered_by"):
                 if name in names:
                     model = Decision._meta.get_field(name).related_model
+                    if model is None:
+                        raise ImproperlyConfigured(f"Decision relation {name} has no related model.")
                     nested.append(Prefetch(
-                        name, queryset=model.objects.db_manager(run._state.db).with_actor(actor),
+                        name, queryset=require_rebac_queryset(model).using(run._state.db).with_actor(actor),
                     ))
             related_querysets["decision"] = decision.prefetch_related(*nested)
         return cast(WorkflowRunGraph, run.graph(

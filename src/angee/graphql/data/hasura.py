@@ -50,6 +50,7 @@ from angee.base.hooks import resolve_hooks
 from angee.base.identity import public_data_id_field
 from angee.base.models.children import OwnedChildrenMixin
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for
+from angee.base.models.inputs import InputExtensionsMixin
 from angee.base.models.locks import OptimisticLockMixin, RowLockMixin
 from angee.base.models.refs import RecordRefMixin
 from angee.base.querysets import row_lock_paths
@@ -313,6 +314,8 @@ class AngeeHasuraWriteBackend:
     ) -> Any:
         """Persist the once-locked parent and its actual owned values."""
         if expected_revision is not None:
+            if not isinstance(instance, OptimisticLockMixin):
+                raise ImproperlyConfigured(f"{self.model._meta.label} does not support expected_revision.")
             instance.require_revision(expected_revision)
         patch = dict(patch)
         extensions = _pop_input_extensions(self.model, patch)
@@ -324,6 +327,7 @@ class AngeeHasuraWriteBackend:
         if line_rows is not None:
             self._apply_line_diff(info, instance, line_rows)
         if extensions:
+            assert isinstance(instance, InputExtensionsMixin)
             instance.apply_input_extensions(**extensions)
         return instance
 
@@ -422,6 +426,8 @@ class AngeeHasuraWriteBackend:
                 queryset=self.write_target_queryset().select_for_update(of=row_lock_paths(self.model)),
             )
             if expected_revision is not None:
+                if not isinstance(instance, OptimisticLockMixin):
+                    raise ImproperlyConfigured(f"{self.model._meta.label} does not support expected_revision.")
                 instance.require_revision(expected_revision)
             data = dict(data)
             extensions = _pop_input_extensions(self.model, data)

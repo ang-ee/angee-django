@@ -10,6 +10,7 @@ from django.db import models
 from rebac import PermissionDenied, actor_context, system_context
 
 from angee.base.models.merge import MERGE_REASON, MergeableMixin
+from angee.base.models.persistence import require_composed_type
 from angee.base.querysets import MergeableQuerySet
 from angee.iam.models.base import ProtectedModel
 from angee.iam.permissions import instance_actor
@@ -41,7 +42,8 @@ class ProtectedMergeableMixin(MergeableMixin, ProtectedModel, concrete=False):
             return super().merge(records=records, **options)
 
     def merge_candidates(self) -> ProtectedQuerySet[Self]:
-        rows = super().merge_candidates().with_action("read")
+        rows = require_composed_type(super().merge_candidates(), ProtectedQuerySet)
+        rows = rows.with_action("read")
         actor, elevated = self.effective_actor()
         return rows.sudo(reason="iam.merge.admitted") if elevated else rows.with_actor(actor)
 

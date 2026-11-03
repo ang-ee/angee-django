@@ -48,7 +48,7 @@ class GenericRelation(DjangoGenericRelation):
             field.get_col(remote_alias),
             _ContentTypePrimaryKey(self.model, self.for_concrete_model, field.target_field),
         )
-        return WhereNode([lookup])
+        return WhereNode([lookup])  # type: ignore[list-item]  # django-stubs omits Lookup from WhereNode children.
 
 
 class RetainedGenericRelation(GenericRelation):

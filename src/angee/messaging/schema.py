@@ -31,7 +31,7 @@ from strawberry_django.optimizer import OptimizerStore
 from strawberry_django.resolvers import django_resolver
 from strawberry_django.utils.requests import get_request
 
-from angee.base.models.identity import instance_from_public_id
+from angee.base.models.identity import instance_from_public_id, public_id_of
 from angee.graphql.actions import ActionResult, ActionSelectionInput, action_guard
 from angee.graphql.data.hasura import (
     SortAlias,
@@ -1580,7 +1580,7 @@ class MessagingQuery:
         page = RecordMessageFeedPage.from_scope(
             Message.objects.record_scope(record, role=input.role, message_types=tuple(input.message_types)),
             scope=(f"record:{record._meta.label_lower}:{input.role}:{','.join(sorted(input.message_types))}",
-                   str(record.sqid)),
+                   public_id_of(record)),
             search=input.search, all_copies=True,
             anchor=f"message:{input.around}" if input.around else "",
             before_cursor=before_cursor, through_cursor=through_cursor, after_cursor=after_cursor, limit=limit,

@@ -46,6 +46,11 @@ from angee.resources.mixins import ResourceLoadMixin
 
 _ROUNDING_STEPS = tuple(Decimal(10) ** exponent for exponent in range(-6, 6))
 
+UomRole = role_anchor("uom/role")
+"""The ``uom/role`` anchor: its const ``admin`` arm resolves a platform admin as
+an effective uom manager. See :func:`angee.iam.models.roles.role_anchor`.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class UomExpressions:
@@ -283,9 +288,3 @@ class Uom(ResourceLoadMixin, ArchiveMixin, ProtectedDataModel, concrete=True):
         if self.category_id != to_uom.category_id:
             raise ValueError(f"cannot convert {self.name!r} to {to_uom.name!r}: units belong to different categories")
         return to_uom.quantize((qty * self.ratio + self.offset - to_uom.offset) / to_uom.ratio)
-
-
-UomRole = role_anchor("uom/role")
-"""The ``uom/role`` anchor: its const ``admin`` arm resolves a platform admin as
-an effective uom manager. See :func:`angee.iam.models.roles.role_anchor`.
-"""

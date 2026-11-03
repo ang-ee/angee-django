@@ -123,7 +123,7 @@ class Timeline:
         using = next(iter(self.branches.values())).db
         connection = connections[using]
         materialized = connection.vendor == "postgresql" or (
-            connection.vendor == "sqlite" and connection.Database.sqlite_version_info >= (3, 35, 0)
+            connection.vendor == "sqlite" and connection.get_database_version() >= (3, 35, 0)
         )
         # The branches share one actor: REBAC hoists the permission definitions
         # they have in common (target permissions, recursive closures) to the

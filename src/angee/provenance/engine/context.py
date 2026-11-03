@@ -74,10 +74,19 @@ class ChangesetRequired(RuntimeError):
 class ChangesetLike(Protocol):
     pk: Any
     actor_ref: str
-    action: str
-    activity: str
-    state: str
-    outcome: str | None
+
+    @property
+    def action(self) -> str: ...
+
+    @property
+    def activity(self) -> str: ...
+
+    @property
+    def state(self) -> str: ...
+
+    @property
+    def outcome(self) -> str | None: ...
+
     scope: str
     key: str
     fingerprint: str

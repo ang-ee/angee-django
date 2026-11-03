@@ -132,10 +132,13 @@ class _RecordReferenceAccess(models.Expression):
                 continue
             queryset = require_rebac_queryset(target_model).using(alias).with_actor(self.actor).with_action("read")
             keys = queryset.order_by().annotate(_angee_reference_key=Cast("pk", output_field=key_field))
+            model_name = target_model._meta.model_name
+            if model_name is None:
+                raise ImproperlyConfigured(f"{target_model._meta.label} has no model name for reference access.")
             targets.append((
                 content_type.pk,
                 target_model._meta.app_label,
-                target_model._meta.model_name,
+                model_name,
                 _ActorScopedSubquery(keys, "_angee_reference_key").resolve_expression(query),
             ))
         resolved.targets = tuple(targets)

@@ -38,6 +38,7 @@ from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
 from angee.base.models.identity import instances_from_public_ids
 from angee.base.models.locks import ImmutableFieldsMixin, OptimisticLockMixin
 from angee.base.models.merge_references import MergePolicy
+from angee.base.models.persistence import require_composed_type
 from angee.base.models.trash import TRASH_FLAG_FIELD, TrashQuerySet
 from angee.base.querysets import MergeableQuerySet
 from angee.base.serialization import strip_null_bytes
@@ -864,7 +865,7 @@ class Project(
     def selectable_milestones(self) -> MilestoneQuerySet[Milestone]:
         """Return this project's phase choices; contributors may narrow eligibility."""
 
-        return self.milestones.all()
+        return require_composed_type(self.milestones.all(), MilestoneQuerySet)
 
     def set_current_milestone(
         self,

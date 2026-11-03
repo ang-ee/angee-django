@@ -99,13 +99,13 @@ def test_checked_parent_keeps_manager_methods_and_model_rows(tmp_path: Path) -> 
     (app / "__init__.py").write_text("")
     (app / "models.py").write_text("""from django.db import models
 from django_compose.models import Composable
-from rebac.mixins import INJECTED_BASE_MANAGER, RebacModelBase
+from rebac.mixins import RebacModelBase
 from angee.iam.models.base import ProtectedModel
-from angee.iam.managers import ProtectedUnscopedManager
-class ParentManager[T: models.Model](ProtectedUnscopedManager[T]):
+from angee.iam.managers import ProtectedManager
+class ParentManager[T: models.Model](ProtectedManager[T]):
     def parent_method(self) -> str:
         return 'parent'
-class OtherManager[T: models.Model](ProtectedUnscopedManager[T]):
+class OtherManager[T: models.Model](ProtectedManager[T]):
     def other_method(self) -> int:
         return 1
 class Parent(ProtectedModel, concrete=True):
@@ -113,7 +113,6 @@ class Parent(ProtectedModel, concrete=True):
     objects = ParentManager()
     class Meta(ProtectedModel.Meta):
         abstract = True
-        base_manager_name = 'objects'
 class Capability(Composable, metaclass=RebacModelBase, demands='manager_contract.Parent'):
     class Meta:
         abstract = True
@@ -124,7 +123,6 @@ class Explicit(Capability, inherits='manager_contract.Parent'):
     objects = OtherManager()
     class Meta:
         abstract = True
-        base_manager_name = 'objects'
 """)
     (tmp_path / "manager_settings.py").write_text(
         "from pathlib import Path\n"
@@ -178,3 +176,44 @@ Child.system_queryset().unknown_method()
     negative = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, check=False)
     assert negative.returncode == 1, negative.stdout + negative.stderr
     assert "Found 5 errors in 1 file" in negative.stdout, negative.stdout
+
+
+def test_iam_system_queryset_hook_runs_in_mypy(tmp_path: Path) -> None:
+    """Mypy dispatches protected system reads through the mixin-owned hook."""
+
+    root = Path(__file__).resolve().parents[1]
+    (tmp_path / "hook_probe.py").write_text("""\
+from angee.iam.typing import IAMPlugin
+
+class ProbePlugin(IAMPlugin):
+    def _system_queryset(self, ctx):
+        ctx.api.fail('system queryset hook ran', ctx.context)
+        return super()._system_queryset(ctx)
+
+def plugin(version):
+    return ProbePlugin
+""")
+    config = tmp_path / "mypy.ini"
+    config.write_text(
+        "[mypy]\nplugins = hook_probe\npython_version = 3.14\n"
+        f"mypy_path = {root / 'src'}, {root / '.mypy_cache'}\n"
+        f"cache_dir = {tmp_path / 'cache'}\nignore_missing_imports = True\n"
+        "[mypy.plugins.django-stubs]\ndjango_settings_module = tests.typing_settings\n"
+    )
+    source = tmp_path / "consumer.py"
+    source.write_text("from angee.iam.models import User\nUser.system_queryset()\n")
+    env = dict(os.environ, DJANGO_SETTINGS_MODULE="tests.typing_settings")
+    env["PYTHONPATH"] = os.pathsep.join((str(tmp_path), str(root / "src"), str(root), str(root / ".mypy_cache")))
+
+    result = subprocess.run(
+        [sys.executable, "-m", "mypy", "--config-file", str(config), str(source)],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "system queryset hook ran" in result.stdout
+    assert "Found 1 error in 1 file" in result.stdout

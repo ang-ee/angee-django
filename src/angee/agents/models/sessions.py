@@ -25,6 +25,7 @@ from angee.agents.runners import TurnOutcome
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.models.audit import AuditMixin
+from angee.base.models.persistence import require_composed_type
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.refs import RecordRef
 from angee.iam.models.base import ProtectedDataModel
@@ -286,7 +287,8 @@ class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
         with database_context(using), transaction.atomic(using=using):
             locked = type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
             actor = locked.require_access("write", actor)
-            turn = locked.turns.with_actor(actor).active().order_by("index").first()
+            turns = require_composed_type(locked.turns.all(), AgentTurnQuerySet)
+            turn = turns.with_actor(actor).active().order_by("index").first()
             if turn is not None:
                 locked.cancel_turn(turn, actor=actor)
             self.refresh_from_db(using=using)
@@ -308,7 +310,8 @@ class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
             locked = type(self).system_queryset(lock=("self",)).using(using).filter(pk=self.pk).first()
             if locked is None or locked.status == SessionStatus.CLOSED:
                 return None
-            if locked.turns.active().exists():
+            turns = require_composed_type(locked.turns.all(), AgentTurnQuerySet)
+            if turns.active().exists():
                 return None
             turn = locked.turns.lock_if_supported().filter(status=TurnStatus.PENDING).order_by("index").first()
             if turn is None:

@@ -15,8 +15,8 @@ from angee.integrate.testing.integration import Integration
 class InferenceProvider(AbstractInferenceProvider, Integration):
     """Concrete inference capability over the shared integration."""
 
-    created_at = Integration.created_at
-    updated_at = Integration.updated_at
+    created_at = Integration.created_at  # type: ignore[assignment]  # django-stubs class field descriptor conflicts with its instance value.
+    updated_at = Integration.updated_at  # type: ignore[assignment]  # django-stubs class field descriptor conflicts with its instance value.
 
     class Meta(AbstractInferenceProvider.Meta):
         abstract = False

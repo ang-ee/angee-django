@@ -21,6 +21,7 @@ from angee.base.exceptions import exception_text
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.models.merge_references import MergePolicy
+from angee.base.models.persistence import require_composed_type
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.refs import RecordRef
 from angee.iam.models.base import ProtectedDataModel
@@ -34,6 +35,7 @@ from angee.workflows.managers import (
     StepWatchManager,
 )
 from angee.workflows.models.runs import WorkflowRun
+from angee.workflows.querysets import StepAttemptQuerySet, StepRunQuerySet
 from angee.workflows.states import (
     NAME_MAX_LENGTH,
     AttemptResult,
@@ -187,9 +189,10 @@ class StepRun(ProtectedDataModel, concrete=True):
     def redispatch(self) -> None:
         step_run = self
         run = self.run
-        run.step_runs.filter(pk=step_run.pk).count_redispatch()
+        step_runs = require_composed_type(run.step_runs.all(), StepRunQuerySet)
+        step_runs.filter(pk=step_run.pk).count_redispatch()
         if step_run.dispatches + 1 >= settings.ANGEE_WORKFLOW_MAX_DISPATCHES:
-            run.step_runs.filter(pk=step_run.pk).to_waiting(
+            step_runs.filter(pk=step_run.pk).to_waiting(
                 kind=WaitingKind.ERROR,
                 reason="Task delivery exhausted its retry allowance.",
             )
@@ -198,9 +201,10 @@ class StepRun(ProtectedDataModel, concrete=True):
     def reap(self) -> None:
         step_run = self
         run = self.run
+        step_runs = require_composed_type(run.step_runs.all(), StepRunQuerySet)
         try:
             with transaction.atomic(using=self._state.db):
-                run.step_runs.expire(
+                step_runs.expire(
                     step_run,
                     _AttemptRecord.failure(
                         "The attempt deadline expired.",
@@ -209,8 +213,9 @@ class StepRun(ProtectedDataModel, concrete=True):
                     ),
                 )
         except ImproperlyConfigured as failure:
-            step_run.attempts.filter(number=step_run.attempt).close(AttemptResult.TIMED_OUT, exception_text(failure))
-            run.step_runs.filter(pk=step_run.pk).to_waiting(
+            attempts = require_composed_type(step_run.attempts.all(), StepAttemptQuerySet)
+            attempts.filter(number=step_run.attempt).close(AttemptResult.TIMED_OUT, exception_text(failure))
+            step_runs.filter(pk=step_run.pk).to_waiting(
                 kind=WaitingKind.ERROR,
                 reason="The step implementation is unavailable; restore its registration before retrying.",
             )
@@ -328,7 +333,8 @@ class StepRun(ProtectedDataModel, concrete=True):
 
     def map_rows(self) -> Any:
         """Select this map's body rows; ordinary nodes have no matching items."""
-        return self.run.step_runs.for_map(self.run_id, self.node_key)
+        step_runs = require_composed_type(self.run.step_runs.all(), StepRunQuerySet)
+        return step_runs.for_map(self.run_id, self.node_key)
 
     @property
     def map_total(self) -> int:

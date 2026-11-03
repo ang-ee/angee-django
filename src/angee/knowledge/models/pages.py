@@ -32,6 +32,7 @@ from angee.base.lineage import concrete_child, concrete_child_models
 from angee.base.models.audit import AuditMixin
 from angee.base.models.hierarchy import HierarchyMixin, HierarchyQuerySet
 from angee.base.models.locks import OptimisticLockMixin
+from angee.base.models.persistence import require_composed_type
 from angee.base.models.trash import TrashQuerySet
 from angee.base.signals import send_created_batch
 from angee.iam.models.base import ProtectedDataModel, ProtectedModel
@@ -321,7 +322,8 @@ class Page(
         db = self._state.db
         with transaction.atomic(using=db):
             super().trash(reason=reason)
-            type(self).system_queryset().using(db).subtree_of(self).exclude(pk=self.pk).trash(
+            pages = require_composed_type(type(self).system_queryset().using(db), PageQuerySet)
+            pages.subtree_of(self).exclude(pk=self.pk).trash(
                 reason=self.trash_reason, at=self.trashed_at,
             )
 
@@ -334,7 +336,7 @@ class Page(
 
         db = self._state.db
         with transaction.atomic(using=db):
-            pages = type(self).system_queryset(lock=("self",)).using(db)
+            pages = require_composed_type(type(self).system_queryset(lock=("self",)).using(db), PageQuerySet)
             if self.parent_id is not None and pages.filter(pk=self.parent_id, is_trashed=True).exists():
                 raise ValidationError({"parent": "Restore the folder that contains this page first."})
             together = pages.subtree_of(self).exclude(pk=self.pk).filter(trashed_at=self.trashed_at).trashed()
@@ -516,7 +518,7 @@ class MarkdownPage(HistoryMixin, ProtectedModel, inherits="knowledge.Page"):
     body_hash = models.CharField(max_length=64, blank=True, default="", editable=False)
     word_count = models.PositiveIntegerField(default=0, db_index=True)
 
-    objects = MarkdownPageManager()
+    objects = MarkdownPageManager()  # type: ignore[assignment]  # django-compose typing retains the parent manager on an inherited child.
 
     class Meta:
         """Django model options."""

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self, cast, runtime_checkable
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist
@@ -50,6 +50,17 @@ def _metadata(source: models.Model, target: models.Model) -> None:
             setattr(target, name, getattr(source, name))
 
 
+@runtime_checkable
+class _HistoricalModelMetadata(Protocol):
+    """Generated attributes read by a ModelHistory manager."""
+
+    _provenance_history: ClassVar[ModelHistory]
+    tracked_fields: ClassVar[Sequence[models.Field[Any, Any]]]
+
+    @staticmethod
+    def get_default_history_user(instance: models.Model) -> models.Model | None: ...
+
+
 class ModelHistoryManager[T: HistoricalChanges](HistoryManager[T]):
     def bulk_history_create(
         self,
@@ -63,6 +74,12 @@ class ModelHistoryManager[T: HistoricalChanges](HistoryManager[T]):
         *,
         history_type: str | None = None,
     ) -> list[models.Model]:
+        metadata = self.model
+        if not isinstance(metadata, _HistoricalModelMetadata):
+            raise ImproperlyConfigured(f"{self.model.__name__} has incomplete ModelHistory metadata.")
+        history = metadata._provenance_history
+        if not isinstance(history, ModelHistory):
+            raise ImproperlyConfigured(f"{self.model.__name__} has no ModelHistory registration.")
         grouped: dict[str, list[models.Model]] = {}
         for obj in objs:
             if obj.pk is None:
@@ -72,7 +89,7 @@ class ModelHistoryManager[T: HistoricalChanges](HistoryManager[T]):
         records: list[models.Model] = []
         for alias, objects in grouped.items():
             records.extend(
-                self.model._provenance_history.bulk_history_create(
+                history.bulk_history_create(
                     self.model.instance_type,
                     [obj.pk for obj in objects],
                     history_type or ("~" if update else "+"),
@@ -103,9 +120,12 @@ class ModelHistoryManager[T: HistoricalChanges](HistoryManager[T]):
         """Extend upstream's bulk constructor with the native deletion marker."""
         if not getattr(settings, "SIMPLE_HISTORY_ENABLED", True):
             return []
+        metadata = self.model
+        if not isinstance(metadata, _HistoricalModelMetadata):
+            raise ImproperlyConfigured(f"{self.model.__name__} has incomplete ModelHistory metadata.")
         rows = []
         for obj in objs:
-            values = {field.attname: getattr(obj, field.attname) for field in self.model.tracked_fields}
+            values = {field.attname: getattr(obj, field.attname) for field in metadata.tracked_fields}
             rows.append(
                 self.model(
                     **values,
@@ -115,17 +135,14 @@ class ModelHistoryManager[T: HistoricalChanges](HistoryManager[T]):
                     history_user=getattr(
                         obj,
                         "_history_user",
-                        default_user or self.model.get_default_history_user(obj),
+                        default_user or metadata.get_default_history_user(obj),
                     ),
                     history_change_reason=get_change_reason_from_object(obj) or default_change_reason,
                 )
             )
             if hasattr(self.model, "history_relation"):
-                rows[-1].history_relation_id = obj.pk
-        return cast(
-            list[models.Model],
-            self.model.objects.using(self.db).bulk_create(rows, batch_size=batch_size),
-        )
+                setattr(rows[-1], "history_relation_id", obj.pk)
+        return list(self.model._default_manager.using(self.db).bulk_create(rows, batch_size=batch_size))
 
 
 class ModelHistory(ModelHistoryReplayMixin, HistoricalRecords):

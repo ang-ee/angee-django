@@ -44,6 +44,11 @@ from angee.iam.managers import ProtectedManager
 from angee.iam.models.base import ProtectedDataModel, ProtectedModel
 from angee.iam.models.roles import role_anchor
 
+SequenceRole = role_anchor("sequence/role")
+"""The ``sequence/role`` anchor: its const ``admin`` arm resolves a platform admin
+as an effective sequence manager. See :func:`angee.iam.models.roles.role_anchor`.
+"""
+
 
 class PeriodReset(models.TextChoices):
     """When a sequence restarts its counter at 1."""
@@ -236,9 +241,3 @@ class SequenceCounter(ProtectedModel, concrete=True):
         """Return a readable label for Django displays."""
 
         return f"{self.sequence_id}:{self.period or '-'}={self.value}"
-
-
-SequenceRole = role_anchor("sequence/role")
-"""The ``sequence/role`` anchor: its const ``admin`` arm resolves a platform admin
-as an effective sequence manager. See :func:`angee.iam.models.roles.role_anchor`.
-"""

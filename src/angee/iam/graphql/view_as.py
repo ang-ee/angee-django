@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, cast
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.db import connections, transaction
-from django.http import HttpRequest, HttpResponse
+from django.http import HttpRequest, HttpResponseBase
 from rebac import actor_context
 from rebac.actors import is_sudo
 from strawberry.extensions import SchemaExtension
@@ -68,10 +68,10 @@ class ViewAs:
     def dispatch(
         self,
         request: HttpRequest,
-        view: Callable[[HttpRequest], HttpResponse],
+        view: Callable[[HttpRequest], HttpResponseBase],
         *,
         schema_name: str,
-    ) -> HttpResponse:
+    ) -> HttpResponseBase:
         """Bind both identity readers, roll back query writes, then audit once."""
 
         request = cast("_ViewAsRequest", request)

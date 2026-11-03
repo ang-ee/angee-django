@@ -252,7 +252,7 @@ class Reference:
                 )
                 pending = rows.order_by("pk")
                 while True:
-                    previous = ()
+                    previous: tuple[models.Model, ...] = ()
                     if observed:
                         # Reserve the native update's shared assignment parameters.
                         size = query_batch_size(pending) - len(values)

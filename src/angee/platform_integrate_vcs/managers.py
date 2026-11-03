@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
@@ -19,8 +19,13 @@ from angee.platform.discovery import (
 )
 from angee.platform_integrate_vcs.catalog import source_descriptors
 
+if TYPE_CHECKING:
+    from angee.platform.models import Addon
 
-class AddonCatalogManager(ProtectedManager, VcsOutputManager):
+_AddonT = TypeVar("_AddonT", bound="Addon")
+
+
+class AddonCatalogManager(ProtectedManager[_AddonT], VcsOutputManager[_AddonT]):
     """Owns the reconcile of marketplace rows from an addon ``Source``."""
 
     @staticmethod
