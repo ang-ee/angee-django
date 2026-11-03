@@ -4,6 +4,7 @@ from django.db import models
 from django.db.migrations.state import ModelState
 from django.test.utils import isolate_apps
 
+from angee.base.models.merge import MergeableMixin
 from angee.base.models.merge_references import ForeignKeyReference, MergeContractMixin, MergePolicy
 from angee.base.models.trash import ArchiveMixin
 from angee.iam.models.base import ProtectedDataModel
@@ -44,7 +45,7 @@ def test_merge_base_preserves_existing_composed_field_state_and_mro() -> None:
         }
         assert before.options == after.options
         assert [base for base in Legacy.__mro__[1:] if base is not LegacyMergeable] == [
-            base for base in Composed.__mro__[1:] if base is not ProtectedMergeableMixin
+            base for base in Composed.__mro__[1:] if base not in (ProtectedMergeableMixin, MergeableMixin)
         ]
 
 
