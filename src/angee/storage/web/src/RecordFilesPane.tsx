@@ -15,7 +15,7 @@ import { StorageUploadTasks } from "./views/StorageUploadTasks";
 const FILE_MODEL = "storage.File";
 const ATTACHMENT_MODELS = [FILE_ATTACHMENT_MODEL] as const;
 
-/** The count, presence probe and rows observe the same actor-scoped read. */
+/** The upload verb and rows observe the same actor-scoped read when Links renders. */
 function useRecordFilesRead(context: ChatterViewContext) {
   const modelLabel = context.route?.modelLabel ?? "";
   const recordId = context.view.kind === "record" ? context.view.sqid ?? "" : "";
@@ -37,7 +37,7 @@ export const recordFilesGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: "Files",
     edge: { model: FILE_ATTACHMENT_MODEL },
-    useCount: (context) => useRecordFilesRead(context).data?.record_files.attachments.length,
+    usePaneCount: (context) => useRecordFilesRead(context).data?.record_files.attachments.length,
     useVerb: useRecordFilesVerb,
     render: (context, label) => <RecordFilesGroup key={context.view.sqid} context={context} label={label} />,
   },

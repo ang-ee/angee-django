@@ -1,11 +1,11 @@
 import { useAuthoredQuery } from "@angee/refine";
 import {
   AbsoluteTime, ErrorBanner, PaneRow, PaneRows, RecordReferenceRow, Skeleton, SkeletonStatus, StatusBadge, useEnumOptions, useRouteHref,
-  useResourceRecordHrefLookup, type ChatterViewContext, type ContainerChild, type RelatedGroupContent, type RelatedGroupLabel,
+  useResourceRecordHrefLookup, relatedCount, type ChatterViewContext, type ContainerChild, type RelatedGroupContent, type RelatedGroupLabel,
 } from "@angee/ui";
 import { useMemo, type ReactElement } from "react";
 
-import { DecisionStepsDocument, RecordRelatedRunsCountDocument, RecordRelatedRunsDocument, RUN_MODEL, RUN_MODELS, RunRelatedDocument, STEP_RUN_MODEL } from "./documents.console";
+import { DecisionRunCountDocument, DecisionStepsDocument, RecordRelatedRunsDocument, RunDecisionsCountDocument, RUN_MODEL, RUN_MODELS, RunRelatedDocument, STEP_RUN_MODEL } from "./documents.console";
 import { enWorkflowsMessages, useWorkflowsT } from "./i18n";
 
 const DECISION_MODEL = "decisions.Decision";
@@ -21,11 +21,15 @@ function recordId(context: ChatterViewContext): string {
   return context.view.kind === "record" ? context.view.sqid ?? "" : "";
 }
 
-function useRunRelated(runId: string) {
-  const variables = useMemo(() => ({ run: runId }), [runId]);
-  return useAuthoredQuery(RunRelatedDocument, variables, {
+function runRelatedScope(runId: string) {
+  return { variables: { run: runId }, options: {
     enabled: Boolean(runId), models: RELATED_MODELS, records: [{ model: RUN_MODEL, id: runId }],
-  });
+  } };
+}
+
+function useRunRelated(runId: string) {
+  const { variables, options } = runRelatedScope(runId);
+  return useAuthoredQuery(RunRelatedDocument, variables, options);
 }
 
 export interface RunRecord {
@@ -63,7 +67,7 @@ export const runRecordsGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 10,
   content: {
     label: enWorkflowsMessages["related.records"]!,
-    useCount: (context) => {
+    usePaneCount: (context) => {
       const query = useRunRelated(recordId(context));
       return query.data ? runRecords(query.data).length : undefined;
     },
@@ -92,7 +96,9 @@ export const runDecisionsGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 20,
   content: {
     label: enWorkflowsMessages["related.decisions"]!,
-    useCount: (context) => useRunRelated(recordId(context)).data?.steprun?.filter((step) => step.decision).length,
+    useCount: relatedCount(RunDecisionsCountDocument, (context) => runRelatedScope(recordId(context)),
+      (data) => data.steprun_aggregate.aggregate?.count),
+    usePaneCount: (context) => useRunRelated(recordId(context)).data?.steprun?.filter((step) => step.decision).length,
     render: (context, label) => <RunDecisionsGroup key={context.view.sqid} context={context} label={label} />,
   },
 };
@@ -139,9 +145,9 @@ export const recordRunsGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: enWorkflowsMessages["related.runs"]!,
     when: hasRuns,
-    useCount: (context) => {
+    usePaneCount: (context) => {
       const scope = useRecordRunsScope(context);
-      const query = useAuthoredQuery(RecordRelatedRunsCountDocument, scope.variables, scope.options);
+      const query = useAuthoredQuery(RecordRelatedRunsDocument, scope.variables, scope.options);
       return query.data ? query.data.record_timeline.records.flatMap((entry) => entry.runs).length : undefined;
     },
     render: (context, label) => <RecordRunsGroup key={context.view.sqid} context={context} label={label} />,
@@ -169,12 +175,16 @@ function RecordRunsGroup({ context, label }: { context: ChatterViewContext; labe
   </li></>;
 }
 
-function useDecisionSteps(decisionId: string) {
-  const variables = useMemo(() => ({ decision: decisionId }), [decisionId]);
-  return useAuthoredQuery(DecisionStepsDocument, variables, {
+function decisionStepsScope(decisionId: string) {
+  return { variables: { decision: decisionId }, options: {
     enabled: Boolean(decisionId), models: [DECISION_MODEL, STEP_RUN_MODEL],
     records: [{ model: DECISION_MODEL, id: decisionId }], relatedModels: [STEP_RUN_MODEL],
-  });
+  } };
+}
+
+function useDecisionSteps(decisionId: string) {
+  const { variables, options } = decisionStepsScope(decisionId);
+  return useAuthoredQuery(DecisionStepsDocument, variables, options);
 }
 
 /** The run and step that asked a decision, as a Related group of the decision's page. */
@@ -182,7 +192,9 @@ export const decisionRunGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 20,
   content: {
     label: enWorkflowsMessages["related.run"]!,
-    useCount: (context) => useDecisionSteps(recordId(context)).data?.steprun.filter((step) => step.run).length,
+    useCount: relatedCount(DecisionRunCountDocument, (context) => decisionStepsScope(recordId(context)),
+      (data) => data.steprun_aggregate.aggregate?.count),
+    usePaneCount: (context) => useDecisionSteps(recordId(context)).data?.steprun.filter((step) => step.run).length,
     render: (context, label) => <DecisionRunGroup key={context.view.sqid} context={context} label={label} />,
   },
 };

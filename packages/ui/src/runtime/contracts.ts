@@ -248,8 +248,10 @@ export interface RelatedGroupContent {
   /** Eligible only where the record's metadata declares this edge. */
   edge?: { model: string };
   label: ReactNode;
-  /** Rows the group has on this record, for the tab's count and the group's label. */
+  /** Count-only read for the tab badge, or the pane label without usePaneCount. */
   useCount?: (context: ChatterViewContext) => number | undefined;
+  /** Row-derived count while the Links panel is mounted, reusing its row document. */
+  usePaneCount?: (context: ChatterViewContext) => number | undefined;
   /** Whether the group offers its one verb (upload, bind) on this record; a group with neither rows nor a verb is absent. */
   useVerb?: (context: ChatterViewContext) => boolean;
   /** One component owns the action and rows; label(action?) supplies the counted PaneLabel. */

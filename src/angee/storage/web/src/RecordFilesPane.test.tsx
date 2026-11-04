@@ -35,7 +35,7 @@ vi.mock("./data/use-drive-picker", () => ({
 
 import { recordFilesGroup } from "./RecordFilesPane";
 import { StorageRecordFiles } from "./data/documents";
-import { AppRuntimeProvider, CHATTER_CONTAINERS, InAppLinkProvider, RelatedPane, containersFromChildren, type ChatterViewContext } from "@angee/ui";
+import { AppRuntimeProvider, CHATTER_CONTAINERS, InAppLinkProvider, RelatedCountProbe, RelatedPane, containersFromChildren, type ChatterViewContext } from "@angee/ui";
 
 const context: ChatterViewContext = {
   pathname: "/records/rec_1", params: { id: "rec_1" },
@@ -71,6 +71,13 @@ test("the group shares the actor-scoped attachment count and each row links to i
   expect(row.textContent).toContain("River");
   fireEvent.click(row);
   expect(sdk.navigate).toHaveBeenCalledWith("/storage/fil_1");
+});
+
+test("the Files badge never requests attachment rows before Links renders", () => {
+  render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
+    "related#groups": { "storage.files": recordFilesGroup },
+  }) }}><RelatedCountProbe id="related" context={context} onCount={vi.fn()} /></AppRuntimeProvider>);
+  expect(sdk.query).not.toHaveBeenCalledWith(StorageRecordFiles, expect.anything(), expect.anything());
 });
 
 test("the label picker and row drop target share one upload owner, with progress after the popover closes", async () => {

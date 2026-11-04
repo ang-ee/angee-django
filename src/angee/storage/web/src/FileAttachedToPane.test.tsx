@@ -7,7 +7,7 @@ const sdk = vi.hoisted(() => ({ query: vi.fn(), navigate: vi.fn() }));
 vi.mock("@angee/refine", async (original) => ({
   ...(await original<typeof import("@angee/refine")>()), useAuthoredQuery: sdk.query,
 }));
-import { AppRuntimeProvider, CHATTER_CONTAINERS, InAppLinkProvider, RelatedPane, containersFromChildren, createRouteHref, type ChatterViewContext } from "@angee/ui";
+import { AppRuntimeProvider, CHATTER_CONTAINERS, InAppLinkProvider, RelatedCountProbe, RelatedPane, containersFromChildren, createRouteHref, type ChatterViewContext } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
 import { testDataResource, testQueryField, testResourceQuery } from "@angee/metadata/testing";
 import { StorageFileAttachments } from "./data/documents";
@@ -61,4 +61,12 @@ test("the reverse read shows loading and errors while its count is unknown", () 
   sdk.query.mockReturnValue({ data: undefined, error: new Error("Read failed") });
   view.rerender(<Group />);
   expect(screen.getByRole("alert").textContent).toContain("Read failed");
+});
+
+test("the Attached to badge defers the redacted attachment read until Links renders", () => {
+  sdk.query.mockReset();
+  render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
+    "storage.File#groups": { "storage.attached-to": fileAttachedToGroup },
+  }) }}><RelatedCountProbe id="related" context={context} onCount={vi.fn()} /></AppRuntimeProvider>);
+  expect(sdk.query).not.toHaveBeenCalledWith(StorageFileAttachments, expect.anything(), expect.anything());
 });

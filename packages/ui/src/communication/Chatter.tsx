@@ -52,7 +52,7 @@ export function Chatter({
   className,
 }: ChatterProps): React.ReactElement | null {
   const t = useUiT();
-  const { activeTab, setActiveTab, setCollapsed } = useChatter();
+  const { activeTab, collapsed, setActiveTab, setCollapsed } = useChatter();
   const requested = useRouterState({
     select: (state) => {
       const search = state.location.search as Record<string, unknown>;
@@ -118,6 +118,19 @@ export function Chatter({
   const back = React.useCallback(() => {
     if (originTab) setActiveTab(originTab.id, {});
   }, [originTab, setActiveTab]);
+  const [visit, setVisit] = React.useState<{ pathname: string; ids: readonly string[] }>({
+    pathname: viewContext.pathname, ids: collapsed || !active ? [] : [active],
+  });
+  const visited = visit.pathname === viewContext.pathname ? visit.ids : [];
+  React.useEffect(() => {
+    if (collapsed || !active) return;
+    setVisit((current) => {
+      const ids = current.pathname === viewContext.pathname ? current.ids : [];
+      return ids.includes(active) ? current : { pathname: viewContext.pathname, ids: [...ids, active] };
+    });
+  }, [active, collapsed, viewContext.pathname]);
+  const panelsMounted = !collapsed || visited.length > 0;
+  const linksMounted = panelsMounted && (visited.includes(RELATED_TAB_ID) || (!collapsed && active === RELATED_TAB_ID));
 
   // Collapse is owned by the enclosing SplitPane (it collapses the pane to zero
   // width); Chatter only bails when it has no tab to show.
@@ -133,7 +146,7 @@ export function Chatter({
         className,
       )}
     >
-      {activeContributions.map((contribution) =>
+      {!collapsed && activeContributions.map((contribution) =>
         contribution.content.useCount ? (
           <ChatterCountProbe
             key={`${viewContext.pathname}:${contribution.id}`}
@@ -148,6 +161,7 @@ export function Chatter({
             id={contribution.id}
             context={viewContext}
             onCount={publishCount}
+            includePaneCounts={linksMounted}
           />
         ) : null,
       )}
@@ -179,7 +193,7 @@ export function Chatter({
             </Tabs.Tab>
           ))}
         </Tabs.List>
-        {activeDrillIn ? (
+        {!collapsed && activeDrillIn ? (
           <PaneToolbarHost back={originTab ? { label: originTab.label, onClick: back } : undefined} title={activeDrillIn.label}>
             {selection?.target ? (
               <ChatterPanel tab={activeDrillIn} />
@@ -187,9 +201,10 @@ export function Chatter({
               <EmptyState icon="activity" title={t("chatter.unavailable.title")} description={t("chatter.unavailable.description")} className="min-h-40 p-4" />
             )}
           </PaneToolbarHost>
-        ) : (
-          <ChatterPanels key={viewContext.pathname} tabs={stripTabs} active={active} />
-        )}
+        ) : null}
+        {panelsMounted ? <div className={collapsed || activeDrillIn ? "hidden" : "contents"}>
+          <ChatterPanels key={viewContext.pathname} tabs={stripTabs} visited={visited} active={active} />
+        </div> : null}
       </Tabs>
     </aside>
   );
@@ -235,13 +250,9 @@ export function useChatterPresentation(explicitTabs?: readonly ChatterTab[]): {
 }
 
 /** Strip tabs mount on first visit and then stay mounted for that record, so drafts survive switching. */
-function ChatterPanels({ tabs, active }: { tabs: readonly ChatterTab[]; active: string }): React.ReactElement {
-  const [visited, setVisited] = React.useState<readonly string[]>([active]);
-  React.useEffect(() => {
-    setVisited((current) => current.includes(active) ? current : [...current, active]);
-  }, [active]);
+function ChatterPanels({ tabs, active, visited }: { tabs: readonly ChatterTab[]; active: string; visited: readonly string[] }): React.ReactElement {
   return <>{tabs.map((tab) => (
-    <Tabs.Panel key={tab.id} value={tab.id} keepMounted={visited.includes(tab.id)} className="flex min-h-0 flex-1 flex-col">
+    <Tabs.Panel key={tab.id} value={tab.id} keepMounted={visited.includes(tab.id) || tab.id === active} className="flex min-h-0 flex-1 flex-col">
       <ChatterPanel tab={tab} />
     </Tabs.Panel>
   ))}</>;

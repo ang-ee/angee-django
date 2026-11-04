@@ -38,3 +38,11 @@ export const RecordDecisionsDocument = graphql(`
     }
   }
 `);
+
+export const RecordDecisionsCountDocument = graphql(`
+  query RecordDecisionsCount($model: String!, $id: String!) {
+    decision_records_aggregate(where: {
+      record_model: { _eq: $model }, record_id: { _eq: $id }
+    }) { aggregate { count } }
+  }
+`);

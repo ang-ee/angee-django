@@ -177,12 +177,15 @@ export const DecisionStepsDocument = graphql(`
   }
 `);
 
-/** The capped selected-run count uses the same Timeline membership as the Links pane. */
-export const RecordRelatedRunsCountDocument = graphql(`
-  query RecordRelatedRunsCount($records: [TimelineRecordInput!]!) {
-    record_timeline(records: $records, run_limit: 20) {
-      records { runs { id } }
-    }
+export const RunDecisionsCountDocument = graphql(`
+  query RunDecisionsCount($run: String!) {
+    steprun_aggregate(where: { run: { _eq: $run }, decision: { _is_null: false } }) { aggregate { count } }
+  }
+`);
+
+export const DecisionRunCountDocument = graphql(`
+  query DecisionRunCount($decision: String!) {
+    steprun_aggregate(where: { decision: { _eq: $decision }, run: { _is_null: false } }) { aggregate { count } }
   }
 `);
 

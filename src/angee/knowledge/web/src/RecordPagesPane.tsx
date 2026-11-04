@@ -62,7 +62,7 @@ export function recordPagesGroup(options: RecordPagesGroupOptions = {}): Contain
       edge: { model: RECORD_BINDING_MODEL },
       bindingRole: role,
       when,
-      useCount: (context) => useRecordPagesRead(context, role).bindings?.length,
+      usePaneCount: (context) => useRecordPagesRead(context, role).bindings?.length,
       useVerb: (context) => useRecordPagesRead(context, role).canBind,
       render: (context, label) => <RecordPagesGroup key={context.view.sqid} context={context} role={role} label={label} />,
     },
@@ -153,7 +153,7 @@ export const pageBacklinksGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 10,
   content: {
     label: "Backlinks",
-    useCount: (context) => usePageDetail(context).data?.pages_by_pk?.backlinks.length,
+    usePaneCount: (context) => usePageDetail(context).data?.pages_by_pk?.backlinks.length,
     render: (context, label) => <>{label()}<li><PageBacklinks context={context} /></li></>,
   },
 };
@@ -163,7 +163,7 @@ export const pageBoundToGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 20,
   content: {
     label: "Bound to",
-    useCount: (context) => usePageRecordBindings(context).data?.page_record_bindings.length,
+    usePaneCount: (context) => usePageRecordBindings(context).data?.page_record_bindings.length,
     render: (context, label) => <>{label()}<li><PageBoundTo context={context} /></li></>,
   },
 };
