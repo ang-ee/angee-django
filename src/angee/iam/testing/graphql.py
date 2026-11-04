@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, cast
 
-from django.contrib.auth.models import AnonymousUser
 from django.db import connections
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
@@ -33,6 +32,10 @@ def execute_schema(
     request: Any | None = None,
 ) -> Any:
     """Execute a GraphQL operation with a request-shaped actor context."""
+
+    # The shared fixture plugin imports before django.setup(); the auth model
+    # import stays inside the call that needs it.
+    from django.contrib.auth.models import AnonymousUser
 
     request = request or graphql_request(user or AnonymousUser())
     actor = getattr(request, "user", AnonymousUser())
