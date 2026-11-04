@@ -65,14 +65,15 @@ class GraphQLDocumentRead:
     largest_sql_bytes: int
     audit_inserts: int
 
-    def assert_bytes(self, *, total: int, largest: int) -> None:
+    def assert_bytes(self, *, total: int, largest: int, cause: str = "") -> None:
         """Pin both the complete document and its largest generated statement."""
 
+        explanation = f" ({cause})" if cause else ""
         assert self.total_sql_bytes <= total, (
-            f"GraphQL document SQL: {self.total_sql_bytes} bytes exceeds total budget {total} bytes"
+            f"GraphQL document SQL: {self.total_sql_bytes} bytes exceeds total budget {total} bytes{explanation}"
         )
         assert self.largest_sql_bytes <= largest, (
-            f"GraphQL largest statement: {self.largest_sql_bytes} bytes exceeds budget {largest} bytes"
+            f"GraphQL largest statement: {self.largest_sql_bytes} bytes exceeds budget {largest} bytes{explanation}"
         )
 
     def assert_statements(self, maximum: int) -> None:

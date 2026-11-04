@@ -354,8 +354,8 @@ def test_reference_permission_and_relation_sql_compilation_does_not_discover_tar
     )
 
 
-# REBAC lane R1 removes _Scope.as_sql's render-time reads; strict xfail marks that handoff.
-@pytest.mark.xfail(strict=True, reason="R1: _Scope.as_sql prepares at render")
+# The REBAC inline-compilation lane owns _Scope.as_sql's render-time reads.
+@pytest.mark.xfail(strict=True, reason="REBAC-R1: _Scope.as_sql prepares at render")
 def test_reference_permission_and_relation_sql_compilation_is_query_free(reference_compile_queries):
     with CaptureQueriesContext(connection) as queries:
         for prepared in reference_compile_queries:

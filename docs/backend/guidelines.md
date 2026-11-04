@@ -201,7 +201,11 @@ Use these owners instead of maintaining another contract in an addon:
   behavior.
 - Every GraphQL list document gets a statement-budget test: execute its authored
   selection as one actor at one and at least five rows, require equal statement
-  counts and zero permission-audit writes, and bound total and largest SQL bytes.
+  counts by default and zero permission-audit writes, and bound total and
+  largest SQL bytes.
+  When a measured native one-row scope takes a different fixed path, pin its
+  exact statement delta, name the library mechanism and fixing lane, and require
+  equal counts from five through twenty rows. Growth after five rows is a defect.
   Use the [shared document guard](../checks.md#graphql-document-budgets).
 - Declare computed GraphQL field dependencies with native Strawberry-Django
   `only`, `select_related`, `prefetch_related`, and `annotate` hints. Computed
