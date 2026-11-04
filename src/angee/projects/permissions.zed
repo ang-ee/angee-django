@@ -137,7 +137,8 @@ definition projects/participant {
 // A link names its target through its GenericForeignKey: one relation per
 // target type, backed by `target`, so every link permission follows the
 // project or task it is attached to. A target type no relation names is
-// refused under an actor.
+// refused under an actor. On deleting an admitted target, the edge lookup is
+// a structural read to apply its deletion policy, not delivery of link rows.
 definition projects/link {
     relation project: projects/project // rebac:field=target
     relation task:    projects/task // rebac:field=target

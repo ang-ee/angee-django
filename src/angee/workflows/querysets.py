@@ -22,7 +22,9 @@ from rebac import (
     database_context,
     generic_target,
     system_context,
+    to_object_ref,
 )
+from rebac.errors import PermissionDenied
 
 from angee.base.querysets import by_key
 from angee.base.refs import RecordRef, record_view_refs
@@ -169,6 +171,28 @@ class WorkflowRunQuerySet[T: WorkflowRun](ProtectedQuerySet[T]):
             operations=("created", "changed"),
             ancestors=False,
         )
+
+    def _cancel_on_commit(self, runs: list[WorkflowRun]) -> None:
+        """Authorize a collected run set and defer each cancellation until commit."""
+        if not runs:
+            return
+        groups: dict[Any, list[WorkflowRun]] = {}
+        for run in runs:
+            groups.setdefault(run.run_as_id, []).append(run)
+        denied: set[Any] = set()
+        for group in groups.values():
+            actor = group[0].run_as
+            for start in range(0, len(group), 256):
+                part = group[start : start + 256]
+                allowed = self.model._writable_for(tuple(part), actor)
+                for run in part:
+                    if run.pk not in allowed:
+                        denied.add(run.pk)
+        for run in runs:
+            if run.pk in denied:
+                raise PermissionDenied(f"Denied: the current actor lacks 'write' on {to_object_ref(run)}.")
+        for run in runs:
+            run._enqueue_cancel_on_commit(run.run_as, using=self.db)
 
     def blocking(self, record: Any, action: str) -> Any:
         """Return open runs whose pinned definition blocks an action on ``record``."""

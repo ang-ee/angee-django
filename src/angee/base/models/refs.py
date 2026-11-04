@@ -7,7 +7,11 @@ native contenttype. Optional protection contributes admission at its own owner.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from contextvars import ContextVar
+from operator import attrgetter
 from typing import Any, ClassVar, Protocol
+from weakref import ReferenceType, ref
 
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
@@ -17,6 +21,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django.db.models.deletion import ProtectedError
 from django_compose.models import Composable
+from rebac.mixins import batch_delivered, delete_scope
 
 from angee.base.identity import public_data_id_field
 from angee.base.models.identity import public_id_for
@@ -56,6 +61,10 @@ class _TargetTeardown(Protocol):
     def __call__(self, target: models.Model) -> None: ...
 
 
+class _TargetsTeardown(Protocol):
+    def __call__(self, content_type: ContentType, ids: tuple[Any, ...], *, using: str) -> None: ...
+
+
 class RecordRefMixin(RecordRefMergeContract, Composable, concrete=False):
     """Project a row reference from the model's single declared generic foreign key.
 
@@ -69,6 +78,8 @@ class RecordRefMixin(RecordRefMergeContract, Composable, concrete=False):
     """What deleting the referenced record does to this edge's rows."""
     teardown_for_target: ClassVar[_TargetTeardown | None] = None
     """Optional class hook replacing ordinary deletion policy with the edge owner's cleanup."""
+    teardown_for_targets: ClassVar[_TargetsTeardown | None] = None
+    """Batch form of the same cleanup, when the edge owns one."""
 
     class Meta:
         """Django model options for record-ref-only abstract inheritance."""
@@ -326,34 +337,164 @@ def record_ref_cleanup_edges_for_target(
     return tuple(sorted(edges, key=lambda edge: edge._meta.label))
 
 
-def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> None:
-    """Apply each edge owner's declared policy before its target is deleted."""
+_edge_presence_for_delete: ContextVar[
+    tuple[tuple[ReferenceType[Any], dict[type[RecordRefMixin], bool]], ...]
+] = ContextVar(
+    "record_edge_presence_for_delete", default=(),
+)
 
-    del kwargs
-    cleanup_edges = record_ref_cleanup_edges_for_target(type(instance))
-    for edge in cleanup_edges:
-        teardown = edge.teardown_for_target
-        assert teardown is not None
-        teardown(instance)
-    target = generic_pointer_model(type(instance))
-    declared = record_edges_by_target().get(target, ()) if target is not None else ()
-    content_type, object_id = generic_pointer_target(instance)
+
+def _has_edge_to_admitted_targets(
+    edge: type[RecordRefMixin], admitted: dict[type[models.Model], set[Any]], using: str,
+) -> bool:
+    """Probe the delete scope's admitted target identities through the edge's base manager."""
+    pointer = edge.record_ref_field()
+    object_id_field = edge._meta.get_field(pointer.fk_field)
+    if not isinstance(object_id_field, models.Field):
+        raise ImproperlyConfigured(f"{edge._meta.label}'s generic object ID must be a concrete field.")
+    grouped: dict[type[models.Model], set[Any]] = {}
+    for model, ids in admitted.items():
+        grouped.setdefault(generic_pointer_model(model), set()).update(ids)
+    lookup = models.Q()
+    parameters = 0
+    for model in sorted(grouped, key=lambda target: target._meta.label):
+        prepared = []
+        for pk in sorted(grouped[model]):
+            try:
+                prepared.append(object_id_field.get_prep_value(pk))
+            except TypeError, ValueError, ValidationError:
+                continue
+        for start in range(0, len(prepared), 256):
+            part = prepared[start:start + 256]
+            if parameters + len(part) + 2 > 512 and lookup.children:
+                if edge._base_manager.using(using).filter(lookup).exists():
+                    return True
+                lookup = models.Q()
+                parameters = 0
+            lookup |= models.Q(**{
+                f"{pointer.ct_field}__app_label": model._meta.app_label,
+                f"{pointer.ct_field}__model": model._meta.model_name,
+                f"{pointer.fk_field}__in": part,
+            })
+            parameters += len(part) + 2
+    return bool(lookup.children and edge._base_manager.using(using).filter(lookup).exists())
+
+
+def delete_record_refs_batch(
+    sender: type[models.Model], *, instances: Iterable[models.Model], using: str, origin: Any = None,
+) -> None:
+    """Apply each target edge once per collected model batch.
+
+    Edge rows referring to collected targets are reachable through those
+    already-admitted parents. Base-manager probes are structural reads for
+    applying ``on_target_delete``, not delivery of edge rows to a caller.
+    An edge with no rows pointing at the admitted target set needs one probe
+    for the whole delete scope.
+    """
+    targets = tuple(sorted(instances, key=attrgetter("pk")))
+    if not targets:
+        return
+    scope = delete_scope(origin, using) if origin is not None else None
+    cached_presence = tuple(entry for entry in _edge_presence_for_delete.get() if entry[0]() is not None)
+    presence = next((rows for owner, rows in cached_presence if owner() is scope), None)
+    if scope is not None and presence is None:
+        presence = {}
+        _edge_presence_for_delete.set((*cached_presence, (ref(scope), presence)))
+    cleanup_edges = record_ref_cleanup_edges_for_target(sender)
+    grouped: dict[ContentType, list[tuple[Any, models.Model]]] = {}
+    for instance in targets:
+        content_type, object_id = generic_pointer_target(instance)
+        grouped.setdefault(content_type, []).append((object_id, instance))
+    canonical = generic_pointer_model(sender)
+    edge_index = record_edges_by_target()
+    declared = edge_index.get(canonical, ()) if canonical is not None else ()
+    prepared_edges = []
     for edge in declared:
         if edge in cleanup_edges:
             continue
+        if scope is not None and sender in scope.covered_pks:
+            assert presence is not None
+            if edge not in presence:
+                admitted = {
+                    model: ids for model, ids in scope.covered_pks.items()
+                    if edge in edge_index.get(generic_pointer_model(model), ())
+                }
+                presence[edge] = _has_edge_to_admitted_targets(edge, admitted, using)
+            if not presence[edge]:
+                continue
         pointer = edge.record_ref_field()
         object_id_field = edge._meta.get_field(pointer.fk_field)
         if not isinstance(object_id_field, models.Field):
             raise ImproperlyConfigured(f"{edge._meta.label}'s generic object ID must be a concrete field.")
-        try:
-            prepared_id = object_id_field.get_prep_value(object_id)
-        except TypeError, ValueError, ValidationError:
-            # A generic edge with a numeric object ID cannot reference a string-keyed target.
+        for content_type, entries in grouped.items():
+            prepared: list[tuple[Any, models.Model]] = []
+            for object_id, instance in entries:
+                try:
+                    prepared.append((object_id_field.get_prep_value(object_id), instance))
+                except TypeError, ValueError, ValidationError:
+                    continue
+            for start in range(0, len(prepared), 256):
+                part = prepared[start:start + 256]
+                if part:
+                    prepared_edges.append((edge, pointer, content_type, part))
+    protected: dict[models.Model, tuple[type[RecordRefMixin], set[RecordRefMixin]]] = {}
+    for edge, pointer, content_type, part in prepared_edges:
+        if edge.on_target_delete is not models.PROTECT:
             continue
-        rows = edge._base_manager.using(using).filter(**{pointer.ct_field: content_type, pointer.fk_field: prepared_id})
-        policy = edge.on_target_delete
-        if policy is models.PROTECT:
-            if rows[:1]:
-                raise ProtectedError(f"{edge._meta.label} rows still refer to {instance}.", set(rows))
+        blocking_rows = list(edge._base_manager.using(using).filter(**{
+            pointer.ct_field: content_type,
+            f"{pointer.fk_field}__in": [pk for pk, _ in part],
+        }).only("pk", pointer.fk_field))
+        if not blocking_rows:
             continue
-        edge.remove_target_refs(rows)
+        by_id: dict[Any, set[RecordRefMixin]] = {}
+        for row in blocking_rows:
+            by_id.setdefault(getattr(row, pointer.fk_field), set()).add(row)
+        matched = False
+        for pk, instance in part:
+            if blockers := by_id.get(pk):
+                protected.setdefault(instance, (edge, blockers))
+                matched = True
+        if not matched:
+            protected.setdefault(part[0][1], (edge, set(blocking_rows)))
+    for instance in targets:
+        if instance in protected:
+            edge, blockers = protected[instance]
+            raise ProtectedError(f"{edge._meta.label} rows still refer to {instance}.", blockers)
+    for edge in cleanup_edges:
+        teardown_batch = edge.teardown_for_targets
+        if teardown_batch is None:
+            teardown = edge.teardown_for_target
+            assert teardown is not None
+            for instance in targets:
+                teardown(instance)
+        else:
+            for content_type, entries in grouped.items():
+                for start in range(0, len(entries), 256):
+                    teardown_batch(content_type, tuple(pk for pk, _ in entries[start:start + 256]), using=using)
+    for edge, pointer, content_type, part in prepared_edges:
+        if edge.on_target_delete is not models.PROTECT:
+            edge_rows = edge._base_manager.using(using).filter(**{
+                pointer.ct_field: content_type,
+                f"{pointer.fk_field}__in": [pk for pk, _ in part],
+            })
+            if edge_rows.exists():
+                edge.remove_target_refs(edge_rows)
+
+
+def delete_record_refs_collected(
+    sender: type[models.Model], *, instances: Iterable[models.Model], using: str, **kwargs: Any,
+) -> None:
+    """Receive the native collector's admitted model batch."""
+    delete_record_refs_batch(sender, instances=instances, using=using, origin=kwargs.get("origin"))
+
+
+def delete_record_refs(
+    sender: type[models.Model], *, instance: models.Model, using: str, origin: Any = None, **kwargs: Any,
+) -> None:
+    """Apply each edge owner's declared policy before its target is deleted."""
+
+    del kwargs
+    if batch_delivered(origin, using, sender):
+        return
+    delete_record_refs_batch(sender, instances=(instance,), using=using, origin=origin)

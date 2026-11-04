@@ -44,9 +44,10 @@ class BaseConfig(AppConfig):
     def ready(self) -> None:
         super().ready()
         from django.db.models.signals import pre_delete
+        from rebac.signals import collected_for_delete
 
         from angee.base.models.locks import RowLockMixin, refuse_locked_row_delete
-        from angee.base.models.refs import delete_record_refs
+        from angee.base.models.refs import delete_record_refs, delete_record_refs_collected
         from angee.base.signals import connect_for_models
 
         connect_for_models(
@@ -54,6 +55,12 @@ class BaseConfig(AppConfig):
             delete_record_refs,
             applies=lambda model: not model._meta.auto_created,
             dispatch_uid="angee.record_refs.target_delete",
+        )
+        connect_for_models(
+            collected_for_delete,
+            delete_record_refs_collected,
+            applies=lambda model: not model._meta.auto_created,
+            dispatch_uid="angee.record_refs.target_delete.batch",
         )
         connect_for_models(
             pre_delete,

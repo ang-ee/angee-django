@@ -13,6 +13,7 @@ from django.dispatch import Signal
 from rebac import database_context, system_context
 from rebac.database import write_alias
 from rebac.resources import model_resource_type
+from rebac.signals import collected_for_delete
 
 from angee.base.signals import connect_for_models
 from angee.decisions.signals import decision_answered
@@ -45,9 +46,15 @@ def revoke_deleted_trigger_grants(sender: Any, *, instance: Any, **kwargs: Any) 
     sender.objects.reconcile_grants(instance, ())
 
 
-def stop_deleted_record_runs(sender: Any, *, instance: Any, using: str | None = None, **kwargs: Any) -> None:
+def stop_deleted_record_runs(
+    sender: Any, *, instance: Any, using: str | None = None, origin: Any = None, **kwargs: Any,
+) -> None:
     """Deletion leaves retained identities, but no run continues asking about them."""
 
+    from rebac.mixins import batch_delivered
+
+    if using is not None and batch_delivered(origin, using, sender):
+        return
     model = apps.get_model("workflows", "WorkflowRun")
     using = using or instance._state.db
     with database_context(using), system_context(reason="workflows.deleted_record"):
@@ -55,6 +62,21 @@ def stop_deleted_record_runs(sender: Any, *, instance: Any, using: str | None = 
             model.objects.db_manager(using, hints={"instance": instance}).working_on(instance).select_related("run_as")
         ):
             run.cancel_on_commit(run.run_as)
+
+
+def stop_deleted_record_runs_collected(
+    sender: Any, *, instances: tuple[Any, ...], using: str, **kwargs: Any,
+) -> None:
+    """Defer admitted runs once for a collected record batch."""
+    del sender, kwargs
+    model = apps.get_model("workflows", "WorkflowRun")
+    with database_context(using), system_context(reason="workflows.deleted_record"):
+        runs = {}
+        manager = model.objects.db_manager(using)
+        for start in range(0, len(instances), 256):
+            for run in manager.working_on(instances[start : start + 256]).select_related("run_as"):
+                runs[run.pk] = run
+        manager.all()._cancel_on_commit(sorted(runs.values(), key=lambda run: (run.created_at, run.pk)))
 
 
 def connect() -> None:
@@ -68,6 +90,14 @@ def connect() -> None:
             model._meta.app_label not in {"workflows", "decisions"} and bool(model_resource_type(model))
         ),
         dispatch_uid="workflows.deleted_record",
+    )
+    connect_for_models(
+        collected_for_delete,
+        stop_deleted_record_runs_collected,
+        applies=lambda model: (
+            model._meta.app_label not in {"workflows", "decisions"} and bool(model_resource_type(model))
+        ),
+        dispatch_uid="workflows.deleted_record.batch",
     )
     post_delete.connect(
         deactivate_workflow_principal,

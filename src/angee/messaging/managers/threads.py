@@ -539,32 +539,41 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         their physical thread identities, preferences and receipts remain intact.
         Only an unshared, unmerged private chatter thread is deleted with its
         native cascade. Source threads retain their independently owned graph.
+        Timeline suppression covers the teardown's whole dynamic extent, including
+        cascades beyond the host; ordinary delete publication continues.
         """
 
-        if target.pk is None:
+        if target.pk is not None:
+            content_type, object_id = generic_pointer_target(target)
+            self.teardown_for_targets(content_type, (object_id,), using=self.db_manager(hints={"instance": target}).db)
+
+    def teardown_for_targets(self, content_type: Any, object_ids: tuple[Any, ...], *, using: str) -> None:
+        """Remove a collected host batch, including its shared chatter bookkeeping.
+
+        Timeline invalidation is suppressed throughout the teardown, including
+        cascades; ordinary delete publication still reaches its subscribers.
+        """
+        if not object_ids:
             return
-        content_type, object_id = generic_pointer_target(target)
         target_model = content_type.model_class()
         if target_model is None:
             return
         thread_model = self.model.thread.field.related_model
-        manager = self.db_manager(hints={"instance": target})
-        using = manager.db
         with (
             system_context(reason="messaging.record_thread.teardown"),
             suppress_invalidation(),
             transaction.atomic(using=using),
         ):
-            target_model._base_manager.db_manager(hints={"instance": target}).select_for_update(
+            list(target_model._base_manager.db_manager(using).select_for_update(
                 of=row_lock_paths(target_model),
             ).filter(
-                pk=object_id
-            ).exists()
-            edges = self.model._base_manager.db_manager(hints={"instance": target})
+                pk__in=object_ids,
+            ).order_by("pk").values_list("pk", flat=True))
+            edges = self.model._base_manager.db_manager(using)
             attachments = list(
                 edges.all()
                 .lock_if_supported()
-                .filter(content_type=content_type, object_id=object_id)
+                .filter(content_type=content_type, object_id__in=object_ids)
                 .order_by("pk")
             )
             if not attachments:
@@ -572,7 +581,7 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
             thread_ids = {edge.thread_id for edge in attachments}
             threads = {
                 thread.pk: thread
-                for thread in thread_model._base_manager.db_manager(hints={"instance": target})
+                for thread in thread_model._base_manager.db_manager(using)
                 .all()
                 .lock_if_supported()
                 .filter(pk__in=thread_ids)
@@ -597,19 +606,27 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
                     .first()
                 )
                 if replacement is None or replacement.target is None:
+                    if any(
+                        candidate.role == self.model.AttachmentRole.CHATTER
+                        and candidate.thread_id == survivor.pk
+                        for candidate in attachments
+                    ) and not edges.filter(thread_id=survivor.pk).exclude(pk__in=attachment_ids).exists():
+                        # The batch orphans the survivor. Let Django's protected
+                        # merged_into relation name the refusal.
+                        thread_model._base_manager.db_manager(using).filter(pk=survivor.pk).delete()
                     raise ValidationError("Retained chatter requires a surviving record attachment before deletion.")
                 replacements[edge.pk] = replacement.pk
-            for old_id, new_id in replacements.items():
+            for new_id in set(replacements.values()):
+                old_ids = [old_id for old_id, replacement in replacements.items() if replacement == new_id]
                 for name in ("ThreadFollower", "ThreadNotification"):
-                    apps.get_model("messaging", name)._base_manager.db_manager(
-                        hints={"instance": target}
-                    ).filter(attachment_id=old_id).update(attachment_id=new_id)
+                    apps.get_model("messaging", name)._base_manager.db_manager(using).filter(
+                        attachment_id__in=old_ids,
+                    ).update(attachment_id=new_id)
             edges.filter(pk__in=attachment_ids).delete()
-            orphaned_chatter_ids = [
-                thread_id for thread_id in chatter_thread_ids if not edges.filter(thread_id=thread_id).exists()
-            ]
+            occupied = set(edges.filter(thread_id__in=chatter_thread_ids).values_list("thread_id", flat=True))
+            orphaned_chatter_ids = chatter_thread_ids - occupied
             if orphaned_chatter_ids:
-                thread_model._base_manager.db_manager(hints={"instance": target}).filter(
+                thread_model._base_manager.db_manager(using).filter(
                     pk__in=orphaned_chatter_ids,
                     merged_into__isnull=True,
                 ).delete()

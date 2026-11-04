@@ -712,8 +712,15 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
             actor = run.require_access("write", actor)
             if actor is None:
                 raise PermissionDenied("Deferred cancellation requires an actor.")
-            payload = {"run_id": run.pk, "actor": str(to_subject_ref(actor)), "using": using}
-            enqueue_task("workflows.cancel", kwargs=payload, robust=True, using=using)
+            run._enqueue_cancel_on_commit(actor, using=using)
+
+    def _enqueue_cancel_on_commit(self, actor: Any, *, using: str) -> None:
+        """Deliver the authorized cancellation with the run's native task payload."""
+        enqueue_task(
+            "workflows.cancel",
+            kwargs={"run_id": self.pk, "actor": str(to_subject_ref(actor)), "using": using},
+            robust=True, using=using,
+        )
 
     def reopen(self) -> None:
         """Clear a locked run's terminal facts and replan retained step rows."""
