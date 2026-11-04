@@ -16,10 +16,10 @@ from rebac import (
     SubjectRef,
     current_actor,
     database_context,
+    is_sudo,
     system_context,
     to_subject_ref,
 )
-from rebac.actors import is_sudo
 from rebac.backends import backend
 from rebac.resources import model_resource_type
 

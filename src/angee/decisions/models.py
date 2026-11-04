@@ -13,8 +13,7 @@ from django.db.models import F
 from django.db.models.functions import Now
 from django.utils.text import capfirst
 from pydantic import JsonValue, TypeAdapter
-from rebac import actor_context, current_actor, database_context, system_context, to_subject_ref
-from rebac.actors import is_sudo
+from rebac import actor_context, current_actor, database_context, is_sudo, system_context, to_subject_ref
 
 from angee.base.models.locks import OptimisticLockMixin
 from angee.base.refs import RecordRef, record_view_refs

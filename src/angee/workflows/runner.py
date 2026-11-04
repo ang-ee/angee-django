@@ -17,8 +17,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import OperationalError, connections, router, transaction
 from django.db.models.functions import Now
 from django.utils import timezone
-from rebac import actor_context, database_context, generic_target, system_context
-from rebac.actors import is_sudo
+from rebac import actor_context, database_context, generic_target, is_sudo, system_context
 
 from angee.base.exceptions import exception_text
 from angee.base.signals import publish_change

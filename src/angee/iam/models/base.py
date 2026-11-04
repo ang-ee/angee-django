@@ -14,11 +14,12 @@ from rebac import (
     RelationshipTuple,
     SubjectRef,
     delete_relationship,
+    is_sudo,
     system_context,
     to_object_ref,
     write_relationships,
 )
-from rebac.actors import is_sudo, to_subject_ref
+from rebac.actors import to_subject_ref
 from rebac.errors import NoActorResolvedError, PermissionDenied
 from rebac.field_backing import canonical_model
 from rebac.field_visibility import redacted_fields
@@ -434,9 +435,10 @@ def _relationship_subject(value: Any) -> SubjectRef:
 
 
 class IAMProtectionMixin(ProtectedModel, extends="base.AngeeModel"):
-    """Contribute native protection while retaining each source manager factory."""
+    """Contribute native protection to each source queryset and manager factory."""
 
     compose_querysets = {"objects": ProtectedQuerySet, "_angee_base": ProtectedUnscopedQuerySet}
+    compose_managers = {"objects": ProtectedManager}
 
     class Meta:
         abstract = True

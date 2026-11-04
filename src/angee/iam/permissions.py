@@ -17,12 +17,12 @@ from rebac import (
     SubjectRef,
     check_new,
     current_actor,
+    is_sudo,
     proposed_forward_relationships,
     to_object_ref,
     to_subject_ref,
 )
 from rebac import user_subject_type as _user_subject_type
-from rebac.actors import is_sudo
 from rebac.backends import backend
 from rebac.errors import PermissionDenied
 from rebac.managers import RebacQuerySet

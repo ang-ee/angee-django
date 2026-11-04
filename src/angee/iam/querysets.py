@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Self, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Self, cast
 
 from django.db import models
 from django.db.models import Exists, F, OuterRef, Q, TextField
@@ -24,10 +24,7 @@ if TYPE_CHECKING:
     from angee.iam.models import User
 
 
-_ModelT = TypeVar("_ModelT", bound=models.Model)
-
-
-class ProtectedQuerySet(AngeeQuerySet[_ModelT], RebacQuerySet[_ModelT]):
+class ProtectedQuerySet[ModelT: models.Model](AngeeQuerySet[ModelT], RebacQuerySet[ModelT]):
     """Native actor-scoped collection and readable correlated projections."""
 
     def attributed_user_id(self) -> Any:
@@ -77,7 +74,7 @@ class ProtectedQuerySet(AngeeQuerySet[_ModelT], RebacQuerySet[_ModelT]):
         return (*scope, str(self.actor() or current_actor()))
 
 
-class ProtectedUnscopedQuerySet(AngeeQuerySet[_ModelT], TrackedQuerySet[_ModelT]):
+class ProtectedUnscopedQuerySet[ModelT: models.Model](AngeeQuerySet[ModelT], TrackedQuerySet[ModelT]):
     """Unfiltered native Django reads with REBAC-tracked protected writes."""
 
 

@@ -13,9 +13,8 @@ from angee.base.querysets import ClosedUpdateQuerySet, row_lock_paths
 
 
 def require_composed_type[T](value: object, expected: type[T]) -> T:
-    """Require the manager or queryset class declared by a composed owner."""
+    """Require a declared manager or queryset class at runtime."""
 
-    # django-compose's generated managers type get_queryset() as Any.
     if not isinstance(value, expected):
         raise ImproperlyConfigured(
             f"Expected composed {expected.__module__}.{expected.__qualname__}; "

@@ -2,8 +2,7 @@
 
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist, ValidationError
 from django.db import models
-from rebac import PermissionDenied, RebacMixin, SubjectRef, to_subject_ref
-from rebac.actors import is_sudo
+from rebac import PermissionDenied, RebacMixin, SubjectRef, is_sudo, to_subject_ref
 from rebac.resources import model_for_subject_type, model_resource_type
 
 from angee.iam.permissions import require_record_access

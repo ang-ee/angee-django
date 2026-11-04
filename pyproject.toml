@@ -88,10 +88,10 @@ postgres = ["psycopg[binary,pool]>=3.2"]
 [dependency-groups]
 dev = [
     "daphne>=4.0",
-    "django-zed-rebac[caveats] @ git+https://github.com/ang-ee/django-zed-rebac.git@1bec24b735a0dae3b79fbae53ca4153ffe6d7e06",
+    "django-zed-rebac[caveats] @ git+https://github.com/ang-ee/django-zed-rebac.git@a65ad786e487c2b5da9155ac337c4feb65625c35",
     "faker>=30.0",
     "psycopg[binary,pool]>=3.2",
-    "angee-django-stubs[compatible-mypy]==6.1.2.post3",
+    "angee-django-stubs[compatible-mypy] @ git+https://github.com/ang-ee/django-stubs.git@10bf2bdd683fc11a9def78a8e985edb3a8717dc6",
     "angee-mypy==2.1.0",
     "pytest>=8.0",
     "pytest-django>=4.8",

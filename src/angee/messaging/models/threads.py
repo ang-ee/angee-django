@@ -24,11 +24,11 @@ from rebac import (
     actor_context,
     current_actor,
     database_context,
+    is_sudo,
     system_context,
     to_object_ref,
     to_subject_ref,
 )
-from rebac.actors import is_sudo
 from rebac.backends import backend
 from rebac.resources import model_resource_type
 
@@ -38,6 +38,7 @@ from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.identity import instance_from_public_id
 from angee.base.models.merge_references import MergePolicy
+from angee.base.models.persistence import require_composed_type
 from angee.base.models.scope import NullableScopeMixin
 from angee.base.refs import RecordRef, generic_pointer_model
 from angee.graphql.mixins import ChangeBroadcastMixin
@@ -167,9 +168,14 @@ class ThreadedModelMixin(models.Model):
             attachments__object_id=models.OuterRef("_record_id"),
             attachments__role=cls.thread_attachment_role,
         )
-        return rows.alias(_record_attached=models.Exists(attached)).filter(
-            thread_id__isnull=False,
-            _record_attached=True,
+        # angee-django-stubs does not relate annotated composed models to their
+        # source model here; this narrows the return through MessageQuerySet[Any].
+        return require_composed_type(
+            rows.alias(_record_attached=models.Exists(attached)).filter(
+                thread_id__isnull=False,
+                _record_attached=True,
+            ),
+            MessageQuerySet,
         )
 
     thread_post_access: ClassVar[str] = "write"

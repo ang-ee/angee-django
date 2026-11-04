@@ -5,11 +5,10 @@ from __future__ import annotations
 from typing import Any, ClassVar, Self
 
 from django.db import models
-from rebac import RebacMixin
-from rebac.actors import is_sudo
+from rebac import RebacMixin, is_sudo
 from rebac.managers import RebacQuerySet
 
-from angee.base.models.locks import RowLockMixin, RowLockQuerySet
+from angee.base.models.locks import RowLockMixin, RowLockQuerySet, _RowLockBaseManager
 from angee.iam.querysets import ProtectedUnscopedQuerySet
 
 
@@ -27,13 +26,13 @@ class _ProtectedRowLockBaseQuerySet(ProtectedRowLockQuerySet, ProtectedUnscopedQ
     """Native unfiltered tracked writes retaining row-lock guards."""
 
 
-_ProtectedRowLockBaseManager = models.Manager.from_queryset(_ProtectedRowLockBaseQuerySet)
+_ProtectedRowLockBaseManager = _RowLockBaseManager.from_queryset(_ProtectedRowLockBaseQuerySet)
 
 
 class ProtectedRowLockMixin(RowLockMixin, concrete=False):
     """Apply IAM's pinned authority to generic system-row invariants."""
 
-    _angee_base: ClassVar[models.Manager[Self]] = _ProtectedRowLockBaseManager()  # type: ignore[assignment]  # Distinct from_queryset manager classes on the base and IAM mixins have incompatible nominal types.
+    _angee_base: ClassVar[models.Manager[Self]] = _ProtectedRowLockBaseManager()
 
     class Meta:
         abstract = True

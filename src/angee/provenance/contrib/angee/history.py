@@ -16,9 +16,9 @@ from rebac import (
     RebacMixin,
     RebacTrackedMixin,
     database_context,
+    is_sudo,
     system_context,
 )
-from rebac.actors import is_sudo
 from rebac.errors import SchemaError
 from rebac.field_backing import resolve_field_backing
 from rebac.field_visibility import gated_read_fields, redacted_fields

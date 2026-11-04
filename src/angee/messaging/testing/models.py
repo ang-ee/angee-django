@@ -122,7 +122,7 @@ class Fragment(AbstractFragment):
         db_table = "test_messaging_fragment"
 
 
-class Channel(ChannelIntake, ChannelSpace, ImapChannelSampling, AbstractChannel, Integration):  # type: ignore[misc]  # angee.projects IntegrationProjects extends integrate.Integration and declares objects/_default_manager incompatibly with abstract Channel.
+class Channel(ChannelIntake, ChannelSpace, ImapChannelSampling, AbstractChannel, Integration):
     """Concrete Integration child used to verify channel-owned message access."""
 
     created_at = Integration.created_at  # type: ignore[assignment]  # django-stubs class field descriptor conflicts with its instance value.

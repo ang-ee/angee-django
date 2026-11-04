@@ -26,10 +26,10 @@ from rebac import (
     SubjectRef,
     actor_context,
     current_actor,
+    is_sudo,
     system_context,
     to_subject_ref,
 )
-from rebac.actors import is_sudo
 from rebac.resources import model_for_subject_type, model_resource_type
 from simple_history.utils import get_history_manager_for_model
 

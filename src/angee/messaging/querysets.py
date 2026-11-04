@@ -472,7 +472,7 @@ class MessageQuerySet[MessageT: Message](
     ) -> MessageQuerySet[WithAnnotations[MessageT, _MessageChronology]]:
         """The parent-authorized message population, without presentation hydration."""
 
-        rows = self.using(self._db or router.db_for_read(self.model, instance=record))  # type: ignore[attr-defined]  # django-stubs post3 omits QuerySet._db; post4 adds it.
+        rows = self.using(self._db or router.db_for_read(self.model, instance=record))
         using = rows.db
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
         attachment = attachment_model.objects.db_manager(using, hints={"instance": record}).for_record(

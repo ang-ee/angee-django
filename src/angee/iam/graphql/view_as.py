@@ -12,8 +12,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.db import connections, transaction
 from django.http import HttpRequest, HttpResponseBase
-from rebac import actor_context
-from rebac.actors import is_sudo
+from rebac import actor_context, is_sudo
 from strawberry.extensions import SchemaExtension
 from strawberry.types.graphql import OperationType
 

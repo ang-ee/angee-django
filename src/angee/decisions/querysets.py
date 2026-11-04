@@ -8,7 +8,6 @@ from django.apps import apps
 from django.db.models import BooleanField, Case, Exists, ExpressionWrapper, ManyToManyField, OuterRef, Q, Value, When
 from rebac import permission_expression, to_subject_ref
 
-from angee.base.models.persistence import require_composed_type
 from angee.base.refs import generic_pointer_model
 from angee.iam.models.append_only import ProtectedAppendOnlyQuerySet
 from angee.iam.permissions import actor_user_id
@@ -77,7 +76,7 @@ class DecisionQuerySet[T: Decision](ProtectedAppendOnlyQuerySet[T], ProtectedQue
         model = generic_pointer_model(queryset.model)
         # Attention belongs to the readable record, regardless of who can answer
         # or read the question. Only the boolean crosses that permission boundary.
-        rows = require_composed_type(self.model.system_queryset().using(queryset.db), DecisionQuerySet)
+        rows = self.model.system_queryset().using(queryset.db)
         return Exists(
             rows.open().filter(
                 records__content_type__app_label=model._meta.app_label,
