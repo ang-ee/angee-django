@@ -199,6 +199,10 @@ Use these owners instead of maintaining another contract in an addon:
   library primitives (`strawberry-django`, `hasura_model_resource`, `changes`,
   aggregate builders) instead of reimplementing ORM, permission, or serialization
   behavior.
+- Every GraphQL list document gets a statement-budget test: execute its authored
+  selection as one actor at one and at least five rows, require equal statement
+  counts and zero permission-audit writes, and bound total and largest SQL bytes.
+  Use the [shared document guard](../checks.md#graphql-document-budgets).
 - Declare computed GraphQL field dependencies with native Strawberry-Django
   `only`, `select_related`, `prefetch_related`, and `annotate` hints. Computed
   fields promote their model-owned aliases through native `annotate` hints only

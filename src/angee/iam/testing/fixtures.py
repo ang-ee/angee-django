@@ -1,6 +1,6 @@
 """Foundation permission fixtures requiring pytest and pytest-django."""
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
@@ -10,6 +10,7 @@ from django.core.management import call_command
 from django.db.models.signals import post_migrate
 from pytest_django.plugin import DjangoDbBlocker
 
+from angee.iam.testing.graphql import GraphQLDocumentRead, measure_graphql_document
 from angee.iam.testing.permissions import composed_permissions as composed_permissions
 
 
@@ -67,3 +68,10 @@ def composed_tables(transactional_db: None) -> None:
 
     del transactional_db
     call_command("rebac", "sync", verbosity=0)
+
+
+@pytest.fixture
+def capture_graphql_document() -> Callable[..., GraphQLDocumentRead]:
+    """Expose the shipped document guard to framework and consumer tests."""
+
+    return measure_graphql_document
