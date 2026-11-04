@@ -11,6 +11,7 @@ import {
   PaneRows,
   StatusBadge,
   formatDateTime,
+  relatedCount,
   type ChatterViewContext,
   type ContainerChild,
   type RelatedGroupContent,
@@ -23,29 +24,19 @@ import { enIntegrateMessages, useIntegrateT } from "./i18n";
 export const RECORD_LINK_MODEL = "integrate.RecordLink";
 export const RECORD_SOURCES_GROUP_ID = "integrate.sources";
 
-function useRecordSourcesTarget(context: ChatterViewContext) {
+function recordSourcesScope(context: ChatterViewContext) {
   const modelLabel = context.route?.canonicalLabel ?? context.route?.modelLabel ?? "";
   const recordId = context.view.kind === "record" ? context.view.sqid ?? "" : "";
-  return React.useMemo(() => ({ modelLabel, recordId }), [modelLabel, recordId]);
-}
-
-function recordSourcesInterests({ modelLabel, recordId }: { modelLabel: string; recordId: string }) {
-  return {
+  return { variables: { modelLabel, recordId }, options: {
     enabled: Boolean(modelLabel && recordId),
     models: [RECORD_LINK_MODEL],
     records: [{ model: modelLabel, id: recordId }],
-  };
+  } };
 }
 
 function useRecordSources(context: ChatterViewContext) {
-  const variables = useRecordSourcesTarget(context);
-  return useAuthoredQuery(RecordSourcesDocument, variables, recordSourcesInterests(variables));
-}
-
-function useRecordSourcesCount(context: ChatterViewContext): number | undefined {
-  const variables = useRecordSourcesTarget(context);
-  const query = useAuthoredQuery(RecordSourcesCountDocument, variables, recordSourcesInterests(variables));
-  return query.data?.record_links_aggregate.aggregate?.count;
+  const { variables, options } = recordSourcesScope(context);
+  return useAuthoredQuery(RecordSourcesDocument, variables, options);
 }
 
 /** The Sources group of the Links tab: the record's retained provider identities. */
@@ -54,7 +45,9 @@ export const recordSourcesGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: enIntegrateMessages["sources.title"]!,
     edge: { model: RECORD_LINK_MODEL },
-    useCount: useRecordSourcesCount,
+    useCount: relatedCount(RecordSourcesCountDocument, recordSourcesScope,
+      (data) => data.record_links_aggregate.aggregate?.count),
+    usePaneCount: (context) => useRecordSources(context).data?.record_links.length,
     render: (context, label) => <>{label()}<li><RecordSourcesPane context={context} /></li></>,
   },
 };

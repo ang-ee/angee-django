@@ -24,7 +24,7 @@ export const fileAttachedToGroup: ContainerChild<RelatedGroupContent> = {
   sequence: 10,
   content: {
     label: "Attached to",
-    useCount: (context) => useFileAttachments(context).attachments?.length,
+    usePaneCount: (context) => useFileAttachments(context).attachments?.length,
     render: (context, label) => <>{label()}<li><FileAttachedToPane context={context} /></li></>,
   },
 };

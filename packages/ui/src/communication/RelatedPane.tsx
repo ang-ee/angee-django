@@ -27,21 +27,25 @@ export function useRelatedGroups<T extends RelatedGroupContent = RelatedGroupCon
  * change the eligible groups without changing any reader's hook order.
  * @kind surface
  */
-export function RelatedCountProbe({ id, context, onCount }: CountProbeProps): React.ReactElement {
+export function RelatedCountProbe({ id, context, onCount, includePaneCounts = false }: CountProbeProps & { includePaneCounts?: boolean }): React.ReactElement {
   const groups = useRelatedGroups(context);
   const [counts, publishCount] = useChatterCounts();
-  const total = groups.reduce<number | undefined>((sum, group) => {
-    const count = counts[group.id];
-    return count === undefined ? sum : (sum ?? 0) + count;
-  }, undefined);
+  const counted = groups.filter((group) => group.content.useCount || (includePaneCounts && group.content.usePaneCount));
+  const canCount = counted.length === groups.length;
+  const total = canCount && counted.every((group) => counts[group.id] !== undefined)
+    ? counted.reduce((sum, group) => sum + counts[group.id]!, 0)
+    : undefined;
   React.useEffect(() => {
     onCount(id, total);
     return () => onCount(id, undefined);
   }, [id, total, onCount]);
-  return <>{groups.map((group) => group.content.useCount ? (
-    <ChatterCountProbe key={group.id} id={group.id} useCount={group.content.useCount}
-      context={context} onCount={publishCount} />
-  ) : null)}</>;
+  return <>{canCount && groups.map((group) => {
+    const useCount = (includePaneCounts ? group.content.usePaneCount : undefined) ?? group.content.useCount;
+    return useCount ? (
+      <ChatterCountProbe key={`${group.id}:${includePaneCounts ? "pane" : "badge"}`}
+        id={group.id} useCount={useCount} context={context} onCount={publishCount} />
+    ) : null;
+  })}</>;
 }
 
 /** The Links tab: every eligible group, its label with count and verb, then its rows.
@@ -66,7 +70,9 @@ export function RelatedPane({ context }: { context: ChatterViewContext }): React
 }
 
 function RelatedGroup({ group, context }: { group: ComposedContainerChild<RelatedGroupContent>; context: ChatterViewContext }): React.ReactElement | null {
-  const count = group.content.useCount?.(context);
+  const count = group.content.usePaneCount
+    ? group.content.usePaneCount(context)
+    : group.content.useCount?.(context);
   const verb = group.content.useVerb?.(context) ?? false;
   // A group with neither rows nor a verb is absent, not empty.
   if (count === 0 && !verb) return null;

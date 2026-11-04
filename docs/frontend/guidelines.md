@@ -1745,7 +1745,8 @@ with neither rows nor a verb is absent, not empty.
 Mount count hooks in independent keyed readers. Route and permission changes
 can change the eligible groups while the aside stays mounted; aggregating hooks
 in a loop changes their order. The [Related count owner](../../packages/ui/src/communication/RelatedPane.tsx)
-sums the results published by each group reader.
+sums the results once every eligible group has published a count.
+Declare a count-only document through [`relatedCount`](../../packages/ui/src/communication/related-count.ts) and derive the rendered pane's count from its row read with `usePaneCount`; without a count root, the badge waits until the Links panel is mounted. A collapsed aside mounts no probes and holds off mounting panels until first expanded, then retains visited panels.
 
 Each `related#groups` child (or `<model>#groups` for one model's pages) is one
 group of the framework's Links tab, declared by the addon that owns the edge.
@@ -1761,6 +1762,7 @@ interface RelatedGroupContent {
   edge?: { model: string };
   label: ReactNode;
   useCount?: (context: ChatterViewContext) => number | undefined;
+  usePaneCount?: (context: ChatterViewContext) => number | undefined;
   useVerb?: (context: ChatterViewContext) => boolean;
   render: (context: ChatterViewContext, label: (action?: ReactNode) => ReactNode) => ReactNode;
 }
