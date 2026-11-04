@@ -245,6 +245,7 @@ jobs:
             tests/test_integrate_discovery_concurrency.py \
             tests/test_framework_integration.py tests/test_projects_wave3_campaign.py \
             tests/test_task_project_ordering.py \
+            tests/test_rebac_queries.py::test_recursive_reads_stay_bounded_across_nineteen_levels \
             tests/test_messaging_delivery.py tests/test_messaging_delivery_concurrency.py \
             tests/test_base_row_lock.py \
             tests/test_connections.py::test_ensure_fresh_serializes_two_processes_on_postgresql \

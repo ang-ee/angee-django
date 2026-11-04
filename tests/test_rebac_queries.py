@@ -63,14 +63,12 @@ def test_large_permission_reads_keep_one_application_statement(
 
 
 @pytest.mark.parametrize(
-    ("resource_type", "statement_bound"),
-    # Both hierarchy plans stay bounded as the row count grows.
-    (("storage/folder", 8), ("knowledge/page", 9)),
+    "resource_type",
+    ("storage/folder", "knowledge/page"),
 )
-def test_recursive_reads_stay_bounded_across_fifty_levels(
+def test_recursive_reads_stay_bounded_across_nineteen_levels(
     composed_tables: None,
     resource_type: str,
-    statement_bound: int,
 ) -> None:
     """Hierarchy reads stay correct and bounded as predecided row keys grow."""
 
@@ -87,25 +85,27 @@ def test_recursive_reads_stay_bounded_across_fifty_levels(
         with CaptureQueriesContext(connection) as queries:
             pks = set(rows.with_actor(viewer).with_action("read").scoped().values_list("pk", flat=True))
         # Include native policy reads as well as the final query.
-        # Bound statements independently of the fifty application rows.
-        assert len(queries) <= statement_bound, queries.captured_queries
+        # Both plans measured four statements at depths 0, 1, 5, 10 and 19
+        # on PostgreSQL and SQLite, independent of the application row count.
+        assert len(queries) == 4, queries.captured_queries
         assert max(len(query["sql"]) for query in queries) <= 32_768, queries.captured_queries
         return pks
 
     assert scope_pks(actor) == set()
     expected = set()
     with system_context(reason="tests.rebac.query.depth"):
+        # HierarchyMixin.path holds at most 19 padded segments in varchar(255).
         if resource_type == "storage/folder":
             storage = Backend.objects.create(slug="depth", label="Depth", backend_class="local")
             drive = Drive.objects.create(slug="depth", name="Depth", prefix="depth", backend=storage, owner=actor)
             parent = None
-            for level in range(50):
+            for level in range(19):
                 parent = Folder.objects.create(drive=drive, parent=parent, name=f"level-{level}")
                 expected.add(parent.pk)
         elif resource_type == "knowledge/page":
             vault = Vault.objects.create(name="Depth", owner=actor)
             parent = None
-            for level in range(50):
+            for level in range(19):
                 parent = Page.objects.create(vault=vault, parent=parent, title=f"level-{level}")
                 expected.add(parent.pk)
     assert scope_pks(actor) == expected

@@ -117,9 +117,12 @@ class HierarchyQuerySet(models.QuerySet[_HierarchyModelT]):
 
         A row's ``parent`` is a saved row (with its path loaded) or another row of
         ``rows``, in the same scope. Every row is one INSERT, then one UPDATE sets
-        each parent and path, whatever the tree's depth; each row records one
+        each parent and path, at any depth the path column holds; each row records one
         creation version, path included. No row is saved one by one, so ``save()``
         hooks do not run; the caller sends what lifecycle signals it owes.
+        At the default ``max_length=255``, 19 levels of 12-digit segments fit;
+        a deeper forest raises ``ValidationError`` and rolls back, and deeper
+        trees require a wider column and a migration in each consumer.
         """
 
         model = self.model
@@ -302,7 +305,10 @@ class HierarchyMixin(PersistenceMixin):
     the mixin is its only writer. The column width bounds tree depth: at
     :attr:`path_segment_width` = 12 each segment costs 13 characters, so
     ``max_length=255`` holds ~19 levels — deeper than any ERP location/category
-    tree, but a consumer expecting deeper nesting must widen the column.
+    tree, but a consumer expecting deeper nesting must widen the column. Creation
+    and reparenting (including descendant paths) reject overflow with
+    ``ValidationError`` before an overlong path reaches the database. Widening
+    a concrete column requires a migration in every affected consumer.
     Maintenance writes go through the shared queryset capture path. History
     includes these writes; replay derives paths again from the restored parents.
     """
@@ -506,13 +512,18 @@ class HierarchyMixin(PersistenceMixin):
         with transaction.atomic(using=using):
             old_path = self._lock_moved_paths(using=using)
             subtree = type(self).system_queryset(lock=("self",)).using(using).filter(path__startswith=old_path)
+            descendant_paths = []
             if old_path:
                 # Evaluate SELECT FOR UPDATE before moving any descendant's path.
-                list(subtree.order_by("pk").values_list("pk", flat=True))
+                descendant_paths = list(subtree.order_by("pk").values_list("path", flat=True))
             parent = self._hierarchy_parent(using=using)
             self._reject_cycle(parent)
             self._reject_cross_scope_parent(parent, using=using)
             new_path = self._hierarchy_path(parent)
+            if descendant_paths:
+                self._validate_hierarchy_path_length(
+                    len(new_path) + max(len(path) - len(old_path) for path in descendant_paths)
+                )
             self.path = new_path
             super().save(*args, **kwargs)
             if old_path:
@@ -618,7 +629,16 @@ class HierarchyMixin(PersistenceMixin):
         """Return this node's derived path under ``parent`` (a root when ``None``)."""
 
         prefix = parent.path if parent is not None else self.PATH_DELIMITER
-        return prefix + f"{self.pk:0{self.path_segment_width}d}{self.PATH_DELIMITER}"
+        path = prefix + f"{self.pk:0{self.path_segment_width}d}{self.PATH_DELIMITER}"
+        self._validate_hierarchy_path_length(len(path))
+        return path
+
+    def _validate_hierarchy_path_length(self, length: int) -> None:
+        """Reject paths that the concrete model's column cannot persist."""
+
+        limit = self._hierarchy_column("path").max_length
+        if limit is not None and length > limit:
+            raise ValidationError({"parent": "Hierarchy depth exceeds the path column's maximum length."})
 
     def _reject_cycle(self, parent: HierarchyMixin | None) -> None:
         """Reject a reparent whose new parent is this node or one of its descendants."""
