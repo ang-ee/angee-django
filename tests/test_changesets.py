@@ -20,7 +20,6 @@ from django.core.management.base import BaseCommand
 from django.db import close_old_connections, connections
 from django.http import HttpResponse
 from django.test import RequestFactory
-from django_compose import management as manage
 from fastmcp.exceptions import ToolError
 from rebac import actor_context, system_context, to_subject_ref
 from rebac.middleware import ActorMiddleware
@@ -38,6 +37,7 @@ from angee.provenance.context import (
 from angee.provenance.contrib.angee.context import SERVER_COMMANDS
 from angee.provenance.middleware import ChangesetMiddleware, ChangesetScopeMiddleware
 from angee.provenance.tasks import Task
+from angee.server import management as manage
 from tests.conftest import create_user
 from tests.core_persistence import OwnedRow
 
@@ -48,7 +48,7 @@ pytestmark = [pytest.mark.entrypoint_boundaries, pytest.mark.django_db(transacti
 def management_changeset_context(settings):
     """Select the optional provenance policy for these attribution contracts."""
 
-    settings.COMPOSE_COMMAND_CONTEXT = ("angee.provenance.contrib.angee.context.management_context",)
+    settings.ANGEE_SERVER_COMMAND_CONTEXT = ("angee.provenance.contrib.angee.context.management_context",)
 
 
 def write(title: str = "captured") -> Any:
@@ -110,6 +110,35 @@ def test_main_attributes_a_command_to_one_closed_changeset(monkeypatch, command)
     assert (context.state, context.outcome) == ("closed", "success")
 
 
+def test_iam_and_provenance_factories_wrap_the_same_native_command(monkeypatch, settings):
+    """The server setting composes both enabled command context contributions."""
+    settings.ANGEE_SERVER_COMMAND_CONTEXT = (
+        "angee.iam.context.command_context",
+        "angee.provenance.contrib.angee.context.management_context",
+    )
+    observed = []
+    from angee.iam import context as iam_context
+
+    original_system_context = iam_context.system_context
+
+    def system_context(*args, **kwargs):
+        observed.append("iam")
+        return original_system_context(*args, **kwargs)
+
+    monkeypatch.setattr(iam_context, "system_context", system_context)
+
+    def operation():
+        observed.append("handle")
+        write()
+
+    _native_command(monkeypatch, operation)
+    manage.execute(["manage.py", "createsuperuser"])
+    (context,) = changesets()
+    assert observed == ["iam", "handle"]
+    assert context.change_reason == "manage.createsuperuser"
+    assert context.state == "closed"
+
+
 def test_a_thread_a_command_starts_writes_under_the_command_boundary(monkeypatch):
     """Plain threads share the process attribution intent while storing their own rows."""
 
@@ -130,7 +159,7 @@ def test_a_thread_a_command_starts_writes_under_the_command_boundary(monkeypatch
 
 def test_a_write_without_a_boundary_names_the_manage_py_remedy(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "argv", ["/srv/app/manage.py", "seed_lorem_notes"])
-    with pytest.raises(ChangesetRequired, match=r"manage\.py must call django_compose\.management\.execute\(\)"):
+    with pytest.raises(ChangesetRequired, match=r"manage\.py must call angee\.server\.management\.execute\(\)"):
         write()
     monkeypatch.setattr(sys, "argv", ["celery", "worker"])
     with pytest.raises(ChangesetRequired) as error:

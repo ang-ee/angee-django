@@ -59,7 +59,7 @@ settings.configure(
     INSTALLED_APPS=['django.contrib.contenttypes', 'django.contrib.auth', 'rebac', 'angee.base', 'angee.mcp'],
     SECRET_KEY='native-mcp-mount', ANGEE_MERGE_GUARDS=[],
     ALLOWED_HOSTS=['localhost'], CSRF_TRUSTED_ORIGINS=['http://localhost'],
-    ANGEE_MCP_ACTOR_VERIFIER='native_mcp_verifier.resolve_actor',
+    ANGEE_MCP_ACTOR_VERIFIER='native_mcp_verifier.resolve_actor', ANGEE_WEB_STATEMENT_TIMEOUT=0,
 )
 import django
 django.setup()
@@ -75,7 +75,7 @@ def register_probe(mcp):
 
 # The real capability owns registration, app creation and its native lifespan.
 with patch.object(server, '_registrars', return_value=(register_probe,)):
-    from django_compose.asgi import application
+    from angee.server.asgi import application
     with TestClient(application, base_url='http://localhost') as client:
         headers = {'Authorization': 'Bearer native-route-token', 'Accept': 'application/json, text/event-stream'}
         request = {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {

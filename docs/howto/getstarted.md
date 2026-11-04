@@ -365,7 +365,7 @@ Native `uv sync --locked` installs the project's distributions on a stopped/new
 host; it does not compose output. `uv run --no-sync python manage.py compose`
 runs the native compiler before ordinary serving/management processes consume
 its receipt. The authored `settings.py` calls `angee.base.conf.configure` and
-`manage.py` delegates to `django_compose.management.execute`. Database changes
+`manage.py` delegates to `angee.server.management.execute`. Database changes
 belong to the separate `manage.py provision` operation. `uv build` builds
 archives only. [Checks](../checks.md#composition-and-schema) owns command context
 and ordering. To work on a change in

@@ -32,9 +32,8 @@ class GraphQLConfig(AppConfig):
     def compose_asgi(self):
         """Contribute the single Channels protocol owner after app population."""
 
-        from django_compose.asgi import AsgiContribution
-
         from angee.graphql.asgi import websocket_application
+        from angee.server.asgi import AsgiContribution
 
         return AsgiContribution(protocols={"websocket": websocket_application()})
 

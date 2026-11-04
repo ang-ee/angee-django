@@ -178,7 +178,7 @@ statement tables.
 
 - A queryset update writing only excluded columns records no version; an MTI child save records the child's history only ([Persistence primitives](../../../../../docs/backend/guidelines.md#persistence-primitives), "`HistoryMixin` excludes `GeneratedField`").
 - One changeset row per writing thread and actor: a pool thread needs `copy_context().run` or a `process=True` boundary ([README: Boundaries](../../README.md#boundaries)).
-- Management commands need the native launcher and provenance's `COMPOSE_COMMAND_CONTEXT` contribution; re-render an obsolete entrypoint ([README: Boundaries](../../README.md#boundaries)).
+- Management commands need the server launcher and provenance's `ANGEE_SERVER_COMMAND_CONTEXT` contribution; re-render an obsolete entrypoint ([README: Boundaries](../../README.md#boundaries)).
 - `history_relations` are document parts with their own capture and read gates, not arbitrary references (`history.py:357-361`).
 - Revert refuses any later touch of a row and reuses trash for created subjects; without `TrashMixin` retained references block removal ([Persistence primitives](../../../../../docs/backend/guidelines.md#persistence-primitives)).
 - A seed load, merge, revert, MCP tool call or bridge session is a distinct logical write with its own `fresh=True` boundary nested inside the entrypoint's; a write that is not a distinct unit stays under the entrypoint boundary ([README: Boundaries](../../README.md#boundaries) "Separate logical writes").

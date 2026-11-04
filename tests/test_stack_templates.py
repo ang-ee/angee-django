@@ -1103,7 +1103,7 @@ def test_rendered_management_command_closes_its_changeset(tmp_path: Path) -> Non
     """A real one-shot command attributes its captured write through rendered manage.py."""
 
     rendered = (PROJECT_SETTINGS_TEMPLATE.parent / "manage.py.jinja").read_text().replace("{{ project_name }}", "probe")
-    assert "from django_compose.management import execute" in rendered
+    assert "from angee.server.management import execute" in rendered
     result = _run_probe_command(tmp_path, rendered)
     assert result.returncode == 0, f"rendered management command failed:\n{result.stdout}\n{result.stderr}"
 
@@ -2487,9 +2487,10 @@ def test_py_sync_cold_bootstrap_needs_only_native_uv(tmp_path: Path) -> None:
 def test_project_template_delegates_native_bootstrap() -> None:
     directory = PROJECT_SETTINGS_TEMPLATE.parent
     launcher = (directory / "manage.py.jinja").read_text()
-    assert "from django_compose.management import execute" in launcher
+    assert "from angee.server.management import execute" in launcher
     assert 'os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")' in launcher
     assert "angee.management" not in launcher
+    assert "django_compose.management" not in launcher
     assert (directory / "settings.py").read_text() == "from angee.base.conf import configure\n\nconfigure(globals())\n"
 
 

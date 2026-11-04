@@ -14,7 +14,7 @@ _Settings = TypedDict(
         "PROVENANCE_POLICY": str,
         "MIDDLEWARE:append": list[str],
         "ANGEE_CELERY_TASK_CLASS": str,
-        "COMPOSE_COMMAND_CONTEXT:append": list[str],
+        "ANGEE_SERVER_COMMAND_CONTEXT:append": list[str],
         "COMPOSE_FINGERPRINT_SETTINGS:append": list[str],
         "ANGEE_TIMELINE_KINDS:append": list[str],
     },
@@ -29,6 +29,6 @@ SETTINGS: _Settings = {
     "COMPOSE_FINGERPRINT_SETTINGS:append": ["ANGEE_CHANGESET_MODEL", "PROVENANCE_POLICY"],
     "MIDDLEWARE:append": ["angee.provenance.middleware.ChangesetMiddleware"],
     "ANGEE_CELERY_TASK_CLASS": "angee.provenance.tasks:Task",
-    "COMPOSE_COMMAND_CONTEXT:append": ["angee.provenance.contrib.angee.context.management_context"],
+    "ANGEE_SERVER_COMMAND_CONTEXT:append": ["angee.provenance.contrib.angee.context.management_context"],
     "ANGEE_TIMELINE_KINDS:append": ["angee.provenance.timeline.timeline_kinds"],
 }
