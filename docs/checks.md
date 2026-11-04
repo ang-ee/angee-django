@@ -121,7 +121,8 @@ integration contracts, including the composed
 PostgreSQL test nodes because each also has SQLite-only tests. The PostgreSQL
 branches in `test_extraction_models.py` and `test_knowledge_access_campaign.py`
 also run by node; other listed files run whole. This preserves the SQLite floor
-tests and the PostgreSQL zero-skip gate. The six
+tests and the PostgreSQL zero-skip gate, which counts strict expected failures
+as executed tests rather than skips. The six
 groups use the [PostgreSQL timing map](../.test_durations_postgres) with
 pytest-split's `least_duration` algorithm, four xdist workers grouped by file,
 `--nomigrations`, a JUnit report, and a zero-skip gate. Pytest-django creates a
@@ -141,6 +142,45 @@ or `-p no:xdist` for serial debugging. `--dist loadfile` keeps each test module 
 one worker. Pytest-django isolates worker databases; custom database and composed
 host fixtures must use process-local connections or pytest's worker-local
 `tmp_path`/`tmp_path_factory`, and restore registry changes after each test.
+
+### GraphQL document budgets
+
+The shipped IAM [GraphQL test guard](../src/angee/iam/testing/graphql.py) measures
+one authored document against an addon schema built with `addon_schema` or a
+composed host. The `capture_graphql_document` fixture comes from
+`angee.iam.testing.fixtures`; pass the schema, document, variables, and actor.
+It returns GraphQL data, statement count across configured database aliases,
+total UTF-8 SQL bytes, largest statement bytes, and INSERTs into REBAC's
+permission-audit table. Bytes use Django's captured SQL text, including bind
+values when the backend renders them. For a list, seed one and at least five
+visible rows and pin the same document at both sizes:
+
+```python
+one = capture_graphql_document(schema, document, {"limit": 1}, actor=viewer)
+many = capture_graphql_document(schema, document, {"limit": 5}, actor=viewer)
+assert len(one.data["items"]) == 1
+assert len(many.data["items"]) == 5
+many.assert_flat_from(one)
+for read in (one, many):
+    read.assert_no_audit_writes()
+    read.assert_statements(20)
+    read.assert_bytes(total=120_000, largest=80_000)
+```
+
+Every ceiling is a maximum. Set it from today's measured value, rounded up;
+a lane that lowers a cost lowers its ceiling in the same change. Pin any
+remaining audit INSERTs with `assert_audit_inserts(maximum)` while keeping the
+zero-write assertion in a separate test marked
+`@pytest.mark.xfail(strict=True, reason="<fixing lane>: ...")`. A strict xfail
+turns an unexpectedly passing assertion into a failure for cleanup. The
+[first document pins](../tests/test_graphql_statement_budgets.py) run on SQLite
+and in the PostgreSQL selection in [reusable checks](../.github/workflows/reusable-checks.yml).
+
+Consumer suites register `angee.iam.testing.fixtures` in `pytest_plugins`,
+request its `capture_graphql_document` fixture, and pass their authored list or
+form document against the consumer's composed schema. This lets ARP's bill
+list and form tests use the same statement, audit and byte assertions without
+importing the framework's `tests` package.
 
 ### Source-addon Test Models
 

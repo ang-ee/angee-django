@@ -247,6 +247,7 @@ jobs:
             tests/test_framework_integration.py tests/test_projects_wave3_campaign.py \
             tests/test_task_project_ordering.py \
             tests/test_rebac_queries.py::test_recursive_reads_stay_bounded_across_nineteen_levels \
+            tests/test_graphql_statement_budgets.py \
             tests/test_messaging_delivery.py tests/test_messaging_delivery_concurrency.py \
             tests/test_base_row_lock.py \
             tests/test_connections.py::test_ensure_fresh_serializes_two_processes_on_postgresql \
@@ -265,7 +266,7 @@ jobs:
             tests/test_task_locks.py tests/test_timeline_concurrency.py \
             tests/test_work_intake_lock_campaign.py tests/test_work_stage_lock_campaign.py \
             tests/test_workflows_integrate_cycle.py tests/test_workflows_integrate_steps.py
-          uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'
+          uv run --locked python -c 'import xml.etree.ElementTree as ET; root = ET.parse("workflow-concurrency.xml").getroot(); cases = list(root.iter("testcase")); skipped = sum(any(child.tag.rsplit("}", 1)[-1] == "skipped" and child.get("type") != "pytest.xfail" for child in case) for case in cases); assert cases and skipped == 0, f"expected executed PostgreSQL tests, got tests={len(cases)}, skipped={skipped}"; print(f"PostgreSQL tests={len(cases)}, skipped={skipped}")'
       - name: Test the full provenance engine on PostgreSQL
         if: ${{ !cancelled() && matrix.group == 1 }}
         env:
