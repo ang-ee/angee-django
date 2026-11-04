@@ -156,18 +156,19 @@ jobs:
           uv run pytest -q -n auto --dist loadfile --durations=25
           --splits 6 --group ${{ matrix.group }} ${{ inputs.pytest-extra-args }}
 
-  # PostgreSQL timings balance the four groups across the expanded selection.
+  # PostgreSQL timings balance the six groups across the expanded selection; run 41777088918
+  # measured four groups at 28-40 min of CI wall against a 40-minute limit, one cancelled.
   # Every worker flushes the whole schema between transactional tests, so one
   # job no longer fits.
   uv-postgres:
     name: uv postgres ${{ matrix.group }}/4
     if: ${{ inputs.uv-enabled }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        group: [1, 2, 3, 4]
+        group: [1, 2, 3, 4, 5, 6]
     services:
       postgres:
         image: postgres:17
@@ -211,7 +212,7 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/angee
         run: |
           uv run --locked python -m pytest -q -n 4 --dist loadfile --nomigrations --durations=25 --junitxml=workflow-concurrency.xml \
-            --splits 4 --group ${{ matrix.group }} --splitting-algorithm least_duration \
+            --splits 6 --group ${{ matrix.group }} --splitting-algorithm least_duration \
             --durations-path .test_durations_postgres \
             tests/test_workflows_definition.py tests/test_workflows_concurrency.py \
             tests/test_workflows_runtime.py tests/test_workflows_install.py \
