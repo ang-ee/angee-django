@@ -2,17 +2,36 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
+import strawberry_django
+from django.db import connection
 from django.test import override_settings
-from rebac import actor_context, system_context
+from django.test.utils import CaptureQueriesContext
+from rebac import (
+    RelationshipTuple,
+    actor_context,
+    permission_expression,
+    system_context,
+    to_object_ref,
+    to_subject_ref,
+    write_relationships,
+)
+from rebac.managers import RebacQuerySet
 
 from angee.base.models.identity import public_id_of
 from angee.decisions import schema as decisions_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
+from angee.graphql.data.hasura import hasura_model_resource
+from angee.graphql.schema import GraphQLSchemas
 from angee.iam import schema as iam_schema
+from angee.iam.graphql.capabilities import held_permissions, permissions_field
+from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import actor_scoped_to_one
+from angee.iam.testing.queries import is_permission_audit_insert
 from angee.integrate import schema as integrate_schema
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
@@ -23,6 +42,8 @@ from angee.projects.testing.models import Project, Task
 from angee.provenance.context import changeset as open_changeset
 from angee.timeline import schema as timeline_schema
 from tests.conftest import (
+    Page,
+    SchemaAddon,
     addon_schema,
     authored_graphql_document,
     create_user,
@@ -234,14 +255,152 @@ def test_related_permission_resource_list_budget(composed_tables: None, capture_
     for count, read in reads.items():
         assert len(read.data["project_tasks"]) == count
         read.assert_bytes(
-            total=70_000,
+            total=56_000,
             largest=40_000,
-            cause="REBAC L2 one-row candidate proof; multi-row TupleIn retains the general scope",
+            cause="REBAC L8 bounds the multi-row prefetch; the related permission proof is shared",
         )
-        read.assert_statements(4 if count == 1 else 6)
+        read.assert_statements(4)
         read.assert_no_audit_writes()
-    assert reads[5].statement_count == reads[1].statement_count + 2, (
-        "L2 multi-row TupleIn repeats membership and population reads; L8 removes this step"
+    for count in (5, 10, 20):
+        reads[count].assert_flat_from(reads[1])
+
+
+@strawberry_django.type(Project)
+class FourPermissionProject(ProtectedNode):
+    permissions = permissions_field(("read", "write", "share", "delete"))
+
+
+@strawberry_django.type(Task)
+class TaskWithFourPermissionProject(ProtectedNode):
+    project: FourPermissionProject | None = actor_scoped_to_one("project")
+
+
+@strawberry_django.type(Project)
+class WriteScopedProject(ProtectedNode):
+    permissions = permissions_field(("read", "write", "share", "delete"))
+
+    @classmethod
+    def get_queryset(cls, queryset: RebacQuerySet, info: object) -> RebacQuerySet:
+        return queryset.with_action("write")
+
+
+@strawberry_django.type(Task)
+class TaskWithWriteScopedProject(ProtectedNode):
+    project: WriteScopedProject | None = actor_scoped_to_one("project")
+
+
+def test_related_type_hook_keeps_write_scope(composed_tables: None, capture_graphql_document) -> None:
+    """A read-only project actor cannot bypass the related type's write hook."""
+
+    del composed_tables
+    owner = create_user("document-budget-write-hook-owner")
+    reader = create_user("document-budget-write-hook-reader")
+    with system_context(reason="test.document_budget.write_hook"):
+        for index in range(3):
+            project = Project.objects.create(title=f"Write-hook project {index}", owner=owner)
+            Task.objects.create(title=f"Write-hook task {index}", owner=owner, project=project)
+            write_relationships([RelationshipTuple(to_object_ref(project), "reader", to_subject_ref(reader))])
+    resource = hasura_model_resource(
+        TaskWithWriteScopedProject,
+        model=Task,
+        name="write_scoped_tasks",
+        filterable=["id"],
+        sortable=["id"],
+        aggregatable=["id"],
+        insert=False,
+        update=False,
+        delete=False,
     )
-    reads[10].assert_flat_from(reads[5])
-    reads[20].assert_flat_from(reads[10])
+    schema = GraphQLSchemas([SchemaAddon({"public": {"query": (resource.query,)}})]).build("public")
+    document = "query { write_scoped_tasks { id project { permissions } } }"
+    owner_rows = capture_graphql_document(schema, document, {}, actor=owner).data["write_scoped_tasks"]
+    reader_rows = capture_graphql_document(schema, document, {}, actor=reader).data["write_scoped_tasks"]
+    assert len(owner_rows) == len(reader_rows) == 3
+    assert all(row["project"] is not None for row in owner_rows)
+    assert all(row["project"] is None for row in reader_rows)
+
+
+def test_four_related_permission_names_reuse_proven_read(composed_tables: None, capture_graphql_document) -> None:
+    """A related Project answers four named actions without a second read proof."""
+
+    del composed_tables
+    owner = create_user("document-budget-four-project")
+    reader = create_user("document-budget-four-project-reader")
+    with system_context(reason="test.document_budget.four_project"):
+        for index in range(20):
+            project = Project.objects.create(title=f"Four project {index}", owner=owner)
+            Task.objects.create(title=f"Four task {index}", owner=owner, project=project)
+            write_relationships([RelationshipTuple(to_object_ref(project), "reader", to_subject_ref(reader))])
+    resource = hasura_model_resource(
+        TaskWithFourPermissionProject,
+        model=Task,
+        name="four_permission_tasks",
+        filterable=["id"],
+        sortable=["id"],
+        aggregatable=["id"],
+        insert=False,
+        update=False,
+        delete=False,
+    )
+    schema = GraphQLSchemas([SchemaAddon({"public": {"query": (resource.query,)}})]).build("public")
+    document = """
+        query FourRelatedPermissions($limit: Int!) {
+          four_permission_tasks(limit: $limit) { id project { permissions } }
+        }
+    """
+    reads = {
+        count: capture_graphql_document(schema, document, {"limit": count}, actor=owner) for count in (1, 5, 10, 20)
+    }
+    for count, read in reads.items():
+        read.assert_bytes(total=38_000, largest=21_000, cause="one bounded related permission closure")
+        read.assert_statements(4)
+        read.assert_no_audit_writes()
+        assert len(read.data["four_permission_tasks"]) == count
+        assert all(
+            row["project"]["permissions"] == ["delete", "read", "share", "write"]
+            for row in read.data["four_permission_tasks"]
+        )
+        assert sum(len(re.findall(r'"rebac_scope_[0-9a-f]+_closure" AS \(', sql)) for sql in read.statements) == 1
+    for count in (5, 10, 20):
+        reads[count].assert_flat_from(reads[1])
+    reader_rows = capture_graphql_document(schema, document, {"limit": 5}, actor=reader)
+    assert [row["project"]["permissions"] for row in reader_rows.data["four_permission_tasks"]] == [["read"]] * 5
+    reader_rows.assert_no_audit_writes()
+
+
+def test_recursive_permission_policy_keeps_inline_proofs(composed_tables: None) -> None:
+    """A recursive page policy cannot use the multi-action closure."""
+
+    del composed_tables
+    actor = create_user("document-budget-recursive-page")
+    rows = (
+        Page.objects.with_actor(actor)
+        .with_action("read_granted")
+        .filter(pk__in=(1,))
+        .annotate(can_write=permission_expression(Page, "write_granted", actor=actor))
+    )
+    scope = (
+        Page.objects.with_actor(actor)
+        .with_action("read_granted")
+        .filter(pk__in=(1,))
+        .scope_cte(actions=("read_granted", "write_granted"))
+    )
+    query = scope.attach(rows)
+    assert "_closure" not in str(query.query)
+    list(query.values_list("pk", flat=True))
+
+
+def test_unoptimized_permission_fallback_uses_one_unbypassed_proof(composed_tables: None) -> None:
+    """A mutation-style row keeps its permission values without an audit write."""
+
+    del composed_tables
+    actor = create_user("document-budget-unoptimized-project")
+    with system_context(reason="test.document_budget.unoptimized_project"):
+        project = Project.objects.create(title="Unoptimized project", owner=actor)
+    with actor_context(actor), CaptureQueriesContext(connection) as queries:
+        held = held_permissions(project, ("read", "write", "share", "delete"))
+    assert held == {"read", "write", "share", "delete"}
+    assert len(queries) == 6
+    assert sum(len(query["sql"].encode("utf-8")) for query in queries) <= 18_000
+    assert not any(is_permission_audit_insert(query["sql"], connection) for query in queries)
+    assert sum(len(re.findall(r'"rebac_scope_[0-9a-f]+_closure" AS \(', query["sql"])) for query in queries) == 1

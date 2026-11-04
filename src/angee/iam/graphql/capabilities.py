@@ -45,6 +45,38 @@ def permission_annotations(
     return annotations
 
 
+def _proven_read_annotation(queryset: models.QuerySet[Any]) -> models.QuerySet[Any]:
+    """Use the caller's actor-scoped read proof for a selected ``read`` capability."""
+
+    if "_angee_permission_read" in queryset.query.annotations:
+        return queryset.annotate(_angee_permission_read=models.Value(True, output_field=models.BooleanField()))
+    return queryset
+
+
+def _share_permission_projections(queryset: models.QuerySet[Any], actor: SubjectRef) -> models.QuerySet[Any]:
+    """Attach one REBAC closure to selected permissions on a read-scoped relation."""
+
+    prefix = "_angee_permission_"
+    names = sorted(
+        name
+        for key in queryset.query.annotations
+        if key.startswith(prefix)
+        and key != _ACTOR
+        and not key.startswith(f"{prefix}owner_")
+        and (name := key.removeprefix(prefix)) != "read"
+    )
+    if not names:
+        return queryset
+    scope = (
+        require_rebac_queryset(queryset.model)
+        .using(queryset.db)
+        .with_actor(actor)
+        .with_action("read")
+        .scope_cte(actions=("read", *names))
+    )
+    return scope.attach(queryset)
+
+
 def held_permissions(
     record: models.Model,
     names: Iterable[str],
@@ -65,7 +97,9 @@ def held_permissions(
     if actor is None:
         return frozenset()
     owner = _permission_model(type(record), model)
-    names = tuple(names)
+    names = tuple(dict.fromkeys(names))
+    if not names:
+        return frozenset()
     values = record.__dict__
     if values.get(_ACTOR) != str(actor) or any(
         f"_angee_permission_{name}" not in values
@@ -73,15 +107,18 @@ def held_permissions(
         for name in names
     ):
         annotations = permission_annotations(owner, names, actor=actor)
-        values = (
-            require_rebac_queryset(owner)
-            .system_context(reason="graphql.permissions")
-            .filter(pk=record.pk)
-            .annotate(**annotations)
-            .values(*annotations)
-            .first()
-            or {}
-        )
+        rows = owner._base_manager.db_manager(record._state.db).filter(pk=record.pk).annotate(**annotations)
+        if len(names) > 1:
+            scope = (
+                require_rebac_queryset(owner)
+                .using(rows.db)
+                .with_actor(actor)
+                .with_action(names[0])
+                .filter(pk=record.pk)
+                .scope_cte(actions=names)
+            )
+            rows = scope.attach(rows)
+        values = rows.values(*annotations).first() or {}
     return frozenset(name for name in names if values.get(f"_angee_permission_{name}"))
 
 

@@ -26,6 +26,7 @@ from strawberry_django.queryset import run_type_get_queryset
 
 from angee.graphql.ids import PublicID, optional_public_id, to_public_id
 from angee.graphql.introspection import FieldPathError, fields_for_path, is_to_one_relation
+from angee.iam.graphql.capabilities import _proven_read_annotation, _share_permission_projections
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.iam.permissions import require_rebac_queryset
@@ -418,6 +419,7 @@ def _guarded_relation_prefetch(field_name: str) -> Callable[[strawberry.Info], m
 
     The native optimizer resolves ``permissions_field`` annotation callbacks on
     this related queryset, as it does on roots, before any row is materialized.
+    Only a hook-preserved actor/read scope can reuse that read proof.
     """
 
     def prefetch(info: strawberry.Info) -> models.Prefetch:
@@ -432,6 +434,15 @@ def _guarded_relation_prefetch(field_name: str) -> Callable[[strawberry.Info], m
             manager.none() if actor is None else manager.with_actor(actor).with_action("read")
         )
         queryset = run_type_get_queryset(queryset, field.django_type, info)
+        # REBAC exposes actor and sudo pins, but no public action accessor.
+        # The exact stored action is needed before replacing a selected read proof.
+        read_scoped = (
+            actor is not None
+            and isinstance(queryset, RebacQuerySet)
+            and queryset.actor() == actor
+            and not queryset.is_sudo()
+            and queryset._rebac_action == "read"
+        )
         assert field.origin_django_type is not None
         relation = field.origin_django_type.model._meta.get_field(field_name)
         store = OptimizerStore()
@@ -439,7 +450,10 @@ def _guarded_relation_prefetch(field_name: str) -> Callable[[strawberry.Info], m
             store.only.append(relation.field.attname)
         elif isinstance(relation, models.ForeignKey):
             store.only.append(relation.target_field.attname)
-        return models.Prefetch(field_name, queryset=optimize(queryset, info, store=store))
+        optimized = optimize(queryset, info, store=store)
+        if read_scoped and actor is not None:
+            optimized = _share_permission_projections(_proven_read_annotation(optimized), actor)
+        return models.Prefetch(field_name, queryset=optimized)
 
     return prefetch
 
