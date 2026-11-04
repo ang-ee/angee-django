@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import partial
 from typing import Any, ClassVar, cast
 
 from django.apps import apps
@@ -10,18 +11,43 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django.utils.text import capfirst
 from rebac import system_context
+from rebac.backends import backend
 from rebac.field_backing import canonical_model
 from rebac.resources import model_for_resource_type, model_resource_type
-from rebac.schema import Definition, FieldBinding
+from rebac.schema import Definition, FieldBinding, Schema
 
 from angee.base.models.refs import RecordRefMixin
-from angee.iam.permissions import effective_rebac_definition
+from angee.base.models.refs import record_edges_by_target as base_record_edges_by_target
+from angee.iam.permissions import declared_rebac_definition, effective_rebac_definition
 
 
 class ProtectedRecordRefMixin(RecordRefMixin, concrete=False):
     """Keep native protected edge admission with its optional IAM owner."""
 
     accepts_any_record_target: ClassVar[bool] = False
+
+    @staticmethod
+    def target_index_source(*, declared: bool = False) -> Schema | None:
+        """Return authored or effective policy once for all protected edges."""
+        if declared:
+            # Authored metadata is used before the database and policy sync exist.
+            return None
+        return backend().schema()
+
+    @classmethod
+    def indexed_target_models(
+        cls, source: object | None, *, definition_required: bool = False,
+    ) -> dict[str, type[models.Model]]:
+        """Use the effective policy's targets, or authored targets for metadata."""
+        if cls.accepts_any_record_target:
+            return cls.accepted_target_models(definition_for=declared_rebac_definition)
+        if not isinstance(source, Schema):
+            definition = declared_rebac_definition(cls)
+            return cls._declared_target_models(definition) if definition is not None else {}
+        definition = source.get_definition(model_resource_type(cls) or "")
+        if definition is not None:
+            return cls._declared_target_models(definition)
+        return {} if definition_required else super().accepted_target_models()
 
     class Meta:
         abstract = True
@@ -132,26 +158,15 @@ class ProtectedRecordRefMixin(RecordRefMixin, concrete=False):
         return (model_resource_type(apps.get_model(label)) or "") if label else ""
 
 
-def record_edges_by_target(*, definition_for=effective_rebac_definition):
-    """Project authored target policy for compiler metadata without querying rows."""
-    index = {}
-    for edge in sorted(apps.get_models(), key=lambda model: model._meta.label):
-        if not issubclass(edge, ProtectedRecordRefMixin):
-            continue
-        if edge.accepts_any_record_target:
-            targets = edge.accepted_target_models(definition_for=definition_for)
-        else:
-            definition = definition_for(edge)
-            if definition is None:
-                continue
-            targets = edge._declared_target_models(definition)
-        for target in targets.values():
-            index.setdefault(target, []).append(edge)
-    return {target: tuple(edges) for target, edges in index.items()}
-
-
 class IAMRecordRefMixin(ProtectedRecordRefMixin, extends="base.RecordRefMixin"):
     """Donate native target admission without becoming an authored source ancestor."""
 
     class Meta:
         abstract = True
+
+
+# Historical IAM callers retain the defined protected-edge view of the one base index.
+record_edges_by_target = partial(
+    base_record_edges_by_target, edge_type=cast(type[RecordRefMixin], ProtectedRecordRefMixin),
+    definition_required=True,
+)

@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from itertools import chain
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import strawberry
 from django.core.exceptions import ValidationError
@@ -34,9 +34,6 @@ from graphql import GraphQLError
 
 _PREVIEW_LEAF_LIMIT = 50
 _PREVIEW_PK_CHUNK_SIZE = 500
-
-type _FastDelete = tuple[models.QuerySet[models.Model], int]
-
 
 @strawberry.type
 class DeletePreviewGroup:
@@ -188,9 +185,6 @@ class DeletePreview:
         except RestrictedError as error:
             blocked = _groups(_count_by_model(error.restricted_objects))
 
-        fast_deletes: tuple[_FastDelete, ...] = tuple(
-            (queryset, queryset.count()) for queryset in collector.fast_deletes
-        )
         refusals = list(
             dict.fromkeys(
                 message
@@ -209,7 +203,7 @@ class DeletePreview:
         groups = _PreviewRows.by_model(
             instance,
             collector,
-            fast_deletes,
+            collector.fast_deletes,
             actor,
         )
         root = DeletePreviewNode.from_target(instance, groups)
@@ -449,7 +443,7 @@ class _PreviewRows:
         cls,
         root: models.Model,
         collector: Collector,
-        fast_deletes: tuple[_FastDelete, ...],
+        fast_deletes: Iterable[models.QuerySet[models.Model]],
         actor: Any | None,
     ) -> dict[type[models.Model], _PreviewRows]:
         """Return deleted tree rows grouped by model, excluding ``root``."""
@@ -463,8 +457,8 @@ class _PreviewRows:
                     visible_count=preview.visible_count,
                     visible_rows=preview.visible_rows,
                 )
-        for queryset, total_count in fast_deletes:
-            preview = cls.from_fast_delete(queryset, total_count, actor)
+        for queryset in fast_deletes:
+            preview = cls.from_fast_delete(queryset, actor)
             if preview.total_count:
                 groups.setdefault(queryset.model, cls()).add(
                     total_count=preview.total_count,
@@ -520,27 +514,41 @@ class _PreviewRows:
     def from_fast_delete(
         cls,
         queryset: models.QuerySet[models.Model],
-        total_count: int,
         actor: Any | None,
     ) -> _PreviewRows:
-        """Return access-scoped preview rows from one fast-delete queryset."""
+        """Fetch bounded preview rows, counting only when the leaf limit overflows."""
 
-        if total_count == 0:
-            return cls()
         visibility = resource_extensions(queryset.model).preview_queryset
         if visibility is None:
+            visible_rows = list(_order_by_pk(queryset)[: _PREVIEW_LEAF_LIMIT + 1])
+            total_count = len(visible_rows) if len(visible_rows) <= _PREVIEW_LEAF_LIMIT else queryset.count()
             return cls(
                 total_count=total_count,
                 visible_count=total_count,
-                visible_rows=list(_order_by_pk(queryset)[: _PREVIEW_LEAF_LIMIT + 1]),
+                visible_rows=visible_rows,
             )
         scoped = visibility(queryset.model, actor)
         visible_queryset = scoped.filter(pk__in=models.Subquery(queryset.order_by().values("pk")))
-        visible_count = visible_queryset.count()
+        total_query = (
+            queryset.order_by()
+            .annotate(_preview_group=models.Value(1))
+            .values("_preview_group")
+            .annotate(_preview_count=models.Count("pk"))
+            .values("_preview_count")[:1]
+        )
+        visible_rows = list(
+            _order_by_pk(visible_queryset).annotate(
+                _preview_total=models.Subquery(total_query, output_field=models.IntegerField()),
+            )[: _PREVIEW_LEAF_LIMIT + 1]
+        )
+        total_count = cast(int, getattr(visible_rows[0], "_preview_total")) if visible_rows else queryset.count()
+        visible_count = (
+            len(visible_rows) if len(visible_rows) <= _PREVIEW_LEAF_LIMIT else visible_queryset.count()
+        )
         return cls(
             total_count=total_count,
             visible_count=visible_count,
-            visible_rows=list(_order_by_pk(visible_queryset)[: _PREVIEW_LEAF_LIMIT + 1]),
+            visible_rows=visible_rows,
         )
 
 

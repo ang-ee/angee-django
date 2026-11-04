@@ -179,6 +179,20 @@ class RecordRefMixin(RecordRefMergeContract, Composable, concrete=False):
         }
 
     @classmethod
+    def indexed_target_models(
+        cls, source: object | None, *, definition_required: bool = False,
+    ) -> dict[str, type[models.Model]]:
+        """Targets admitted by the policy source shared by one index build."""
+        del source, definition_required
+        return cls.accepted_target_models()
+
+    @staticmethod
+    def target_index_source(*, declared: bool = False) -> object | None:
+        """Return the policy snapshot used by :meth:`indexed_target_models`."""
+        del declared
+        return None
+
+    @classmethod
     def validate_target(cls, target: models.Model) -> None:
         """Require a saved target; domain and protection donors own further admission."""
         if target.pk is None or target._state.adding:
@@ -248,14 +262,48 @@ class RecordRefMixin(RecordRefMergeContract, Composable, concrete=False):
         return self.record_ref.public_id
 
 
-def record_edges_by_target() -> dict[type[models.Model], tuple[type[RecordRefMixin], ...]]:
-    """Index model-owned generic edge admission, independent of its policy provider."""
+_target_edge_index: dict[tuple[type[RecordRefMixin], bool], tuple[
+    object,
+    tuple[tuple[type[RecordRefMixin], object | None], ...],
+    dict[type[models.Model], tuple[type[RecordRefMixin], ...]],
+]] = {}
+
+
+def record_edges_by_target(
+    *, declared: bool = False, edge_type: type[RecordRefMixin] = RecordRefMixin,
+    definition_required: bool = False,
+) -> dict[type[models.Model], tuple[type[RecordRefMixin], ...]]:
+    """Invert edge admission once per model set and schema snapshot identity."""
+    registered_models = apps.get_models()
+    edges = tuple(
+        edge for edge in sorted(registered_models, key=lambda model: model._meta.label)
+        if issubclass(edge, edge_type)
+    )
+    policy_sources: dict[object, object | None] = {}
+    sources = []
+    for edge in edges:
+        provider = edge.target_index_source
+        if provider not in policy_sources:
+            policy_sources[provider] = provider(declared=declared)
+        sources.append((edge, policy_sources[provider]))
+    signature = tuple(sources)
+    # Authored files can be rebound or rewritten during composition; only native
+    # effective snapshots have a revision identity suitable for reuse.
+    cache_key = (edge_type, definition_required)
+    cached = _target_edge_index.get(cache_key) if not declared else None
+    if cached is not None and registered_models is cached[0] and len(signature) == len(cached[1]) and all(
+        edge is cached_edge and source is cached_source
+        for (edge, source), (cached_edge, cached_source) in zip(signature, cached[1], strict=True)
+    ):
+        return cached[2]
     index: dict[type[models.Model], list[type[RecordRefMixin]]] = {}
-    for edge in sorted(apps.get_models(), key=lambda model: model._meta.label):
-        if issubclass(edge, RecordRefMixin):
-            for target in edge.accepted_target_models().values():
-                index.setdefault(target, []).append(edge)
-    return {target: tuple(edges) for target, edges in index.items()}
+    for edge, source in signature:
+        for target in edge.indexed_target_models(source, definition_required=definition_required).values():
+            index.setdefault(target, []).append(edge)
+    result = {target: tuple(target_edges) for target, target_edges in index.items()}
+    if not declared:
+        _target_edge_index[cache_key] = (registered_models, signature, result)
+    return result
 
 
 def record_ref_cleanup_edges_for_target(
@@ -305,8 +353,7 @@ def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> Non
         rows = edge._base_manager.using(using).filter(**{pointer.ct_field: content_type, pointer.fk_field: prepared_id})
         policy = edge.on_target_delete
         if policy is models.PROTECT:
-            protected: set[models.Model] = set(rows)
-            if protected:
-                raise ProtectedError(f"{edge._meta.label} rows still refer to {instance}.", protected)
+            if rows[:1]:
+                raise ProtectedError(f"{edge._meta.label} rows still refer to {instance}.", set(rows))
             continue
         edge.remove_target_refs(rows)

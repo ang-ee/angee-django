@@ -99,7 +99,7 @@ def contribute(model):
 
 def enrich_metadata(resources):
     by_model = {item.model: item for item in resources if item.model is not None}
-    edges = record_edges_by_target(definition_for=declared_rebac_definition)
+    edges = record_edges_by_target(declared=True)
     return tuple(
         dataclasses.replace(
             item,
@@ -128,6 +128,8 @@ def _record_edges(
         return ()
     entries: list[str] = []
     for edge in edges_by_target.get(generic_pointer_model(model), ()):
+        if not issubclass(edge, ProtectedRecordRefMixin):
+            continue
         entries.append(edge._meta.label)
         entries.extend(f"{edge._meta.label}:{role}" for role in edge.record_edge_roles(model))
     return tuple(entries)

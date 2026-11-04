@@ -4,20 +4,22 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from types import SimpleNamespace
 from typing import Any, Self, cast
 
 import pytest
 from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import connection, models, transaction
 from django.db.models.deletion import Collector
 from django.db.models.signals import pre_delete
 from django.test import override_settings
-from django.test.utils import isolate_apps
+from django.test.utils import CaptureQueriesContext, isolate_apps
 from graphql import GraphQLError
 from rebac import PermissionDenied, RebacMixin, SubjectRef, actor_context, system_context, to_object_ref
 from rebac.models import active_relationship_model
 
+from angee.graphql import deletion as deletion_module
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.graphql.deletion import (
     DeletePreview,
@@ -407,6 +409,44 @@ def test_deletion_preview_counts_fast_deletes(monkeypatch: pytest.MonkeyPatch) -
         child_label = str(PreviewCascadeChild._meta.verbose_name_plural)
         assert deleted[parent_label] == 1
         assert deleted[child_label] == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fast_delete_preview_counts_visible_rows_only_after_overflow(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bounded scoped preview uses one SELECT up to its leaf limit, two above it."""
+
+    class PreviewRow(models.Model):
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "auth"
+
+    monkeypatch.setattr(
+        deletion_module,
+        "resource_extensions",
+        lambda model: SimpleNamespace(preview_queryset=lambda model, actor: model.objects.all()),
+    )
+    with model_tables((PreviewRow,)):
+        PreviewRow.objects.bulk_create(PreviewRow(name=str(index)) for index in range(51))
+        rows = PreviewRow.objects.all()
+        with CaptureQueriesContext(connection) as one_query:
+            one = deletion_module._PreviewRows.from_fast_delete(rows.filter(name="0"), None)
+        with CaptureQueriesContext(connection) as overflow_queries:
+            overflow = deletion_module._PreviewRows.from_fast_delete(rows, None)
+        monkeypatch.setattr(
+            deletion_module,
+            "resource_extensions",
+            lambda model: SimpleNamespace(preview_queryset=lambda model, actor: model.objects.none()),
+        )
+        with CaptureQueriesContext(connection) as hidden_queries:
+            hidden = deletion_module._PreviewRows.from_fast_delete(rows, None)
+
+    assert (one.total_count, one.visible_count) == (1, 1)
+    assert (overflow.total_count, overflow.visible_count) == (51, 51)
+    assert (hidden.total_count, hidden.visible_count) == (51, 0)
+    assert len(one_query) == 1
+    assert len(overflow_queries) == 2
+    assert len(hidden_queries) <= 2
 
 
 @pytest.mark.django_db(transaction=True)

@@ -12,7 +12,7 @@ import pytest
 import strawberry
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
-from django.db import connection
+from django.db import connection, models
 from django.test import RequestFactory
 from django.test.utils import CaptureQueriesContext
 from rebac import (
@@ -3087,6 +3087,60 @@ def test_message_whose_thread_was_deleted_in_the_same_cascade_does_not_broadcast
         assert not messaging_models.Thread._base_manager.filter(pk=thread_id).exists()
         torn_down = messaging_models.Message(thread_id=thread_id, preview="gone")
         assert torn_down.broadcasts_changes() is False
+
+
+def test_record_teardown_suppresses_timeline_but_publishes_recipient_rows(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Host teardown skips its timeline invalidation and publishes recipients' deletes."""
+
+    del composed_tables
+    from angee.base.signals import change_observed, change_published
+    from angee.timeline import events as timeline_events
+
+    recipient = _platform_admin("mute-recipient")
+    with system_context(reason="test.messaging.record_teardown.seed"):
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Case mute")
+        message = ticket.message_log("Keep until host deletion")
+        control = ticket.message_log("Direct deletion proves the observer")
+        messaging_models.MessageStar._base_manager.create(message=message, user=recipient)
+        messaging_models.ThreadNotification._base_manager.create(
+            thread=message.thread, message=message, user=recipient,
+        )
+
+    published: list[str] = []
+    observed: list[str] = []
+    invalidated: list[models.Model] = []
+
+    def observe_publication(sender: Any, payload: Any, **kwargs: Any) -> None:
+        published.append(payload.model)
+
+    def observe_transport(sender: Any, payload: Any, **kwargs: Any) -> None:
+        observed.append(payload.model)
+
+    def observe_invalidation(records: Any) -> None:
+        invalidated.extend(records)
+
+    monkeypatch.setattr(timeline_events, "broadcast_related_records", observe_invalidation)
+    change_published.connect(observe_publication, dispatch_uid="test.messaging.record_teardown.publish", weak=False)
+    change_observed.connect(observe_transport, dispatch_uid="test.messaging.record_teardown.observe", weak=False)
+    try:
+        with system_context(reason="test.messaging.record_teardown.control"):
+            control.delete()
+        assert "messaging.Message" in published
+        assert any(record.pk == ticket.pk for record in invalidated)
+        published.clear()
+        observed.clear()
+        invalidated.clear()
+        with system_context(reason="test.messaging.record_teardown.delete"):
+            ticket.delete()
+        for label in ("messaging.Message", "messaging.Thread", "messaging.MessageStar", "messaging.ThreadNotification"):
+            assert label in published
+            assert label in observed
+        assert all(record.pk != ticket.pk for record in invalidated)
+    finally:
+        change_published.disconnect(dispatch_uid="test.messaging.record_teardown.publish")
+        change_observed.disconnect(dispatch_uid="test.messaging.record_teardown.observe")
 
 
 def test_teardown_for_channel_purges_messages_threads_and_cascade(composed_tables: None) -> None:
