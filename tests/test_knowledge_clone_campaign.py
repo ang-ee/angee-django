@@ -287,12 +287,13 @@ def test_clone_page_tree_queries_do_not_grow_with_depth(composed_tables, record_
 
     actor = create_user("tree-depth-owner")
     counts = []
-    for depth in (2, 30):
+    # F35 enforces the inherited varchar(255) path: 19 levels fit, 20 do not.
+    for depth in (2, 19):
         with actor_context(actor):
             source = Vault.objects.create_for(actor, name=f"Depth {depth}")
             pages = []
             for index in range(30):
-                parent = pages[-1 if depth == 30 else 0] if pages else None
+                parent = pages[-1 if index < depth else 0] if pages else None
                 pages.append(
                     Page.objects.create_in(
                         source,
