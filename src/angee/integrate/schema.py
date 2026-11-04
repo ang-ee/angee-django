@@ -26,6 +26,7 @@ from django.utils import timezone
 from django.utils.text import capfirst
 from django.utils.translation import gettext as _
 from rebac import PermissionDenied, check_new, system_context, to_subject_ref
+from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
@@ -47,6 +48,7 @@ from angee.iam.graphql.actions import action_target, authorized_action_target, r
 from angee.iam.graphql.actions import session_user as _session_user
 from angee.iam.graphql.capabilities import PermissionsExtension, held_permissions
 from angee.iam.graphql.node import ProtectedNode
+from angee.iam.graphql.relations import actor_scoped_to_one
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.graphql.writes import instance_for_write
 from angee.iam.identity import user_from_public_id as _user_from_public_id
@@ -64,6 +66,16 @@ from angee.integrate.oauth.registrations import OAuthRegistrationExtension, oper
 from angee.integrate.states import ConflictKeep, StreamState, SyncFailure, SyncFailureKind, SyncFailureStatus
 
 logger = logging.getLogger(__name__)
+
+
+def _selects_field(selections: Any, name: str) -> bool:
+    """Test selected fields, including fragments and aliases."""
+
+    return any(
+        getattr(selection, "name", None) == name
+        or _selects_field(getattr(selection, "selections", ()), name)
+        for selection in selections
+    )
 
 Vendor = apps.get_model("integrate", "Vendor")
 Integration = apps.get_model("integrate", "Integration")
@@ -1270,12 +1282,11 @@ class IntegrationType(IntegrationLabelMixin, ProtectedNode):
 
     @classmethod
     def get_queryset(cls, queryset: Any, info: strawberry.Info) -> Any:
-        """Batch authorized concrete children for root and nested projections."""
+        """Batch concrete children only when this selection projects a target."""
 
-        return queryset.with_concrete_children(
-            actor=_session_user(info),
-            exposed_model_labels=_exposed_model_labels(info),
-        )
+        if not _selects_field(info.selected_fields, "concrete_target"):
+            return queryset
+        return queryset.with_concrete_children(actor=relation_actor(queryset))
 
     @strawberry_django.field(only=["concrete_type_id"])
     def concrete_target(self, info: strawberry.Info) -> ConcreteIntegrationTarget:
@@ -1385,7 +1396,7 @@ class SyncFailureType:
 class SyncStreamType(ProtectedNode):
     """Read-only inspection of a bridge partition's retained epoch."""
 
-    integration: IntegrationType
+    integration: IntegrationType | None = actor_scoped_to_one("integration")
     key: auto
     partition: auto
     kind: auto
@@ -1432,7 +1443,16 @@ class SyncStreamType(ProtectedNode):
 class RecordLinkType(ProtectedNode):
     """Read-only identity, comparison bases and deletion evidence."""
 
-    stream: SyncStreamType
+    @classmethod
+    def get_queryset(cls, queryset: Any, info: strawberry.Info) -> Any:
+        """Batch source capabilities only for selections that use them."""
+
+        selected = info.selected_fields
+        if any(_selects_field(selected, name) for name in ("source_url", "source_label", "stream")):
+            return queryset.with_concrete_sources(actor=relation_actor(queryset))
+        return queryset
+
+    stream: SyncStreamType | None = actor_scoped_to_one("stream")
     external_key: auto
     status: auto
     remote_version: auto
@@ -1450,7 +1470,7 @@ class RecordLinkType(ProtectedNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["stream_id", "external_key"], select_related=["stream__integration"])
+    @strawberry_django.field(only=["stream_id", "external_key"])
     def source_url(self) -> str | None:
         """Return the selected connector's provider URL for this remote identity."""
 
@@ -1458,7 +1478,6 @@ class RecordLinkType(ProtectedNode):
 
     @strawberry_django.field(
         only=["stream_id", "external_key", "source_payload"],
-        select_related=["stream__integration"],
     )
     def source_label(self) -> str:
         """Connector-owned human label, shared by record sources and failures."""
@@ -1552,6 +1571,7 @@ _RECORD_LINK_RESOURCE = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
+    get_queryset=lambda info: RecordLinkType.get_queryset(RecordLink.objects.all(), info),
     field_id_decode={"stream": public_pk_decoder(SyncStream)},
     record_ref_filters=("model_label", "record_id"),
     record_ref_requires_read=True,

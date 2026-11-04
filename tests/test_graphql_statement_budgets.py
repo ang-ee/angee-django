@@ -5,12 +5,15 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from django.db import connection
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.agents import schema as agents_schema
 from angee.agents.testing.models import Agent, AgentSession
 from angee.base.models.identity import public_id_of
+from angee.base.signals import mute_changes
 from angee.decisions import schema as decisions_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
@@ -20,14 +23,21 @@ from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.integrate_vcs import schema as integrate_vcs_schema
 from angee.knowledge import schema as knowledge_schema
+from angee.messaging import schema as messaging_schema
 from angee.messaging.testing.models import Channel
 from angee.messaging.testing.models import Party as PartyModel
 from angee.parties import schema as parties_schema
+from angee.posts import schema as posts_schema
 from angee.projects import schema as projects_schema
 from angee.projects.testing.models import Milestone, Project, Task
 from angee.provenance.context import changeset as open_changeset
 from angee.timeline import schema as timeline_schema
+from tests import test_messaging as messaging_models
 from tests.conftest import (
+    Backend,
+    Drive,
+    Feed,
+    MimeType,
     Page,
     RecordBinding,
     addon_schema,
@@ -37,6 +47,7 @@ from tests.conftest import (
     make_integration,
     vault_for,
 )
+from tests.conftest import File as StorageFile
 from tests.test_timeline import KINDS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +55,10 @@ DECISIONS = authored_graphql_document(
     ROOT / "src/angee/decisions/web/src/documents.console.ts", "RecordDecisionsDocument"
 )
 SOURCES = authored_graphql_document(ROOT / "src/angee/integrate/web/src/documents.ts", "RecordSourcesDocument")
+RECORD_THREAD = "\n".join(
+    authored_graphql_document(ROOT / "src/angee/messaging/web/src/documents.ts", name)
+    for name in ("RecordThreadSummaryFields", "RecordFollowerFields", "RecordThreadDocument")
+)
 TIMELINE = authored_graphql_document(ROOT / "src/angee/timeline/web/src/documents.console.ts", "TimelineDocument")
 KNOWLEDGE_DOCUMENTS = ROOT / "src/angee/knowledge/web/src/data/documents.ts"
 KNOWLEDGE_PAGES = authored_graphql_document(KNOWLEDGE_DOCUMENTS, "KnowledgeRecordPages")
@@ -111,65 +126,190 @@ def test_record_decisions_document_statement_count(record_decisions_reads) -> No
     twenty.assert_flat_from(ten)
 
 
-@pytest.fixture
-def record_sources_reads(composed_tables: None, capture_graphql_document):
-    """Execute the authored pane at one, five, ten and twenty visible links."""
+@pytest.fixture(params=(Channel, Feed), ids=("channel", "feed"))
+def record_sources_reads(request, composed_tables: None, capture_graphql_document):
+    """Execute the authored pane at one, five, ten and twenty links from distinct integrations."""
 
     del composed_tables
-    bridge = make_integration("document-budget-sources", model=Channel)
-    schema = addon_schema(iam_schema.schemas, "console", integrate_schema.schemas, integrate_vcs_schema.schemas)
+    kind = request.param
+    options = {"backend_class": "feed", "feed_backend_class": "stub"} if kind is Feed else {}
+    bridge = make_integration("document-budget-sources", model=kind, **options)
+    schema = addon_schema(
+        iam_schema.schemas, "console", integrate_schema.schemas, integrate_vcs_schema.schemas,
+        posts_schema.schemas,
+    )
     with system_context(reason="test.document_budget.sources"):
         stream = current_stream(bridge, "records", kind=StreamKind.RECORD_REPLICA)
+        many_stream = current_stream(bridge, "records-many", kind=StreamKind.RECORD_REPLICA)
         RecordLink.objects.observe(stream, "record:1", target=stream)
-    variables = {"modelLabel": stream._meta.label, "recordId": public_id_of(stream)}
-    one = capture_graphql_document(schema, SOURCES, variables, actor=bridge.owner)
+        RecordLink.objects.observe(stream, "record:1-many", target=many_stream)
+    one = capture_graphql_document(
+        schema, SOURCES, {"modelLabel": stream._meta.label, "recordId": public_id_of(stream)}, actor=bridge.owner,
+    )
     assert len(one.data["record_links"]) == 1
     reads = {1: one}
+    many = {"modelLabel": many_stream._meta.label, "recordId": public_id_of(many_stream)}
     for index in range(2, 21):
         with system_context(reason="test.document_budget.sources.more"):
-            RecordLink.objects.observe(stream, f"record:{index}", target=stream)
+            another = make_integration(
+                f"document-budget-sources-{index}", model=kind, owner=bridge.owner, **options
+            )
+            source_stream = current_stream(another, "records", kind=StreamKind.RECORD_REPLICA)
+            RecordLink.objects.observe(source_stream, f"record:{index}", target=many_stream)
         if index in (5, 10, 20):
-            read = capture_graphql_document(schema, SOURCES, variables, actor=bridge.owner)
+            read = capture_graphql_document(schema, SOURCES, many, actor=bridge.owner)
             assert len(read.data["record_links"]) == index
+            assert all(row["source_label"] for row in read.data["record_links"])
             reads[index] = read
-    return reads
+    return reads, schema, bridge.owner, kind
 
 
-def test_record_sources_document_fixed_budgets(record_sources_reads) -> None:
-    one, five, ten, twenty = (record_sources_reads[count] for count in (1, 5, 10, 20))
-    # Concrete integration reads remain per link until P12 batches them.
-    # Suite context and the full-profile host add one statement per link.
-    one.assert_bytes(total=139_500, largest=20_900, cause="REBAC L2 candidate-root proof on one link")
-    one.assert_statements(34)
-    one.assert_no_audit_writes()
-    five.assert_bytes(total=525_000, largest=20_900, cause="REBAC L2 candidate-root proof per unbatched link")
-    five.assert_statements(110)
-    five.assert_no_audit_writes()
-    ten.assert_statements(205)
-    twenty.assert_statements(395)
+def test_record_sources_document_budget(record_sources_reads) -> None:
+    reads, _, _, kind = record_sources_reads
+    # CI's full-profile host composes more addons; retain two statements of headroom.
+    maximum = 16 if kind is Feed else 15
+    total_bytes = 70_000 if kind is Feed else 62_000
+    for read in reads.values():
+        read.assert_bytes(
+            total=total_bytes, largest=16_000, cause="batched reads bind under 100 bytes of keys per link",
+        )
+        read.assert_statements(maximum)
+        read.assert_no_audit_writes()
 
 
-@pytest.mark.xfail(strict=True, reason="P12: unbatched concrete integration reads exceed the Sources byte target")
-def test_record_sources_document_byte_budget(record_sources_reads) -> None:
-    five = record_sources_reads[5]
-    five.assert_bytes(
-        total=450_000,
-        largest=20_000,
-        cause="REBAC L2 candidate-root proof repeats for each unbatched concrete integration",
-    )
-
-
-@pytest.mark.xfail(strict=True, reason="P12: Sources must batch concrete integrations across links")
 def test_record_sources_document_statement_count(record_sources_reads) -> None:
-    one, five, ten, twenty = (record_sources_reads[count] for count in (1, 5, 10, 20))
-    twenty.assert_flat_from(ten)
-    ten.assert_flat_from(five)
+    one, five, ten, twenty = (record_sources_reads[0][count] for count in (1, 5, 10, 20))
     five.assert_flat_from(one)
+    ten.assert_flat_from(five)
+    twenty.assert_flat_from(ten)
 
 
 def test_record_sources_document_audit(record_sources_reads) -> None:
-    for read in record_sources_reads.values():
+    for read in record_sources_reads[0].values():
         read.assert_no_audit_writes()
+
+
+def test_record_links_without_source_fields_stays_flat(record_sources_reads, capture_graphql_document) -> None:
+    """An id-only link list never loads deferred stream ids per row."""
+
+    _, schema, owner, _ = record_sources_reads
+    document = "query Links($limit: Int!) { record_links(limit: $limit) { id external_key } }"
+    one = capture_graphql_document(schema, document, {"limit": 1}, actor=owner)
+    five = capture_graphql_document(schema, document, {"limit": 5}, actor=owner)
+    assert len(one.data["record_links"]) == 1
+    assert len(five.data["record_links"]) == 5
+    five.assert_flat_from(one)
+    one.assert_no_audit_writes()
+    five.assert_no_audit_writes()
+
+
+def test_record_link_source_fields_without_stream_stay_flat(record_sources_reads, capture_graphql_document) -> None:
+    """Source labels and URLs batch even without the nested stream field."""
+
+    _, schema, owner, _ = record_sources_reads
+    document = "query Links($limit: Int!) { record_links(limit: $limit) { id source_label source_url } }"
+    one = capture_graphql_document(schema, document, {"limit": 1}, actor=owner)
+    five = capture_graphql_document(schema, document, {"limit": 5}, actor=owner)
+    assert len(one.data["record_links"]) == 1
+    assert len(five.data["record_links"]) == 5
+    five.assert_flat_from(one)
+    one.assert_no_audit_writes()
+    five.assert_no_audit_writes()
+
+
+def test_integration_ids_stay_flat_without_concrete_target(record_sources_reads, capture_graphql_document) -> None:
+    """An id-only integration list never loads deferred content-type ids per row."""
+
+    _, schema, owner, _ = record_sources_reads
+    document = "query Integrations($limit: Int!) { integrations(limit: $limit) { id } }"
+    one = capture_graphql_document(schema, document, {"limit": 1}, actor=owner)
+    five = capture_graphql_document(schema, document, {"limit": 5}, actor=owner)
+    assert len(one.data["integrations"]) == 1
+    assert len(five.data["integrations"]) == 5
+    five.assert_flat_from(one)
+    one.assert_no_audit_writes()
+    five.assert_no_audit_writes()
+
+
+def test_record_thread_document_file_part_growth(
+    composed_tables: None, capture_graphql_document, tmp_path: Path,
+) -> None:
+    """The authored thread state read stays flat as its file attachments grow."""
+
+    del composed_tables
+    owner = create_user("document-budget-thread-owner")
+    reader = create_user("document-budget-thread-reader")
+    with system_context(reason="test.document_budget.thread"), mute_changes():
+        backend = Backend._base_manager.create(
+            slug="budget-local", label="Local", backend_class="local",
+            backend_config={"root": str(tmp_path), "base_url": "/media/"},
+        )
+        MimeType._base_manager.get_or_create(
+            mime_type="text/plain", defaults={"category": "text", "label": "Text"},
+        )
+        Drive._base_manager.create(backend=backend, slug="assets", name="Assets", prefix="assets", created_by=owner)
+        record = Project.objects.create(title="Attachment budget", owner=owner)
+        attachment = messaging_models.ThreadAttachment.objects.ensure_for_record(record)
+        message = messaging_models.Message.objects.create(
+            thread=attachment.thread, direction="internal", message_type="comment", created_by=owner,
+        )
+
+        def attach(index: int) -> None:
+            file = StorageFile.objects.ingest_bytes(
+                f"Attachment {index}".encode(), filename=f"budget-{index}.txt", drive_slug="assets",
+            )
+            messaging_models.Part.objects.create(
+                message=message, position=index, type="text/plain", disposition="attachment", file=file,
+                created_by=owner,
+            )
+
+        attach(1)
+    record.with_actor(owner).grant_record_access("reader", reader)
+    with actor_context(reader):
+        record.message_subscribe(user=reader)
+    schema = addon_schema(
+        iam_schema.schemas, "console", integrate_schema.schemas, parties_schema.schemas, messaging_schema.schemas,
+        projects_schema.schemas,
+    )
+    variables = {"modelLabel": record._meta.label, "recordId": public_id_of(record)}
+    with CaptureQueriesContext(connection) as captured:
+        one = capture_graphql_document(schema, RECORD_THREAD, variables, actor=reader)
+    attachment_table = connection.ops.quote_name(messaging_models.ThreadAttachment._meta.db_table)
+    edge_reads = [
+        query for query in captured
+        if query["sql"].startswith(f"SELECT {attachment_table}.") and f"FROM {attachment_table}" in query["sql"]
+    ]
+    assert len(edge_reads) == 1
+    assert one.data["record_thread"]["attachment_count"] == 1
+    assert one.data["record_thread"]["followers"]
+    with system_context(reason="test.document_budget.thread.more"), mute_changes():
+        for index in range(2, 6):
+            attach(index)
+    five = capture_graphql_document(schema, RECORD_THREAD, variables, actor=reader)
+    assert five.data["record_thread"]["attachment_count"] == 5
+    transcript = capture_graphql_document(
+        schema,
+        """query ThreadParts($modelLabel: String!, $recordId: ID!) {
+          record_thread(input: {model_label: $modelLabel, record_id: $recordId}) {
+            attachment_count messages { parts { id disposition } }
+          }
+        }""",
+        variables,
+        actor=reader,
+    ).data["record_thread"]
+    assert transcript["attachment_count"] == sum(
+        part["disposition"] == "ATTACHMENT"
+        for message in transcript["messages"] for part in message["parts"]
+    )
+    five.assert_flat_from(one)
+    # P23: messaging's audited system reads remain: follower person and effective rows, suggested-recipient
+    # suppression, the notification error count and record rows, and the record-gated attachment count.
+    for read in (one, five):
+        read.assert_statements(41)
+        read.assert_bytes(
+            total=150_000, largest=30_000, cause="P5's read requirement in the messaging held_permissions check",
+        )
+        read.assert_audit_inserts(6)
 
 
 @pytest.fixture

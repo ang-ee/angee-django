@@ -60,7 +60,7 @@ if TYPE_CHECKING:
     )
 
 from angee.messaging.managers.threads import _record_attachment, _record_thread_title
-from angee.messaging.querysets import _MESSAGE_ORDER, _resolve_user_id
+from angee.messaging.querysets import _MESSAGE_ORDER, _UNRESOLVED, _resolve_user_id
 
 _ThreadFollowerManagerBase = ProtectedManager.from_queryset(ThreadFollowerQuerySet)
 
@@ -463,7 +463,10 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
             follower.save(using=follower._state.db, update_fields=("last_read_message", "updated_at"))
         return 1
 
-    def unread_messages(self, thread: Any, *, party: Any = None, user: Any = None, user_id: Any = None) -> Any:
+    def unread_messages(
+        self, thread: Any, *, party: Any = None, user: Any = None, user_id: Any = None,
+        party_id: Any = _UNRESOLVED,
+    ) -> Any:
         """Return ``user``'s unread messages on ``thread`` — the receipt-anchored scan.
 
         Everything strictly after the follower's ``last_read_message`` in feed order
@@ -477,7 +480,8 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         badge, the needaction markers, and email delivery.
         """
 
-        party_id = self.get_party_id(party=party, user=user, user_id=user_id)
+        if party_id is _UNRESOLVED:
+            party_id = self.get_party_id(party=party, user=user, user_id=user_id)
         if party_id is None:
             return apps.get_model("messaging", "Message")._base_manager.none()
         message_model = apps.get_model("messaging", "Message")
@@ -510,9 +514,19 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         """Return ``user``'s unread message count on ``record``'s chatter thread."""
 
         attachment = _record_attachment(record, role=role)
+        return self.unread_count_for_attachment(attachment, party=party, user=user, user_id=user_id)
+
+    def unread_count_for_attachment(
+        self, attachment: Any | None, *, party: Any = None, user: Any = None, user_id: Any = None,
+        party_id: Any = _UNRESOLVED,
+    ) -> int:
+        """Count unread messages using an already resolved chatter edge."""
+
         if attachment is None:
             return 0
-        return int(self.unread_messages(attachment.thread, party=party, user=user, user_id=user_id).count())
+        return int(self.unread_messages(
+            attachment.thread, party=party, user=user, user_id=user_id, party_id=party_id,
+        ).count())
 
     def mark_read_for_record(
         self,
@@ -626,7 +640,13 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         if resolved_user_id is None:
             return self.none()
         attachment = _record_attachment(record, role=role)
-        if attachment is None:
+        return self.for_attachment_for_user(attachment, user_id=resolved_user_id)
+
+    def for_attachment_for_user(self, attachment: Any | None, *, user: Any = None, user_id: Any = None) -> Any:
+        """Return the user's delivery rows from an already resolved chatter edge."""
+
+        resolved_user_id = _resolve_user_id(user=user, user_id=user_id)
+        if attachment is None or resolved_user_id is None:
             return self.none()
         # Notification bookkeeping bypasses per-row REBAC: the record-level gate has
         # already authorised the whole chatter read, so scope the reads with sudo
@@ -654,7 +674,13 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         if resolved_user_id is None:
             return 0
         attachment = _record_attachment(record, role=role)
-        if attachment is None:
+        return self.error_count_for_attachment(attachment, user_id=resolved_user_id)
+
+    def error_count_for_attachment(self, attachment: Any | None, *, user: Any = None, user_id: Any = None) -> int:
+        """Count delivery errors using an already resolved chatter edge."""
+
+        resolved_user_id = _resolve_user_id(user=user, user_id=user_id)
+        if attachment is None or resolved_user_id is None:
             return 0
         return int(
             self.sudo(reason="messaging.notification.error_count")

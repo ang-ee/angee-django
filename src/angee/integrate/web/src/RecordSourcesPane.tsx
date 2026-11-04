@@ -65,17 +65,18 @@ export function RecordSourcesPane({ context }: { context: ChatterViewContext }):
 
   return <PaneRows>
     {rows.map((source) => {
-      const target = source.stream.integration.concrete_target;
-      const connectionHref = target.resource && target.id ? recordHref(target.resource, target.id) : undefined;
+      const integration = source.stream?.integration;
+      const target = integration?.concrete_target;
+      const connectionHref = target?.resource && target.id ? recordHref(target.resource, target.id) : undefined;
       return <li key={source.id}>
       <PaneRow
         icon="link"
         title={source.source_label}
-        detail={source.stream.integration.display_name}
+        detail={integration?.display_name}
         meta={<StatusBadge value={source.status} display="pill" />}
         sub={source.last_seen_at ? formatDateTime(source.last_seen_at) : t("sources.never")}
         verb={connectionHref ? <NavLink href={connectionHref} variant="inline">{t("sources.connection")}</NavLink> : undefined}
-        href={source.source_url ?? undefined}
+        href={integration ? source.source_url ?? undefined : undefined}
         target="_blank" rel="noopener"
       />
     </li>; })}

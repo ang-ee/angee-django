@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
@@ -40,7 +40,7 @@ from angee.base.models.identity import instance_from_public_id
 from angee.base.models.merge_references import MergePolicy
 from angee.base.models.persistence import require_composed_type
 from angee.base.models.scope import NullableScopeMixin
-from angee.base.refs import RecordRef, generic_pointer_model
+from angee.base.refs import RecordRef, generic_pointer_model, generic_pointer_target
 from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.iam.models.base import ProtectedDataModel, ProtectedModel
 from angee.iam.models.ownership import OwnerMixin
@@ -52,7 +52,7 @@ from angee.messaging.managers import (
 )
 from angee.messaging.models.messages import Message
 from angee.messaging.models.notifications import AudienceMember, ThreadAudienceMixin, ThreadFollower
-from angee.messaging.querysets import MessageQuerySet, ThreadFollowerQuerySet
+from angee.messaging.querysets import _UNRESOLVED, MessageQuerySet, ThreadFollowerQuerySet
 from angee.messaging.source_copies import SourceCopyMixin
 from angee.parties.models import Handle
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
@@ -106,6 +106,15 @@ def chatter_record(model_label: str, public_id: str) -> models.Model | None:
     a missing or unreadable record is ``None``.
     """
 
+    result = chatter_record_with_attachment(model_label, public_id)
+    return result[0] if result is not None else None
+
+
+def chatter_record_with_attachment(
+    model_label: str, public_id: str,
+) -> tuple[ThreadedModelMixin, ThreadAttachment | None] | None:
+    """Resolve a chatter record and its existing edge in one authorized read."""
+
     try:
         model = apps.get_model(model_label)
     except (LookupError, ValueError) as error:
@@ -117,7 +126,16 @@ def chatter_record(model_label: str, public_id: str) -> models.Model | None:
         if record is None:
             return None
         attachment = record.message_thread_attachment(create=False)
-        return attachment.target if attachment is not None else record
+        if attachment is not None:
+            content_type, object_id = generic_pointer_target(record)
+            if (
+                attachment.content_type_id != content_type.pk
+                or str(attachment.object_id) != str(object_id)
+                or generic_pointer_model(type(record)) is not type(record)
+            ):
+                target = attachment.target
+                return (cast(ThreadedModelMixin, target), attachment) if target is not None else None
+        return cast(ThreadedModelMixin, record), attachment
     except ImproperlyConfigured as error:
         raise ValueError(str(error)) from error
 
@@ -697,6 +715,7 @@ class ThreadedModelMixin(models.Model):
         role: str = "chatter",
         reply_discussion: bool = True,
         user: models.Model | None = None,
+        attachment: ThreadAttachment | None | object = _UNRESOLVED,
     ) -> tuple[dict[str, Any], ...]:
         """Return Odoo-style suggested recipients for this record's chatter.
 
@@ -712,14 +731,20 @@ class ThreadedModelMixin(models.Model):
             raise PermissionDenied(
                 f"Reading message recipients on {self._meta.label} requires {self.thread_read_access!r} access."
             )
-        attachment = self.message_thread_attachment(create=False)
+        if attachment is _UNRESOLVED:
+            attachment = self.message_thread_attachment(create=False)
+        assert attachment is None or isinstance(attachment, ThreadAttachment)
         thread = attachment.thread if attachment is not None else None
-        follower_ids = {
-            str(user_id)
-            for user_id in self.message_followers()
-            .sudo(reason="messaging suggested recipients follower suppression")
-            .values_list("party__person__user_id", flat=True)
-        }
+        follower_ids = (
+            {
+                str(user_id)
+                for user_id in apps.get_model("messaging", "ThreadFollower").objects.sudo(
+                    reason="messaging suggested recipients follower suppression"
+                ).for_attachment(attachment)
+                .values_list("party__person__user_id", flat=True)
+            }
+            if attachment is not None else set()
+        )
         current_user_id = getattr(user, "pk", None)
         suggestions: list[dict[str, Any]] = []
         seen: set[str] = set()
