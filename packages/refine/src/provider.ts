@@ -389,8 +389,8 @@ export function createAngeeChangeLiveProvider(
             next: (result) => {
               if (!active || !enabled) return;
               const payload = recordValue(recordValue(result.data)?.[changesRoot]);
-              // Each ready closes the registration or reconnect gap for reads
-              // in flight and retained snapshots without cancelling either.
+              // A ready closes this operation's registration or reconnect gap
+              // for in-flight reads and retained snapshots without cancellation.
               if (payload?.action === "ready") {
                 liveInvalidation?.ready(resource.modelLabel);
                 return;

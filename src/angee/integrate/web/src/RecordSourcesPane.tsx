@@ -17,21 +17,35 @@ import {
 } from "@angee/ui";
 import * as React from "react";
 
-import { RecordSourcesDocument } from "./documents";
+import { RecordSourcesCountDocument, RecordSourcesDocument } from "./documents";
 import { enIntegrateMessages, useIntegrateT } from "./i18n";
 
 export const RECORD_LINK_MODEL = "integrate.RecordLink";
 export const RECORD_SOURCES_GROUP_ID = "integrate.sources";
 
-function useRecordSources(context: ChatterViewContext) {
+function useRecordSourcesTarget(context: ChatterViewContext) {
   const modelLabel = context.route?.canonicalLabel ?? context.route?.modelLabel ?? "";
   const recordId = context.view.kind === "record" ? context.view.sqid ?? "" : "";
-  const variables = React.useMemo(() => ({ modelLabel, recordId }), [modelLabel, recordId]);
-  return useAuthoredQuery(RecordSourcesDocument, variables, {
+  return React.useMemo(() => ({ modelLabel, recordId }), [modelLabel, recordId]);
+}
+
+function recordSourcesInterests({ modelLabel, recordId }: { modelLabel: string; recordId: string }) {
+  return {
     enabled: Boolean(modelLabel && recordId),
     models: [RECORD_LINK_MODEL],
     records: [{ model: modelLabel, id: recordId }],
-  });
+  };
+}
+
+function useRecordSources(context: ChatterViewContext) {
+  const variables = useRecordSourcesTarget(context);
+  return useAuthoredQuery(RecordSourcesDocument, variables, recordSourcesInterests(variables));
+}
+
+function useRecordSourcesCount(context: ChatterViewContext): number | undefined {
+  const variables = useRecordSourcesTarget(context);
+  const query = useAuthoredQuery(RecordSourcesCountDocument, variables, recordSourcesInterests(variables));
+  return query.data?.record_links_aggregate.aggregate?.count;
 }
 
 /** The Sources group of the Links tab: the record's retained provider identities. */
@@ -40,10 +54,7 @@ export const recordSourcesGroup: ContainerChild<RelatedGroupContent> = {
   content: {
     label: enIntegrateMessages["sources.title"]!,
     edge: { model: RECORD_LINK_MODEL },
-    useCount: (context) => {
-      const query = useRecordSources(context);
-      return query.data ? query.data.record_links.length : undefined;
-    },
+    useCount: useRecordSourcesCount,
     render: (context, label) => <>{label()}<li><RecordSourcesPane context={context} /></li></>,
   },
 };

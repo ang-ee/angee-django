@@ -1087,15 +1087,17 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
 - **Registration readiness closes read and reconnect gaps without cancellation.**
   The [live provider](../../packages/refine/src/provider.ts) consumes the server's
   `ready` control after model-group registration on initial subscription,
-  reconnect and resume. Every ready marks matching reads that hold data or are
-  in flight stale, including reads sent between the subscription request and
-  registration. It never cancels a read: in-flight reads, even without data,
-  settle before one coalesced refetch; observed idle retained reads refetch
-  after the quiet gap. Cached reads without observers are marked stale and
-  refetch on next mount. Ready never reaches user data callbacks. Recovery
-  costs one fetch per affected read per ready window; a read covering two models
-  whose readies arrive in separate windows refetches once for each model. A
-  websocket connection acknowledgement precedes group registration.
+  reconnect and resume. Each subscription operation sends one ready. It marks
+  stale every matching read that is in flight or holds data, including reads
+  sent between the subscription request and registration. The
+  [reconciler](../../packages/refine/src/query-invalidation.ts) refetches each
+  once at the quiet gap, after an in-flight read settles. It skips an idle read
+  that has fetched since ready, including one still fetching at the flush; an
+  accepted response is not a fetch. Ready never cancels a read or reaches user
+  data callbacks; cached reads without observers refetch on next mount.
+  Recovery costs one fetch per affected read per ready window; a read covering
+  two models whose readies arrive in separate windows refetches once for each.
+  A websocket connection acknowledgement precedes group registration.
   This transport has no replay cursor, total order or row revision guarantee,
   so recovery rereads the authorized scope. Generic `changed_values` are not
   complete GraphQL projections and must not be merged into cached rows by

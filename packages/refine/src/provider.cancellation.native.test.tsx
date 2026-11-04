@@ -211,35 +211,6 @@ test("ready lets an older data-less HTTP read settle before one recovery refetch
   }
 });
 
-test("a second ready on the same sink refetches a retained HTTP read once", async () => {
-  const f = fixture();
-  const { live, subscribe, subscribeNotes, ready } = liveReadyFixture(f.client);
-  const subscription = subscribeNotes();
-  const hook = renderHook(() => useAuthoredQuery(DOCUMENT, {}, { models: ["example.Note"] }), { wrapper: f.wrapper });
-  try {
-    await waitFor(() => expect(f.attempts).toHaveLength(1));
-    act(() => { ready(); });
-    await act(async () => { f.attempts[0]?.resolve(response("retained")); });
-    await waitFor(() => expect(f.attempts).toHaveLength(2));
-    await act(async () => { f.attempts[1]?.resolve(response("registered")); });
-    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "registered" }]));
-    act(() => { ready(); });
-    expect(f.client.getQueryCache().getAll().some((query) => query.state.isInvalidated)).toBe(true);
-    await waitFor(() => expect(f.attempts).toHaveLength(3));
-    expect(subscribe).toHaveBeenCalledOnce();
-    expect(f.attempts[0]?.signal?.aborted).toBe(false);
-    await act(async () => { f.attempts[2]?.resolve(response("after reconnect")); });
-    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "after reconnect" }]));
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
-    expect(f.attempts).toHaveLength(3);
-  } finally {
-    live.setEnabled(false);
-    live.unsubscribe(subscription);
-    f.attempts.forEach((attempt) => attempt.resolve(response()));
-    hook.unmount();
-  }
-});
-
 test("ready refetches a read that settled between subscribe and registration", async () => {
   const f = fixture();
   const { live, subscribeNotes, ready } = liveReadyFixture(f.client);
