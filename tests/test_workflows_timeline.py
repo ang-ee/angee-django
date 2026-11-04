@@ -26,7 +26,7 @@ from angee.workflows.decision_steps import AskDecision, DecisionStep
 from angee.workflows.querysets import WorkflowRunQuerySet
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
-from angee.workflows.testing.drivers import deliver_decision_wakes, load_workflow, run_until, start_run
+from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Trigger, WorkflowRun
 from angee.workflows.timeline import TimelineSelection
 from tests.conftest import create_user, execute_schema, result_data, vault_for
@@ -49,6 +49,88 @@ def timeline(schema, actor, records):
     }""", {"records": [{"model": record._meta.label, "id": record.sqid} for record in records]}, user=actor))[
         "record_timeline"
     ]
+
+
+QUERY = """query($records:[TimelineRecordInput!]!, $limit:Int!) {
+    record_timeline(records: $records, run_limit: $limit) {
+      open_decision_count
+      records {
+      record_model record_id
+      decisions { id kind kind_label revision created_at is_open permissions context proposal verdict
+      verdict_values verdict_label answered_at records { id record_model record_id } requester {
+      display_name } assignees { display_name } answered_by { display_name } }
+      runs {
+        id display_name status origin subject_model subject_id outcome_label failure_reason created_at
+        finished_at stopped_at output can_cancel
+        run_as { display_name }
+        version { workflow { display_name } }
+        parent_step { id run { id } }
+        trigger_event { record_model record_id changed_at trigger { display_name } }
+        graph {
+          edges { source outcome target taken }
+          nodes {
+            key label step_label rank body_key plan outcomes { outcome label }
+            item_counts { status count } item_attempts
+            step_run {
+              id status hold outcome outcome_label failure_reason wait_reason notes { tone message }
+              attempt page_index map_total map_settled created_at updated_at
+              can_retry requires_duplicate_acknowledgement
+              awaited_run { id display_name status }
+              child_runs { id display_name status }
+              records { id label operation record_model record_id }
+              decision { id kind kind_label revision created_at is_open permissions context proposal verdict
+              verdict_values verdict_label answered_at records { id record_model record_id } requester {
+              display_name } assignees { display_name } answered_by { display_name } }
+              map_steps {
+                id node_label map_index status hold outcome_label failure_reason wait_reason notes { tone message }
+                can_retry requires_duplicate_acknowledgement updated_at
+                awaited_run { id display_name status }
+                child_runs { id display_name status }
+                records { id label operation record_model record_id }
+                decision { id kind kind_label revision created_at is_open permissions context proposal verdict
+                verdict_values verdict_label answered_at records { id record_model record_id } requester {
+                display_name } assignees { display_name } answered_by { display_name } }
+              }
+            }
+          }
+        }
+      }
+      }
+    }
+  }"""
+
+
+def test_record_timeline_graph_statement_count_is_independent_of_run_count(schema, review):
+    """The shipped RecordTimelineDocument fields cost the same for one or five runs."""
+    actor, reviewers, sent, question = review
+    subject = question.review_subject
+    workflow = load_workflow({"nodes": {"review": {"step": "question"}}}, actor=actor)
+    runs = []
+    for _ in range(5):
+        run = WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
+        run_until(run)
+        runs.append(run)
+
+    def counts(query):
+        measured = []
+        for limit in (1, 5):
+            with CaptureQueriesContext(connection) as queries:
+                rows = result_data(execute_schema(schema, query, {"records": [{
+                    "model": subject._meta.label, "id": subject.sqid,
+                }], "limit": limit}, user=actor))["record_timeline"]["records"][0]["runs"]
+            assert len(rows) == limit
+            measured.append(len(queries))
+        assert measured[0] == measured[1], measured
+
+    for query in (QUERY, QUERY.replace(" can_retry", "")):
+        counts(query)
+    for run in runs:
+        step = StepRun.system_queryset().get(run=run, node_key="review")
+        decide(step.decision, actor=reviewers[0], chosen=["reject"])
+        deliver_decision_wakes(sent, step.decision_id)
+        run_until(run)
+    for query in (QUERY, QUERY.replace(" can_retry", "")):
+        counts(query)
 
 
 @pytest.mark.parametrize("operation,canceled", [("read", False), ("created", True), ("changed", True)])

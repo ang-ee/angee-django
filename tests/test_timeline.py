@@ -15,6 +15,7 @@ from rebac import actor_context, system_context
 
 from angee.base.models.identity import public_id_of
 from angee.base.pagination import KeysetOrder, keyset_signer
+from angee.decisions.timeline import DecisionKind
 from angee.graphql.publishing import mute_changes
 from angee.messaging.testing.models import Message, ThreadAttachment
 from angee.messaging.timeline import CommentKind
@@ -95,6 +96,17 @@ def test_observed_fields_reject_reverse_relation_declarations() -> None:
 
 
 @pytest.mark.django_db(transaction=True)
+def test_decision_timeline_without_requester_contributors(composed_permissions: None, monkeypatch) -> None:
+    actor = create_platform_admin("decision-only-reader")
+    record = vault_for(actor)
+    decision = apps.get_model("decisions", "Decision")
+    monkeypatch.setattr(decision, "requester_querysets", classmethod(lambda cls: ()))
+    rows, fold = DecisionKind().source(record, actor)
+    assert fold is None
+    assert list(rows) == []
+
+
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("activity_catalog")
 @override_settings(ANGEE_TIMELINE_KINDS=KINDS)
 def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: None) -> None:
@@ -153,21 +165,21 @@ def test_sparse_non_admin_page_has_one_bounded_selection_statement(comment_recor
         Message.objects.create(
             thread=attachment.thread, message_type="comment", direction="internal", created_by=actor,
         )
-    timeline = Timeline(record, actor)
-    assert {kind.id for kind in timeline.kinds} == {kind.id for kind in timeline_kinds()}
     with CaptureQueriesContext(connection) as queries:
+        timeline = Timeline(record, actor)
         timeline.page()
+    assert {kind.id for kind in timeline.kinds} == {kind.id for kind in timeline_kinds()}
     selections = [
         query["sql"] for query in queries
         if 'WITH RECURSIVE "timeline_source" AS' in query["sql"]
     ]
-    assert len(selections) == 1  # Hydration and kind-owned admission reads are outside this budget.
+    assert len(selections) == 1
     sql, = selections
     source_kinds = re.findall(r"'([\w.]+)'(?:::\w+)? AS \"_timeline_kind\"", sql)
     assert sorted(source_kinds) == sorted(kind.id for kind in timeline.kinds)
     assert re.findall(r"'(\w+)'(?:::\w+)? AS \"_timeline_row\"", sql) == ["kind", "entry", "child"]
-    # SQLite measured 850,002 bytes with chatter on 2026-11-03; lower this ceiling as REBAC statements shrink.
-    assert len(sql.encode("utf-8")) <= 1_000_000
+    assert len(sql.encode("utf-8")) <= 275_000
+    assert all(len(query["sql"].encode("utf-8")) <= 275_000 for query in queries)
 
 
 def timeline_entries(record, actor=None, *, kind=None):

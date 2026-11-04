@@ -70,6 +70,10 @@ class TimelineKind(ABC):
     def queryset(self, record: models.Model, actor: Any) -> models.QuerySet:
         """Readable occurrences on this record, one per source primary key."""
 
+    def source(self, record: models.Model, actor: Any) -> tuple[models.QuerySet, tuple[Any, Any] | None]:
+        """Share statement-local admission and fold facts; queryset() must select the same rows."""
+        return self.queryset(record, actor), self.fold(record)
+
     @abstractmethod
     def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
         """Describe the selected source rows, batching any additional display dependencies."""
@@ -78,7 +82,9 @@ class TimelineKind(ABC):
         """Project attention on an already-readable branch without changing its rows.
 
         Return a non-null, join-free Boolean expression; related targets retain their own
-        read gates. The branch owns its record membership and row admission.
+        read gates. The branch owns its record membership and row admission. A kind may
+        resolve record-bounded attention first when an in-statement relation would exceed
+        the Timeline SQL budget; that pre-read executes during Timeline construction.
         """
         return models.Value(False, output_field=models.BooleanField())
 

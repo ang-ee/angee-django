@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import timedelta
 
 import pytest
@@ -9,6 +10,7 @@ from django.db import connection
 from django.db.models.query import EmptyQuerySet
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
+from django_cte import with_cte
 from rebac import (
     RelationshipTuple,
     SubjectRef,
@@ -19,11 +21,13 @@ from rebac import (
     to_subject_ref,
     write_relationships,
 )
+from rebac.models import PermissionAuditEvent
 
 from angee.base.models.identity import public_id_of
 from angee.base.signals import bulk_updated
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
+from angee.decisions.timeline import DecisionKind
 from angee.graphql import publishing
 from angee.graphql.publishing import change_published
 from angee.provenance.context import changeset
@@ -33,7 +37,7 @@ from angee.workflows.states import RunStatus, WaitingKind
 from angee.workflows.testing.drivers import decide, deliver_decision_wakes, load_workflow, run_until
 from angee.workflows.testing.models import StepRun, WorkflowRun
 from angee.workflows.timeline import RunKind
-from tests.conftest import create_user
+from tests.conftest import create_user, vault_for
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.test_timeline import read_timeline, timeline_entries
 from tests.test_workflows_review import review as review  # noqa: F401 -- shared real review driver
@@ -89,6 +93,48 @@ def test_run_follows_execution_without_an_explicit_projection(execution) -> None
     data = read_timeline(subject, subject, kinds=["workflows.run"])
     assert data["timeline"]["entries"] == []
     assert next(kind["count"] for kind in data["timeline"]["kinds"] if kind["id"] == "workflows.run") == 0
+
+
+def test_requester_cte_stays_on_the_record_and_audits_each_run_source(review) -> None:
+    owner, reviewers, _, question = review
+    subject = question.review_subject
+    _, step = start_review(review)
+    other = create_user("timeline-other-subject")
+    workflow = load_workflow(document("entry"), key="timeline-other-run", actor=owner,
+                             subject_model=other._meta.label)
+    unrelated = WorkflowRun.objects.start(workflow, actor=owner, subject=other)
+    run_until(unrelated)
+    assert StepRun.system_queryset().filter(run=unrelated).exists()
+    unrelated_record = vault_for(owner, name="Timeline unrelated concern")
+    write_relationships([RelationshipTuple(
+        to_object_ref(unrelated_record), "viewer", to_subject_ref(reviewers[0]),
+    )])
+    unrelated_decision = Decision.objects.ask(DecisionRequest(
+        kind="elsewhere", records=(unrelated_record,), assignees=(reviewers[0],),
+        proposal=DecisionProposal.model_validate({
+            "alternatives": [{"key": "done", "label": "Done", "outcome": "done"}],
+        }),
+    ), actor=owner)
+    assert Decision.objects.with_actor(reviewers[0]).scoped().filter(pk=unrelated_decision.pk).exists()
+
+    rows, _ = DecisionKind().source(subject, reviewers[0])
+    requester, = rows.query._with_ctes
+    assert requester.name == "timeline_requesters"
+    assert requester.query.model is Decision
+    assert set(with_cte(requester, select=requester.queryset().using(rows.db)
+                        .with_actor(reviewers[0]).scoped())
+               .values_list("pk", flat=True)) == {
+        step.decision_id,
+    }
+    before = PermissionAuditEvent.objects.order_by("-pk").values_list("pk", flat=True).first() or 0
+    with CaptureQueriesContext(connection) as queries:
+        Timeline(subject, reviewers[0]).page()
+    reasons = Counter(PermissionAuditEvent.objects.filter(pk__gt=before).values_list("reason", flat=True))
+    # Selection and hydration each compile the two requester sources once.
+    assert reasons["workflows.workflowrun.system_queryset"] == 4
+    selection, = (query["sql"] for query in queries if '"timeline_source" AS' in query["sql"])
+    assert selection.count('"timeline_requesters" AS') == 1
+    assert f'"timeline_requesters" AS (SELECT "{Decision._meta.db_table}"' in selection
 
 
 def test_waiting_run_folds_readable_children_and_computes_attention(review) -> None:

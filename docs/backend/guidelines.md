@@ -1608,6 +1608,12 @@ open fresh evaluator scopes for authorization and change-feed reads.
   including its final permission witnesses. A kind projects attention with its join-free `waiting_on_expression`;
   queryset `waiting_on` filters compose that same owner predicate. Related read/action
   gates remain; outer record membership and read scope are not repeated.
+  [RunKind](../../src/angee/workflows/timeline.py) is the exception: during Timeline
+  construction it re-reads the branch's record-bounded, admitted waiting runs, then
+  makes up to two bounded reads for readable decision steps and actionable decisions.
+  The initial read writes one StepRecord bypass audit for a user actor even when the
+  record has no runs. This keeps the related gates within the
+  [Timeline statement guard](../../tests/test_timeline.py).
   Display payloads are hydrated only for selected source rows.
   There is no event projection table or backfill requirement. Folding hides a
   child only when a readable parent target occurs on the same record; counts

@@ -101,7 +101,8 @@ also covers [review waiters](../tests/test_workflows_review.py), their
 [execution links](../tests/test_workflows_review_graphql.py), and
 [inbox predicates](../tests/test_decisions_inbox.py),
 [committed timeline waits and inherited record feeds](../tests/test_timeline_workflows.py),
-[shared Timeline source and nullable fold columns](../tests/test_timeline_tasks.py), plus the
+[shared Timeline source and nullable fold columns](../tests/test_timeline_tasks.py),
+[the one-statement, 275 KB Timeline read guard](../tests/test_timeline.py), plus the
 [agent session loop](../tests/test_agent_sessions.py) and its
 [locking races](../tests/test_agent_sessions_concurrency.py), plus
 [connection discovery races](../tests/test_integrate_discovery_concurrency.py),

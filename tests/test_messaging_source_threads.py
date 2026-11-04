@@ -3,6 +3,7 @@
 from typing import Any
 
 import pytest
+from django.test import override_settings
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
@@ -16,6 +17,7 @@ from rebac import (
 
 from angee.messaging.testing.models import Thread, ThreadAttachment
 from angee.projects.testing.models import Project, Task
+from angee.timeline.reading import Timeline
 from tests.chatterdemo.models import ChatterDoc, TrackedRecordParent
 from tests.conftest import create_user, execute_schema, result_data, vault_for
 from tests.test_messaging_graphql import _schema
@@ -91,6 +93,34 @@ def test_source_threads_project_their_record_through_the_reference_gate(sourced:
         "id": str(edge.sqid), "label": "Original request", "record_model": "projects.Task",
         "record_id": str(task.sqid), "thread": {"id": str(thread.sqid)},
     }]
+
+
+def test_source_threads_require_thread_read_through_the_attachment_edge(sourced: dict[str, Any]) -> None:
+    owner, task, thread = sourced["owner"], sourced["task"], sourced["thread"]
+    record_reader = create_user("record-only-reader")
+    with actor_context(owner):
+        task.project.grant_record_access("reader", record_reader)
+        ThreadAttachment.objects.bind_source_thread(task, thread)
+    with actor_context(record_reader):
+        assert task.with_actor(record_reader).has_access("read")
+        assert not thread.with_actor(record_reader).has_access("read")
+        assert not ThreadAttachment.objects.source_threads_for_record(task)
+
+
+@override_settings(ANGEE_TIMELINE_KINDS=["angee.messaging.timeline.timeline_kinds"])
+def test_source_edge_reader_without_thread_read_sees_no_conversation(sourced: dict[str, Any]) -> None:
+    owner, task, thread = sourced["owner"], sourced["task"], sourced["thread"]
+    edge_reader = create_user("source-edge-only-reader")
+    with actor_context(owner):
+        task.project.grant_record_access("reader", edge_reader)
+        edge = ThreadAttachment.objects.bind_source_thread(task, thread, label="Edge label")
+    with system_context(reason="test.source_threads.edge_reader"):
+        _grant(edge, "reader", edge_reader)
+    with actor_context(edge_reader):
+        assert edge.with_actor(edge_reader).has_access("read")
+        assert not thread.with_actor(edge_reader).has_access("read")
+        assert not ThreadAttachment.objects.source_threads_for_record(task)
+        assert not Timeline(task, edge_reader).page().entries
 
 
 def test_source_edge_accepts_a_long_display_label(sourced: dict[str, Any]) -> None:
