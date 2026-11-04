@@ -161,7 +161,7 @@ jobs:
   # Every worker flushes the whole schema between transactional tests, so one
   # job no longer fits.
   uv-postgres:
-    name: uv postgres ${{ matrix.group }}/4
+    name: uv postgres ${{ matrix.group }}/6
     if: ${{ inputs.uv-enabled }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
