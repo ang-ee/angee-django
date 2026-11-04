@@ -42,7 +42,7 @@ TIMELINE = authored_graphql_document(ROOT / "src/angee/timeline/web/src/document
 
 @pytest.fixture
 def record_decisions_reads(composed_tables: None, capture_graphql_document):
-    """Execute the authored pane empty, then open and answered at one and five."""
+    """Execute the authored pane empty, then answered at one, five, ten and twenty."""
 
     del composed_tables
     owner = create_user("document-budget-decisions")
@@ -53,8 +53,8 @@ def record_decisions_reads(composed_tables: None, capture_graphql_document):
     assert empty.data["decision_records"] == []
 
     open_one = None
-    one = None
-    for index in range(5):
+    answered = {}
+    for index in range(20):
         decision = Decision.objects.ask(
             DecisionRequest(
                 kind=f"budget_review_{index}",
@@ -70,40 +70,42 @@ def record_decisions_reads(composed_tables: None, capture_graphql_document):
             assert len(open_one.data["decision_records"]) == 1
         with system_context(reason="test.document_budget.decisions"):
             decision.withdraw(actor=owner)
-        if index == 0:
-            one = capture_graphql_document(schema, DECISIONS, variables, actor=owner)
-            assert len(one.data["decision_records"]) == 1
-    five = capture_graphql_document(schema, DECISIONS, variables, actor=owner)
-    assert len(five.data["decision_records"]) == 5
-    assert all(row["decision"]["answered_by"]["display_name"] for row in five.data["decision_records"])
-    assert all(row["decision"]["verdict_label"] == "Withdrawn" for row in five.data["decision_records"])
-    return empty, open_one, one, five
+        if index + 1 in (1, 5, 10, 20):
+            read = capture_graphql_document(schema, DECISIONS, variables, actor=owner)
+            assert len(read.data["decision_records"]) == index + 1
+            assert all(row["decision"]["answered_by"]["display_name"] for row in read.data["decision_records"])
+            assert all(row["decision"]["verdict_label"] == "Withdrawn" for row in read.data["decision_records"])
+            answered[index + 1] = read
+    return empty, open_one, answered
 
 
 def test_record_decisions_document_budget(record_decisions_reads) -> None:
-    empty, open_one, one, five = record_decisions_reads
-    # An empty result still carries one bounded target proof since lane P1
-    # (36,252 bytes today); the library's bounded identity contract (L2) lowers it.
-    empty.assert_bytes(total=40_000, largest=35_000)
+    empty, open_one, answered = record_decisions_reads
+    empty.assert_bytes(total=43_000, largest=41_000, cause="REBAC L2 bounded target proof in the empty record scope")
     empty.assert_statements(4)
-    open_one.assert_bytes(total=90_000, largest=80_000)
-    open_one.assert_statements(6)
+    open_one.assert_bytes(total=47_000, largest=41_000, cause="REBAC L2 bounded target proof")
+    open_one.assert_statements(5)
     open_one.assert_no_audit_writes()
-    for read in (one, five):
-        read.assert_bytes(total=120_000, largest=80_000)
-        read.assert_statements(13)
+    for count, read in answered.items():
+        read.assert_bytes(total=55_000, largest=41_000, cause="REBAC L2 candidate scope and L5 held_many field gates")
+        read.assert_statements(7 if count == 1 else 8)
         read.assert_no_audit_writes()
     empty.assert_no_audit_writes()
 
 
 def test_record_decisions_document_statement_count(record_decisions_reads) -> None:
-    _, _, one, five = record_decisions_reads
-    five.assert_flat_from(one)
+    _, _, answered = record_decisions_reads
+    one, five, ten, twenty = (answered[count] for count in (1, 5, 10, 20))
+    assert five.statement_count == one.statement_count + 1, (
+        "L2 multi-row TupleIn repeats actor role/group membership; L8 removes this step"
+    )
+    ten.assert_flat_from(five)
+    twenty.assert_flat_from(ten)
 
 
 @pytest.fixture
 def record_sources_reads(composed_tables: None, capture_graphql_document):
-    """Execute the authored pane at one and five visible record links."""
+    """Execute the authored pane at one, five, ten and twenty visible links."""
 
     del composed_tables
     bridge = make_integration("document-budget-sources", model=Channel)
@@ -114,36 +116,55 @@ def record_sources_reads(composed_tables: None, capture_graphql_document):
     variables = {"modelLabel": stream._meta.label, "recordId": public_id_of(stream)}
     one = capture_graphql_document(schema, SOURCES, variables, actor=bridge.owner)
     assert len(one.data["record_links"]) == 1
-    with system_context(reason="test.document_budget.sources.more"):
-        for index in range(2, 6):
+    reads = {1: one}
+    for index in range(2, 21):
+        with system_context(reason="test.document_budget.sources.more"):
             RecordLink.objects.observe(stream, f"record:{index}", target=stream)
-    five = capture_graphql_document(schema, SOURCES, variables, actor=bridge.owner)
-    assert len(five.data["record_links"]) == 5
-    return one, five
+        if index in (5, 10, 20):
+            read = capture_graphql_document(schema, SOURCES, variables, actor=bridge.owner)
+            assert len(read.data["record_links"]) == index
+            reads[index] = read
+    return reads
 
 
-def test_record_sources_document_budget(record_sources_reads) -> None:
-    one, five = record_sources_reads
-    one.assert_bytes(total=150_000, largest=25_000)
-    # CI's full-profile test host composes more addons than a local checkout
-    # (41 statements there against 39 here); the ceiling carries that headroom,
-    # the flatness pin below is the strict one.
+def test_record_sources_document_fixed_budgets(record_sources_reads) -> None:
+    one, five, ten, twenty = (record_sources_reads[count] for count in (1, 5, 10, 20))
+    # CI's full-profile SQLite shard measures more than a local checkout on this
+    # document (one link 41 statements / 9 audits against 39 / 8 here; five links
+    # 149 / 45 against 139 / 40, about +2.6 KB per link); the ceilings carry that
+    # headroom. The strict pins are the xfails below; P12's batching lowers all of
+    # these.
+    one.assert_bytes(total=140_000, largest=21_000, cause="REBAC L2 candidate-root proof on one link")
     one.assert_statements(45)
-    one.assert_audit_inserts(8)
-    five.assert_bytes(total=450_000, largest=25_000)
-    five.assert_statements(139)
-    five.assert_audit_inserts(40)
+    one.assert_audit_inserts(10)
+    five.assert_bytes(total=530_000, largest=21_000, cause="REBAC L2 candidate-root proof per unbatched link")
+    five.assert_statements(155)
+    five.assert_audit_inserts(50)
+    ten.assert_statements(300)
+    twenty.assert_statements(600)
 
 
-@pytest.mark.xfail(strict=True, reason="P12/P6: Sources must batch concrete integrations across links")
+@pytest.mark.xfail(strict=True, reason="P12: unbatched concrete integration reads exceed the Sources byte target")
+def test_record_sources_document_byte_budget(record_sources_reads) -> None:
+    five = record_sources_reads[5]
+    five.assert_bytes(
+        total=450_000,
+        largest=20_000,
+        cause="REBAC L2 candidate-root proof repeats for each unbatched concrete integration",
+    )
+
+
+@pytest.mark.xfail(strict=True, reason="P12: Sources must batch concrete integrations across links")
 def test_record_sources_document_statement_count(record_sources_reads) -> None:
-    one, five = record_sources_reads
+    one, five, ten, twenty = (record_sources_reads[count] for count in (1, 5, 10, 20))
+    twenty.assert_flat_from(ten)
+    ten.assert_flat_from(five)
     five.assert_flat_from(one)
 
 
 @pytest.mark.xfail(strict=True, reason="P5: Sources reads must not insert permission-audit events")
 def test_record_sources_document_audit(record_sources_reads) -> None:
-    for read in record_sources_reads:
+    for read in record_sources_reads.values():
         read.assert_no_audit_writes()
 
 
@@ -196,7 +217,7 @@ def test_related_permission_resource_list_budget(composed_tables: None, capture_
     del composed_tables
     owner = create_user("document-budget-project")
     with system_context(reason="test.document_budget.project"):
-        for index in range(5):
+        for index in range(20):
             project = Project.objects.create(title=f"Budget project {index}", owner=owner)
             Task.objects.create(title=f"Budget task {index}", owner=owner, project=project)
     schema = addon_schema(projects_schema.schemas, "console")
@@ -207,14 +228,20 @@ def test_related_permission_resource_list_budget(composed_tables: None, capture_
           }
         }
     """
-    one = capture_graphql_document(schema, document, {"limit": 1}, actor=owner)
-    five = capture_graphql_document(schema, document, {"limit": 5}, actor=owner)
-    assert len(one.data["project_tasks"]) == 1
-    assert len(five.data["project_tasks"]) == 5
-    one.assert_bytes(total=70_000, largest=40_000)
-    five.assert_bytes(total=70_000, largest=40_000)
-    one.assert_statements(6)
-    five.assert_statements(6)
-    five.assert_flat_from(one)
-    one.assert_no_audit_writes()
-    five.assert_no_audit_writes()
+    reads = {
+        count: capture_graphql_document(schema, document, {"limit": count}, actor=owner) for count in (1, 5, 10, 20)
+    }
+    for count, read in reads.items():
+        assert len(read.data["project_tasks"]) == count
+        read.assert_bytes(
+            total=70_000,
+            largest=40_000,
+            cause="REBAC L2 one-row candidate proof; multi-row TupleIn retains the general scope",
+        )
+        read.assert_statements(4 if count == 1 else 6)
+        read.assert_no_audit_writes()
+    assert reads[5].statement_count == reads[1].statement_count + 2, (
+        "L2 multi-row TupleIn repeats membership and population reads; L8 removes this step"
+    )
+    reads[10].assert_flat_from(reads[5])
+    reads[20].assert_flat_from(reads[10])

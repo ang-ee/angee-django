@@ -167,9 +167,22 @@ for read in (one, many):
     read.assert_bytes(total=120_000, largest=80_000)
 ```
 
-Every ceiling is a maximum. Set it from today's measured value, rounded up;
-a lane that lowers a cost lowers its ceiling in the same change. Pin any
-remaining audit INSERTs with `assert_audit_inserts(maximum)` while keeping the
+Every ceiling is a maximum. Set it from today's measured value with CI headroom;
+a lane that lowers a cost lowers its ceiling in the same change. Compare one and
+five rows by default. If a native one-row scope has a measured fixed step, pin
+the exact statement delta and compare five, ten and twenty rows for flat counts:
+
+```python
+assert five.statement_count == one.statement_count + 1, "L2 repeats a membership read; L8 removes the step"
+ten.assert_flat_from(five)
+twenty.assert_flat_from(ten)
+```
+
+Name the library mechanism and the lane that removes the step; a count growing
+from five to ten or twenty rows is a defect, not a fixed step. Pass `cause=` to
+`assert_bytes` to name the library mechanism behind a changed byte ceiling in
+its failure message. Pin any remaining audit INSERTs with
+`assert_audit_inserts(maximum)` while keeping the
 zero-write assertion in a separate test marked
 `@pytest.mark.xfail(strict=True, reason="<fixing lane>: ...")`. A strict xfail
 turns an unexpectedly passing assertion into a failure for cleanup. The

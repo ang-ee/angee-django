@@ -98,12 +98,10 @@ def test_picker_applies_sql_admission_before_the_capped_limit(iam_admin, monkeyp
             ]
         selections = [q["sql"] for q in captured if q["sql"].startswith("SELECT") and f'FROM "{table}"' in q["sql"]]
         rows = [sql for sql in selections if sql.startswith(f'SELECT "{table}"."id",')]
-        # Recovery REBAC sends one held_ids statement per gated User field over
-        # returned ids. All six fields use read_private, so these are identical
-        # (REBAC follow-up B). When B groups by permission, the user-table count
-        # returns to two: the capped row SELECT plus one held statement.
+        # REBAC held_many groups the six read_private fields into one bounded
+        # visibility statement over the returned ids.
         guards = [sql for sql in selections if sql.startswith(f'SELECT "{table}"."id" AS "pk", CASE WHEN')]
-        assert len(rows) == 1 and len(guards) == 6 and len(selections) == 7, selections
+        assert len(rows) == 1 and len(guards) == 1 and len(selections) == 2, selections
         assert all(f'FROM "{table}" WHERE "{table}"."id" IN (' in sql for sql in guards)
         sql = rows[0]
         assert f"LIMIT {cap}" in sql
@@ -112,8 +110,8 @@ def test_picker_applies_sql_admission_before_the_capped_limit(iam_admin, monkeyp
         assert "person" in where and "NOT" in where and "EXISTS(" in where
         user_select_counts.append(len(selections))
         total_counts.append(len(captured))
-    assert user_select_counts == [7, 7]
-    assert total_counts == [25, 25]
+    assert user_select_counts == [2, 2]
+    assert total_counts == [20, 20]
 
 
 def test_viewable_people_returns_at_most_twenty_five_people(iam_admin):
