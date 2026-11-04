@@ -73,8 +73,16 @@ async function start() {
     server: { middlewareMode: true, ws: false, watch: { ignored: ["**/.jj/**"] } },
   });
   servers.push(server);
-  // Directory registration/initial scanning does not acknowledge delivery of
-  // native filesystem events. Observe one real edit before testing regeneration.
+  // The codegen plugin registers its directories with the watcher after the
+  // server exists, and chokidar scans them asynchronously with initial events
+  // suppressed: a probe written before that scan never produces an event (on
+  // Linux's fs.watch backend this is deterministic). Wait for the watched
+  // source and runtime trees before writing the event probe.
+  await vi.waitFor(() => {
+    const watched = server.watcher.getWatched();
+    expect(watched[join(addon, "src")]).toContain("palette.mjs");
+    expect(watched[runtime]).toContain("web");
+  });
   const probe = join(addon, "src", "watcher-ready.txt");
   await editSource(server, probe, () => write(probe, "ready"));
   rmSync(probe);
