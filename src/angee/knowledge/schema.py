@@ -36,7 +36,6 @@ from angee.graphql.ids import (
     require_public_id,
     to_public_id,
 )
-from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
 from angee.iam.graphql.actions import session_user
@@ -45,6 +44,7 @@ from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import actor_scoped_to_one
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.identity import user_display_label, user_label_annotation, user_public_id
+from angee.iam.permissions import instance_actor
 from angee.knowledge.models import (
     AmbiguousMatchError,
     PageQuerySet,
@@ -72,9 +72,6 @@ RecordBinding = apps.get_model("knowledge", "RecordBinding")
 class VaultType(TrashedRefMixin, ProtectedNode):
     """GraphQL projection of a vault."""
 
-    display_name: str = strawberry_django.field(
-        resolver=ProtectedNode.display_name, only=["name"], description=NODE_DISPLAY_NAME_DESCRIPTION
-    )
     name: auto
     description: auto
     icon: auto
@@ -190,9 +187,6 @@ def _wikilinks_prefetch(_info: strawberry.Info) -> Prefetch:
 class PageType(AuthoredRefMixin, TrashedRefMixin, ProtectedNode):
     """GraphQL projection of a page."""
 
-    display_name: str = strawberry_django.field(
-        resolver=ProtectedNode.display_name, only=["title"], description=NODE_DISPLAY_NAME_DESCRIPTION
-    )
     revision: auto
     title: auto
     icon: auto
@@ -288,25 +282,28 @@ class RecordBindingType(ProtectedNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["page_id", "page__title"])
+    @strawberry_django.field(annotate={"_page_title": F("page__title")})
     def page_title(self) -> str | None:
-        """Return a readable bound page's title, when this edge owns a page."""
+        """Return the bound page title; binding read already requires page read."""
 
+        if hasattr(self, "_page_title"):
+            return cast(str | None, cast(Any, self)._page_title)
         page = cast(Any, self).page
         return None if page is None else str(page.title)
 
-    @strawberry_django.field(only=["page_id"])
-    def page_detail(self) -> PageType | None:
-        """Expose the readable page through its existing content and author projection."""
-
-        return cast(PageType | None, cast(Any, self).page)
+    page_detail: PageType | None = actor_scoped_to_one("page")
 
     @strawberry_django.field(only=["page_id"])
     def page_can_write(self) -> bool:
         """Expose the page end's write permission for binding controls."""
 
-        page = cast(Any, self).page
-        return page is not None and bool(page.has_access("write"))
+        row = cast(Any, self)
+        if row.page_id is None:
+            return False
+        page = Page.from_db(row._state.db, [Page._meta.pk.attname], [row.page_id])
+        if actor := instance_actor(row):
+            page.with_actor(actor)
+        return bool(page.has_access("write"))
 
     @strawberry_django.field(only=["page_id"])
     def page(self) -> PublicID | None:
@@ -541,7 +538,7 @@ class KnowledgeQuery:
             return []
         return cast(
             "list[RecordBindingType]",
-            list(RecordBinding._default_manager.for_record(record, role=role)),
+            RecordBinding._default_manager.for_record(record, role=role),
         )
 
     @strawberry.field(name="record_knowledge_can_bind")
@@ -565,7 +562,7 @@ class KnowledgeQuery:
         source = require_instance_for_id(Page, page)
         return cast(
             "list[RecordBindingType]",
-            list(RecordBinding._default_manager.for_knowledge(source, role=role)),
+            RecordBinding._default_manager.for_knowledge(source, role=role),
         )
 
     @strawberry.field(name="vault_record_bindings")
@@ -579,7 +576,7 @@ class KnowledgeQuery:
         source = require_instance_for_id(Vault, vault)
         return cast(
             "list[RecordBindingType]",
-            list(RecordBinding._default_manager.for_knowledge(source, role=role)),
+            RecordBinding._default_manager.for_knowledge(source, role=role),
         )
 
 

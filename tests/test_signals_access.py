@@ -289,7 +289,7 @@ def test_readable_fields_provider_resolves_only_for_observable_partial_updates(
     publishing.publish_change(group, action="create", update_fields=None, readable_fields=readable_fields)
     publishing.publish_change(group, action="update", update_fields=None, readable_fields=readable_fields)
     publishing.publish_change(group, action="delete", update_fields=None, readable_fields=readable_fields)
-    post_save.send(sender=Group, instance=group, raw=True, created=False, update_fields=("name",))
+    post_save.send(sender=Group, instance=group, raw=True, created=False, update_fields=("name",), using="default")
     with publishing.mute_changes():
         publishing.publish_change(
             group,
@@ -932,30 +932,38 @@ def test_change_read_gate_redacts_denied_fields(
     """Field-gated values are redacted when their field action denies."""
 
     monkeypatch.setattr(access, "model_resource_type", lambda model: "group")
-    monkeypatch.setattr(access, "gated_read_fields", lambda model: {"secret"})
+    monkeypatch.setattr(access, "gated_read_fields", lambda model: {"secret", "secret2"})
     monkeypatch.setattr(access, "backend", lambda: object())
     actions: list[str] = []
+    field_batches: list[frozenset[str]] = []
 
     def check(*args: object, **kwargs: object) -> SimpleNamespace:
         """Record the REBAC checks used by the subscription gate."""
 
         actions.append(kwargs["action"])
-        return SimpleNamespace(allowed=kwargs["action"] != "read__secret")
+        return SimpleNamespace(allowed=True)
 
     monkeypatch.setattr(access, "check_field_access", check)
+
+    def visible(**kwargs: Any) -> dict[str, frozenset[str]]:
+        field_batches.append(kwargs["fields"])
+        return {name: frozenset() for name in kwargs["fields"]}
+
+    monkeypatch.setattr(access, "visible_id_sets", visible)
     gate = ChangeReadGate(Group, anonymous_actor())
 
     event = gate.filter(
         payload(
-            changed_fields=["name", "secret"],
-            changed_values={"name": "editors", "secret": "hidden"},
+            changed_fields=["name", "secret", "secret2"],
+            changed_values={"name": "editors", "secret": "hidden", "secret2": "hidden"},
         )
     )
 
     assert event is not None
     assert event.changed_fields == ["name"]
     assert event.changed_values == {"name": "editors"}
-    assert actions == ["read", "read__secret"]
+    assert actions == ["read"]
+    assert field_batches == [frozenset({"secret", "secret2"})]
 
 
 def test_change_read_gate_keeps_allowed_field_gates(
@@ -975,6 +983,7 @@ def test_change_read_gate_keeps_allowed_field_gates(
         return SimpleNamespace(allowed=True)
 
     monkeypatch.setattr(access, "check_field_access", check)
+    monkeypatch.setattr(access, "visible_id_sets", lambda **kwargs: {"secret": frozenset({"1"})})
     gate = ChangeReadGate(Group, anonymous_actor())
 
     event = gate.filter(
@@ -987,7 +996,7 @@ def test_change_read_gate_keeps_allowed_field_gates(
     assert event is not None
     assert event.changed_fields == ["name", "secret"]
     assert event.changed_values == {"name": "editors", "secret": "visible"}
-    assert actions == ["read", "read__secret"]
+    assert actions == ["read"]
 
 
 def test_publisher_projection_validates_before_wiring(monkeypatch: pytest.MonkeyPatch) -> None:

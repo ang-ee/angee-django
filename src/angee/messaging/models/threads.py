@@ -1177,6 +1177,7 @@ class Thread(
 class ThreadAttachment(HistoryMixin, AuditMixin, ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
     """Polymorphic edge attaching one chatter thread to one model row."""
 
+    record_display_paths: ClassVar[tuple[str, ...]] = ("label", "content_type", "object_id")
     history = ChatterHistory(inherit=True)
     merge_policy = MergePolicy.MOVE
     on_target_delete = models.CASCADE

@@ -621,6 +621,7 @@ class Project(
     """A bounded endeavor whose access is owned by direct ReBAC grants."""
 
     sqid_prefix = "prj_"
+    record_display_paths: ClassVar[tuple[str, ...]] = ("title",)
     history_relations = ("milestones",)
     rebac_grantable = {"reader": "share", "editor": "share"}
 
@@ -1097,6 +1098,8 @@ class Task(
     concrete=True,
 ):
     """The platform's one table for a discrete human action."""
+
+    record_display_paths: ClassVar[tuple[str, ...]] = ("title",)
 
     _angee_base = TaskBaseManager()
 

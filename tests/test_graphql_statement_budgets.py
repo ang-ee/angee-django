@@ -6,8 +6,10 @@ from pathlib import Path
 
 import pytest
 from django.test import override_settings
-from rebac import actor_context, system_context
+from rebac import RelationshipTuple, actor_context, system_context, to_object_ref, to_subject_ref, write_relationships
 
+from angee.agents import schema as agents_schema
+from angee.agents.testing.models import Agent, AgentSession
 from angee.base.models.identity import public_id_of
 from angee.decisions import schema as decisions_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
@@ -19,12 +21,15 @@ from angee.integrate.testing.models import RecordLink
 from angee.integrate_vcs import schema as integrate_vcs_schema
 from angee.knowledge import schema as knowledge_schema
 from angee.messaging.testing.models import Channel
+from angee.messaging.testing.models import Party as PartyModel
+from angee.parties import schema as parties_schema
 from angee.projects import schema as projects_schema
-from angee.projects.testing.models import Project, Task
+from angee.projects.testing.models import Milestone, Project, Task
 from angee.provenance.context import changeset as open_changeset
 from angee.timeline import schema as timeline_schema
 from tests.conftest import (
     Page,
+    RecordBinding,
     addon_schema,
     authored_graphql_document,
     create_user,
@@ -40,6 +45,9 @@ DECISIONS = authored_graphql_document(
 )
 SOURCES = authored_graphql_document(ROOT / "src/angee/integrate/web/src/documents.ts", "RecordSourcesDocument")
 TIMELINE = authored_graphql_document(ROOT / "src/angee/timeline/web/src/documents.console.ts", "TimelineDocument")
+KNOWLEDGE_DOCUMENTS = ROOT / "src/angee/knowledge/web/src/data/documents.ts"
+KNOWLEDGE_PAGES = authored_graphql_document(KNOWLEDGE_DOCUMENTS, "KnowledgeRecordPages")
+KNOWLEDGE_NOTES = authored_graphql_document(KNOWLEDGE_DOCUMENTS, "KnowledgeRecordNotes")
 
 
 @pytest.fixture
@@ -306,3 +314,223 @@ def test_relation_sort_and_filter_aliases_have_no_bypass_audits(
         read.assert_statements(3)
         read.assert_no_audit_writes()
     five.assert_flat_from(one)
+
+
+def test_decision_concern_labels_batch_across_the_list(
+    composed_tables: None,
+    capture_graphql_document,
+) -> None:
+    del composed_tables
+    owner = create_user("document-budget-concern-labels")
+    schema = addon_schema(decisions_schema.schemas, "console")
+    document = "query Concerns($limit: Int!) { decisions(limit: $limit) { id concerns_label } }"
+    reads = []
+    records = []
+    for index in range(5):
+        record = vault_for(owner, name=f"Concern {index}")
+        records.append(record)
+        Decision.objects.ask(
+            DecisionRequest(
+                kind=f"concern_{index}",
+                records=(record,),
+                requester=owner,
+                assignees=(),
+                proposal=DecisionProposal(alternatives=[{"key": "accept", "label": "Accept", "outcome": "done"}]),
+            ),
+            actor=owner,
+        )
+        if index in (0, 4):
+            read = capture_graphql_document(schema, document, {"limit": index + 1}, actor=owner)
+            assert len(read.data["decisions"]) == index + 1
+            assert {row["concerns_label"] for row in read.data["decisions"]} == {str(item) for item in records}
+            reads.append(read)
+    one, five = reads
+    five.assert_flat_from(one)
+    for read in (one, five):
+        read.assert_statements(7)
+        read.assert_bytes(total=55_000, largest=45_000)
+        read.assert_no_audit_writes()
+
+
+def test_project_node_display_name_stays_flat_at_one_and_five(
+    composed_tables: None,
+    capture_graphql_document,
+) -> None:
+    del composed_tables
+    owner = create_user("document-budget-node-label")
+    with system_context(reason="test.document_budget.node_label"):
+        projects = [Project.objects.create(title=f"Project label {index}", owner=owner) for index in range(5)]
+    schema = addon_schema(projects_schema.schemas, "console")
+    document = "query Labels($limit: Int!) { projects(limit: $limit) { id display_name } }"
+    one = capture_graphql_document(schema, document, {"limit": 1}, actor=owner)
+    five = capture_graphql_document(schema, document, {"limit": 5}, actor=owner)
+    assert [row["display_name"] for row in one.data["projects"]] == [projects[0].title]
+    assert [row["display_name"] for row in five.data["projects"]] == [project.title for project in projects]
+    five.assert_flat_from(one)
+    for read in (one, five):
+        read.assert_statements(4)
+        read.assert_bytes(total=15_000, largest=10_000)
+        read.assert_no_audit_writes()
+
+
+def test_knowledge_binding_roots_batch_selected_pages(
+    composed_permissions: None,
+    capture_graphql_document,
+) -> None:
+    del composed_permissions
+    owner = create_user("document-budget-knowledge-bindings")
+    source = vault_for(owner, name="Knowledge source")
+    targets = [vault_for(owner, name=f"Knowledge target {index}") for index in range(5)]
+    schema = addon_schema(knowledge_schema.schemas, "console")
+    documents = {
+        "record": """query Bindings($id: ID!) {
+          record_knowledge_bindings(model_label: "knowledge.Vault", record_id: $id, role: "notes") {
+            id page_title
+          }
+        }""",
+        "page": """query Bindings($id: ID!) {
+          page_record_bindings(page: $id, role: "notes") {
+            id page_title model_label record_id
+          }
+        }""",
+        "vault": """query Bindings($id: ID!) {
+          vault_record_bindings(vault: $id, role: "reference") {
+            id page_title model_label record_id
+          }
+        }""",
+    }
+    roots = {"record": "record_knowledge_bindings", "page": "page_record_bindings", "vault": "vault_record_bindings"}
+    reads = {name: [] for name in documents}
+    first_page = None
+    for index, target in enumerate(targets):
+        with actor_context(owner):
+            page = Page.objects.create_in(source, title=f"Binding page {index}")
+            RecordBinding.objects.upsert(page=page, target=targets[0], role="notes")
+            RecordBinding.objects.upsert(vault=source, target=target, role="reference")
+            if first_page is None:
+                first_page = page
+            else:
+                RecordBinding.objects.upsert(page=first_page, target=target, role="notes")
+        if index in (0, 4):
+            ids = {"record": targets[0].sqid, "page": first_page.sqid, "vault": source.sqid}
+            for name, document in documents.items():
+                read = capture_graphql_document(schema, document, {"id": str(ids[name])}, actor=owner)
+                assert len(read.data[roots[name]]) == index + 1
+                reads[name].append(read)
+    for one, five in reads.values():
+        five.assert_flat_from(one)
+        for read in (one, five):
+            read.assert_statements(5)
+            read.assert_bytes(total=225_000, largest=140_000)
+            read.assert_no_audit_writes()
+
+
+def test_node_labels_batch_stored_deferred_and_related_sources(
+    composed_tables: None,
+    capture_graphql_document,
+) -> None:
+    del composed_tables
+    owner = create_user("document-budget-label-sources")
+    with system_context(reason="test.document_budget.label_sources"):
+        project = Project.objects.create(title="Milestone parent", owner=owner)
+        parties = [PartyModel.objects.create(display_name=f"Party {index}", created_by=owner) for index in range(5)]
+        milestones = [Milestone.objects.create(project=project, name=f"Phase {index}") for index in range(5)]
+        agent = Agent.objects.create(name="Assistant", owner=owner)
+        sessions = [AgentSession.objects.create(agent=agent, user=owner) for _ in range(5)]
+    cases = (
+        (parties_schema.schemas, "parties", [str(row) for row in parties], 5),
+        (projects_schema.schemas, "project_milestones", [str(row) for row in milestones], 6),
+        (agents_schema.schemas, "agent_sessions", [str(row) for row in sessions], 7),
+    )
+    for schemas, root, expected, statement_limit in cases:
+        schema = addon_schema(schemas, "console")
+        document = f"query Labels($limit: Int!) {{ {root}(limit: $limit) {{ id display_name }} }}"
+        one = capture_graphql_document(schema, document, {"limit": 1}, actor=owner)
+        five = capture_graphql_document(schema, document, {"limit": 5}, actor=owner)
+        assert len(one.data[root]) == 1
+        assert one.data[root][0]["display_name"] in expected
+        assert sorted(row["display_name"] for row in five.data[root]) == sorted(expected)
+        five.assert_flat_from(one)
+        for read in (one, five):
+            read.assert_statements(statement_limit)
+            read.assert_bytes(total=25_000, largest=20_000)
+            read.assert_no_audit_writes()
+
+
+def test_agent_session_label_falls_back_when_agent_is_unreadable(
+    composed_tables: None,
+    capture_graphql_document,
+) -> None:
+    """A caller can read their sessions without reading the shared agent."""
+
+    del composed_tables
+    owner = create_user("document-budget-shared-agent-owner")
+    caller = create_user("document-budget-shared-agent-caller")
+    with system_context(reason="test.document_budget.shared_agent"):
+        agent = Agent.objects.create(name="Shared assistant", owner=owner)
+        write_relationships([RelationshipTuple(to_object_ref(agent), "caller", to_subject_ref(caller))])
+        untitled = AgentSession.objects.create(agent=agent, user=caller)
+        titled = AgentSession.objects.create(agent=agent, user=caller, title="Quarterly close chat")
+    assert not agent.with_actor(caller).has_access("read")
+    schema = addon_schema(agents_schema.schemas, "console")
+    document = "{ agent_sessions { id display_name } }"
+    read = capture_graphql_document(schema, document, {}, actor=caller)
+    assert {row["id"]: row["display_name"] for row in read.data["agent_sessions"]} == {
+        str(untitled.sqid): "agent session",
+        str(titled.sqid): "Quarterly close chat",
+    }
+    read.assert_no_audit_writes()
+
+
+@pytest.fixture
+def knowledge_authored_reads(composed_permissions: None, capture_graphql_document):
+    """Read the authored pane at 1/5/10 and the notes at 1/5/10/20 bindings."""
+
+    del composed_permissions
+    owner = create_user("document-budget-knowledge-authored")
+    source = vault_for(owner, name="Knowledge authored source")
+    record = vault_for(owner, name="Knowledge authored record")
+    schema = addon_schema(knowledge_schema.schemas, "console")
+    reads = {"pages": [], "notes": []}
+    for index in range(20):
+        with actor_context(owner):
+            if index < 10:
+                page = Page.objects.create_in(source, title=f"Related page {index}")
+                RecordBinding.objects.upsert(page=page, target=record, role="related")
+            RecordBinding.objects.create_note(target=record, vault=source, body=f"Note {index}", role="notes")
+        if index in (0, 4, 9, 19):
+            for name, document, role in (
+                ("pages", KNOWLEDGE_PAGES, "related"),
+                ("notes", KNOWLEDGE_NOTES, "notes"),
+            ):
+                if index == 19 and name == "pages":
+                    continue
+                read = capture_graphql_document(
+                    schema,
+                    document,
+                    {"modelLabel": record._meta.label, "recordId": str(record.sqid), "role": role},
+                    actor=owner,
+                )
+                assert len(read.data["record_knowledge_bindings"]) == index + 1
+                reads[name].append(read)
+    return reads
+
+
+def test_knowledge_authored_documents(knowledge_authored_reads) -> None:
+    pages = knowledge_authored_reads["pages"]
+    notes = knowledge_authored_reads["notes"]
+    for read, statements, total in zip(pages, (9, 13, 18), (360_000, 580_000, 850_000), strict=True):
+        read.assert_statements(statements)
+        read.assert_bytes(total=total, largest=140_000)
+        read.assert_no_audit_writes()
+    for read in notes:
+        read.assert_statements(10)
+        read.assert_bytes(total=420_000, largest=140_000)
+        read.assert_no_audit_writes()
+    for read in notes[1:]:
+        read.assert_flat_from(notes[0])
+
+
+@pytest.mark.xfail(strict=True, reason="P2b: page_can_write checks the related page once per row")
+def test_knowledge_record_pages_page_write_growth(knowledge_authored_reads) -> None:
+    knowledge_authored_reads["pages"][1].assert_flat_from(knowledge_authored_reads["pages"][0])

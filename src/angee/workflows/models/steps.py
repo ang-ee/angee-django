@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from django.apps import apps
 from django.conf import settings
@@ -107,6 +107,8 @@ class StepRun(ProtectedDataModel, concrete=True):
 
     ``rank`` stores graph order for query sorting without reparsing the version.
     """
+
+    record_display_paths: ClassVar[tuple[str, ...]] = ("node_key", "map_index")
 
     awaited_run = models.ForeignKey(
         "workflows.WorkflowRun",
@@ -536,6 +538,8 @@ class StepRun(ProtectedDataModel, concrete=True):
 class StepAttempt(ProtectedDataModel, concrete=True):
     """One committed claim, closed once the attempt finishes."""
 
+    record_display_paths: ClassVar[tuple[str, ...]] = ("number",)
+
     sqid_prefix = "wsa_"
 
     step_run = models.ForeignKey("workflows.StepRun", on_delete=models.CASCADE, related_name="attempts")
@@ -580,6 +584,8 @@ class StepAttempt(ProtectedDataModel, concrete=True):
 
 class StepRecord(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
     """One record used by a step, or supplied by its run's trigger."""
+
+    record_display_paths: ClassVar[tuple[str, ...]] = ("label",)
 
     merge_policy = MergePolicy.KEEP
     sqid_prefix = "wsrec_"

@@ -1,5 +1,6 @@
 """Parent redaction, bearer revocation, canonical attachment and file audiences."""
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -17,6 +18,7 @@ from rebac.models import active_relationship_model
 from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.iam.graphql.relations import actor_scoped_public_id, actor_scoped_to_one
 from angee.iam.identity import public_subject_ref
+from angee.projects.testing.models import Project, Task
 from angee.storage import exceptions, views
 from angee.storage import schema as storage_schema
 from angee.storage.models import FileAttachmentManager, FileVisibility
@@ -28,6 +30,7 @@ from tests.conftest import (
     Folder,
     MimeType,
     addon_schema,
+    authored_graphql_document,
     create_platform_admin,
     create_user,
     execute_schema,
@@ -40,6 +43,90 @@ from tests.test_storage import PNG_BYTES, _proxy_upload
 from tests.test_storage import drive as drive
 
 pytestmark = pytest.mark.django_db(transaction=True)
+RECORD_FILES = authored_graphql_document(
+    Path(__file__).resolve().parents[1] / "src/angee/storage/web/src/data/documents.ts", "StorageRecordFiles"
+)
+FILE_ATTACHMENTS = authored_graphql_document(
+    Path(__file__).resolve().parents[1] / "src/angee/storage/web/src/data/documents.ts", "StorageFileAttachments"
+)
+
+
+@pytest.fixture
+def record_files_reads(drive: Any, capture_graphql_document: Any) -> list[Any]:
+    schema = addon_schema(storage_schema.schemas, "console")
+    variables = {"modelLabel": drive._meta.label, "recordId": str(drive.sqid)}
+    reads = []
+    for index in range(20):
+        author = create_user(f"record-files-author-{index}")
+        with system_context(reason="test.document_budget.record_files"):
+            file = File.objects.create(
+                drive=drive,
+                filename=f"budget-{index}.txt",
+                content_hash=f"{index + 1:064x}",
+                visibility="record",
+                owner=drive.alice,
+                upload_state="ready",
+                created_by=author,
+            )
+            FileAttachment.objects.attach(file, drive)
+        if index in (0, 4, 9, 19):
+            read = capture_graphql_document(schema, RECORD_FILES, variables, actor=drive.alice)
+            assert len(read.data["record_files"]["attachments"]) == index + 1
+            assert all(row["file"]["created_by_label"] for row in read.data["record_files"]["attachments"])
+            reads.append(read)
+    return reads
+
+
+def test_record_files_document_batches_nested_file_rows(record_files_reads: list[Any]) -> None:
+    one, five, ten, twenty = record_files_reads
+    for read in (five, ten, twenty):
+        read.assert_flat_from(one)
+    for read in record_files_reads:
+        read.assert_statements(5)
+        read.assert_bytes(total=130_000, largest=65_000)
+        read.assert_no_audit_writes()
+
+
+def test_record_files_document_has_no_audit_writes(record_files_reads: list[Any]) -> None:
+    for read in record_files_reads:
+        read.assert_no_audit_writes()
+
+
+def test_file_attachments_document_stays_flat_at_one_and_five(
+    drive: Any,
+    capture_graphql_document: Any,
+) -> None:
+    schema = addon_schema(storage_schema.schemas, "console")
+    reads = []
+    with system_context(reason="test.document_budget.file_attachments"):
+        project = Project.objects.create(title="Attachment targets", owner=drive.alice)
+        file = File.objects.create(
+            drive=drive,
+            filename="shared.txt",
+            content_hash="f" * 64,
+            visibility="record",
+            owner=drive.alice,
+            upload_state="ready",
+        )
+    for index in range(5):
+        with system_context(reason="test.document_budget.file_attachments"):
+            task = Task.objects.create(project=project, title=f"Target {index}")
+            FileAttachment.objects.attach(file, task)
+        if index in (0, 4):
+            read = capture_graphql_document(
+                schema,
+                FILE_ATTACHMENTS,
+                {"file": str(file.sqid)},
+                actor=drive.alice,
+            )
+            assert len(read.data["file_attachments"]) == index + 1
+            reads.append(read)
+    one, five = reads
+    five.assert_flat_from(one)
+    for read in (one, five):
+        read.assert_statements(5)
+        read.assert_bytes(total=160_000, largest=75_000)
+        read.assert_no_audit_writes()
 
 
 @pytest.mark.parametrize("schema_name", ["public", "console"])

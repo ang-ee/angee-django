@@ -32,7 +32,6 @@ from angee.graphql.data.hasura import (
 )
 from angee.graphql.ids import PublicID, instance_for_id, optional_public_id
 from angee.graphql.inputs import input_values
-from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
 from angee.graphql.relations import RecordPointerType
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin
@@ -247,7 +246,7 @@ def overdue_milestone_count_field(model: Any) -> Any:
 
 @strawberry.type
 class ProjectSetupFields:
-    """Project readiness and phase attention, shared by both schema projections."""
+    """Project readiness and phase attention shared by both schema projections."""
 
     setup_state: ProjectSetupState = setup_state_field(Project)
     overdue_milestone_count: int = overdue_milestone_count_field(Project)
@@ -461,11 +460,6 @@ class TaskProjectionMixin:
 class TaskType(TaskProjectionMixin, AuthoredRefMixin, ProtectedNode):
     """GraphQL projection of one human action."""
 
-    display_name: str = strawberry_django.field(
-        resolver=ProtectedNode.display_name,
-        only=["title"],
-        description=NODE_DISPLAY_NAME_DESCRIPTION,
-    )
     title: auto
     note: auto
     status: auto
@@ -505,11 +499,6 @@ class TaskType(TaskProjectionMixin, AuthoredRefMixin, ProtectedNode):
 class ConsoleTaskType(TaskProjectionMixin, AuthoredRefMixin, TaggedNode, ProtectedNode):
     """Console task projection with label-bearing user relations."""
 
-    display_name: str = strawberry_django.field(
-        resolver=ProtectedNode.display_name,
-        only=["title"],
-        description=NODE_DISPLAY_NAME_DESCRIPTION,
-    )
     title: auto
     note: auto
     status: auto

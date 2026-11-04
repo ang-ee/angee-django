@@ -54,7 +54,6 @@ from angee.iam.graphql.relations import (
     RecordReferenceNode,
     actor_scoped_to_many,
     actor_scoped_to_one,
-    with_record_reference_access,
 )
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.schema import UserType
@@ -296,9 +295,6 @@ attach_delete_preview_metadata(
 class FragmentType(ProtectedNode):
     """GraphQL projection of a content-addressed text fragment."""
 
-    display_name: str = strawberry_django.field(
-        resolver=ProtectedNode.display_name, only=["text"], description=NODE_DISPLAY_NAME_DESCRIPTION
-    )
 
     kind: auto
     hash: auto
@@ -321,9 +317,6 @@ class FragmentType(ProtectedNode):
 class PartType(ProtectedNode):
     """GraphQL projection of one message body part."""
 
-    display_name: str = strawberry_django.field(
-        resolver=ProtectedNode.display_name, only=["type", "role"], description=NODE_DISPLAY_NAME_DESCRIPTION
-    )
 
     position: auto
     type: auto
@@ -341,9 +334,6 @@ class PartType(ProtectedNode):
 class MessageSubtypeType(ProtectedNode):
     """GraphQL projection of an Odoo-style message subtype."""
 
-    display_name: str = strawberry_django.field(
-        resolver=ProtectedNode.display_name, only=["name"], description=NODE_DISPLAY_NAME_DESCRIPTION
-    )
 
     key: auto
     model_label: auto
@@ -398,9 +388,6 @@ class RecordMessageReactionGroupType:
 class MessageType(TrashedRefMixin, TaggedNode, ProtectedNode):
     """GraphQL projection of a message; its managers see trash stamps and ``delete``."""
 
-    display_name: str = strawberry_django.field(
-        resolver=ProtectedNode.display_name, only=["preview"], description=NODE_DISPLAY_NAME_DESCRIPTION
-    )
 
     @strawberry_django.field(only=["sent_at", "created_at"])
     def feed_order_key(self) -> str:
@@ -539,9 +526,6 @@ class MessageType(TrashedRefMixin, TaggedNode, ProtectedNode):
 class RecordMessageParentType(ProtectedNode):
     """Minimal parent-message context shown in record chatter."""
 
-    display_name: str = strawberry_django.field(
-        resolver=ProtectedNode.display_name, only=["preview"], description=NODE_DISPLAY_NAME_DESCRIPTION
-    )
 
     preview: auto
     message_type: auto
@@ -565,9 +549,6 @@ class RecordMessageType(TrashedRefMixin, ProtectedNode):
     trash stamps say who removed it, when and why.
     """
 
-    display_name: str = strawberry_django.field(
-        resolver=ProtectedNode.display_name, only=["preview"], description=NODE_DISPLAY_NAME_DESCRIPTION
-    )
 
     direction: auto
     status: auto
@@ -1656,7 +1637,7 @@ class MessagingQuery:
         if record is None:
             return []
         edges = ThreadAttachment.objects.source_threads_for_record(record).order_by("-created_at", "pk")
-        return list(with_record_reference_access(edges))
+        return cast(list[ThreadAttachmentType], edges)
 
 @strawberry.type
 class MessagingMutation:

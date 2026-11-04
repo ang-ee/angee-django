@@ -35,3 +35,12 @@ def test_page_display_name_fetches_its_title_with_the_rows(composed_tables: None
         counts.append(sum(f"FROM {table}" in item["sql"] for item in captured))
 
     assert counts[0] == counts[1], "Reading label titles must not add a query for each row"
+
+
+def test_record_display_paths_rejects_nested_and_missing_fields(composed_tables: None, monkeypatch) -> None:
+    """The model check catches label paths before a GraphQL query selects them."""
+
+    del composed_tables
+    monkeypatch.setattr(Page, "record_display_paths", ("vault__name", "missing"))
+    errors = [error for error in Page.check() if error.id == "angee.E050"]
+    assert len(errors) == 2

@@ -106,7 +106,6 @@ def _selected_names(selections: list[Selection]) -> frozenset[str]:
 class WorkflowType(ProtectedNode):
     """Workflow identity with draft fields governed by native REBAC redaction."""
 
-    display_name: str = strawberry_django.field(resolver=ProtectedNode.display_name, only=["name"])
     key: auto
     name: auto
     description: auto
@@ -123,7 +122,6 @@ class WorkflowType(ProtectedNode):
 class WorkflowVersionType(ProtectedNode):
     """The immutable graph selected by an admitted run."""
 
-    display_name: str = strawberry_django.field(resolver=ProtectedNode.display_name, only=["number"])
     number: auto
     document: JSON
     content_hash: auto
@@ -275,7 +273,6 @@ class StepNoteType:
 class StepRunType(ProtectedNode):
     """A node's retained execution and wait state; transitions use actions."""
 
-    display_name: str = strawberry_django.field(resolver=ProtectedNode.display_name, only=["node_key", "map_index"])
     run: WorkflowRunType | None = actor_scoped_to_one("run")
     child_runs: list[WorkflowRunType] = actor_scoped_to_many("child_runs")
     awaited_run: WorkflowRunType | None = actor_scoped_to_one("awaited_run")
@@ -344,7 +341,6 @@ class StepRunType(ProtectedNode):
 class StepAttemptType(ProtectedNode):
     """One claim's timing, effect marker, failure and operator acknowledgment."""
 
-    display_name: str = strawberry_django.field(resolver=ProtectedNode.display_name, only=["number"])
     step_run: StepRunType | None = actor_scoped_to_one("step_run")
     number: auto
     page_index: auto
@@ -456,7 +452,6 @@ class StepWatchType(RecordReferenceNode):
 class StepRecordType(RecordReferenceNode):
     """A step's labeled reference to a record, governed by its execution policy."""
 
-    display_name: str = strawberry_django.field(resolver=ProtectedNode.display_name, only=["label"])
     run: WorkflowRunType | None = actor_scoped_to_one("run")
     step_run: StepRunType | None = actor_scoped_to_one("step_run")
     operation: auto
@@ -497,7 +492,6 @@ class TriggerEnablePreviewType:
 class TriggerType(ProtectedNode):
     """A workflow's editable event admission policy and server-owned activation."""
 
-    display_name: str = strawberry_django.field(resolver=ProtectedNode.display_name, only=["source", "model_label"])
     workflow: WorkflowType | None = actor_scoped_to_one("workflow")
     source: auto
     model_label: auto

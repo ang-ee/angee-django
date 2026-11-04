@@ -29,7 +29,6 @@ from angee.graphql.ids import (
     instance_for_id,
     require_instance_for_id,
 )
-from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
 from angee.iam.graphql.access import RolePermission
@@ -40,7 +39,6 @@ from angee.iam.graphql.relations import (
     RECORD_REFERENCE_ANNOTATIONS,
     RecordReferenceNode,
     actor_scoped_public_id,
-    with_record_reference_access,
 )
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.storage import exceptions
@@ -139,11 +137,6 @@ class FileType(AuthoredRefMixin, TrashedRefMixin, ProtectedNode):
     """The verbs record chrome gates on (``holdsPermission``), e.g. a contributed
     ``storage.File#actions`` child declaring ``permission: "read"``."""
 
-    display_name: str = strawberry_django.field(
-        resolver=ProtectedNode.display_name,
-        only=["title", "filename"],
-        description=NODE_DISPLAY_NAME_DESCRIPTION,
-    )
     filename: auto
     title: auto
     content_hash: auto
@@ -182,11 +175,6 @@ class FileAttachmentType(RecordReferenceNode):
 
     label: auto
     file: FileType
-    display_name: str = strawberry_django.field(
-        resolver=ProtectedNode.display_name,
-        only=["label", "file_id"],
-        description=NODE_DISPLAY_NAME_DESCRIPTION,
-    )
 
     model_label: str | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_model, annotate=RECORD_REFERENCE_ANNOTATIONS,
@@ -217,7 +205,7 @@ class StorageQuery:
         source = instance_for_id(File, file)
         if source is None:
             return []
-        return list(with_record_reference_access(source.attachments.select_related("file")))
+        return cast(list[FileAttachmentType], source.attachments.all())
 
     @strawberry.field(name="record_files")
     def record_files(self, model_label: str, record_id: PublicID) -> RecordFilesType:
@@ -240,7 +228,7 @@ class StorageQuery:
         manager = FileAttachment._default_manager
         return RecordFilesType(
             can_upload=manager.has_record_arm(generic_target(record)) and record.has_access("write"),
-            attachments=list(with_record_reference_access(manager.for_record(record))),
+            attachments=cast(list[FileAttachmentType], manager.for_record(record)),
         )
 
 

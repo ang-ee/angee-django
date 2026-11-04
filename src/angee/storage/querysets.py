@@ -220,4 +220,4 @@ class FileAttachmentQuerySet[AttachmentT: FileAttachment](AngeeHistoryQuerySet[A
         return self.filter(
             **generic_target(record).lookups(self.model, "target"),
             file__is_trashed=False,
-        ).select_related("file")
+        )

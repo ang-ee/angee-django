@@ -98,6 +98,8 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, ProtectedDataModel,
     matching guards and accepts at most one matching input builder.
     """
 
+    record_display_paths: ClassVar[tuple[str, ...]] = ("source", "model_label")
+
     resource_class = TriggerResource
     sqid_prefix = "wft_"
     workflow = models.ForeignKey("workflows.Workflow", on_delete=models.CASCADE, related_name="triggers")

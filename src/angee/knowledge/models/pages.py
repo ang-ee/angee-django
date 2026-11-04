@@ -238,6 +238,8 @@ class Page(
     readers who cannot delete them and leave their titles free meanwhile.
     """
 
+    record_display_paths: ClassVar[tuple[str, ...]] = ("title",)
+
     rebac_grantable = {"viewer": "write"}
 
     sqid_prefix = "pg_"

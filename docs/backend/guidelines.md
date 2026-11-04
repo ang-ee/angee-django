@@ -207,6 +207,8 @@ Use these owners instead of maintaining another contract in an addon:
   exact statement delta, name the library mechanism and fixing lane, and require
   equal counts from five through twenty rows. Growth after five rows is a defect.
   Use the [shared document guard](../checks.md#graphql-document-budgets).
+- List resolvers return unevaluated querysets, or apply the native optimizer
+  before materializing rows, so selected field hints can batch their reads.
 - Declare computed GraphQL field dependencies with native Strawberry-Django
   `only`, `select_related`, `prefetch_related`, and `annotate` hints. Computed
   fields promote their model-owned aliases through native `annotate` hints only
@@ -216,11 +218,12 @@ Use these owners instead of maintaining another contract in an addon:
   expression still costs Python work even when Django omits it from SQL.
   See [the Hasura adapter](../../src/angee/graphql/data/hasura.py) and
   [workflow decision fields](../../src/angee/workflows/schema.py).
-  Dependencies include inherited `AngeeNode.display_name`: bind its existing
-  resolver on the concrete type with
-  the fields its model's `__str__` actually reads. Test narrow selections at
-  multiple row counts; selecting the underlying field elsewhere can hide a
-  deferred-field N+1.
+  Inherited `AngeeNode.display_name` takes its dependencies from the model's
+  `record_display_paths`: declare direct columns and related rows there, then
+  test narrow selections at multiple row counts. A column beyond a relation
+  needs specialized GraphQL hints, such as `only` with `select_related` or an
+  annotation; the declaration accepts direct fields only. An unreadable related
+  label falls back to the model name.
 - Model-backed `hasura_model_resource(...)` surfaces expose sqid public identity. Use
   `AngeeDataModel`/`SqidMixin` for concrete rows. For third-party Django models
   that Angee exposes but does not own, pass an explicit sqid public identity

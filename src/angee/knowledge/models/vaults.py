@@ -232,6 +232,8 @@ class Vault(OwnerMixin, ProtectedTrashMixin, HistoryMixin, ProtectedDataModel, c
     its direct ``viewer`` shares; editor and role reach stay administrative.
     """
 
+    record_display_paths: ClassVar[tuple[str, ...]] = ("name",)
+
     rebac_grantable = {"viewer": "share"}
 
     sqid_prefix = "vlt_"

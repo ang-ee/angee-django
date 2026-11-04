@@ -23,7 +23,6 @@ from angee.dashboards.models import Dashboard as DashboardModel
 from angee.dashboards.validators import widget_visibility_answers
 from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.ids import PublicID, require_public_id, to_public_id
-from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
 from angee.graphql.subscriptions import changes
 from angee.iam.audit import TrashedRefMixin
 from angee.iam.graphql.actions import session_user
@@ -73,11 +72,6 @@ class DashboardWidgetType(ProtectedNode):
 
 @strawberry_django.type(Dashboard)
 class DashboardType(TrashedRefMixin, ProtectedNode):
-    display_name: str = strawberry_django.field(
-        resolver=ProtectedNode.display_name,
-        only=["name"],
-        description=NODE_DISPLAY_NAME_DESCRIPTION,
-    )
     scope: auto
     scope_key: auto
     name: auto
