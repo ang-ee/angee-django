@@ -34,9 +34,10 @@ from rebac import (
     PermissionDenied,
     actor_context,
     database_context,
+    is_sudo,
     system_context,
 )
-from rebac.actors import is_sudo, to_subject_ref
+from rebac.actors import to_subject_ref
 from rebac.database import write_alias
 
 from angee.base.hooks import resolve_hooks
@@ -72,7 +73,6 @@ from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.evidence import EvidenceReference
 from angee.provenance.statements import (
     SourceKind,
-    StatementManager,
     StatementSourceMixin,
     StatementSubjectManager,
 )
@@ -171,6 +171,11 @@ _HandleManagerBase = AngeeHistoryManager.from_queryset(HandleQuerySet)
 
 class HandleManager[HandleT: Handle](_HandleManagerBase[HandleT]):
     """Factory + upsert for handles (the contact-point write path)."""
+
+    def get_queryset(self) -> HandleQuerySet[HandleT]:
+        """Retain handle scopes after REBAC pins a fresh queryset."""
+
+        return require_composed_type(super().get_queryset(), HandleQuerySet)
 
     def for_user(self, user: Any) -> Any:
         """Return the account's self-claimed handle for internal attribution."""
@@ -498,6 +503,11 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     :meth:`for_user` lives here.
     """
 
+    def get_queryset(self) -> PartyQuerySet[PartyT]:
+        """Retain party scopes after REBAC pins a fresh queryset."""
+
+        return require_composed_type(super().get_queryset(), PartyQuerySet)
+
     def display_avatar(self, party: Any, *, actor: Any) -> Any | None:
         """Return the avatar ``party`` shows ``actor``: its own, else its strongest handle's.
 
@@ -659,7 +669,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         if not contact_value:
             raise ValidationError({"value": "Enter an email address or phone number."})
         candidate = handle_model(
-            platform=normalized_platform,
+            platform=handle_model.Platform(normalized_platform),
             value=contact_value,
             normalized_value=handle_model.normalize_value(normalized_platform, contact_value),
             label=normalized_label,
@@ -1768,7 +1778,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
             )
             parent = apps.get_model("parties", "Party")._base_manager.db_manager(using).get(pk=person.pk)
             apps.get_model("integrate", "RecordLink").objects.db_manager(using).bind_target(link, parent)
-            person_statements = require_composed_type(person.statements, StatementManager)
+            person_statements = person.statements
             for subject, aspect, values in (
                 (
                     parent,
@@ -1787,7 +1797,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
                 ),
                 (person, "dates", {"birthday": parsed.birthday, "anniversary": parsed.anniversary}),
             ):
-                statements = require_composed_type(subject.statements, StatementManager)
+                statements = subject.statements
                 statements.set(aspect=aspect, values=values, asserted_by=source, link=link)
             supported_handles = []
             for platform, points in (("email", parsed.emails), ("phone", parsed.phones)):

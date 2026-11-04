@@ -26,10 +26,11 @@ from rebac import (
     actor_context,
     current_actor,
     database_context,
+    is_sudo,
     system_context,
     to_subject_ref,
 )
-from rebac.actors import is_anonymous_actor, is_sudo
+from rebac.actors import is_anonymous_actor
 
 from angee.base.models.identity import instances_from_public_ids
 from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256, strip_null_bytes
@@ -1834,13 +1835,17 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 ),
                 created_by_id=created_by_id,
             )
+        part_disposition = part_model._meta.get_field("disposition").to_python(parsed.disposition)
+        part_role_value = part_model._meta.get_field("role").to_python(parsed.role)
+        assert isinstance(part_disposition, part_model.Disposition)
+        assert isinstance(part_role_value, part_model.PartRole)
         part = part_model.objects.create(
             message_id=message.pk,
             parent_id=parent.pk if parent is not None else None,
             position=position,
             type=parsed.type,
-            disposition=parsed.disposition,
-            role=parsed.role,
+            disposition=part_disposition,
+            role=part_role_value,
             cid=parsed.cid,
             name=part_name,
             fragment_id=fragment.pk if fragment is not None else None,
@@ -1916,11 +1921,13 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             if key in seen:
                 continue
             seen.add(key)
+            recipient_role = participant_model._meta.get_field("role").to_python(recipient.role)
+            assert isinstance(recipient_role, participant_model.ParticipantRole)
             participant_model.objects.create(
                 message_id=message.pk,
                 thread_id=thread.pk,
                 handle_id=handle.pk,
-                role=recipient.role,
+                role=recipient_role,
                 created_by_id=created_by_id,
             )
             handles.append(handle)

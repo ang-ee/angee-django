@@ -62,6 +62,11 @@ class ProtectedManager[T: models.Model](_ProtectedManagerBase[T]):
 
     model: type[T]
 
+    def get_queryset(self) -> ProtectedQuerySet[T]:
+        """Retain the protected queryset promised by this manager factory."""
+
+        return require_composed_type(super().get_queryset(), ProtectedQuerySet)
+
 
 _ProtectedUnscopedManagerBase = models.Manager.from_queryset(ProtectedUnscopedQuerySet)
 
@@ -79,6 +84,11 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
     """Manager for Angee's composed user model."""
 
     use_in_migrations = True
+
+    def get_queryset(self) -> UserQuerySet[UserT]:
+        """Retain user scopes after REBAC pins a fresh queryset."""
+
+        return require_composed_type(super().get_queryset(), UserQuerySet)
 
     @classmethod
     def normalize_email(cls, email: str | None) -> str:
@@ -312,7 +322,7 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
 
         using = self._db or router.db_for_write(self.model)
         with database_context(using), system_context(reason="iam.service_user.sync"), transaction.atomic(using=using):
-            rows = require_composed_type(self.db_manager(using).get_queryset(), UserQuerySet)
+            rows = self.db_manager(using).get_queryset()
             if user_id is None:
                 user, created = rows.get_or_create(
                     username=username,

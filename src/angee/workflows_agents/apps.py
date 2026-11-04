@@ -11,8 +11,6 @@ from angee.workflows.signals import isolated_run_cleanup, run_stopping
 @isolated_run_cleanup
 def close_run_conversations(sender: Any, *, run: Any, **kwargs: Any) -> None:
     """Close created sessions and stop created turns on explicitly continued sessions."""
-    from angee.agents.models.sessions import AgentSessionQuerySet
-    from angee.base.models.persistence import require_composed_type
 
     sessions = apps.get_model("agents", "AgentSession")
     turns = apps.get_model("agents", "AgentTurn")
@@ -24,10 +22,7 @@ def close_run_conversations(sender: Any, *, run: Any, **kwargs: Any) -> None:
         owned = created.filter(content_type=content_types.objects.db_manager(using).get_for_model(sessions)).values(
             "object_id"
         )
-        session_rows = require_composed_type(
-            sessions.system_queryset().using(using).filter(pk__in=owned),
-            AgentSessionQuerySet,
-        )
+        session_rows = sessions.system_queryset().using(using).filter(pk__in=owned)
         session_rows.close_as_system(reason="workflows_agents.run_stopping")
         own_turns = created.filter(content_type=content_types.objects.db_manager(using).get_for_model(turns)).values(
             "object_id"

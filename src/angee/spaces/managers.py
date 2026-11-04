@@ -6,14 +6,12 @@ from typing import TYPE_CHECKING, Any, Self
 
 from django.core.exceptions import ValidationError
 from django.db import router, transaction
-from rebac import PermissionDenied, SubjectRef, check_new, current_actor, database_context, to_subject_ref
-from rebac.actors import is_sudo
+from rebac import PermissionDenied, SubjectRef, check_new, current_actor, database_context, is_sudo, to_subject_ref
 from rebac.errors import MissingActorError
 from rebac.resources import model_resource_type
 
 from angee.base.fields.state import enum_member_for
 from angee.base.models.hierarchy import HierarchyQuerySet
-from angee.base.models.persistence import require_composed_type
 from angee.iam.managers import ProtectedManager
 from angee.iam.querysets import ProtectedQuerySet
 from angee.messaging.managers import ThreadManager, ThreadQuerySet
@@ -112,7 +110,7 @@ class MembershipManager[MembershipT: Membership](_MembershipManagerBase[Membersh
                 raise ValidationError("Roster members must share their group's database.")
         with database_context(using), transaction.atomic(using=using):
             type(group).system_queryset(lock=("self",)).using(using).get(pk=group.pk)
-            memberships = require_composed_type(self.get_queryset().using(using), MembershipQuerySet)
+            memberships = self.get_queryset().using(using)
             memberships = memberships.lock_if_supported().filter(group=group, party=party)
             membership = memberships.first()
             if membership is not None:

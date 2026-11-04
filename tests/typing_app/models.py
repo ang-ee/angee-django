@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Self, cast
+from typing import Self
 
 from django.db import models
 
 from angee.base.fields import ImplClassField
 from angee.base.implementations import ImplBase
-from angee.base.models.persistence import PersistenceMixin
+from angee.base.models.persistence import PersistenceMixin, require_composed_type
 from angee.iam.managers import ProtectedManager
 from angee.iam.querysets import ProtectedQuerySet
 from tests.typing_app.factory import OtherFactory
@@ -75,7 +75,7 @@ _SystemRecordManagerBase = ProtectedManager.from_queryset(SystemRecordQuerySet)
 
 class SystemRecordManager[RecordT: SystemRecord](_SystemRecordManagerBase[RecordT]):
     def get_queryset(self) -> SystemRecordQuerySet[RecordT]:
-        return cast(SystemRecordQuerySet[RecordT], super().get_queryset())
+        return require_composed_type(super().get_queryset(), SystemRecordQuerySet)
 
 
 class SystemRecord(PersistenceMixin):

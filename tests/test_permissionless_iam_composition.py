@@ -16,6 +16,7 @@ if settings.SETTINGS_MODULE != "tests.iam_only_settings":
 from django.apps import apps
 from django_compose.model_composition import ModelComposition
 from django_compose.rendering import render_models
+from rebac.managers import RebacManager
 
 from angee.base.models.base import AngeeModel
 from angee.iam.models.base import IAMProtectionMixin, ProtectedModel
@@ -51,6 +52,7 @@ def test_native_abstract_target_and_queryset_donor_protect_the_neutral_source(mo
     assert isinstance(concrete.objects.get_queryset(), ProtectedQuerySet)
     assert isinstance(concrete._base_manager.get_queryset(), ProtectedUnscopedQuerySet)
     assert isinstance(concrete.objects, type(SourceEntry._meta.managers_map["objects"]))
+    assert isinstance(concrete.objects, RebacManager)
     assert "ProtectedQuerySet" in emitted
 
 

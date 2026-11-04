@@ -27,13 +27,13 @@ from rebac import (
     actor_context,
     database_context,
     generic_target,
+    is_sudo,
     resolve_subjects,
     system_context,
     to_object_ref,
     to_subject_ref,
     user_subject_type,
 )
-from rebac.actors import is_sudo
 from rebac.backends import backend
 from rebac.database import write_alias
 from rebac.errors import MissingActorError, NoActorResolvedError

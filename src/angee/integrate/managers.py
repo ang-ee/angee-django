@@ -18,9 +18,9 @@ from django.utils import timezone
 from rebac import (
     PermissionDenied,
     database_context,
+    is_sudo,
     system_context,
 )
-from rebac.actors import is_sudo
 from rebac.database import write_alias
 from simple_history.signals import post_create_historical_record
 

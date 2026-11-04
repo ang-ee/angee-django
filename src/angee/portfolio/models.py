@@ -376,12 +376,12 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, ProtectedDataModel, concr
             targets = (
                 (
                     placement.initiative,
-                    "at_risk",
+                    UpdateHealth.AT_RISK,
                     "Scope is clear; delivery sequencing needs attention.",
                 ),
                 (
                     placement.project,
-                    "on_track",
+                    UpdateHealth.ON_TRACK,
                     "The current push is progressing as planned.",
                 ),
             )

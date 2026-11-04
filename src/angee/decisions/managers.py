@@ -9,8 +9,7 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import router, transaction
-from rebac import database_context, generic_target, system_context, to_subject_ref
-from rebac.actors import is_sudo
+from rebac import database_context, generic_target, is_sudo, system_context, to_subject_ref
 
 from angee.base.models.identity import public_id_of
 from angee.base.signals import mute_changes, publish_change
