@@ -97,10 +97,10 @@ class Timeline:
         self.content_types = {}
         self.folding = set()
         for kind in self.kinds:
-            rows = kind.queryset(record, actor).order_by()
+            rows, fold = kind.source(record, actor)
+            rows = rows.order_by()
             content_type = ContentType.objects.get_for_model(rows.model)
             self.content_types[kind.id] = content_type.pk
-            fold = kind.fold(record)
             if fold is not None:
                 self.folding.add(kind.id)
             fold_type, fold_pk = fold or (models.Value(None), models.Value(None))

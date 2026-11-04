@@ -94,19 +94,27 @@ class RunKind(TimelineKind):
         )
 
     def waiting_on_expression(self, rows: Any, actor: Any) -> models.Expression:
-        """Project a readable waiting decision without rebuilding the run branch."""
+        """Pre-read this record's admitted waiting runs before projecting attention."""
         decisions = apps.get_model("decisions", "Decision").objects.using(rows.db).waiting_on(actor)
         if isinstance(decisions, EmptyQuerySet):
             return models.Value(False, output_field=models.BooleanField())
-        decisions = decisions.with_actor(actor).scoped()
-        steps = (apps.get_model("workflows", "StepRun").objects.using(rows.db)
-                 .with_actor(actor).scoped().filter(
-                     run_id=models.OuterRef("pk"), status=StepRunStatus.WAITING,
-                     waiting_kind=WaitingKind.DECISION, decision_id__in=decisions.values("pk"),
-                 ))
+        run_ids = tuple(rows.filter(status=RunStatus.WAITING).order_by().values_list("pk", flat=True))
+        if not run_ids:
+            return models.Value(False, output_field=models.BooleanField())
+        steps = apps.get_model("workflows", "StepRun").objects.using(rows.db).with_actor(actor)
+        pairs = tuple(steps.scoped_for_aggregate().filter(
+            run_id__in=run_ids, status=StepRunStatus.WAITING, waiting_kind=WaitingKind.DECISION,
+            decision_id__isnull=False,
+        ).order_by().values_list("run_id", "decision_id"))
+        if not pairs:
+            return models.Value(False, output_field=models.BooleanField())
+        decision_ids = {decision_id for _, decision_id in pairs}
+        actionable = set(decisions.with_actor(actor).scoped_for_aggregate().filter(
+            pk__in=decision_ids,
+        ).order_by().values_list("pk", flat=True))
+        waiting_runs = {run_id for run_id, decision_id in pairs if decision_id in actionable}
         return models.Case(
-            models.When(models.Q(status=RunStatus.WAITING) & models.Q(models.Exists(steps)),
-                        then=models.Value(True)),
+            models.When(status=RunStatus.WAITING, pk__in=waiting_runs, then=models.Value(True)),
             default=models.Value(False), output_field=models.BooleanField(),
         )
 

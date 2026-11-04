@@ -8,7 +8,7 @@ import {
   actionFormSubmitResult, formSubmitError, titleCase, useAuthoredResourceMutation, useRevealedRecordField,
 } from "@angee/ui";
 import { DecisionContext, DecisionContextSchema, FactValue } from "./DecisionContext";
-import { DECISION_MODELS, DecideDocument, DecisionDocument, type Decision } from "./documents.console";
+import { DECISION_MODEL, DecideDocument, DecisionDocument, type Decision } from "./documents.console";
 import { useDecisionsT } from "./i18n";
 import { ProposalSchema, VerdictValuesSchema } from "./proposal";
 import { DecisionProvider, DecisionOriginOutlet } from "./origin";
@@ -77,11 +77,19 @@ export function DecisionCard({ decision: incomingDecision, selfId, highlighted, 
     }
   }, [open, acceptedRevision]);
   const [decide] = useAuthoredResourceMutation(DecideDocument, {
-    shouldInvalidate: (data) => data?.decide.ok === true, invalidateModels: [...new Set([...DECISION_MODELS,
+    shouldInvalidate: (data) => data?.decide.ok === true,
+    invalidateModels: [...new Set([DECISION_MODEL,
       ...decision.records.flatMap((record) => record.record_model ? [record.record_model] : []),
-      ...(proposal.success ? proposal.output.alternatives.flatMap((alternative) => Object.values(alternative.actions)
-        .flatMap((action) => action.model ? [action.model] : [])) : []),
     ])],
+    records: (_data, variables) => [
+      { model: DECISION_MODEL, id: decision.id, relatedRecords: decision.records.flatMap((record) =>
+        record.record_model && record.record_id ? [{ model: record.record_model, id: record.record_id }] : []) },
+      ...decision.records.flatMap((record) => record.record_model && record.record_id
+        ? [{ model: record.record_model, id: record.record_id }] : []),
+      ...(proposal.success ? proposal.output.alternatives.filter((alternative) => variables.chosen.includes(alternative.key))
+        .flatMap((alternative) => Object.entries(alternative.actions).flatMap(([id, action]) =>
+          action.model ? [{ model: action.model, id }] : [])) : []),
+    ],
     acceptResponse: (data) => {
       const answered = data?.decide.decision;
       if (!data?.decide.ok || !answered) return;

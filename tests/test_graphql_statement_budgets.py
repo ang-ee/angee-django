@@ -194,10 +194,10 @@ def timeline_rail_reads(activity_catalog: None, composed_permissions: None, capt
 
 def test_timeline_rail_document_budget(timeline_rail_reads) -> None:
     for read in timeline_rail_reads:
-        read.assert_bytes(total=750_000, largest=400_000)
-        # 64 statements on CI's full-profile host against 60 locally: headroom.
-        read.assert_statements(70)
-        read.assert_audit_inserts(8)
+        read.assert_bytes(total=685_000, largest=300_000)
+        # 62 statements on CI's full-profile host against 58 locally: headroom.
+        read.assert_statements(68)
+        read.assert_audit_inserts(7)
 
 
 def test_timeline_rail_document_statement_count(timeline_rail_reads) -> None:

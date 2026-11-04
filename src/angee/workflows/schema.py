@@ -185,8 +185,20 @@ class WorkflowRunType(RecordReferenceNode):
     def graph(self, info: strawberry.Info) -> WorkflowRunGraph:
         """Read one run's bounded graph with its selected step details."""
         run = cast(Any, self)
+        graph = run.__dict__.get("_record_timeline_graph")
+        if graph is None:
+            graph = WorkflowRunType._graphs_for_runs((run,), info)[run.pk]
+        return cast(WorkflowRunGraph, graph)
+
+    @staticmethod
+    def _graphs_for_runs(
+        runs: tuple[Any, ...], info: strawberry.Info, *, writable_run_ids: set[int] | None = None,
+    ) -> dict[int, Any]:
+        """Translate the selected GraphQL fields into one model-owned graph batch."""
+        run = runs[0]
         actor = get_current_user(info)
-        nodes = _selected_children(_selected_children(info.selected_fields, "graph"), "nodes")
+        run_fields = _selected_children(info.selected_fields, "runs") or info.selected_fields
+        nodes = _selected_children(_selected_children(run_fields, "graph"), "nodes")
         steps = _selected_children(nodes, "step_run")
         map_steps = _selected_children(steps, "map_steps")
         selected = _selected_names(steps) | _selected_names(map_steps)
@@ -217,12 +229,13 @@ class WorkflowRunType(RecordReferenceNode):
                         name, queryset=require_rebac_queryset(model).using(run._state.db).with_actor(actor),
                     ))
             related_querysets["decision"] = decision.prefetch_related(*nested)
-        return cast(WorkflowRunGraph, run.graph(
-            actor,
+        return WorkflowRun.graphs_for(
+            runs, actor,
+            writable_run_ids=writable_run_ids,
             step_fields=_selected_names(steps),
             map_fields=_selected_names(map_steps),
             related_querysets=related_querysets,
-        ))
+        )
 
     @strawberry_django.field(only=["status", "stopped_at"])
     def can_cancel(self, info: strawberry.Info) -> bool:
@@ -972,8 +985,8 @@ class RecordTimelineType:
         return self._owner._runs(self._target, info)
 
     @strawberry.field
-    def decisions(self) -> list[DecisionType]:
-        return self._owner._selection.decisions_by_record[self._target]
+    def decisions(self, info: strawberry.Info) -> list[DecisionType]:
+        return self._owner._decisions(self._target, info)
 
 
 @strawberry.type
@@ -981,6 +994,9 @@ class RecordTimelineSelectionType:
     _selection: strawberry.Private[TimelineSelection]
     _include_runs: strawberry.Private[bool]
     _run_projections: strawberry.Private[dict[tuple[FieldNode, ...], dict[int, Any]]] = strawberry.field(
+        default_factory=dict,
+    )
+    _decision_projections: strawberry.Private[dict[tuple[FieldNode, ...], dict[int, Any]]] = strawberry.field(
         default_factory=dict,
     )
 
@@ -1025,8 +1041,32 @@ class RecordTimelineSelectionType:
             )
             hydrated = optimize(run_type_get_queryset(rows, WorkflowRunType, info), info)
             self._run_projections[key] = {row.pk: row for row in hydrated}
+            run_fields = _selected_children(info.selected_fields, "runs")
+            selected = _selected_names(run_fields)
+            projected_runs = tuple(self._run_projections[key].values())
+            writable = (WorkflowRun._prepare_cancel_for(projected_runs, self._selection.actor)
+                        if projected_runs and "can_cancel" in selected else None)
+            if self._run_projections[key] and _selected_children(run_fields, "graph"):
+                graphs = WorkflowRunType._graphs_for_runs(projected_runs, info, writable_run_ids=writable)
+                for pk, graph in graphs.items():
+                    self._run_projections[key][pk].__dict__["_record_timeline_graph"] = graph
         projected = self._run_projections[key]
         return [projected[pk] for pk in groups[target] if pk in projected]
+
+    def _decisions(self, target: GenericTarget, info: strawberry.Info) -> list[DecisionType]:
+        groups = self._selection.decisions_by_record
+        identities = {row.pk for group in groups.values() for row in group}
+        if not identities:
+            return []
+        key = tuple(info._raw_info.field_nodes)
+        if key not in self._decision_projections:
+            rows = Decision.objects.db_manager(self._selection.records[0]._state.db).with_actor(
+                self._selection.actor,
+            ).filter(pk__in=identities)
+            hydrated = optimize(DecisionType.get_queryset(rows, info), info)
+            self._decision_projections[key] = {row.pk: row for row in hydrated}
+        projected = self._decision_projections[key]
+        return [projected[row.pk] for row in groups[target] if row.pk in projected]
 
 
 @strawberry.type

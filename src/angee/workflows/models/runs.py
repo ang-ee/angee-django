@@ -420,15 +420,20 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
                     run.refresh_from_db(using=self._state.db)
                     publish_change(run, action="update", update_fields=None)
 
+    @classmethod
     def _graph_steps(
-        self,
+        cls,
+        runs: tuple[WorkflowRun, ...],
         actor: Any,
         fields: frozenset[str],
         related_querysets: Mapping[str, models.QuerySet[Any]],
     ) -> Any:
         """Scope and batch only the step details selected by a graph reader."""
-        model = self.step_runs.model
-        queryset = cast(Any, model.objects.db_manager(self._state.db).with_actor(actor)).filter(run_id=self.pk)
+        model = apps.get_model("workflows", "StepRun")
+        using = runs[0]._state.db
+        queryset = cast(Any, model.objects.db_manager(using).with_actor(actor)).filter(
+            run_id__in=[run.pk for run in runs],
+        )
         if "requires_duplicate_acknowledgement" in fields:
             queryset = queryset.annotate(_effect_started=model.effect_started_expression())
         related = {
@@ -440,7 +445,7 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
         prefetches = [
             Prefetch(
                 name,
-                queryset=related_querysets.get(name, target.objects.db_manager(self._state.db).with_actor(actor)),
+                queryset=related_querysets.get(name, target.objects.db_manager(using).with_actor(actor)),
             )
             for name, target in related.items()
             if name in fields
@@ -456,75 +461,226 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
         related_querysets: Mapping[str, models.QuerySet[Any]] | None = None,
     ) -> RunGraph:
         """Read frozen topology, batching the step details requested by the caller."""
+        return type(self).graphs_for(
+            (self,),
+            actor,
+            step_fields=step_fields,
+            map_fields=map_fields,
+            related_querysets=related_querysets,
+        )[self.pk]
+
+    @classmethod
+    def graphs_for(
+        cls,
+        runs: tuple[WorkflowRun, ...],
+        actor: Any,
+        *,
+        writable_run_ids: set[int] | None = None,
+        step_fields: frozenset[str] = frozenset(),
+        map_fields: frozenset[str] = frozenset(),
+        related_querysets: Mapping[str, models.QuerySet[Any]] | None = None,
+    ) -> dict[int, RunGraph]:
+        """Build actor-readable run graphs with one read per selected step table."""
+        if not runs:
+            return {}
         if actor is None:
             raise PermissionDenied("A run graph requires a reader.")
-        self.require_access("read", actor)
-        definition = self.policy_version.definition
-        topology = definition.topology()
+        using = runs[0]._state.db
+        if any(run._state.db != using for run in runs):
+            raise ValueError("A graph batch must use one database.")
+        by_id = {run.pk: run for run in runs}
+        readable = set(
+            cls.objects.db_manager(using)
+            .with_actor(actor)
+            .scoped_for_aggregate()
+            .filter(pk__in=by_id)
+            .values_list("pk", flat=True)
+        )
+        if readable != by_id.keys():
+            raise PermissionDenied("A run graph requires a reader.")
         related_querysets = related_querysets or {}
-        steps = self._graph_steps(actor, step_fields, related_querysets)
-        rows = {row.node_key: row for row in steps.nodes()}
-        for row in rows.values():
-            row.run = self
-        map_rows: dict[str, list[Any]] = {}
+        rows_by_run: dict[int, dict[str, Any]] = {pk: {} for pk in by_id}
+        map_rows: dict[int, dict[str, list[Any]]] = {pk: {} for pk in by_id}
         if "map_steps" in step_fields:
-            for row in (
-                self._graph_steps(actor, map_fields, related_querysets)
-                .filter(node_key__endswith=MAP_BODY_SUFFIX)
-                .order_by("node_key", "map_index")
-            ):
-                row.run = self
-                map_rows.setdefault(row.node_key.removesuffix(MAP_BODY_SUFFIX), []).append(row)
-            for key, row in rows.items():
-                row._graph_map_steps = map_rows.get(key, [])
-                row._graph_map_actor = actor
+            fields = step_fields | map_fields
+            steps = cls._graph_steps(runs, actor, fields, related_querysets)
+            deferred = {"input", "output", "state"} - fields
+            for row in steps.defer(*sorted(deferred))._graph_rows():
+                row.run = by_id[row.run_id]
+                if row.node_key.endswith(MAP_BODY_SUFFIX):
+                    map_rows[row.run_id].setdefault(row.node_key.removesuffix(MAP_BODY_SUFFIX), []).append(row)
+                else:
+                    rows_by_run[row.run_id][row.node_key] = row
+            for run_id, rows in rows_by_run.items():
+                for key, row in rows.items():
+                    row._graph_map_steps = sorted(map_rows[run_id].get(key, []), key=lambda item: item.map_index)
+                    row._graph_map_actor = actor
+        else:
+            steps = cls._graph_steps(runs, actor, step_fields, related_querysets)
+            for row in steps.nodes():
+                row.run = by_id[row.run_id]
+                rows_by_run[row.run_id][row.node_key] = row
         if "can_retry" in step_fields or "can_retry" in map_fields:
-            permission = (to_subject_ref(actor), self.with_actor(actor).has_access("write"))
-            graph_rows = (*rows.values(), *(item for group in map_rows.values() for item in group))
-            for row in graph_rows:
-                row._graph_retry_permission = permission
-            if permission[1]:
-                with system_context(reason="workflows.retry_policy"):
-                    failures = tuple(
-                        (pk, key)
-                        for pk, key in self.step_runs.model._default_manager.db_manager(self._state.db)
-                        .filter(run_id=self.pk, status=StepRunStatus.FAILED)
-                        .values_list("pk", "node_key")
-                        if definition.retry_allowed(key)
-                    )
+            writable = writable_run_ids if writable_run_ids is not None else cls._writable_for(runs, actor)
+            subject = to_subject_ref(actor)
+            for run_id, rows in rows_by_run.items():
+                graph_rows = (*rows.values(), *(item for group in map_rows[run_id].values() for item in group))
                 for row in graph_rows:
-                    row._graph_unrouted_failures = failures
-        plan = definition.plan(
-            rows.values(),
-            terminal=self.stopped_at is not None or self.is_terminal and self.status != RunStatus.FAILED,
-        )
-        counts: dict[str, list[StepRunStatusCount]] = {}
-        attempts: dict[str, int] = {}
-        for item in steps.item_counts():
-            key = item["node_key"]
-            counts.setdefault(key, []).append(StepRunStatusCount(StepRunStatus(item["status"]), item["count"]))
-            attempts[key] = attempts.get(key, 0) + item["attempts"]
-        return RunGraph(
-            nodes=tuple(
-                RunGraphNode(
-                    node=node,
-                    step_run=rows.get(node.key),
-                    plan=plan.get(node.key, "not_run"),
-                    item_counts=tuple(counts.get(node.body_key, ())) if node.body_key else (),
-                    item_attempts=attempts.get(node.body_key, 0) if node.body_key else 0,
+                    row._graph_retry_permission = (subject, run_id in writable)
+            if writable:
+                with system_context(reason="workflows.retry_policy"):
+                    failures = list(
+                        apps.get_model("workflows", "StepRun")
+                        ._default_manager.db_manager(using)
+                        .filter(run_id__in=writable, status=StepRunStatus.FAILED)
+                        .values_list("run_id", "pk", "node_key")
+                    )
+                for run_id, rows in rows_by_run.items():
+                    if run_id not in writable:
+                        continue
+                    definition = by_id[run_id].policy_version.definition
+                    allowed = tuple(
+                        (pk, key)
+                        for owner_id, pk, key in failures
+                        if owner_id == run_id and definition.retry_allowed(key)
+                    )
+                    for row in (*rows.values(), *(item for group in map_rows[run_id].values() for item in group)):
+                        row._graph_unrouted_failures = allowed
+        counts: dict[int, dict[str, list[StepRunStatusCount]]] = {pk: {} for pk in by_id}
+        attempts: dict[int, dict[str, int]] = {pk: {} for pk in by_id}
+        if "map_steps" in step_fields:
+            for run_id, groups in map_rows.items():
+                by_key: dict[tuple[str, StepRunStatus], int] = {}
+                for key, items in groups.items():
+                    body_key = key + MAP_BODY_SUFFIX
+                    for row in items:
+                        status = StepRunStatus(row.status)
+                        by_key[body_key, status] = by_key.get((body_key, status), 0) + 1
+                        attempts[run_id][body_key] = attempts[run_id].get(body_key, 0) + row.attempt
+                for (key, status), count in sorted(by_key.items(), key=lambda item: (item[0][0], str(item[0][1]))):
+                    counts[run_id].setdefault(key, []).append(StepRunStatusCount(status, count))
+        else:
+            for item in steps.item_counts():
+                run_id, key = item["run_id"], item["node_key"]
+                counts[run_id].setdefault(key, []).append(
+                    StepRunStatusCount(StepRunStatus(item["status"]), item["count"]),
                 )
-                for node in topology.nodes
-            ),
-            edges=tuple(
-                RunGraphEdge(
-                    source=edge.source,
-                    outcome=edge.outcome,
-                    target=edge.target,
-                    taken=edge.source in rows and definition.edge_live(rows[edge.source], {edge.outcome}),
-                )
-                for edge in topology.edges
-            ),
+                attempts[run_id][key] = attempts[run_id].get(key, 0) + item["attempts"]
+        graphs = {}
+        for run_id, run in by_id.items():
+            definition = run.policy_version.definition
+            topology = definition.topology()
+            rows = rows_by_run[run_id]
+            plan = definition.plan(
+                rows.values(),
+                terminal=run.stopped_at is not None or run.is_terminal and run.status != RunStatus.FAILED,
+            )
+            graphs[run_id] = RunGraph(
+                nodes=tuple(
+                    RunGraphNode(
+                        node=node,
+                        step_run=rows.get(node.key),
+                        plan=plan.get(node.key, "not_run"),
+                        item_counts=tuple(counts[run_id].get(node.body_key, ())) if node.body_key else (),
+                        item_attempts=attempts[run_id].get(node.body_key, 0) if node.body_key else 0,
+                    )
+                    for node in topology.nodes
+                ),
+                edges=tuple(
+                    RunGraphEdge(
+                        source=edge.source,
+                        outcome=edge.outcome,
+                        target=edge.target,
+                        taken=edge.source in rows and definition.edge_live(rows[edge.source], {edge.outcome}),
+                    )
+                    for edge in topology.edges
+                ),
+            )
+        return graphs
+
+    @classmethod
+    def _writable_for(cls, runs: tuple[WorkflowRun, ...], actor: Any) -> set[int]:
+        """Read write permission once for a batch of runs."""
+        if not runs:
+            return set()
+        using = runs[0]._state.db
+        return set(
+            cls.objects.db_manager(using)
+            .with_actor(actor)
+            .with_action("write")
+            .scoped_for_aggregate()
+            .filter(pk__in=[run.pk for run in runs])
+            .values_list("pk", flat=True)
         )
+
+    @classmethod
+    def _prepare_cancel_for(cls, runs: tuple[WorkflowRun, ...], actor: Any) -> set[int]:
+        """Seed write and open-work facts on request-scoped projection instances."""
+        writable = cls._writable_for(runs, actor)
+        if not runs:
+            return writable
+        subject = to_subject_ref(actor)
+        open_ids = cls._batch_cancel_open_work(tuple(run for run in runs if run.pk in writable))
+        for run in runs:
+            run.__dict__["_graph_write_permission"] = (subject, run.pk in writable)
+            run.__dict__["_graph_open_owned_work"] = run.pk in open_ids
+        return writable
+
+    @classmethod
+    def _batch_cancel_open_work(cls, runs: tuple[WorkflowRun, ...]) -> set[int]:
+        """Find runs with open owned work, including terminal descendants."""
+        if not runs:
+            return set()
+        using = runs[0]._state.db
+        pending = {
+            run.pk
+            for run in runs
+            if run.is_terminal and not (run.status == RunStatus.FAILED and run.stopped_at is None)
+        }
+        open_roots = {run.pk for run in runs} - pending
+        frontier = set(pending)
+        seen = set(frontier)
+        parents: dict[int, int] = {}
+        open_ids: set[int] = set()
+        while frontier:
+            children = list(
+                cls.system_queryset()
+                .using(using)
+                .filter(
+                    parent_step__run_id__in=frontier,
+                    relation=RunRelation.OWNED,
+                )
+                .values_list("pk", "parent_step__run_id", "status", "stopped_at")
+            )
+            next_frontier = set()
+            for child_id, parent_id, status, stopped_at in children:
+                parents[child_id] = parent_id
+                if status not in RunStatus.terminal_values() or status == RunStatus.FAILED and stopped_at is None:
+                    open_ids.add(child_id)
+                if child_id not in seen:
+                    next_frontier.add(child_id)
+                    seen.add(child_id)
+            frontier = next_frontier
+        if pending:
+            open_ids.update(
+                apps.get_model("workflows", "StepRun")
+                .system_queryset()
+                .using(using)
+                .filter(run_id__in=seen)
+                .exclude(status__in=StepRunStatus.terminal_values())
+                .values_list("run_id", flat=True)
+            )
+        for run_id in open_ids:
+            current = run_id
+            visited = set()
+            while current not in visited:
+                visited.add(current)
+                if current in pending:
+                    open_roots.add(current)
+                if current not in parents:
+                    break
+                current = parents[current]
+        return open_roots
 
     def _cancel_owned_work(self, *, actor: Any) -> tuple[bool, int]:
         """Stop this locked run's open work while preserving its terminal facts."""
@@ -570,7 +726,13 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
 
     def can_cancel(self, actor: Any) -> bool:
         """A writer may cancel active execution or clean up a terminal run's open rows."""
-        return self.with_actor(actor).has_access("write") and self._has_open_owned_work
+        cached = self.__dict__.get("_graph_write_permission")
+        allowed = (
+            cached[1]
+            if cached is not None and actor is not None and cached[0] == to_subject_ref(actor)
+            else self.with_actor(actor).has_access("write")
+        )
+        return allowed and self._has_open_owned_work
 
     def check_await(self, observer: Any, *, expects: str) -> None:
         """Require an observed run to match the pinned contract without a self-wait."""
@@ -584,26 +746,9 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
     @property
     def _has_open_owned_work(self) -> bool:
         """Cancellation owns open rows throughout the tree, even below final descendants."""
-        return (
-            not self.is_terminal
-            or self.status == RunStatus.FAILED
-            and self.stopped_at is None
-            or self.step_runs.model.system_queryset()
-            .using(self._state.db)
-            .filter(run=self)
-            .exclude(status__in=StepRunStatus.terminal_values())
-            .exists()
-            or any(
-                child._has_open_owned_work
-                for child in type(self)
-                .system_queryset()
-                .using(self._state.db)
-                .filter(
-                    parent_step__run=self,
-                    relation=RunRelation.OWNED,
-                )
-            )
-        )
+        if "_graph_open_owned_work" in self.__dict__:
+            return bool(self.__dict__["_graph_open_owned_work"])
+        return self.pk in type(self)._batch_cancel_open_work((self,))
 
     def can_reprocess(self, actor: Any) -> bool:
         """Reprocessing needs terminal execution, run write and workflow start access."""
