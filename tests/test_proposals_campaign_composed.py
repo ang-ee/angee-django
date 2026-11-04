@@ -191,11 +191,11 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
             with CaptureQueriesContext(connection) as queries, self.assertRaises(ClarificationWidenBlocked) as error:
                 task.validate_visibility("inherited")
             self.assertEqual(error.exception.code, "HIDDEN_ASKER_IN_THREAD")
-            # Auditing the two task scopes and the message scope adds three
-            # INSERTs; the publication check itself remains one SELECT.
+            # The block audit precedes the SELECT; two embedded bypass audits
+            # now follow execution, once per distinct entry, not compilation.
             self.assertEqual(len(queries), 4, queries.captured_queries)
-            self.assertTrue(all('INSERT INTO "rebac_permissionauditevent"' in q["sql"] for q in queries[:3]))
-            self.assertIn("EXISTS", queries[3]["sql"].upper())
+            self.assertTrue(all('INSERT INTO "rebac_permissionauditevent"' in queries[i]["sql"] for i in (0, 2, 3)))
+            self.assertIn("EXISTS", queries[1]["sql"].upper())
         before = self.Task._base_manager.filter(pk=task.pk).values().get()
         with actor_context(self.manager):
             with self.assertRaises(ClarificationWidenBlocked):

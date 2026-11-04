@@ -449,14 +449,16 @@ def test_narrow_step_run_relation_projection_does_not_fetch_each_foreign_key(sch
     actor, _sent = execution
     workflow = load_workflow(document("entry"), actor=actor)
     counts = []
-    for count in (1, 5):
+    for count in (1, 5, 10, 20):
         while StepRun.system_queryset().count() < count:
             run_until(start_run(workflow, actor=actor))
         with CaptureQueriesContext(connection) as queries:
             data = result_data(execute_schema(schema, "{ steprun { run { id } } }", user=actor))
         assert len(data["steprun"]) == count
         counts.append(len(queries))
-    assert counts[0] == counts[1]
+    # REBAC L8 shares the actor-set proof across one and many rows;
+    # the relation projection stays batched through twenty rows.
+    assert counts == [8, 8, 8, 8], counts
 
 
 def test_diagnostics_distinguish_run_operators_editors_and_readers(schema, callers, register_step):

@@ -195,26 +195,25 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
         assert isinstance(local, LocalBackend)
         local.schema()
         monkeypatch.setattr(type(local), "accessible", no_enumeration)
-        for model in (Party, Person):
+        for model, expected_bounded_queries in ((Party, 2), (Person, 3)):
             resource_type = model_resource_type(model)
             assert resource_type is not None
             for action in ("read", "read_private"):
-                # Recovery REBAC compiles arrow sources into the row SELECT. A fresh
-                # scope reads one schema revision and one actor set before that SELECT.
+                # A range keeps the generic follower scope for both page sizes;
+                # bounded pk__in uses a different candidate-root proof.
                 expected_queries = 3
                 counts = []
-                for size in (2, 50):
-                    ids = [row.pk for row in rows[:size]]
+                for size in (1, 50):
+                    ids = [row.pk for row in rows[-size:]]
                     scoped = model.objects.with_actor(f.reader).with_action(action).scoped()
-                    query = scoped.filter(pk__in=ids).values_list("pk", flat=True)
+                    query = scoped.filter(pk__gte=ids[0]).values_list("pk", flat=True)
                     sql, parameters = query.query.sql_with_params()
                     assert "SELECT" in sql and parameters
                     (tmp_path / f"{model.__name__}-{action}-{size}.sql").write_text(
                         f"{sql}\n-- parameters: {parameters!r}\n",
                         encoding="utf-8",
                     )
-                    # A fresh scope per measurement: a scoped queryset keeps the actor sets
-                    # it decided, so reusing one would skip the actor-set read.
+                    # A fresh scope per measurement keeps decisions independent.
                     with evaluator_scope(), CaptureQueriesContext(connection) as captured:
                         result = set(query)
                     counts.append(len(captured))
@@ -227,17 +226,35 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
                         )
                         == 1
                     )
-                    assert result == (set(ids) if action == "read" else set())
+                    assert result == (set(ids[:size]) if action == "read" else set())
                 assert counts[0] == counts[1]
-        # A genuine singleton uses the native point lower bound instead of
-        # preparing the generic Party source for Tie's private intersection.
+                # Native bounded pk__in keeps the candidate-root proof in the
+                # row statement at two, twenty and fifty candidates.
+                bounded_counts = []
+                for size in (2, 20, 50):
+                    ids = [row.pk for row in rows[:size]]
+                    with evaluator_scope(), CaptureQueriesContext(connection) as captured:
+                        query = model.objects.with_actor(f.reader).with_action(action).scoped().filter(pk__in=ids)
+                        query = query.values_list("pk", flat=True)
+                        query.query.sql_with_params()
+                        result = set(query)
+                    bounded_counts.append(len(captured))
+                    assert sum(
+                        item["sql"].startswith(f'SELECT "{model._meta.db_table}".') for item in captured
+                    ) == 1
+                    assert result == (set(ids) if action == "read" else set())
+                # The native Party root uses two statements; Person's MTI
+                # scope keeps one additional fixed preparation at every size.
+                assert bounded_counts == [expected_bounded_queries] * 3, bounded_counts
+        # A genuine singleton uses the native point lower bound, so its actor
+        # proof is embedded and only the revision plus application read remain.
         singleton = Tie.objects.with_actor(f.reader).scoped().filter(pk__in=[tie.pk]).values_list("pk", flat=True)
         sql, parameters = singleton.query.sql_with_params()
         assert "SELECT" in sql and parameters
         (tmp_path / "Tie-read-singleton.sql").write_text(f"{sql}\n-- parameters: {parameters!r}\n", encoding="utf-8")
         with evaluator_scope(), CaptureQueriesContext(connection) as captured:
             result = set(singleton)
-        assert len(captured) == 3, captured.captured_queries
+        assert len(captured) == 2, captured.captured_queries
         assert sum(query["sql"].startswith(f'SELECT "{Tie._meta.db_table}".') for query in captured) == 1
         assert result == set()
         for model in (Party, Person):

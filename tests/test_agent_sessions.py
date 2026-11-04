@@ -286,7 +286,8 @@ def test_stop_or_close_keeps_emitted_updates_and_ends_the_stream_at_its_next_flu
                 session.close()
             else:
                 session.cancel_turn(running)
-        clock[0] += 1
+        # The sink's default factory captured the real clock before this callback.
+        clock[0] = time.monotonic() + 1
         emit(_chunk("Before observing stop"))
         after_stop.append("runner continued")
 
@@ -864,7 +865,8 @@ def test_stop_then_delete_during_streaming_is_a_quiet_cancellation(
                 _delete_session_as(admin, session.pk)
             else:
                 AgentTurn.objects.get(pk=running.pk).delete()
-        clock[0] += 1
+        # Advance past the sink's real-clock start even after a slow database call.
+        clock[0] = time.monotonic() + 1
         emit(_chunk("Before observing deletion"))
         after_stop.append("runner continued")
 
