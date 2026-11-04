@@ -1,15 +1,35 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { ShellPageTestProviders } from "@angee/app/testing";
 import { createUiTestProviders } from "@angee/ui/testing";
-import { createRouteHref, type ChatterViewContext } from "@angee/ui";
+import { AppRuntimeProvider, CHATTER_CONTAINERS, RelatedCountProbe, containersFromChildren, createRouteHref, type ChatterViewContext } from "@angee/ui";
 import type { CustomParams } from "@refinedev/core";
 
-import { recordDecisionsGroup } from "./related";
+import { decisionConcernsGroup, recordDecisionsGroup } from "./related";
+import { RecordDecisionsCountDocument, RecordDecisionsDocument } from "./documents.console";
 
 const { Provider, clearClients } = createUiTestProviders({
   apiUrl: "test://decisions-related", queryClientConfig: { defaultOptions: { queries: { retry: false } } },
+});
+
+test("the Decisions probe selects only the filtered aggregate document", async () => {
+  const custom = vi.fn(async (_params: Partial<CustomParams>) => ({ data: { decision_records_aggregate: { aggregate: { count: 2 } } } }));
+  render(<Provider dataProvider={{ custom }}><AppRuntimeProvider runtime={{
+    containers: containersFromChildren(CHATTER_CONTAINERS, { "related#groups": { decisions: recordDecisionsGroup } }),
+  }}><RelatedCountProbe id="related" context={context} onCount={vi.fn()} /></AppRuntimeProvider></Provider>);
+  await waitFor(() => expect(custom).toHaveBeenCalled());
+  const documents = custom.mock.calls.map(([request]) => request.meta?.gqlQuery);
+  expect(documents).toContain(RecordDecisionsCountDocument);
+  expect(documents).not.toContain(RecordDecisionsDocument);
+});
+
+test("a decision's derived Concerns count waits for the Links pane", () => {
+  const custom = vi.fn();
+  render(<Provider dataProvider={{ custom }}><AppRuntimeProvider runtime={{
+    containers: containersFromChildren(CHATTER_CONTAINERS, { "decisions.Decision#groups": { concerns: decisionConcernsGroup } }),
+  }}><RelatedCountProbe id="related" context={{ ...context, route: { ...context.route!, modelLabel: "decisions.Decision", canonicalLabel: "decisions.Decision" } }} onCount={vi.fn()} /></AppRuntimeProvider></Provider>);
+  expect(custom).not.toHaveBeenCalled();
 });
 afterEach(() => { cleanup(); clearClients(); });
 

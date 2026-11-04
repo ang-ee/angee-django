@@ -44,7 +44,7 @@ const context: ChatterViewContext = {
 function Count({ current }: { current: ChatterViewContext }) {
   const [count, setCount] = useState<number>();
   const publish = useCallback((_: string, next: number | undefined) => setCount(next), []);
-  return <><RelatedCountProbe id="related" context={current} onCount={publish} /><span>Related {count}</span></>;
+  return <><RelatedCountProbe id="related" context={current} onCount={publish} includePaneCounts /><span>Related {count}</span></>;
 }
 function Groups({ groups, current = context }: {
   groups: Record<string, ContainerChild<RelatedGroupContent>>; current?: ChatterViewContext;
@@ -94,6 +94,22 @@ test("role configuration filters one shared query and each row links to the page
   expect(row.getAttribute("href")).toBe("/knowledge/page/pg_1");
   fireEvent.click(row);
   expect(sdk.navigate).toHaveBeenCalledWith("/knowledge/page/pg_1");
+});
+
+test("a Pages badge alone does not request binding rows", () => {
+  render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
+    "related#groups": { pages: recordPagesGroup() },
+  }) }}><RelatedCountProbe id="related" context={context} onCount={vi.fn()} /></AppRuntimeProvider>);
+  expect(sdk.query).not.toHaveBeenCalledWith(KnowledgeRecordPages, expect.anything(), expect.anything());
+});
+
+test("a page's Backlinks and Bound to badges defer their row documents", () => {
+  const page = { ...context, route: { ...context.route!, modelLabel: "knowledge.Page" } };
+  render(<AppRuntimeProvider runtime={{ containers: containersFromChildren(CHATTER_CONTAINERS, {
+    "knowledge.Page#groups": { backlinks: pageBacklinksGroup, bound: pageBoundToGroup },
+  }) }}><RelatedCountProbe id="related" context={page} onCount={vi.fn()} /></AppRuntimeProvider>);
+  expect(sdk.query).not.toHaveBeenCalledWith(KnowledgePage, expect.anything(), expect.anything());
+  expect(sdk.query).not.toHaveBeenCalledWith(KnowledgePageRecordBindings, expect.anything(), expect.anything());
 });
 
 test("writer controls use the role-keyed bind and unbind mutations", async () => {

@@ -177,6 +177,18 @@ export const DecisionStepsDocument = graphql(`
   }
 `);
 
+export const RunDecisionsCountDocument = graphql(`
+  query RunDecisionsCount($run: String!) {
+    steprun_aggregate(where: { run: { _eq: $run }, decision: { _is_null: false } }) { aggregate { count } }
+  }
+`);
+
+export const DecisionRunCountDocument = graphql(`
+  query DecisionRunCount($decision: String!) {
+    steprun_aggregate(where: { decision: { _eq: $decision }, run: { _is_null: false } }) { aggregate { count } }
+  }
+`);
+
 /** The runs that worked on one record, through the run owner's read. */
 export const RecordRelatedRunsDocument = graphql(`
   query RecordRelatedRuns($records: [TimelineRecordInput!]!) {

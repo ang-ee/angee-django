@@ -78,14 +78,6 @@ test("the Sources count probe reads only the filtered aggregate before the pane 
 test("the Sources group counts and lists each source as a row linking to its outbound URL", () => {
   render(<AppRuntimeProvider runtime={{ containers }}><RelatedPane context={context} /></AppRuntimeProvider>);
 
-  expect(mocks.query).toHaveBeenCalledWith(RecordSourcesCountDocument, {
-    modelLabel: "accounting.Bill",
-    recordId: "bil_1",
-  }, {
-    enabled: true,
-    models: ["integrate.RecordLink"],
-    records: [{ model: "accounting.Bill", id: "bil_1" }],
-  });
   expect(mocks.query).toHaveBeenCalledWith(RecordSourcesDocument, {
     modelLabel: "accounting.Bill",
     recordId: "bil_1",
@@ -94,6 +86,7 @@ test("the Sources group counts and lists each source as a row linking to its out
     models: ["integrate.RecordLink"],
     records: [{ model: "accounting.Bill", id: "bil_1" }],
   });
+  expect(mocks.query).not.toHaveBeenCalledWith(RecordSourcesCountDocument, expect.anything(), expect.anything());
   expect(screen.getByText("Sources").closest("li")?.textContent).toBe("Sources· 1");
   const row = screen.getByRole("link", { name: /Vendor bill 42/ });
   expect(row.getAttribute("href")).toBe("https://source.test/42");
