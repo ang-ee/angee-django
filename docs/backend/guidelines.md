@@ -93,9 +93,11 @@ separate core wheel or namespace initializer.
 - `angee.base` owns reusable models, fields, managers, settings/deployment glue,
   package-data projection and small shared primitives. It consumes declared
   native Django, compiler and permission-library contracts.
-- `angee.server` owns optional HTTP defaults, Uvicorn commands and connection
-  policy. Web, GraphQL and MCP require it through native package requirements;
-  model-only projects do not activate a serving stack.
+- `angee.server` owns optional HTTP defaults, URL and ASGI composition,
+  command contexts, Uvicorn commands and connection policy. Web, GraphQL and MCP require it through native package requirements;
+  model-only projects do not activate a serving stack. IAM's command context runs
+  only through `angee.server.management.execute`; a model-only project using the
+  compiler's default launcher has no server command contexts.
 - Capability addons own their own policy and package facts. Cross-addon imports
   follow declared native requirements toward stable owners.
 - Source models may inherit `django_compose.models.Composable`. Settings,
@@ -113,7 +115,7 @@ Use these owners instead of maintaining another contract in an addon:
 |---|---|
 | Addon discovery and declarations | The native `django_compose.components` index owns identity/closure. [`angee.base.addons`](../../src/angee/base/addons.py) reads packaged `[tool.angee.*]` tables and discovers optional addon modules. Addon requirements stay in `[project].dependencies`; foreign app edges use django-compose's `AppConfig.requires_apps` extension. |
 | Settings and app ordering | [Settings bootstrap and app graph](../composer.md#settings-bootstrap) compose one app set. Keep source-model imports out of settings loading; do not create separate build/run registries. |
-| Capability conventions | [Addon declarations](../composer.md#addon-declarations) identifies the readers. Resources owns resource semantics; GraphQL [schema discovery](../../src/angee/graphql/schema.py) resolves and validates its schema references. Generic lifecycle and optional hook dispatch belong to django-compose; native `django_compose.urls` owns explicit HTTP URL contributions. |
+| Capability conventions | [Addon declarations](../composer.md#addon-declarations) identifies the readers. Resources owns resource semantics; GraphQL [schema discovery](../../src/angee/graphql/schema.py) resolves and validates its schema references. Generic lifecycle and optional hook dispatch belong to django-compose; `angee.server.urls` owns explicit HTTP URL contributions. |
 | Models and runtime import | [Runtime build and import](../composer.md#runtime-build-and-import) describes source selection and Django phase 2. Use narrow abstract contributors; let Django own inheritance, field cloning, managers, and registration. |
 | Migration history and cleanup | [Project migration history](../composer.md#project-migration-history) and [migration policy](#migration-history) distinguish replaceable generated models from version-controlled native Django history. |
 | Resource load hooks | [`ResourceLoadMixin`](../../src/angee/resources/mixins.py) is the resources-owned terminal mixin. Contributors delegate exactly once through `super()`, even when skipping local work; an exception aborts the transaction, so never delegate in `finally`. A row whose state only an owner verb may write declares a `resource_class` adapter that persists through that verb as the row's named actor and records the result in the ledger ([workflow definitions](../../src/angee/workflows/resources.py), [chatter](../../src/angee/messaging/resources.py)). |
@@ -1089,11 +1091,11 @@ strict mode refuses one without it. Entrypoints own boundaries, one per unit of
 work, and nothing else opens a `fresh` one except a deliberately separate logical
 write (merge, revert, seed): HTTP requests through `ChangesetMiddleware` on the
 stack's own sync or async path; WebSocket connections through
-`ChangesetScopeMiddleware`, composed in the native ASGI contribution seam; Celery
+`ChangesetScopeMiddleware`, composed in the server ASGI contribution seam; Celery
 tasks through [`angee.provenance.tasks.Task`](../../src/angee/provenance/tasks.py); management
-commands through the native launcher's `COMPOSE_COMMAND_CONTEXT` hooks, contributed by
+commands through `angee.server.management`'s `ANGEE_SERVER_COMMAND_CONTEXT` hooks, contributed by
 [`provenance`](../../src/angee/provenance/contrib/angee/context.py). The
-[native launcher](../composer.md#flow) supplies the winning command's parsed,
+[server launcher](../composer.md#flow) supplies the winning command's parsed,
 read-only options at its `execute` boundary; use those options for `--database`
 selection rather than parsing argv. (`serve`, `runserver` and `test` are
 excluded because their requests, connections, tasks and tests own boundaries;
@@ -1419,7 +1421,7 @@ retains its native routing contract.
 ### Development server
 
 - **The native launcher owns the Django reloader parent.** Rendered `manage.py`
-  calls `django_compose.management.execute`, which composes in a fresh process
+  calls `angee.server.management.execute`, which uses the compiler to compose in a fresh process
   before a reloader child. Django owns imported/input-file watching and reload
   decisions. [`angee.server`'s runserver override](../../src/angee/server/management/commands/runserver.py)
   serves the child with Uvicorn and closes its ASGI lifecycle on shutdown. Do not

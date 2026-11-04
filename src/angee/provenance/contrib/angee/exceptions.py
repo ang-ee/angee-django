@@ -8,7 +8,7 @@ from rebac.errors import MissingActorError
 from angee.provenance.context import ChangesetRequired as ContextRequired
 from angee.provenance.engine.exceptions import CreationKeyConflict as CreationKeyConflict
 
-MANAGEMENT_ENTRYPOINT = "django_compose.management.execute"
+MANAGEMENT_ENTRYPOINT = "angee.server.management.execute"
 
 
 class AngeeChangesetRequired(ContextRequired, MissingActorError):

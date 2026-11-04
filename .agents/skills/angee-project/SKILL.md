@@ -16,7 +16,7 @@ package or stack profile. Addon-local declarations belong to `angee-addon`.
 | Root apps and structural output identity | Project `settings.yaml` / `settings.py` |
 | Deployment YAML, `.env`, typed service URLs | `angee.base.conf.configure` |
 | Closure, ordered addon settings, build/serving mode | `django_compose.conf.configure` |
-| Management dispatch | `django_compose.management.execute` |
+| Management dispatch | `angee.server.management.execute` (the server's command contexts over the native launcher's `utility_class` seam) |
 | Database hooks and readiness | `django_compose.provision` |
 | Dependency chain and service holds | Controlling stack `angee.yaml` |
 | Fragment install membership | Stack `pnpm-workspace.yaml` |
@@ -37,7 +37,9 @@ package or stack profile. Addon-local declarations belong to `angee-addon`.
    addon providers; foreign Django app edges come from `AppConfig.requires_apps`.
    Keep `COMPOSE_OUTPUT_DIR` and `COMPOSE_OUTPUT_MODULE` authored and importable.
 4. The rendered `settings.py` calls `angee.base.conf.configure(globals())`.
-   `manage.py` selects that authored settings module and calls the native launcher.
+   `manage.py` selects that authored settings module and calls the server launcher,
+   `angee.server.management.execute`, which dispatches through the native launcher with the
+   server's command contexts.
    Addon `autoconfig` contributes settings, not a second project bootstrap.
 5. Deployment URLs and secrets belong in the stack's environment or explicit
    YAML overlay. Native yamlconf provenance must survive expansion. Do not move

@@ -37,8 +37,9 @@ wires declarations only; the reference example throughout is `examples/src/examp
   [GraphQL schema discovery](../../../src/angee/graphql/schema.py) owns schema references and
   [GraphQL ASGI](../../../src/angee/graphql/asgi.py) owns WebSocket contributions.
 - Native django-compose owns component graphs, generic lifecycle and optional hook dispatch:
-  `django_compose.conf` merges settings, `django_compose.urls` reads explicit `AppConfig.compose_urls`,
-  and `django_compose.asgi` composes `compose_asgi()` contributions. Declare through those owners.
+  `django_compose.conf` merges settings. The serving addon owns the serving seams:
+  `angee.server.urls` reads explicit `AppConfig.compose_urls` and `angee.server.asgi` composes
+  `compose_asgi()` contributions. Declare through those owners.
 - `defineBaseAddon`, `resourcePageRoutes` (`packages/app/src/define-base-addon.ts:162,66`), `createNamespaceT`
   (`packages/ui/src/i18n/index.ts:45`), `expectValidBaseAddon` (`packages/app/src/testing.tsx:101`),
   `defineAngeeWebVitestConfig` (`packages/app/config/vitest.ts:90`) own fragment composition.

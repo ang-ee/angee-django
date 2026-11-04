@@ -175,7 +175,7 @@ def test_installed_provenance_settings_keep_their_declared_types(tmp_path: Path)
     source.write_text(
         "from typing import assert_type\nfrom django.conf import settings\n"
         "assert_type(settings.ANGEE_CHANGESET_MODEL, str)\n"
-        "assert_type(settings.COMPOSE_COMMAND_CONTEXT, list[str])\n"
+        "assert_type(settings.ANGEE_SERVER_COMMAND_CONTEXT, list[str])\n"
         "assert_type(settings.SIMPLE_HISTORY_HISTORY_CHANGE_REASON_USE_TEXT_FIELD, bool)\n",
     )
     env = dict(
