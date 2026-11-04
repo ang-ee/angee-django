@@ -220,7 +220,7 @@ def test_waiting_list_has_constant_query_count_and_is_private_to_each_recipient(
                         queries,
                         Task,
                         projection="_clarification_waiting",
-                        audits=2,
+                        audits=1,
                     )
                 )
                 assert len(waiting) == limit
@@ -274,10 +274,10 @@ def test_postgresql_waiting_projection_executes_with_empty_and_populated_recipie
             assert list(rows) == [[{"id": c.person("responder").pk, "name": c.person("responder").username}]]
         # Recovery REBAC decides the actor sets when the expression is built (before
         # this capture) and compiles the arrow decisions into the one application
-        # SELECT; SQL execution reads one revision and emits two bypass audits.
-        assert _list_statement_categories(queries, Task, projection="waiting", audits=2) == Counter(
+        # SELECT; SQL execution reads one revision and emits one waiting audit.
+        assert _list_statement_categories(queries, Task, projection="waiting", audits=1) == Counter(
             application=1,
-            bypass_audit=2,
+            bypass_audit=1,
             schema_revision=1,
         )
     with actor_context(c.person("responder")):

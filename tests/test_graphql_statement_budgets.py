@@ -17,12 +17,14 @@ from angee.integrate import schema as integrate_schema
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.integrate_vcs import schema as integrate_vcs_schema
+from angee.knowledge import schema as knowledge_schema
 from angee.messaging.testing.models import Channel
 from angee.projects import schema as projects_schema
 from angee.projects.testing.models import Project, Task
 from angee.provenance.context import changeset as open_changeset
 from angee.timeline import schema as timeline_schema
 from tests.conftest import (
+    Page,
     addon_schema,
     authored_graphql_document,
     create_user,
@@ -129,19 +131,16 @@ def record_sources_reads(composed_tables: None, capture_graphql_document):
 
 def test_record_sources_document_fixed_budgets(record_sources_reads) -> None:
     one, five, ten, twenty = (record_sources_reads[count] for count in (1, 5, 10, 20))
-    # CI's full-profile SQLite shard measures more than a local checkout on this
-    # document (one link 41 statements / 9 audits against 39 / 8 here; five links
-    # 149 / 45 against 139 / 40, about +2.6 KB per link); the ceilings carry that
-    # headroom. The strict pins are the xfails below; P12's batching lowers all of
-    # these.
-    one.assert_bytes(total=140_000, largest=21_000, cause="REBAC L2 candidate-root proof on one link")
-    one.assert_statements(45)
-    one.assert_audit_inserts(10)
-    five.assert_bytes(total=530_000, largest=21_000, cause="REBAC L2 candidate-root proof per unbatched link")
-    five.assert_statements(155)
-    five.assert_audit_inserts(50)
-    ten.assert_statements(300)
-    twenty.assert_statements(600)
+    # Concrete integration reads remain per link until P12 batches them.
+    # Suite context and the full-profile host add one statement per link.
+    one.assert_bytes(total=139_500, largest=20_900, cause="REBAC L2 candidate-root proof on one link")
+    one.assert_statements(34)
+    one.assert_no_audit_writes()
+    five.assert_bytes(total=525_000, largest=20_900, cause="REBAC L2 candidate-root proof per unbatched link")
+    five.assert_statements(110)
+    five.assert_no_audit_writes()
+    ten.assert_statements(205)
+    twenty.assert_statements(395)
 
 
 @pytest.mark.xfail(strict=True, reason="P12: unbatched concrete integration reads exceed the Sources byte target")
@@ -162,7 +161,6 @@ def test_record_sources_document_statement_count(record_sources_reads) -> None:
     five.assert_flat_from(one)
 
 
-@pytest.mark.xfail(strict=True, reason="P5: Sources reads must not insert permission-audit events")
 def test_record_sources_document_audit(record_sources_reads) -> None:
     for read in record_sources_reads.values():
         read.assert_no_audit_writes()
@@ -194,10 +192,13 @@ def timeline_rail_reads(activity_catalog: None, composed_permissions: None, capt
 
 def test_timeline_rail_document_budget(timeline_rail_reads) -> None:
     for read in timeline_rail_reads:
-        read.assert_bytes(total=685_000, largest=300_000)
-        # 62 statements on CI's full-profile host against 58 locally: headroom.
-        read.assert_statements(68)
-        read.assert_audit_inserts(7)
+        read.assert_bytes(
+            total=655_000, largest=276_000,
+            cause="shared union definitions; the requester CTE carries no scope",
+        )
+        # The full-profile host adds about four statements to the local rail.
+        read.assert_statements(60)
+        read.assert_audit_inserts(2)
 
 
 def test_timeline_rail_document_statement_count(timeline_rail_reads) -> None:
@@ -205,7 +206,7 @@ def test_timeline_rail_document_statement_count(timeline_rail_reads) -> None:
     five.assert_flat_from(one)
 
 
-@pytest.mark.xfail(strict=True, reason="P5: Timeline rail reads must not insert permission-audit events")
+@pytest.mark.xfail(strict=True, reason="Provenance ChangeKind: record history still audits")
 def test_timeline_rail_document_audit(timeline_rail_reads) -> None:
     for read in timeline_rail_reads:
         read.assert_no_audit_writes()
@@ -245,3 +246,63 @@ def test_related_permission_resource_list_budget(composed_tables: None, capture_
     )
     reads[10].assert_flat_from(reads[5])
     reads[20].assert_flat_from(reads[10])
+
+
+def test_record_labels_have_no_bypass_audits(composed_tables: None, capture_graphql_document) -> None:
+    """Selected label scalars add no read or audit per returned record."""
+
+    del composed_tables
+    owner = create_user("document-budget-labels")
+    vault = vault_for(owner)
+    for index in range(5):
+        with actor_context(owner):
+            Page.objects.create_in(vault, title=f"Budget label {index}")
+    schema = addon_schema(knowledge_schema.schemas, "public")
+    document = """
+        query RecordLabels($limit: Int!) {
+          pages(limit: $limit) { id created_by_label updated_by_label }
+        }
+    """
+    one = capture_graphql_document(schema, document, {"limit": 1}, actor=owner)
+    five = capture_graphql_document(schema, document, {"limit": 5}, actor=owner)
+    assert len(one.data["pages"]) == 1
+    assert len(five.data["pages"]) == 5
+    for read in (one, five):
+        assert all(row["created_by_label"] == owner.username for row in read.data["pages"])
+        assert all(row["updated_by_label"] == owner.username for row in read.data["pages"])
+        read.assert_bytes(total=22_000, largest=20_000)
+        read.assert_statements(3)
+        read.assert_no_audit_writes()
+    five.assert_flat_from(one)
+
+
+def test_relation_sort_and_filter_aliases_have_no_bypass_audits(
+    composed_tables: None, capture_graphql_document,
+) -> None:
+    """Relation aliases retain the related Project read guard at one and five rows."""
+
+    del composed_tables
+    owner = create_user("document-budget-relation-alias")
+    with system_context(reason="test.document_budget.relation_alias"):
+        project = Project.objects.create(title="Budget alias project", owner=owner)
+        for index in range(5):
+            Task.objects.create(title=f"Budget alias task {index}", owner=owner, project=project)
+    schema = addon_schema(projects_schema.schemas, "console")
+    document = """
+        query RelationAliases($limit: Int!) {
+          project_tasks(
+            limit: $limit,
+            where: {project: {_is_null: false}},
+            order_by: [{project: asc}]
+          ) { id }
+        }
+    """
+    one = capture_graphql_document(schema, document, {"limit": 1}, actor=owner)
+    five = capture_graphql_document(schema, document, {"limit": 5}, actor=owner)
+    assert len(one.data["project_tasks"]) == 1
+    assert len(five.data["project_tasks"]) == 5
+    for read in (one, five):
+        read.assert_bytes(total=65_100, largest=63_200)
+        read.assert_statements(3)
+        read.assert_no_audit_writes()
+    five.assert_flat_from(one)

@@ -270,15 +270,13 @@ class GroupType(ProtectedNode):
     def members(self) -> list[IAMGroupMemberType]:
         """Return direct group memberships, without effective-permission expansion."""
 
-        with system_context(reason="iam.graphql.group.members"):
-            return cast(list[IAMGroupMemberType], _group_members_owner(self))
+        return cast(list[IAMGroupMemberType], _group_members_owner(self))
 
     @strawberry_django.field
     def bindings(self) -> list[IAMGroupBindingType]:
         """Return tuples bound directly to this group's member subject set."""
 
-        with system_context(reason="iam.graphql.group.bindings"):
-            return cast(list[IAMGroupBindingType], _group_bindings_owner(self))
+        return cast(list[IAMGroupBindingType], _group_bindings_owner(self))
 
 
 @strawberry.type

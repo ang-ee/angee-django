@@ -95,7 +95,7 @@ def test_run_follows_execution_without_an_explicit_projection(execution) -> None
     assert next(kind["count"] for kind in data["timeline"]["kinds"] if kind["id"] == "workflows.run") == 0
 
 
-def test_requester_cte_stays_on_the_record_and_audits_each_run_source(review) -> None:
+def test_requester_cte_stays_on_the_record_without_a_private_scope_or_run_audit(review) -> None:
     owner, reviewers, _, question = review
     subject = question.review_subject
     _, step = start_review(review)
@@ -130,11 +130,20 @@ def test_requester_cte_stays_on_the_record_and_audits_each_run_source(review) ->
     with CaptureQueriesContext(connection) as queries:
         Timeline(subject, reviewers[0]).page()
     reasons = Counter(PermissionAuditEvent.objects.filter(pk__gt=before).values_list("reason", flat=True))
-    # Selection and hydration each compile the two requester sources once.
-    assert reasons["workflows.workflowrun.system_queryset"] == 4
+    assert reasons["workflows.workflowrun.system_queryset"] == 0
     selection, = (query["sql"] for query in queries if '"timeline_source" AS' in query["sql"])
     assert selection.count('"timeline_requesters" AS') == 1
     assert f'"timeline_requesters" AS (SELECT "{Decision._meta.db_table}"' in selection
+    start = selection.index('"timeline_requesters" AS (')
+    opening = selection.index("(", start)
+    depth = 0
+    for end in range(opening, len(selection)):
+        depth += (selection[end] == "(") - (selection[end] == ")")
+        if depth == 0:
+            break
+    else:
+        pytest.fail("Unclosed timeline_requesters CTE")
+    assert '"rebac_' not in selection[opening:end + 1]
 
 
 def test_waiting_run_folds_readable_children_and_computes_attention(review) -> None:

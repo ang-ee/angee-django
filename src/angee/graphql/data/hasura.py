@@ -1146,7 +1146,9 @@ def with_filter_aliases[M: models.Model](queryset: models.QuerySet[M]) -> models
 def _scalar_alias_expression(queryset: models.QuerySet[Any], expression: Combinable) -> models.Subquery:
     """Keep an unused alias's related joins out of its containing row query."""
 
-    source = _composition_queryset(queryset.model).order_by().filter(pk=models.OuterRef("pk"))
+    # The outer resource queryset already admits this exact row. Relation
+    # expressions retain their own actor-scoped related-row guard.
+    source = queryset.model._base_manager.order_by().filter(pk=models.OuterRef("pk"))
     return models.Subquery(source.annotate(_angee_scalar=expression).values("_angee_scalar")[:1])
 
 

@@ -33,31 +33,19 @@ def test_user_source_model_owns_auth_identity() -> None:
     assert "user_permissions" not in field_names
 
 
-def test_user_pk_get_is_not_the_session_bypass(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The session bypass is a named manager method, not a ``get`` override."""
+def test_session_user_reload_does_not_bypass(composed_tables: None) -> None:
+    """Django's signed session ID loads its principal without an audit event."""
 
-    from angee.iam.models import User, UserManager
+    from django.contrib.auth import get_user_model
+    from rebac.models import PermissionAuditEvent
 
-    manager = User._meta.managers_map["objects"]
-    calls: list[tuple[str, dict[str, object]]] = []
+    from tests.conftest import create_user
 
-    class ScopedQuery:
-        def get(self, **kwargs: object) -> object:
-            calls.append(("get", kwargs))
-            return "user"
-
-    def system_context(self: UserManager, *, reason: str) -> ScopedQuery:
-        calls.append(("system_context", {"reason": reason}))
-        return ScopedQuery()
-
-    monkeypatch.setattr(type(manager), "system_context", system_context)
-
-    assert "get" not in UserManager.__dict__
-    assert manager.get_for_session("usr_123") == "user"
-    assert calls == [
-        ("system_context", {"reason": "iam.session"}),
-        ("get", {"pk": "usr_123"}),
-    ]
+    del composed_tables
+    user = create_user("session-principal")
+    before = PermissionAuditEvent.objects.count()
+    assert get_user_model().objects.get_for_session(user.pk).pk == user.pk
+    assert PermissionAuditEvent.objects.count() == before
 
 
 def test_iam_model_backend_uses_named_session_lookup(monkeypatch: pytest.MonkeyPatch) -> None:

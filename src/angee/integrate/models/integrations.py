@@ -210,11 +210,9 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
 
         using = write_alias(type(self), using=self._state.db, instance=self)
 
-        queryset = (
-            model.objects.db_manager(using).with_actor(actor)
-            if authorized
-            else model.objects.db_manager(using).sudo(reason="integrate.integration.child_integrity")
-        )
+        # Native concrete_child reads structural MTI identity through the base
+        # manager. Only the returned capability uses the actor-scoped queryset.
+        queryset = model.objects.db_manager(using).with_actor(actor) if authorized else None
         if type(self) not in model._meta.parents:
             parent_model = next(iter(model._meta.parents))
             assert issubclass(parent_model, Integration)
@@ -237,7 +235,11 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
     def concrete_children(
         self, *, actor: Any, exposed_model_labels: set[str]
     ) -> tuple[list[Integration], list[Integration]]:
-        """Return installed and actor-readable child rows without leaking denied siblings."""
+        """Compare structural child identity with actor-readable capabilities.
+
+        Integrity rows stay inside this owner; only ``authorized`` rows may be
+        returned to a client or used for a capability operation.
+        """
 
         integrity: list[Integration] = []
         authorized: list[Integration] = []

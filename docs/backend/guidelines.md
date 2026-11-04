@@ -888,8 +888,22 @@ data through REBAC, never a queryset bypass.
   and bulk-updated active superusers have const-admin reach immediately.
 - Never `select_related` a REBAC-guarded relation into an actor-scoped queryset —
   it fails live ("loaded N rows outside actor scope") while passing unit tests.
-  Resolve the field elevated by FK id under `system_context`, and verify by
-  rendering the live page, not just the test.
+  A narrow structural read through `_base_manager` needs no bypass audit only
+  when its rows are already admitted by the enclosing actor-scoped statement,
+  correlated by admitted identity or proved concern links. For example, a
+  relation sort alias may self-join the admitted row by primary key; the
+  related-row expression still applies its own actor guard. A structural read
+  may also feed a fact the API already exposes without the rows, such as the
+  concern links behind `open_decision_count`. Never return structural rows or
+  their fields to a client. Prefer this shape to a duplicate actor-bound proof;
+  use an audited system read when the page intentionally exposes a fact across
+  the ordinary row boundary.
+  Django's signed-session principal reload is identity bootstrap before an
+  actor exists; `UserManager.get_for_session` owns that separate auth path.
+  IAM's record label is a declared scalar disclosure: a nameless account's
+  label is its sign-in name, a `read_private` username, on every readable
+  record without a bypass audit. Verify guarded relation behavior on a live
+  page as well as in tests.
 - The relationship store has two storage modes: composed projects and bare
   `tests/settings.py` both use the FK-backed `registry` mode contributed by
   `angee` autoconfig. Since

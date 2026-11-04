@@ -213,7 +213,7 @@ class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[Integr
         )
 
     def with_concrete_children(self, *, actor: Any, exposed_model_labels: set[str]) -> Self:
-        """Prefetch installed and actor-readable MTI descendants in fixed queries."""
+        """Prefetch structural MTI identity and actor-readable descendants in fixed queries."""
 
         prefetches: list[Prefetch] = []
 
@@ -225,9 +225,7 @@ class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[Integr
                 prefetches.append(
                     Prefetch(
                         path,
-                        queryset=child_model.objects.db_manager(self.db).sudo(
-                            reason="integrate.integration.child_integrity"
-                        ),
+                        queryset=child_model._base_manager.db_manager(self.db).all(),
                         to_attr=integrity_attr,
                     )
                 )

@@ -7,12 +7,15 @@ from django.contrib.auth import get_user_model
 from django.db import connection
 from django.http import HttpRequest
 from django.test.utils import CaptureQueriesContext
+from rebac import actor_context
 
 from angee.iam import identity as identity_module
 from angee.iam.identity import (
     user_display_label,
     user_display_labels,
     user_from_public_id,
+    user_label,
+    user_label_queryset,
     user_principal,
     user_public_id,
 )
@@ -96,9 +99,22 @@ def test_mixed_principal_and_public_labels_share_one_batch() -> None:
         users[0].pk: "Person 0", str(users[1].pk): "Person 1",
         users[2].public_id: "Person 2", users[0].public_id: "Person 0", "bad-public-id": None,
     }
-    # Native system elevation records one audit event alongside the batched read.
-    assert len(queries) == 2
+    assert len(queries) == 1
     assert sum(query["sql"].lstrip().upper().startswith("SELECT") for query in queries) == 1
     with CaptureQueriesContext(connection) as repeated:
         assert user_display_labels(reversed(ids), request=request) == labels
     assert not repeated
+
+
+def test_label_projection_survives_user_field_redaction(composed_tables: None) -> None:
+    """A readable record can disclose its author label without the User field gate."""
+
+    from tests.conftest import create_user
+
+    del composed_tables
+    viewer = create_user("label-viewer")
+    author = create_user("label-author")
+    with actor_context(viewer):
+        projected = user_label_queryset().get(pk=author.pk)
+        assert projected.__dict__["_iam_display_label"] == "label-author"
+        assert user_label(projected) == "label-author"

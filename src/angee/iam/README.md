@@ -44,7 +44,10 @@ confirmed opening verb.
 - **Names for everyone signed in.** `auth/user#read` is `authenticated`, so a
   record embedding an account (assignee, owner, requester, `run_as`) shows its display name to every reader. The web draws the
   avatar's initials from that name. Records that carry a label instead resolve
-  the same IAM label elevated (`angee.iam.identity`).
+  the same IAM label as a scalar projection (`angee.iam.identity`), with no
+  User row returned to the caller or permission bypass audit. For a nameless
+  account the label discloses its sign-in name (`read_private` username) on
+  every readable record.
 - **Restricted fields** are field gates on `read_private` (`self + list`):
   username, email, last sign-in, staff and active state, and UI preferences.
   The person and people managers read them; for anyone else they are null.
