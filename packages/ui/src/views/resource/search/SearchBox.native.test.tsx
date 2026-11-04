@@ -12,6 +12,32 @@ import { searchFixture } from "./search-fixture.test-support";
 
 const providers = createUiTestProviders();
 afterEach(() => { cleanup(); providers.clearClients(); });
+
+test("active relation chips resolve accessible labels in one selected-options read while facets are closed", async () => {
+  const reviewer = testDataResource("test.Reviewer", {
+    recordRepresentation: "display_name",
+    query: testResourceQuery({ fields: { display_name: testQueryField("display_name", { filter: null }) } }),
+  });
+  const getList = vi.fn(async () => ({ data: [
+    { id: "rev_a", display_name: "Abby" }, { id: "rev_b", display_name: "Bea" },
+  ], total: 2 }));
+  const options = ["rev_a", "rev_b"].map((value) => ({
+    id: value, value, label: value, filter: { reviewer: { exact: value } },
+  }));
+  const search = searchFixture({
+    catalog: { facets: [{ field: "reviewer", label: "Reviewer", source: "relation", options: [],
+      relation: { resource: reviewer.modelLabel, labelField: "display_name", canCreate: false },
+    }] },
+    active: [{ id: "facet:reviewer", kind: "facet", field: "reviewer", label: "Reviewer", options }],
+  });
+  render(<providers.Provider resources={[reviewer]} dataProvider={{ getList }}><SearchBox search={search} /></providers.Provider>);
+  const toolbar = await screen.findByRole("toolbar", { name: "Active search" });
+  await waitFor(() => expect(toolbar.textContent).toContain("Reviewer: Abby or Bea"));
+  expect(toolbar.querySelector("[title]")?.getAttribute("title")).toBe("Reviewer: Abby or Bea");
+  expect(screen.getByRole("button", { name: "Remove Reviewer: Abby or Bea" })).toBeTruthy();
+  expect(getList).toHaveBeenCalledTimes(1);
+});
+
 test("relation suggestions use server search beyond the facet page and remain clearable facet chips", async () => {
   const reviewer = testDataResource("test.Reviewer", { recordRepresentation: "name", query: testResourceQuery({ fields: {
     name: testQueryField("name", { filter: { field: "name", scalar: "String", values: [], operators: ["exact", "iContains"] } }),

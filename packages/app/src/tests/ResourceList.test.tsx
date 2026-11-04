@@ -2305,6 +2305,14 @@ describe("ResourceList", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "Add custom filter" }),
     );
+    fireEvent.click(await screen.findByRole("combobox", { name: "Filter field" }));
+    const title = await screen.findByRole("option", { name: "Title" });
+    fireEvent.pointerDown(title, { pointerType: "mouse" });
+    fireEvent.click(title);
+    fireEvent.click(await screen.findByRole("combobox", { name: "Filter operator" }));
+    const contains = await screen.findByRole("option", { name: "contains (case-sensitive)" });
+    fireEvent.pointerDown(contains, { pointerType: "mouse" });
+    fireEvent.click(contains);
     fireEvent.change(await screen.findByRole("textbox", { name: "Filter value" }), {
       target: { value: "Fir" },
     });
@@ -2316,9 +2324,7 @@ describe("ResourceList", () => {
         title: { contains: "Fir" },
       });
     });
-    // A custom text filter defaults to case-sensitive `contains` so it coexists
-    // with the free-text search box's `iContains` on the same field; the chip
-    // labels that distinction.
+    // Case-sensitive `contains` coexists with the search box's `iContains`.
     expect(
       await screen.findAllByRole("button", { name: "Remove Title contains (case-sensitive) Fir" }),
     ).toHaveLength(1);

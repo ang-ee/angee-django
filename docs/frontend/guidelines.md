@@ -677,9 +677,14 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   mechanics, duplicate route params, cache state, bespoke loading/error surfaces,
   or local copies of shared resource-view state.
 - **A list selects only declared fields.** The selection owner
-  (`requestedFieldPaths`) fetches the paths its columns declare plus the
-  `ListView fields={[…]}` extras and nothing else; a render callback reads only
-  those fields.
+  (`requestedFieldPaths`) fetches visible columns and their currency, fraction
+  digit and subline dependencies, identity, grouping/lane paths, and the
+  `ListView fields={[…]}` extras. Hidden column projections are omitted. Row
+  actions, links, cards and render callbacks declare in `fields` any row fact
+  they need beyond the visible columns. A record pager reuses the native cached
+  list page when its scope and projection match the cached page.
+  Enum facets use model metadata. Server facets read only while a list filter
+  control is open and use that list's current filter.
 - A row verb is a `rowActions` declaration on `ListView`/`RowsListView`, never a
   hand-rolled trailing column with local `useConfirm`/`toast.danger` ceremony.
   Declare `presentation="icon"`, `"label"`, or `"both"`; labelled text is the default
@@ -1000,10 +1005,13 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   and selects the new row under the parent. The switcher decides only what is
   created now; consumers declare nothing. See
   [`useRelationForms`](../../packages/ui/src/views/relation/RelationRecordDialog.tsx).
+  A multi-relation picker loads its option page when opened; selected values
+  retain their own label resolution while it is closed.
 - Toolbar and record action menus compose [ActionMenu](../../packages/ui/src/toolbars/ActionMenu.tsx).
   Contributions use `ActionTrigger` to adapt between a toolbar button and a native
-  menu item and report pending state to the menu trigger. Render menu-opened
-  dialogs inside the menu: the shared owner keeps them mounted after it closes
+  menu item and report pending state to the menu trigger. Contributions first
+  mount when the menu opens. Render menu-opened dialogs inside the menu: the shared
+  owner keeps them mounted after it closes
   and returns focus to its toolbar trigger. `DialogContent` resets menu context
   for its body, so nested dialogs return to their own triggers. Pages supply
   domain labels through i18n and alignment through `align`; selection menus keep
@@ -1095,6 +1103,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   that has fetched since ready, including one still fetching at the flush; an
   accepted response is not a fetch. Ready never cancels a read or reaches user
   data callbacks; cached reads without observers refetch on next mount.
+  A model's shared upstream stays registered for two seconds after its last
+  consumer leaves, so a list-to-record handoff does not create another ready.
+  Suspension closes it immediately.
   Recovery costs one fetch per affected read per ready window; a read covering
   two models whose readies arrive in separate windows refetches once for each.
   A websocket connection acknowledgement precedes group registration.
@@ -1229,6 +1240,9 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   remount. A model with **no** `changes()` subscription only reflects cross-actor
   edits on explicit invalidation or once `staleTime` expires; a query that must be
   always-fresh sets its own per-hook `queryOptions`, not a new app default.
+  An interrupted transport, or an HTTP 4xx response without a GraphQL body,
+  gets at most one jittered read retry. Server 5xx and GraphQL answers,
+  including masked errors, are final for that fetch.
 - **Generated schema metadata loads before app composition.** The codegen-owned
   `loadComposedSchemas()` fetches metadata JSON assets in parallel. The host
   passes it to `@angee/app`'s `bootApp`, which shows the shared loading state and

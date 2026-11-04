@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ResourceQuery } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { OperationDocumentsProvider } from "@angee/refine";
@@ -13,11 +13,11 @@ import { ListView } from "./ListView";
 // A message's parts, as the message form's Parts tab lists them: grouped by role,
 // with role and disposition as categorical (scalar-facet) fields.
 const contract = ResourceQuery.forRows({ fields: {
-  id: { scalar: "ID" }, message: { scalar: "ID" }, name: { scalar: "String" },
+  id: { scalar: "ID" }, message: { scalar: "ID" }, name: { scalar: "String" }, status: { scalar: "String" },
   role: { kind: "enum", values: [{ value: "BODY" }, { value: "QUOTED" }] },
   disposition: { kind: "enum", values: [{ value: "INLINE" }, { value: "ATTACHMENT" }] },
 } }).contract;
-for (const field of ["role", "disposition"]) {
+for (const field of ["role", "disposition", "status"]) {
   contract.axes[field]!.server = { input: field.toUpperCase(), key: field };
   contract.axes[field]!.drill = { kind: "value", field, valueKey: field, nullMode: "isNull", valueMap: [] };
 }
@@ -37,7 +37,7 @@ const { Provider, clearClients } = createUiTestProviders({
 });
 afterEach(() => { cleanup(); clearClients(); });
 
-test("a base-filtered list scopes its group counts and every facet count to the base filter", async () => {
+test("a base-filtered list reads its visible group while enum facets need no request", async () => {
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
     const key = (meta!.gqlVariables as GroupVariables).group_by[0]!.field.toLowerCase();
     return { data: { parts_groups: [{ key: { [key]: "BODY" }, aggregate: { count: 2 } }], totalCount: 1 } };
@@ -48,7 +48,8 @@ test("a base-filtered list scopes its group counts and every facet count to the 
       <OperationDocumentsProvider documents={{ console: { groups: { "messaging.Part": "query PartGroups { parts_groups { key } totalCount }" } } }}>
         <ToastProvider>
           <ListView resource={resource.modelLabel} scope="local" baseFilter={{ message: { exact: "msg_1" } }}
-            columns={[{ field: "role" }, { field: "name" }]} defaultGroups={{ list: { field: "role" } }} emptyContent="No parts" />
+            columns={[{ field: "role" }, { field: "name" }, { field: "status", widget: "statusBadge" }]}
+            defaultGroups={{ list: { field: "role" } }} emptyContent="No parts" />
         </ToastProvider>
       </OperationDocumentsProvider>
     </Provider>,
@@ -56,8 +57,10 @@ test("a base-filtered list scopes its group counts and every facet count to the 
   const requests = () => custom.mock.calls.map(([request]) => request.meta!.gqlVariables as GroupVariables);
   const axes = () => [...new Set(requests().map(({ group_by, limit }) => `${group_by[0]!.field}:${limit}`))]
     .map((request) => request.split(":")[0]).sort();
-  // The list's role groups plus one facet per categorical field, shown as a column or not.
-  await waitFor(() => expect(axes()).toEqual(["DISPOSITION", "ROLE", "ROLE"]));
+  // The visible group reads once; enum choices come from metadata even while closed.
+  await waitFor(() => expect(axes()).toEqual(["ROLE"]));
+  fireEvent.click(await screen.findByRole("button", { name: "Search options" }));
+  await waitFor(() => expect(axes()).toEqual(["ROLE", "STATUS"]));
   for (const variables of requests()) {
     expect(terms(variables.where)).toContainEqual({ message: { _eq: "msg_1" } });
   }

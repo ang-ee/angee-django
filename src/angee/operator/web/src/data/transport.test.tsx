@@ -218,5 +218,8 @@ test("connection refresh follows minted short expiry with safety skew", () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(now);
   expect(operatorConnectionRefresh({ operator_connection: { expires_at: new Date(now + 60_000).toISOString() } })).toBe(48_000);
   expect(operatorConnectionRefresh({ operator_connection: { expires_at: new Date(now - 1000).toISOString() } })).toBe(1000);
+  expect(operatorConnectionRefresh({ operator_connection: null })).toBe(false);
+  expect(operatorConnectionRefresh({ operator_connection: null }, true)).toBe(30_000);
+  expect(operatorConnectionRefresh(undefined, false, new Error("Daemon unavailable"))).toBe(30_000);
   clock.mockRestore();
 });
