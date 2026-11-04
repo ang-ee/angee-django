@@ -310,7 +310,7 @@ dev = [
     { name = "angee-knowledge-graph-pgvector", editable = "examples/src/angee/knowledge_graph_pgvector" },
     { name = "angee-mypy", specifier = "==2.1.0" },
     { name = "daphne", specifier = ">=4.0" },
-    { name = "django-zed-rebac", extras = ["caveats"], git = "https://github.com/ang-ee/django-zed-rebac.git?rev=e27fa98e195b683d7bf480e67e8a619dc9397d00" },
+    { name = "django-zed-rebac", extras = ["caveats"], git = "https://github.com/ang-ee/django-zed-rebac.git?rev=d1ea0d2c70310ef04477011e00166f222d6ddb83" },
     { name = "example-notes", editable = "examples/src/example/notes" },
     { name = "example-theme", editable = "examples/src/example/theme" },
     { name = "faker", specifier = ">=30.0" },
@@ -684,7 +684,7 @@ dependencies = [
 requires-dist = [
     { name = "angee-base", editable = "src/angee/base" },
     { name = "django-axes", specifier = ">=8.0" },
-    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=e27fa98e195b683d7bf480e67e8a619dc9397d00" },
+    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=d1ea0d2c70310ef04477011e00166f222d6ddb83" },
 ]
 
 [[package]]
@@ -2816,7 +2816,7 @@ wheels = [
 [[package]]
 name = "django-zed-rebac"
 version = "0.31.0.dev0"
-source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=e27fa98e195b683d7bf480e67e8a619dc9397d00#e27fa98e195b683d7bf480e67e8a619dc9397d00" }
+source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=d1ea0d2c70310ef04477011e00166f222d6ddb83#d1ea0d2c70310ef04477011e00166f222d6ddb83" }
 dependencies = [
     { name = "django" },
     { name = "django-cte" },
