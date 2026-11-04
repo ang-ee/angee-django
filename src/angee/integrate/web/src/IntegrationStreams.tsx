@@ -256,6 +256,7 @@ export function IntegrationStreamsPane(): ReactElement {
         baseFilter={{ integration: { exact: integrationId } }}
         defaultGroup={{ field: "key" }}
         order={{ key: "ASC", partition: "ASC", generation: "DESC" }}
+        fields={["kind", "resync_required"]}
         columns={streamColumns}
         rowActions={streamActions}
       />
@@ -298,7 +299,7 @@ export function IntegrationStreamsPane(): ReactElement {
       scope="local"
       baseFilter={{ stream: { exact: streamId } }}
       order={{ external_key: "ASC" }}
-      fields={["model_label"]}
+      fields={["model_label", "pinned"]}
       columns={linkColumns}
       rowActions={linkActions}
       toolbarActions={toolbar}

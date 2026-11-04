@@ -29,6 +29,8 @@ export interface ResourceListSnapshot<TRow extends Row = Row> {
   fetching: boolean;
   error?: Error | null;
   navigationScope?: ListViewNavigationScope;
+  /** The native page projection that supplied these rows, for pager cache reuse. */
+  queryFields?: readonly string[];
 }
 
 export interface ListViewNavigationScope {
@@ -187,5 +189,6 @@ export interface ResourceRowsSnapshotSource {
 
 export interface UseResourceRowsSnapshotOptions<TRow extends Row> {
   navigation?: Pick<ListViewNavigationScope, "filter" | "order">;
+  queryFields?: readonly string[];
   onListStateChange?: (state: ResourceListSnapshot<TRow>) => void;
 }

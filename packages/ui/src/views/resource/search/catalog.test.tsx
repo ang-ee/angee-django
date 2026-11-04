@@ -11,6 +11,8 @@ import { developmentMode } from "../../../lib/development-mode";
 import { SearchControls } from "./SearchControls";
 import { pageSearchShortcuts } from "./shortcuts";
 import { searchFixture } from "./search-fixture.test-support";
+import { activeItems } from "./active";
+import { createResourceViewState } from "../resource-view-model";
 
 vi.mock("../../../lib/development-mode", () => ({ developmentMode: vi.fn() }));
 beforeEach(() => vi.mocked(developmentMode).mockReturnValue(true));
@@ -52,6 +54,22 @@ test("facet declarations override field labels and scalar enum inference remains
   expect(facet.label).toBe("Authored status");
   expect(facet.options.find((option) => option.value === "open")).toMatchObject({ id: "bucket-open", label: "Authored open" });
   expect(catalog().facets.find((item) => item.field === "status")?.options.map((item) => item.value)).toEqual(["open", "closed"]);
+});
+
+test("closed scalar facets retain active values absent from an empty page", () => {
+  const sourceQuery = ResourceQuery.forRows({ fields: { source: { scalar: "String" } } });
+  const result = catalog({ query: sourceQuery, rows: [], inferOptions: false, columns: [], scalarFacets: [{
+    field: "source", label: "Source", source: "scalar", options: [],
+    optionForValue: (value) => ({ id: `source:${JSON.stringify(value)}`, label: value,
+      filter: { source: { exact: value } }, value }),
+  }] });
+  expect(result.fields.some((field) => field.field === "source")).toBe(true);
+  expect(result.facets[0]?.options).toEqual([]);
+  expect(activeItems(createResourceViewState({ filter: { source: { exact: "api" } } }), result)).toEqual([
+    { id: "facet:source", kind: "facet", field: "source", label: "Source", options: [
+      { id: 'source:"api"', label: "api", filter: { source: { exact: "api" } }, value: "api" },
+    ] },
+  ]);
 });
 
 test("contributed facet labels retain IntegerChoices operands in the shared clause catalogue", () => {

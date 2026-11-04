@@ -69,6 +69,9 @@ export function useListRecordNavigation<TRow extends Row>({
   const localQueryScope = stableSerialize([view?.baseFilter, view?.state.filter, view?.state.sorting, view?.state.groupStack, view?.state.pagination.pageSize, view?.state.view]);
   const binding = `${resource}:${model?.resource?.schemaName ?? ""}`;
   const [captured, setCaptured] = React.useState<{ binding: string; scope: ListViewNavigationScope | null } | null>(null);
+  const [capturedPage, setCapturedPage] = React.useState<{
+    binding: string; scope: ListViewNavigationScope; fields: readonly string[];
+  } | null>(null);
   const scopeRef = React.useRef<{ binding: string; scope: ListViewNavigationScope } | null>(null);
   const [local, setLocal] = React.useState<{ binding: string; snapshot: ResourceListSnapshot<TRow> } | null>(null);
   const [localEdge, setLocalEdge] = React.useState<{ recordId: string; binding: string; sourceScope: string; page: number; edge: "first" | "last" } | null>(null);
@@ -80,11 +83,18 @@ export function useListRecordNavigation<TRow extends Row>({
   const scopeIdentity = stableSerialize(navigationScope);
   const activeRecordRef = React.useRef({ recordId, binding, scopeIdentity });
   activeRecordRef.current = { recordId, binding, scopeIdentity };
-  const current = useResourceListQuery({ resource: model?.resource, scope: navigationScope, fields: idFields, enabled: Boolean(recordId) });
+  const currentFields = capturedPage?.binding === binding
+    && stableSerialize(capturedPage.scope) === scopeIdentity ? capturedPage.fields : idFields;
+  const current = useResourceListQuery({ resource: model?.resource, scope: navigationScope, fields: currentFields, enabled: Boolean(recordId) });
   const target = useResourceListQuery({ resource: model?.resource, scope: pending?.scope ?? null, fields: idFields, enabled: Boolean(recordId && pending?.recordId === recordId && pending.binding === binding && pending.sourceScope === scopeIdentity) });
   const refetchCurrent = current.query.refetch;
 
   const onListStateChange = React.useCallback((state: ResourceListSnapshot<TRow>) => {
+    if (!recordId) setCapturedPage((previous) => {
+      const next = state.navigationScope && state.queryFields
+        ? { binding, scope: state.navigationScope, fields: state.queryFields } : null;
+      return stableSerialize(previous) === stableSerialize(next) ? previous : next;
+    });
     if (state.navigationScope) {
       setLocal(null);
       scopeRef.current = { binding, scope: state.navigationScope };

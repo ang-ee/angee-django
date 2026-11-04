@@ -84,11 +84,12 @@ export function RelationMultiFieldWidget({
   const t = useUiT();
   const [dialog, setDialog] = useState<RelationDialogState | null>(null);
   const [search, setSearch] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [searchText] = useDebounce(search, 250);
   const forms = useRelationForms(relation, create);
   const quickCreate = useRelationQuickCreate(forms.create);
   const { options, list } = useRelationOptions(relation, {
-    enabled: !readOnly,
+    enabled: !readOnly && (pickerOpen || Boolean(searchText)),
     filters,
     where,
     sort: true,
@@ -139,6 +140,7 @@ export function RelationMultiFieldWidget({
   };
   const control = <Many2ManyEdit value={value ?? []} onChange={change} field={field} controlRef={controlRef}
     onSearchChange={setSearch}
+    onOpenChange={setPickerOpen}
     onCreate={quickCreate ? (query) => void quickCreate(query).then(created) : undefined}
     onCreateAndEdit={forms.create ? (query) => setDialog({ mode: "create", query }) : undefined} />;
   if (!forms.create) return control;

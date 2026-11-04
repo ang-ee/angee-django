@@ -2,6 +2,7 @@ import * as React from "react";
 import {
   ActionMenu,
   ActionTrigger,
+  DropdownMenu,
   firstDashboardSlot,
   parseDashboardSnapshot,
   useActionResultRun,
@@ -21,19 +22,23 @@ export function CaptureDashboardAction(): React.ReactElement | null {
 }
 
 function CaptureDashboardMenu({ store }: { store: DashboardStore }): React.ReactElement | null {
-  const catalogue = store.useCatalogue();
   const t = useDashboardsT();
+  return <ActionMenu label={null} aria-label={t("capture.add")} glyph="layout-dashboard" variant="ghost" size="iconMd">
+    <CaptureDashboardTargets store={store} />
+  </ActionMenu>;
+}
+
+function CaptureDashboardTargets({ store }: { store: DashboardStore }): React.ReactElement | null {
+  const t = useDashboardsT();
+  const catalogue = store.useCatalogue();
   const targets = catalogue.summaries.filter(
     (dashboard) => dashboard.target.scope === "personal" && dashboard.available && dashboard.capabilities.canEdit,
   );
-  if (targets.length === 0) return null;
-  return (
-    <ActionMenu label={null} aria-label={t("capture.add")} glyph="layout-dashboard" variant="ghost" size="iconMd">
-      {targets.map((dashboard) => (
-        <CaptureDestination key={dashboard.id} store={store} dashboard={dashboard} />
-      ))}
-    </ActionMenu>
-  );
+  if (catalogue.loading) return <DropdownMenu.Item disabled>{t("capture.loading")}</DropdownMenu.Item>;
+  if (targets.length === 0) return <DropdownMenu.Item disabled>{t("capture.none")}</DropdownMenu.Item>;
+  return <>{targets.map((dashboard) => (
+    <CaptureDestination key={dashboard.id} store={store} dashboard={dashboard} />
+  ))}</>;
 }
 
 function CaptureDestination({ store, dashboard }: {

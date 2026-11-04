@@ -285,7 +285,8 @@ describe("Angee Hasura provider defaults", () => {
     );
   });
 
-  test("subscribes to backend-declared change roots as refine live events", () => {
+  test("subscribes to backend-declared change roots as refine live events", async () => {
+    vi.useFakeTimers();
     const dispose = vi.fn();
     const subscribe = vi.fn((_payload, sink) => {
       sink.next({
@@ -314,6 +315,7 @@ describe("Angee Hasura provider defaults", () => {
       params: { resource: "notes" },
     });
     provider.unsubscribe(subscription);
+    await vi.advanceTimersByTimeAsync(2_000);
 
     expect(subscribe).toHaveBeenCalledWith(
       {
@@ -547,7 +549,8 @@ describe("Angee Hasura provider defaults", () => {
     } finally { provider.setEnabled(false); provider.unsubscribe(subscription); stops.forEach((stop) => stop()); client.clear(); }
   });
 
-  test("shares one upstream subscription across consumers for the same resource", () => {
+  test("shares one upstream subscription across consumers for the same resource", async () => {
+    vi.useFakeTimers();
     const { subscribe, sinks } = recordingClient();
     const provider = createAngeeChangeLiveProvider(
       { subscribe, on: vi.fn(() => () => undefined) } as never,
@@ -581,11 +584,14 @@ describe("Angee Hasura provider defaults", () => {
     expect(nthSink(sinks, 0).dispose).not.toHaveBeenCalled();
 
     provider.unsubscribe(subB);
+    expect(nthSink(sinks, 0).dispose).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(nthSink(sinks, 0).dispose).toHaveBeenCalledTimes(1);
   });
 
-  test("reopens the upstream subscription after the last consumer leaves", () => {
-    const { subscribe } = recordingClient();
+  test("reuses an upstream during navigation and closes it after the grace period", async () => {
+    vi.useFakeTimers();
+    const { subscribe, sinks } = recordingClient();
     const provider = createAngeeChangeLiveProvider(
       { subscribe, on: vi.fn(() => () => undefined) } as never,
       [resource({ changes: "noteChanged" })],
@@ -601,12 +607,20 @@ describe("Angee Hasura provider defaults", () => {
     );
     expect(subscribe).toHaveBeenCalledTimes(1);
 
-    provider.subscribe({
+    const returning = provider.subscribe({
       channel: "resources/notes",
       types: ["*"],
       callback: vi.fn(),
       params: { resource: "notes" },
     });
+    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(nthSink(sinks, 0).dispose).not.toHaveBeenCalled();
+    provider.unsubscribe(returning);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(nthSink(sinks, 0).dispose).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(nthSink(sinks, 0).dispose).toHaveBeenCalledTimes(1);
+    provider.subscribe({ channel: "resources/notes", types: ["*"], callback: vi.fn(), params: { resource: "notes" } });
     expect(subscribe).toHaveBeenCalledTimes(2);
   });
 
@@ -634,7 +648,28 @@ describe("Angee Hasura provider defaults", () => {
     expect(callback).toHaveBeenCalledTimes(2);
     provider.unsubscribe(first);
     provider.unsubscribe(second);
+    provider.setEnabled(false);
     expect(nthSink(sinks, 1).dispose).toHaveBeenCalledTimes(1);
+  });
+
+  test("a final consumer leaving during suspension cannot leave a disposed entry for the next join", () => {
+    const { subscribe, sinks } = recordingClient();
+    const provider = createAngeeChangeLiveProvider(
+      { subscribe, on: vi.fn(() => () => undefined) } as never,
+      [resource({ changes: "noteChanged" })],
+    );
+    const callback = vi.fn();
+    const params = { channel: "resources/notes", types: ["*"], callback, params: { resource: "notes" } };
+    const first = provider.subscribe(params);
+    provider.setEnabled(false);
+    provider.unsubscribe(first);
+    provider.setEnabled(true);
+    const second = provider.subscribe(params);
+    expect(subscribe).toHaveBeenCalledTimes(2);
+    nthSink(sinks, 1).next({ data: { noteChanged: { model: "notes.Note", id: "note_1", action: "update" } } });
+    expect(callback).toHaveBeenCalledOnce();
+    provider.unsubscribe(second);
+    provider.setEnabled(false);
   });
 
   test("logs and drops errored subscriptions so the next subscriber reconnects", () => {
@@ -670,7 +705,8 @@ describe("Angee Hasura provider defaults", () => {
     );
   });
 
-  test("subscribes each authored-query model to its own changes root", () => {
+  test("subscribes each authored-query model to its own changes root", async () => {
+    vi.useFakeTimers();
     const { subscribe, sinks } = recordingClient();
     const provider = createAngeeChangeLiveProvider(
       { subscribe, on: vi.fn(() => () => undefined) } as never,
@@ -697,11 +733,13 @@ describe("Angee Hasura provider defaults", () => {
     );
 
     provider.unsubscribe(subscription);
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(nthSink(sinks, 0).dispose).toHaveBeenCalledTimes(1);
     expect(nthSink(sinks, 1).dispose).toHaveBeenCalledTimes(1);
   });
 
-  test("joins the shared fan-out — a resource hook and an authored query share one upstream", () => {
+  test("joins the shared fan-out — a resource hook and an authored query share one upstream", async () => {
+    vi.useFakeTimers();
     const { subscribe, sinks } = recordingClient();
     const provider = createAngeeChangeLiveProvider(
       { subscribe, on: vi.fn(() => () => undefined) } as never,
@@ -727,6 +765,7 @@ describe("Angee Hasura provider defaults", () => {
     provider.unsubscribe(resourceSub);
     expect(nthSink(sinks, 0).dispose).not.toHaveBeenCalled();
     provider.unsubscribe(authoredSub);
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(nthSink(sinks, 0).dispose).toHaveBeenCalledTimes(1);
   });
 
@@ -808,7 +847,8 @@ describe("Angee Hasura provider defaults", () => {
     expect(subscribe).not.toHaveBeenCalled();
   });
 
-  test("keeps a separate upstream subscription per change root", () => {
+  test("keeps a separate upstream subscription per change root", async () => {
+    vi.useFakeTimers();
     const { subscribe, sinks } = recordingClient();
     const provider = createAngeeChangeLiveProvider(
       { subscribe, on: vi.fn(() => () => undefined) } as never,
@@ -834,10 +874,12 @@ describe("Angee Hasura provider defaults", () => {
     expect(subscribe).toHaveBeenCalledTimes(2);
 
     provider.unsubscribe(subNotes);
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(nthSink(sinks, 0).dispose).toHaveBeenCalledTimes(1);
     expect(nthSink(sinks, 1).dispose).not.toHaveBeenCalled();
 
     provider.unsubscribe(subTags);
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(nthSink(sinks, 1).dispose).toHaveBeenCalledTimes(1);
   });
 });
@@ -905,10 +947,13 @@ describe("retryableQueryError", () => {
     },
   );
 
-  test("transport failures and masked server errors are retried", () => {
+  test("transport failures without a GraphQL answer retry, except timeouts and server errors", () => {
     expect(retryableQueryError(new TypeError("Failed to fetch"))).toBe(true);
-    expect(retryableQueryError({ response: { status: 502, errors: [] } })).toBe(true);
-    expect(retryableQueryError({ graphQLErrors: [answer("INTERNAL_SERVER_ERROR")] })).toBe(true);
+    expect(retryableQueryError({ response: { status: 502, errors: [] } })).toBe(false);
+    expect(retryableQueryError({ response: { status: 403, errors: [] } })).toBe(true);
+    expect(retryableQueryError({ graphQLErrors: [answer("INTERNAL_SERVER_ERROR")] })).toBe(false);
+    expect(retryableQueryError({ name: "TimeoutError" })).toBe(false);
+    expect(retryableQueryError({ hasGraphQLAnswer: true, graphQLErrors: [] })).toBe(false);
   });
 });
 

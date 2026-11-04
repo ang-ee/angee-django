@@ -36,6 +36,7 @@ import {
 type FetchFn = typeof globalThis.fetch;
 export type GraphQLWsClient = ReturnType<typeof graphqlWS.createClient>;
 const noopSubscription = () => undefined;
+const SUBSCRIPTION_GRACE_MS = 2_000;
 
 export const ANGEE_HASURA_PROVIDER_OPTIONS = {
   idType: "String",
@@ -190,6 +191,7 @@ export function boundedGraphQLTransportError(
       errors,
     },
     graphQLErrors: errors,
+    hasGraphQLAnswer: Array.isArray(response?.errors) && response.errors.length > 0,
   });
 }
 
@@ -246,12 +248,17 @@ export function publicGraphQLErrorsFromUnknown(value: unknown): readonly PublicG
 }
 
 /**
- * Whether a failed query is worth retrying: a transport or server failure is,
- * a public GraphQL answer (validation, permission, conflict, sign-in) is not,
- * because a retry repeats the same answer.
+ * Retry errors without a GraphQL answer, except server errors and timeouts.
+ * A 4xx transport response without a GraphQL body can retry once.
  */
 export function retryableQueryError(error: unknown): boolean {
-  return publicGraphQLErrorsFromUnknown(error).length === 0;
+  const record = recordValue(error);
+  const response = recordValue(record?.response);
+  if (record?.hasGraphQLAnswer || Array.isArray(record?.graphQLErrors) && record.graphQLErrors.length > 0
+    || Array.isArray(response?.errors) && response.errors.length > 0
+    || typeof response?.status === "number" && response.status >= 500
+    || record?.name === "AbortError" || record?.name === "TimeoutError") return false;
+  return true;
 }
 
 export function createAngeeHasuraDataProviders(
@@ -298,6 +305,7 @@ interface ChangeSubscription {
   dispose: () => void;
   start: () => void;
   consumers: Set<ChangeConsumer>;
+  leaveTimer?: ReturnType<typeof setTimeout>;
 }
 
 export interface AngeeChangeLiveProvider extends LiveProvider {
@@ -317,8 +325,8 @@ export function createAngeeChangeLiveProvider(
   // graphql-ws does not dedup identical documents, so fan one upstream
   // subscription per changes root out to every mounted consumer — resource hooks
   // (useList/useOne, keyed by list root) and authored queries (keyed by model
-  // label) alike — and tear the socket subscription down only when the last
-  // consumer leaves.
+  // label) alike — and retain the socket briefly after the last consumer
+  // leaves for route handoffs.
   const subscriptions = new Map<string, ChangeSubscription>();
   let enabled = true;
   const liveInvalidation = options.queryClient
@@ -358,9 +366,9 @@ export function createAngeeChangeLiveProvider(
     batch: (run) => enabled ? liveInvalidation.batch(run) : run(undefined),
   };
 
-  // Attach one fan-in consumer to the shared upstream for `changesRoot`, opening
-  // the socket subscription on the first consumer; the returned disposer removes
-  // that consumer and closes the socket once the last one leaves.
+  // Attach one fan-in consumer to the shared upstream for `changesRoot`. Keep
+  // its socket briefly after the last consumer leaves so a route handoff can
+  // reuse the same ready registration.
   function joinChangesRoot(
     changesRoot: string,
     resource: AngeeLiveResource,
@@ -376,6 +384,10 @@ export function createAngeeChangeLiveProvider(
       start: noopSubscription,
       consumers: new Set<ChangeConsumer>(),
     };
+    if (entry.leaveTimer) {
+      clearTimeout(entry.leaveTimer);
+      entry.leaveTimer = undefined;
+    }
     entry.consumers.add(consumer);
     if (!subscriptions.has(changesRoot)) {
       subscriptions.set(changesRoot, entry);
@@ -427,8 +439,17 @@ export function createAngeeChangeLiveProvider(
     return () => {
       entry.consumers.delete(consumer);
       if (entry.consumers.size === 0 && subscriptions.get(changesRoot) === entry) {
-        entry.dispose();
-        subscriptions.delete(changesRoot);
+        if (!enabled) {
+          entry.dispose();
+          subscriptions.delete(changesRoot);
+          return;
+        }
+        entry.leaveTimer = setTimeout(() => {
+          entry.leaveTimer = undefined;
+          if (entry.consumers.size !== 0 || subscriptions.get(changesRoot) !== entry) return;
+          entry.dispose();
+          subscriptions.delete(changesRoot);
+        }, SUBSCRIPTION_GRACE_MS);
       }
     };
   }
@@ -441,9 +462,15 @@ export function createAngeeChangeLiveProvider(
       if (!next) liveInvalidation?.clear();
       if (next === enabled) return;
       enabled = next;
-      subscriptions.forEach((entry) => {
-        if (enabled) entry.start();
-        else entry.dispose();
+      subscriptions.forEach((entry, root) => {
+        if (enabled) {
+          if (entry.consumers.size > 0) entry.start();
+        } else {
+          if (entry.leaveTimer) clearTimeout(entry.leaveTimer);
+          entry.leaveTimer = undefined;
+          entry.dispose();
+          if (entry.consumers.size === 0) subscriptions.delete(root);
+        }
       });
     },
     subscribe({ channel, callback, params }) {

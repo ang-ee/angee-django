@@ -238,8 +238,9 @@ const APP_QUERY_CLIENT_CONFIG: QueryClientConfig = {
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      // TanStack's three retries, for failures a retry can fix.
-      retry: (failureCount, error) => failureCount < 3 && retryableQueryError(error),
+      // One jittered retry without a GraphQL answer; server errors and timeouts are final.
+      retry: (failureCount, error) => failureCount < 1 && retryableQueryError(error),
+      retryDelay: () => 250 + Math.random() * 250,
       placeholderData: keepPreviousData,
       staleTime: 30_000,
       gcTime: 600_000,

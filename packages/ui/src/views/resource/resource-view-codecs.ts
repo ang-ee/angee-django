@@ -4,6 +4,7 @@ import type {
   Row as TableRowModel,
   RowSelectionState,
   SortingState,
+  VisibilityState,
 } from "@tanstack/react-table";
 
 import type { ColumnDescriptor } from "../page";
@@ -31,6 +32,7 @@ export function requestedFieldPaths<TRow extends Row>(
   modelMetadata: ModelMetadata | null | undefined,
   laneSource: LaneFieldSource | null | undefined = null,
   groups: readonly ResourceViewGroup[] = [],
+  columnVisibility?: VisibilityState,
 ): readonly string[] {
   // Render-only columns are not real GraphQL fields. When metadata is present,
   // keep only paths whose head belongs to the resource.
@@ -51,11 +53,21 @@ export function requestedFieldPaths<TRow extends Row>(
       if (knownNames === null || knownNames.has(head)) paths.add(path);
     }
   };
-  for (const column of columns) {
+  const addColumnSelections = (column: ColumnDescriptor<TRow>) => {
     addSelections(column.field, column.selectionPaths);
-    if (column.sublineColumn) {
-      addSelections(column.sublineColumn.field, column.sublineColumn.selectionPaths);
+    const field = modelMetadata?.fields[column.field];
+    const currency = column.currencyField ?? field?.currencyField;
+    if (currency) {
+      addSelections(currency);
+      const display = query.fields[currency]?.relation?.labelPath;
+      if (display) addSelections(display, [display]);
     }
+    if (column.fractionDigitsField) addSelections(column.fractionDigitsField);
+  };
+  for (const column of columns) {
+    if (columnVisibility?.[column.id ?? column.field] === false) continue;
+    addColumnSelections(column);
+    if (column.sublineColumn) addColumnSelections(column.sublineColumn);
   }
   for (const extra of extraFields ?? []) paths.add(extra);
   const requiredGroups = laneSource && !groups.some((group) => group.field === laneSource.field)
@@ -70,6 +82,19 @@ export function requestedFieldPaths<TRow extends Row>(
     for (const path of query.clientSelection()) paths.add(path);
   }
   return [...paths];
+}
+
+/** Authored defaults, saved visibility and mandatory columns share one projection. */
+export function resourceColumnVisibility<TRow extends Row>(
+  columns: readonly ColumnDescriptor<TRow>[],
+  saved: VisibilityState,
+): VisibilityState {
+  return {
+    ...Object.fromEntries(columns.map((column) => [column.id ?? column.field, !column.hiddenByDefault])),
+    ...saved,
+    ...Object.fromEntries(columns.filter((column) => column.hideable === false)
+      .map((column) => [column.id ?? column.field, true])),
+  };
 }
 
 export function modelRowId<TRow extends Row>(row: TRow, index: number, resource?: Pick<DataResourceMetadata, "query"> | null): string {

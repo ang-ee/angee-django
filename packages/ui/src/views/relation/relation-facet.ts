@@ -31,6 +31,7 @@ export function useRelationFacets(
   options: readonly RelationFacetOptions[] | undefined = EMPTY_OPTIONS,
   activeFilter?: ResourceViewFilter,
   interests: Pick<AuthoredQueryOptions, "records" | "relatedModels"> = {},
+  enabled = true,
 ): RelationFacets {
   const t = useUiT();
   const metadata = useModelMetadata(resource);
@@ -56,7 +57,7 @@ export function useRelationFacets(
   })), [activeFilter, facets, query]);
   const result = useAngeeFacets(groupOperation.target, {
     ...interests,
-    document: groupOperation.document, facets: facetSpecs, enabled: facetSpecs.length > 0,
+    document: groupOperation.document, facets: facetSpecs, enabled: enabled && facetSpecs.length > 0,
   });
   return React.useMemo(() => facets.map((facet): SearchFacet => ({
     field: facet.field, label: facet.label, source: "relation", group: facet.group,

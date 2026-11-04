@@ -435,6 +435,17 @@ export const RecordThreadDocument = graphql(`
   }
 `);
 
+/** Header bell projection; discussion owns the full record-thread read. */
+export const RecordFollowingDocument = graphql(`
+  query MessagingRecordFollowing($modelLabel: String!, $recordId: ID!) {
+    record_thread(input: { model_label: $modelLabel, record_id: $recordId }) {
+      error_code
+      is_following
+      subtypes { key internal default }
+    }
+  }
+`);
+
 /** Chatter windows and retained IDs share the parent record's authorization. */
 export const RecordMessageFeedDocument = graphql(`
   query MessagingRecordMessageFeed(

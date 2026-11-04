@@ -13,7 +13,7 @@ import { Button } from "../../../ui/button";
 import { FilterClauseEditor, filterClauseDraft, type FilterClauseDraft, type FilterClauseField } from "../../../toolbars/FilterClauseEditor";
 import { labelText, parseCustomFilterId } from "../utils/labels";
 import { GroupStackPanel, groupLevelLabel } from "./GroupStackPanel";
-import { SearchBox } from "./SearchBox";
+import { FacetReadActivationContext, SearchBox } from "./SearchBox";
 import type { ComposedContainerChild } from "../../../runtime/containers";
 import { validateSearchShortcutCatalog, type SearchShortcut } from "./shortcuts";
 import type { ResourceSearch } from "./types";
@@ -67,6 +67,7 @@ function TextShortcut({ search, shortcut }: { search: ResourceSearch; shortcut: 
 }
 
 function FacetShortcut({ search, shortcut }: { search: ResourceSearch; shortcut: Extract<SearchShortcut, { kind: "facet" }> }) {
+  const activateFacets = React.useContext(FacetReadActivationContext);
   const facet = search.catalog.facets.find((item) => item.field === shortcut.field)!;
   const label = shortcut.label ?? facet.label;
   const active = search.active.find((item) => item.kind === "facet" && item.field === shortcut.field);
@@ -79,7 +80,7 @@ function FacetShortcut({ search, shortcut }: { search: ResourceSearch; shortcut:
     search.setFacet(facet.field, ids);
   };
   return <SelectRoot<string, boolean> multiple={multiple} items={options.map((option) => ({ value: option.id, label: option.label }))}
-    value={multiple ? selected : selected[0] ?? null} onValueChange={change}>
+    value={multiple ? selected : selected[0] ?? null} onValueChange={change} onOpenChange={activateFacets}>
     <Toolbar.Button render={<SelectTrigger size="sm" aria-label={labelText(label) ?? facet.field} className="w-auto max-w-64" />}>
       <SelectValue>{() => activeOptions.length ? activeOptions.map((option, index) => <React.Fragment key={option.id}>
         {index > 0 ? ", " : null}{option.label}

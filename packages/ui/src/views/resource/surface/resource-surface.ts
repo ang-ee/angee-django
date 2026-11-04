@@ -186,6 +186,7 @@ export function useResourceViewSurface<TRow extends Row = Row>({
   );
   const listState = useResourceRowsSnapshot<TRow>(list, {
     navigation: { filter: mergedFilter, order: sortOrder },
+    queryFields: source ? undefined : requestedFields,
     onListStateChange,
   });
 

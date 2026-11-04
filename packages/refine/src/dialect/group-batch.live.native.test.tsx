@@ -74,8 +74,10 @@ test("group-only views refresh lanes and counts through native live model invali
   expect(f.custom).toHaveBeenCalledTimes(2);
   await act(async () => { await invalidateAuthoredQueries(f.client, ["notes.Note"]); });
   expect(f.custom).toHaveBeenCalledTimes(2);
+  vi.useFakeTimers();
   rerender({ scopes: SCOPES, enabled: false });
-  await waitFor(() => expect(f.disposers[0]).toHaveBeenCalledTimes(1));
+  await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+  expect(f.disposers[0]).toHaveBeenCalledTimes(1);
   expect(result.current.size).toBe(0);
   rerender({ scopes: [], enabled: true });
   expect(f.subscribe).toHaveBeenCalledTimes(1);
@@ -90,7 +92,9 @@ test("active group scopes share one changes subscription and tear it down with t
   f.custom.mockResolvedValue(response(3));
   await act(async () => { f.change(); });
   await waitFor(() => expect(f.custom).toHaveBeenCalledTimes(2));
+  vi.useFakeTimers();
   unmount();
+  await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
   expect(f.disposers[0]).toHaveBeenCalledTimes(1);
 });
 

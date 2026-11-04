@@ -145,7 +145,7 @@ function ProjectMilestonesTab({ recordId }: RecordPanelContext): React.ReactElem
     <ListView<MilestoneRow>
       resource={MILESTONE_MODEL}
       scope="local"
-      fields={["revision"]}
+      fields={["revision", "reached_at"]}
       baseFilter={{ project: { exact: recordId } }}
       order={{ sort_order: "ASC" }}
       columns={[

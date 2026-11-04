@@ -26,6 +26,8 @@ export const enDashboardsMessages: Record<string, string> = {
   "catalogue.unavailable.description": "No dashboard persistence adapter is installed.",
   "catalogue.unavailable.title": "Dashboards unavailable",
   "capture.add": "Add to dashboard",
+  "capture.loading": "Loading dashboards…",
+  "capture.none": "No editable dashboards",
   "capture.adding": "Adding…",
   "capture.added": "Added to {dashboard}",
   "capture.widgetTitle": "{resource} total",

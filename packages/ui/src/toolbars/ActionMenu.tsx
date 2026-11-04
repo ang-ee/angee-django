@@ -121,13 +121,18 @@ export function ActionMenu({
   const t = useUiT();
   const triggerRef = React.useRef<HTMLElement>(null);
   const [pendingCount, setPendingCount] = React.useState(0);
+  const [open, setOpen] = React.useState(false);
+  const [openedOnce, setOpenedOnce] = React.useState(false);
   const registerPending = React.useCallback(() => {
     setPendingCount((count) => count + 1);
     return () => setPendingCount((count) => count - 1);
   }, []);
   const menu = React.useMemo(() => ({ blocked, registerPending }), [blocked, registerPending]);
   return (
-    <DropdownMenu.Root>
+    <DropdownMenu.Root open={open} onOpenChange={(next) => {
+      setOpen(next);
+      if (next) setOpenedOnce(true);
+    }}>
       <DropdownMenu.Trigger render={
         <Button ref={triggerRef} type="button" variant={variant} size={size} disabled={disabled} badge={badge}
           className={className} aria-label={ariaLabel} loading={loading || pendingCount > 0}>
@@ -140,7 +145,7 @@ export function ActionMenu({
           <DropdownMenu.Content className="w-52">
             <ActionMenuContext.Provider value={menu}>
               <DialogReturnFocusContext.Provider value={triggerRef}>
-                {children}
+                {openedOnce ? children : null}
               </DialogReturnFocusContext.Provider>
             </ActionMenuContext.Provider>
           </DropdownMenu.Content>

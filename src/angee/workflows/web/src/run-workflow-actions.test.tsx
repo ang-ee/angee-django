@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { DocumentType } from "@angee/gql/console";
 import type { CustomParams } from "@refinedev/core";
@@ -63,6 +63,8 @@ async function openWorkflows() {
 
 test("lists the server's workflows for the concrete and canonical record models", async () => {
   const { custom } = mount();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(custom).not.toHaveBeenCalled();
   await openWorkflows();
   expect(await screen.findByRole("menuitem", { name: "Quiet" })).toBeTruthy();
   expect(screen.getByRole("menuitem", { name: "Review" })).toBeTruthy();
@@ -128,8 +130,9 @@ test("relation annotations render the standard record picker", async () => {
 
 test("omits the contribution when no workflow applies", async () => {
   const { custom } = mount({ workflow: [] });
-  await waitFor(() => expect(custom).toHaveBeenCalledOnce());
   fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+  await waitFor(() => expect(custom).toHaveBeenCalledOnce());
+  await act(async () => { await custom.mock.results[0]?.value; });
   expect(screen.queryByRole("menuitem", { name: "Run workflow" })).toBeNull();
 });
 

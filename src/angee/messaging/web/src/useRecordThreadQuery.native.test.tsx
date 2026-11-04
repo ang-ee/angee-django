@@ -5,8 +5,8 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { RecordThreadDocument, SetRecordFollowingDocument } from "./documents";
-import { useRecordThreadQuery, useRecordFollowing } from "./useRecordThreadQuery";
+import { RecordFollowingDocument, RecordThreadDocument, SetRecordFollowingDocument } from "./documents";
+import { useRecordFollowingQuery, useRecordThreadQuery, useRecordFollowing } from "./useRecordThreadQuery";
 
 const { Provider, createClient, clearClients } = createRefineTestProviders();
 afterEach(() => { cleanup(); clearClients(); });
@@ -55,6 +55,40 @@ test("an unsaved record neither reads nor subscribes", () => {
   });
   expect(custom).not.toHaveBeenCalled();
   expect(subscribe).not.toHaveBeenCalled();
+});
+
+test("the Follow bell reads its compact document and only follows record-related thread changes", async () => {
+  const custom = vi.fn(async (_params: { meta?: { gqlQuery?: unknown } }) =>
+    ({ data: { record_thread: { error_code: null, is_following: false, subtypes: [] } } }));
+  const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  const sinks: Array<{ next: (value: unknown) => void }> = [];
+  const subscribe = vi.fn((_request: unknown, sink: { next: (value: unknown) => void }) => {
+    sinks.push(sink);
+    return vi.fn();
+  });
+  const liveProvider = createAngeeChangeLiveProvider({ subscribe, on: vi.fn(() => vi.fn()) } as never,
+    [
+      { schemaName: "console", modelLabel: "notes.Note", roots: { list: "notes", changes: "noteChanged" } },
+      { schemaName: "console", modelLabel: "messaging.Thread", roots: { list: "threads", changes: "threadChanged" } },
+    ], { queryClient: client });
+  renderHook(() => useRecordFollowingQuery({ modelLabel: "notes.Note", recordId: "nte_1" }), {
+    wrapper: ({ children }: { children: ReactNode }) =>
+      <Provider queryClient={client} dataProvider={{ custom }} liveProvider={liveProvider}>{children}</Provider>,
+  });
+  await waitFor(() => expect(custom).toHaveBeenCalledOnce());
+  expect(custom.mock.calls[0]?.[0].meta?.gqlQuery).toBe(RecordFollowingDocument);
+  expect(subscribe).toHaveBeenCalledTimes(2);
+  const thread = sinks[1]!;
+  await act(async () => thread.next({ data: { threadChanged: {
+    model: "messaging.Thread", id: "thd_elsewhere", action: "update",
+  } } }));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+  expect(custom).toHaveBeenCalledOnce();
+  await act(async () => thread.next({ data: { threadChanged: {
+    model: "messaging.Thread", id: "thd_here", action: "update",
+    relatedRecords: [{ model: "notes.Note", id: "nte_1" }],
+  } } }));
+  await waitFor(() => expect(custom).toHaveBeenCalledTimes(2));
 });
 
 

@@ -10,7 +10,7 @@ import { buildColumns, withQueryOnlyColumnsHidden } from "../resource-view-list-
 import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
 import { normalisePageSize } from "../page-size";
-import { defaultResourceOrder, groupingStateFromResourceGroups, requestedFieldPaths } from "../resource-view-codecs";
+import { defaultResourceOrder, groupingStateFromResourceGroups, requestedFieldPaths, resourceColumnVisibility } from "../resource-view-codecs";
 import type { ListViewNavigationScope, ResourceFilterInput, ResourceListResult, ResourceListSnapshot, ResourceRowsSnapshotSource, UseResourceRowsSnapshotOptions } from "./types";
 import { useLatestRef } from "../../../lib/use-latest-ref";
 
@@ -18,7 +18,7 @@ export function useResourceRowsSnapshot<TRow extends Row = Row>(
   list: ResourceRowsSnapshotSource,
   options: UseResourceRowsSnapshotOptions<TRow> = {},
 ): ResourceListSnapshot<TRow> {
-  const { navigation, onListStateChange } = options;
+  const { navigation, queryFields, onListStateChange } = options;
   const rows = list.rows as readonly TRow[];
   const navigationScope = React.useMemo<ListViewNavigationScope | undefined>(
     () => navigation
@@ -42,6 +42,7 @@ export function useResourceRowsSnapshot<TRow extends Row = Row>(
       fetching: list.fetching,
       error: list.error,
       ...(navigationScope ? { navigationScope } : {}),
+      ...(queryFields ? { queryFields } : {}),
     }),
     [
       rows,
@@ -54,6 +55,7 @@ export function useResourceRowsSnapshot<TRow extends Row = Row>(
       list.fetching,
       list.error,
       navigationScope,
+      queryFields,
     ],
   );
   // Collection consumers publish the snapshot back into parent state. Some
@@ -148,8 +150,16 @@ export function useResourceViewQueryFacts<TRow extends Row>({
   sortOrder: ResourceListOrder | undefined;
 } {
   const requestedFields = React.useMemo(
-    () => requestedFieldPaths(columns, fields, modelMetadata, laneSource, groupStack),
-    [columns, fields, laneSource, modelMetadata, groupStack],
+    () => {
+      const visibility = resourceColumnVisibility(columns, resourceView.state.columnVisibility);
+      if (resourceView.state.view === "board") {
+        for (const column of columns.filter((item) => !groupStack.some((group) => group.field === item.field)).slice(0, 4)) {
+          visibility[column.id ?? column.field] = true;
+        }
+      }
+      return requestedFieldPaths(columns, fields, modelMetadata, laneSource, groupStack, visibility);
+    },
+    [columns, fields, laneSource, modelMetadata, groupStack, resourceView.state.columnVisibility, resourceView.state.view],
   );
   const mergedFilter = React.useMemo(
     () => filterForResourceTextSearch(
@@ -209,12 +219,9 @@ export function useResourceViewTableState<TRow extends Row>({
       buildColumns(columns, { groupStack, metadata: modelMetadata, clientOperations, query }),
     [columns, groupStack, modelMetadata, clientOperations, query],
   );
-  const columnVisibility = React.useMemo(() => ({
-    ...Object.fromEntries(columns.map((column) => [column.id ?? column.field, !column.hiddenByDefault])),
-    ...resourceView.state.columnVisibility,
-    ...Object.fromEntries(columns.filter((column) => column.hideable === false)
-      .map((column) => [column.id ?? column.field, true])),
-  }), [columns, resourceView.state.columnVisibility]);
+  const columnVisibility = React.useMemo(() =>
+    resourceColumnVisibility(columns, resourceView.state.columnVisibility),
+  [columns, resourceView.state.columnVisibility]);
   const setColumnVisibility = resourceView.setColumnVisibility;
   const effectiveColumnVisibility = React.useMemo(
     () => withQueryOnlyColumnsHidden(tableColumns, columnVisibility),

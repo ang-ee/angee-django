@@ -4,7 +4,7 @@ import * as React from "react";
 
 import { THREAD_CHATTER_EDGE } from "./documents";
 import { useMessagingT } from "./i18n";
-import { useRecordThreadQuery, useRecordFollowing } from "./useRecordThreadQuery";
+import { useRecordFollowingQuery, useRecordFollowing } from "./useRecordThreadQuery";
 
 /** Whether rows of `modelLabel` carry a chatter thread at all. */
 export function useCarriesChatter(modelLabel: string): boolean {
@@ -29,7 +29,7 @@ function FollowToggle({ modelLabel, recordId }: { modelLabel: string; recordId: 
   const t = useMessagingT();
   const toast = useToast();
   const variables = React.useMemo(() => ({ modelLabel, recordId }), [modelLabel, recordId]);
-  const query = useRecordThreadQuery(variables);
+  const query = useRecordFollowingQuery(variables);
   const [setFollowing, state] = useRecordFollowing(modelLabel, recordId);
   const payload = query.data?.record_thread;
   if (!payload || payload.error_code) return null;

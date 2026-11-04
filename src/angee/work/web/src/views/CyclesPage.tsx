@@ -42,6 +42,7 @@ export function CyclesPage(): React.ReactElement {
           completed_at: { isNull: true },
         }}
         order={{ starts_on: "ASC" }}
+        fields={["starts_on", "completed_at"]}
         rowActions={actions.rowActions}
         rowHref={(row) =>
           routeHref("work.cycle-board", { queueId, id: row.id })
