@@ -1282,8 +1282,13 @@ exception closes the rows as failed. Tests inherit a boundary from the root
   private queryset write state or duplicate Django's feature checks.
 - **Hierarchy rows are created through `save()` or `HierarchyQuerySet.create_forest`.**
   A batch (a cloned page tree) is one INSERT and one parent-and-path UPDATE
-  whatever its depth, and each row records one creation version, path included;
-  `save()` hooks do not run, so the caller sends the lifecycle signals it owes.
+  within the model's path-column width, and each row records one creation version,
+  path included; `save()` hooks do not run, so the caller sends the lifecycle
+  signals it owes.
+  With the default `path.max_length=255`, 19 levels of 12-digit segments fit;
+  a create, forest insert, or move beyond the concrete column width raises
+  `ValidationError` and rolls back; deeper trees require a wider column and a
+  migration in each consumer.
 - **A `HierarchyMixin` consumer declares its scope fields — the mixin never probes
   by column name.** A subtree that must stay inside a tenant or other scope
   declares `hierarchy_scope_fields = ("scope",)` (a `ClassVar` tuple; FKs compare
