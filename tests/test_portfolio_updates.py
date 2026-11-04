@@ -3,9 +3,13 @@
 from typing import Any
 
 import pytest
+from django.contrib.sessions.models import Session
 from django.core.exceptions import ValidationError
 from django.db import connection
+from django.db.models.deletion import Collector
+from django.db.models.signals import pre_delete
 from django.test.utils import CaptureQueriesContext
+from django.utils import timezone
 from rebac import (
     ObjectRef,
     PermissionDenied,
@@ -17,10 +21,29 @@ from rebac import (
     write_relationships,
 )
 
+from angee.base.models.refs import delete_record_refs
 from angee.portfolio.testing.models import Initiative, Product, Update
 from tests.conftest import create_user
 
 pytestmark = pytest.mark.django_db(transaction=True)
+
+
+def test_portfolio_hooks_leave_an_unrelated_session_fast_deletable() -> None:
+    """The portfolio sender scope permits native fast delete once base policy is absent."""
+
+    # The source-test app's definition-less record edges make base's receiver
+    # apply to Session until P10b; isolate portfolio's own binding here.
+    uid = "angee.record_refs.target_delete.sessions.session"
+    assert pre_delete.disconnect(sender=Session, dispatch_uid=uid)
+    try:
+        assert Collector(using=connection.alias).can_fast_delete(Session)
+        session = Session.objects.create(
+            session_key="portfolio-fast-delete", session_data="", expire_date=timezone.now(),
+        )
+        Session.objects.filter(pk=session.pk).delete()
+        assert not Session.objects.filter(pk=session.pk).exists()
+    finally:
+        pre_delete.connect(delete_record_refs, sender=Session, dispatch_uid=uid)
 
 
 @pytest.fixture

@@ -468,6 +468,49 @@ def test_record_edges_invert_the_declared_targets_into_resource_metadata(compose
     assert "messaging.ThreadAttachment" in edges and "messaging.ThreadAttachment:chatter" in edges
 
 
+def test_record_edge_index_reuses_one_effective_schema(composed_permissions: None) -> None:
+    """One build asks for the effective policy once across every edge model."""
+
+    del composed_permissions
+    record_refs._target_edge_index.clear()
+    with CaptureQueriesContext(connection) as queries:
+        first = record_refs.record_edges_by_target()
+        for _ in range(10):
+            assert record_refs.record_edges_by_target() is first
+    revision_reads = [query for query in queries if "rebac_schemageneration" in query["sql"].lower()]
+    # A cold schema load may validate the revision twice; later calls read once.
+    assert len(revision_reads) <= 12
+    assert RecordRefTypedTarget in first
+    legacy: dict[type[models.Model], list[type[record_refs.RecordRefMixin]]] = {}
+    for edge in sorted(record_refs.apps.get_models(), key=lambda model: model._meta.label):
+        if issubclass(edge, record_refs.RecordRefMixin):
+            for target in edge.accepted_target_models().values():
+                legacy.setdefault(target, []).append(edge)
+    assert first == {target: tuple(edges) for target, edges in legacy.items()}
+
+
+def test_record_edge_index_rebuilds_when_a_target_model_registers(composed_permissions: None) -> None:
+    """A late model joins the target set even when the schema snapshot is unchanged."""
+
+    del composed_permissions
+    before = record_refs.record_edges_by_target()
+    registered_models = record_refs.apps.get_models()
+
+    class LateRecordRefTarget(models.Model):
+        class Meta:
+            app_label = "recordrefdemo"
+
+    try:
+        assert record_refs.apps.get_models() is not registered_models
+        after = record_refs.record_edges_by_target()
+        assert after is not before
+        assert RecordRefNullableEdge in after[LateRecordRefTarget]
+    finally:
+        record_refs.apps.all_models["recordrefdemo"].pop("laterecordreftarget")
+        record_refs.apps.clear_cache()
+        record_refs._target_edge_index.clear()
+
+
 def test_concrete_child_uses_parent_link_and_prefetched_child(record_ref_tables: None) -> None:
     """One owner resolves MTI children from a parent row and honors Django's relation cache."""
 

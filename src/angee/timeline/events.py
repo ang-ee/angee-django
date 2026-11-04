@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from django.db import models, transaction
@@ -16,6 +18,17 @@ from angee.iam.models.merge import ProtectedMergeableMixin
 from angee.timeline.kinds import TimelineKind, timeline_kinds
 
 log = logging.getLogger(__name__)
+_suppress_invalidation: ContextVar[bool] = ContextVar("timeline_suppress_invalidation", default=False)
+
+
+@contextmanager
+def suppress_invalidation() -> Iterator[None]:
+    """Skip timeline invalidation while preserving each model's change publication."""
+    token = _suppress_invalidation.set(True)
+    try:
+        yield
+    finally:
+        _suppress_invalidation.reset(token)
 
 
 def kinds_for(model: type[models.Model]) -> tuple[TimelineKind, ...]:
@@ -29,7 +42,7 @@ def _records(row: Any, *, update_fields: Iterable[str] | None = None) -> list[mo
     adds new membership after the write; Django's callback queue discards
     invalidations on rollback.
     """
-    if changes_muted():
+    if changes_muted() or _suppress_invalidation.get():
         return []
     using = row._state.db
     records = []

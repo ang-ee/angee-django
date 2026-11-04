@@ -46,6 +46,7 @@ from angee.messaging.querysets import (
 )
 from angee.parties.models import Handle
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
+from angee.timeline.events import suppress_invalidation
 
 if TYPE_CHECKING:
 
@@ -549,7 +550,11 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         thread_model = self.model.thread.field.related_model
         manager = self.db_manager(hints={"instance": target})
         using = manager.db
-        with system_context(reason="messaging.record_thread.teardown"), transaction.atomic(using=using):
+        with (
+            system_context(reason="messaging.record_thread.teardown"),
+            suppress_invalidation(),
+            transaction.atomic(using=using),
+        ):
             target_model._base_manager.db_manager(hints={"instance": target}).select_for_update(
                 of=row_lock_paths(target_model),
             ).filter(
