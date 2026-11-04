@@ -5,12 +5,24 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, fields
-from typing import Any
+from typing import Any, Protocol
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 
 from angee.base.hooks import resolve_hooks
+
+
+class PrepareQueryset(Protocol):
+    """Prepare a resource queryset, optionally bounding its record read proof."""
+
+    def __call__(
+        self,
+        queryset: models.QuerySet[Any],
+        node: type,
+        required: bool,
+        target: tuple[type[models.Model], Any] | None = None,
+    ) -> models.QuerySet[Any]: ...
 
 
 @dataclass(frozen=True)
@@ -23,7 +35,7 @@ class ResourceExtensions:
     relation_queryset: Callable[[type[models.Model], models.QuerySet[Any]], models.QuerySet[Any]] | None = None
     relation_expression: Callable[..., Any] | None = None
     validate_fields: Callable[[type[models.Model], Iterable[str], str, str], None] | None = None
-    prepare_queryset: Callable[[models.QuerySet[Any], type, bool], models.QuerySet[Any]] | None = None
+    prepare_queryset: PrepareQueryset | None = None
     write_backend_factory: Callable[..., Any] | None = None
     delete_context: Callable[[str | None], AbstractContextManager[Any]] | None = None
     validate_delete: Callable[[models.Model], None] | None = None

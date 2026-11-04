@@ -138,6 +138,75 @@ def test_record_model_filter_composes_with_identity_and_decision_filter(referenc
     }, user=owner)) == {"decision_records": []}
 
 
+def test_model_and_id_filter_uses_one_bounded_target_proof(referenced_decisions, content_type_discoveries):
+    owner, outsider, records, decisions = referenced_decisions
+    schema = addon_schema(decision_schema.schemas, "console")
+    query = """query($model: String!, $id: String!) {
+      decision_records(where: {record_model: {_eq: $model}, record_id: {_eq: $id}}) { id }
+      decision_records_aggregate(where: {record_model: {_eq: $model}, record_id: {_eq: $id}}) {
+        aggregate { count }
+      }
+    }"""
+    variables = {"model": records[0]._meta.label, "id": records[0].sqid}
+    for actor, rows, count in ((owner, [{"id": decisions[0].sqid}], 1), (outsider, [], 0)):
+        content_type_discoveries.clear()
+        with CaptureQueriesContext(connection) as captured:
+            data = result_data(execute_schema(schema, query, variables, user=actor))
+        assert data == {
+            "decision_records": rows,
+            "decision_records_aggregate": {"aggregate": {"count": count}},
+        }
+        assert content_type_discoveries == []
+        statements = [
+            item["sql"] for item in captured
+            if f'FROM "{DecisionRecord._meta.db_table}"' in item["sql"]
+        ]
+        assert len(statements) == 2
+        for sql in statements:
+            assert f'FROM "{records[0]._meta.db_table}"' in sql
+            assert f'FROM "{records[1]._meta.db_table}"' not in sql
+            assert sql.count("_angee_reference_key") == 1
+            assert len(sql.encode()) < 100_000
+
+
+@pytest.mark.parametrize("filter_body,expected_positions", [
+    ("{_not: {record_model: {_eq: $model}, record_id: {_eq: $id}}}", (1,)),
+    ("{_or: [{record_model: {_eq: $model}, record_id: {_eq: $id}}, "
+     "{record_id: {_eq: $other}}]}", (0, 1)),
+])
+def test_pair_inside_not_or_or_keeps_unbounded_guard(
+    referenced_decisions, content_type_discoveries, filter_body, expected_positions,
+):
+    owner, _outsider, records, decisions = referenced_decisions
+    schema = addon_schema(decision_schema.schemas, "console")
+    other_variable = ", $other: String!" if "$other" in filter_body else ""
+    query = f"""query($model: String!, $id: String!{other_variable}) {{
+      decision_records(where: {filter_body}) {{ id }}
+    }}"""
+    content_type_discoveries.clear()
+    rows = result_data(execute_schema(schema, query, {
+        "model": records[0]._meta.label, "id": records[0].sqid, "other": records[1].sqid,
+    }, user=owner))["decision_records"]
+    assert {row["id"] for row in rows} == {decisions[position].sqid for position in expected_positions}
+    assert len(content_type_discoveries) == 1
+
+
+def test_positive_pair_bounds_with_unrelated_or_sibling(referenced_decisions, content_type_discoveries):
+    owner, _outsider, records, decisions = referenced_decisions
+    schema = addon_schema(decision_schema.schemas, "console")
+    query = """query($model: String!, $id: String!, $other: String!) {
+      decision_records(where: {_and: [
+        {record_model: {_eq: $model}}, {record_id: {_eq: $id}},
+        {_or: [{record_id: {_eq: $id}}, {record_id: {_eq: $other}}]}
+      ]}) { id }
+    }"""
+    rows = result_data(execute_schema(schema, query, {
+        "model": records[0]._meta.label, "id": records[0].sqid, "other": records[1].sqid,
+    }, user=owner))["decision_records"]
+    assert rows == [{"id": decisions[0].sqid}]
+    assert content_type_discoveries == []
+
+
 def test_record_model_and_identity_membership_use_native_boolean_filters(referenced_decisions):
     owner, _outsider, records, decisions = referenced_decisions
     schema = addon_schema(decision_schema.schemas, "console")
@@ -202,21 +271,35 @@ def test_record_reference_guard_uses_the_declared_string_key_and_current_actor(c
             app_label = "auth"
 
     owner, other = create_user("reference-guard-owner"), create_user("reference-guard-other")
-    owned, hidden = vault_for(owner), vault_for(other)
+    owned, hidden, another_owned = vault_for(owner), vault_for(other), vault_for(owner, name="Other research")
     with model_tables((TextReference,)):
-        for record in (owned, hidden):
+        for record in (owned, hidden, another_owned):
             TextReference.objects.create(
                 content_type=ContentType.objects.get_for_model(record), object_id=str(record.pk),
             )
         TextReference.objects.create(
             content_type=ContentType.objects.get_for_model(owned), object_id="0" + str(owned.pk),
         )
+        plain_type = ContentType.objects.get_for_model(ContentType)
+        TextReference.objects.create(content_type=plain_type, object_id=str(plain_type.pk))
         with actor_context(owner):
             guarded = with_record_reference_access(TextReference.objects.order_by("pk"))
-            assert list(guarded.values_list("_angee_record_readable", flat=True)) == [True, False, False]
+            assert list(guarded.values_list("_angee_record_readable", flat=True)) == [True, False, True, False, False]
+            bounded = with_record_reference_access(TextReference.objects.order_by("pk"), target=(Vault, owned.pk))
+            assert list(bounded.values_list("_angee_record_readable", flat=True)) == [True, False, False, False, False]
+            hidden_target = with_record_reference_access(
+                TextReference.objects.order_by("pk"), target=(Vault, hidden.pk)
+            )
+            assert list(hidden_target.values_list("_angee_record_readable", flat=True)) == [False] * 5
+            plain = with_record_reference_access(
+                TextReference.objects.order_by("pk"), target=(ContentType, plain_type.pk)
+            )
+            assert list(plain.values_list("_angee_record_readable", flat=True)) == [False] * 5
         with actor_context(other):
             rebound = with_record_reference_access(guarded)
-            assert list(rebound.values_list("_angee_record_readable", flat=True)) == [False, True, False]
+            assert list(rebound.values_list("_angee_record_readable", flat=True)) == [False, True, False, False, False]
+        missing_actor = with_record_reference_access(TextReference.objects.order_by("pk"), target=(Vault, owned.pk))
+        assert list(missing_actor.values_list("_angee_record_readable", flat=True)) == [False] * 5
 
 
 def test_unselected_reference_fields_do_not_discover_targets(referenced_decisions, content_type_discoveries):
