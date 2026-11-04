@@ -89,7 +89,12 @@ test("role configuration filters one shared query and each row links to the page
   expect(screen.getByText("Related 1")).toBeTruthy();
   expect(sdk.query).toHaveBeenCalledWith(KnowledgeRecordPages, {
     modelLabel: "example.Record", recordId: "rec_1", role: null,
-  }, { enabled: true, models: ["knowledge.RecordBinding"] });
+  }, {
+    enabled: true,
+    models: ["knowledge.RecordBinding", "knowledge.Page", "knowledge.MarkdownPage", "example.Record"],
+    records: [{ model: "example.Record", id: "rec_1" }],
+    relatedModels: ["knowledge.RecordBinding"],
+  });
   const row = screen.getByRole("link", { name: "Guide" });
   expect(row.getAttribute("href")).toBe("/knowledge/page/pg_1");
   fireEvent.click(row);

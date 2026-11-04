@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { ActionDescriptor } from "@angee/ui";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -9,6 +10,7 @@ afterEach(cleanup);
 
 const mocks = vi.hoisted(() => ({
   decide: vi.fn(), reset: vi.fn(),
+  scope: { reconcile: vi.fn(async () => undefined) },
   actions: [] as Array<{ id: string; permission?: string; danger?: boolean; confirm?: unknown }>,
 }));
 vi.mock("@angee/metadata", () => ({
@@ -48,12 +50,12 @@ vi.mock("@angee/ui", async () => {
       action === "reset_need_access" ? mocks.reset : mocks.decide,
     ],
     useActionResultRun: () => (run: () => Promise<unknown>) => run(),
-    RecordActionBar: ({ actions }: { actions: Array<{
-      id: string; label: string; permission?: string; confirm?: unknown; run?: () => Promise<void>;
-    }> }) => {
+    RecordActionBar: ({ record, actions }: { record: CurrentAccessRow; actions: ActionDescriptor[] }) => {
       mocks.actions.push(...actions);
       return React.createElement(React.Fragment, {}, ...actions.map((action) => React.createElement(
-        "button", { key: action.id, onClick: () => void action.run?.() }, action.label,
+        "button", { key: action.id, onClick: () => void action.run?.({
+          record, values: {}, refresh: vi.fn(), update: vi.fn(), prompt: vi.fn(), reconciliation: mocks.scope,
+        }) }, action.label,
       )));
     },
   };
@@ -89,9 +91,9 @@ describe("requester access cards", () => {
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Give access" })); });
     expect(mocks.decide).toHaveBeenCalledExactlyOnceWith("need-1", {
       action: "INTAKE_APPROVE", expected_revision: 3,
-    });
+    }, { reconciliation: mocks.scope });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Deny" })); });
-    expect(mocks.decide).toHaveBeenLastCalledWith("need-1", { action: "INTAKE_DENY", expected_revision: 3 });
+    expect(mocks.decide).toHaveBeenLastCalledWith("need-1", { action: "INTAKE_DENY", expected_revision: 3 }, { reconciliation: mocks.scope });
     expect(mocks.actions.map((action) => action.permission)).toEqual(["write", "write"]);
   });
 
@@ -109,7 +111,7 @@ describe("requester access cards", () => {
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Reset access" })); });
     expect(mocks.reset).toHaveBeenCalledExactlyOnceWith("need-1", {
       confirmed: true, expected_revision: 3,
-    });
+    }, { reconciliation: mocks.scope });
   });
 
   test("an applied approval has no second grant action", () => {
