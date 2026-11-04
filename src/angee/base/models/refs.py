@@ -26,6 +26,32 @@ from angee.base.querysets import MergeableQuerySet
 from angee.base.refs import RecordRef, generic_pointer_model, generic_pointer_target
 
 
+class RecordPublicIDOperand(models.Case):
+    """A generic reference ID operand that can decode its one known target."""
+
+    def __init__(self, *cases: models.When, keys: dict[str, Any]) -> None:
+        super().__init__(*cases, default=models.Value(""), output_field=models.CharField())
+        self.keys = keys
+
+    def key_for_model(self, model: type[models.Model]) -> Any | None:
+        """Return the key decoded for this target model, if the ID names one."""
+
+        return self.keys.get(model._meta.label_lower)
+
+    @staticmethod
+    def decode_key(model: type[models.Model], value: str) -> Any | None:
+        """Use the target's native public identity, rejecting invalid values."""
+
+        field = public_data_id_field(model)
+        try:
+            pk = field.public_id_to_value(value) if field else model._meta.pk.to_python(value)
+            if pk is None or (field is None and public_id_for(model, pk) != value):
+                return None
+        except TypeError, ValueError, ValidationError:
+            return None
+        return pk
+
+
 class _TargetTeardown(Protocol):
     def __call__(self, target: models.Model) -> None: ...
 
@@ -181,7 +207,7 @@ class RecordRefMixin(RecordRefMergeContract, Composable, concrete=False):
         return ()
 
     @classmethod
-    def record_public_id_operand(cls, value: str) -> models.Case:
+    def record_public_id_operand(cls, value: str) -> RecordPublicIDOperand:
         """Decode a public ID to a SQL operand bound to the pointer's model.
 
         Generic references carry both a content type and an object ID. Decode
@@ -192,14 +218,12 @@ class RecordRefMixin(RecordRefMergeContract, Composable, concrete=False):
 
         reference = cls.record_ref_field()
         candidates = []
+        keys = {}
         for model in sorted(cls._meta.apps.get_models(), key=lambda item: item._meta.label_lower):
-            field = public_data_id_field(model)
-            try:
-                pk = field.public_id_to_value(value) if field else model._meta.pk.to_python(value)
-                if pk is None or (field is None and public_id_for(model, pk) != value):
-                    continue
-            except TypeError, ValueError, ValidationError:
+            pk = RecordPublicIDOperand.decode_key(model, value)
+            if pk is None:
                 continue
+            keys[model._meta.label_lower] = pk
             candidates.append(
                 models.When(
                     **{
@@ -209,7 +233,7 @@ class RecordRefMixin(RecordRefMergeContract, Composable, concrete=False):
                     then=models.Value(str(pk)),
                 )
             )
-        return models.Case(*candidates, default=models.Value(""), output_field=models.CharField())
+        return RecordPublicIDOperand(*candidates, keys=keys)
 
     @property
     def record_model_label(self) -> str:

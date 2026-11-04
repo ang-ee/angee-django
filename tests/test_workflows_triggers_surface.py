@@ -413,24 +413,31 @@ def test_trigger_ledger_redacts_unreadable_source_identity_and_filter_oracles(tr
       triggerevent { id record_model record_id evaluated_at admitted_at }
       by_model: triggerevent(where: {record_model: {_eq: $model}}) { id }
       by_record: triggerevent(where: {record_id: {_eq: $record}}) { id }
+      by_pair: triggerevent(where: {record_model: {_eq: $model}, record_id: {_eq: $record}}) { id }
       model_count: triggerevent_aggregate(where: {record_model: {_eq: $model}}) { aggregate { count } }
       record_count: triggerevent_aggregate(where: {record_id: {_eq: $record}}) { aggregate { count } }
+      pair_count: triggerevent_aggregate(where: {
+        record_model: {_eq: $model}, record_id: {_eq: $record}
+      }) { aggregate { count } }
     }"""
     variables = {"model": record._meta.label, "record": record.sqid}
     hidden = result_data(execute_schema(schema, query, variables, user=editor))
     assert hidden == {
         "triggerevent": [{"id": event.sqid, "record_model": None, "record_id": None,
                           "evaluated_at": None, "admitted_at": None}],
-        "by_model": [], "by_record": [],
+        "by_model": [], "by_record": [], "by_pair": [],
         "model_count": {"aggregate": {"count": 0}}, "record_count": {"aggregate": {"count": 0}},
+        "pair_count": {"aggregate": {"count": 0}},
     }
     grant = RelationshipTuple(resource=to_object_ref(record), relation="viewer", subject=to_subject_ref(editor))
     write_relationships([grant])
     visible = result_data(execute_schema(schema, query, variables, user=editor))
     assert visible["triggerevent"][0]["record_model"] == record._meta.label
     assert visible["triggerevent"][0]["record_id"] == record.sqid
-    assert visible["by_model"] == visible["by_record"] == [{"id": event.sqid}]
-    assert visible["model_count"] == visible["record_count"] == {"aggregate": {"count": 1}}
+    assert visible["by_model"] == visible["by_record"] == visible["by_pair"] == [{"id": event.sqid}]
+    assert visible["model_count"] == visible["record_count"] == visible["pair_count"] == {
+        "aggregate": {"count": 1},
+    }
     Trigger.objects.drain()
     event.refresh_from_db()
     assert event.admitted_at is not None, event.rejection

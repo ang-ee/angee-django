@@ -52,7 +52,7 @@ from angee.base.models.children import OwnedChildrenMixin
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for
 from angee.base.models.inputs import InputExtensionsMixin
 from angee.base.models.locks import OptimisticLockMixin, RowLockMixin
-from angee.base.models.refs import RecordRefMixin
+from angee.base.models.refs import RecordPublicIDOperand, RecordRefMixin
 from angee.base.querysets import row_lock_paths
 from angee.graphql.constants import PUBLIC_ID_FIELD_NAME
 from angee.graphql.data.contracts import (
@@ -1336,6 +1336,20 @@ def _resource_filter_projection(
     )
 
 
+def _positive_conjuncts(predicate: models.Q) -> list[tuple[str, Any]]:
+    """Return leaves guaranteed by the predicate's top-level positive conjunction."""
+
+    if predicate.negated or predicate.connector != models.Q.AND:
+        return []
+    clauses = []
+    for child in predicate.children:
+        if isinstance(child, models.Q):
+            clauses.extend(_positive_conjuncts(child))
+        elif isinstance(child, tuple) and isinstance(child[0], str):
+            clauses.append(child)
+    return clauses
+
+
 def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative builder.
     node: type,
     *,
@@ -1565,18 +1579,34 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
     def prepare_filters(queryset: models.QuerySet[Any], predicate: models.Q) -> models.QuerySet[Any]:
         """Build only expressions referenced by the native, resolved predicate."""
         selected = predicate.referenced_base_fields
+        target: tuple[type[models.Model], Any] | None = None
+        if record_ref_requires_read and record_ref_filters is not None:
+            model_name, id_name = record_ref_filters
+            clauses = _positive_conjuncts(predicate)
+            models_equal = [value for name, value in clauses if name == model_name]
+            ids_equal = [value for name, value in clauses if name == id_name]
+            if len(models_equal) == len(ids_equal) == 1 and isinstance(ids_equal[0], RecordPublicIDOperand):
+                try:
+                    target_model = model._meta.apps.get_model(models_equal[0])
+                except (LookupError, TypeError, ValueError):
+                    pass
+                else:
+                    target = (target_model, ids_equal[0].key_for_model(target_model))
         if record_ref_requires_read and selected.intersection(record_ref_filters or ()):
             transform = resource_extensions(model).prepare_queryset
             if transform is None:
                 raise ImproperlyConfigured("A record-reference read guard requires a declared resource contributor.")
-            queryset = transform(queryset, node, True)
+            queryset = transform(queryset, node, True, target)
+            if target is not None:
+                # The positive pair already implies this guard, so narrowing preserves filter results.
+                queryset = queryset.filter(_angee_record_readable=True)
         aliases: dict[str, BaseExpression] = {}
         for name, expression in expressions.items():
             if name not in selected or name in model_filter_aliases:
                 continue
             if callable(expression):
                 expression = expression(queryset)
-            if record_ref_requires_read and name in (record_ref_filters or ()):
+            if record_ref_requires_read and target is None and name in (record_ref_filters or ()):
                 expression = models.Case(
                     models.When(_angee_record_readable=True, then=expression),
                     default=models.Value(None),

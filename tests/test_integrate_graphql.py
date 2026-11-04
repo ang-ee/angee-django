@@ -329,14 +329,21 @@ def test_record_sources_filter_by_readable_target_and_project_connector_url(comp
       }
     """
     variables = {"model": "integrate.SyncStream", "id": _public_id(stream)}
-    visible = _data(_execute(_schema(), query, variables, user=bridge.owner))["record_links"]
+    schema = _schema()
+    with CaptureQueriesContext(connection) as captured:
+        visible = _data(_execute(schema, query, variables, user=bridge.owner))["record_links"]
     assert visible == [{
         "id": _public_id(link),
         "external_key": "message:1",
         "source_url": None,
         "stream": {"key": "messages", "integration": {"display_name": bridge.record_display_label}},
     }]
-    assert _data(_execute(_schema(), query, variables, user=outsider_bridge.owner))["record_links"] == []
+    proof_sql = [item["sql"] for item in captured if "_angee_reference_key" in item["sql"]]
+    assert len(proof_sql) == 1
+    assert f'FROM "{RecordLink._meta.db_table}"' in proof_sql[0]
+    assert f'FROM "{SyncStream._meta.db_table}"' in proof_sql[0]
+    assert proof_sql[0].count("_angee_reference_key") == 1
+    assert _data(_execute(schema, query, variables, user=outsider_bridge.owner))["record_links"] == []
 
 
 @pytest.mark.parametrize(
