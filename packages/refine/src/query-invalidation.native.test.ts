@@ -576,6 +576,93 @@ test("a full live refresh stays full when targeted changes join across flushes",
   }
 });
 
+test("ready reconciles a read fetched before the subscription request", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  let reads = 0;
+  const observer = new QueryObserver(cache, {
+    queryKey: ["ready", "retained"], meta: { angeeModels: ["notes.Note"] },
+    queryFn: async () => ++reads,
+  });
+  const stop = observer.subscribe(() => undefined);
+  const live = createAuthoredLiveInvalidation(cache);
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads).toBe(1);
+    live.ready("notes.Note");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(reads).toBe(2);
+  } finally { live.clear(); stop(); cache.clear(); }
+});
+
+test("a post-ready refetch still pending at flush needs no recovery fetch", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  let reads = 0;
+  const later = pending<number>();
+  const observer = new QueryObserver(cache, {
+    queryKey: ["ready", "pending-refetch"], meta: { angeeModels: ["notes.Note"] },
+    queryFn: () => ++reads === 1 ? Promise.resolve(1) : later.promise,
+  });
+  const stop = observer.subscribe(() => undefined);
+  const live = createAuthoredLiveInvalidation(cache);
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(observer.getCurrentResult().data).toBe(1);
+    live.ready("notes.Note");
+    const refetch = observer.refetch();
+    expect(reads).toBe(2);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(reads).toBe(2);
+    later.resolve(2);
+    await refetch;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads).toBe(2);
+  } finally { later.resolve(2); live.clear(); stop(); cache.clear(); }
+});
+
+test("a retained read refetched after ready needs no second recovery fetch", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  let reads = 0;
+  const observer = new QueryObserver(cache, {
+    queryKey: ["ready", "refetched"], meta: { angeeModels: ["notes.Note"] },
+    queryFn: async () => ++reads,
+  });
+  const stop = observer.subscribe(() => undefined);
+  const live = createAuthoredLiveInvalidation(cache);
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    live.ready("notes.Note");
+    await observer.refetch();
+    expect(reads).toBe(2);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(reads).toBe(2);
+  } finally { live.clear(); stop(); cache.clear(); }
+});
+
+test("an accepted response after ready still needs an authoritative recovery fetch", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const key = ["ready", "accepted"];
+  let reads = 0;
+  const observer = new QueryObserver(cache, {
+    queryKey: key, meta: { angeeModels: ["notes.Note"] },
+    queryFn: async () => ({ title: `fetched ${++reads}` }),
+  });
+  const stop = observer.subscribe(() => undefined);
+  const live = createAuthoredLiveInvalidation(cache);
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reads).toBe(1);
+    live.ready("notes.Note");
+    await acceptQueryData(cache, key, { title: "accepted" }, { complete: true });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(reads).toBe(2);
+    expect(observer.getCurrentResult().data).toEqual({ title: "fetched 2" });
+  } finally { live.clear(); stop(); cache.clear(); }
+});
+
 test("ready merged with a row change fully rereads a held keyset feed", async () => {
   vi.useFakeTimers();
   const cache = client();

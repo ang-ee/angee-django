@@ -100,7 +100,7 @@ export interface MutationExecutionOptions {
 
 export interface AuthoredLiveInvalidation {
   push: (change: AuthoredLiveChange, deliver?: () => void) => void;
-  /** Recover matching reads on every subscription ready ack, without cancelling. */
+  /** Recover reads that preceded this registration without cancelling. */
   ready: (model: string) => void;
   reconcile: (request: QueryReconciliation) => Promise<void>;
   batch: <T>(run: (reconciliation?: MutationReconciliationScope) => Promise<T>) => Promise<T>;
@@ -297,14 +297,21 @@ export function createAuthoredLiveInvalidation(
     get generation() { return generation; },
     ready(model) {
       const change = { model };
-      // GraphQL-WS may send ready again on this same sink after reconnect.
-      // A read started after subscription request can still precede registration.
-      const stale = new Set(queryClient.getQueryCache().findAll({ predicate: (query) =>
+      // A read fetched between the subscription request and this ack can
+      // precede registration. Keep reads in flight at the ack even if they
+      // settle later; an idle read fetched after the ack covers the gap.
+      const snapshot = new Map(queryClient.getQueryCache().findAll({ predicate: (query) =>
         (query.state.data !== undefined || query.state.fetchStatus !== "idle")
         && (authoredQueryReadsLiveChange(query.meta, change) || nativeReadsChange(query, change))
-      }));
-      if (stale.size) void reconcile({ changes: [], predicate: (query) => stale.has(query) })
-        .catch(() => undefined);
+      }).map((query) => [query, query.state.fetchStatus === "idle" ? query.state.dataUpdateCount : undefined] as const));
+      if (snapshot.size) void reconcile({ changes: [], predicate: (query) => {
+        if (!snapshot.has(query)) return false;
+        const seen = snapshot.get(query);
+        const { fetchStatus, dataUpdateCount } = query.state;
+        // An accepted mutation response updates data without fetching the scope.
+        return seen === undefined || fetchStatus === "idle" && (dataUpdateCount === seen
+          || recordValue(query.meta?.angeeAcceptedResponse)?.dataUpdateCount === dataUpdateCount);
+      } }).catch(() => undefined);
     },
     clear() {
       generation++;

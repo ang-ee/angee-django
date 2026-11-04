@@ -77,14 +77,11 @@ Opaque custom reloads and explicit record-action `refresh: true` remain imperati
 Foreign live providers retain native direct refresh behavior.
 
 A subscription's `ready` result acknowledges model-group registration. The
-provider handles every ready, including reconnect on the same sink and resume.
-It marks every matching read that holds data or is in flight stale. In-flight
-reads, including those without data, settle before one coalesced refetch; idle
-retained reads with observers refetch after the quiet gap; cached reads without
-observers are marked stale and refetch on next mount. Ready never cancels a read
-or reaches user data callbacks. Recovery costs one fetch per affected read per
-ready window; a read covering two models whose readies arrive in separate
-windows refetches once for each model. No read is cancelled by reconciliation:
+provider handles each operation's ready, including one sent after reconnect or
+resume. The reconciler snapshots matching reads at the ack and excludes an
+idle read that has fetched since; accepted mutation data does not count as a
+fetch. See the [readiness rule](../../docs/frontend/guidelines.md#rules) for the
+race contract. No read is cancelled by reconciliation:
 commands, live changes and ready let in-flight reads settle, then refetch once
 for coalesced effects. Idle retained reads refetch immediately for explicit
 batches and the exported invalidation helper; provider-scheduled commands
