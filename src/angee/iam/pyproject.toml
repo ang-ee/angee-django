@@ -5,7 +5,7 @@ name = "angee-iam"
 version = "3.0.0"
 description = "Identity, the swappable user model, and the REBAC permission hub"
 keywords = ["identity", "rebac", "auth"]
-dependencies = ["angee-base>=3,<4", "django-zed-rebac @ git+https://github.com/ang-ee/django-zed-rebac.git@2bf907797045456312359dee1adbef398d918f39", "django-axes>=8.0"]
+dependencies = ["angee-base>=3,<4", "django-zed-rebac @ git+https://github.com/ang-ee/django-zed-rebac.git@e27fa98e195b683d7bf480e67e8a619dc9397d00", "django-axes>=8.0"]
 dynamic = ["entry-points"]
 
 [tool.angee]
