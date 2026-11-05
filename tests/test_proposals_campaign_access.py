@@ -9,7 +9,7 @@ import pytest
 from django.apps import apps
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import ValidationError
-from rebac import ObjectRef, PermissionDenied, SubjectRef, actor_context, system_context, to_subject_ref
+from rebac import ObjectRef, PermissionDenied, SubjectRef, actor_context, system_context, to_object_ref, to_subject_ref
 from rebac.models import active_relationship_model
 
 from angee.base.exceptions import RecordAccessSubjectRefused
@@ -17,7 +17,7 @@ from angee.graphql.events import ChangePayload
 from angee.iam.graphql.access import ChangeReadGate
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Milestone, Project, Task
-from tests.conftest import Drive, File, FileAttachment
+from tests.conftest import Drive, File, FileAttachment, create_platform_admin
 from tests.proposals_campaign import ProposalCampaign, as_actor, grant
 from tests.proposals_campaign import campaign as campaign
 from tests.proposals_campaign import campaign_schema as campaign_schema
@@ -493,7 +493,7 @@ def test_retirement_cleans_peers_tracks_and_withholds_group_shared_round_content
         report = as_actor(round, manager).remove_responder(retiring)
     removed = {(row["resource"], row["relation"], row["subject"]) for row in report["removed"]}
     for row, relation in track_rows:
-        assert (f"{row._meta.rebac_resource_type}:{row.pk}", relation, str(subject)) in removed
+        assert (str(to_object_ref(row)), relation, str(subject)) in removed
         assert_read(row, retiring, False)
         assert_read(row, c.person("other-member"), False)
     for row in (round, own, peer, answer, own_question, shared_question, assigned):
@@ -698,16 +698,24 @@ def test_round_team_and_project_team_do_not_copy_each_others_seats(campaign: Pro
     assert not as_actor(round, inactive).has_access("manage")
 
 
-def test_view_as_reaches_only_current_responders_of_managed_rounds(campaign: ProposalCampaign) -> None:
+def test_round_manager_reads_roster_without_view_as(campaign: ProposalCampaign) -> None:
     c = campaign
     round = c.round()
     c.admit(round, "responder")
     c.admit(round, "peer")
     manager = c.person("facilitator")
-    for seat in ("responder", "peer"):
-        assert as_actor(c.person(seat), manager).has_access("view_as")
-    assert not as_actor(c.person("outsider"), manager).has_access("view_as")
-    assert not as_actor(manager, manager).has_access("view_as")
+    admin = create_platform_admin(f"{c.prefix}-admin")
+    assert as_actor(round, manager).has_access("manage")
+    assert {entry.user_id for entry in as_actor(round, manager).roster()} == {
+        c.person("responder").pk,
+        c.person("peer").pk,
+    }
+    for seat in ("responder", "peer", "outsider", "facilitator"):
+        person = c.person(seat)
+        assert not as_actor(person, manager).has_access("view_as")
+        assert type(person).objects.admit_view_as(manager, str(person.sqid)) is None
+        assert as_actor(person, admin).has_access("view_as")
+    assert type(manager).objects.admit_view_as(admin, str(c.person("responder").sqid)) == c.person("responder")
     with actor_context(manager):
         as_actor(round, manager).remove_responder(c.person("peer"))
     assert not as_actor(c.person("peer"), manager).has_access("view_as")
@@ -809,7 +817,7 @@ def test_requester_identity_cannot_bypass_round_owner_through_conflict_updates(
 def test_requester_party_delete_uses_native_collector(campaign: ProposalCampaign, referenced: bool) -> None:
     with system_context(reason="tests.proposals.requester.delete"):
         party = Person.objects.create(display_name="Disposable requester")
-        round = campaign.round(**({"requester_party": party} if referenced else {}))
+        round = campaign.round(requester_party=party if referenced else None)
         party.delete()
         round.refresh_from_db()
         assert round.requester_party_id is None

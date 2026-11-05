@@ -8,6 +8,18 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — admin-only account preview
+
+- `auth/user#view_as` now belongs only to platform admins. Intake task writers
+  and proposal round managers no longer inherit account preview through requester
+  or responder relationships; their requester and roster displays retain their
+  record-specific permissions. Integrations that used `X-Angee-View-As` with
+  those roles must use the owning record's display fields instead.
+- IAM composition rejects any extension fragment that adds an arm to
+  `auth/user#view_as` with `<addon>: permissions.extends.zed cannot extend
+  auth/user#view_as; account preview is granted to platform admins only`.
+  Consumers must grant each specific display need at its owning record instead.
+
 ## Unreleased — agent transcript storage
 
 - `AgentTurn` stores ACP updates in ordered `AgentTurnUpdate` batches with turn

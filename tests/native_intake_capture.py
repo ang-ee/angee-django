@@ -904,7 +904,7 @@ class NeedAccessTests(IntakeAccessCase):
         self.assertEqual(need.access_verdict, ["intake.deny"])
         self.assertEqual(need.access_answered_by_id, self.owner.pk)
 
-    def test_requester_comment_filer_read_and_preview_derive_from_need(self):
+    def test_requester_comment_and_filer_read_derive_from_need(self):
         party = self.party(self.reader)
         need = self.need(party=party)
         with system_context(reason="test restricted request"):
@@ -919,7 +919,6 @@ class NeedAccessTests(IntakeAccessCase):
         for user in (self.owner, self.writer):
             self.assertTrue(self.Party.objects.as_user(user).filter(pk=party.pk).exists())
             self.assertTrue(apps.get_model("parties", "Person").objects.as_user(user).filter(pk=party.pk).exists())
-            self.assertTrue(self.reader.with_actor(to_subject_ref(user)).has_access("view_as"))
 
     def test_filer_name_sorts_readable_requesters_and_redacts_hidden_parties(self):
         with system_context(reason="test filer parties"):
@@ -1137,6 +1136,35 @@ class NeedResetAccessTests(IntakeAccessCase):
 
 @override_settings(REBAC_LOCAL_BACKEND_STORAGE="denormalized")
 class DenormalizedNeedResetAccessTests(NeedResetAccessTests):
+    pass
+
+
+class NeedViewAsAdminOnlyTests(IntakeAccessCase):
+    def test_task_writers_read_requester_without_view_as(self):
+        party = self.party(self.reader)
+        need = self.need(party=party)
+        with system_context(reason="test unrelated preview target"):
+            unrelated = self.User.objects.create_user(username="unrelated-preview-target")
+        for writer in (self.owner, self.writer):
+            self.assertTrue(need.task.with_actor(to_subject_ref(writer)).has_access("write"))
+            for target in (self.reader, unrelated, writer):
+                self.assertFalse(target.with_actor(to_subject_ref(writer)).has_access("view_as"))
+                self.assertIsNone(self.User.objects.admit_view_as(writer, str(target.sqid)))
+            self.assertTrue(self.Party.objects.as_user(writer).filter(pk=party.pk).exists())
+            self.assertEqual(
+                self.graphql(
+                    "{ project_tasks { requester { display_name } } }",
+                    {},
+                    user=writer,
+                )["project_tasks"],
+                [{"requester": {"display_name": party.display_name}}],
+            )
+        self.assertTrue(self.reader.with_actor(to_subject_ref(self.admin)).has_access("view_as"))
+        self.assertEqual(self.User.objects.admit_view_as(self.admin, str(self.reader.sqid)), self.reader)
+
+
+@override_settings(REBAC_LOCAL_BACKEND_STORAGE="denormalized")
+class DenormalizedNeedViewAsAdminOnlyTests(NeedViewAsAdminOnlyTests):
     pass
 
 

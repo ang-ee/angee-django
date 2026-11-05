@@ -18,6 +18,7 @@ definition auth/user {
     relation staff: iam/audience // rebac:const={"target_id":"staff","filters":{"is_staff":true}}
 
     permission create = admin->member
+    // Account preview is a platform-admin action; fragments do not union into it.
     permission view_as = admin->member
     // Everyone signed in reads a person's name wherever a record embeds the
     // account; the restricted fields below keep everything else.

@@ -1473,9 +1473,12 @@ open fresh evaluator scopes for authorization and change-feed reads.
 
 ### GraphQL actor and write contracts
 
-- **View-as is a server-side, read-only HTTP preview.** `X-Angee-View-As`
-  carries the target user's public id. [IAM admission](../../src/angee/iam/models/__init__.py)
-  checks the real actor's `view_as` permission and the target's eligibility;
+- **View-as is a platform-admin-only, server-side, read-only HTTP preview.** `X-Angee-View-As`
+  carries the target user's public id. [IAM admission](../../src/angee/iam/managers.py)
+  checks the real actor's `view_as` permission and the target's eligibility.
+  IAM composition rejects extension fragments that add an arm to
+  `auth/user#view_as`. An addon that shows a person on its records grants the
+  specific display need through the owning record's read permissions.
   [ViewAs](../../src/angee/iam/graphql/view_as.py) binds both `request.user` and
   the ambient actor to that target. Mutations and HTTP subscriptions fail with
   `VIEW_AS_READ_ONLY`; query database writes are rolled back. The
