@@ -8,7 +8,7 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connections, models, transaction
 
 from angee.provenance.context import current_changeset, discard_changeset_claim, require_changeset
-from angee.provenance.querysets import ChangesetQuerySet as ChangesetQuerySet
+from angee.provenance.querysets import ChangesetQuerySet
 
 from .exceptions import CreationKeyConflict
 from .serialization import creation_fingerprint

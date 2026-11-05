@@ -2070,7 +2070,7 @@ bridge advisory lock as polling and delivery settlement.
   Pro/Max token there violates Anthropic's ToS — enabling it without the plugin silently drops
   Anthropic from OpenCode's model list.
 - **Task locks are advisory, row locks are authoritative.** Celery task bodies may
-  use `angee.jobs.locks.task_lock()` to prevent duplicate workers from doing the
+  use `angee.base.locks.task_lock()` to prevent duplicate workers from doing the
   same external work, but persisted state transitions still use model/queryset row
   locks, constraints, and idempotent managers. Do not hold row locks during network
   IO.

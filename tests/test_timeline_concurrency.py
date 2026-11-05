@@ -8,7 +8,7 @@ from django.db import connection, connections, transaction
 
 from tests.test_timeline import timeline_entries
 from tests.test_timeline_decisions import ask
-from tests.test_timeline_decisions import people as people  # noqa: F401 -- shared fixture
+from tests.test_timeline_decisions import people as people
 
 pytestmark = pytest.mark.django_db(transaction=True)
 

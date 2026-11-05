@@ -28,13 +28,7 @@ from angee.iam.models.base import ProtectedModel
 from angee.platform.discovery import (
     AddonCategory,
 )
-from angee.platform.managers import AddonChangeImpact as AddonChangeImpact
-from angee.platform.managers import AddonChangePreview as AddonChangePreview
-from angee.platform.managers import AddonContributedFieldInventory as AddonContributedFieldInventory
-from angee.platform.managers import AddonDataInventory as AddonDataInventory
-from angee.platform.managers import AddonManager as AddonManager
-from angee.platform.managers import AddonModelInventory as AddonModelInventory
-from angee.platform.managers import _preview_revision as _preview_revision
+from angee.platform.managers import AddonManager
 
 
 def get_addon_display_label(name: str, label: str) -> str:

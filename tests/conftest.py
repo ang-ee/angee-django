@@ -53,7 +53,7 @@ from angee.knowledge.models import Page as AbstractPage
 from angee.knowledge.models import RecordBinding as AbstractRecordBinding
 from angee.knowledge.models import Vault as AbstractVault
 from angee.knowledge_integrate_notion.models import NotionConnection as AbstractNotionConnection
-from angee.messaging.testing import models as messaging_models  # noqa: F401 -- register messaging test models
+from angee.messaging.testing import models as messaging_models
 from angee.messaging.testing.models import Channel
 from angee.platform.models import Addon as AbstractAddon
 from angee.platform.models import PlatformExplorer as AbstractPlatformExplorer
@@ -680,7 +680,7 @@ class ExtcontribRole(Role):
 from angee.nexus.testing import models as nexus_models  # noqa: E402, F401
 from angee.operator.testing import models as operator_models  # noqa: E402, F401
 from angee.portfolio.testing import models as portfolio_models  # noqa: E402, F401
-from angee.projects.testing import models as projects_models  # noqa: E402, F401
+from angee.projects.testing import models as projects_models  # noqa: E402
 from angee.provenance.testing import load_statement_sources  # noqa: E402
 from angee.sequence.testing import models as sequence_models  # noqa: E402, F401
 from angee.tags.testing import models as tags_models  # noqa: E402, F401
@@ -951,7 +951,7 @@ def catalogue_package(name: str, *, depends_on: tuple[str, ...] = (), descriptio
     }
 
 
-def SchemaAddon(schemas: dict[str, dict[str, tuple[object, ...]]]) -> AppConfig:  # noqa: N802 - kept for call sites
+def SchemaAddon(schemas: dict[str, dict[str, tuple[object, ...]]]) -> AppConfig:
     """Build a package-backed addon exposing the supplied executable schema objects."""
 
     return make_addon(schemas=schemas)

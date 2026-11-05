@@ -36,21 +36,11 @@ from angee.base.models.locks import OptimisticLockMixin
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.iam.models.base import ProtectedDataModel
 from angee.iam.permissions import actor_user_id, instance_actor
-from angee.intake.choices import NeedAccessAction as NeedAccessAction
-from angee.intake.choices import NeedImportance as NeedImportance
-from angee.intake.managers import NeedManager as NeedManager
-from angee.intake.querysets import (
-    NeedQuerySet as NeedQuerySet,
-)
+from angee.intake.choices import NeedAccessAction, NeedImportance
+from angee.intake.managers import NeedManager
 from angee.intake.querysets import (
     _requested_by_viewer_filter,
     _requester_name_filter,
-)
-from angee.intake.querysets import (
-    task_requester_name as task_requester_name,
-)
-from angee.intake.querysets import (
-    task_requester_rows as task_requester_rows,
 )
 from angee.intake.resources import NeedResource
 from angee.provenance.contrib.angee.history import HistoryMixin
@@ -214,11 +204,6 @@ class Need(ResourceLoadMixin, HistoryMixin, OptimisticLockMixin, AuditMixin, Pro
     @property
     def access_verdict(self) -> list[str] | None:
         return self.access_decision.verdict if self.access_decision is not None else None
-
-    @property
-    def access_answered_by_id(self) -> Any:
-        """Project the readable decision's answerer identity for server-side consumers."""
-        return self.access_decision.answered_by_id if self.access_decision is not None else None
 
     @property
     def access_answered_by(self) -> Any:

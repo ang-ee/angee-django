@@ -198,21 +198,15 @@ class ThreadNotification(AuditMixin, ProtectedDataModel, concrete=True):
 
 
     class NotificationType(models.TextChoices):
-        """How this notification should be delivered."""
+        """The follower's selected notification policy."""
 
         INBOX = "inbox", "Inbox"
         EMAIL = "email", "Email"
 
     class NotificationStatus(models.TextChoices):
-        """Delivery lifecycle for a notification."""
+        """Notifications are created ready for inbox reads."""
 
-        READY = "ready", "Ready to send"
-        PROCESS = "process", "Processing"
-        PENDING = "pending", "Sent"
-        SENT = "sent", "Delivered"
-        BOUNCE = "bounce", "Bounced"
-        EXCEPTION = "exception", "Exception"
-        CANCELED = "canceled", "Canceled"
+        READY = "ready", "Ready"
 
     sqid_prefix = "ntf_"
     thread = models.ForeignKey(
@@ -271,19 +265,6 @@ class ThreadNotification(AuditMixin, ProtectedDataModel, concrete=True):
         )
         indexes = (
             models.Index(fields=("thread", "user")),
-            # The delivery worker's queue: only undelivered rows enter the index
-            # (the Zulip scheduled-send pattern), so it stays tiny at any volume.
-            models.Index(
-                fields=("notification_status", "created_at"),
-                condition=models.Q(notification_status__in=("ready", "process")),
-                name="ix_thread_notification_pending",
-            ),
-            # Delivery-error surfacing per user.
-            models.Index(
-                fields=("user", "notification_status"),
-                condition=models.Q(notification_status__in=("bounce", "exception")),
-                name="ix_thread_notification_failed",
-            ),
         )
 
     def __str__(self) -> str:

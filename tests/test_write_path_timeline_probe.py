@@ -10,7 +10,7 @@ from rebac import actor_context, system_context
 from angee.projects.testing.models import Task
 from angee.timeline import events
 from tests.chatterdemo.models import ChatterDoc
-from tests.messaging_campaign import comment_record as comment_record  # noqa: F401
+from tests.messaging_campaign import comment_record as comment_record
 
 pytestmark = [
     pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("activity_catalog", "composed_permissions"),
@@ -22,7 +22,7 @@ def kinds(settings):
     settings.ANGEE_TIMELINE_KINDS = ["angee.projects.timeline.timeline_kinds"]
 
 
-def test_probe_task_kind_invalidations(comment_record, monkeypatch) -> None:  # noqa: F811
+def test_probe_task_kind_invalidations(comment_record, monkeypatch) -> None:
     record, writer = comment_record.record, comment_record.writer
     seen: list[Any] = []
     monkeypatch.setattr(events, "broadcast_related_records",

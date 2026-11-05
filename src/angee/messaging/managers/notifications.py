@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
@@ -23,10 +23,8 @@ from rebac import (
 from rebac.backends import backend
 from rebac.resources import model_resource_type
 
-from angee.base.fields import DiagnosticTextField
 from angee.base.querysets import MergeableQuerySet
 from angee.base.refs import generic_pointer_model
-from angee.base.serialization import strip_null_bytes
 from angee.iam.managers import ProtectedManager
 from angee.iam.permissions import actor_user_id, require_rebac_queryset
 from angee.messaging.querysets import (
@@ -685,57 +683,6 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
             .filter(created_by_id=resolved_user_id)
             .delivery_errors()
             .count()
-        )
-
-    def mark_failed(
-        self,
-        notification: Any,
-        *,
-        status: str = "exception",
-        failure_type: str = "unknown",
-        failure_reason: str = "",
-    ) -> Any:
-        """Mark one notification as a delivery failure."""
-
-        if status not in ThreadNotificationQuerySet.DELIVERY_ERROR_STATUSES:
-            raise ValueError("Delivery failure status must be 'bounce' or 'exception'.")
-        cleaned_failure_type = strip_null_bytes(failure_type or "unknown")
-        failure_field = cast(DiagnosticTextField, self.model._meta.get_field("failure_reason"))
-        cleaned_failure_reason = failure_field.get_prep_value(failure_reason or "")
-        now = timezone.now()
-        self.model._base_manager.filter(pk=notification.pk).update(
-            notification_status=status,
-            failure_type=cleaned_failure_type,
-            failure_reason=cleaned_failure_reason,
-            updated_at=now,
-        )
-        notification.notification_status = status
-        notification.failure_type = cleaned_failure_type
-        notification.failure_reason = cleaned_failure_reason
-        notification.updated_at = now
-        return notification
-
-    def mark_failed_for_message(
-        self,
-        message: Any,
-        *,
-        user: Any = None,
-        user_id: Any = None,
-        status: str = "exception",
-        failure_type: str = "unknown",
-        failure_reason: str = "",
-    ) -> Any:
-        """Mark one message notification for ``user`` as failed."""
-
-        resolved_user_id = _resolve_user_id(user=user, user_id=user_id)
-        if resolved_user_id is None:
-            raise ValueError("A user is required to mark a notification failed.")
-        notification = self.model._base_manager.get(message=message, user_id=resolved_user_id)
-        return self.mark_failed(
-            notification,
-            status=status,
-            failure_type=failure_type,
-            failure_reason=failure_reason,
         )
 
     def fanout_for_message(

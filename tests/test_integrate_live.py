@@ -456,7 +456,7 @@ def test_optional_material_round_skips_without_touching_durable_password(
                 assert operator_channel.subscription_state["awaiting"] == "recovery_key"
                 assert operator_channel.live_impl.pairing().can_skip is True
                 skip_channel_password(operator_channel)
-        except BaseException as error:  # noqa: BLE001 — surface operator-thread failures.
+        except BaseException as error:
             operator_failures.append(error)
 
     operator_thread = threading.Thread(target=skip_round, daemon=True)
@@ -605,7 +605,7 @@ def test_second_round_resubmit_delivers_the_new_password(
                 second_operator_channel = type(channel).objects.get(pk=channel.pk)
                 submit_channel_password(second_operator_channel, "correct-password-2")
                 assert second_operator_channel.credential.reveal()["password"] == "correct-password-2"
-        except BaseException as error:  # noqa: BLE001 — surface operator-thread failures.
+        except BaseException as error:
             operator_failures.append(error)
 
     operator_thread = threading.Thread(target=submit_both_rounds, daemon=True)
@@ -658,7 +658,7 @@ def test_missing_credential_at_password_delivery_is_a_latched_session_outcome(
                 operator_channel.credential = None
                 operator_channel.save(update_fields=["credential", "updated_at"])
                 operator_channel.merge_subscription_state(awaiting="")
-        except BaseException as error:  # noqa: BLE001 — surface operator-thread failures.
+        except BaseException as error:
             operator_failures.append(error)
 
     operator_thread = threading.Thread(target=remove_credential_and_signal_ready, daemon=True)
@@ -711,7 +711,7 @@ def test_missing_password_at_consume_time_reports_and_rearms(
                 operator_channel.merge_subscription_state(awaiting="")
             _wait_until(lambda: channel.runtime_status == IntegrationRuntimeStatus.ERROR)
             stop_event.set()
-        except BaseException as error:  # noqa: BLE001 — surface operator-thread failures.
+        except BaseException as error:
             operator_failures.append(error)
             stop_event.set()
 

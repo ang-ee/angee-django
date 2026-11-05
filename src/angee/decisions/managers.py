@@ -14,8 +14,7 @@ from rebac import database_context, generic_target, is_sudo, system_context, to_
 from angee.base.models.identity import public_id_of
 from angee.base.signals import mute_changes, publish_change
 from angee.decisions.contracts import DecisionProposal, DecisionRecordReference, DecisionRequest
-from angee.decisions.querysets import DecisionQuerySet as DecisionQuerySet
-from angee.decisions.querysets import DecisionRecordQuerySet as DecisionRecordQuerySet
+from angee.decisions.querysets import DecisionQuerySet, DecisionRecordQuerySet
 from angee.iam.managers import ProtectedManager
 from angee.iam.permissions import actor_user_id
 from angee.provenance.evidence import readable_records

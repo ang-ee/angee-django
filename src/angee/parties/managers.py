@@ -48,25 +48,11 @@ from angee.parties.backends import AvatarReport, ParsedAddress, ParsedAddressboo
 from angee.parties.connections import ParsedConnection
 from angee.parties.domains import GENERIC_EMAIL_DOMAINS
 from angee.parties.querysets import (
-    _DISPLAY_AVATAR_HANDLES as _DISPLAY_AVATAR_HANDLES,
-)
-from angee.parties.querysets import (
-    _DISPLAY_OWN_AVATAR as _DISPLAY_OWN_AVATAR,
-)
-from angee.parties.querysets import (
-    CircleQuerySet as CircleQuerySet,
-)
-from angee.parties.querysets import (
-    HandleQuerySet as HandleQuerySet,
-)
-from angee.parties.querysets import (
-    PartyQuerySet as PartyQuerySet,
-)
-from angee.parties.querysets import (
-    PartyStatementQuerySet as PartyStatementQuerySet,
-)
-from angee.parties.querysets import (
-    SameAsPair as SameAsPair,
+    _DISPLAY_AVATAR_HANDLES,
+    _DISPLAY_OWN_AVATAR,
+    CircleQuerySet,
+    HandleQuerySet,
+    PartyQuerySet,
 )
 from angee.provenance.contrib.angee.managers import AngeeHistoryManager
 from angee.provenance.evidence import EvidenceReference

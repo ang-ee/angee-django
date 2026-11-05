@@ -92,28 +92,6 @@ class CorrectionRef:
     revision_parent_revision: int | None = None
 
 
-@dataclass(frozen=True, slots=True)
-class CorrectionBinding:
-    """Frozen fact authority and exact revision parent for one correction."""
-
-    authority: ExtractionRef
-    revision_parent: ExtractionRef
-
-    @property
-    def bridges_revision_parent(self) -> bool:
-        """Whether the decision authority predates the revision being replaced."""
-        return self.authority.public_id != self.revision_parent.public_id
-
-    def payload(self) -> dict[str, Any]:
-        """Return the authority references captured with the revision."""
-        return {
-            "authority_extraction_id": self.authority.public_id,
-            "authority_extraction_revision": self.authority.revision,
-            "revision_parent_extraction_id": self.revision_parent.public_id,
-            "revision_parent_extraction_revision": self.revision_parent.revision,
-        }
-
-
 class ExtractionPartKind(TextChoices):
     """Closed carrier kinds retained for an extraction part."""
 

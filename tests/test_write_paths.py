@@ -13,7 +13,7 @@ from simple_history.utils import get_history_manager_for_model
 
 from angee.projects.testing.models import Task
 from angee.provenance.context import changeset
-from angee.provenance.history import HistoryMixin, ModelHistory
+from angee.provenance.history import CaptureHistoryMixin, ModelHistory
 from tests.tables import model_tables
 
 pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("composed_tables")]
@@ -57,7 +57,7 @@ def test_task_save_query_cost_follows_written_fields() -> None:
 
 
 def test_history_capture_does_not_reselect_the_written_row(monkeypatch: pytest.MonkeyPatch) -> None:
-    class HistoryProbe(HistoryMixin):
+    class HistoryProbe(CaptureHistoryMixin):
         value = models.CharField(max_length=80)
         history = ModelHistory(inherit=True)
 
@@ -112,7 +112,7 @@ def test_history_capture_does_not_reselect_the_written_row(monkeypatch: pytest.M
 
 
 def test_history_counts_only_models_written_since_previous_commit() -> None:
-    class CountA(HistoryMixin):
+    class CountA(CaptureHistoryMixin):
         value = models.CharField(max_length=80)
         history = ModelHistory(inherit=True)
 
@@ -120,7 +120,7 @@ def test_history_counts_only_models_written_since_previous_commit() -> None:
             app_label = "provenance"
             db_table = "test_write_paths_count_a"
 
-    class CountB(HistoryMixin):
+    class CountB(CaptureHistoryMixin):
         value = models.CharField(max_length=80)
         history = ModelHistory(inherit=True)
 
@@ -128,7 +128,7 @@ def test_history_counts_only_models_written_since_previous_commit() -> None:
             app_label = "provenance"
             db_table = "test_write_paths_count_b"
 
-    class CountC(HistoryMixin):
+    class CountC(CaptureHistoryMixin):
         value = models.CharField(max_length=80)
         note = models.CharField(max_length=80, default="original")
         history = ModelHistory(inherit=True)

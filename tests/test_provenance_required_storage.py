@@ -22,6 +22,7 @@ def test_disabled_storage_required_fails_closed(settings, opened):
 
 def test_strictness_is_only_storage_policy(settings, monkeypatch):
     from angee.provenance.contrib.angee.exceptions import AngeeChangesetRequired
+
     assert issubclass(AngeeChangesetRequired, ChangesetRequired)
     model = apps.get_model(changeset_model_label())
     settings.REBAC_STRICT_MODE = False

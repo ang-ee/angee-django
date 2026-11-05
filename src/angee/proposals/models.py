@@ -55,25 +55,19 @@ from angee.iam.models.roles import role_anchor
 from angee.iam.permissions import actor_user_id, instance_actor, subject_reaches_user
 from angee.messaging.models import ThreadedModelMixin
 from angee.money.fields import MoneyField
-from angee.proposals.choices import ANSWER_VISIBILITY_ORDER as ANSWER_VISIBILITY_ORDER
-from angee.proposals.choices import OPENING_POLICY_ORDER as OPENING_POLICY_ORDER
-from angee.proposals.choices import AnswerVisibility as AnswerVisibility
-from angee.proposals.choices import ClarificationAskers as ClarificationAskers
-from angee.proposals.choices import PassAudience as PassAudience
-from angee.proposals.choices import ProposalConfidence as ProposalConfidence
-from angee.proposals.choices import ProposalState as ProposalState
-from angee.proposals.choices import QuestionAudience as QuestionAudience
-from angee.proposals.choices import RosterVisibility as RosterVisibility
-from angee.proposals.choices import RoundOpeningPolicy as RoundOpeningPolicy
-from angee.proposals.choices import RoundOutcome as RoundOutcome
-from angee.proposals.choices import RoundStatus as RoundStatus
-from angee.proposals.managers import ProposalManager as ProposalManager
-from angee.proposals.managers import RoundManager as RoundManager
-from angee.proposals.managers import _RoundBaseManager as _RoundBaseManager
-from angee.proposals.managers import _RoundManagerBase as _RoundManagerBase
-from angee.proposals.querysets import RoundQuerySet as RoundQuerySet
-from angee.proposals.querysets import _RoundBaseQuerySet as _RoundBaseQuerySet
-from angee.proposals.querysets import _RoundRequesterWrites as _RoundRequesterWrites
+from angee.proposals.choices import (
+    ANSWER_VISIBILITY_ORDER,
+    OPENING_POLICY_ORDER,
+    AnswerVisibility,
+    ClarificationAskers,
+    ProposalConfidence,
+    ProposalState,
+    RosterVisibility,
+    RoundOpeningPolicy,
+    RoundOutcome,
+    RoundStatus,
+)
+from angee.proposals.managers import ProposalManager, RoundManager, _RoundBaseManager
 from angee.proposals.validators import normalize_topic_key
 from angee.provenance.context import changeset, changeset_model, require_changeset
 

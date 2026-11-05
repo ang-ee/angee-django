@@ -42,7 +42,7 @@ def check_graphql_schemas(
     try:
         schemas = GraphQLSchemas.from_discovery()
         names = schemas.names()
-    except Exception as error:  # noqa: BLE001 - checks report invalid composition instead of aborting
+    except Exception as error:
         return [
             checks.Error(
                 f"GraphQL schema discovery failed: {error}",
@@ -55,7 +55,7 @@ def check_graphql_schemas(
     for name in names:
         try:
             schemas.build(name)
-        except Exception as error:  # noqa: BLE001 - retain successful builds and report every invalid bucket
+        except Exception as error:
             errors.append(
                 checks.Error(
                     f"GraphQL schema {name!r} failed to build: {error}",

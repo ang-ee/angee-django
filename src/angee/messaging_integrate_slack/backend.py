@@ -568,7 +568,7 @@ class SlackChannelBackend(ChannelBackend):
                 follow_redirects=True,
                 timeout=timeout,
             )
-        except Exception:  # noqa: BLE001 — a failed attachment stays visible as a marker.
+        except Exception:  # a failed attachment stays visible as a marker.
             return None
 
     def _oldest(self) -> str:

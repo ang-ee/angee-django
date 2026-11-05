@@ -18,7 +18,8 @@ from angee.extraction.acquisition import (
     PartCarrier,
     PreparedDocument,
     RecognitionOutput,
-    _text_part,
+    prepare_pages,
+    text_part,
 )
 from angee.extraction.contracts import (
     ExtractionPartKind,
@@ -126,7 +127,7 @@ class PreparePagesStep(_IOStep, Step[ExtractionSourceInput, PreparePagesOutput, 
         parts = [ctx.load(apps.get_model("messaging.Part"), public_id) for public_id in value.message_parts]
         profile = apps.get_model("extraction.Extraction").profile.field.resolve_class(ctx.config.profile)()
         profile.parse_config(ctx.config.profile_config)
-        prepared = apps.get_model("extraction.Extraction").objects.prepare_pages(
+        prepared = prepare_pages(
             files, parts, profile=profile, config=ctx.config.acquisition, actor=ctx.actor, heartbeat=ctx.heartbeat,
         )
         return ctx.done(PreparePagesOutput(prepared=prepared, pages=prepared.recognition_pages), outcome="prepared")
@@ -158,7 +159,7 @@ class RecognizePageStep(_IOStep, Step[RecognizePageInput, RecognitionOutput, Inf
             response = recognize_page(value.page, file, model, config=ctx.config.request)
         except TransientInferenceError as error:
             raise Retryable(str(error)) from None
-        part = _text_part(
+        part = text_part(
             value.page.source_position,
             value.page.page_position,
             response.text,

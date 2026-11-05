@@ -25,12 +25,12 @@ from rebac.roles import grant
 from angee.base.models.locks import StaleRevisionError
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.knowledge import schema as knowledge_schema
-from angee.knowledge.models import (
+from angee.knowledge.exceptions import (
     SectionNotFoundError,
     StaleBodyError,
     UnsupportedPageKindError,
-    parse_wikilinks,
 )
+from angee.knowledge.models.pages import parse_wikilinks
 from angee.mcp.graphql import execute_under_actor
 from tests.conftest import Link, MarkdownPage, Page, SchemaAddon, Vault, create_user, vault_for
 
