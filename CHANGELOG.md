@@ -8,6 +8,13 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — intake trigger cleanup
+
+- Channel intake now offers only `all_messages`. The selectable `reaction`,
+  `mention`, and `command` triggers never captured messages and have been removed
+  from the declared choices. The stored column remains unchanged; existing rows
+  with those values need an explicit data decision before enabling capture.
+
 ## Unreleased — extraction correction cleanup
 
 - Remove the unused decision-backed extraction correction writer and its

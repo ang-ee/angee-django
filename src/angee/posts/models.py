@@ -366,7 +366,7 @@ class MessagePublic(Composable, extends="messaging.Message"):
         if self.is_original_post != post.is_original_post:
             self.is_original_post = post.is_original_post
             self.save(update_fields=("is_original_post", "updated_at"))
-        if self.thread is not None and post.is_original_post:
+        if post.is_original_post and self.thread is not None:
             self.thread.set_public_subject_url(post.subject_url)
 
     def apply_provider_visibility(self, *, hidden: bool) -> None:

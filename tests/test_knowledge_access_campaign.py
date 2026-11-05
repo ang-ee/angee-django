@@ -313,11 +313,8 @@ def test_binding_without_record_owner_arm_is_absent_in_every_read_direction_and_
         assert page.as_user(viewer).has_access("read") == (seat in {"knowledge", "both", "administrator"})
         assert list(RecordBinding.objects.for_record(record)) == []
         assert list(RecordBinding.objects.pages_for_record(record)) == []
-        assert list(RecordBinding.objects.vaults_for_record(record)) == []
         assert list(RecordBinding.objects.for_knowledge(page)) == []
         assert list(RecordBinding.objects.for_knowledge(knowledge)) == []
-        assert RecordBinding.objects.records_for_page(page) == ()
-        assert RecordBinding.objects.records_for_vault(knowledge) == ()
         assert not RecordBinding.objects.exists()
     for binding in (page_binding, vault_binding):
         for action in ("create", "update", "delete"):

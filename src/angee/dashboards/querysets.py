@@ -23,13 +23,13 @@ class DashboardQuerySet[DashboardT: Dashboard](
         """Readable personal, owned and installed entries, including removed personal rows."""
 
         return self.filter(
-            models.Q(scope="personal") | models.Q(owner=owner) | models.Q(is_baseline=True),
+            models.Q(scope=self.model.DashboardScope.PERSONAL) | models.Q(owner=owner) | models.Q(is_baseline=True),
         ).order_by("sqid")
 
     def target_candidates(self, owner: Any, scope: str, scope_key: str | None) -> Self:
         """Readable authored snapshots precede an installed baseline for this target."""
 
-        if scope == "personal":
+        if scope == self.model.DashboardScope.PERSONAL:
             raise ValueError("Personal dashboards resolve by public id.")
         return self.filter(
             models.Q(owner=owner) | models.Q(is_baseline=True), scope=scope, scope_key=scope_key,
@@ -38,8 +38,7 @@ class DashboardQuerySet[DashboardT: Dashboard](
     def trash_targets(self) -> Self:
         """Installed and scoped snapshots reset through their owning verb."""
 
-        return self.filter(scope="personal")
-
+        return self.filter(scope=self.model.DashboardScope.PERSONAL)
 
 
 class DashboardWidgetQuerySet[WidgetT: DashboardWidget](ArchiveQuerySet[WidgetT], AngeeHistoryQuerySet[WidgetT]):

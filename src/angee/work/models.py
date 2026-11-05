@@ -114,7 +114,7 @@ class QueueManager[QueueT: Queue](GroupManager[QueueT]):
         ):
             queue = queues.personal_for(user)
             if queue is None:
-                label = str(user.get_full_name() or user.username)
+                label = str(user)
                 queue = self.model(
                     name=f"{label}'s work",
                     slug=slug,
@@ -191,7 +191,10 @@ class Queue(ImmutableFieldsMixin, ProtectedModel, inherits="spaces.Group"):
         """Whether the queue has its creator's canonical personal-queue identity."""
 
         queue = cast(Any, self)
-        return queue.created_by_id is not None and queue.slug == type(self).objects.personal_slug(queue.created_by)
+        return (
+            queue.created_by_id is not None
+            and queue.slug == f"{type(self).objects.PERSONAL_SLUG_PREFIX}{queue.created_by_id}"
+        )
 
     key = models.CharField(
         max_length=12,
@@ -299,7 +302,6 @@ class Queue(ImmutableFieldsMixin, ProtectedModel, inherits="spaces.Group"):
     def next_task_number(self) -> int:
         """Draw the next gapless task number inside the caller's transaction."""
 
-        self.ensure_task_sequence()
         sequence_model = apps.get_model("sequence", "Sequence")
         return int(sequence_model.objects.db_manager(self._state.db).next_value(self.task_sequence_key()))
 
@@ -332,7 +334,7 @@ class Queue(ImmutableFieldsMixin, ProtectedModel, inherits="spaces.Group"):
         stage = stage_model._base_manager.using(self._state.db).get(pk=self.default_stage_id)
         if self.pk is None or stage.queue_id != self.pk:
             raise ValidationError({"default_stage": "Default stage must belong to this queue."})
-        if stage.entry_reserved or not stage.ordinary_entry_available:
+        if stage.entry_reserved:
             raise ValidationError({"default_stage": "Default stage must allow ordinary entry."})
 
     def _validate_estimate_settings(self) -> None:
@@ -470,12 +472,6 @@ class Stage(ProtectedRowLockMixin, StagePrimitive, AuditMixin, ProtectedDataMode
     }
 
     @property
-    def ordinary_entry_available(self) -> bool:
-        """Whether this stage allows entry by ordinary work verbs."""
-
-        return not self.rule_owned
-
-    @property
     def on_path(self) -> bool:
         """Whether the stage belongs to the queue's ordinary progress path."""
 
@@ -555,7 +551,7 @@ class Stage(ProtectedRowLockMixin, StagePrimitive, AuditMixin, ProtectedDataMode
 
         if self._state.adding:
             return
-        if self.entry_reserved or not self.ordinary_entry_available:
+        if self.entry_reserved:
             queue_model = type(self).queue.field.related_model
             if queue_model._base_manager.using(self._state.db).filter(default_stage_id=self.pk).exists():
                 field = "rule_owned" if self.rule_owned else "category"
@@ -603,8 +599,8 @@ class CycleManager[CycleT: Cycle](ProtectedManager[CycleT]):
         generated = 0
         for queue in queues:
             before = self.filter(queue=queue).count()
-            self.generate_for_queue(queue, as_of=as_of, completed_at=now)
-            generated += self.filter(queue=queue).count() - before
+            cycles = self.generate_for_queue(queue, as_of=as_of, completed_at=now)
+            generated += len(cycles) - before
         return generated
 
     @staticmethod
@@ -1066,7 +1062,7 @@ class TaskManager[TaskT: TaskWork](_TaskManagerBase[TaskT]):
         using = self._db or queue._state.db or router.db_for_write(self.model, instance=queue)
         with database_context(using), transaction.atomic(using=using):
             triage = apps.get_model("work", "Stage")._base_manager.using(using).filter(
-                queue_id=queue.pk, category="triage",
+                queue_id=queue.pk, category=Stage.StageCategory.TRIAGE,
             ).first()
             if triage is None:
                 raise ValidationError({"queue": "The intake queue has no triage stage."})
@@ -1097,7 +1093,6 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         snoozed_by_id: Any | None
         dropped_at: datetime | None
 
-    work_stage_projection = True
     hasura_readable_fields: ClassVar[tuple[str, ...]] = (
         "queue",
         "stage",
@@ -1360,10 +1355,10 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
                 return self
             previous, _following = self._reject_reserved_stage_transition(manual=True, lock=True)
             category = previous.category if previous is not None else None
-            if category == "started":
+            if category == Stage.StageCategory.STARTED:
                 return self
             self.validate_action("start")
-            stage = self._stage_for_category("started")
+            stage = self._stage_for_category(Stage.StageCategory.STARTED)
             Stage.validate_transition(previous, stage)
             self.stage = stage
             self.save(update_fields=("stage", "updated_at"))
@@ -1377,10 +1372,10 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
             if self.queue_id is None:
                 return self._base_verb("complete", feedback=feedback)
             previous, _following = self._reject_reserved_stage_transition(manual=True, lock=True)
-            if previous is not None and previous.category == "completed":
+            if previous is not None and previous.category == Stage.StageCategory.COMPLETED:
                 return self
             self.validate_action("complete")
-            stage = self._stage_for_category("completed")
+            stage = self._stage_for_category(Stage.StageCategory.COMPLETED)
             self._reject_reserved_stage_transition(target=stage, manual=True, lock=True)
             self.stage = stage
             self.save(update_fields=("stage", "updated_at"))
@@ -1399,14 +1394,17 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
             if self.queue_id is None:
                 return self._base_verb("drop", reason_member)
             self.validate_action("drop")
-            category = "duplicate" if reason_member == self.TaskDroppedReason.DUPLICATE else "canceled"
+            category = (
+                Stage.StageCategory.DUPLICATE if reason_member == self.TaskDroppedReason.DUPLICATE
+                else Stage.StageCategory.CANCELED
+            )
             stage = self._stage_for_category(category)
             self._reject_reserved_stage_transition(
-                target=stage, manual=True, allow_system_entry=category == "duplicate", lock=True
+                target=stage, manual=True, allow_system_entry=category == Stage.StageCategory.DUPLICATE, lock=True
             )
             self.stage = stage
             self.dropped_reason = reason_member
-            if category == "duplicate":
+            if category == Stage.StageCategory.DUPLICATE:
                 self._reject_direct_status_write()
                 with self._work_verb_write():
                     self.save(update_fields=("stage", "dropped_reason", "updated_at"))
@@ -1467,16 +1465,19 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
             apps.get_model("projects", "Project")._base_manager.filter(converted_from_id=models.OuterRef("pk"))
         )
         blockers: dict[str, tuple[tuple[models.Q, Any], ...]] = {
-            "complete": (missing("completed"), reserved),
+            "complete": (missing(stage.StageCategory.COMPLETED), reserved),
             "drop": (reserved,),
             "reopen": (
-                (lacks("unstarted") & Q(queue__default_stage__isnull=True), {"stage": "Queue has no default stage."}),
+                (lacks(stage.StageCategory.UNSTARTED) & Q(queue__default_stage__isnull=True),
+                 {"stage": "Queue has no default stage."}),
                 # A removed task returns through restore, which keeps its pre-removal stage.
                 (Q(is_trashed=True), {"stage": "Restore a removed task instead of reopening it."}),
                 reserved,
                 # Reopening returns closed work; open work never moves through it.
                 (
-                    queued & ~Q(stage__category__in=("completed", "canceled", "duplicate")),
+                    queued & ~Q(stage__category__in=(
+                        stage.StageCategory.COMPLETED, stage.StageCategory.CANCELED, stage.StageCategory.DUPLICATE,
+                    )),
                     {"stage": "Only a closed task can be reopened."},
                 ),
             ),
@@ -1484,10 +1485,12 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
             "start": (
                 (triage, {"stage": "Accept a task in triage before starting it."}),
                 (
-                    Q(stage__category__in=("completed", "canceled", "duplicate")),
+                    Q(stage__category__in=(
+                        stage.StageCategory.COMPLETED, stage.StageCategory.CANCELED, stage.StageCategory.DUPLICATE,
+                    )),
                     {"stage": "Reopen a closed task before starting it."},
                 ),
-                missing("started"),
+                missing(stage.StageCategory.STARTED),
                 reserved,
             ),
             "return_to_triage": (
@@ -1495,7 +1498,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
                     Q(queue__isnull=True) | Q(queue__triage_enabled=False),
                     {"queue": "Returning to triage requires a triage-enabled queue."},
                 ),
-                missing("triage"),
+                missing(stage.StageCategory.TRIAGE),
                 reserved,
             ),
             "remove": (
@@ -1586,7 +1589,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         using = self._state.db or router.db_for_write(type(self), instance=self)
         with database_context(using), transaction.atomic(using=using):
             self.validate_action("return_to_triage")
-            stage = self._stage_for_category("triage")
+            stage = self._stage_for_category(Stage.StageCategory.TRIAGE)
             self._reject_reserved_stage_transition(target=stage, manual=True, allow_system_entry=True, lock=True)
             if self.stage_id == stage.pk:
                 return self
@@ -1613,7 +1616,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
                 raise ValidationError({"reason": "Choose declined or obsolete."})
             if self.queue_id is None:
                 raise ValidationError({"queue": "A queued task is required for triage."})
-            target = self._stage_for_category("canceled")
+            target = self._stage_for_category(Stage.StageCategory.CANCELED)
             previous, _following = self._reject_reserved_stage_transition(target=target, manual=True, lock=True)
             if (
                 self.stage_id == target.pk
@@ -1673,7 +1676,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         for source in merged:
             if source.queue_id is None:
                 raise ValidationError({"queue": "A queued task is required for duplicate triage."})
-            duplicate_stage = source._stage_for_category("duplicate")
+            duplicate_stage = source._stage_for_category(Stage.StageCategory.DUPLICATE)
             source._reject_reserved_stage_transition(
                 target=duplicate_stage, manual=True, allow_system_entry=True, lock=True,
             )
@@ -1773,7 +1776,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         previous = stages.get(previous_id) if previous_id is not None else None
         following = stages.get(target_id) if target_id is not None else None
         changed = previous_id != target_id
-        if changed and manual and following is not None and not following.ordinary_entry_available:
+        if changed and manual and following is not None and following.exit_reserved:
             raise ValidationError({"stage": "Hand verbs cannot enter a rule-owned stage."})
         if manual or not (getattr(self, "_work_internal_status", False) or self.effective_actor()[1]):
             Stage.validate_transition(
@@ -1814,8 +1817,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
                         self.queue = queue
                         changed.add("queue")
         if self.queue_id is not None and (self._state.adding or self.queue_id != self._work_loaded_value("queue_id")):
-            # A save(using=...) owns the row-relative FK read even when a caller
-            # supplied a cached queue or a read router prefers another replica.
+            # Validate a newly selected queue against the write database.
             queue_model = type(self).queue.field.related_model
             self.queue = queue_model._base_manager.using(self._state.db).get(pk=self.queue_id)
         if self.stage_id is None and self.queue_id is not None:
@@ -1869,17 +1871,20 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         old_category = previous.category if previous is not None else None
 
         with self._work_verb_write():
-            if category in {"triage", "backlog", "unstarted", "started"}:
+            if category in {
+                Stage.StageCategory.TRIAGE, Stage.StageCategory.BACKLOG,
+                Stage.StageCategory.UNSTARTED, Stage.StageCategory.STARTED,
+            }:
                 self.status = self.TaskStatus.OPEN
                 self.done_at = None
                 self.dropped_reason = None
                 self.dropped_at = None
-            elif category == "completed":
+            elif category == Stage.StageCategory.COMPLETED:
                 self.status = self.TaskStatus.DONE
                 self.done_at = self.done_at or now
                 self.dropped_reason = None
                 self.dropped_at = None
-            elif category == "canceled":
+            elif category == Stage.StageCategory.CANCELED:
                 self.status = self.TaskStatus.DROPPED
                 if self.dropped_reason not in {
                     self.TaskDroppedReason.DECLINED,
@@ -1888,7 +1893,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
                     self.dropped_reason = self.TaskDroppedReason.OBSOLETE
                 self.dropped_at = self.dropped_at or now
                 self.done_at = None
-            elif category == "duplicate":
+            elif category == Stage.StageCategory.DUPLICATE:
                 self.status = self.TaskStatus.DROPPED
                 self.dropped_reason = self.TaskDroppedReason.DUPLICATE
                 self.dropped_at = self.dropped_at or now
@@ -1897,11 +1902,11 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
                 raise ValidationError({"stage": f"Unknown work stage category {category!r}."})
 
         fields = {"status", "done_at", "dropped_reason", "dropped_at"}
-        if category == "triage" and stage_changed:
+        if category == Stage.StageCategory.TRIAGE and stage_changed:
             self.started_triage_at = now
             self.triaged_at = None
             fields.update(("started_triage_at", "triaged_at"))
-        elif category != "triage" and old_category == "triage":
+        elif category != Stage.StageCategory.TRIAGE and old_category == Stage.StageCategory.TRIAGE:
             self.triaged_at = self.triaged_at or now
             fields.add("triaged_at")
         return fields
@@ -1937,8 +1942,11 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
             raise ValidationError({"queue": "A readable queue is required to resolve its rule stage."})
         if project.converted_from_id != self.pk:
             raise ValidationError({"project": "The project must have been promoted from this task."})
-        category = "canceled" if project.status == project.ProjectStatus.DROPPED else "started"
-        if category == "started" and project.current_milestone_id is not None:
+        category = (
+            Stage.StageCategory.CANCELED if project.status == project.ProjectStatus.DROPPED
+            else Stage.StageCategory.STARTED
+        )
+        if category == Stage.StageCategory.STARTED and project.current_milestone_id is not None:
             milestone_model = type(project).current_milestone.field.related_model
             stage_id = (
                 milestone_model._base_manager.using(self._state.db).filter(pk=project.current_milestone_id)

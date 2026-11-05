@@ -47,7 +47,7 @@ def rebuild_backlinks(
         return
     link_model = apps.get_model(instance._meta.app_label, "Link")
     if instance._meta.label_lower == _MARKDOWN_LABEL and (update_fields is None or "body" in update_fields):
-        link_model._default_manager.db_manager(using).rebuild_for(instance)
+        link_model._default_manager.db_manager(using).rebuild_many((instance,))
     if update_fields is None or {"title", "is_trashed"}.intersection(update_fields):
         link_model._default_manager.db_manager(using).refresh_targets((instance,))
 

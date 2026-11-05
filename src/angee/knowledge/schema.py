@@ -123,7 +123,7 @@ class MarkdownPageType(ProtectedNode):
 
         return require_public_id(Page, cast(Any, self).page_ptr_id)
 
-    @strawberry_django.field(only=["body"])
+    @strawberry_django.field(annotate={"_excerpt_body": MarkdownPage.excerpt_expression()})
     def excerpt(self) -> str:
         """Return the leading body characters used for list previews."""
 

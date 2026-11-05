@@ -131,7 +131,7 @@ class Dashboard(
         ):
             locked = type(self).system_queryset(lock=("self",)).using(using).get(pk=self.pk)
             locked.require_revision(expected_revision)
-            if locked.scope == "personal" or actor is None or to_subject_ref(locked.owner) != actor:
+            if locked.scope == self.DashboardScope.PERSONAL or actor is None or to_subject_ref(locked.owner) != actor:
                 raise PermissionDenied("Only the owner can reset a scoped dashboard.")
             locked.sudo(reason="dashboards.reset_snapshot").delete(using=using)
 

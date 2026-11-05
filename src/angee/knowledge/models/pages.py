@@ -14,6 +14,7 @@ from urllib.parse import quote, unquote
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
+from django.db.models.functions import Left
 from markdown_it import MarkdownIt
 from rebac import (
     PermissionDenied,
@@ -348,16 +349,6 @@ class Page(
             together.restore()
 
 
-
-
-
-
-
-
-
-
-
-
 class MarkdownPageManager[MarkdownT: MarkdownPage](PageManager[MarkdownT]):
     """Factories for actor-scoped markdown body writes."""
 
@@ -547,9 +538,18 @@ class MarkdownPage(HistoryMixin, ProtectedModel, inherits="knowledge.Page"):
     def excerpt(self) -> str:
         """Return the leading body characters used for list previews."""
 
-        if len(self.body) <= self.excerpt_chars:
-            return self.body
-        return self.body[: self.excerpt_chars].rstrip() + "…"
+        body = self.__dict__.get("_excerpt_body")
+        if body is None:
+            body = self.body
+        if len(body) <= self.excerpt_chars:
+            return body
+        return body[: self.excerpt_chars].rstrip() + "…"
+
+    @classmethod
+    def excerpt_expression(cls) -> models.Expression:
+        """Fetch one extra character so a list can detect truncation."""
+
+        return Left("body", cls.excerpt_chars + 1)
 
     # -- markdown structure ------------------------------------------------
     # The body lives here, so its structure behaviour lives here too: the
@@ -557,12 +557,6 @@ class MarkdownPage(HistoryMixin, ProtectedModel, inherits="knowledge.Page"):
     # splices that never re-render (non-heading markdown round-trips
     # byte-for-byte). markdown-it-py supplies the block tokens' source line
     # spans; everything else is raw line-buffer slicing.
-
-    @property
-    def outline(self) -> list[OutlineEntry]:
-        """Return this body's heading outline (see :meth:`parse_outline`)."""
-
-        return self.parse_outline(self.body)
 
     @staticmethod
     def parse_outline(body: str) -> list[OutlineEntry]:

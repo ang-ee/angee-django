@@ -752,12 +752,9 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
     """Same-row intake fields and capture behavior for ``messaging.Channel``."""
 
     class IntakeTrigger(models.TextChoices):
-        """Declared capture triggers; only all-messages is implemented in v1."""
+        """Implemented channel capture trigger."""
 
         ALL_MESSAGES = "all_messages", "All messages"
-        REACTION = "reaction", "Reaction"
-        MENTION = "mention", "Mention"
-        COMMAND = "command", "Command"
 
     hasura_readable_fields: ClassVar[tuple[str, ...]] = (
         "intake_queue",
@@ -887,15 +884,13 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
         return values
 
     def should_capture_message(self, message: Message) -> bool:
-        """Return whether this channel's configured v1 trigger accepts ``message``."""
+        """Return whether this channel accepts ``message``."""
 
         if self.intake_queue_id is None:
             return False
         match str(self.intake_trigger):
             case self.IntakeTrigger.ALL_MESSAGES:
                 return True
-            case self.IntakeTrigger.REACTION | self.IntakeTrigger.MENTION | self.IntakeTrigger.COMMAND:
-                return False
             case _:
                 raise ValidationError({"intake_trigger": "Unknown intake trigger."})
 

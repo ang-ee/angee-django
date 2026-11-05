@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from importlib import import_module
-
 from django.apps import AppConfig
 
 
@@ -29,4 +27,6 @@ class PostsConfig(AppConfig):
         """Run posts ready-time hooks after app population."""
 
         super().ready()
-        import_module("angee.posts.signals")
+        from angee.posts.signals import connect
+
+        connect()

@@ -76,8 +76,6 @@ class Health(models.TextChoices):
     OFF_TRACK = "off_track", "Off track"
 
 
-InitiativeHealth = Health
-
 class InitiativeDateResolution(models.TextChoices):
     """Precision carried by an Initiative target date."""
 
@@ -87,8 +85,6 @@ class InitiativeDateResolution(models.TextChoices):
     HALF_YEAR = "half_year", "Half year"
     YEAR = "year", "Year"
 
-
-UpdateHealth = Health
 
 class ReleaseStatus(models.TextChoices):
     """Lifecycle of a Product release artifact."""
@@ -198,7 +194,7 @@ class Initiative(HierarchyMixin, OwnerMixin, HistoryMixin, ProtectedDataModel, c
     body = models.TextField(blank=True, default="")
     status = StateField(choices_enum=InitiativeStatus, default=InitiativeStatus.PROPOSED)
     health = StateField(
-        choices_enum=InitiativeHealth,
+        choices_enum=Health,
         null=True,
         blank=True,
         editable=False,
@@ -377,12 +373,12 @@ class InitiativeProject(ResourceLoadMixin, AuditMixin, ProtectedDataModel, concr
             targets = (
                 (
                     placement.initiative,
-                    UpdateHealth.AT_RISK,
+                    Health.AT_RISK,
                     "Scope is clear; delivery sequencing needs attention.",
                 ),
                 (
                     placement.project,
-                    UpdateHealth.ON_TRACK,
+                    Health.ON_TRACK,
                     "The current push is progressing as planned.",
                 ),
             )
@@ -443,7 +439,7 @@ class UpdateManager[UpdateT: Update](_UpdateManagerBase[UpdateT]):
         self,
         *,
         target: Project | Initiative,
-        health: str | UpdateHealth,
+        health: str | Health,
         body: str = "",
     ) -> UpdateT:
         """Create one report on a Project or Initiative; its ``create`` requires write on the target."""
@@ -472,7 +468,7 @@ class Update(
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
     object_id = models.PositiveBigIntegerField()
     target = GenericForeignKey("content_type", "object_id")
-    health = StateField(choices_enum=UpdateHealth)
+    health = StateField(choices_enum=Health)
     body = models.TextField(blank=True, default="")
 
     objects = UpdateManager()
@@ -638,7 +634,7 @@ class ProjectPortfolio(Composable, extends="projects.Project"):
         related_name="projects",
     )
     health = StateField(
-        choices_enum=InitiativeHealth,
+        choices_enum=Health,
         null=True,
         blank=True,
         editable=False,

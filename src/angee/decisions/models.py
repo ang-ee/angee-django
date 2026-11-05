@@ -38,7 +38,6 @@ def _user(actor: Any, *, using: str, active: bool = True) -> Any:
     return user
 
 
-
 class Decision(OptimisticLockMixin, ProtectedAppendOnlyModel, ProtectedDataModel, concrete=True):
     """An immutable question; answering records choices without applying them."""
 
