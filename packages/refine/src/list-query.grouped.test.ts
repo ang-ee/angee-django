@@ -4,25 +4,22 @@ import { groupedListQueryMeta } from "./list-query";
 
 test("grouped list pages share one document and retain independent pagination", () => {
   const meta = groupedListQueryMeta(
-    { root: "workflow_runs", aggregateRoot: "workflow_runs_aggregate", filterType: "WorkflowRunBoolExp", orderType: "WorkflowRunOrderBy" },
+    { root: "workflow_runs", aggregateRoot: "workflow_runs_aggregate", groupedRowsRoot: "workflow_runs_grouped_rows", groupByType: "WorkflowRunGroupBySpec", groupedRowPageType: "WorkflowRunGroupedRowPage", filterType: "WorkflowRunBoolExp", orderType: "WorkflowRunOrderBy" },
     ["id", "subject_model", "subject_id"],
+    { field: "STATUS" },
     [
-      { where: { status: { _eq: "queued" } }, page: 2, pageSize: 5 },
-      { where: { status: { _eq: "done" } }, page: 1, pageSize: 20 },
+      { value: "queued", page: 2, pageSize: 5 },
+      { value: "done", page: 1, pageSize: 20 },
     ],
+    { active: { _eq: true } },
   );
   const text = print(meta.document);
-  expect(text).toContain("group_0_rows: workflow_runs");
-  expect(text).toContain("group_1_rows: workflow_runs");
-  expect(text).toContain("group_0_aggregate: workflow_runs_aggregate");
-  expect(text).toContain("group_1_aggregate: workflow_runs_aggregate");
+  expect(text).toContain("rows: workflow_runs_grouped_rows");
+  expect(text).not.toContain("workflow_runs_aggregate");
   expect(meta.variables).toMatchObject({
-    group_0_limit: 5,
-    group_0_offset: 5,
-    group_0_where: { status: { _eq: "queued" } },
-    group_1_limit: 20,
-    group_1_offset: 0,
-    group_1_where: { status: { _eq: "done" } },
+    group_by: { field: "STATUS" },
+    pages: [{ key: "queued", limit: 5, offset: 5 }, { key: "done", limit: 20, offset: 0 }],
+    where: { active: { _eq: true } },
   });
   expect((text.match(/query GroupedResourceList/g) ?? [])).toHaveLength(1);
 });

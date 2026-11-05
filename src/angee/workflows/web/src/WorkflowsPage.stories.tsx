@@ -61,15 +61,11 @@ export function CatalogueStory({ appearance, list = false, unavailable = false, 
       if (query.includes("workflowrun_groups")) return jsonResponse({ data: { workflowrun_groups: [
         { key: { status: "FAILED", workflow_id: "wfl_review", workflow__name: "Record review" }, aggregate: { count: 1 } },
       ], totalCount: 1 } });
-      if (query.includes("query GroupedResourceList") && query.includes("workflowrun(")) {
-        const data: Record<string, unknown> = {};
-        for (const variable of Object.keys(request.variables).filter((name) => /^group_\d+_limit$/.test(name))) {
-          const prefix = variable.slice(0, -"limit".length);
-          const offset = Number(request.variables[`${prefix}offset`]);
-          data[`${prefix}rows`] = [runFixture()].slice(offset, offset + Number(request.variables[variable]));
-          data[`${prefix}aggregate`] = { aggregate: { count: 1 } };
-        }
-        return jsonResponse({ data });
+      if (query.includes("query GroupedResourceList") && query.includes("workflowrun_grouped_rows")) {
+        const pages = request.variables.pages as { key: string; offset: number; limit: number }[];
+        return jsonResponse({ data: { rows: pages.flatMap((page) => [runFixture()]
+          .filter((row) => row.status === page.key)
+          .slice(page.offset, page.offset + page.limit)) } });
       }
       if (query.includes("workflowrun")) return jsonResponse({ data: { workflowrun: [runFixture()], workflowrun_aggregate: { aggregate: { count: 1 } } } });
       if (query.includes("trigger")) return jsonResponse({ data: { trigger: [triggerFixture], trigger_aggregate: { aggregate: { count: 1 } } } });

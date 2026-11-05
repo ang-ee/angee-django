@@ -587,16 +587,19 @@ vi.mock("@angee/refine", async (importOriginal) => {
     useAuthoredQueryBatch: (requests: readonly { key: string; variables: Record<string, unknown> }[]) =>
       new Map(requests.map(({ key, variables }) => {
         const data: Record<string, unknown> = {};
-        for (const variable of Object.keys(variables).filter((name) => /^group_\d+_limit$/.test(name))) {
-          const prefix = variable.slice(0, -"limit".length);
-          const pageSize = Number(variables[variable]);
-          const offset = Number(variables[`${prefix}offset`]);
-          const where = variables[`${prefix}where`] as Record<string, unknown> | undefined;
-          const order = variables[`${prefix}order_by`];
+        const pages = variables.pages as { key: unknown; limit: number; offset: number }[] | undefined;
+        const groupBy = variables.group_by as { field: string; granularity?: string } | undefined;
+        if (pages && groupBy) {
+          const where = variables.where as Record<string, unknown> | undefined;
           const matchingRows = refineRowsForWhere(sdkMocks.rows, where);
-          sdkMocks.listCalls.push({ page: offset / pageSize + 1, pageSize, filter: where, order, enabled: true });
-          data[`${prefix}rows`] = matchingRows.slice(offset, offset + pageSize);
-          data[`${prefix}aggregate`] = { aggregate: { count: matchingRows.length } };
+          data.rows = pages.flatMap((page) => {
+            sdkMocks.listCalls.push({ page: page.offset / page.limit + 1, pageSize: page.limit, filter: where, order: variables.order_by, enabled: true });
+            const keyField = groupBy.granularity
+              ? `${snakeToCamel(groupBy.field.toLowerCase())}${groupBy.granularity.charAt(0)}${groupBy.granularity.slice(1).toLowerCase()}`
+              : snakeToCamel(groupBy.field.toLowerCase());
+            return matchingRows.filter((row) => Object.is(groupValue(row, { input: groupBy.field, granularity: groupBy.granularity }, keyField), page.key))
+              .slice(page.offset, page.offset + page.limit);
+          });
         }
         return [key, { data, isFetching: sdkMocks.fetching, error: null, refetch: vi.fn() }];
       })),
@@ -681,6 +684,7 @@ const TEST_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
           aggregate: "noteAggregate",
           groups: "noteGroups",
           groupsCount: "noteGroupsCount",
+          groupedRows: "noteGroupedRows",
           deletePreview: "deleteNote",
         },
         typeNames: {
@@ -688,6 +692,7 @@ const TEST_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventory({
           filter: "NoteFilter",
           order: "NoteOrder",
           groupBySpec: "NoteGroupBySpec",
+          groupedRowPage: "NoteGroupedRowPage",
           groupKey: "NoteGroupKey",
           groupOrder: "NoteGroupOrder",
           having: "NoteHaving",
@@ -742,12 +747,14 @@ const SNAKE_NOTE_SCHEMA_METADATA: SchemaFieldMetadata = withTestResourceInventor
           aggregate: "notes_aggregate",
           groups: "notes_groups",
           groupsCount: "notes_groups_count",
+          groupedRows: "notes_grouped_rows",
         },
         typeNames: {
           node: "NoteType",
           filter: "notes_bool_exp",
           order: "notes_order_by",
           groupBySpec: "NoteTypeGroupBySpec",
+          groupedRowPage: "NoteTypeGroupedRowPage",
           groupKey: "NoteTypeGroupKey",
           groupOrder: "NoteTypeGroupOrder",
           having: "NoteTypeHaving",
@@ -781,12 +788,14 @@ function groupedListResource(
       aggregate: `${modelName}_aggregate`,
       groups: `${modelName}_groups`,
       groupsCount: `${modelName}_groups_count`,
+      groupedRows: `${modelName}_grouped_rows`,
     },
     typeNames: {
       filter: `${modelName}_bool_exp`,
       order: `${modelName}_order_by`,
       aggregate: `${modelName}_aggregate_fields`,
       groupBySpec: `${modelName}_group_by`,
+      groupedRowPage: `${modelName}_grouped_row_page`,
       groupKey: `${modelName}_group_key`,
       groupOrder: `${modelName}_group_order`,
       having: `${modelName}_having`,
@@ -2125,8 +2134,8 @@ describe("ResourceList", () => {
       expect(pager.textContent?.replace(/\s+/g, " ")).toContain("2 / 2");
       expect(screen.queryByRole("button", { name: "Search options", hidden: true })).toBeNull();
       const request = sdkMocks.listCalls.findLast((call) => call.enabled !== false);
-      expect(JSON.stringify(request?.filter)).toContain("2026-01-01");
-      expect(JSON.stringify(request?.filter)).toContain("2026-02-01");
+      expect(request?.page).toBe(1);
+      expect(request?.pageSize).toBe(20);
       fireEvent.click(within(pager).getByRole("button", { name: "Previous record" }));
       await waitFor(() => expect(screen.getByRole("navigation", { name: "Record navigation" }).textContent?.replace(/\s+/g, " ")).toContain("1 / 2"));
       expect(await screen.findByDisplayValue("First")).toBeTruthy();

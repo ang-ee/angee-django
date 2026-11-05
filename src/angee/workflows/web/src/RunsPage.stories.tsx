@@ -144,17 +144,13 @@ export function RunStory({ appearance, list = false, waiting = false, redacted =
           version__workflow__name: current.version?.workflow?.name },
         aggregate: { count: 1 },
       }], totalCount: 1 } });
-      if (query.includes("query GroupedResourceList") && query.includes("workflowrun(")) {
-        const data: Record<string, unknown> = {};
-        for (const variable of Object.keys(variables).filter((name) => /^group_\d+_limit$/.test(name))) {
-          const prefix = variable.slice(0, -"limit".length);
-          const rows = JSON.stringify(variables[`${prefix}where`] ?? {}).includes("parent_step__run") ? children ?? [] : [current];
-          const offset = Number(variables[`${prefix}offset`]);
-          data[`${prefix}rows`] = rows.slice(offset, offset + Number(variables[variable]))
-            .map((row) => ({ ...row, subject_label: "Review notes" }));
-          data[`${prefix}aggregate`] = { aggregate: { count: rows.length } };
-        }
-        return jsonResponse({ data });
+      if (query.includes("query GroupedResourceList") && query.includes("workflowrun_grouped_rows")) {
+        const sourceRows = JSON.stringify(variables.where ?? {}).includes("parent_step__run") ? children ?? [] : [current];
+        const pages = variables.pages as { key: string; offset: number; limit: number }[];
+        return jsonResponse({ data: { rows: pages.flatMap((page) => sourceRows
+          .filter((row) => row.status === page.key)
+          .slice(page.offset, page.offset + page.limit)
+          .map((row) => ({ ...row, subject_label: "Review notes" }))) } });
       }
       if (/\bworkflow\s*\(/.test(query)) return jsonResponse({ data: { workflow: [current.version?.workflow], workflow_aggregate: { aggregate: { count: 1 } } } });
       const rows = JSON.stringify(variables.where ?? {}).includes("parent_step__run") ? children ?? [] : [current];

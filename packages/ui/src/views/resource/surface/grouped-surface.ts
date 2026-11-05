@@ -14,7 +14,7 @@ import type { ResourceViewGroupExpansion } from "../resource-view-context";
 import { useUiT } from "../../../i18n";
 import { type ResourceListOrder } from "../resource-view-model";
 import { estimateGroupedItemSize, groupFieldLabel, groupMeasuresFromColumns, hasuraMeasuresFromGroupMeasures } from "../resource-view-list-body";
-import { listBatchTarget, requireDataResource, useAggregateOperation, useGroupOperation } from "../resource-operations";
+import { groupedListTarget, requireDataResource, useAggregateOperation, useGroupOperation } from "../resource-operations";
 import { idsFromRowSelectionState, modelRowId } from "../resource-view-codecs";
 import {
   buildGroupedRenderModel,
@@ -64,7 +64,10 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     : ResourceQuery.from(requireDataResource(resource, modelMetadata));
   const aggregateOperation = useAggregateOperation(dataResource);
   const groupOperation = useGroupOperation(dataResource);
-  const listTarget = listBatchTarget(dataResource);
+  const listTarget = groupedListTarget(dataResource);
+  if (!source && !listTarget) {
+    throw new Error(`Resource "${resource}" is missing grouped row metadata.`);
+  }
   const rowGroupStack = groupStack ?? resourceView.state.groupStack;
 
   const { requestedFields, mergedFilter, sortOrder } =
@@ -172,7 +175,6 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     () => ({
       query,
       leafPageSize: source?.leafPageSize,
-      nativeRelationLabels: !source,
       autoExpandRoot: !source && defaultExpandedGroups === "all",
       collapsedKeys: activeExpansion.collapsedKeys,
       groupStack: rowGroupStack,
@@ -299,17 +301,21 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     );
   }, [desiredGroupScopes]);
 
-  // Every expanded leaf bucket's record page, batched into one request round.
+  // Every expanded leaf bucket contributes its own page to one grouped row read.
   const leafRequests = React.useMemo(() => {
     if (source) return EMPTY_ARRAY;
-    return leafScopes.map(({ filter, order, ...scope }) => ({
+    return leafScopes.map(({ parentFilter, order, filter: _filter, ...scope }) => ({
       ...scope,
-      where: query.toWhere(filter),
+      parentWhere: query.toWhere(parentFilter),
       orderBy: query.toOrderBy(order),
     }));
   }, [source, query, leafScopes]);
+  const rowValue = React.useCallback((row: Row) => {
+    const group = rowGroupStack.at(-1);
+    return group ? query.group(group).identity(row) : null;
+  }, [query, rowGroupStack]);
   const nativeLeafResults = useGroupedNativePages(
-    source ? null : listTarget, leafRequests, requestedFields, dataResource?.modelLabel,
+    source ? null : listTarget, leafRequests, requestedFields, dataResource?.modelLabel, rowValue,
   );
   const authoredLeaves = useCollectionQueryBatch(source?.rows, leafScopes);
   const leafResults = React.useMemo<ReadonlyMap<string, AngeeListBatchEntry>>(

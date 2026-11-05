@@ -22,8 +22,8 @@ for (const field of ["role", "disposition", "status"]) {
   contract.axes[field]!.drill = { kind: "value", field, valueKey: field, nullMode: "isNull", valueMap: [] };
 }
 const resource = testDataResource("messaging.Part", {
-  roots: { groups: "parts_groups", aggregate: "parts_aggregate" },
-  typeNames: { filter: "PartBoolExp", order: "PartOrderBy" }, query: contract,
+  roots: { groups: "parts_groups", groupedRows: "parts_grouped_rows", aggregate: "parts_aggregate" },
+  typeNames: { filter: "PartBoolExp", order: "PartOrderBy", groupBySpec: "PartGroupBySpec", groupedRowPage: "PartGroupedRowPage" }, query: contract,
   fields: Object.entries(contract.fields).map(([name, field]) => ({ name,
     kind: field.kind === "enum" ? "enum" : "scalar", scalar: field.scalar, values: field.values,
     readable: true, aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false })),
@@ -40,9 +40,7 @@ afterEach(() => { cleanup(); clearClients(); });
 test("a base-filtered list reads its visible group while enum facets need no request", async () => {
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
     const variables = meta!.gqlVariables as GroupVariables & Record<string, unknown>;
-    if ("group_0_limit" in variables) return { data: { data: {
-      group_0_rows: [], group_0_aggregate: { aggregate: { count: 0 } },
-    } } };
+    if ("pages" in variables) return { data: { data: { rows: [] } } };
     const key = variables.group_by[0]!.field.toLowerCase();
     return { data: { parts_groups: [{ key: { [key]: "BODY" }, aggregate: { count: 2 } }], totalCount: 1 } };
   });
@@ -59,7 +57,7 @@ test("a base-filtered list reads its visible group while enum facets need no req
     </Provider>,
   );
   const requests = () => custom.mock.calls.map(([request]) => request.meta!.gqlVariables as GroupVariables & Record<string, unknown>);
-  const groupRequests = () => requests().filter((variables) => variables.group_by);
+  const groupRequests = () => requests().filter((variables) => Array.isArray(variables.group_by));
   const axes = () => [...new Set(groupRequests().map(({ group_by, limit }) => `${group_by[0]!.field}:${limit}`))]
     .map((request) => request.split(":")[0]).sort();
   // The visible group reads once; enum choices come from metadata even while closed.
@@ -67,7 +65,7 @@ test("a base-filtered list reads its visible group while enum facets need no req
   fireEvent.click(await screen.findByRole("button", { name: "Search options" }));
   await waitFor(() => expect(axes()).toEqual(["ROLE", "STATUS"]));
   for (const variables of requests()) {
-    const where = (variables.group_by ? variables.where : variables.group_0_where) as Where | undefined;
+    const where = variables.where as Where | undefined;
     expect(terms(where)).toContainEqual({ message: { _eq: "msg_1" } });
   }
 });

@@ -97,6 +97,7 @@ export type AggregateMeasureValues = Record<string, unknown>;
 
 export interface AggregateBucket {
   key: Record<string, unknown> | null;
+  label?: string | null;
   count: number;
   sum?: AggregateMeasureValues;
   avg?: AggregateMeasureValues;
@@ -551,6 +552,7 @@ function groupBucket(group: Record<string, unknown>): AggregateBucket {
   const aggregate = recordValue(group.aggregate) ?? {};
   return {
     key: recordValue(group.key) ?? {},
+    ...(typeof group.label === "string" || group.label === null ? { label: group.label as string | null } : {}),
     count: countOf(aggregate.count),
     ...extractMeasures(aggregate),
   };

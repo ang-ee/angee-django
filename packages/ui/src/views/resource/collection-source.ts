@@ -9,7 +9,7 @@ import {
   stableSerialize,
   useAuthoredQueryBatch,
   type AngeeListBatchEntry,
-  type AngeeListBatchScope,
+  type GroupedListQueryTarget,
   type AuthoredDocument,
   type AuthoredVariables,
   type DocumentData,
@@ -33,58 +33,65 @@ export interface CollectionPageRequest {
   pageSize: number;
 }
 
-/** Fetch expanded native leaf pages together, isolating failed aliases on retry. */
+export interface NativeGroupedPageScope {
+  key: string;
+  value: unknown;
+  identity: unknown;
+  groupBy: { field: string; granularity?: string };
+  parentWhere?: Record<string, unknown>;
+  orderBy?: unknown;
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+/** Fetch the visible groups' independently bounded rows through grouped_rows. */
 export function useGroupedNativePages(
-  target: ListBatchTarget | null,
-  scopes: readonly AngeeListBatchScope[],
+  target: (GroupedListQueryTarget & ListBatchTarget) | null,
+  scopes: readonly NativeGroupedPageScope[],
   fields: readonly string[],
   modelLabel: string | undefined,
+  rowValue: (row: Row) => unknown,
 ): ReadonlyMap<string, AngeeListBatchEntry> {
   const models = useCanonicalResourceModelLabels(modelLabel ? [modelLabel] : []);
   const targetKey = stableSerialize(target);
   const scopesKey = stableSerialize(scopes);
   const fieldsKey = stableSerialize(fields);
-  const request = React.useMemo(
-    () => target && scopes.length > 0 ? groupedListQueryMeta(target, fields, scopes) : null,
-    [targetKey, scopesKey, fieldsKey],
+  const requests = React.useMemo(
+    () => {
+      if (!target) return [];
+      const byParent = new Map<string, NativeGroupedPageScope[]>();
+      for (const scope of scopes) {
+        const key = stableSerialize([scope.groupBy, scope.parentWhere, scope.orderBy]);
+        const pages = byParent.get(key) ?? [];
+        pages.push(scope);
+        byParent.set(key, pages);
+      }
+      return [...byParent].map(([key, pages]) => ({
+        key,
+        ...groupedListQueryMeta(target, fields, pages[0]!.groupBy, pages,
+          pages[0]!.parentWhere, pages[0]!.orderBy),
+        models,
+      }));
+    },
+    [targetKey, scopesKey, fieldsKey, models],
   );
-  const results = useAuthoredQueryBatch(request ? [{
-    key: "grouped-leaves",
-    document: request.document,
-    variables: request.variables,
-    models,
-  }] : [], { dataProviderName: target?.dataProviderName, errorNotification: false });
-  const result = results.get("grouped-leaves");
-  // A failed shared document cannot identify which alias failed. Retry only on
-  // that path so healthy buckets remain visible beside a failed leaf.
-  const fallbackRequests = React.useMemo(() => {
-    if (!result?.error || !target) return [];
-    return scopes.map((scope) => ({
-      key: scope.key,
-      ...groupedListQueryMeta(target, fields, [scope]),
-      models,
-    }));
-  }, [result?.error, targetKey, scopesKey, fieldsKey, models]);
-  const fallback = useAuthoredQueryBatch(fallbackRequests, {
+  const results = useAuthoredQueryBatch(requests, {
     dataProviderName: target?.dataProviderName,
     errorNotification: false,
   });
-  const refetchBatch = React.useCallback(() => { void result?.refetch(); }, [result?.refetch]);
-  return React.useMemo(() => new Map(scopes.map((scope, index) => {
-    const entry = result?.error ? fallback.get(scope.key) : result;
-    const data = entry?.data;
-    const alias = result?.error ? 0 : index;
-    const aggregate = data?.[`group_${alias}_aggregate`] as
-      | { aggregate?: { count?: number } }
-      | undefined;
+  return React.useMemo(() => new Map(scopes.map((scope) => {
+    const key = stableSerialize([scope.groupBy, scope.parentWhere, scope.orderBy]);
+    const entry = results.get(key);
+    const rows = (entry?.data?.rows ?? []) as readonly Row[];
     return [scope.key, {
-      rows: (data?.[`group_${alias}_rows`] ?? []) as readonly Row[],
-      total: aggregate?.aggregate?.count,
-      fetching: entry?.isFetching ?? Boolean(result?.error),
+      rows: rows.filter((row) => stableSerialize(rowValue(row)) === stableSerialize(scope.identity)),
+      total: scope.total,
+      fetching: entry?.isFetching ?? true,
       error: entry?.error ?? null,
-      refetch: result?.error ? () => { void entry?.refetch(); } : refetchBatch,
+      refetch: () => { void entry?.refetch(); },
     }];
-  })), [scopesKey, result, fallback, refetchBatch]);
+  })), [scopesKey, results, rowValue]);
 }
 
 export interface CollectionGroupRequest extends CollectionPageRequest {

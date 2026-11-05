@@ -27,8 +27,8 @@ const scalarField = (name: string): DataResourceFieldMetadata => ({
   aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false,
 });
 const resource = testDataResource("messaging.Message", {
-  roots: { groups: "messages_groups", aggregate: "messages_aggregate", delete: undefined },
-  typeNames: { filter: "MessageBoolExp", order: "MessageOrderBy" }, query,
+  roots: { groups: "messages_groups", groupedRows: "messages_grouped_rows", aggregate: "messages_aggregate", delete: undefined },
+  typeNames: { filter: "MessageBoolExp", order: "MessageOrderBy", groupBySpec: "MessageGroupBySpec", groupedRowPage: "MessageGroupedRowPage" }, query,
   recordRepresentation: "title", capabilities: ["list"],
   fields: [scalarField("id"), scalarField("title"), scalarField("status"), {
     ...scalarField("channel"), kind: "relation", scalar: null, relationObject: true,
@@ -63,14 +63,17 @@ const terms = (where: Where = {}): Where[] => [where, ...(where._and ?? []).flat
 function leafRequests(calls: { meta?: Record<string, unknown> }[][]): LeafRequest[] {
   return calls.flatMap(([request]) => {
     const variables = request?.meta?.gqlVariables as Record<string, unknown> | undefined;
-    if (!variables) return [];
-    return Object.keys(variables).filter((key) => /^group_\d+_limit$/.test(key)).map((key) => {
-      const prefix = key.slice(0, -"limit".length);
+    if (!Array.isArray(variables?.pages)) return [];
+    const field = (variables.group_by as { field: string }).field;
+    return (variables.pages as { key: string | null; limit: number; offset: number }[]).map((page) => {
+      const term = field === "CHANNEL"
+        ? { channel: { id: page.key === null ? { _is_null: true } : { _eq: page.key } } }
+        : { status: { _eq: page.key } };
       return {
-        where: variables[`${prefix}where`] as Where | undefined,
-        orderBy: variables[`${prefix}order_by`],
-        limit: variables[key] as number,
-        offset: variables[`${prefix}offset`] as number,
+        where: { _and: [variables.where as Where ?? {}, term] } as Where,
+        orderBy: variables.order_by,
+        limit: page.limit,
+        offset: page.offset,
         document: request?.meta?.gqlQuery,
       };
     });
@@ -121,13 +124,11 @@ function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested 
     if (error === "root") throw new Error("Channel groups unavailable");
     const leaves = leafRequests([[{ meta }]]);
     if (leaves.length > 0) {
-      const data: Record<string, unknown> = {};
-      leaves.forEach((leaf, index) => {
+      const rows = leaves.flatMap((leaf) => {
         const page = selectRows(leaf.where, leaf.offset, leaf.limit);
-        data[`group_${index}_rows`] = page.rows;
-        data[`group_${index}_aggregate`] = { aggregate: { count: page.total } };
+        return page.rows;
       });
-      return { data: { data } };
+      return { data: { data: { rows } } };
     }
     const groupVariables = meta!.gqlVariables as GroupVariables;
     if (groupVariables.group_by[0]?.field === "STATUS") {
@@ -139,7 +140,7 @@ function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested 
       ? channels.filter((channel) => channel.id === "signal") : channels;
     return { data: {
       messages_groups: filtered.slice(groupVariables.offset, groupVariables.offset + groupVariables.limit).map((channel) => ({
-        key: { channel_id: channel.id, ...(!noGroupKeyLabel ? { channel_name: channel.label } : {}) }, aggregate: { count: channel.count },
+        key: { channel_id: channel.id, ...(!noGroupKeyLabel ? { channel_name: channel.label } : {}) }, label: channel.label, aggregate: { count: channel.count },
       })), totalCount: filtered.length,
     } };
   });
@@ -194,7 +195,7 @@ test("server board discovers all channel buckets before fetching bounded card pa
   expect(within(shared[1]!).getByText("shared-second message 1")).toBeTruthy();
 });
 
-test("a relation group without a key label uses its batched leaf label, including while collapsed", async () => {
+test("a relation group without a key label uses the server group label, including while collapsed", async () => {
   const f = fixture({ noGroupKeyLabel: true });
   const mail = await screen.findByRole("region", { name: "Mail" });
   expect(await screen.findByRole("region", { name: "Signal" })).toBeTruthy();
@@ -206,7 +207,7 @@ test("a relation group without a key label uses its batched leaf label, includin
   fireEvent.click(within(mail).getByRole("button", { name: "Mail" }));
   await waitFor(() => expect(within(mail).queryByRole("article")).toBeNull());
   expect(screen.getByRole("region", { name: "Mail" })).toBeTruthy();
-  expect(f.leafRequests().some((request) => request.limit === 1)).toBe(true);
+  expect(f.leafRequests().some((request) => request.limit === 1)).toBe(false);
 });
 
 test("a grouped company header and readable supplier cell use labels selected in the same leaf document", async () => {
@@ -220,8 +221,8 @@ test("a grouped company header and readable supplier cell use labels selected in
   invoiceQuery.axes.company!.server = { input: "COMPANY", key: "company_id" };
   invoiceQuery.axes.company!.drill = { kind: "identity", field: "company", valueKey: "company_id", nullMode: "isNull", valueMap: [] };
   const invoice = testDataResource("accounting.Invoice", {
-    roots: { groups: "invoices_groups", aggregate: "invoices_aggregate" },
-    typeNames: { filter: "InvoiceBoolExp", order: "InvoiceOrderBy" }, query: invoiceQuery,
+    roots: { groups: "invoices_groups", groupedRows: "invoices_grouped_rows", aggregate: "invoices_aggregate" },
+    typeNames: { filter: "InvoiceBoolExp", order: "InvoiceOrderBy", groupBySpec: "InvoiceGroupBySpec", groupedRowPage: "InvoiceGroupedRowPage" }, query: invoiceQuery,
     fields: [scalarField("id"), scalarField("number"), ...["company", "partner"].map((name) => ({
       ...scalarField(name), kind: "relation" as const, scalar: null, relationObject: true,
       relationModelLabel: name === "company" ? "arp.Company" : "parties.Party",
@@ -229,21 +230,18 @@ test("a grouped company header and readable supplier cell use labels selected in
   });
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
     const variables = meta!.gqlVariables as Record<string, unknown>;
-    if ("group_by" in variables) return { data: { invoices_groups: [
-      { key: { company_id: "pty_acme" }, aggregate: { count: 1 } },
-      { key: { company_id: "pty_beta" }, aggregate: { count: 1 } },
+    if (Array.isArray(variables.group_by)) return { data: { invoices_groups: [
+      { key: { company_id: "pty_acme" }, label: "Acme", aggregate: { count: 1 } },
+      { key: { company_id: "pty_beta" }, label: "Beta", aggregate: { count: 1 } },
     ], totalCount: 2 } };
-    const data: Record<string, unknown> = {};
-    for (const key of Object.keys(variables).filter((name) => /^group_\d+_limit$/.test(name))) {
-      const alias = key.slice(0, -"limit".length);
-      const acme = JSON.stringify(variables[`${alias}where`]).includes("pty_acme");
-      data[`${alias}rows`] = [{ id: acme ? "bill-1" : "bill-2", number: "",
+    const rows = (variables.pages as { key: string }[]).map((page) => {
+      const acme = page.key === "pty_acme";
+      return { id: acme ? "bill-1" : "bill-2", number: "",
         company: { id: acme ? "pty_acme" : "pty_beta", display_name: acme ? "Acme" : "Beta" },
         partner: { id: acme ? "pty_supplier" : "pty_other", display_name: acme ? "Supplier Inc" : "Other Supplier" },
-      }];
-      data[`${alias}aggregate`] = { aggregate: { count: 1 } };
-    }
-    return { data: { data } };
+      };
+    });
+    return { data: { data: { rows } } };
   });
   render(<Provider resources={[invoice]} dataProvider={{ custom }}>
     <OperationDocumentsProvider documents={{ console: { groups: { "accounting.Invoice":
@@ -261,7 +259,7 @@ test("a grouped company header and readable supplier cell use labels selected in
   expect(screen.getByText("Other Supplier")).toBeTruthy();
   expect(screen.getAllByText("—")).toHaveLength(2);
   const leafCalls = custom.mock.calls.filter(([request]) =>
-    Object.keys(request.meta?.gqlVariables as Record<string, unknown>).some((name) => /^group_\d+_limit$/.test(name)));
+    Array.isArray((request.meta?.gqlVariables as Record<string, unknown>).pages));
   expect(leafCalls).toHaveLength(1);
   const leafDocument = JSON.stringify(leafCalls[0]![0].meta?.gqlQuery);
   expect(leafDocument).toContain("company");
@@ -297,8 +295,7 @@ test("each channel pages its own records and links retain that leaf filter, orde
   expect(screen.getByRole("button", { name: "Groups 1-6 / 6 groups" })).toBeTruthy();
   const request = f.leafRequests().findLast((request) => request.offset === 20 &&
     terms(request.where).some((term) => term.channel?.id._eq === "mail"));
-  expect(request).toMatchObject({ offset: 20, limit: 20,
-    where: { channel: { id: { _eq: "mail" } } }, orderBy: { title: "desc" } });
+  expect(request).toMatchObject({ offset: 20, limit: 20, orderBy: { title: "desc" } });
   const navigation = f.rowHref.mock.calls.findLast(([row]) => row.id === "mail-21")?.[1];
   const scope = { filter: { channel: { exact: "mail" } }, order: { title: "DESC" }, page: 2, pageSize: 20 };
   expect(navigation).toMatchObject(scope);
@@ -383,8 +380,8 @@ test("a card action refreshes loaded records even when the server's channel buck
 
 test.each(["root", "leaf"] as const)("a failed %s request is visible instead of presenting missing channels as an empty board", async (error) => {
   const f = fixture({ error });
-  expect(await screen.findByText(error === "root" ? "Channel groups unavailable" : "Mail records unavailable")).toBeTruthy();
+  expect((await screen.findAllByText(error === "root" ? "Channel groups unavailable" : "Mail records unavailable")).length).toBeGreaterThan(0);
   expect(screen.queryByText("No messages")).toBeNull();
   if (error === "root") expect(f.leafRequests()).toHaveLength(0);
-  else expect(await within(screen.getByRole("region", { name: "Signal" })).findByText("signal message 1 needle")).toBeTruthy();
+  else expect(within(screen.getByRole("region", { name: "Signal" })).queryByText("signal message 1 needle")).toBeNull();
 });

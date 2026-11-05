@@ -1,14 +1,7 @@
 import {
-  Kind,
-  OperationTypeNode,
   parse,
   parseType,
   print,
-  visit,
-  type FieldNode,
-  type OperationDefinitionNode,
-  type SelectionNode,
-  type VariableDefinitionNode,
 } from "graphql";
 import { refineFieldsFromPaths, selectionText } from "./selections";
 import type { TypedDocumentNode } from "./typed-document";
@@ -34,10 +27,10 @@ export interface ListQueryFieldBinding {
   arguments: readonly ListQueryFieldArgument[];
 }
 
-/** Aliased list variables have typed page bounds and dynamic compiled predicates. */
-interface GroupedListQueryVariables extends Record<string, unknown> {
-  [key: `group_${number}_limit`]: number;
-  [key: `group_${number}_offset`]: number;
+export interface GroupedListQueryTarget extends ListQueryTarget {
+  groupedRowsRoot: string;
+  groupByType: string;
+  groupedRowPageType: string;
 }
 
 /** Bind already-compiled predicates through Refine's native document override. */
@@ -103,55 +96,41 @@ export function listQueryMeta(
 
 /** Build one operation for independently paged list scopes of the same resource. */
 export function groupedListQueryMeta(
-  target: ListQueryTarget,
+  target: GroupedListQueryTarget,
   paths: readonly string[],
+  groupBy: { field: string; granularity?: string },
   scopes: readonly {
-    where?: Record<string, unknown>;
-    orderBy?: unknown;
+    value: unknown;
     page: number;
     pageSize: number;
   }[],
+  where?: Record<string, unknown>,
+  orderBy?: unknown,
 ) {
-  const definitions: VariableDefinitionNode[] = [];
-  const selections: SelectionNode[] = [];
-  const variables: GroupedListQueryVariables = {};
-  scopes.forEach((scope, index) => {
-    const meta = listQueryMeta(target, paths, scope.where, scope.orderBy);
-    const operation = meta.gqlQuery.definitions[0] as OperationDefinitionNode;
-    const prefix = `group_${index}_`;
-    const renamed = visit(operation, {
-      Variable(node) {
-        return { ...node, name: { ...node.name, value: `${prefix}${node.name.value}` } };
-      },
-    }) as OperationDefinitionNode;
-    definitions.push(...(renamed.variableDefinitions ?? []));
-    renamed.selectionSet.selections.forEach((selection, fieldIndex) => {
-      const field = selection as FieldNode;
-      selections.push({
-        ...field,
-        alias: { kind: Kind.NAME, value: `group_${index}_${fieldIndex === 0 ? "rows" : "aggregate"}` },
-      });
-    });
-    for (const [key, value] of Object.entries(meta.gqlVariables)) {
-      variables[`${prefix}${key}`] = value;
+  for (const name of [target.groupedRowsRoot, target.groupByType, target.groupedRowPageType, target.filterType, target.orderType]) {
+    if (!/^[_A-Za-z][_0-9A-Za-z]*$/.test(name)) throw new Error(`Invalid GraphQL name: ${name}`);
+  }
+  const fields = refineFieldsFromPaths(paths);
+  if (fields.length === 0) throw new Error("A grouped list query requires a selection.");
+  const document: TypedDocumentNode<Record<string, unknown>, Record<string, unknown>> = parse(`
+    query GroupedResourceList(
+      $group_by: ${target.groupByType}!,
+      $pages: [${target.groupedRowPageType}!]!,
+      $where: ${target.filterType},
+      $order_by: [${target.orderType}!]
+    ) {
+      rows: ${target.groupedRowsRoot}(group_by: $group_by, pages: $pages, where: $where, order_by: $order_by) {
+        ${selectionText(fields, {})}
+      }
     }
-    variables[`group_${index}_limit`] = scope.pageSize;
-    variables[`group_${index}_offset`] = (scope.page - 1) * scope.pageSize;
-  });
-  const document: TypedDocumentNode<Record<string, unknown>, GroupedListQueryVariables> = {
-    kind: Kind.DOCUMENT,
-    definitions: [
-      {
-        kind: Kind.OPERATION_DEFINITION,
-        operation: OperationTypeNode.QUERY,
-        name: { kind: Kind.NAME, value: "GroupedResourceList" },
-        variableDefinitions: definitions,
-        selectionSet: { kind: Kind.SELECTION_SET, selections },
-      },
-    ],
-  };
+  `);
   return {
     document,
-    variables,
+    variables: {
+      group_by: groupBy,
+      pages: scopes.map(({ value, page, pageSize }) => ({ key: value, limit: pageSize, offset: (page - 1) * pageSize })),
+      ...(where === undefined ? {} : { where }),
+      ...(orderBy === undefined ? {} : { order_by: orderBy }),
+    },
   };
 }

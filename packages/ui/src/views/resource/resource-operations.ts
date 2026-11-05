@@ -158,3 +158,12 @@ export function listBatchTarget(
     resourceName: refineResourceName(resource),
   };
 }
+
+export function groupedListTarget(resource: DataResourceMetadata | null) {
+  const list = listBatchTarget(resource);
+  if (!list || !resource) return null;
+  const { groupedRows: groupedRowsRoot } = resource.roots;
+  const { groupBySpec: groupByType, groupedRowPage: groupedRowPageType } = resource.typeNames;
+  if (!groupedRowsRoot || !groupByType || !groupedRowPageType) return null;
+  return { ...list, groupedRowsRoot, groupByType, groupedRowPageType };
+}

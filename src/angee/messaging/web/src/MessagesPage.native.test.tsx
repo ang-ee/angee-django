@@ -29,9 +29,9 @@ const fields: DataResourceFieldMetadata[] = Object.entries(query.fields).map(([n
   ...(name === "channel" ? { relationModelLabel: "messaging.Channel", relationObject: true } : {}),
 }));
 const resource = testDataResource("messaging.Message", {
-  roots: { groups: "messages_groups", aggregate: "messages_aggregate", deletePreview: "preview_delete_message", update: undefined, create: undefined },
+  roots: { groups: "messages_groups", groupedRows: "messages_grouped_rows", aggregate: "messages_aggregate", deletePreview: "preview_delete_message", update: undefined, create: undefined },
   capabilities: ["list", "detail", "delete"], fields, query, recordRepresentation: "title",
-  typeNames: { filter: "MessageBoolExp", order: "MessageOrderBy" },
+  typeNames: { filter: "MessageBoolExp", order: "MessageOrderBy", groupBySpec: "MessageGroupBySpec", groupedRowPage: "MessageGroupedRowPage" },
 });
 const { Provider, clearClients } = createUiTestProviders({
   resources: [resource, testDataResource("messaging.Thread")], apiUrl: "test://messages",
@@ -77,17 +77,11 @@ function dataProvider({ count = 2, fail = false, transportFailure = false, limit
       return { data: { send_held_drafts: results, discard_held_drafts: results } };
     }
     const variables = meta?.gqlVariables as Record<string, unknown> | undefined;
-    if (variables && "group_0_limit" in variables) {
-      const data: Record<string, unknown> = {};
-      for (const variable of Object.keys(variables).filter((name) => /^group_\d+_limit$/.test(name))) {
-        const prefix = variable.slice(0, -"limit".length);
-        const offset = Number(variables[`${prefix}offset`]);
-        data[`${prefix}rows`] = rows.slice(offset, offset + Number(variables[variable]));
-        data[`${prefix}aggregate`] = { aggregate: { count } };
-      }
-      return { data: { data } };
+    if (Array.isArray(variables?.pages)) {
+      const pages = variables.pages as { offset: number; limit: number }[];
+      return { data: { data: { rows: pages.flatMap(({ offset, limit }) => rows.slice(offset, offset + limit)) } } };
     }
-    return { data: { messages_groups: [{ key: { channel_id: "channel", channel_name: "Discussion" }, aggregate: { count } }], totalCount: 1 } };
+    return { data: { messages_groups: [{ key: { channel_id: "channel", channel_name: "Discussion" }, label: "Discussion", aggregate: { count } }], totalCount: 1 } };
   });
   const getList = vi.fn(async () => ({ data: [], total: 0 }));
   return { rows, custom, getList, mutations: () => custom.mock.calls.filter(([request]) => request.meta?.gqlMutation) };
@@ -179,7 +173,7 @@ test.each([false, true])("a grouped held action discarding=%s sends selected rev
   expect(await screen.findByText(`${discarding ? "Discarded one held draft." : "Queued one held draft."}; Revision changed`, { selector: "h2" })).toBeTruthy();
   // Publishing invalidates the loaded rows. Reselecting captures the on-screen revision.
   await waitFor(() => expect(f.custom.mock.calls.filter(([request]) =>
-    "group_0_limit" in ((request.meta?.gqlVariables as Record<string, unknown> | undefined) ?? {})).length).toBeGreaterThan(1));
+    Array.isArray((request.meta?.gqlVariables as Record<string, unknown> | undefined)?.pages)).length).toBeGreaterThan(1));
   fireEvent.click(rowCheckbox("Message 2"));
   const retry = await screen.findByRole("button", { name: discarding ? "Discard" : "Send now" });
   await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(false));

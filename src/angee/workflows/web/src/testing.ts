@@ -29,9 +29,9 @@ export function retainedField(name: string, scalar = "String"): DataResourceFiel
 export const runResourceFixture = testDataResource("workflows.WorkflowRun", {
   capabilities: ["list", "detail"],
   roots: { list: "workflowrun", detail: "workflowrun_by_pk", aggregate: "workflowrun_aggregate",
-    groups: "workflowrun_groups", groupsCount: "workflowrun_groups_count" },
+    groups: "workflowrun_groups", groupsCount: "workflowrun_groups_count", groupedRows: "workflowrun_grouped_rows" },
   typeNames: { filter: "workflowrun_bool_exp", order: "workflowrun_order_by",
-    groupBySpec: "workflowrunGroupBySpec", groupOrder: "workflowrunGroupOrder", having: "workflowrunHaving" },
+    groupBySpec: "workflowrunGroupBySpec", groupedRowPage: "workflowrunGroupedRowPage", groupOrder: "workflowrunGroupOrder", having: "workflowrunHaving" },
   recordRepresentation: "display_name",
   fields: [...["id", "display_name", "subject_id", "subject_model", "subject_label", "created_at", "finished_at", "outcome", "outcome_label"].map((name) => ({
     name, kind: "scalar" as const, scalar: "String", readable: true, aggregatable: false,

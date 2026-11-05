@@ -337,6 +337,20 @@ describe("Hasura custom operations", () => {
     });
   });
 
+  test("retains server relation labels and the redacted null bucket", () => {
+    const result = extractGroupBy({
+      bills_groups: [
+        { key: { company_id: "company-1" }, label: "Apexive", aggregate: { count: 2 } },
+        { key: { company_id: null }, label: null, aggregate: { count: 1 } },
+      ],
+      totalCount: 2,
+    }, "bills_groups");
+    expect(result.buckets).toEqual([
+      { key: { company_id: "company-1" }, label: "Apexive", count: 2 },
+      { key: { company_id: null }, label: null, count: 1 },
+    ]);
+  });
+
   test("rejects a grouped response without an exact numeric total", () => {
     expect(() => extractGroupBy({ notes_groups: [] }, "notes_groups")).toThrow(
       "numeric totalCount",

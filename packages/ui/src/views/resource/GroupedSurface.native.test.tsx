@@ -22,7 +22,7 @@ for (const field of ["status", "title"]) {
   contract.axes[field]!.drill = { kind: "value", field, valueKey: field, nullMode: "isNull", valueMap: [] };
 }
 const resource = testDataResource("notes.Note", {
-  roots: { groups: "notes_groups", aggregate: "notes_aggregate" }, typeNames: { filter: "NoteBoolExp", order: "NoteOrderBy" }, query: contract,
+  roots: { groups: "notes_groups", groupedRows: "notes_grouped_rows", aggregate: "notes_aggregate" }, typeNames: { filter: "NoteBoolExp", order: "NoteOrderBy", groupBySpec: "NoteGroupBySpec", groupedRowPage: "NoteGroupedRowPage" }, query: contract,
   fields: ["id", "title", "status"].map((name) => ({ name, kind: "scalar", scalar: "String", readable: true,
     aggregatable: false, creatable: false, updatable: false, requiredOnCreate: false })),
 });
@@ -49,14 +49,14 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false }: { failed
   const lifecycle = { mounts: 0, unmounts: 0 };
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
     const batch = meta!.gqlVariables as Record<string, unknown>;
-    if ("group_0_limit" in batch) {
-      const page = (Number(batch.group_0_offset) / Number(batch.group_0_limit)) + 1;
+    if ("pages" in batch) {
+      const selected = (batch.pages as { key: string; limit: number; offset: number }[])[0]!;
+      const page = (selected.offset / selected.limit) + 1;
       if (page === delayPage) {
         return new Promise<{ data: { data: Record<string, unknown> } }>((resolve) => { resolvePage = resolve; });
       }
       return { data: { data: {
-        group_0_rows: [{ id: `page-${page}`, title: "Native row", status: "active" }],
-        group_0_aggregate: { aggregate: { count: rowTotal } },
+        rows: [{ id: `page-${page}`, title: selected.key, status: "active" }],
       } } };
     }
     const variables = meta!.gqlVariables as { group_by: { field: string }[]; limit: number; offset: number };
@@ -90,14 +90,13 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false }: { failed
   const client = clients.at(-1)!;
   const header = (depth: number) => surface.groupedItems.filter((item) => item.kind === "groupHeader").find((item) => item.depth === depth);
   const leafQueries = () => custom.mock.calls.map(([request]) => request.meta?.gqlVariables as Record<string, unknown>)
-    .filter((variables) => variables && "group_0_limit" in variables);
+    .filter((variables) => variables && "pages" in variables);
   const groupQueries = () => custom.mock.calls.map(([request]) => request.meta?.gqlVariables as
-    { group_by?: { field: string }[]; limit?: number; offset?: number }).filter((variables) => variables?.group_by);
+    { group_by?: { field: string }[]; limit?: number; offset?: number }).filter((variables) => Array.isArray(variables?.group_by));
   return { get view() { return view; }, get surface() { return surface; }, header, show: (visible: boolean) => show(visible),
     custom, leafQueries, groupQueries, lifecycle, refreshCount: async (count: number) => { rowTotal = count; await client.invalidateQueries(); },
     delay: (page: number) => { delayPage = page; },
-    release: () => resolvePage({ data: { data: { group_0_rows: [{ id: "obsolete", title: "Old filter row" }],
-      group_0_aggregate: { aggregate: { count: 120 } } } } }) };
+    release: () => resolvePage({ data: { data: { rows: [{ id: "obsolete", title: "Old filter row" }] } } }) };
 }
 
 test("server summary axes without a row identity render buckets without leaf requests", async () => {
@@ -123,9 +122,9 @@ test("native subgroup and leaf page sizes, page 2 and expansion survive an actua
   await waitFor(() => expect(f.header(1)?.kind === "groupHeader" && f.header(1)?.pager).toBeTruthy());
   const leafKey = leaf.bucketKey;
   act(() => f.surface.setScopePageSize(leafKey, 50));
-  await waitFor(() => expect(f.leafQueries().at(-1)?.group_0_limit).toBe(50));
+  await waitFor(() => expect((f.leafQueries().at(-1)?.pages as { limit: number }[])[0]?.limit).toBe(50));
   act(() => f.surface.setScopePage(leafKey, 2));
-  await waitFor(() => expect(f.leafQueries().at(-1)?.group_0_offset).toBe(50));
+  await waitFor(() => expect((f.leafQueries().at(-1)?.pages as { offset: number }[])[0]?.offset).toBe(50));
   await waitFor(() => expect(f.surface.groupedItems.some((item) => item.kind === "record" && item.nav.page === 2)).toBe(true));
 
   act(() => f.show(false));
@@ -150,7 +149,7 @@ test("native subgroup and leaf page sizes, page 2 and expansion survive an actua
   // A late old-filter page must not restore its interaction state after reset.
   f.delay(3);
   act(() => f.surface.setScopePage(leafKey, 3));
-  await waitFor(() => expect(f.leafQueries().at(-1)?.group_0_offset).toBe(100));
+  await waitFor(() => expect((f.leafQueries().at(-1)?.pages as { offset: number }[])[0]?.offset).toBe(100));
   act(() => f.view.setFilter({ title: { iContains: "changed" } }));
   expect(f.view.paginationByScope).toEqual({});
   await act(async () => f.release());
@@ -177,7 +176,7 @@ test("native grouped root and leaf pagination clamp oversized page sizes", async
   act(() => f.surface.toggleGroup(leaf.bucketKey));
   await waitFor(() => expect(f.header(1)?.pager).toBeTruthy());
   act(() => f.surface.setScopePageSize(leaf.bucketKey, 500));
-  await waitFor(() => expect(f.leafQueries().at(-1)?.group_0_limit).toBe(100));
+  await waitFor(() => expect((f.leafQueries().at(-1)?.pages as { limit: number }[])[0]?.limit).toBe(100));
   expect(f.view.paginationByScope[leaf.bucketKey]).toEqual({ pageIndex: 0, pageSize: 100 });
   expect(f.surface.groupedItems.find((item) => item.kind === "record")?.nav.pageSize).toBe(100);
 });
@@ -191,15 +190,15 @@ test("a native grouped header sort updates the leaf query and preserves the pare
   const leafKey = f.header(1)!.bucketKey;
   act(() => f.surface.setScopePageSize(leafKey, 50));
   act(() => f.surface.setScopePage(leafKey, 2));
-  await waitFor(() => expect(f.leafQueries().at(-1)).toMatchObject({ group_0_offset: 50, group_0_limit: 50 }));
+  await waitFor(() => expect(f.leafQueries().at(-1)?.pages).toMatchObject([{ offset: 50, limit: 50 }]));
   fireEvent.click(screen.getByRole("button", { name: "Sort Title (not sorted)" }));
   await waitFor(() => expect(f.view.state.sorting).toEqual([{ id: "title", desc: false }]));
   // Sorting resets row windows while keeping the same group tree expanded.
   await waitFor(() => expect(f.header(1)?.expanded).toBe(true));
   expect(f.view.paginationByScope[leafKey]).toEqual({ pageIndex: 0, pageSize: 50 });
-  await waitFor(() => expect(f.leafQueries().at(-1)?.group_0_order_by).toEqual({ title: "asc" }));
+  await waitFor(() => expect(f.leafQueries().at(-1)?.order_by).toEqual({ title: "asc" }));
   expect(f.view.state.filter).toEqual({ title: { iContains: "kept" } });
-  expect(JSON.stringify(f.leafQueries().at(-1)?.group_0_where)).toContain('"_ilike":"%kept%"');
+  expect(JSON.stringify(f.leafQueries().at(-1)?.where)).toContain('"_ilike":"%kept%"');
   expect(screen.getByRole("columnheader", { name: "Title" }).getAttribute("aria-sort")).toBe("ascending");
 });
 

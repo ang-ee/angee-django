@@ -32,13 +32,15 @@ test("versions and recent runs are filtered by the open workflow using native li
   fireEvent.click(await screen.findByRole("tab", { name: "Versions" }));
   await screen.findByText("usr_operator");
   fireEvent.click(screen.getByRole("tab", { name: "Recent runs" }));
-  await waitFor(() => expect(onRequest.mock.calls.some(([entry]) => entry.query.includes("workflowrun("))).toBe(true));
+  await waitFor(() => expect(onRequest.mock.calls.some(([entry]) => entry.query.includes("workflowrun_grouped_rows("))).toBe(true));
   for (const name of ["workflowversion", "workflowrun"]) {
-    const request = onRequest.mock.calls.find(([entry]) => entry.query.includes(`${name}(`))?.[0];
-    expect(request?.variables[name === "workflowrun" ? "group_0_where" : "where"]).toEqual({ _and: [
-      ...(name === "workflowrun" ? [{ status: { _eq: "failed" } }] : []),
-      { [name === "workflowrun" ? "version__workflow" : "workflow"]: { _eq: "wfl_review" } },
-    ] });
+    const request = onRequest.mock.calls.find(([entry]) => entry.query.includes(`${name === "workflowrun" ? "workflowrun_grouped_rows" : name}(`))?.[0];
+    if (name === "workflowrun") {
+      expect(request?.variables.where).toEqual({ version__workflow: { _eq: "wfl_review" } });
+      expect((request?.variables.pages as { key: string }[]).some(({ key }) => key.toLowerCase() === "failed")).toBe(true);
+    } else {
+      expect(request?.variables.where).toEqual({ _and: [{ workflow: { _eq: "wfl_review" } }] });
+    }
   }
 });
 

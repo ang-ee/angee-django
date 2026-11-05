@@ -5,6 +5,7 @@ export {
   type ListQueryFieldArgument,
   type ListQueryFieldBinding,
   type ListQueryTarget,
+  type GroupedListQueryTarget,
 } from "./list-query";
 // Story/test consumers that pair these bindings with providers returned by this
 // package must resolve Refine's provider types through the same package identity.
@@ -14,9 +15,6 @@ export { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 export {
   OperationDocumentsProvider,
   actionDocumentForSchema,
-  aggregateDocumentForResource,
-  deletePreviewDocumentForResource,
-  groupDocumentForResource,
   maybeOperationDocument,
   operationDocument,
   useOperationDocuments,
