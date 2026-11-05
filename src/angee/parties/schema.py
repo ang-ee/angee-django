@@ -15,10 +15,8 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db.models import Exists, OuterRef, Prefetch
-from rebac.graphql.strawberry_django import optimize
 from strawberry import auto
-from strawberry_django.fields.field import StrawberryDjangoField
-from strawberry_django.queryset import run_type_get_queryset
+from strawberry_django.utils.requests import get_request
 
 from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.data.hasura import declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
@@ -34,10 +32,12 @@ from angee.integrate.schema import BridgeTypeMixin
 from angee.parties.managers import DisplayAvatarPrefetches
 from angee.parties.models import Party as PartyModel
 from angee.parties.models import RelationshipKind as RelationshipKindModel
-from angee.storage.schema import FileType
+from angee.storage.models import UploadState
+from angee.storage.schema import FileMimeIdentity, FileType
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
 Party = apps.get_model("parties", "Party")
+File = apps.get_model("storage", "File")
 Person = apps.get_model("parties", "Person")
 Organization = apps.get_model("parties", "Organization")
 Handle = apps.get_model("parties", "Handle")
@@ -79,18 +79,63 @@ _ORGANIZATION_EXTENSION_PUBLIC_ID_FIELDS = tuple(
 def _display_avatar_prefetch(name: str) -> Callable[[strawberry.Info], Prefetch]:
     """Select the named read :meth:`PartyManager.display_avatar_prefetches` batches for a page.
 
-    Avatars load through the actor's readable files, optimized for the selected
-    ``FileType`` fields.
+    The admitted party bounds its avatar projection. Handle visibility keeps
+    its own actor guard; file rows contribute display facts only.
     """
 
     def prefetch(info: strawberry.Info) -> Prefetch:
         actor = session_user(info)
-        field = cast(StrawberryDjangoField, info._field)
-        files = apps.get_model("storage", "File").objects.with_actor(actor)
-        avatars = optimize(run_type_get_queryset(files, field.django_type, info), info)
+        avatars = apps.get_model("storage", "File").objects.sudo(reason="parties.admitted_avatar").select_related(
+            "mime_type"
+        )
         return cast(Prefetch, getattr(Party.objects.display_avatar_prefetches(actor, avatars=avatars), name))
 
     return prefetch
+
+
+@strawberry.type
+class AvatarIdentity:
+    """Only image display facts shown with an admitted party."""
+
+    file: strawberry.Private[Any]
+
+    @strawberry.field
+    def id(self) -> strawberry.ID:
+        return strawberry.ID(self.file.sqid)
+
+    @strawberry.field
+    def filename(self) -> str:
+        return str(self.file.filename)
+
+    @strawberry.field
+    def mime_type(self) -> FileMimeIdentity | None:
+        return FileMimeIdentity.of(self.file)
+
+    @strawberry.field
+    def url(self, info: strawberry.Info) -> str | None:
+        if getattr(get_request(info), "view_as", None) is not None:
+            return None
+        return self.file.download_url() if self.file.upload_state == UploadState.READY else ""
+
+
+@strawberry.type
+class PartyIdentity:
+    """Public identity facts projected by an admitted follower or Need."""
+
+    party: strawberry.Private[Any]
+
+    @strawberry.field
+    def id(self) -> strawberry.ID:
+        return strawberry.ID(self.party.sqid)
+
+    @strawberry.field
+    def display_name(self) -> str:
+        return str(self.party.display_name)
+
+    @strawberry.field
+    def display_avatar(self, info: strawberry.Info) -> AvatarIdentity | None:
+        avatar = Party.objects.display_avatar(self.party, actor=session_user(info))
+        return AvatarIdentity(file=avatar) if avatar is not None else None
 
 
 @strawberry_django.type(Party)
@@ -102,7 +147,17 @@ class PartyType(AuthoredRefMixin, ProtectedNode):
     handle_count: int | None
     first_met_note: str | None
     introduced_by: "PartyType | None" = actor_scoped_to_one("introduced_by")
-    avatar: FileType | None = actor_scoped_to_one("avatar")
+
+    @strawberry_django.field(only=["avatar_id"], prefetch_related=[_display_avatar_prefetch("own")])
+    def avatar(self) -> AvatarIdentity | None:
+        """Project the admitted party's own avatar identity."""
+
+        row = cast(Any, self)
+        avatar = getattr(row, "_display_own_avatar", None)
+        if not hasattr(row, "_display_own_avatar") and row.avatar_id is not None:
+            avatar = File._base_manager.select_related("mime_type").filter(pk=row.avatar_id).first()
+        return AvatarIdentity(file=avatar) if avatar is not None else None
+
     created_at: auto
     updated_at: auto
 
@@ -110,10 +165,11 @@ class PartyType(AuthoredRefMixin, ProtectedNode):
         only=["avatar_id"],
         prefetch_related=[_display_avatar_prefetch(name) for name in DisplayAvatarPrefetches._fields],
     )
-    def display_avatar(self, info: strawberry.Info) -> FileType | None:
+    def display_avatar(self, info: strawberry.Info) -> AvatarIdentity | None:
         """Return the avatar the party shows: its own, else its strongest handle's."""
 
-        return cast(Any, Party.objects.display_avatar(cast(Any, self), actor=session_user(info)))
+        avatar = Party.objects.display_avatar(cast(Any, self), actor=session_user(info))
+        return AvatarIdentity(file=avatar) if avatar is not None else None
 
     @strawberry_django.field(annotate={"_concrete_kind": lambda info: Party.concrete_kind_expression()})
     def concrete_kind(parent: strawberry.Parent[PartyModel]) -> RelationshipKindModel.PartyKind | None:

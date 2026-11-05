@@ -71,8 +71,8 @@ from angee.messaging.models import Thread as ThreadModel
 from angee.messaging.models import ThreadedModelMixin, chatter_record
 from angee.messaging.models.threads import chatter_record_with_attachment
 from angee.messaging.querysets import _UNRESOLVED, ChannelQuerySet, MessageQuerySet, PartQuerySet, ThreadQuerySet
-from angee.parties.schema import HandleType, PartyType
-from angee.storage.schema import FileType
+from angee.parties.schema import HandleType, PartyIdentity
+from angee.storage.schema import FileIdentity
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
 Integration = apps.get_model("integrate", "Integration")
@@ -352,7 +352,19 @@ class PartType(ProtectedNode):
     name: auto
     parent: "PartType | None" = actor_scoped_to_one("parent")
     fragment: FragmentType | None
-    file: FileType | None = actor_scoped_to_one("file")
+
+    @strawberry_django.field(only=["file_id"])
+    def file(self) -> FileIdentity | None:
+        """Project an admitted part's attachment; its URL retains the part proof."""
+
+        row = cast(Any, self)
+        if row.file_id is None:
+            return None
+        file = row._state.fields_cache.get("file")
+        if file is None:
+            file = File._base_manager.select_related("mime_type").filter(pk=row.file_id).first()
+        return FileIdentity(file=file, parent=row) if file is not None else None
+
     created_at: auto
 
 
@@ -528,7 +540,7 @@ class MessageType(TrashedRefMixin, TaggedNode, ProtectedNode):
             if files_prefetched:
                 readable_files = prefetched_files
             else:
-                file_rows = File.objects.with_actor(actor).select_related("mime_type")
+                file_rows = File._base_manager.select_related("mime_type")
                 readable_files = {file.pk: file for file in file_rows.filter(pk__in=file_ids or {0})}
         for part in ordered:
             if part.file_id is not None:
@@ -609,9 +621,14 @@ def _record_parts_prefetch(info: strawberry.Info) -> models.Prefetch:
     """Keep trusted parent membership while native hints project selected part fields."""
 
     rows = Part._base_manager
-    return models.Prefetch("parts", queryset=optimize(
-        rows, info, store=OptimizerStore(only=["message_id", "parent_id", "position", "sqid"]),
-    ))
+    selected = optimize(rows, info, store=OptimizerStore(only=["message_id", "parent_id", "position", "sqid"]))
+    return models.Prefetch(
+        "parts", queryset=selected.prefetch_related(
+            models.Prefetch(
+                "file", queryset=File.objects.sudo(reason="messaging.admitted_part_file").select_related("mime_type"),
+            ),
+        ),
+    )
 
 
 @strawberry_django.type(Message)
@@ -806,33 +823,34 @@ def _record_thread_totals(thread: Any) -> dict[str, Any]:
     return context.thread_totals if context is not None else thread.chatter_totals()
 
 
-_FOLLOWER_PARTY_FIELD = actor_scoped_to_one("party")
-_PERSON_USER_FIELD = actor_scoped_to_one("user")
-
-
 @strawberry.type
 class FollowerIdentity:
-    """Party identity and an optional readable account, shared by follower projections."""
+    """Identity projected from an admitted follower, without party page reach."""
 
-    party: PartyType | None = _FOLLOWER_PARTY_FIELD
+    @strawberry_django.field(only=["party_id"])
+    def party(self) -> PartyIdentity | None:
+        """Return only the followed party's public display identity."""
 
-    @strawberry_django.field(only=["party_id"], prefetch_related=["party__person__user"])
-    def user(self) -> UserType | None:
-        """Project the person's account through the shared relation guard; never store it."""
-
-        party = _FOLLOWER_PARTY_FIELD.base_resolver(self)
+        follower = cast(Any, self)
+        party = getattr(follower, "_follower_party", None)
         if party is None:
+            party = apps.get_model("parties", "Party")._base_manager.filter(pk=follower.party_id).first()
+        return PartyIdentity(party=party) if party is not None else None
+
+    @strawberry_django.field(only=["party_id"])
+    def user(self) -> UserType | None:
+        """Keep the account's own read gate; following grants no account detail."""
+
+        follower = cast(Any, self)
+        if hasattr(follower, "_follower_user"):
+            return cast(UserType | None, follower._follower_user)
+        person = apps.get_model("parties", "Person")._base_manager.filter(pk=follower.party_id).first()
+        if person is None or person.user_id is None:
             return None
-        cached_person = party._state.fields_cache.get("person")
-        if "person" not in party._state.fields_cache or (
-            cached_person is not None and getattr(cached_person, "_rebac_actor", None) != current_actor()
-        ):
-            person = apps.get_model("parties", "Person").objects.with_actor(current_actor()).filter(pk=party.pk).first()
-            party._meta.get_field("person").set_cached_value(party, person)
-        person = party._state.fields_cache["person"]
-        if person is None:
-            return None
-        return cast(UserType | None, _PERSON_USER_FIELD.base_resolver(person))
+        return cast(
+            UserType | None,
+            get_user_model().objects.with_actor(current_actor()).filter(pk=person.user_id).first(),
+        )
 
 
 @strawberry_django.type(ThreadFollower)
@@ -2545,30 +2563,34 @@ def _message_access(message: Any, info: strawberry.Info | None) -> dict[str, Any
 
 
 def _prime_follower_identities(followers: list[Any], actor: Any) -> None:
-    """Batch readable identities into Django's relation caches for the shared guards."""
+    """Batch display facts under the admitted follower rows and account gate."""
 
     if not followers or actor is None:
         return
     party_model = apps.get_model("parties", "Party")
     person_model = apps.get_model("parties", "Person")
-    parties = {
-        row.pk: row for row in party_model.objects.with_actor(actor).filter(pk__in={f.party_id for f in followers})
-    }
-    people = {row.pk: row for row in person_model.objects.with_actor(actor).filter(pk__in=parties)}
+    parties = {row.pk: row for row in party_model._base_manager.filter(pk__in={f.party_id for f in followers})}
+    prefetch_related_objects(
+        list(parties.values()),
+        *party_model.objects.display_avatar_prefetches(
+            actor, avatars=apps.get_model("storage", "File").objects.sudo(
+                reason="parties.admitted_avatar"
+            ).select_related("mime_type"),
+        ),
+    )
+    people = {row.pk: row for row in person_model._base_manager.filter(pk__in=parties)}
     users = {
         row.pk: row
         for row in get_user_model()
         .objects.with_actor(actor)
         .filter(pk__in={p.user_id for p in people.values() if p.user_id})
     }
-    for person in people.values():
-        person._meta.get_field("user").set_cached_value(
-            person, users.get(person.user_id) if person.user_id is not None else None
-        )
-    for party in parties.values():
-        party._meta.get_field("person").set_cached_value(party, people.get(party.pk))
     for follower in followers:
-        follower._meta.get_field("party").set_cached_value(follower, parties.get(follower.party_id))
+        follower._follower_party = parties.get(follower.party_id)
+        person = people.get(follower.party_id)
+        follower._follower_user = (
+            users.get(person.user_id) if person is not None and person.user_id is not None else None
+        )
 
 
 def _moderate_record_message(

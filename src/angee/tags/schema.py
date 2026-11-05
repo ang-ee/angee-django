@@ -9,7 +9,7 @@ actor: the edge's own gates require write on the tagged record, whoever curates
 the vocabulary.
 
 Owners of taggable models compose :class:`TaggedNode` onto their console node
-type to read a row's tags as a batched, actor-scoped relation list, and
+type to read a row's tags as a batched relation list on admitted rows, and
 :func:`tags_input_extensions` onto that resource's insert and set inputs, so a
 record form edits ``tags`` like any field and the row's save writes them
 (:class:`~angee.tags.models.TaggedModel`).
@@ -82,11 +82,11 @@ _TAG_EDGES_ATTR = "_angee_tag_edges"
 
 
 def _tag_edges_prefetch(info: strawberry.Info) -> models.Prefetch:
-    """Prefetch each selected row's readable tag edges with their tags, once per page.
+    """Prefetch admitted rows' tag edges and readable tags, once per page.
 
-    Both querysets are actor-scoped, so an edge whose tag or record the actor
-    cannot read never reaches the row, and the inner tag queryset carries the
-    selected ``TagType`` hints. The REBAC optimizer stamps and rescopes the outer lookup.
+    The parent query proves row read. The structural edge queryset retains its
+    explicit sudo scope through REBAC's prefetch optimizer, while the inner tag
+    queryset keeps the vocabulary's actor read guard and selected type hints.
     A multi-table child's edges key on its canonical ancestor, which declares
     ``tag_assignments``, so the lookup climbs the child's parent links to it.
     """
@@ -100,7 +100,7 @@ def _tag_edges_prefetch(info: strawberry.Info) -> models.Prefetch:
     edges = (
         TagAssignment._base_manager.none()
         if actor is None
-        else TagAssignment.objects.with_actor(actor).with_action("read").by_tag()
+        else TagAssignment.objects.sudo(reason="tags.admitted_parent").filter(tag__in=tags.values("pk")).by_tag()
     ).prefetch_related(
         models.Prefetch("tag", queryset=tags),
     )

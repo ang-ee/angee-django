@@ -264,14 +264,16 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         return self.annotate(_concrete_kind=self.model.concrete_kind_expression())
 
     def with_display_avatars(self, actor: Any) -> Self:
-        """Batch :meth:`PartyManager.display_avatar` for these parties, through ``actor``'s readable files.
+        """Batch :meth:`PartyManager.display_avatar` for these admitted parties.
 
         For a read owner that hands parties to a page outside the GraphQL
         optimizer (a navigator row, a same_as pair), so no party reads its
         avatar on its own.
         """
 
-        avatars = apps.get_model("storage", "File").objects.with_actor(actor)
+        avatars = apps.get_model("storage", "File").objects.sudo(reason="parties.admitted_avatar").select_related(
+            "mime_type"
+        )
         return self.prefetch_related(*self.model._default_manager.display_avatar_prefetches(actor, avatars=avatars))
 
     def named(self, name: str) -> Self:

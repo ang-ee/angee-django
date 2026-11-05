@@ -31,8 +31,9 @@ definition tags/tag {
 // permissions.extends.zed, backed by the edge's GenericForeignKey
 // (`relation party: parties/party // rebac:field=target`), and unions the type's
 // read and write into `target_read` and `target_write`. Adding or removing a tag
-// needs write on the record; an edge is visible to whoever reads both the tag and
-// the record. A type no relation names cannot be tagged under an actor.
+// needs write on the record; the standalone query checks the edge while a
+// proved parent projects its own edges structurally and still checks tag read.
+// A type no relation names cannot be tagged under an actor.
 definition tags/tag_assignment {
     relation tag:   tags/tag // rebac:field=tag
     relation admin: angee/role // rebac:const=admin

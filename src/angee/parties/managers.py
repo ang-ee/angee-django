@@ -477,16 +477,14 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     def display_avatar(self, party: Any, *, actor: Any) -> Any | None:
         """Return the avatar ``party`` shows ``actor``: its own, else its strongest handle's.
 
-        Its own avatar counts when ``actor`` can read it. Otherwise it is the avatar
+        Its own avatar is a fact of the admitted party. Otherwise it is the avatar
         of a handle resolution gave to this party (``Handle.party``, so only the
         party that won a handle shows its avatar), ranked by what that resolution
         materialised on the handle: a human-confirmed winner
         (``party_link_confirmed``) first, then the oldest handle. Statement
         confidence does not rank, so among unconfirmed handles an older inferred one
         shows before a newer one a card asserts. Only the handles ``actor`` can read
-        count, which is what a party shared with its handles grants, and only avatars
-        it can read: storage's image drive, which every signed-in user reads, holds
-        every avatar stored since that drive existed. Derived for display only: never
+        count, which is what a party shared with its handles grants. Derived for display only: never
         stored, and never part of the directory projection, so no address book
         receives it. A page of parties batches the same reads with
         :meth:`display_avatar_prefetches`.
@@ -495,7 +493,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
         if hasattr(party, _DISPLAY_OWN_AVATAR):
             own, handles = getattr(party, _DISPLAY_OWN_AVATAR), getattr(party, _DISPLAY_AVATAR_HANDLES)
         else:
-            avatars = apps.get_model("storage", "File").objects.with_actor(actor)
+            avatars = apps.get_model("storage", "File")._base_manager.select_related("mime_type")
             own = avatars.filter(pk=party.avatar_id).first() if party.avatar_id is not None else None
             handles = self._display_avatar_handles(actor, avatars).filter(party_id=party.pk)[:1]
         if own is not None:
@@ -506,8 +504,8 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
     def display_avatar_prefetches(self, actor: Any, *, avatars: Any) -> DisplayAvatarPrefetches:
         """Return the prefetches :meth:`display_avatar` reads for a page of parties.
 
-        ``avatars`` is ``actor``'s readable File queryset every avatar loads through;
-        a GraphQL page passes it optimized for its selection.
+        ``avatars`` is a structural File queryset bounded by the admitted party
+        or its actor-readable handles. It is only for avatar display facts.
         """
 
         return DisplayAvatarPrefetches(
@@ -519,7 +517,7 @@ class PartyManager[PartyT: Party](_PartyManagerBase[PartyT]):
 
     @staticmethod
     def _display_avatar_handles(actor: Any, avatars: Any) -> Any:
-        """Handles ``actor`` reads that carry an avatar in ``avatars``, strongest first, avatar loaded."""
+        """Handles ``actor`` reads that carry an avatar, strongest first, avatar loaded."""
 
         return (
             apps.get_model("parties", "Handle")

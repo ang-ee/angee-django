@@ -117,6 +117,8 @@ definition messaging/thread_follower {
     // An admitted record's chatter may show its followers and suppress them
     // from suggestions. The current user's identity implies their Person link
     // and effective follow across the admitted thread's merged members.
+    // An admitted thread's read implies its explicit follower rows. The record
+    // GraphQL projection may carry only their party identity display facts.
     relation thread: messaging/thread // rebac:field=thread
     relation attachment: messaging/thread_attachment // rebac:field=attachment
     relation user: auth/user // rebac:field=party__person__user
@@ -145,7 +147,9 @@ definition messaging/thread_notification {
 }
 
 definition messaging/part {
-    // A selected message implies its parts, including attachment counts.
+    // A readable message implies its part rows; the part's file display facts
+    // are projected through this admitted row, while file download keeps its
+    // own record arm and a token bound to the part.
     relation message: messaging/message // rebac:field=message
     relation editor: auth/user | auth/group#member
     relation reader: auth/user | auth/group#member

@@ -25,6 +25,31 @@ class NeedQuerySet[NeedT: Need](AngeeHistoryQuerySet[NeedT]):
         return self.filter(models.Q(project=project) | models.Q(task__project=project))
 
 
+def filer_name_expression(queryset: models.QuerySet[Any]) -> models.Expression:
+    """Sort/filter by a Need's projected requester, guarding project-filed rows.
+
+    A readable task-filed Need itself admits the requester's display name.
+    A project-filed Need retains the party's independent read gate.
+    """
+
+    blank = models.Value("", output_field=models.TextField())
+    task_name = NullIf(models.F("party__display_name"), blank)
+    actor = relation_actor(queryset)
+    party = apps.get_model("parties", "Party")
+    project_name = (
+        models.Subquery(
+            party.objects.with_actor(actor).filter(pk=models.OuterRef("party_id")).values("display_name")[:1],
+            output_field=models.TextField(),
+        )
+        if actor is not None else models.Value(None, output_field=models.TextField())
+    )
+    return models.Case(
+        models.When(task_id__isnull=False, then=task_name),
+        default=NullIf(project_name, blank),
+        output_field=models.TextField(),
+    )
+
+
 def task_requester_rows(task: str = "pk") -> models.QuerySet[Any]:
     """A task's requests in attribution order; the first is the one the task shows as filed by.
 

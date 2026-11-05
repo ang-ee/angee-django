@@ -8,9 +8,11 @@ import secrets
 from collections.abc import Sequence
 from typing import IO, TYPE_CHECKING, Any, NoReturn, cast
 
+from django.apps import apps
 from django.conf import settings
 from django.core import signing
 from django.core.exceptions import (
+    FieldDoesNotExist,
     ObjectDoesNotExist,
     ValidationError,
 )
@@ -779,7 +781,8 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         """Return the READY file a signed proxy download token addresses.
 
         The mirror of :meth:`for_upload_token`: re-check ``read`` for the token's
-        actor after the elevated lookup. The request needs no credentials: any
+        actor after the elevated lookup. Parent-bound tokens also prove the
+        parent's current read and the live file link. The request needs no credentials: any
         bearer may use the token until it expires or its actor loses access.
         Tokens without an actor claim are rejected. Trashed and unfinished
         rows have no servable bytes.
@@ -813,6 +816,31 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
             row.with_actor(actor)
             if not row.has_access("read"):
                 raise exceptions.UploadDenied("read access to the file is required")
+            parent_label = str(payload.get("parent_model") or "")
+            parent_id = str(payload.get("parent_id") or "")
+            if parent_label or parent_id:
+                if not parent_label or not parent_id:
+                    raise exceptions.UploadDenied("invalid download parent")
+                try:
+                    parent_model = apps.get_model(parent_label)
+                except (LookupError, ValueError) as error:
+                    raise exceptions.UploadDenied("invalid download parent") from error
+                parent = parent_model._default_manager.with_actor(actor).filter(pk=parent_id).first()
+                if parent is None:
+                    raise exceptions.UploadDenied("read access to the download parent is required")
+                try:
+                    file_field = parent_model._meta.get_field("file")
+                except FieldDoesNotExist:
+                    file_field = None
+                if file_field is not None and getattr(file_field, "related_model", None) is self.model:
+                    attached = parent_model._base_manager.filter(pk=parent.pk, file_id=row.pk).exists()
+                else:
+                    attachment = apps.get_model("storage", "FileAttachment")
+                    attached = attachment._base_manager.filter(
+                        file_id=row.pk, **generic_target(parent).lookups(attachment, "target"),
+                    ).exists()
+                if not attached:
+                    raise exceptions.UploadDenied("file is no longer attached to the download parent")
             return row
 
     def _drive_for(self, *, drive_id: str, drive_slug: str, folder_id: str = "") -> Any:
