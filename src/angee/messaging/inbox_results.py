@@ -176,7 +176,7 @@ class InboxResults:
             return InboxPage(
                 [
                     InboxResultRow(f"message:{message.sqid}", message._order_at, 1, 0, message)
-                    for message in activity.order_by(order, "pk")[InboxPage.window(page, size)]
+                    for message in activity.with_title_text().order_by(order, "pk")[InboxPage.window(page, size)]
                 ],
                 count,
                 count,
@@ -221,7 +221,9 @@ class InboxResults:
         )
         messages = {
             record.pk: record
-            for record in self.inbox.messages.filter(pk__in=[part.message_id for part in sources.values()])
+            for record in self.inbox.messages.filter(
+                pk__in=[part.message_id for part in sources.values()]
+            ).with_title_text()
         }
         rows = []
         for group in selected:

@@ -501,6 +501,8 @@ def test_related_is_distinct_cross_scope_and_excludes_unreadable_uses():
                 created_by=row.created_by, message=row, role="body", fragment=fragment, position=0
             )
         Part._base_manager.create(created_by=owner, message=rows[0], role="quoted", fragment=fragment, position=1)
+        title = Fragment.objects.upsert(text="Selected shared title", created_by_id=owner.pk)
+        Part._base_manager.create(created_by=owner, message=rows[0], role="title", fragment=title, position=2)
     with actor_context(owner):
         inbox = Message.objects.all().explorer()
         related = inbox.related(f"fragment:{fragment.sqid}")
@@ -517,6 +519,7 @@ def test_related_is_distinct_cross_scope_and_excludes_unreadable_uses():
         assert page.count == page.message_count == 1
         assert page.rows[0].count == 1 and page.rows[0].part_count == 2
         assert page.rows[0].id == f"fragment:{fragment.sqid}"
+        assert page.rows[0].message.title() == "Selected shared title"
         assert content.groups("platform").page().record_count == 1
         assert content.page(scope=InboxGroupScope(axis="platform", value="email")).rows[0].count == 1
         related_target = InboxRelated(inbox, f"fragment:{fragment.sqid}", str(rows[1].sqid))
@@ -737,19 +740,21 @@ def test_result_batch_preserves_each_group_page_and_statement_budget():
     owner = User.objects.create_user(username="explorer-batch-budget")
     channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="seed result groups"):
-        threads = [Thread._base_manager.create(created_by=owner) for _ in range(10)]
+        threads = [Thread._base_manager.create(created_by=owner) for _ in range(25)]
         for index, thread in enumerate(threads):
-            Message._base_manager.create(
+            message = Message._base_manager.create(
                 channel=channel, created_by=owner, thread=thread, status="synced", sent_at=T0 + timedelta(minutes=index)
             )
+            title = Fragment.objects.upsert(text=f"Inbox title {index}", created_by_id=owner.pk)
+            Part._base_manager.create(message=message, role="title", fragment=title, created_by=owner)
     request = RequestFactory().post("/graphql/console/")
     request.user = owner
     query = """query($pages: [InboxResultPageInput!]!) {
       inbox_results_batch(pages: $pages) {
-        key error result { count message_count rows { id message { id } } }
+        key error result { count message_count rows { id message { id title } } }
       }
     }"""
-    for group_count in (1, 5, 10):
+    for group_count in (1, 5, 25):
         pages = [
             {"key": f"group-{index}", "scope": {"axis": "conversation", "value": f"thread:{thread.sqid}"},
              "page": 1, "size": 3}
@@ -760,17 +765,52 @@ def test_result_batch_preserves_each_group_page_and_statement_budget():
         assert [page["key"] for page in result["inbox_results_batch"]] == [page["key"] for page in pages]
         assert all(page["result"]["count"] == page["result"]["message_count"] == 1
                    and len(page["result"]["rows"]) == 1 for page in result["inbox_results_batch"])
-        assert len(statements) == {1: 8, 5: 20, 10: 35}[group_count]
+        assert [page["result"]["rows"][0]["message"]["title"] for page in result["inbox_results_batch"]] == [
+            f"Inbox title {index}" for index in range(group_count)
+        ]
+        sizes = [len(statement["sql"].encode("utf-8")) for statement in statements]
+        # Measured SQLite 1/5/25: 8/20/80 statements, 124911/597399/2959903 SQL bytes,
+        # max 54863/54863/54864; PostgreSQL: 8/20/80, 154671/746199/3703903 bytes,
+        # max 69735/69735/69736. Three policy-bearing statements per group remain.
+        assert len(statements) == 5 + 3 * group_count
+        base_limit, group_limit, largest_limit = (
+            (25_000, 145_000, 70_000) if connection.vendor == "sqlite" else (30_000, 180_000, 85_000)
+        )
+        assert sum(sizes) <= base_limit + group_limit * group_count
+        assert max(sizes) <= largest_limit
     single = result_data(execute_schema(
         _schema(),
         """query($scope: InboxGroupScopeInput!) {
           inbox_results(scope: $scope, page: 1, size: 3) {
-            count message_count rows { id message { id } }
+            count message_count rows { id message { id title } }
           }
         }""",
         {"scope": pages[0]["scope"]}, request=request,
     ))
     assert result["inbox_results_batch"][0]["result"] == single["inbox_results"]
+    page_query = """query($size: Int!) {
+      inbox_results(size: $size) { count rows { message { title } } }
+    }"""
+    page_totals = []
+    for size in (1, 5, 25):
+        with CaptureQueriesContext(connection) as page_statements:
+            whole = result_data(execute_schema(_schema(), page_query, {"size": size}, request=request))
+        assert whole["inbox_results"]["count"] == 25
+        assert [row["message"]["title"] for row in whole["inbox_results"]["rows"]] == [
+            f"Inbox title {index}" for index in range(24, 24 - size, -1)
+        ]
+        page_sizes = [len(statement["sql"].encode("utf-8")) for statement in page_statements]
+        # Measured SQLite 1/5/25 rows: 6/6/6 statements, 85358/85358/85359 bytes,
+        # max 41165/41165/41166; PostgreSQL: 6/6/6, 107594/107594/107595,
+        # max 52283/52283/52284. Title selection adds no per-row statement.
+        assert len(page_statements) == 6
+        page_totals.append(sum(page_sizes))
+        total_limit, largest_limit = (
+            (105_000, 52_000) if connection.vendor == "sqlite" else (132_000, 65_000)
+        )
+        assert sum(page_sizes) <= total_limit
+        assert max(page_sizes) <= largest_limit
+    assert max(page_totals) - min(page_totals) <= 2_000
     mixed = [dict(page, page=2 if index == 0 else 1) for index, page in enumerate(pages[:2])]
     paged = result_data(execute_schema(_schema(), query, {"pages": mixed}, request=request))["inbox_results_batch"]
     assert [(page["result"]["count"], len(page["result"]["rows"])) for page in paged] == [(1, 0), (1, 1)]
