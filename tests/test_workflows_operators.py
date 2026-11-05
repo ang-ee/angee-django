@@ -168,7 +168,7 @@ def test_context_cancellation_uses_workflow_operator_authority(operator_run, exe
         key = "operator_cancel_target"
 
         def run(self, ctx):
-            ctx.cancel_run(ctx.load(WorkflowRun, target.sqid))
+            ctx.load(WorkflowRun, target.sqid).cancel_on_commit(ctx.actor)
             return ctx.done(ctx.input)
 
     register_step(CancelTarget)

@@ -179,7 +179,7 @@ def test_stale_turn_delete_refuses_a_claim_by_another_session_instance(session: 
     assert stale.status == TurnStatus.PENDING
     with pytest.raises(ValidationError) as refused:
         stale.delete()
-    assert refused.value.messages == ["An agent turn is still running or awaiting approval; stop it first."]
+    assert refused.value.messages == ["An agent turn is still running; stop it first."]
     stale.refresh_from_db()
     assert stale.status == TurnStatus.RUNNING
 
@@ -200,7 +200,7 @@ def test_session_delete_refuses_a_hidden_turn_claimed_after_collection(session: 
     assert claimed is not None and claimed.pk == pending.pk
     with pytest.raises(ValidationError) as refused:
         collector.delete()
-    assert refused.value.messages == ["An agent turn is still running or awaiting approval; stop it first."]
+    assert refused.value.messages == ["An agent turn is still running; stop it first."]
     with system_context(reason="test.agents.hidden_claim.verify"):
         assert AgentSession.objects.filter(pk=session.pk).exists()
         assert AgentTurn.objects.filter(pk=pending.pk, status=TurnStatus.RUNNING).exists()
@@ -384,34 +384,6 @@ def test_missing_agent_principal_is_a_failed_turn(session: AgentSession, runner:
     assert runner.prompts == []
 
 
-def test_tool_approval_outcome_fails_readably(session: AgentSession, runner: FakeRunner) -> None:
-    session.post("Before approval")
-    run_session.run(session.pk)
-    session.refresh_from_db()
-    prior_replay = session.replay_state
-    completed = runner.outcome
-    turn = session.post("Needs approval")
-    runner.outcome = TurnOutcome(
-        kind="needs_approval",
-        approval_requests=[{"tool_call_id": "call-1", "name": "read_document", "args": {}}],
-        replay_state=[{"deferred": "call-1"}],
-        usage={"requests": 1},
-    )
-    run_session.run(session.pk)
-    turn.refresh_from_db()
-    session.refresh_from_db()
-    assert turn.status == TurnStatus.FAILED
-    assert turn.error == "Tool approvals are not available yet."
-    assert session.status == SessionStatus.ERROR
-    assert session.usage == {"requests": 2, "tokens": 3}
-    assert session.replay_state == prior_replay
-    runner.outcome = completed
-    continued = session.post("Continue")
-    run_session.run(session.pk)
-    continued.refresh_from_db()
-    assert continued.status == TurnStatus.COMPLETED
-
-
 def test_append_updates_publishes_and_keeps_the_final_stopped_batch(session: AgentSession) -> None:
     turn = session.post("Stream")
     session.claim_turn()
@@ -449,34 +421,12 @@ def test_broker_error_leaves_committed_turn_first_in_queue(session: AgentSession
     assert runner.prompts == ["Committed before failed send"]
 
 
-@pytest.mark.parametrize("other_status", [TurnStatus.RUNNING, TurnStatus.AWAITING_APPROVAL])
-def test_database_allows_only_one_active_turn(session: AgentSession, other_status: str) -> None:
+def test_database_allows_only_one_active_turn(session: AgentSession) -> None:
     session.post("Active")
     pending = session.post("Also active")
     session.claim_turn()
     with system_context(reason="test active turn constraint"), pytest.raises(IntegrityError), transaction.atomic():
-        AgentTurn.objects.filter(pk=pending.pk).update(status=other_status)
-
-
-@pytest.mark.parametrize("close", [False, True])
-def test_legacy_awaiting_approval_is_released_only_by_stop_or_close(session: AgentSession, close: bool) -> None:
-    turn = session.post("Legacy approval")
-    claimed = session.claim_turn()
-    with system_context(reason="test legacy approval state"):
-        claimed.mark_awaiting_approval()
-        session.refresh_from_db()
-        session.mark_awaiting_approval()
-    assert session.claim_turn() is None
-    with pytest.raises(ValidationError, match="approval"):
-        session.post("Blocked while awaiting")
-    if close:
-        session.close()
-    else:
-        session.cancel_turn(turn)
-    turn.refresh_from_db()
-    session.refresh_from_db()
-    assert turn.status == TurnStatus.CANCELED
-    assert session.status == (SessionStatus.CLOSED if close else SessionStatus.IDLE)
+        AgentTurn.objects.filter(pk=pending.pk).update(status=TurnStatus.RUNNING)
 
 
 def test_start_and_post_enforce_call_at_the_model_verbs(session: AgentSession) -> None:
@@ -665,11 +615,9 @@ def test_failed_runner_outcome_keeps_completed_replay_history(session: AgentSess
     assert session.replay_state == history
 
 
-@pytest.mark.parametrize("kind", ["failed", "needs_approval"])
 def test_failed_settlement_does_not_rewrite_replay_state(
     session: AgentSession,
     runner: FakeRunner,
-    kind: Any,
 ) -> None:
     session.post("Retain a completed answer")
     run_session.run(session.pk)
@@ -680,7 +628,7 @@ def test_failed_settlement_does_not_rewrite_replay_state(
     assert turn is not None
 
     with CaptureQueriesContext(connection) as queries:
-        session.settle_turn(turn, TurnOutcome(kind=kind, replay_state=["Discard"], usage={"tokens": 1}))
+        session.settle_turn(turn, TurnOutcome(kind="failed", replay_state=["Discard"], usage={"tokens": 1}))
 
     session_updates = [
         query["sql"] for query in queries if query["sql"].startswith(f'UPDATE "{AgentSession._meta.db_table}" ')
@@ -708,14 +656,11 @@ def test_stray_delivery_preserves_the_last_failed_turn_error(session: AgentSessi
     assert runner.prompts == ["Complete first", "Fail second"]
 
 
-@pytest.mark.parametrize("awaiting_approval", [False, True])
-def test_claim_transition_only_accepts_pending_turns(session: AgentSession, awaiting_approval: bool) -> None:
+def test_claim_transition_only_accepts_pending_turns(session: AgentSession) -> None:
     session.post("Already claimed")
     turn = session.claim_turn()
     assert turn is not None
     with system_context(reason="test repeated claim"):
-        if awaiting_approval:
-            turn.mark_awaiting_approval()
         with pytest.raises(TransitionNotAllowed):
             turn.mark_running()
 
@@ -1023,8 +968,6 @@ def test_session_cancels_active_work_without_canceling_queued_turns(session: Age
     assert first.status == TurnStatus.CANCELED and second.status == TurnStatus.PENDING
     claimed = session.claim_turn()
     assert claimed.pk == second.pk
-    with system_context(reason="test suspended state projection"):
-        claimed.mark_awaiting_approval()
     session.cancel_active_turn()
     claimed.refresh_from_db()
     assert claimed.status == TurnStatus.CANCELED

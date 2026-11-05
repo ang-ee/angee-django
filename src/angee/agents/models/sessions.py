@@ -103,8 +103,7 @@ class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
     """Runtime-neutral conversation whose turns run once, without crash recovery.
 
     A pending turn retained across a rebuild runs first when the user next posts.
-    A session left awaiting approval is released through Stop or Close. If an
-    after-commit settlement signal is lost, the turn stays parked until Stop.
+    If an after-commit settlement signal is lost, the turn stays parked until Stop.
     Delete authority derives from the agent, independently of the session's user.
     """
 
@@ -136,13 +135,6 @@ class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
             SessionStatus.RUNNING: [
                 SessionStatus.RUNNING,
                 SessionStatus.IDLE,
-                SessionStatus.AWAITING_APPROVAL,
-                SessionStatus.CLOSED,
-                SessionStatus.ERROR,
-            ],
-            SessionStatus.AWAITING_APPROVAL: [
-                SessionStatus.IDLE,
-                SessionStatus.RUNNING,
                 SessionStatus.CLOSED,
                 SessionStatus.ERROR,
             ],
@@ -215,8 +207,6 @@ class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
             blocker = locked.agent.chat_blocker()
             if blocker:
                 raise ValidationError({"agent": blocker})
-            if locked.status == SessionStatus.AWAITING_APPROVAL:
-                raise ValidationError({"session": "Stop the pending tool approval before sending another message."})
             turns = locked.turns.with_actor(actor)
             next_index = int(turns.aggregate(last=models.Max("index"))["last"] or 0) + 1
             turn = turns.create(session=locked, index=next_index, prompt=prompt, context=dict(context))
@@ -323,7 +313,7 @@ class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
                 return None
             turn = locked.turns.lock_if_supported().filter(status=TurnStatus.PENDING).order_by("index").first()
             if turn is None:
-                if locked.status in (SessionStatus.RUNNING, SessionStatus.AWAITING_APPROVAL):
+                if locked.status == SessionStatus.RUNNING:
                     locked.mark_idle()
             else:
                 turn.mark_running()
@@ -368,11 +358,7 @@ class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
                 current.mark_completed(text=outcome.text, usage=outcome.usage)
                 locked.mark_idle()
             else:
-                error = (
-                    "Tool approvals are not available yet."
-                    if outcome.kind == "needs_approval"
-                    else outcome.error or "Agent runtime failed."
-                )
+                error = outcome.error or "Agent runtime failed."
                 current.mark_failed(error, usage=outcome.usage)
                 locked.mark_error(current.error)
             locked.save(update_fields=fields)
@@ -403,7 +389,7 @@ class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
 
     @transition(
         status,
-        source=[SessionStatus.IDLE, SessionStatus.RUNNING, SessionStatus.AWAITING_APPROVAL, SessionStatus.ERROR],
+        source=[SessionStatus.IDLE, SessionStatus.RUNNING, SessionStatus.ERROR],
         target=SessionStatus.RUNNING,
         on_success=save_state,
     )
@@ -415,7 +401,7 @@ class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
 
     @transition(
         status,
-        source=[SessionStatus.IDLE, SessionStatus.RUNNING, SessionStatus.AWAITING_APPROVAL, SessionStatus.ERROR],
+        source=[SessionStatus.IDLE, SessionStatus.RUNNING, SessionStatus.ERROR],
         target=SessionStatus.IDLE,
         on_success=save_state,
     )
@@ -427,16 +413,7 @@ class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
 
     @transition(
         status,
-        source=SessionStatus.RUNNING,
-        target=SessionStatus.AWAITING_APPROVAL,
-        on_success=save_state,
-    )
-    def mark_awaiting_approval(self) -> None:
-        """Project a suspended tool approval onto the session."""
-
-    @transition(
-        status,
-        source=[SessionStatus.IDLE, SessionStatus.RUNNING, SessionStatus.AWAITING_APPROVAL, SessionStatus.ERROR],
+        source=[SessionStatus.IDLE, SessionStatus.RUNNING, SessionStatus.ERROR],
         target=SessionStatus.CLOSED,
         on_success=save_state,
     )
@@ -445,7 +422,7 @@ class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
 
     @transition(
         status,
-        source=[SessionStatus.IDLE, SessionStatus.RUNNING, SessionStatus.AWAITING_APPROVAL, SessionStatus.ERROR],
+        source=[SessionStatus.IDLE, SessionStatus.RUNNING, SessionStatus.ERROR],
         target=SessionStatus.ERROR,
         on_success=save_state,
     )
@@ -465,7 +442,7 @@ class AgentTurnQuerySet[TurnT: AgentTurn](AngeeHistoryQuerySet[TurnT]):
         return self.filter(status__in=OPEN_TURN_STATUSES)
 
     def active(self) -> Self:
-        """Select claimed work, including a turn parked on approval."""
+        """Select claimed work."""
 
         return self.filter(status__in=ACTIVE_TURN_STATUSES)
 
@@ -495,12 +472,6 @@ class AgentTurn(AuditMixin, ProtectedDataModel, concrete=True):
         {
             TurnStatus.PENDING: [TurnStatus.RUNNING, TurnStatus.CANCELED],
             TurnStatus.RUNNING: [
-                TurnStatus.AWAITING_APPROVAL,
-                TurnStatus.COMPLETED,
-                TurnStatus.FAILED,
-                TurnStatus.CANCELED,
-            ],
-            TurnStatus.AWAITING_APPROVAL: [
                 TurnStatus.COMPLETED,
                 TurnStatus.FAILED,
                 TurnStatus.CANCELED,
@@ -654,7 +625,7 @@ class AgentTurn(AuditMixin, ProtectedDataModel, concrete=True):
         return (RecordRef.from_model(model, self.session_id),)
 
     def delete_blocker(self) -> str | None:
-        """Refuse deletion of claimed work, including work parked on approval."""
+        """Refuse deletion of claimed work."""
 
         return ACTIVE_TURN_DELETE_MESSAGE if self.status in ACTIVE_TURN_STATUSES else None
 
@@ -673,15 +644,6 @@ class AgentTurn(AuditMixin, ProtectedDataModel, concrete=True):
     @transition(
         status,
         source=TurnStatus.RUNNING,
-        target=TurnStatus.AWAITING_APPROVAL,
-        on_success=save_state,
-    )
-    def mark_awaiting_approval(self) -> None:
-        """Suspend this turn for deferred tool approval."""
-
-    @transition(
-        status,
-        source=[TurnStatus.RUNNING, TurnStatus.AWAITING_APPROVAL],
         target=TurnStatus.COMPLETED,
         on_success=save_state,
     )
@@ -695,7 +657,7 @@ class AgentTurn(AuditMixin, ProtectedDataModel, concrete=True):
 
     @transition(
         status,
-        source=[TurnStatus.RUNNING, TurnStatus.AWAITING_APPROVAL],
+        source=TurnStatus.RUNNING,
         target=TurnStatus.FAILED,
         on_success=save_state,
     )
@@ -708,7 +670,7 @@ class AgentTurn(AuditMixin, ProtectedDataModel, concrete=True):
 
     @transition(
         status,
-        source=[TurnStatus.PENDING, TurnStatus.RUNNING, TurnStatus.AWAITING_APPROVAL],
+        source=[TurnStatus.PENDING, TurnStatus.RUNNING],
         target=TurnStatus.CANCELED,
         on_success=save_state,
     )

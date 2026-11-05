@@ -27,7 +27,7 @@ The reference example is `examples/src/example/notes` (steps, rows, trigger, tes
 | `src/angee/workflows/definition.py`, `models/`, `querysets.py`, `managers.py` | `Definition` (:274), `WorkflowExtension` (:147); `Workflow` (:145), `WorkflowVersion` (:220), `Trigger` (:872); `WorkflowManager.install_definition` (:363), `save_draft` (:277), `publish` (:309), `WorkflowRunManager.start` (:584) | [README](../../README.md) |
 | `src/angee/workflows/resources.py` | `WorkflowDefinitionResource` (:68), `TriggerResource` (:121), `WorkflowExtensionResourceKind` (:21) | docstrings |
 | `src/angee/workflows/triggers.py`, `subjects.py` | `TriggerSource` (:187), `RecordChangedOptIn` (:178), `TriggerGrantTarget` (:72), `RecordChanged` (:389); `RunSubject` (:10) | docstrings |
-| `src/angee/workflows/testing/` | `register_steps` :53, `load_workflow` :70, `publish_draft` :97, `start_run` :110, `decide` :117, `run_until` :124, `RunFactory` :147 (`drivers.py`); fixtures `register_step`, `execution`, `run_factory` (`fixtures.py:37,27,48`) | `testing/__init__.py` docstring |
+| `src/angee/workflows/testing/` | `register_steps`, `load_workflow`, `start_run`, `decide`, `run_until`, `RunFactory` (`drivers.py`); fixtures `register_step`, `execution`, `run_factory` (`fixtures.py`) | `testing/__init__.py` docstring |
 
 ## Reuse first
 

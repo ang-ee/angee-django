@@ -46,7 +46,7 @@ from angee.base.models.identity import public_id_of
 from angee.base.models.locks import StaleRevisionError, require_revision
 from angee.base.querysets import query_batch_size, row_lock_paths
 from angee.base.serialization import canonical_json_sha256
-from angee.iam.identity import group_subject_type, user_label
+from angee.iam.identity import group_subject_type
 from angee.iam.managers import ProtectedManager
 from angee.iam.permissions import actor_user_id
 from angee.jobs.enqueue import enqueue_task
@@ -60,29 +60,14 @@ from angee.workflows.definition import (
     SourcedWorkflowExtension,
 )
 from angee.workflows.querysets import (
-    RETRYABLE_SQLSTATES as RETRYABLE_SQLSTATES,
-)
-from angee.workflows.querysets import (
-    StepAttemptQuerySet as StepAttemptQuerySet,
-)
-from angee.workflows.querysets import (
-    StepRecordQuerySet as StepRecordQuerySet,
-)
-from angee.workflows.querysets import (
-    StepRunQuerySet as StepRunQuerySet,
-)
-from angee.workflows.querysets import (
+    StepAttemptQuerySet,
+    StepRecordQuerySet,
+    StepRunQuerySet,
     TriggerEventQuerySet,
     TriggerQuerySet,
-)
-from angee.workflows.querysets import (
-    WorkflowRunQuerySet as WorkflowRunQuerySet,
-)
-from angee.workflows.querysets import (
-    _record_failure as _record_failure,
-)
-from angee.workflows.querysets import (
-    _sqlstate as _sqlstate,
+    WorkflowRunQuerySet,
+    record_failure,
+    sqlstate,
 )
 from angee.workflows.states import (
     INTERRUPTED_OUTCOME,
@@ -101,10 +86,10 @@ logger = logging.getLogger(__name__)
 
 
 PRUNE_BATCH_LIMIT = 25
-TRIGGER_DRAIN_LIMIT = 100
-
-
 """Prune examines at most 25 roots per tick; blocked roots retry after one day."""
+
+TRIGGER_DRAIN_LIMIT = 100
+"""Trigger drain examines at most 100 events per tick."""
 
 
 @dataclass(frozen=True)
@@ -704,7 +689,7 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             with owner.hold_owned(run.pk, timeout=timeout) as runs:
                 return owner._cancel_locked(runs, actor=actor or runs[0].run_as)
         except OperationalError as error:
-            if _sqlstate(error) == "55P03":
+            if sqlstate(error) == "55P03":
                 raise ValidationError("The run is still running; retry cancellation.") from error
             raise
 
@@ -740,7 +725,7 @@ class WorkflowRunManager[T: WorkflowRun](_WorkflowRunManagerBase[T]):
             )
             for run_id in candidates:
                 with (
-                    _record_failure(f"prune candidate {run_id}", using=owner.db),
+                    record_failure(f"prune candidate {run_id}", using=owner.db),
                     owner.hold_owned(run_id, skip_locked=True) as runs,
                 ):
                     if not runs or not owner.retention_candidates().filter(pk=run_id).exists():
@@ -954,12 +939,6 @@ _TriggerEventManagerBase = ProtectedManager.from_queryset(TriggerEventQuerySet)
 class TriggerEventManager[T: TriggerEvent](_TriggerEventManagerBase[T]):
     """Capture without compromising the transaction that changed the record."""
 
-    def record_change(self, model: Any, record: Any, *, source: str = "record_changed") -> None:
-        """Capture one source record through the same batch-aware owner."""
-        owner = self.db_manager(write_alias(self.model, using=self._db or record._state.db, instance=record))
-
-        owner.record_changes(model, (record,), source=source)
-
     def record_changes(self, model: Any, records: tuple[Any, ...], *, source: str = "record_changed") -> None:
         """Resolve a batch's source once; retain scoped, failure-isolated upserts."""
         if not records:
@@ -1105,7 +1084,7 @@ class TriggerManager[T: Trigger](_TriggerManagerBase[T]):
             with system_context(reason="workflows.enable_preview readers"):
                 resolved = resolve_subjects(refs)
             readers.extend(
-                f"{label}: {user_label(row) if subject_type == user_subject_type() else row}"
+                f"{label}: {row}"
                 for row in resolved.values()
             )
         return TriggerEnablePreview(

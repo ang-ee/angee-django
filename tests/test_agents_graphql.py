@@ -477,7 +477,7 @@ def test_agent_delete_preview_reports_provisioned_blocker(composed_tables: None,
 
 
 @pytest.mark.parametrize("confirm", [False, True])
-@pytest.mark.parametrize("status", ["running", "awaiting_approval"])
+@pytest.mark.parametrize("status", ["running"])
 def test_agent_delete_preview_reports_hidden_active_turn_blockers(
     composed_tables: None,
     confirm: bool,
@@ -504,7 +504,7 @@ def test_agent_delete_preview_reports_hidden_active_turn_blockers(
     messages = set(preview["refusals"])
     assert messages == {
         "Stop all active turns before deleting this agent.",
-        "An agent turn is still running or awaiting approval; stop it first.",
+        "An agent turn is still running; stop it first.",
     }
     serialized = json.dumps(preview)
     for secret in (str(session.sqid), str(turn.sqid), "Secret conversation", "Secret prompt"):
@@ -538,7 +538,7 @@ def test_agent_delete_preview_has_constant_query_count_across_sessions(composed_
         assert preview["blocked"] == []
         assert preview["refusals"] == [
             "Stop all active turns before deleting this agent.",
-            "An agent turn is still running or awaiting approval; stop it first.",
+            "An agent turn is still running; stop it first.",
         ]
         counts.append(len(captured))
     # Native singleton and population plans differ; population work stays constant.
@@ -576,7 +576,7 @@ def test_graphql_delete_receivers_refuse_after_preview_race(
         {"id": str(agent.sqid), "confirm": True} if surface == "agent" else {"id": str(owner.sqid)},
         user=admin,
     )
-    message = "An agent turn is still running or awaiting approval; stop it first."
+    message = "An agent turn is still running; stop it first."
     if surface == "agent":
         preview = _data(result)["delete_agent"]
         assert preview["has_blockers"] is True
@@ -608,7 +608,7 @@ def test_agent_delete_capability_has_constant_query_count(composed_tables: None)
         Agent.objects.create(name="C rendered", owner=owner, lifecycle="ready", service="agent-service")
         waiting = Agent.objects.create(name="D waiting", owner=owner)
         session = AgentSession.objects.create(agent=waiting, user=other)
-        AgentTurn.objects.create(session=session, index=1, prompt="Private approval", status="awaiting_approval")
+        AgentTurn.objects.create(session=session, index=1, prompt="Private question", status="running")
     query = """
         query Capabilities($limit: Int!) {
           agents(limit: $limit, order_by: {name: asc}) { can_delete }
@@ -815,7 +815,7 @@ def test_session_user_without_agent_ownership_cannot_delete_transcripts(composed
         assert AgentTurn.objects.filter(pk=turn.pk).exists()
 
 
-@pytest.mark.parametrize("status", ["running", "awaiting_approval"])
+@pytest.mark.parametrize("status", ["running"])
 def test_agent_delete_refuses_active_turns_in_unreadable_sessions(composed_tables: None, status: str) -> None:
     """The projection and delete verb refuse all active work without disclosing its transcript."""
 
@@ -830,7 +830,7 @@ def test_agent_delete_refuses_active_turns_in_unreadable_sessions(composed_table
         target = Agent.objects.get(pk=agent.pk)
         assert target.get_delete_blocker() is not None
         assert target.get_delete_blocker() == "Stop all active turns before deleting this agent."
-        with pytest.raises(ValidationError, match="An agent turn is still running or awaiting approval; stop it first"):
+        with pytest.raises(ValidationError, match="An agent turn is still running; stop it first"):
             target.delete()
         assert not target.is_sudo()
     console = _schema()
@@ -843,7 +843,7 @@ def test_agent_delete_refuses_active_turns_in_unreadable_sessions(composed_table
     assert refused.errors is not None
     assert refused.errors[0].extensions == {"code": "BAD_USER_INPUT"}
     assert "Stop all active turns before deleting this agent." in refused.errors[0].message
-    assert "An agent turn is still running or awaiting approval; stop it first." in refused.errors[0].message
+    assert "An agent turn is still running; stop it first." in refused.errors[0].message
     with system_context(reason="test.agents.active_agent_delete.verify_and_stop"):
         assert Agent.objects.filter(pk=agent.pk).exists()
         assert AgentSession.objects.filter(pk=session.pk).exists()
@@ -925,7 +925,7 @@ def test_agent_delete_denies_before_locking_or_disclosing_session_counts(
     assert previews == []
 
 
-@pytest.mark.parametrize("status", ["running", "awaiting_approval"])
+@pytest.mark.parametrize("status", ["running"])
 def test_agent_session_delete_refuses_an_active_turn(composed_tables: None, status: str) -> None:
     """Even an admin, who may delete sessions, must Stop an active turn first."""
 
@@ -943,14 +943,14 @@ def test_agent_session_delete_refuses_an_active_turn(composed_tables: None, stat
     )
     assert result.errors is not None
     assert result.errors[0].extensions == {"code": "BAD_USER_INPUT"}
-    assert result.errors[0].message == "An agent turn is still running or awaiting approval; stop it first."
+    assert result.errors[0].message == "An agent turn is still running; stop it first."
     with system_context(reason="test.agents.active_session_delete.verify"):
         assert AgentSession.objects.filter(pk=session.pk).exists()
         assert AgentTurn.objects.filter(pk=turn.pk, status=status).exists()
 
 
 @pytest.mark.parametrize("actor", ["owner", "admin", "system"])
-@pytest.mark.parametrize("status", ["running", "awaiting_approval"])
+@pytest.mark.parametrize("status", ["running"])
 def test_agent_queryset_delete_refuses_private_active_turns(
     composed_tables: None, actor: str, status: str,
 ) -> None:
@@ -970,7 +970,7 @@ def test_agent_queryset_delete_refuses_private_active_turns(
     )
     with pytest.raises(ValidationError) as refused:
         targets.filter(pk__in=[agent.pk, idle.pk]).delete()
-    assert refused.value.messages == ["An agent turn is still running or awaiting approval; stop it first."]
+    assert refused.value.messages == ["An agent turn is still running; stop it first."]
     assert f"agents/turn:{turn.pk}" not in str(refused.value)
     assert str(turn.sqid) not in str(refused.value)
     with system_context(reason="test.agents.bulk_active.verify"):
@@ -1016,7 +1016,7 @@ def test_agent_queryset_delete_requires_deprovisioning(
 
 
 @pytest.mark.parametrize("model", [AgentSession, AgentTurn])
-@pytest.mark.parametrize("status", ["running", "awaiting_approval"])
+@pytest.mark.parametrize("status", ["running"])
 def test_transcript_queryset_delete_refuses_active_turns(
     composed_tables: None, model: type[models.Model], status: str,
 ) -> None:
@@ -1027,7 +1027,7 @@ def test_transcript_queryset_delete_refuses_active_turns(
         agent = Agent.objects.create(name="Assistant", owner=owner)
         session = AgentSession.objects.create(agent=agent, user=owner)
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Retained", status=status)
-    with pytest.raises(ValidationError, match="An agent turn is still running or awaiting approval; stop it first"):
+    with pytest.raises(ValidationError, match="An agent turn is still running; stop it first"):
         model.system_queryset().filter(pk=session.pk if model is AgentSession else turn.pk).delete()
     with system_context(reason="test.agents.transcript_bulk.verify"):
         assert Agent.objects.filter(pk=agent.pk).exists()
@@ -1035,7 +1035,7 @@ def test_transcript_queryset_delete_refuses_active_turns(
         assert AgentTurn.objects.filter(pk=turn.pk, status=status).exists()
 
 
-@pytest.mark.parametrize("status", ["running", "awaiting_approval"])
+@pytest.mark.parametrize("status", ["running"])
 @pytest.mark.parametrize(
     ("mutation", "is_preview"),
     [
@@ -1064,7 +1064,7 @@ def test_user_delete_refuses_active_turn_cascades(
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Retained", status=status)
         principal = agent.user
     result = _execute(_schema(), mutation, {"id": str(other.sqid)}, user=admin)
-    turn_message = "An agent turn is still running or awaiting approval; stop it first."
+    turn_message = "An agent turn is still running; stop it first."
     if is_preview:
         preview = _data(result)["delete_user"]
         assert preview["has_blockers"] is True
@@ -1105,7 +1105,7 @@ def test_instance_delete_uses_current_lifecycle_state(composed_tables: None, mod
         assert AgentTurn.objects.filter(pk=turn.pk).exists()
 
 
-@pytest.mark.parametrize("status", ["running", "awaiting_approval"])
+@pytest.mark.parametrize("status", ["running"])
 def test_agent_owner_cannot_delete_session_with_hidden_active_turn(composed_tables: None, status: str) -> None:
     """Delete authority over a private session never bypasses hidden active work."""
 
@@ -1120,7 +1120,7 @@ def test_agent_owner_cannot_delete_session_with_hidden_active_turn(composed_tabl
         assert not target.turns.active().exists()
         with pytest.raises(ValidationError) as refused:
             target.delete()
-    assert refused.value.messages == ["An agent turn is still running or awaiting approval; stop it first."]
+    assert refused.value.messages == ["An agent turn is still running; stop it first."]
     with system_context(reason="test.agents.hidden_active.verify"):
         assert AgentSession.objects.filter(pk=session.pk).exists()
         assert AgentTurn.objects.filter(pk=turn.pk, status=status).exists()
@@ -3579,7 +3579,7 @@ def test_deprovision_in_process_agent_closes_open_sessions(composed_tables: None
             runtime_status="running",
             lifecycle="ready",
         )
-        for status in ("running", "awaiting_approval"):
+        for status in ("running",):
             session = AgentSession.objects.create(agent=agent, user=admin, status=status)
             AgentTurn.objects.create(session=session, index=1, prompt="Message", status=status)
     result = _data(

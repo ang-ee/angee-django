@@ -17,8 +17,8 @@ from rebac.roles import grant as grant_role
 
 from angee.base.models.locks import StaleRevisionError
 from angee.workflows.definition import Definition, DefinitionInvalid
-from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet
 from angee.workflows.models import runs as runs_module
+from angee.workflows.querysets import StepAttemptQuerySet, StepRunQuerySet
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus, WaitingKind
 from angee.workflows.steps import Done, Fail, RetryPolicy, Step, StepMode, Superseded, Wait
@@ -186,7 +186,7 @@ def test_claim_retains_run_identity_and_parses_definition_once(execution, regist
     assert len(parsed) == 1
 
 
-@pytest.mark.parametrize("helper", ["context", "class", "direct"])
+@pytest.mark.parametrize("helper", ["context", "direct"])
 def test_success_output_is_validated_once_before_serialization(execution, register_step, helper):
     """Native validation aliases and serializers survive every completion constructor."""
     actor, _ = execution
@@ -208,15 +208,13 @@ def test_success_output_is_validated_once_before_serialization(execution, regist
             return value + 1
 
     class AliasedStep(Step[None, AliasedOutput, None]):
-        """Return the same raw output through each supported constructor."""
+        """Return the same raw output through either supported constructor."""
 
         key = "aliased_output"
 
         def run(self, ctx):
             if helper == "context":
                 return ctx.done({"raw": 21})
-            if helper == "class":
-                return self.done({"raw": 21})
             return Done(outcome="done", output={"raw": 21})
 
     register_step(AliasedStep)
@@ -1394,7 +1392,7 @@ def test_settlement_recovery_losing_its_fence_keeps_the_run_recoverable(executio
     workflow = load_workflow(document("entry"), key="expired_failure_recovery", actor=actor)
     run = WorkflowRun.objects.start(workflow, actor=actor)
     step_run = StepRun.system_queryset().get(run=run)
-    original_settle, original_record_failure = StepRunQuerySet.settle, runs_module._record_failure
+    original_settle, original_record_failure = StepRunQuerySet.settle, runs_module.record_failure
     settlements = []
 
     def reject_result(self, row, settlement):
@@ -1411,7 +1409,7 @@ def test_settlement_recovery_losing_its_fence_keeps_the_run_recoverable(executio
             yield
 
     monkeypatch.setattr(StepRunQuerySet, "settle", reject_result)
-    monkeypatch.setattr(runs_module, "_record_failure", expire_before_failure_recovery)
+    monkeypatch.setattr(runs_module, "record_failure", expire_before_failure_recovery)
 
     assert runner.execute(step_run.pk) is False
     assert settlements == ["done", "fail"]

@@ -11,7 +11,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 
-from angee.agents.constants import BUILTIN_MCP_ANGEE as BUILTIN_MCP_ANGEE
+from angee.agents.constants import BUILTIN_MCP_ANGEE
 from angee.agents.managers import MCPServerManager, MCPToolManager
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
@@ -207,8 +207,6 @@ class MCPTool(AuditMixin, ProtectedDataModel, concrete=True):
     description = models.TextField(blank=True)
     input_schema = models.JSONField(default=dict, blank=True)
     enabled = models.BooleanField(default=True)
-    requires_approval = models.BooleanField(default=False)
-    """Whether invoking this tool must suspend for an owner decision."""
 
     class Meta:
         """Django model options for MCP tools."""

@@ -7,7 +7,7 @@ opaque replay state without teaching the catalogue about their SDK types.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -19,9 +19,8 @@ SessionUpdateSink = Callable[[dict[str, Any]], None]
 class TurnOutcome:
     """Runtime-neutral result of one bounded agent turn."""
 
-    kind: Literal["completed", "needs_approval", "failed"]
+    kind: Literal["completed", "failed"]
     usage: dict[str, int] = field(default_factory=dict)
-    approval_requests: list[dict[str, Any]] = field(default_factory=list)
     error: str = ""
     """Public refusal composed by the runtime; never raw provider exception text."""
     text: str = ""
@@ -36,7 +35,6 @@ class SessionRunner:
         session: Any,
         turn: Any,
         *,
-        deferred_results: list[Mapping[str, Any]],
         emit: SessionUpdateSink,
         deadline: float,
     ) -> TurnOutcome:

@@ -180,7 +180,7 @@ def test_context_cancellation_follows_the_body_transaction(target, execution, re
         key = "cancel_other"
 
         def run(self, ctx):
-            ctx.cancel_run(ctx.load(WorkflowRun, target.sqid))
+            ctx.load(WorkflowRun, target.sqid).cancel_on_commit(ctx.actor)
             assert cancellations(sent) == []
             return ctx.fail("Discard this body.") if body_rollback else ctx.done(ctx.input)
 

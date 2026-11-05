@@ -406,7 +406,7 @@ def test_operator_wait_in_a_body_requires_duplicate_acknowledgement(execution, m
             if ctx.attempt.number == 1:
                 ctx.begin_effect()
                 raise Retryable("The effect's result was unavailable.")
-            assert ctx.retry_acknowledged
+            assert ctx.attempt.acknowledged_by_id is not None
             return ctx.done(ctx.input)
 
     register_step(MarkedItem)

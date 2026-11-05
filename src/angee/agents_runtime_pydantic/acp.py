@@ -67,21 +67,6 @@ def updates_for_event(event: Any) -> Iterable[dict[str, Any]]:
         }
 
 
-def approval_requests(requests: Any) -> list[dict[str, Any]]:
-    """Return neutral decision payloads for pydantic-ai approval requests."""
-
-    metadata = requests.metadata if isinstance(requests.metadata, dict) else {}
-    return [
-        {
-            "tool_call_id": call.tool_call_id,
-            "tool_name": call.tool_name,
-            "args": _tool_args(call),
-            "metadata": _json_value(metadata.get(call.tool_call_id, {})),
-        }
-        for call in requests.approvals
-    ]
-
-
 def _text_update(kind: str, text: str) -> dict[str, Any]:
     return {"sessionUpdate": kind, "content": {"type": "text", "text": text}}
 

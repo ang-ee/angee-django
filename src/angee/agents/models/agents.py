@@ -8,7 +8,7 @@ from contextlib import AbstractAsyncContextManager
 from typing import Any, ClassVar, cast
 
 from django.core.exceptions import ImproperlyConfigured
-from django.db import models, transaction
+from django.db import models, router, transaction
 from pydantic_ai.models import Model
 from rebac import SubjectRef, current_actor, system_context, to_subject_ref
 
@@ -229,12 +229,14 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Prote
         update_fields = kwargs.get("update_fields")
         names = None if update_fields is None else _update_field_names(update_fields)
         should_check_name = creating or names is None or "name" in names
-        with transaction.atomic():
+        using = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
+        with transaction.atomic(using=using):
             persisted = None
             if not creating and should_check_name:
-                persisted = type(self)._base_manager.filter(pk=self.pk).lock_if_supported(no_key=True).values(
-                    "name", *_READER_POLICY_FIELDS,
-                ).first()
+                persisted = (
+                    type(self)._base_manager.using(using).filter(pk=self.pk)
+                    .lock_if_supported(no_key=True).values("name", *_READER_POLICY_FIELDS).first()
+                )
             renamed = not creating and should_check_name and (persisted or {}).get("name") != self.name
             if renamed and self.conflict_kind == OperatorInstanceKind.WORKSPACE:
                 self.conflict_kind = None
@@ -247,11 +249,11 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Prote
             # Explicit policy writes always reconcile; a full save only when it changed the policy.
             explicit = names is not None and bool({*_READER_POLICY_FIELDS, "user"} & names)
             if not (creating or explicit) and names is None and persisted is not None:
-                after = type(self)._base_manager.filter(pk=self.pk).values(*_READER_POLICY_FIELDS).first()
+                after = type(self)._base_manager.using(using).filter(pk=self.pk).values(*_READER_POLICY_FIELDS).first()
                 explicit = after != {field: persisted[field] for field in _READER_POLICY_FIELDS}
             if creating or explicit:
                 # Read the persisted policy: a partial save can omit edited fields.
-                sync_resource_reader_role(type(self)._base_manager.get(pk=self.pk))
+                sync_resource_reader_role(type(self)._base_manager.using(using).get(pk=self.pk))
 
     def principal_subject(self) -> SubjectRef:
         """Return the service user's REBAC subject for actions this agent performs.
@@ -264,15 +266,6 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Prote
             raise ValueError("Agent has no service user and cannot act.")
         user: Any = self.user
         return to_subject_ref(user)
-
-    def is_transient_inference_error(self, error: Exception) -> bool:
-        """Classify with the bound inference provider, if this agent has a model."""
-
-        with system_context(reason="agents.agent.inference_error"):
-            model: Any = self.model
-            if model is None:
-                return False
-            return bool(model.is_transient_error(error))
 
     @property
     def runtime_backend(self) -> AgentRuntime:

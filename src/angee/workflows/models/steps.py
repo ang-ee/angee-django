@@ -472,14 +472,12 @@ class StepRun(ProtectedDataModel, concrete=True):
         ):
             return "This step cannot be retried in place."
         if failures is None:
-            failures = (
-                (row.pk, row.node_key)
-                for row in (
-                    apps.get_model("workflows", "StepRun")
-                    ._default_manager.db_manager(run._state.db)
-                    .filter(run_id=run.pk)
-                )
-                if definition.unrouted_failure([row])
+            failures = StepRunQuerySet.unrouted_failures(
+                definition,
+                apps.get_model("workflows", "StepRun")
+                ._default_manager.db_manager(run._state.db)
+                .filter(run_id=run.pk, status=StepRunStatus.FAILED)
+                .values_list("pk", "node_key"),
             )
         others = sorted(key for pk, key in failures if pk != self.pk)
         return f"Other unrouted failures remain: {', '.join(others)}." if others else None
@@ -648,7 +646,7 @@ class StepRecord(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
     object_id = models.PositiveBigIntegerField()
     record = GenericForeignKey("content_type", "object_id")
     label = models.CharField(max_length=200, blank=True, default="")
-    operation = models.CharField(max_length=7, choices=RecordOperation.choices, default=RecordOperation.READ)
+    operation = StateField(choices_enum=RecordOperation, default=RecordOperation.READ)
     objects = StepRecordManager()
 
     def __str__(self) -> str:

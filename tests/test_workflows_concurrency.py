@@ -26,7 +26,7 @@ from angee.jobs.enqueue import celery_app
 from angee.workflows import tasks as workflow_tasks
 from angee.workflows.decision_steps import DecisionStep
 from angee.workflows.definition import Definition
-from angee.workflows.managers import StepAttemptQuerySet, StepRunQuerySet, WorkflowRunQuerySet
+from angee.workflows.querysets import StepAttemptQuerySet, StepRunQuerySet, WorkflowRunQuerySet
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.steps import Retryable, RetryPolicy, StepMode
@@ -657,7 +657,7 @@ def test_t3_t4_worker_loss_obeys_the_durable_effect_marker(execution, register_s
                 if effect_idempotent is not None:
                     ctx.begin_effect()
                 raise WorkerDied()
-            assert ctx.retry_acknowledged is (effect_idempotent is False)
+            assert (ctx.attempt.acknowledged_by_id is not None) is (effect_idempotent is False)
             return ctx.done(ctx.input)
 
     LostWorker.effect_idempotent = bool(effect_idempotent)
@@ -707,7 +707,7 @@ def test_t4_marked_transient_failure_requires_acknowledged_redelivery(execution,
                 if failure == "retryable":
                     raise Retryable("Transient after effect")
                 raise OperationalError("Transient after effect") from psycopg.errors.DeadlockDetected("Transient")
-            assert ctx.retry_acknowledged
+            assert ctx.attempt.acknowledged_by_id is not None
             return ctx.done(ctx.input)
 
     register_step(MarkedTransient)

@@ -17,7 +17,6 @@ from anthropic import AsyncAnthropic
 from asgiref.sync import async_to_sync, sync_to_async
 from django.contrib.auth import get_user_model
 from openai import AsyncOpenAI, DefaultAsyncHttpxClient
-from pydantic_ai import DeferredToolRequests
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
     FunctionToolResultEvent,
@@ -35,7 +34,6 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.models.test import TestModel
-from pydantic_ai.toolsets import ApprovalRequiredToolset
 from pydantic_ai.toolsets.function import FunctionToolset
 from rebac import (
     RelationshipTuple,
@@ -47,7 +45,7 @@ from rebac import (
 )
 
 from angee.agents.context import render_view_context
-from angee.agents.models import AgentLifecycle, RuntimeStatus, SessionStatus, TurnStatus
+from angee.agents.models import AgentLifecycle, RuntimeStatus, TurnStatus
 from angee.agents.runtimes import ANTHROPIC_OAUTH_CLIENT_HEADERS, ANTHROPIC_OAUTH_SYSTEM_PREAMBLE
 from angee.agents.tasks import run_session
 from angee.agents.testing.models import Agent, AgentSession
@@ -271,7 +269,6 @@ def test_usage_limits_allow_a_multi_request_tool_turn(db: Any) -> None:
     outcome = async_to_sync(PydanticAISessionRunner()._run_async)(
         prompt="Use the lookup tool.",
         history=[],
-        deferred=None,
         instructions="",
         inference_model=TestModel(call_tools=["lookup"], custom_output_text="done"),
         toolsets=[FunctionToolset([lookup])],
@@ -288,7 +285,7 @@ def test_usage_limits_allow_a_multi_request_tool_turn(db: Any) -> None:
     assert outcome.kind == "completed"
     assert outcome.text == "done"
     assert outcome.usage["requests"] == 2
-    assert not isinstance(outcome.replay_state, DeferredToolRequests)
+    assert isinstance(outcome.replay_state, list)
 
 
 def test_view_context_persists_in_native_history_at_its_turn(
@@ -482,7 +479,6 @@ def test_stream_sink_can_stop_the_native_model_loop() -> None:
         async_to_sync(PydanticAISessionRunner()._run_async)(
             prompt="Return a streamed reply.",
             history=[],
-            deferred=None,
             instructions="",
             inference_model=TestModel(custom_output_text="A streamed reply."),
             toolsets=[],
@@ -492,59 +488,6 @@ def test_stream_sink_can_stop_the_native_model_loop() -> None:
         )
 
     assert raised.value is stopped
-
-
-def test_unsupported_approval_does_not_poison_native_model_history(
-    composed_tables: None,
-    capture_tasks: list[Any],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    del composed_tables, capture_tasks
-    owner = get_user_model().objects.create_user(username="native-session-owner")
-    with system_context(reason="test native agent session seed"):
-        agent = Agent.objects.create(
-            name="Native session agent",
-            owner=owner,
-            runtime_class="pydantic",
-            lifecycle=AgentLifecycle.READY,
-            runtime_status=RuntimeStatus.RUNNING,
-        )
-    calls: list[str] = []
-
-    def read_document() -> str:
-        """Read a document after approval."""
-        calls.append("read")
-        return "Document"
-
-    monkeypatch.setattr(
-        pydantic_runner,
-        "toolsets_for_session",
-        lambda selected: [ApprovalRequiredToolset(FunctionToolset([read_document]))],
-    )
-    monkeypatch.setattr(Agent, "inference_model", lambda selected: TestModel(call_tools=["read_document"]))
-    with actor_context(owner):
-        session = AgentSession.objects.start(agent, user=owner, context={})
-        prior_replay = session.replay_state
-        approval = session.post("Read the document")
-        run_session.run(session.pk)
-        approval.refresh_from_db()
-        session.refresh_from_db()
-        assert approval.error == "Tool approvals are not available yet."
-        assert session.replay_state == prior_replay
-        assert calls == []
-
-        monkeypatch.setattr(
-            Agent,
-            "inference_model",
-            lambda selected: TestModel(call_tools=[], custom_output_text="After"),
-        )
-        continued = session.post("Continue without the tool")
-        run_session.run(session.pk)
-        continued.refresh_from_db()
-        session.refresh_from_db()
-        assert continued.status == TurnStatus.COMPLETED
-        assert continued.text == "After"
-        assert session.status == SessionStatus.IDLE
 
 
 @pytest.mark.parametrize("expires", [False, True])
@@ -580,7 +523,6 @@ def test_stream_cancellation_and_deadline_close_sdk_client(monkeypatch: Any, exp
             PydanticAISessionRunner()._run_async(
                 prompt="Keep the request pending.",
                 history=[],
-                deferred=None,
                 instructions="",
                 inference_model=OpenAIInferenceBackend(provider).model("gpt-4.1"),
                 toolsets=[],

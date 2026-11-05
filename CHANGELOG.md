@@ -8,6 +8,21 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — workflow and agent owner cleanup
+
+- `workflows.StepRecord.operation` uses the enum-backed `StateField` with its
+  existing values. Projects must alter the field declaration in their own native
+  migration history after the materialized initial migration; stored operation
+  values are preserved.
+- Workflow trigger capture, retry failure selection, and agent MCP catalogue
+  lookup use their owning managers and querysets directly. Test-only forwarding
+  APIs and unused imports were removed.
+- The unfinished per-call tool approval path is removed. Projects must, in their
+  own native migration history, disable tools marked `requires_approval` before
+  dropping that field, map parked sessions and turns to error/failed with an
+  explanation, and narrow the active-turn constraint to running turns. No
+  selected tool is made callable by this cutover.
+
 ## Unreleased — test contract coverage
 
 - The PostgreSQL CI lane selects marked contracts; isolated settings, the notes

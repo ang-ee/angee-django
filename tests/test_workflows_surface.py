@@ -53,12 +53,12 @@ EXPECTED_VERBS = {
         "answered_decisions body_progress cancel_open changed_records claim collect_map count_redispatch "
         "dispatch due expire expired "
         "extend_deadline fail_attempt fenced for_map item_counts nodes settle terminal_runs to_ready to_running "
-        "to_succeeded to_waiting undispatched with_retry_batch"
+        "to_succeeded to_waiting undispatched unrouted_failures with_retry_batch"
     ),
     "workflows.StepWatch.manager": "record_change record_changes register wait_kind",
     "workflows.Trigger.manager": "admit disable drain enable enable_preview lock_grants reconcile_grants revoke_grant",
     "workflows.Trigger.queryset": "bulk_create update",
-    "workflows.TriggerEvent.manager": "record_change record_changes",
+    "workflows.TriggerEvent.manager": "record_changes",
     "workflows.TriggerEvent.queryset": "pending",
     "workflows.Workflow.manager": "authoring_outcomes install_definition publish save_draft save_identity",
     "workflows.WorkflowRun.manager": (
@@ -99,7 +99,7 @@ EXPECTED_SETTINGS = {
 
 EXPECTED_TEST_DRIVERS = (
     "RunFactory", "capture_tasks", "decide", "deliver_decision_wakes", "load_workflow", "observe",
-    "publish_draft", "register_steps", "run_until", "start_run",
+    "register_steps", "run_until", "start_run",
 )
 
 

@@ -83,7 +83,7 @@ def test_claim_prevents_a_user_delete_that_collected_a_pending_turn(session: Age
             wait_for_lock(pid, contender)
             claimed = session.claim_turn()
             assert claimed is not None and claimed.pk == queued.pk
-        with pytest.raises(ValidationError, match="An agent turn is still running or awaiting approval; stop it first"):
+        with pytest.raises(ValidationError, match="An agent turn is still running; stop it first"):
             contender.result(timeout=10)
     queued.refresh_from_db()
     session.refresh_from_db()

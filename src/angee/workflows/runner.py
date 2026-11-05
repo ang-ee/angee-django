@@ -23,14 +23,13 @@ from angee.base.exceptions import exception_text
 from angee.base.signals import publish_change
 from angee.jobs.timeouts import task_time_budget
 from angee.provenance.context import changeset
-from angee.workflows.querysets import RETRYABLE_SQLSTATES, _database_timeout, _record_failure, _sqlstate
+from angee.workflows.querysets import RETRYABLE_SQLSTATES, database_timeout, record_failure, sqlstate
 from angee.workflows.states import (
     RecordOperation,
     RunStatus,
     StepRunStatus,
 )
-from angee.workflows.steps import Fail, Retryable, StepMode, Superseded
-from angee.workflows.steps import _AttemptRecord as _AttemptRecord
+from angee.workflows.steps import Fail, Retryable, StepMode, Superseded, _AttemptRecord
 
 logger = logging.getLogger(__name__)
 TICK_CANDIDATE_LIMIT = 1000
@@ -57,6 +56,7 @@ class Runner:
 
     def execute(self, step_run_id: int, *, using: str | None = None) -> bool:
         """Claim once; DATABASE bodies share the claim transaction, IO bodies do not."""
+        # StepContext imports this module's runner, so resolve it after module load.
         from angee.workflows.context import StepContext
 
         using = router.db_for_write(self.step_model) if using is None else using
@@ -120,7 +120,7 @@ class Runner:
                     except Exception as failure:
                         settlement = self._failure(failure)
                     if settlement is None:
-                        with _record_failure("run change publication", using=run._state.db):
+                        with record_failure("run change publication", using=run._state.db):
                             publish_change(run, action="update", update_fields=None)
                     if settlement is not None:
                         run.advance(
@@ -144,7 +144,7 @@ class Runner:
             exception_text(failure),
             timed_out=isinstance(failure, SoftTimeLimitExceeded),
             retryable=isinstance(failure, (Retryable,))
-            or (isinstance(failure, OperationalError) and _sqlstate(failure) in RETRYABLE_SQLSTATES),
+            or (isinstance(failure, OperationalError) and sqlstate(failure) in RETRYABLE_SQLSTATES),
             stacktrace=traceback.format_exc(),
         )
 
@@ -153,7 +153,7 @@ class Runner:
         database = ctx.step.mode == StepMode.DATABASE
         try:
             with (
-                _database_timeout(ctx.step.timeout, using=ctx.run._state.db) if database else nullcontext(),
+                database_timeout(ctx.step.timeout, using=ctx.run._state.db) if database else nullcontext(),
                 transaction.atomic(using=ctx.run._state.db) if database else nullcontext(),
                 actor_context(ctx.actor),
                 changeset(
@@ -207,7 +207,7 @@ class Runner:
         with self.run_model.objects.db_manager(step_run._state.db).hold(step_run.run_id, timeout=remaining) as run:
             with (
                 system_context(reason="workflows.attempt"),
-                _database_timeout(step_run.deadline_at - timezone.now(), using=step_run._state.db),
+                database_timeout(step_run.deadline_at - timezone.now(), using=step_run._state.db),
                 transaction.atomic(using=step_run._state.db),
             ):
                 current = (
@@ -325,7 +325,7 @@ class Runner:
             candidates = candidates.exclude(run__status__in=RunStatus.terminal_values())
             for pk, run_id in list(candidates.order_by("pk").values_list("pk", "run_id")[:TICK_CANDIDATE_LIMIT]):
                 try:
-                    with _record_failure(f"tick candidate {pk}", using=candidates.db):
+                    with record_failure(f"tick candidate {pk}", using=candidates.db):
                         with self.run_model.objects.db_manager(candidates.db).hold(run_id, skip_locked=True) as run:
                             if run is None or run.is_terminal:
                                 continue

@@ -90,6 +90,5 @@ class DecisionQuerySet[T: Decision](ProtectedAppendOnlyQuerySet[T], ProtectedQue
         )
 
 
-
 class DecisionRecordQuerySet(ProtectedAppendOnlyQuerySet[Any], ProtectedQuerySet):
     """Concern links are authored once with their decision."""

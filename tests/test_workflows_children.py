@@ -7,7 +7,7 @@ from django.db.models.functions import Now
 from pydantic import BaseModel
 
 from angee.workflows.awaits import AwaitRunInput
-from angee.workflows.managers import WorkflowRunQuerySet
+from angee.workflows.querysets import WorkflowRunQuerySet
 from angee.workflows.runner import runner
 from angee.workflows.states import RunOrigin
 from angee.workflows.steps import Step, StepMode
