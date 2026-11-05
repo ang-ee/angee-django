@@ -10,13 +10,21 @@ through the same ``useList`` path as a model resource — no bespoke client path
 
 from __future__ import annotations
 
+import types as _types
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
+import strawberry
 import strawberry.experimental.pydantic
 from django.core.exceptions import ImproperlyConfigured
 from pydantic import BaseModel
+from strawberry.scalars import JSON
+from strawberry.types import get_object_definition
+from strawberry.types.field import StrawberryField
+from strawberry_django.resolvers import django_resolver
+from strawberry_django_aggregates import AggregateBuilder, compute_row_aggregation, group_by_alias
+from strawberry_django_aggregates.granularity import NumberGranularity
 from strawberry_django_hasura import (
     HasuraResource,
     InMemoryRowSource,
@@ -31,6 +39,7 @@ from angee.graphql.data.metadata import (
     DataResourcePolicy,
     attach_data_resource_contribution,
 )
+from graphql import GraphQLEnumType, GraphQLObjectType, GraphQLScalarType, get_named_type
 
 
 def pydantic_node(row_model: type[BaseModel], *, name: str, include_computed: bool = False) -> type:
@@ -45,6 +54,97 @@ def pydantic_node(row_model: type[BaseModel], *, name: str, include_computed: bo
     return strawberry.experimental.pydantic.type(
         model=row_model, all_fields=True, name=name, include_computed=include_computed
     )(type(name, (), {"__annotations__": {}}))
+
+
+def _attach_grouped_rows(
+    resource: HasuraResource,
+    *,
+    node: type,
+    source: RowSource,
+    groupable: Sequence[str],
+) -> None:
+    """Page computed buckets using the source and the native group key codec."""
+
+    assert resource.name is not None
+    assert resource.row_model is not None
+    assert resource.group_key_type is not None
+    assert resource.group_by_spec_type is not None
+    assert resource.filter_type is not None
+    assert resource.order_by_type is not None
+    page_type = strawberry.input(
+        type(
+            f"{resource.name}_grouped_row_page",
+            (),
+            {"__annotations__": {"key": JSON | None, "limit": int, "offset": int}, "offset": 0},
+        ),
+        name=f"{resource.name}_grouped_row_page",
+    )
+    resource.types.append(page_type)
+    builder = AggregateBuilder(
+        model=resource.row_model,
+        name_prefix=resource.name,
+        aggregate_fields=[],
+        group_by_fields=list(groupable),
+    )
+
+    def resolve_grouped_rows(
+        self: Any,
+        info: strawberry.Info,
+        group_by: Any,
+        pages: list[Any],
+        where: Any = None,
+        order_by: Any = None,
+    ) -> list[Any]:
+        del self
+        if len(pages) > 50:
+            raise ValueError("A grouped row read accepts at most 50 visible groups.")
+        if not pages:
+            return []
+        spec = builder.translate_group_by([group_by])
+        path, granularity = spec[0]
+        if path not in groupable:
+            raise ValueError(f"Unsupported grouped row key {path!r}.")
+        if isinstance(granularity, NumberGranularity):
+            raise ValueError("Grouped row pages require a date bucket, not a numeric date part.")
+        alias = group_by_alias(path, granularity)
+        key_type = info.schema._schema.get_type(get_object_definition(resource.group_key_type, strict=True).name)
+        assert isinstance(key_type, GraphQLObjectType)
+        scalar = get_named_type(key_type.fields[alias].type)
+        assert isinstance(scalar, (GraphQLScalarType, GraphQLEnumType))
+        result: list[Any] = []
+        keys: list[Any] = []
+        for page in pages:
+            if page.limit < 0 or page.offset < 0:
+                raise ValueError("Grouped row limit and offset must be nonnegative.")
+            if any(type(page.key) is type(key) and page.key == key for key in keys):
+                raise ValueError("A grouped row read accepts each key once.")
+            keys.append(page.key)
+            rows = source.query(info, where=where, order_by=order_by, limit=None, offset=None)
+            matching = []
+            for row in rows:
+                [bucket] = compute_row_aggregation((row,), model=resource.row_model, group_by=spec)
+                group_key = builder.shape_group_key(resource.group_key_type, bucket, spec)
+                value = getattr(group_key, alias)
+                key = scalar.serialize(value) if value is not None else None
+                if type(key) is type(page.key) and key == page.key:
+                    matching.append(row)
+            result.extend(matching[page.offset : page.offset + page.limit])
+        return result
+
+    resolve_grouped_rows.__annotations__ = {
+        "self": Any,
+        "info": strawberry.Info,
+        "group_by": cast(Any, resource.group_by_spec_type),
+        "pages": _types.GenericAlias(list, (page_type,)),
+        "where": resource.filter_type | None,
+        "order_by": _types.GenericAlias(list, (resource.order_by_type,)) | None,
+        "return": _types.GenericAlias(list, (node,)),
+    }
+    root = f"{resource.name}_grouped_rows"
+    resolve_grouped_rows.__name__ = root
+    field = cast(StrawberryField, strawberry.field(resolver=django_resolver(resolve_grouped_rows), name=root))
+    field.python_name = root
+    get_object_definition(resource.query, strict=True).fields.append(field)
 
 
 def hasura_pydantic_resource(
@@ -72,8 +172,8 @@ def hasura_pydantic_resource(
     every matching row when grouping asks for ``limit=None``.
 
     ``groupable`` names scalar row columns exposed through the library's
-    ``<name>_groups`` roots; their group axes are read from the library's
-    ``HasuraResource.row_model``, as the model path reads its Django model.
+    ``<name>_groups`` roots and the grouped-row page root. Their group axes
+    are read from the library's ``HasuraResource.row_model``.
 
     The attached ``DataResourceMetadata`` carries ``roots.list`` so the frontend
     treats the resource as Hasura-backed and drives it through ``useList``.
@@ -82,7 +182,7 @@ def hasura_pydantic_resource(
     if source is None:
         if rows is None:
             raise TypeError("hasura_pydantic_resource requires rows= or source=")
-        source = InMemoryRowSource(rows)
+        source = InMemoryRowSource(rows, id_field=id_field)
     node = pydantic_node(row_model, name=node_name or row_model.__name__)
     resource = hasura_run_query_resource(
         node,
@@ -93,6 +193,8 @@ def hasura_pydantic_resource(
         source=source,
         id_field=id_field,
     )
+    if groupable:
+        _attach_grouped_rows(resource, node=node, source=source, groupable=groupable)
     if resource.detail_root is None:
         raise ImproperlyConfigured(f"{model_label or name} Hasura resource did not expose a detail root.")
     attach_data_resource_contribution(
