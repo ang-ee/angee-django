@@ -8,15 +8,18 @@ from typing import Any
 from asgiref.sync import iscoroutinefunction
 from django.apps import apps
 from django.db import models, transaction
+from django.db.models import Q
 from django.db.models.signals import post_delete, pre_delete
 from django.dispatch import Signal
 from rebac import database_context, system_context
 from rebac.database import write_alias
 from rebac.resources import model_resource_type
+from rebac.signals import collected_for_delete
 
 from angee.base.signals import connect_for_models
 from angee.decisions.signals import decision_answered
 from angee.jobs.enqueue import enqueue_task
+from angee.workflows.states import RunStatus
 
 logger = logging.getLogger(__name__)
 
@@ -45,16 +48,41 @@ def revoke_deleted_trigger_grants(sender: Any, *, instance: Any, **kwargs: Any) 
     sender.objects.reconcile_grants(instance, ())
 
 
-def stop_deleted_record_runs(sender: Any, *, instance: Any, using: str | None = None, **kwargs: Any) -> None:
-    """Deletion leaves retained identities, but no run continues asking about them."""
+def stop_deleted_record_runs(
+    sender: type[models.Model],
+    *,
+    instances: tuple[models.Model, ...],
+    using: str,
+    **kwargs: Any,
+) -> None:
+    """Cancel runs about one admitted delete batch without a query per record."""
+
+    del sender, kwargs
+    if not instances:
+        return
 
     model = apps.get_model("workflows", "WorkflowRun")
-    using = using or instance._state.db
+    evidence = apps.get_model("workflows", "StepRecord")
     with database_context(using), system_context(reason="workflows.deleted_record"):
-        for run in (
-            model.objects.db_manager(using, hints={"instance": instance}).working_on(instance).select_related("run_as")
-        ):
-            run.cancel_on_commit(run.run_as)
+        changed = (
+            evidence._base_manager.using(using)
+            .filter(
+                evidence.record_filter_batch(instances),
+                operation__in=("created", "changed"),
+            )
+            .values("run_id")
+        )
+        runs = (
+            model.objects.db_manager(using, hints={"instance": instances[0]})
+            .exclude(
+                status__in=RunStatus.terminal_values(),
+            )
+            .filter(
+                model.record_filter_batch(instances) | Q(pk__in=changed),
+            )
+            .select_related("run_as")
+        )
+        model.cancel_many_on_commit((run, run.run_as) for run in runs)
 
 
 def connect() -> None:
@@ -62,7 +90,7 @@ def connect() -> None:
 
     decision_answered.connect(wake_decision, dispatch_uid="workflows.decision_answered")
     connect_for_models(
-        pre_delete,
+        collected_for_delete,
         stop_deleted_record_runs,
         applies=lambda model: (
             model._meta.app_label not in {"workflows", "decisions"} and bool(model_resource_type(model))

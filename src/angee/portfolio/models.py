@@ -9,13 +9,14 @@ upstream rows only when this addon is composed.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, router, transaction
+from django.db.models import OuterRef, Subquery
 from django_compose.models import Composable
 from rebac import (
     current_actor,
@@ -533,6 +534,38 @@ class Update(
         type(target)._base_manager.using(using).filter(pk=target.pk).update(
             health=target.health, health_updated_at=target.health_updated_at,
         )
+
+    @classmethod
+    def refresh_deleted_targets(cls, instances: tuple[Update, ...], *, using: str) -> None:
+        """Project surviving reports once per target model before a collected batch is deleted."""
+
+        deleted_ids = [instance.pk for instance in instances]
+        targets: dict[int, set[int]] = {}
+        for instance in instances:
+            targets.setdefault(instance.content_type_id, set()).add(instance.object_id)
+        for content_type_id, ids in targets.items():
+            target_model = ContentType.objects.db_manager(using).get_for_id(content_type_id).model_class()
+            if target_model is None:
+                continue
+            protected_target_model = cast(type[ProtectedDataModel], target_model)
+            tuple(
+                protected_target_model.system_queryset(lock=("self",))
+                .using(using)
+                .filter(pk__in=ids)
+                .order_by("pk")
+                .values_list("pk", flat=True)
+            )
+            latest = (
+                cls.objects.sudo(reason="portfolio.update.project_health")
+                .using(using)
+                .filter(content_type_id=content_type_id, object_id=OuterRef("pk"))
+                .exclude(pk__in=deleted_ids)
+                .order_by("-updated_at", "-created_at", "-pk")
+            )
+            target_model._base_manager.using(using).filter(pk__in=ids).update(
+                health=Subquery(latest.values("health")[:1]),
+                health_updated_at=Subquery(latest.values("updated_at")[:1]),
+            )
 
     def __str__(self) -> str:
         """Return a readable target-qualified health assertion."""

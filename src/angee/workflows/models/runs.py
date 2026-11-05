@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import traceback
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -706,14 +706,33 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
         actor, rechecking access and terminal state under the existing owner.
         Robust delivery failures are logged without interrupting other callbacks.
         """
-        run = self
-        using = write_alias(type(run), using=run._state.db, instance=run)
-        with database_context(using):
-            actor = run.require_access("write", actor)
+        type(self).cancel_many_on_commit(((self, actor),))
+
+    @classmethod
+    def cancel_many_on_commit(cls, entries: Iterable[tuple[WorkflowRun, Any]]) -> None:
+        """Check write for each actor's run set, then defer the same cancellation tasks."""
+
+        groups: dict[tuple[str, Any], list[WorkflowRun]] = {}
+        for run, actor in entries:
             if actor is None:
                 raise PermissionDenied("Deferred cancellation requires an actor.")
-            payload = {"run_id": run.pk, "actor": str(to_subject_ref(actor)), "using": using}
-            enqueue_task("workflows.cancel", kwargs=payload, robust=True, using=using)
+            using = write_alias(type(run), using=run._state.db, instance=run)
+            groups.setdefault((using, to_subject_ref(actor)), []).append(run)
+        for (using, actor), runs in groups.items():
+            ids = {run.pk for run in runs}
+            with database_context(using):
+                allowed = set(
+                    cls.objects.db_manager(using)
+                    .with_actor(actor)
+                    .with_action("write")
+                    .filter(pk__in=ids)
+                    .values_list("pk", flat=True)
+                )
+                if allowed != ids:
+                    raise PermissionDenied("Deferred cancellation requires run write access.")
+                for run in runs:
+                    payload = {"run_id": run.pk, "actor": str(actor), "using": using}
+                    enqueue_task("workflows.cancel", kwargs=payload, robust=True, using=using)
 
     def reopen(self) -> None:
         """Clear a locked run's terminal facts and replan retained step rows."""

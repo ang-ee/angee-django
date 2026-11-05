@@ -123,6 +123,20 @@ def test_partial_save_and_collector_delete_project_persisted_health(reportable: 
         assert (initiative.health, initiative.health_updated_at) == (None, None)
 
 
+@pytest.mark.parametrize("size", [1, 10, 100])
+def test_report_batch_delete_refreshes_health_once(reportable: dict[str, Any], size: int) -> None:
+    """One target projection covers every report removed by the collector."""
+
+    initiative = reportable["initiative"]
+    with system_context(reason="portfolio.update.batch_seed"):
+        rows = [Update.objects.create(target=initiative, health="at_risk") for _ in range(size)]
+    with system_context(reason="portfolio.update.batch_delete"), CaptureQueriesContext(connection) as queries:
+        Update.objects.filter(pk__in=[row.pk for row in rows]).delete()
+    initiative.refresh_from_db()
+    assert (initiative.health, initiative.health_updated_at) == (None, None)
+    assert len(queries) <= 50
+
+
 def test_report_bulk_projection_mutations_require_the_row_owner(reportable: dict[str, Any]) -> None:
     with actor_context(reportable["manager"]):
         report = Update.objects.report(target=reportable["initiative"], health="on_track")
