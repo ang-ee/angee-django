@@ -56,10 +56,16 @@ class CommentKind(TimelineKind):
             ), self.fold(record)
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
+        """Hydrate admitted comments with the sender label implied by their visible ``from``.
+
+        The record read admits the message; its sender and confirmed party name
+        are display facts of that message, so this to-one join is structural.
+        Standalone message lists retain their own sender and party read gates.
+        """
+
         rows, _ = self.source(record, actor)
-        messages = apps.get_model("messaging", "Message").objects
-        with actor_context(actor):
-            return rows.annotate(_sender_name=messages.sender_name_expression())
+        handles = apps.get_model("parties", "Handle").objects
+        return rows.annotate(_sender_name=handles.sender_name_expression("sender__", party_read_implied=True))
 
     def targets(self, row: Any) -> Iterable[models.Model]:
         if row._meta.label == "messaging.ThreadAttachment" and row.role != "chatter":

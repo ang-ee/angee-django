@@ -45,6 +45,10 @@ definition messaging/thread {
     permission write__owner = transfer
 }
 
+// Record-gated chatter admits each message before hydration. Its visible `from`
+// implies the sender handle's label and confirmed party display name for that
+// message; the timeline reads those display facts structurally. Standalone
+// message lists still apply the handle and party read gates.
 // A trashed message is withheld from every reader but its channel's managers
 // and admins. Record chatter moderators reach trashed comments through the
 // record-gated removed list instead, so its parts, files and reactions follow.
