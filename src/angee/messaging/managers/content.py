@@ -296,15 +296,16 @@ class PartManager[PartT: Part](_PartManagerBase[PartT]):
             fields["cid"] = cid if len(cid) <= max_cid_length else ""
         return super().create(**fields)
 
-    def reading_order_for_message(self, message: Message) -> list[Part]:
+    def reading_order_for_message(self, message: Message, *, rows: Sequence[Part] | None = None) -> list[Part]:
         """Return ``message`` parts flattened in depth-first reading order.
 
         Roots and siblings sort by ``(position, str(sqid))``. Unreachable
         orphan/cycle components follow in ``(parent_id, position, str(sqid))``
-        order, visiting each row once. See the manager's read/cache contract.
+        order, visiting each row once. ``rows`` is an already admitted set from
+        the caller; omitted rows use the manager's read/cache contract.
         """
 
-        by_id, siblings = self._parts_for_message(message)
+        by_id, siblings = self._parts_for_message(message, rows=rows)
         roots = sorted(
             by_id.values(),
             key=lambda part: (
@@ -378,16 +379,18 @@ class PartManager[PartT: Part](_PartManagerBase[PartT]):
             return []
         return self._walk_parts(siblings.get(part_id, []), siblings, seen={part_id}, stop_at=stop_at)
 
-    def _parts_for_message(self, message: Message) -> tuple[dict[Any, Part], dict[Any | None, list[Part]]]:
+    def _parts_for_message(
+        self, message: Message, *, rows: Sequence[Part] | None = None,
+    ) -> tuple[dict[Any, Part], dict[Any | None, list[Part]]]:
         """Index one message read by primary key and ordered siblings.
 
         Foreign parents remain absent from the index, so navigation never
         follows a forward FK descriptor onto another message.
         """
 
-        parts: list[Part] | None = None
+        parts: Sequence[Part] | None = rows
         cache = getattr(message, "_prefetched_objects_cache", None)
-        if cache is not None and "parts" in cache:
+        if parts is None and cache is not None and "parts" in cache:
             # Native prefetch already materialized these rows under the caller's
             # authorization. Re-evaluating its queryset would re-enter REBAC
             # before this owner can reject incomplete rows.

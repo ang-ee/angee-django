@@ -502,32 +502,43 @@ class MessageInbox:
         # admitted message; their target IDs only select candidates below.
         part_model = apps.get_model("messaging", "Part")
         parts = list(part_model._base_manager.filter(message_id=message.pk).select_related("fragment"))
-        files = {
-            row.pk: str(row.sqid)
-            for row in self.collection("storage", "File").filter(
-                pk__in=[part.file_id for part in parts if part.file_id]
-            )
+        readable_uses = part_model._base_manager.order_by().filter(
+            message_id__in=Subquery(self.messages.order_by().values("pk"))
+        )
+        file_ids = {part.file_id for part in parts if part.file_id is not None}
+        file_count = (
+            readable_uses.filter(file_id=OuterRef("pk"))
+            .values("file_id")
+            .annotate(total=Count("message_id", distinct=True))
+            .values("total")[:1]
+        )
+        file_rows = {
+            row.pk: row for row in self.collection("storage", "File")
+            .filter(pk__in=file_ids or {0})
+            .select_related("mime_type")
+            .annotate(_inbox_use_count=Subquery(file_count))
         }
-        targets = {"file_id": list(files), "fragment_id": [part.fragment_id for part in parts if part.fragment_id]}
-        counts = {
-            field: dict(
-                part_model._base_manager.order_by()
-                .filter(
-                    message_id__in=Subquery(self.messages.order_by().values("pk")),
-                    **{f"{field}__in": ids},
-                )
-                .values(field)
+        message._inbox_part_files = file_rows
+        message._inbox_part_file_ids = file_ids
+        message._inbox_part_files_actor = self.actor
+        files = {pk: str(row.sqid) for pk, row in file_rows.items()}
+        fragment_ids = [part.fragment_id for part in parts if part.fragment_id]
+        fragment_counts = (
+            dict(
+                readable_uses.filter(fragment_id__in=fragment_ids)
+                .values("fragment_id")
                 .annotate(total=Count("message_id", distinct=True))
-                .values_list(field, "total")
+                .values_list("fragment_id", "total")
             )
-            for field, ids in targets.items() if ids
-        }
+            if fragment_ids
+            else {}
+        )
         result = []
         for part in parts:
             if part.file_id in files:
                 result.append(
                     InboxPartUse(
-                        str(part.sqid), f"file:{files[part.file_id]}", counts.get("file_id", {}).get(part.file_id, 0)
+                        str(part.sqid), f"file:{files[part.file_id]}", file_rows[part.file_id]._inbox_use_count or 0
                     )
                 )
             if part.fragment_id:
@@ -537,7 +548,7 @@ class MessageInbox:
                     InboxPartUse(
                         str(part.sqid),
                         f"fragment:{fragment.sqid}",
-                        counts.get("fragment_id", {}).get(part.fragment_id, 0),
+                        fragment_counts.get(part.fragment_id, 0),
                     )
                 )
         return result

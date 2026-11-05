@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -39,14 +40,17 @@ from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
 from angee.integrate_vcs import schema as integrate_vcs_schema
 from angee.knowledge import schema as knowledge_schema
-from angee.messaging.testing.models import Channel
+from angee.messaging import schema as messaging_schema
+from angee.messaging.testing.models import Channel, Message, Part
 from angee.messaging.testing.models import Party as PartyModel
+from angee.nexus import schema as nexus_schema
 from angee.parties import schema as parties_schema
 from angee.projects import schema as projects_schema
 from angee.projects.testing.models import Milestone, Project, Task
 from angee.provenance.context import changeset as open_changeset
 from angee.timeline import schema as timeline_schema
 from tests.conftest import (
+    File,
     Page,
     RecordBinding,
     SchemaAddon,
@@ -57,6 +61,8 @@ from tests.conftest import (
     make_integration,
     vault_for,
 )
+from tests.messaging_campaign import make_user
+from tests.test_messaging_graphql import _storage_drive
 from tests.test_timeline import KINDS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +74,112 @@ TIMELINE = authored_graphql_document(ROOT / "src/angee/timeline/web/src/document
 KNOWLEDGE_DOCUMENTS = ROOT / "src/angee/knowledge/web/src/data/documents.ts"
 KNOWLEDGE_PAGES = authored_graphql_document(KNOWLEDGE_DOCUMENTS, "KnowledgeRecordPages")
 KNOWLEDGE_NOTES = authored_graphql_document(KNOWLEDGE_DOCUMENTS, "KnowledgeRecordNotes")
+MESSAGING_DOCUMENTS = ROOT / "src/angee/messaging/web/src/documents.ts"
+NEXUS_DOCUMENTS = ROOT / "src/angee/nexus/web/src/inbox/documents.ts"
+MESSAGE_FRAGMENTS = "\n".join(
+    authored_graphql_document(path, name)
+    for path, name in (
+        (NEXUS_DOCUMENTS, "InboxMessageFields"),
+        (MESSAGING_DOCUMENTS, "MessageSenderFields"),
+        (MESSAGING_DOCUMENTS, "MessageReplyFields"),
+        (MESSAGING_DOCUMENTS, "MessagePartFields"),
+        (MESSAGING_DOCUMENTS, "MessageReaderFields"),
+    )
+)
+NEXUS_MESSAGE = authored_graphql_document(NEXUS_DOCUMENTS, "InboxMessage") + MESSAGE_FRAGMENTS
+SOURCE_COPIES = "\n".join((
+    authored_graphql_document(MESSAGING_DOCUMENTS, "MessageSourceCopiesDocument"),
+    authored_graphql_document(MESSAGING_DOCUMENTS, "TranscriptMessageFields"),
+    authored_graphql_document(MESSAGING_DOCUMENTS, "ReactionGroupFields"),
+    *(authored_graphql_document(MESSAGING_DOCUMENTS, name) for name in (
+        "MessageSenderFields", "MessageReplyFields", "MessagePartFields",
+    )),
+))
+
+
+def test_message_part_document_budgets(composed_tables: None, capture_graphql_document, tmp_path) -> None:
+    """The authored message and source-copies reads stay flat as MIME parts grow."""
+
+    del composed_tables
+    owner, outsider = make_user("message-budget-owner"), make_user("message-budget-outsider")
+    channel = make_integration("message-budget", model=Channel, owner=owner)
+    with system_context(reason="test.document_budget.message"):
+        drive = _storage_drive(tmp_path, owner=owner)
+        message = Message.objects.create(channel=channel, created_by=owner, status="synced")
+        hidden_message = Message.objects.create(created_by=outsider)
+        hidden_parent = Part.objects.create(message=hidden_message, position=0)
+        files = [
+            File.objects.create(
+                drive=drive, owner=owner if index < 3 else outsider,
+                visibility="inherited" if index < 3 else "record",
+                filename=f"budget-{index}.txt", content_hash=f"{index + 1:064x}",
+            )
+            for index in range(4)
+        ]
+    schema = addon_schema(messaging_schema.schemas, "console", nexus_schema.schemas)
+    message_variables = {"id": str(message.sqid), "sender": "", "circle": ""}
+    reads = {}
+    copies = {}
+    previous = None
+    for index in range(40):
+        with system_context(reason="test.document_budget.message.part"):
+            part = Part.objects.create(
+                message=message, parent=previous,
+                position=index, created_by=owner,
+                file=files[{4: 0, 11: 1, 39: 2}[index]] if index in (4, 11, 39) else None,
+            )
+        previous = part
+        if index + 1 in (1, 5, 12, 40):
+            count = index + 1
+            reads[count] = capture_graphql_document(schema, NEXUS_MESSAGE, message_variables, actor=owner)
+            copies[count] = capture_graphql_document(
+                schema, SOURCE_COPIES, {"id": str(message.sqid)}, actor=owner,
+            )
+            assert len(reads[count].data["inbox_message"]["message"]["parts"]) == count
+            assert len(copies[count].data["message_source_copies"][0]["parts"]) == count
+
+    for count in (5, 12, 40):
+        reads[count].assert_flat_from(reads[1])
+        copies[count].assert_flat_from(copies[5])
+    for read in reads.values():
+        assert read.statement_count == 17  # re-measure after integration
+        read.assert_bytes(total=450_000, largest=135_000, cause="bounded actor-scoped part and file reads")
+        read.assert_no_audit_writes()
+    for count, read in copies.items():
+        assert read.statement_count == (12 if count == 1 else 13)
+        read.assert_bytes(total=310_000, largest=85_000, cause="batched parts and present files")
+        read.assert_no_audit_writes()
+
+    with system_context(reason="test.document_budget.message.hidden_part"):
+        Part.objects.create(message=message, parent=hidden_parent, position=40, file=files[3], created_by=owner)
+    hidden_read = capture_graphql_document(schema, NEXUS_MESSAGE, message_variables, actor=owner)
+    assert hidden_read.statement_count == reads[40].statement_count + 1
+    nested_parts = hidden_read.data["inbox_message"]["message"]["parts"]
+    assert nested_parts[-1]["parent"] is None
+    assert nested_parts[-1]["file"] is None
+    assert [part["file"]["id"] for part in nested_parts if part["file"] is not None] == [
+        str(file.sqid) for file in files[:3]
+    ]
+    baseline = capture_graphql_document(
+        schema,
+        "query Parts($id: String!) { parts(where: {message: {_eq: $id}}) { ...MessagePartFields } }\n"
+        + authored_graphql_document(MESSAGING_DOCUMENTS, "MessagePartFields"),
+        {"id": str(message.sqid)}, actor=owner,
+    )
+    baseline_by_id = {part["id"]: part for part in baseline.data["parts"]}
+    expected_parts = [baseline_by_id[part["id"]] for part in nested_parts]
+    assert json.dumps(nested_parts) == json.dumps(expected_parts)
+    hidden_copies = capture_graphql_document(schema, SOURCE_COPIES, {"id": str(message.sqid)}, actor=owner)
+    assert json.dumps(hidden_copies.data["message_source_copies"][0]["parts"]) == json.dumps(expected_parts)
+    with system_context(reason="test.document_budget.message.shared_use"):
+        second = Message.objects.create(channel=channel, created_by=owner, status="synced")
+        Part.objects.create(message=message, file=files[0], created_by=owner)
+        Part.objects.create(message=second, file=files[0], created_by=owner)
+    shared_read = capture_graphql_document(schema, NEXUS_MESSAGE, message_variables, actor=owner)
+    assert next(
+        use["count"] for use in shared_read.data["inbox_message"]["uses"]
+        if use["target"] == f"file:{files[0].sqid}"
+    ) == 2
 
 
 @pytest.fixture
