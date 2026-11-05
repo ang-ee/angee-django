@@ -36,9 +36,9 @@ from angee.iam.graphql.actions import resolve_action_target
 from angee.iam.graphql.capabilities import permissions_field
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import (
-    RECORD_REFERENCE_ANNOTATIONS,
     RecordReferenceNode,
     actor_scoped_public_id,
+    record_reference_field,
 )
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.storage import exceptions
@@ -176,14 +176,8 @@ class FileAttachmentType(RecordReferenceNode):
     label: auto
     file: FileType
 
-    model_label: str | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_model, annotate=RECORD_REFERENCE_ANNOTATIONS,
-        only=["content_type_id", "object_id"],
-    )
-    record_id: PublicID | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_id, annotate=RECORD_REFERENCE_ANNOTATIONS,
-        only=["content_type_id", "object_id"],
-    )
+    model_label: str | None = record_reference_field(FileAttachment, resolver=RecordReferenceNode.reference_model)
+    record_id: PublicID | None = record_reference_field(FileAttachment, resolver=RecordReferenceNode.reference_id)
 
 
 @strawberry.type

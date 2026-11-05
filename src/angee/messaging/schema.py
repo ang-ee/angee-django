@@ -50,10 +50,10 @@ from angee.iam.graphql.actions import action_target, authorized_permission_targe
 from angee.iam.graphql.capabilities import held_permissions, permissions_field
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import (
-    RECORD_REFERENCE_ANNOTATIONS,
     RecordReferenceNode,
     actor_scoped_to_many,
     actor_scoped_to_one,
+    record_reference_field,
 )
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.schema import UserType
@@ -854,14 +854,8 @@ class ThreadAttachmentType(RecordReferenceNode):
     created_at: auto
     updated_at: auto
 
-    record_model: str | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_model, annotate=RECORD_REFERENCE_ANNOTATIONS,
-        only=["content_type_id", "object_id"],
-    )
-    record_id: PublicID | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_id, annotate=RECORD_REFERENCE_ANNOTATIONS,
-        only=["content_type_id", "object_id"],
-    )
+    record_model: str | None = record_reference_field(ThreadAttachment, resolver=RecordReferenceNode.reference_model)
+    record_id: PublicID | None = record_reference_field(ThreadAttachment, resolver=RecordReferenceNode.reference_id)
 
 
 @strawberry_django.type(ThreadFollower)

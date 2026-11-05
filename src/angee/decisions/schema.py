@@ -28,10 +28,10 @@ from angee.iam.graphql.actions import authorized_permission_target
 from angee.iam.graphql.capabilities import permission_expression, permissions_field
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import (
-    RECORD_REFERENCE_ANNOTATIONS,
     RecordReferenceNode,
     actor_scoped_to_many,
     actor_scoped_to_one,
+    record_reference_field,
     with_record_reference_access,
 )
 from angee.iam.schema import UserType
@@ -52,14 +52,8 @@ def _concern_links(info: strawberry.Info) -> Prefetch:
 @strawberry_django.type(DecisionRecord)
 class DecisionRecordType(RecordReferenceNode):
     decision: DecisionType = actor_scoped_to_one("decision")
-    record_model: str | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_model, annotate=RECORD_REFERENCE_ANNOTATIONS,
-        only=["content_type_id", "object_id"],
-    )
-    record_id: PublicID | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_id, annotate=RECORD_REFERENCE_ANNOTATIONS,
-        only=["content_type_id", "object_id"],
-    )
+    record_model: str | None = record_reference_field(DecisionRecord, resolver=RecordReferenceNode.reference_model)
+    record_id: PublicID | None = record_reference_field(DecisionRecord, resolver=RecordReferenceNode.reference_id)
 
 
 @strawberry_django.type(Decision)

@@ -1,10 +1,13 @@
 """Record-reference resource filters preserve model identity and viewer scope."""
 
+import json
+
 import pytest
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, models
+from django.http import HttpRequest
 from django.test.utils import CaptureQueriesContext, isolate_apps
 from rebac import actor_context, system_context
 
@@ -15,14 +18,24 @@ from angee.graphql.data.hasura import hasura_model_resource
 from angee.graphql.schema import GraphQLSchemas
 from angee.iam.graphql.capabilities import permission_annotations
 from angee.iam.graphql.relations import (
+    RECORD_REFERENCE_ANNOTATIONS,
     RecordReferenceNode,
-    _record_reference_hint,
     actor_scoped_relation_expression,
+    prove_record_references,
     with_record_reference_access,
 )
 from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.knowledge import schema as knowledge_schema
-from tests.conftest import Page, SchemaAddon, Vault, addon_schema, create_user, execute_schema, result_data, vault_for
+from tests.conftest import (
+    Page,
+    SchemaAddon,
+    Vault,
+    addon_schema,
+    create_user,
+    execute_schema,
+    result_data,
+    vault_for,
+)
 from tests.tables import model_tables
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -167,6 +180,47 @@ def test_model_and_id_filter_uses_one_bounded_target_proof(referenced_decisions,
             assert f'FROM "{records[1]._meta.db_table}"' not in sql
             assert sql.count("_angee_reference_key") == 1
             assert len(sql.encode()) < 100_000
+
+
+def test_display_list_statement_does_not_inline_target_policies(referenced_decisions):
+    owner, _outsider, records, decisions = referenced_decisions
+    schema = addon_schema(decision_schema.schemas, "console")
+    query = """{
+      decision_records(order_by: {id: asc}) { id record_model record_id }
+    }"""
+    with CaptureQueriesContext(connection) as captured:
+        payload = result_data(execute_schema(schema, query, user=owner))
+    assert payload == {
+        "decision_records": [
+            {"id": row.sqid, "record_model": record._meta.label, "record_id": record.sqid}
+            for row, record in zip(decisions, records, strict=True)
+        ]
+    }
+    statements = [item["sql"] for item in captured]
+    list_statements = [sql for sql in statements if 'AS "_angee_record_readable"' in sql]
+    assert len(list_statements) == 1
+    assert len(list_statements[0].encode()) < 200_000
+    assert list_statements[0].count("WITH RECURSIVE") <= 1
+    assert len(statements) <= 15
+
+
+def test_record_reference_page_proofs_reuse_request_admissions(composed_tables):
+    owner = create_user("reference-proof-memo")
+    other = create_user("reference-proof-other")
+    vault = vault_for(owner)
+    request = HttpRequest()
+    content_type = ContentType.objects.get_for_model(Vault)
+    first = [DecisionRecord(content_type=content_type, object_id=str(vault.pk))]
+    second = [DecisionRecord(content_type=content_type, object_id=str(vault.pk))]
+    with actor_context(owner):
+        prove_record_references(first, request=request)
+        with CaptureQueriesContext(connection) as captured:
+            prove_record_references(second, request=request)
+    assert len(captured) == 0
+    assert second[0]._angee_record_readable is first[0]._angee_record_readable is True
+    with actor_context(other):
+        prove_record_references(first, request=request)
+    assert first[0]._angee_record_readable is False
 
 
 @pytest.mark.parametrize("filter_body,expected_positions", [
@@ -315,7 +369,7 @@ def test_reference_node_and_hint_declaration_are_query_free(referenced_decisions
     with actor_context(owner), CaptureQueriesContext(connection) as queries:
         rows = DecisionRecord.objects.with_actor(owner)
         assert RecordReferenceNode.get_queryset(rows, None) is rows
-        hint = _record_reference_hint(None)
+        hint = RECORD_REFERENCE_ANNOTATIONS["_angee_record_readable"](None)
     assert isinstance(hint, models.Expression)
     assert list(queries) == []
 
@@ -382,6 +436,29 @@ def test_selected_reference_fields_batch_aliases_and_fragments(referenced_decisi
     ]
 
 
+def test_nested_record_references_keep_the_same_payload(referenced_decisions):
+    owner, _outsider, records, decisions = referenced_decisions
+    schema = addon_schema(decision_schema.schemas, "console")
+    payload = result_data(
+        execute_schema(
+            schema,
+            """{
+      decisions(order_by: {id: asc}) { id records { record_model record_id } }
+    }""",
+            user=owner,
+        )
+    )
+    assert payload == {
+        "decisions": [
+            {
+                "id": Decision.system_queryset().get(pk=row.decision_id).sqid,
+                "records": [{"record_model": record._meta.label, "record_id": record.sqid}],
+            }
+            for row, record in zip(decisions, records, strict=True)
+        ]
+    }
+
+
 def test_reference_projection_keeps_authored_actor_until_redeclared(composed_tables):
     owner, other = create_user("reference-snapshot-owner"), create_user("reference-snapshot-other")
     records = (vault_for(owner), vault_for(other))
@@ -402,6 +479,33 @@ def test_reference_projection_keeps_authored_actor_until_redeclared(composed_tab
     assert list(changed_actor.values_list("_angee_record_readable", flat=True)) == [True, False]
     refreshed = with_record_reference_access(changed_actor)
     assert list(refreshed.values_list("_angee_record_readable", flat=True)) == [False, True]
+    schema = addon_schema(decision_schema.schemas, "console")
+    payload = result_data(
+        execute_schema(
+            schema,
+            """{
+      decision_records(order_by: {id: asc}) { id record_model record_id }
+    }""",
+            user=owner,
+        )
+    )
+    expected = {
+        "decision_records": [
+            {
+                "id": row.sqid,
+                "record_model": record._meta.label if index == 0 else None,
+                "record_id": record.sqid if index == 0 else None,
+            }
+            for index, (row, record) in enumerate(
+                zip(
+                    DecisionRecord.system_queryset().filter(decision__in=decisions).order_by("pk"),
+                    records,
+                    strict=True,
+                )
+            )
+        ]
+    }
+    assert json.dumps(payload, separators=(",", ":")) == json.dumps(expected, separators=(",", ":"))
 
 
 def test_selected_reference_readability_groups_by_boolean_not_target_identity(referenced_decisions):

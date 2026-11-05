@@ -5,11 +5,16 @@ import {
   type Row,
 } from "@angee/metadata";
 import {
+  groupedListQueryMeta,
+  stableSerialize,
   useAuthoredQueryBatch,
+  type AngeeListBatchEntry,
+  type AngeeListBatchScope,
   type AuthoredDocument,
   type AuthoredVariables,
   type DocumentData,
   type GroupByResult,
+  type ListBatchTarget,
   type TypedDocumentNode,
 } from "@angee/refine";
 import type {
@@ -26,6 +31,60 @@ export interface CollectionPageRequest {
   order: ResourceListOrder | undefined;
   page: number;
   pageSize: number;
+}
+
+/** Fetch expanded native leaf pages together, isolating failed aliases on retry. */
+export function useGroupedNativePages(
+  target: ListBatchTarget | null,
+  scopes: readonly AngeeListBatchScope[],
+  fields: readonly string[],
+  modelLabel: string | undefined,
+): ReadonlyMap<string, AngeeListBatchEntry> {
+  const models = useCanonicalResourceModelLabels(modelLabel ? [modelLabel] : []);
+  const targetKey = stableSerialize(target);
+  const scopesKey = stableSerialize(scopes);
+  const fieldsKey = stableSerialize(fields);
+  const request = React.useMemo(
+    () => target && scopes.length > 0 ? groupedListQueryMeta(target, fields, scopes) : null,
+    [targetKey, scopesKey, fieldsKey],
+  );
+  const results = useAuthoredQueryBatch(request ? [{
+    key: "grouped-leaves",
+    document: request.document,
+    variables: request.variables,
+    models,
+  }] : [], { dataProviderName: target?.dataProviderName, errorNotification: false });
+  const result = results.get("grouped-leaves");
+  // A failed shared document cannot identify which alias failed. Retry only on
+  // that path so healthy buckets remain visible beside a failed leaf.
+  const fallbackRequests = React.useMemo(() => {
+    if (!result?.error || !target) return [];
+    return scopes.map((scope) => ({
+      key: scope.key,
+      ...groupedListQueryMeta(target, fields, [scope]),
+      models,
+    }));
+  }, [result?.error, targetKey, scopesKey, fieldsKey, models]);
+  const fallback = useAuthoredQueryBatch(fallbackRequests, {
+    dataProviderName: target?.dataProviderName,
+    errorNotification: false,
+  });
+  const refetchBatch = React.useCallback(() => { void result?.refetch(); }, [result?.refetch]);
+  return React.useMemo(() => new Map(scopes.map((scope, index) => {
+    const entry = result?.error ? fallback.get(scope.key) : result;
+    const data = entry?.data;
+    const alias = result?.error ? 0 : index;
+    const aggregate = data?.[`group_${alias}_aggregate`] as
+      | { aggregate?: { count?: number } }
+      | undefined;
+    return [scope.key, {
+      rows: (data?.[`group_${alias}_rows`] ?? []) as readonly Row[],
+      total: aggregate?.aggregate?.count,
+      fetching: entry?.isFetching ?? Boolean(result?.error),
+      error: entry?.error ?? null,
+      refetch: result?.error ? () => { void entry?.refetch(); } : refetchBatch,
+    }];
+  })), [scopesKey, result, fallback, refetchBatch]);
 }
 
 export interface CollectionGroupRequest extends CollectionPageRequest {

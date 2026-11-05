@@ -34,10 +34,10 @@ from angee.iam.graphql.actions import authorized_action_target, authorized_permi
 from angee.iam.graphql.capabilities import permission_annotations, permission_expression, permissions_field
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import (
-    RECORD_REFERENCE_ANNOTATIONS,
     RecordReferenceNode,
     actor_scoped_to_many,
     actor_scoped_to_one,
+    record_reference_field,
     with_record_reference_access,
 )
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
@@ -245,14 +245,8 @@ class WorkflowRunType(RecordReferenceNode):
         """Project the model's viewer-specific replacement admission predicate."""
         return bool(cast(Any, self).can_reprocess(get_current_user(info)))
 
-    subject_model: str | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_model, only=["subject_content_type_id", "subject_object_id"],
-        annotate=RECORD_REFERENCE_ANNOTATIONS,
-    )
-    subject_id: PublicID | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_id, only=["subject_content_type_id", "subject_object_id"],
-        annotate=RECORD_REFERENCE_ANNOTATIONS,
-    )
+    subject_model: str | None = record_reference_field(WorkflowRun, resolver=RecordReferenceNode.reference_model)
+    subject_id: PublicID | None = record_reference_field(WorkflowRun, resolver=RecordReferenceNode.reference_id)
 
 
 @strawberry.type
@@ -432,14 +426,8 @@ class StepWatchType(RecordReferenceNode):
 
     step_run: StepRunType | None = actor_scoped_to_one("step_run")
 
-    record_model: str | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
-        annotate=RECORD_REFERENCE_ANNOTATIONS,
-    )
-    record_id: PublicID | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_id, only=["content_type_id", "object_id"],
-        annotate=RECORD_REFERENCE_ANNOTATIONS,
-    )
+    record_model: str | None = record_reference_field(StepWatch, resolver=RecordReferenceNode.reference_model)
+    record_id: PublicID | None = record_reference_field(StepWatch, resolver=RecordReferenceNode.reference_id)
 
 
 @strawberry_django.type(StepRecord)
@@ -452,14 +440,8 @@ class StepRecordType(RecordReferenceNode):
     label: auto
     created_at: auto
 
-    record_model: str | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
-        annotate=RECORD_REFERENCE_ANNOTATIONS,
-    )
-    record_id: PublicID | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_id, only=["content_type_id", "object_id"],
-        annotate=RECORD_REFERENCE_ANNOTATIONS,
-    )
+    record_model: str | None = record_reference_field(StepRecord, resolver=RecordReferenceNode.reference_model)
+    record_id: PublicID | None = record_reference_field(StepRecord, resolver=RecordReferenceNode.reference_id)
 
 
 @strawberry.type
@@ -546,14 +528,8 @@ class TriggerEventType(RecordReferenceNode):
     admitted_at: auto
     rejection: auto
 
-    record_model: str | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_model, only=["record_content_type_id", "record_object_id"],
-        annotate=RECORD_REFERENCE_ANNOTATIONS,
-    )
-    record_id: PublicID | None = strawberry_django.field(
-        resolver=RecordReferenceNode.reference_id, only=["record_content_type_id", "record_object_id"],
-        annotate=RECORD_REFERENCE_ANNOTATIONS,
-    )
+    record_model: str | None = record_reference_field(TriggerEvent, resolver=RecordReferenceNode.reference_model)
+    record_id: PublicID | None = record_reference_field(TriggerEvent, resolver=RecordReferenceNode.reference_id)
 
 
 _WORKFLOW_RESOURCE = hasura_model_resource(

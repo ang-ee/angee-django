@@ -17,7 +17,9 @@ from angee.graphql.data import contracts as data_contract
 from angee.graphql.data.extensions import ResourceExtensions
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend
 from angee.iam.graphql.access import assert_no_gated_read_fields
+from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import (
+    RecordReferencePageProof,
     actor_scoped_relation_expression,
     with_record_reference_access,
 )
@@ -81,6 +83,9 @@ def contribute(model):
         relation_expression=actor_scoped_relation_expression,
         validate_fields=_validate_fields,
         prepare_queryset=_prepare_queryset,
+        row_extensions=(
+            lambda node: (RecordReferencePageProof(node),) if issubclass(node, ProtectedNode) else ()
+        ) if issubclass(model, RebacMixin) else None,
     )
     if not issubclass(model, RebacMixin):
         return common

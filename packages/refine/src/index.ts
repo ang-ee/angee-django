@@ -1,6 +1,7 @@
 export { refineFieldsFromPaths, selectedFieldsPresent } from "./selections";
 export {
   listQueryMeta,
+  groupedListQueryMeta,
   type ListQueryFieldArgument,
   type ListQueryFieldBinding,
   type ListQueryTarget,

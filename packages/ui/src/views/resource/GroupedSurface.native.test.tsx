@@ -2,7 +2,6 @@
 
 import * as React from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { GetListParams } from "@refinedev/core";
 import { ResourceQuery, schemaFieldMetadataFromDataResources, type Row } from "@angee/metadata";
 import { testDataResource } from "@angee/metadata/testing";
 import { OperationDocumentsProvider } from "@angee/refine";
@@ -46,20 +45,25 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false }: { failed
   let show!: React.Dispatch<React.SetStateAction<boolean>>;
   let delayPage: number | null = null;
   let rowTotal = 120;
-  let resolvePage!: (value: { data: Row[]; total: number }) => void;
+  let resolvePage!: (value: { data: { data: Record<string, unknown> } }) => void;
   const lifecycle = { mounts: 0, unmounts: 0 };
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
+    const batch = meta!.gqlVariables as Record<string, unknown>;
+    if ("group_0_limit" in batch) {
+      const page = (Number(batch.group_0_offset) / Number(batch.group_0_limit)) + 1;
+      if (page === delayPage) {
+        return new Promise<{ data: { data: Record<string, unknown> } }>((resolve) => { resolvePage = resolve; });
+      }
+      return { data: { data: {
+        group_0_rows: [{ id: `page-${page}`, title: "Native row", status: "active" }],
+        group_0_aggregate: { aggregate: { count: rowTotal } },
+      } } };
+    }
     const variables = meta!.gqlVariables as { group_by: { field: string }[]; limit: number; offset: number };
     const field = variables.group_by[0]!.field;
     if (failedRoot && field === "status") throw new Error("Group query unavailable");
     return { data: { notes_groups: [{ key: { [field]: field === "status" ? "active" : `Title ${variables.offset}` },
       aggregate: { count: rowTotal } }], totalCount: field === "status" ? 1 : 130 } };
-  });
-  const getList = vi.fn(async ({ pagination }: GetListParams) => {
-    if (pagination?.currentPage === delayPage) {
-      return new Promise<{ data: Row[]; total: number }>((resolve) => { resolvePage = resolve; });
-    }
-    return { data: [{ id: `page-${pagination?.currentPage}`, title: "Native row", status: "active" }], total: rowTotal };
   });
   function Surface() {
     const resourceView = useResourceView();
@@ -77,7 +81,7 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false }: { failed
     return visible ? <Surface /> : <span>Record form owns this region</span>;
   }
   render(
-    <Provider metadata={activeMetadata} dataProvider={{ custom, getList }}>
+    <Provider metadata={activeMetadata} dataProvider={{ custom }}>
       <OperationDocumentsProvider documents={{ console: { groups: { "notes.Note": "query Groups { notes_groups { key } totalCount }" } } }}>
         <ResourceViewProvider resource={resource.modelLabel} scope="local" initialState={{ ...initialState, page, ...(summaryOnly ? { groupStack: [{ field: "status" }] } : {}) }}><Parent /></ResourceViewProvider>
       </OperationDocumentsProvider>
@@ -85,15 +89,22 @@ function fixture({ failedRoot = false, page = 1, summaryOnly = false }: { failed
   );
   const client = clients.at(-1)!;
   const header = (depth: number) => surface.groupedItems.filter((item) => item.kind === "groupHeader").find((item) => item.depth === depth);
+  const leafQueries = () => custom.mock.calls.map(([request]) => request.meta?.gqlVariables as Record<string, unknown>)
+    .filter((variables) => variables && "group_0_limit" in variables);
+  const groupQueries = () => custom.mock.calls.map(([request]) => request.meta?.gqlVariables as
+    { group_by?: { field: string }[]; limit?: number; offset?: number }).filter((variables) => variables?.group_by);
   return { get view() { return view; }, get surface() { return surface; }, header, show: (visible: boolean) => show(visible),
-    custom, getList, lifecycle, refreshCount: async (count: number) => { rowTotal = count; await client.invalidateQueries(); }, delay: (page: number) => { delayPage = page; }, release: () => resolvePage({ data: [{ id: "obsolete", title: "Old filter row" }], total: 120 }) };
+    custom, leafQueries, groupQueries, lifecycle, refreshCount: async (count: number) => { rowTotal = count; await client.invalidateQueries(); },
+    delay: (page: number) => { delayPage = page; },
+    release: () => resolvePage({ data: { data: { group_0_rows: [{ id: "obsolete", title: "Old filter row" }],
+      group_0_aggregate: { aggregate: { count: 120 } } } } }) };
 }
 
 test("server summary axes without a row identity render buckets without leaf requests", async () => {
   const f = fixture({ summaryOnly: true });
   await waitFor(() => expect(f.header(0)?.label).toBe("active"));
   expect(f.surface.list.error).toBeNull();
-  expect(f.getList).not.toHaveBeenCalled();
+  expect(f.leafQueries()).toHaveLength(0);
   expect(f.surface.requestedFields).toEqual(["id", "title", "status"]);
 });
 
@@ -112,9 +123,9 @@ test("native subgroup and leaf page sizes, page 2 and expansion survive an actua
   await waitFor(() => expect(f.header(1)?.kind === "groupHeader" && f.header(1)?.pager).toBeTruthy());
   const leafKey = leaf.bucketKey;
   act(() => f.surface.setScopePageSize(leafKey, 50));
-  await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].pagination?.pageSize).toBe(50));
+  await waitFor(() => expect(f.leafQueries().at(-1)?.group_0_limit).toBe(50));
   act(() => f.surface.setScopePage(leafKey, 2));
-  await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].pagination?.currentPage).toBe(2));
+  await waitFor(() => expect(f.leafQueries().at(-1)?.group_0_offset).toBe(50));
   await waitFor(() => expect(f.surface.groupedItems.some((item) => item.kind === "record" && item.nav.page === 2)).toBe(true));
 
   act(() => f.show(false));
@@ -139,7 +150,7 @@ test("native subgroup and leaf page sizes, page 2 and expansion survive an actua
   // A late old-filter page must not restore its interaction state after reset.
   f.delay(3);
   act(() => f.surface.setScopePage(leafKey, 3));
-  await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].pagination?.currentPage).toBe(3));
+  await waitFor(() => expect(f.leafQueries().at(-1)?.group_0_offset).toBe(100));
   act(() => f.view.setFilter({ title: { iContains: "changed" } }));
   expect(f.view.paginationByScope).toEqual({});
   await act(async () => f.release());
@@ -154,7 +165,7 @@ test("native grouped root and leaf pagination clamp oversized page sizes", async
 
   act(() => f.view.setPageSize(500));
   await waitFor(() => expect(f.view.state.pagination.pageSize).toBe(100));
-  expect((f.custom.mock.calls.at(-1)?.[0].meta?.gqlVariables as { limit: number }).limit).toBe(100);
+  await waitFor(() => expect(f.groupQueries().findLast((variables) => variables.group_by?.[0]?.field === "status")?.limit).toBe(100));
 
   const root = f.header(0)!;
   if (root.kind !== "groupHeader") throw new Error("missing root header");
@@ -166,7 +177,7 @@ test("native grouped root and leaf pagination clamp oversized page sizes", async
   act(() => f.surface.toggleGroup(leaf.bucketKey));
   await waitFor(() => expect(f.header(1)?.pager).toBeTruthy());
   act(() => f.surface.setScopePageSize(leaf.bucketKey, 500));
-  await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].pagination?.pageSize).toBe(100));
+  await waitFor(() => expect(f.leafQueries().at(-1)?.group_0_limit).toBe(100));
   expect(f.view.paginationByScope[leaf.bucketKey]).toEqual({ pageIndex: 0, pageSize: 100 });
   expect(f.surface.groupedItems.find((item) => item.kind === "record")?.nav.pageSize).toBe(100);
 });
@@ -176,19 +187,19 @@ test("a native grouped header sort updates the leaf query and preserves the pare
   act(() => f.view.setFilter({ title: { iContains: "kept" } }));
   await waitFor(() => expect(f.header(1)).toBeDefined());
   act(() => f.surface.toggleGroup(f.header(1)!.bucketKey));
-  await waitFor(() => expect(f.getList).toHaveBeenCalled());
+  await waitFor(() => expect(f.leafQueries().length).toBeGreaterThan(0));
   const leafKey = f.header(1)!.bucketKey;
   act(() => f.surface.setScopePageSize(leafKey, 50));
   act(() => f.surface.setScopePage(leafKey, 2));
-  await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].pagination).toMatchObject({ currentPage: 2, pageSize: 50 }));
+  await waitFor(() => expect(f.leafQueries().at(-1)).toMatchObject({ group_0_offset: 50, group_0_limit: 50 }));
   fireEvent.click(screen.getByRole("button", { name: "Sort Title (not sorted)" }));
   await waitFor(() => expect(f.view.state.sorting).toEqual([{ id: "title", desc: false }]));
   // Sorting resets row windows while keeping the same group tree expanded.
   await waitFor(() => expect(f.header(1)?.expanded).toBe(true));
   expect(f.view.paginationByScope[leafKey]).toEqual({ pageIndex: 0, pageSize: 50 });
-  await waitFor(() => expect(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.order_by).toEqual({ title: "asc" }));
+  await waitFor(() => expect(f.leafQueries().at(-1)?.group_0_order_by).toEqual({ title: "asc" }));
   expect(f.view.state.filter).toEqual({ title: { iContains: "kept" } });
-  expect(JSON.stringify(f.getList.mock.calls.at(-1)?.[0].meta?.gqlVariables?.where)).toContain('"_ilike":"%kept%"');
+  expect(JSON.stringify(f.leafQueries().at(-1)?.group_0_where)).toContain('"_ilike":"%kept%"');
   expect(screen.getByRole("columnheader", { name: "Title" }).getAttribute("aria-sort")).toBe("ascending");
 });
 
