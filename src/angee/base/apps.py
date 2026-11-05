@@ -55,8 +55,6 @@ class BaseConfig(AppConfig):
         from angee.base.refs import generic_pointer_model
         from angee.base.signals import connect_for_models
 
-        possible_record_edges()
-
         def has_refs(model: type) -> bool:
             return bool(
                 possible_record_edges(model).get(generic_pointer_model(model))
@@ -72,7 +70,7 @@ class BaseConfig(AppConfig):
             connect_for_models(
                 collected_for_delete,
                 delete_record_refs_collected,
-                applies=lambda model: issubclass(model, RebacMixin) and has_refs(model),
+                applies=lambda model: issubclass(model, RebacMixin),
                 dispatch_uid="angee.record_refs.target_delete.batch",
             )
         connect_for_models(

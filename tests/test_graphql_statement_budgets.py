@@ -101,6 +101,7 @@ MESSAGE_FRAGMENTS = "\n".join(
     )
 )
 NEXUS_MESSAGE = authored_graphql_document(NEXUS_DOCUMENTS, "InboxMessage") + MESSAGE_FRAGMENTS
+MESSAGE_USES = authored_graphql_document(NEXUS_DOCUMENTS, "InboxMessageUses")
 SOURCE_COPIES = "\n".join((
     authored_graphql_document(MESSAGING_DOCUMENTS, "MessageSourceCopiesDocument"),
     authored_graphql_document(MESSAGING_DOCUMENTS, "TranscriptMessageFields"),
@@ -156,7 +157,8 @@ def test_message_part_document_budgets(composed_tables: None, capture_graphql_do
         reads[count].assert_flat_from(reads[1])
         copies[count].assert_flat_from(copies[5])
     for read in reads.values():
-        assert read.statement_count == 17  # re-measure after integration
+        # The merged messages resolver reads the parts once for the document.
+        assert read.statement_count == 15
         read.assert_bytes(total=450_000, largest=135_000, cause="bounded actor-scoped part and file reads")
         read.assert_no_audit_writes()
     for count, read in copies.items():
@@ -189,9 +191,9 @@ def test_message_part_document_budgets(composed_tables: None, capture_graphql_do
         second = Message.objects.create(channel=channel, created_by=owner, status="synced")
         Part.objects.create(message=message, file=files[0], created_by=owner)
         Part.objects.create(message=second, file=files[0], created_by=owner)
-    shared_read = capture_graphql_document(schema, NEXUS_MESSAGE, message_variables, actor=owner)
+    shared_read = capture_graphql_document(schema, MESSAGE_USES, {"id": str(message.sqid)}, actor=owner)
     assert next(
-        use["count"] for use in shared_read.data["inbox_message"]["uses"]
+        use["count"] for use in shared_read.data["inbox_message_uses"]
         if use["target"] == f"file:{files[0].sqid}"
     ) == 2
 

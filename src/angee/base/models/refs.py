@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from contextvars import ContextVar
-from functools import lru_cache
 from operator import attrgetter
 from typing import Any, ClassVar, Protocol, cast
 from weakref import ReferenceType, ref
@@ -356,28 +355,37 @@ def record_ref_cleanup_edges_for_target(
     return tuple(sorted(edges, key=lambda edge: edge._meta.label))
 
 
-@lru_cache(maxsize=1)
-def _possible_record_edges(
-    registered_models: tuple[type[models.Model], ...],
-) -> dict[type[models.Model], tuple[type[RecordRefMixin], ...]]:
-    """Invert authored edge admission once for the installed model set."""
-    index: dict[type[models.Model], list[type[RecordRefMixin]]] = {}
-    for edge in sorted(registered_models, key=lambda model: model._meta.label):
-        if not issubclass(edge, RecordRefMixin):
-            continue
-        for target in edge.possible_target_models(registered_models).values():
-            index.setdefault(target, []).append(edge)
-    return {target: tuple(edges) for target, edges in index.items()}
+_possible_edge_index: tuple[
+    tuple[type[models.Model], ...],
+    tuple[tuple[type[RecordRefMixin], tuple[type[models.Model], ...]], ...],
+    dict[type[models.Model], tuple[type[RecordRefMixin], ...]],
+] | None = None
 
 
 def possible_record_edges(
     candidate: type[models.Model] | None = None,
 ) -> dict[type[models.Model], tuple[type[RecordRefMixin], ...]]:
-    """Return cached possible edge targets, rebuilding for late prepared models."""
+    """Index current authored targets, including rebinding and late prepared models."""
+    global _possible_edge_index
+
     registered = tuple(apps.get_models())
     if candidate is not None and candidate not in registered:
         registered = (*registered, candidate)
-    return _possible_record_edges(registered)
+    admissions = tuple(
+        (edge, tuple(sorted(edge.possible_target_models(registered).values(), key=lambda model: model._meta.label)))
+        for edge in sorted(registered, key=lambda model: model._meta.label)
+        if issubclass(edge, RecordRefMixin)
+    )
+    cached = _possible_edge_index
+    if cached is not None and registered == cached[0] and admissions == cached[1]:
+        return cached[2]
+    index: dict[type[models.Model], list[type[RecordRefMixin]]] = {}
+    for edge, targets in admissions:
+        for target in targets:
+            index.setdefault(target, []).append(edge)
+    result = {target: tuple(edges) for target, edges in index.items()}
+    _possible_edge_index = (registered, admissions, result)
+    return result
 
 
 _edge_presence_for_delete: ContextVar[
@@ -437,6 +445,12 @@ def delete_record_refs_batch(
     targets = tuple(sorted(instances, key=attrgetter("pk")))
     if not targets:
         return
+    cleanup_edges = record_ref_cleanup_edges_for_target(sender)
+    canonical = generic_pointer_model(sender)
+    edge_index = possible_record_edges()
+    declared = edge_index.get(canonical, ()) if canonical is not None else ()
+    if not declared and not cleanup_edges:
+        return
     scope = None
     if origin is not None and apps.is_installed("rebac"):
         from rebac.mixins import delete_scope
@@ -447,14 +461,10 @@ def delete_record_refs_batch(
     if scope is not None and presence is None:
         presence = {}
         _edge_presence_for_delete.set((*cached_presence, (ref(scope), presence)))
-    cleanup_edges = record_ref_cleanup_edges_for_target(sender)
     grouped: dict[ContentType, list[tuple[Any, models.Model]]] = {}
     for instance in targets:
         content_type, object_id = generic_pointer_target(instance)
         grouped.setdefault(content_type, []).append((object_id, instance))
-    canonical = generic_pointer_model(sender)
-    edge_index = possible_record_edges()
-    declared = edge_index.get(canonical, ()) if canonical is not None else ()
     prepared_edges = []
     for edge in declared:
         if edge in cleanup_edges:
