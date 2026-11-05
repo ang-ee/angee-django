@@ -6,9 +6,11 @@ import dataclasses
 import types as _types
 from collections.abc import Awaitable, Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date, datetime
 from functools import cache, partial
 from types import EllipsisType
 from typing import TYPE_CHECKING, Any, cast
+from zoneinfo import ZoneInfo
 
 import strawberry
 import strawberry_django
@@ -17,8 +19,9 @@ from django.conf import settings
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
 from django.db import models, transaction
 from django.db.models.expressions import BaseExpression, Combinable, CombinedExpression
+from django.db.models.fields.json import KeyTextTransform
 from django.db.models.fields.reverse_related import ForeignObjectRel
-from django.db.models.functions import Cast, Concat, RowNumber
+from django.db.models.functions import Cast, Concat, RowNumber, Trunc
 from django.db.models.lookups import Exact, In
 from django.utils.module_loading import import_string
 from strawberry.extensions import FieldExtension
@@ -34,6 +37,7 @@ from strawberry_django_aggregates import (
     group_by_alias,
     group_by_enum_member,
     group_by_range_alias,
+    python_type_for_json,
 )
 from strawberry_django_aggregates.granularity import NumberGranularity, TimeGranularity
 from strawberry_django_hasura import (
@@ -1363,6 +1367,7 @@ def _attach_grouped_rows(
     *,
     model: type[models.Model],
     groupable: tuple[str, ...],
+    json_paths: Mapping[str, str],
     node: type,
     read_queryset: Callable[[strawberry.Info], models.QuerySet[Any]],
     prepare_filters: Callable[[models.QuerySet[Any], models.Q], models.QuerySet[Any]],
@@ -1375,8 +1380,10 @@ def _attach_grouped_rows(
     """Add one windowed row read for the visible buckets of a model resource.
 
     The native list field's input extensions carry its exact actor-scoped
-    filter translation. One source queryset and one SQL window replace one
-    list and one count root per bucket; the groups root already owns counts.
+    filter translation. The selected group expression partitions one SQL
+    window by the same bucket returned by the native groups root. A page key
+    is the selected ``_groups.key`` scalar unchanged: an ISO date/time bucket
+    string for time granularity or the declared scalar for a JSON path.
     """
 
     assert resource.name is not None
@@ -1406,14 +1413,56 @@ def _attach_grouped_rows(
         order_by: Any = None,
     ) -> models.QuerySet[Any]:
         del self
-        if group_by.granularity not in (None, strawberry.UNSET):
-            raise ValueError("Grouped row pages require a non-extracted group key.")
-        path = group_by.field.value
-        if path not in groupable:
-            raise ValueError(f"Unsupported grouped row key {path!r}.")
-        field = require_field_for_path(model, path)
-        if "." in path:
-            raise ValueError("Grouped row pages require a model field, not a JSON path.")
+        path = next((name for name in groupable if group_by_enum_member(name) == group_by.field.name), None)
+        if path is None:
+            raise ValueError(f"Unsupported grouped row key {group_by.field.value!r}.")
+        granularity = group_by.granularity
+        if granularity is strawberry.UNSET:
+            granularity = None
+        if granularity is not None:
+            try:
+                time_bucket = TimeGranularity(granularity.value)
+            except ValueError as error:
+                raise ValueError("Grouped row pages require a date bucket, not a numeric date part.") from error
+        else:
+            time_bucket = None
+        field: models.Field[Any, Any] | ForeignObjectRel | None
+        value_expression: Combinable
+        if path in json_paths:
+            root, json_key = path.split(".", 1)
+            declared_type = json_paths[path]
+            python_type_for_json(declared_type)
+            output_fields: dict[str, models.Field[Any, Any]] = {
+                "int": models.IntegerField(),
+                "float": models.FloatField(),
+                "Decimal": models.DecimalField(max_digits=38, decimal_places=10),
+                "bool": models.BooleanField(),
+                "date": models.DateField(),
+                "datetime": models.DateTimeField(),
+            }
+            value_field = output_fields.get(declared_type)
+            value_expression = Cast(
+                KeyTextTransform(json_key, root), output_field=value_field or models.TextField(),
+            )
+            field = value_field
+        else:
+            field = require_field_for_path(model, path)
+            value_expression = models.F(_relation_axis_alias(path) if is_to_one_relation(field) else path)
+        if time_bucket is not None:
+            if not isinstance(field, (models.DateField, models.DateTimeField)):
+                raise ValueError(f"Grouped row date bucket is not applicable to {path!r}.")
+            if isinstance(field, models.DateField) and not isinstance(field, models.DateTimeField) and time_bucket in {
+                TimeGranularity.HOUR, TimeGranularity.MINUTE, TimeGranularity.SECOND,
+            }:
+                raise ValueError(f"Grouped row date bucket is not applicable to {path!r}.")
+            if isinstance(field, models.DateTimeField):
+                value_expression = Trunc(value_expression, time_bucket.value, tzinfo=ZoneInfo(settings.TIME_ZONE))
+                # Trunc emits local, zone-free SQL; a DateTimeField lookup
+                # would convert the page key back to UTC before comparison.
+                value_expression = Cast(value_expression, output_field=models.CharField())
+            else:
+                value_expression = Trunc(value_expression, time_bucket.value)
+                value_expression = Cast(value_expression, output_field=models.DateField())
         if not pages:
             return read_queryset(info).none()
         if len(pages) > 50:
@@ -1424,12 +1473,28 @@ def _attach_grouped_rows(
                 raise ValueError("Grouped row limit and offset must be nonnegative.")
             key = page.key
             if key is not None:
-                if is_to_one_relation(field):
+                if field is not None and is_to_one_relation(field):
                     target = field.related_model
                     assert target is not None
                     key = _public_pk(target, key)
                     if key is None:
                         raise ValidationError("Unknown grouped relation key.")
+                elif time_bucket is not None:
+                    parsed = models.DateTimeField().to_python(key)
+                    assert parsed is not None
+                    if isinstance(field, models.DateField) and not isinstance(field, models.DateTimeField):
+                        key = parsed.date()
+                    else:
+                        key = (
+                            parsed.astimezone(ZoneInfo(settings.TIME_ZONE)) if parsed.tzinfo is not None else parsed
+                        ).replace(tzinfo=None).isoformat(sep=" ", timespec="seconds")
+                elif path in json_paths:
+                    if declared_type == "str":
+                        if not isinstance(key, str):
+                            raise ValidationError("Grouped JSON key must be a string.")
+                    else:
+                        assert value_field is not None
+                        key = value_field.to_python(key)
                 else:
                     assert isinstance(field, models.Field)
                     key = field.to_python(_choices_wire_value(model, path, key))
@@ -1453,11 +1518,10 @@ def _attach_grouped_rows(
             queryset, order_by, id_column=id_column, sortable_aliases=sortable_aliases,
         )
         clauses = queryset.query.order_by or model._meta.ordering or ("pk",)
-        group_expression = _relation_axis_alias(path) if is_to_one_relation(field) else path
         queryset = queryset.annotate(
-            _angee_group_key=models.F(group_expression),
+            _angee_group_key=value_expression,
             _angee_group_rank=models.Window(
-                expression=RowNumber(), partition_by=[models.F(group_expression)], order_by=cast(Any, clauses),
+                expression=RowNumber(), partition_by=[models.F("_angee_group_key")], order_by=cast(Any, clauses),
             ),
         )
         keys = [key for key, _, _ in converted if key is not None]
@@ -1468,11 +1532,11 @@ def _attach_grouped_rows(
         for key, limit, offset in converted:
             if limit == 0:
                 continue
-            bucket = (
+            page_scope = (
                 models.Q(_angee_group_key__isnull=True)
                 if key is None else models.Q(_angee_group_key=key)
             )
-            windows |= bucket & models.Q(
+            windows |= page_scope & models.Q(
                 _angee_group_rank__gt=offset,
                 _angee_group_rank__lte=offset + limit,
             )
@@ -1504,15 +1568,17 @@ def _attach_grouped_rows(
 
 
 class _GroupLabels(FieldExtension):
-    """Fill one relation group's labels from one actor-admitted target read."""
+    """Fill selected group labels from their keys or an actor-admitted target read."""
 
     def __init__(
         self,
         model: type[models.Model],
         source: Callable[[strawberry.Info], models.QuerySet[Any]],
+        json_paths: Mapping[str, str],
     ) -> None:
         self.model = model
         self.source = source
+        self.json_paths = json_paths
 
     def _label(self, groups: list[Any], info: strawberry.Info, group_by: list[Any]) -> list[Any]:
         selected_fields = list(info.selected_fields)
@@ -1525,14 +1591,27 @@ class _GroupLabels(FieldExtension):
             selected_fields.extend(getattr(selected, "selections", ()))
         if not label_selected:
             return groups
-        if len(group_by) != 1 or group_by[0].granularity not in (None, strawberry.UNSET):
+        if len(group_by) != 1:
             return groups
-        path = group_by[0].field.value
+        path = next(
+            (name for name in self.json_paths if group_by_enum_member(name) == group_by[0].field.name),
+            group_by[0].field.value,
+        )
+        granularity = group_by[0].granularity
+        if granularity is strawberry.UNSET:
+            granularity = None
         try:
             field = require_field_for_path(self.model, path)
         except FieldPathError:
+            field = None
+        if (granularity is not None or path in self.json_paths) and groups:
+            key_name = group_by_alias(path, granularity, field)
+            for group in groups:
+                key = getattr(group.key, key_name, None)
+                if key is not None:
+                    group._angee_label = key.isoformat() if isinstance(key, (date, datetime)) else str(key)
             return groups
-        if not is_to_one_relation(field) or not groups:
+        if field is None or not is_to_one_relation(field) or not groups:
             return groups
         key_name = group_by_alias(path, None, field)
         ids = {getattr(group.key, key_name) for group in groups if getattr(group.key, key_name, None)}
@@ -1575,8 +1654,9 @@ def _attach_group_labels(
     *,
     model: type[models.Model],
     source: Callable[[strawberry.Info], models.QuerySet[Any]],
+    json_paths: Mapping[str, str],
 ) -> None:
-    """Project model-owned relation labels beside native group keys and counts."""
+    """Project relation and extracted-axis labels beside native keys and counts."""
 
     if resource.group_type is None or resource.groups_root is None:
         return
@@ -1592,7 +1672,7 @@ def _attach_group_labels(
         field for field in get_object_definition(resource.query, strict=True).fields
         if field.python_name == resource.groups_root
     )
-    groups_field.extensions.append(_GroupLabels(model, source))
+    groups_field.extensions.append(_GroupLabels(model, source, json_paths))
 
 
 def hasura_model_resource(
@@ -2033,11 +2113,12 @@ def hasura_model_resource(
                     )
                 )
     if active_groupable:
-        _attach_group_labels(resource, model=model, source=aggregate_source)
+        _attach_group_labels(resource, model=model, source=aggregate_source, json_paths=active_json_paths)
         _attach_grouped_rows(
             resource,
             model=model,
             groupable=active_groupable,
+            json_paths=active_json_paths,
             node=node,
             read_queryset=read_queryset,
             prepare_filters=prepare_filters,

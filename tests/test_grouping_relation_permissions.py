@@ -5,6 +5,7 @@ These tests exercise only the public ``hasura_model_resource`` contract.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
@@ -129,6 +130,9 @@ class GroupParent(ProtectedDataModel):
     }
     kind = models.CharField(max_length=16)
     amount = models.IntegerField(default=1)
+    occurred_at = models.DateTimeField(null=True)
+    occurred_on = models.DateField(null=True)
+    metadata = models.JSONField(default=dict)
     target = models.ForeignKey(
         GroupLabel,
         null=True,
@@ -227,6 +231,7 @@ def relation_grouping_case(transactional_db: None):
                 name="group_parents",
                 filterable=[
                     "kind", "target", "metric_target__rank", "target__display_name", "middle__target__display_name",
+                    "occurred_at",
                 ],
                 sortable=[
                     "kind", "id", "target", "middle__target", "plain",
@@ -240,7 +245,9 @@ def relation_grouping_case(transactional_db: None):
                     "middle",
                     "middle__target__display_name",
                     "plain", "plain__display_name",
+                    "occurred_at", "occurred_on", "metadata.mailbox", "metadata.rank", "metadata.held_at",
                 ],
+                json_paths={"metadata.mailbox": "str", "metadata.rank": "int", "metadata.held_at": "datetime"},
                 insert=False,
                 update=False,
                 delete=False,
@@ -449,6 +456,142 @@ def test_grouped_page_window_sql_budget(relation_grouping_case: Any) -> None:
         assert {group["label"] for group in groups.data["group_parents_groups"]} == {
             label.display_name for label in labels[:count]
         }
+
+
+@pytest.mark.parametrize(
+    ("axis", "key_field", "granularity"),
+    [
+        ("OCCURRED_AT", "occurred_at_month", "MONTH"),
+        ("OCCURRED_ON", "occurred_on_month", "MONTH"),
+        ("METADATA__MAILBOX", "metadata__mailbox", None),
+        ("METADATA__RANK", "metadata__rank", None),
+        ("METADATA__HELD_AT", "metadata__held_at_month", "MONTH"),
+    ],
+)
+def test_extracted_group_pages_match_native_keys_at_flat_cost(
+    relation_grouping_case: Any, axis: str, key_field: str, granularity: str | None,
+) -> None:
+    """Native bucket keys page the same 50 actor-scoped groups in one windowed read."""
+
+    case = relation_grouping_case
+    seeded: dict[str | int, list[str]] = {}
+    with system_context(reason="test.grouped_page.extracted.seed"):
+        parents = []
+        for index in range(50):
+            month = datetime(2020 + index // 12, index % 12 + 1, 12, 14, tzinfo=UTC)
+            mailbox = f"mail-{index:02d}"
+            group_rows = [
+                GroupParent.objects.create(
+                    kind="axis", occurred_at=month, occurred_on=month.date(),
+                    metadata={"mailbox": mailbox, "rank": index, "held_at": month.isoformat()},
+                )
+                for _ in range(4)
+            ]
+            seeded[mailbox] = [row.sqid for row in group_rows]
+            seeded[index] = [row.sqid for row in group_rows]
+            seeded[month.strftime("%Y-%m")] = [row.sqid for row in group_rows]
+            parents.extend(group_rows)
+    write_relationships([
+        RelationshipTuple(to_object_ref(parent), "reader", case.alice) for parent in parents
+    ])
+    spec = f"field: {axis}" + (f", granularity: {granularity}" if granularity else "")
+    prior_rows = None
+    prior_groups = None
+    for count in (1, 10, 50):
+        groups = measure_graphql_document(
+            case.schema,
+            f'''query AxisGroups($limit: Int) {{
+              group_parents_groups(group_by: [{{{spec}}}], where: {{kind: {{_eq: "axis"}}}},
+                limit: $limit) {{ key {{ {key_field} }} label aggregate {{ count }} }}
+            }}''',
+            {"limit": count}, actor=case.alice,
+        )
+        groups.assert_no_audit_writes()
+        assert groups.statement_count == 1
+        assert len(groups.data["group_parents_groups"]) == count
+        assert all(group["aggregate"]["count"] == 4 for group in groups.data["group_parents_groups"])
+        keys = [group["key"][key_field] for group in groups.data["group_parents_groups"]]
+        assert all(key is not None for key in keys)
+        labels = [group["label"] for group in groups.data["group_parents_groups"]]
+        assert all(label.startswith(key[:10]) if granularity else label == str(key)
+                   for key, label in zip(keys, labels, strict=True))
+        if axis == "METADATA__RANK":
+            assert all(isinstance(key, int) for key in keys)
+        pages = [{"key": key, "limit": 2, "offset": 1} for key in keys]
+        rows = measure_graphql_document(
+            case.schema,
+            f'''query AxisRows($pages: [group_parents_grouped_row_page!]!) {{
+              group_parents_grouped_rows(group_by: {{{spec}}}, pages: $pages,
+                where: {{kind: {{_eq: "axis"}}}}, order_by: [{{id: asc}}]) {{ id kind }}
+            }}''',
+            {"pages": pages}, actor=case.alice,
+        )
+        rows.assert_no_audit_writes()
+        assert rows.statement_count == 1
+        assert sum("ROW_NUMBER" in sql.upper() for sql in rows.statements) == 1
+        assert len(rows.data["group_parents_grouped_rows"]) == count * 2
+        expected = {
+            row_id
+            for key in keys
+            for row_id in seeded[key if granularity is None else key[:7]][1:3]
+        }
+        assert {row["id"] for row in rows.data["group_parents_grouped_rows"]} == expected
+        if prior_rows is not None and prior_groups is not None:
+            rows.assert_flat_from(prior_rows)
+            groups.assert_flat_from(prior_groups)
+        prior_rows, prior_groups = rows, groups
+        # Measured SQLite rows at 1/10/50: DateTime 3966/5029/10149,
+        # Date 3844/4771/9171, JSON text 4514/5218/9378, JSON DateTime
+        # 4894/5725/10845 bytes. PostgreSQL: 4056/5128/10248,
+        # 3914/4966/9846, 3864/4762/8922, 4220/5251/10371.
+        # Each groups read stays below 3504 bytes on SQLite and 3433 on PG.
+        budget = {1: 6_500, 10: 7_500, 50: 14_500}[count]
+        rows.assert_bytes(
+            total=budget,
+            largest=budget,
+            cause="one actor-scoped row window partitioned by the selected group expression",
+        )
+        groups.assert_bytes(total=5_000, largest=5_000, cause="native grouped aggregate")
+
+
+@pytest.mark.parametrize("granularity", ["DAY", "WEEK", "YEAR"])
+@pytest.mark.parametrize("axis", ["OCCURRED_AT", "OCCURRED_ON"])
+def test_date_buckets_round_trip_group_keys(
+    relation_grouping_case: Any, axis: str, granularity: str,
+) -> None:
+    """Each date bucket's native key addresses exactly its grouped row page."""
+
+    case = relation_grouping_case
+    dates = [
+        datetime(2020, 12, 31, 14, tzinfo=UTC),
+        datetime(2021, 1, 1, 14, tzinfo=UTC),
+        datetime(2021, 1, 4, 14, tzinfo=UTC),
+        datetime(2021, 2, 1, 14, tzinfo=UTC),
+    ]
+    with system_context(reason="test.grouped_page.date_grain.seed"):
+        parents = [
+            GroupParent.objects.create(kind="date-grain", occurred_at=value, occurred_on=value.date())
+            for value in dates
+        ]
+    write_relationships([
+        RelationshipTuple(to_object_ref(parent), "reader", case.alice) for parent in parents
+    ])
+    key_field = f"{'occurred_at' if axis == 'OCCURRED_AT' else 'occurred_on'}_{granularity.lower()}"
+    groups = _query(case, case.alice, f'''query {{
+      group_parents_groups(group_by: [{{field: {axis}, granularity: {granularity}}}],
+        where: {{kind: {{_eq: "date-grain"}}}}) {{ key {{ {key_field} }} label aggregate {{ count }} }}
+    }}''')["group_parents_groups"]
+    pages = [{"key": group["key"][key_field], "limit": group["aggregate"]["count"]} for group in groups]
+    rows = measure_graphql_document(
+        case.schema,
+        f'''query DateRows($pages: [group_parents_grouped_row_page!]!) {{
+          group_parents_grouped_rows(group_by: {{field: {axis}, granularity: {granularity}}},
+            pages: $pages, where: {{kind: {{_eq: "date-grain"}}}}, order_by: [{{id: asc}}]) {{ id }}
+        }}''',
+        {"pages": pages}, actor=case.alice,
+    )
+    assert rows.statement_count == 1
+    assert {row["id"] for row in rows.data["group_parents_grouped_rows"]} == {parent.sqid for parent in parents}
 
 
 def test_grouped_row_pages_keep_offsets_and_redacted_null_bucket(relation_grouping_case: Any) -> None:
