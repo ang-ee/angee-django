@@ -8,7 +8,7 @@ producers retain their writes. Reactions remain nested message projections.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from functools import cached_property
@@ -629,10 +629,7 @@ class RecordMessageType(TrashedRefMixin, ProtectedNode):
 
         return cast(Any, self).title()
 
-    @strawberry_django.field(prefetch_related=[lambda info: models.Prefetch(
-        "reactions",
-        queryset=Reaction.objects.sudo(reason="messaging.record_thread.reactions").select_related("handle"),
-    )])
+    @strawberry_django.field
     def reaction_groups(self, info: strawberry.Info) -> list[RecordMessageReactionGroupType]:
         """Return reaction groups with record-safe handle projections."""
 
@@ -741,7 +738,16 @@ class RecordThreadType(ProtectedNode):
     @strawberry_django.field(only=["merged_into_id"])
     def last_message_at(self) -> datetime | None:
         return cast(Any, self).chatter_totals()["latest"]
-    messages: list[RecordMessageType]
+
+    @strawberry_django.field(graphql_type=list[RecordMessageType])
+    def messages(self, info: strawberry.Info) -> list[Any]:
+        """Readable messages, bound to the record context so reaction groups batch."""
+
+        thread = cast(Any, self)
+        rows = list(optimize(Message.objects.filter(thread=thread), info))
+        context = getattr(thread, "_record_thread_context", None)
+        return context.bind_messages(rows) if context is not None else rows
+
     created_at: auto
     updated_at: auto
 
@@ -1076,6 +1082,7 @@ class _RecordThreadContext:
     after: strawberry.ID | None = None
     around: strawberry.ID | None = None
     message_types: tuple[str, ...] = ()
+    _unprimed_reactions: list[Any] = field(default_factory=list, init=False, repr=False)
 
     @cached_property
     def user(self) -> Any:
@@ -1084,7 +1091,10 @@ class _RecordThreadContext:
     @cached_property
     def thread(self) -> Any:
         attachment = ThreadAttachment.objects.for_record(self.record, role=self.role)
-        return attachment.thread if attachment is not None else None
+        thread: Any = attachment.thread if attachment is not None else None
+        if thread is not None:
+            thread._record_thread_context = self
+        return thread
 
     @cached_property
     def access(self) -> tuple[bool, bool]:
@@ -1093,9 +1103,17 @@ class _RecordThreadContext:
     def bind_messages(self, messages: list[Any]) -> list[Any]:
         """Carry the parent context to selected capability fields without evaluating it."""
 
+        self._unprimed_reactions.extend(messages)
         for message in messages:
             message._record_thread_context = self
         return messages
+
+    def prime_reaction_groups(self) -> None:
+        """Read every bound, not yet primed message's reactions in one batch."""
+
+        if self._unprimed_reactions:
+            batch, self._unprimed_reactions = self._unprimed_reactions, []
+            Message.prime_reaction_groups(batch, self.user)
 
     @cached_property
     def page(self) -> tuple[models.QuerySet, int]:
@@ -1393,7 +1411,8 @@ class RecordMessageReactionPayload(RecordAcceptedMessagePayload):
     def reaction_groups(self) -> list[RecordMessageReactionGroupType]:
         if self._context is None or self._message is None:
             return []
-        return _record_message_reaction_groups(self._message, self._context.user)
+        message = self._context.bind_messages([self._message])[0]
+        return _record_message_reaction_groups(message, self._context.user)
 
 
 @strawberry.type
@@ -2392,6 +2411,9 @@ def _message_reaction_groups(message: Any, user: Any | None) -> list[MessageReac
 def _record_message_reaction_groups(message: Any, user: Any | None) -> list[RecordMessageReactionGroupType]:
     """Project model-owned reaction groups without generic handle backedges."""
 
+    context = getattr(message, "_record_thread_context", None)
+    if context is not None:
+        context.prime_reaction_groups()
     return [
         RecordMessageReactionGroupType(
             reaction=group.reaction,
