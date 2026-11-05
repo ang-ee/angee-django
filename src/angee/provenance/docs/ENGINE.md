@@ -88,6 +88,8 @@ does not report which rows were inserted. Replay safely refuses a row without
 prehistory in such a batch; use ordinary inserts when reversible creation is
 required. A refusal rolls back the entire replay.
 `SIMPLE_HISTORY_ENABLED=False` disables capture without hiding stored history.
+Native `skip_history_when_saving` and `save_without_historical_record()` save the
+source row without capture or a changeset boundary.
 Selected base/default managers must preserve captured querysets.
 
 Native `_history_user`, `_history_date`, `_change_reason` and bulk history

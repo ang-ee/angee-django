@@ -196,7 +196,7 @@ class ModelHistory(ModelHistoryReplayMixin, HistoricalRecords):
         """Refuse a tracked native save before Django writes its source row."""
 
         del kwargs
-        if self.capture_enabled and not raw:
+        if self.capture_enabled and not raw and not hasattr(instance, "skip_history_when_saving"):
             current_changeset(required=True, using=self.destination(sender, using))
 
     def destination(self, model: type[models.Model], using: str, explicit: str | None = None) -> str:
