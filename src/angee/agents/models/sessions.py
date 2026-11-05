@@ -176,7 +176,23 @@ class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
     def __str__(self) -> str:
         """Return the session title or its agent name."""
 
-        return self.title or str(self.agent)
+        if self.title:
+            return self.title
+        if "agent" in self._state.fields_cache:
+            return str(self._state.fields_cache["agent"])
+        if "_agent_name" in self.__dict__:
+            return str(self.__dict__["_agent_name"])
+        agent_model = type(self)._meta.get_field("agent").related_model
+        return str(agent_model._base_manager.db_manager(self._state.db).get(pk=self.agent_id))
+
+    @classmethod
+    def agent_name_expression(cls) -> models.Subquery:
+        """Project the agent label without loading one agent per session."""
+
+        agent_model = cls._meta.get_field("agent").related_model
+        return models.Subquery(
+            agent_model._base_manager.filter(pk=models.OuterRef("agent_id")).values("name")[:1],
+        )
 
     def post(
         self,

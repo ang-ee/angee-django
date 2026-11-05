@@ -70,12 +70,12 @@ def test_map_progress_and_item_identity_follow_retained_execution(schema, map_wo
     parent = StepRun.system_queryset().get(run=run, node_key="items")
     runner.execute(parent.pk)
     parent.refresh_from_db()
-    assert (parent.map_total, parent.map_settled) == (2, 0)
+    assert (parent.get_map_total(), parent.get_map_settled()) == (2, 0)
     first = StepRun.system_queryset().get(run=run, node_key="items.body", map_index=0)
-    assert (first.rank, first.is_mapped, first.map_total, first.map_settled) == (parent.rank, True, 0, 0)
+    assert (first.rank, first.is_mapped, first.get_map_total(), first.get_map_settled()) == (parent.rank, True, 0, 0)
     runner.execute(first.pk)
     parent.refresh_from_db()
-    assert (parent.map_total, parent.map_settled) == (2, 1)
+    assert (parent.get_map_total(), parent.get_map_settled()) == (2, 1)
     query = """query($id: String!) {
       steprun(where: {run: {_eq: $id}}, order_by: [{rank: asc}, {map_index: asc}]) {
         node_key rank map_index is_mapped map_total map_settled
@@ -103,7 +103,7 @@ def test_map_progress_and_item_identity_follow_retained_execution(schema, map_wo
     run_until(run)
     parent.refresh_from_db()
     assert run.status == "succeeded"
-    assert (parent.map_total, parent.map_settled) == (2, 2)
+    assert (parent.get_map_total(), parent.get_map_settled()) == (2, 2)
 
 
 def test_map_progress_projection_query_cost_does_not_grow_with_item_count(schema, map_workflow, execution):

@@ -138,7 +138,7 @@ class Channel(Bridge, inherits="integrate.Integration"):
         impl = self.require_live_backend()
         with system_context(reason="messaging.resume_channel_pairing"):
             self.refresh_from_db(from_queryset=type(self)._base_manager.select_related("credential"))
-            if model_locks.task_locks_are_cross_process() and not self.is_syncing:
+            if model_locks.task_locks_are_cross_process() and not self.get_is_syncing():
                 self.update_live_state(identity_key=impl.state_identity_key, drop_pairing_report=True)
             self.set_lifecycle(IntegrationLifecycle.CONNECTED)
             self.report_status(IntegrationRuntimeStatus.OK)

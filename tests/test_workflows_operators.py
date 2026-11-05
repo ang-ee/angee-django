@@ -58,9 +58,9 @@ def test_workflow_operator_reads_only_its_workflow_and_operates_without_editing(
     assert not workflow.with_actor(operator).has_access("monitor")
     assert set(Workflow.objects.with_actor(operator).values_list("pk", flat=True)) == {workflow.pk}
     assert set(WorkflowRun.objects.with_actor(operator).values_list("pk", flat=True)) == {run.pk}
-    assert not unrelated_run.can_cancel(operator)
-    assert not run.can_cancel(other)
-    assert run.can_cancel(operator)
+    assert not unrelated_run.get_can_cancel(operator)
+    assert not run.get_can_cancel(other)
+    assert run.get_can_cancel(operator)
     with pytest.raises(PermissionDenied):
         workflow.with_actor(operator).grant_record_access("operator", other)
     with pytest.raises(PermissionDenied):
@@ -74,8 +74,8 @@ def test_workflow_operator_retries_and_reprocesses_another_users_run(operator_ru
     _workflow, run, _author, starter, operator, other = operator_run
     run_until(run)
     step = StepRun.system_queryset().get(run=run)
-    assert run.status == "failed" and step.can_retry(operator)
-    assert not step.can_retry(other)
+    assert run.status == "failed" and step.get_can_retry(operator)
+    assert not step.get_can_retry(other)
     with pytest.raises(PermissionDenied):
         StepRun.objects.retry_step(step, actor=other)
     retried = StepRun.objects.retry_step(step, actor=operator)

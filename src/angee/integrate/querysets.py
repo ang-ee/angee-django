@@ -134,6 +134,42 @@ class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[Credentia
         )
 
 
+def _concrete_page_groups(queryset: models.QuerySet[Any], rows: list[Any]) -> dict[type[models.Model], list[Any]]:
+    """Group materialized base rows by their saved concrete ContentType."""
+
+    if not rows:
+        return {}
+    if any("concrete_type_id" not in row.__dict__ for row in rows):
+        kinds = dict(
+            queryset.model._base_manager.db_manager(queryset.db)
+            .filter(pk__in=[row.pk for row in rows])
+            .values_list("pk", "concrete_type_id")
+        )
+        for row in rows:
+            row.concrete_type_id = kinds.get(row.pk)
+
+    by_model: dict[type[models.Model], list[Any]] = {}
+    for row in rows:
+        model = row.declared_concrete_model()
+        if model is not None and model is not type(row):
+            by_model.setdefault(model, []).append(row)
+    return by_model
+
+
+def _prepare_concrete_capabilities(queryset: models.QuerySet[Any], rows: list[Any]) -> None:
+    """Fetch only the concrete connector types present in this selected page."""
+
+    groups = _concrete_page_groups(queryset, rows)
+    for model, parents in sorted(groups.items(), key=lambda item: item[0]._meta.label_lower):
+        actor, unscoped = parents[0].effective_actor(strict=True)
+        source = model._base_manager.db_manager(queryset.db) if unscoped else (
+            cast(Any, model).objects.db_manager(queryset.db).with_actor(actor)
+        )
+        children = {child.pk: child for child in source.filter(pk__in=[row.pk for row in parents])}
+        for parent in parents:
+            parent.__dict__["_concrete_capability"] = (actor, unscoped, children.get(parent.pk, parent))
+
+
 class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[IntegrationT]):
     """Chainable collection scopes for integration and bridge rows."""
 
@@ -144,6 +180,11 @@ class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[Integr
             _vendor_display_name=models.F("vendor__display_name"),
             _vendor_slug=models.F("vendor__slug"),
         )
+
+    def with_concrete_capabilities(self) -> Self:
+        """Batch actor-readable concrete connectors only for types on the page."""
+
+        return self.with_page_hook(_prepare_concrete_capabilities)
 
     def of_concrete_type(self) -> Self:
         """Keep rows whose declared final MTI kind is this queryset's model."""
@@ -266,15 +307,9 @@ class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[Integr
     def with_concrete_children(self, *, actor: Any) -> Self:
         """Prime child caches only for a selected concrete target or source label."""
 
-        class ConcreteIntegrationIterable(ModelIterable):
-            def __iter__(self):
-                rows = list(super().__iter__())
-                IntegrationQuerySet.prime_concrete_children(rows, actor=actor, using=self.queryset.db)
-                yield from rows
-
-        queryset = self.only("concrete_type_id")
-        queryset._iterable_class = ConcreteIntegrationIterable
-        return queryset
+        return self.only("concrete_type_id").with_page_hook(
+            lambda queryset, rows: IntegrationQuerySet.prime_concrete_children(rows, actor=actor, using=queryset.db)
+        )
 
 
 class WebhookSubscriptionQuerySet[WebhookSubscriptionT: WebhookSubscription](

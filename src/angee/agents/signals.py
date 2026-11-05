@@ -38,7 +38,7 @@ def refuse_agent_delete(sender: Any, instance: Agent, *, origin: Any, **kwargs: 
     current = type(instance)._base_manager.filter(pk=instance.pk).first() if origin is instance else instance
     if current is None:
         return
-    if blocker := current.delete_blocker():
+    if blocker := current.get_delete_blocker():
         raise ValidationError(blocker)
 
 

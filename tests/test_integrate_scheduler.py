@@ -52,7 +52,7 @@ class SchedulerBridge(Bridge, Integration):
             raise IntegrationError("Vendor refused the login for ada@example.com.")
         items = int(self.config.get("items", 1))
         if self.config.get("assert_locked"):
-            assert self.is_syncing is True
+            assert self.get_is_syncing() is True
         if self.config.get("progress"):
             reporter = current_bridge_progress()
             assert reporter is not None
@@ -574,15 +574,15 @@ def test_bridge_is_syncing_uses_live_lock_state(transactional_db: None) -> None:
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration("live-lock", model=SchedulerBridge)
 
-    assert bridge.is_syncing is False
+    assert bridge.get_is_syncing() is False
 
     with bridge_advisory_lock(bridge) as acquired:
         assert acquired is True
-        assert bridge.is_syncing is True
+        assert bridge.get_is_syncing() is True
         with bridge_advisory_lock(bridge) as second_acquired:
             assert second_acquired is False
 
-    assert bridge.is_syncing is False
+    assert bridge.get_is_syncing() is False
 
 
 @contextmanager
@@ -623,16 +623,16 @@ def test_effective_sync_stage_reconciles_stale_records_against_the_lock(transact
 
         # The suite's LocalLockBackend is process-local: no reconciliation.
         bridge.sync_stage = bridge.SyncStage.SYNCING
-        assert bridge.effective_sync_stage == bridge.SyncStage.SYNCING
+        assert bridge.get_effective_sync_stage() == bridge.SyncStage.SYNCING
 
     with _cross_process_locks():
         bridge.sync_stage = bridge.SyncStage.SYNCING
-        assert bridge.effective_sync_stage == bridge.SyncStage.FAILED
+        assert bridge.get_effective_sync_stage() == bridge.SyncStage.FAILED
         with bridge_advisory_lock(bridge) as acquired:
             assert acquired is True
-            assert bridge.effective_sync_stage == bridge.SyncStage.SYNCING
+            assert bridge.get_effective_sync_stage() == bridge.SyncStage.SYNCING
         bridge.sync_stage = bridge.SyncStage.DISCOVERING
-        assert bridge.effective_sync_stage == bridge.SyncStage.FAILED
+        assert bridge.get_effective_sync_stage() == bridge.SyncStage.FAILED
         for stage in (
             bridge.SyncStage.IDLE,
             bridge.SyncStage.QUEUED,
@@ -640,7 +640,7 @@ def test_effective_sync_stage_reconciles_stale_records_against_the_lock(transact
             bridge.SyncStage.FAILED,
         ):
             bridge.sync_stage = stage
-            assert bridge.effective_sync_stage == stage
+            assert bridge.get_effective_sync_stage() == stage
 
 
 @pytest.mark.django_db(transaction=True)

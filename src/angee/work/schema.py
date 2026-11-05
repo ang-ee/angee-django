@@ -175,7 +175,10 @@ class TaskWorkExtension:
 
         return optional_public_id(user_public_id(cast(Any, self).snoozed_by_id))
 
-    @strawberry.field
+    @strawberry_django.field(
+        only=["queue_id", "number"],
+        annotate={"_work_queue_key": lambda info: Task.work_queue_key_expression()},
+    )
     def work_key(self) -> str | None:
         """Return the queue-keyed task number, such as ``ENG-42``."""
 
@@ -204,7 +207,10 @@ class ConsoleTaskWorkExtension:
 
         return optional_public_id(user_public_id(cast(Any, self).snoozed_by_id))
 
-    @strawberry.field
+    @strawberry_django.field(
+        only=["queue_id", "number"],
+        annotate={"_work_queue_key": lambda info: Task.work_queue_key_expression()},
+    )
     def work_key(self) -> str | None:
         """Return the queue-keyed task number, such as ``ENG-42``."""
 

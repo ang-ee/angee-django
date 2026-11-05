@@ -137,7 +137,7 @@ def test_thousand_items_stay_within_concurrency_and_query_bound(
     assert run.status == "succeeded" and len(run.output) == 1000
     assert [item["index"] for item in run.output] == list(range(1000))
     mapped.refresh_from_db()
-    assert (mapped.map_total, mapped.map_settled) == (1000, 1000)
+    assert (mapped.get_map_total(), mapped.get_map_settled()) == (1000, 1000)
     record_testsuite_property("map_items", completed)
     record_testsuite_property("map_concurrency", 4)
     record_testsuite_property("maximum_queries_per_item", max(query_counts))
@@ -167,7 +167,7 @@ def test_tick_drains_more_than_one_hundred_due_items_without_starvation(
     assert run.status == "succeeded"
     assert len(run.output) == 128
     mapped.refresh_from_db()
-    assert mapped.map_settled == mapped.map_total == 128
+    assert mapped.get_map_settled() == mapped.get_map_total() == 128
 
 
 def test_tick_reaches_another_run_beyond_one_hundred_locked_map_items(

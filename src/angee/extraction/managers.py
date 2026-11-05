@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 from uuid import uuid4
 
+from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, models, transaction
 from rebac import generic_target, system_context, to_subject_ref
@@ -50,6 +51,37 @@ class EvidenceQuerySet[EvidenceT: models.Model](ProtectedAppendOnlyQuerySet[Evid
 
 
 EvidenceManager = ProtectedManager.from_queryset(EvidenceQuerySet)
+
+
+def _prepare_part_values(queryset: models.QuerySet[Any], rows: list[Any]) -> None:
+    """Load the retained structural rows for one admitted part page."""
+
+    if rows:
+        source_model = apps.get_model("extraction", "ExtractionSource")
+        file_model = apps.get_model("storage", "File")
+        sources = (
+            source_model._base_manager.db_manager(queryset.db)
+            .only("position")
+            .in_bulk({row.source_id for row in rows})
+        )
+        files = (
+            file_model._base_manager.db_manager(queryset.db)
+            .select_related("drive__backend")
+            .in_bulk({row.carrier_file_id for row in rows})
+        )
+        for row in rows:
+            row.__dict__["_part_source"] = sources[row.source_id]
+            row.__dict__["_part_carrier_file"] = files[row.carrier_file_id]
+
+
+class ExtractionPartQuerySet[PartT: models.Model](EvidenceQuerySet[PartT]):
+    """Select retained carrier facts after the part page's own admission."""
+
+    def with_part_values(self) -> Self:
+        return self.with_page_hook(_prepare_part_values)
+
+
+ExtractionPartManager = ProtectedManager.from_queryset(ExtractionPartQuerySet)
 
 
 class ExtractionManager[ExtractionT: Extraction](EvidenceManager[ExtractionT]):

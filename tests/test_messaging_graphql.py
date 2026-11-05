@@ -28,6 +28,7 @@ import tests.test_agents_graphql  # noqa: F401 -- register related models before
 from angee.base.signals import mute_changes
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.iam.testing.graphql import measure_graphql_document
 from angee.messaging.testing.models import Channel
 from tests import test_messaging as messaging_models
 from tests import test_parties_graphql as parties_graphql
@@ -837,6 +838,93 @@ def test_parts_resource_lists_a_message_parts_with_fragment_connectivity(
     assert [part["role"] for part in payload] == ["BODY"]
     assert payload[0]["fragment"]["part_count"] == 2
     assert payload[0]["fragment"]["message_count"] == 2
+
+
+def test_fragment_counts_are_projected_at_one_five_ten_twenty_parts(composed_tables: None) -> None:
+    """Nested fragment use counts are projected once in the paged Part query."""
+
+    del composed_tables
+    admin = _platform_admin("fragment-count-budget")
+    _thread, message = _seed_thread_and_message(admin)
+    with system_context(reason="test.messaging.fragment_count_budget"):
+        for index in range(20):
+            fragment = messaging_models.Fragment.objects.upsert(text=f"Counted paragraph {index}")
+            messaging_models.Part.objects.create(
+                message=message, position=index, role="body", fragment=fragment, created_by_id=admin.pk,
+            )
+    schema = _schema()
+    document = """query FragmentCounts($message: String!, $limit: Int!) {
+        parts(where: {message: {_eq: $message}}, limit: $limit, order_by: [{position: asc}]) {
+            id fragment { part_count message_count }
+        }
+    }"""
+    reads = {
+        size: measure_graphql_document(schema, document, {"message": message.sqid, "limit": size}, actor=admin)
+        for size in (1, 5, 10, 20)
+    }
+    for size, read in reads.items():
+        assert len(read.data["parts"]) == size
+        assert all(row["fragment"] == {"part_count": 1, "message_count": 1} for row in read.data["parts"])
+        assert read.statement_count == 6, (size, read.statement_count)
+        read.assert_no_audit_writes()
+        read.assert_bytes(total=70_000, largest=56_000)
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reads[larger].assert_flat_from(reads[smaller])
+
+
+def test_message_needaction_is_projected_at_one_five_ten_twenty(composed_tables: None) -> None:
+    """The inbox computes the owner-selected action predicate with the page."""
+
+    del composed_tables
+    admin = _platform_admin("needaction-budget")
+    with system_context(reason="test.messaging.needaction_budget.seed"):
+        for _ in range(20):
+            messaging_models.Message.objects.create(created_by=admin)
+    schema = _schema()
+    document = """query NeedAction($limit: Int!) {
+        messages(limit: $limit, order_by: [{created_at: asc}]) { id needaction }
+    }"""
+    reads = {
+        size: measure_graphql_document(schema, document, {"limit": size}, actor=admin)
+        for size in (1, 5, 10, 20)
+    }
+    for size, read in reads.items():
+        assert len(read.data["messages"]) == size
+        assert all(isinstance(row["needaction"], bool) for row in read.data["messages"])
+        assert read.statement_count == 4
+        read.assert_no_audit_writes()
+        read.assert_bytes(total=18_000, largest=14_000)
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reads[larger].assert_flat_from(reads[smaller])
+
+
+def test_record_chatter_needaction_keeps_a_structural_message_population(composed_tables: None) -> None:
+    """A record-gated pane does not rebuild each message's REBAC read scope."""
+
+    del composed_tables
+    poster = _platform_admin("record-needaction-poster")
+    watcher = _platform_admin("record-needaction-watcher")
+    plain = User.objects.create_user(username="record-needaction-plain")
+    with system_context(reason="test.messaging.record_needaction.seed"):
+        ticket = messaging_models.ThreadedTicket.objects.create(title="Needaction budget")
+        ticket.message_subscribe(user=watcher)
+    with actor_context(poster):
+        for index in range(5):
+            ticket.message_post(f"Item {index}")
+    schema = _schema()
+    document = """query RecordNeedaction($model: String!, $id: ID!) {
+        record_thread(input: {model_label: $model, record_id: $id}) {
+            messages { preview needaction }
+        }
+    }"""
+    variables = {"model": "messaging.ThreadedTicket", "id": ticket.sqid}
+    for actor, expected in ((watcher, True), (plain, False)):
+        read = measure_graphql_document(schema, document, variables, actor=actor)
+        assert read.data["record_thread"]["messages"] == [
+            {"preview": f"Item {index}", "needaction": expected} for index in range(5)
+        ]
+        assert read.statement_count == 8, (actor.username, read.statement_count)
+        read.assert_bytes(total=15_000, largest=7_000)
 
 
 def test_parts_group_counts_for_one_message_seek_only_its_parts(composed_tables: None) -> None:

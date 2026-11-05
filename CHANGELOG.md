@@ -186,6 +186,10 @@ stack that keeps its database follows the [upgrade cutoff](docs/composer.md#foun
   `source` field on circle members, relationships and space memberships,
   `resolve_sync_discrepancy`, `retry_sync_discrepancy`,
   `SyncStream.open_discrepancy_count` and the record link hash bases.
+- `AngeeQuerySet.with_page_hook` centralizes per-page preparation for extraction,
+  workflows, integrate and messaging. This removes the public
+  `angee.messaging.querysets.NotificationPointerIterable` class and its messaging
+  manager re-exports; consumers importing that name must use the queryset hook.
 
 ## Unreleased — native permission integration
 

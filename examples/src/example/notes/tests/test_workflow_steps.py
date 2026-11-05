@@ -313,7 +313,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
             parent = StepRun.objects.get(run=run, node_key="reviews")
             bodies = list(parent.map_rows().order_by("map_index"))
             decisions = [Decision.objects.get(requesting_steps=body) for body in bodies]
-            self.assertEqual((parent.map_total, parent.map_settled), (2, 0))
+            self.assertEqual((parent.get_map_total(), parent.get_map_settled()), (2, 0))
             self.assertEqual([body.map_index for body in bodies], [0, 1])
             self.assertTrue(all(body.status == StepRunStatus.WAITING for body in bodies))
             self.assertTrue(all(body.waiting_kind == WaitingKind.DECISION for body in bodies))
@@ -329,7 +329,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
         with system_context(reason="mapped note review partial settlement assertions"):
             parent.refresh_from_db()
             decisions[1].refresh_from_db()
-            self.assertEqual((parent.map_total, parent.map_settled), (2, 1))
+            self.assertEqual((parent.get_map_total(), parent.get_map_settled()), (2, 1))
             self.assertTrue(decisions[1].is_open)
             self.assertFalse(StepRun.objects.filter(run=run, node_key="summarize").exists())
         decisions[1].decide(actor=self.reviewer, revision=decisions[1].revision, chosen=["reject"])
@@ -340,7 +340,7 @@ class NoteWorkflowStepTests(TransactionTestCase):
         with system_context(reason="mapped note review result assertions"):
             parent.refresh_from_db()
             self.assertEqual([item["output"]["id"] for item in parent.output], [note.sqid for note in notes])
-            self.assertEqual((parent.map_total, parent.map_settled), (2, 2))
+            self.assertEqual((parent.get_map_total(), parent.get_map_settled()), (2, 2))
             self.assertEqual(StepRun.objects.get(run=run, node_key="summarize").input, parent.output)
 
     def test_rejection_preserves_the_note_and_returns_the_review_result(self) -> None:

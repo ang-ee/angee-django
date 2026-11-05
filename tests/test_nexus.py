@@ -20,6 +20,7 @@ from rebac import (
 )
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.iam.testing.graphql import measure_graphql_document
 from angee.messaging.testing.models import (
     Handle,
     Message,
@@ -681,6 +682,41 @@ def test_party_network_applies_pair_intersection_to_every_edge(
     assert node["id"] == center.sqid
     assert "detail" not in node
     assert "handle_count" not in node["meta"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_party_graph_concrete_kinds_are_flat_at_one_five_ten_twenty(project_access_schema: Any) -> None:
+    """A page of typed graph nodes uses one child-kind projection per selection."""
+
+    del project_access_schema
+    reader = User.objects.create_user(username="graph-kind-budget-reader")
+    owner = User.objects.create_user(username="graph-kind-budget-owner")
+    with system_context(reason="tests.nexus.graph_kind_budget.seed"):
+        center = Party._base_manager.create(display_name="Center", created_by=owner)
+        neighbors = [
+            Person._base_manager.create(display_name=f"Person {index:02d}", created_by=owner)
+            for index in range(20)
+        ]
+        for neighbor in neighbors:
+            Tie._base_manager.create(party_a=center, party_b=neighbor)
+    for resource in (center, *(Party._base_manager.get(pk=neighbor.pk) for neighbor in neighbors)):
+        _grant(resource, "reader", reader)
+    schema = _schema()
+    document = """query GraphKinds($id: ID!, $limit: Int!) {
+        party_graph(root_id: $id, limit: $limit) { nodes }
+    }"""
+    measure_graphql_document(schema, document, {"id": center.sqid, "limit": 1}, actor=reader)
+    reads = {
+        size: measure_graphql_document(schema, document, {"id": center.sqid, "limit": size}, actor=reader)
+        for size in (1, 5, 10, 20)
+    }
+    for size, read in reads.items():
+        assert len(read.data["party_graph"]["nodes"]) == size
+        assert read.statement_count == 12
+        read.assert_no_audit_writes()
+        read.assert_bytes(total=1_100_000, largest=450_000)
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reads[larger].assert_flat_from(reads[smaller])
 
 
 @pytest.mark.django_db(transaction=True)

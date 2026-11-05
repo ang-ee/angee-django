@@ -217,7 +217,8 @@ class TieQuerySet[TieT: Tie](ProtectedQuerySet[TieT]):
                 truncated = True
             seed_party_ids = {membership.party_id for membership in seed_memberships}
             for party in (
-                party_model.objects.canonical().filter(pk__in=seed_party_ids).scoped().order_by("display_name", "sqid")
+                party_model.objects.canonical().filter(pk__in=seed_party_ids)
+                .scoped().with_concrete_kind().order_by("display_name", "sqid")
             ):
                 if not add_party(party):
                     break
@@ -260,6 +261,7 @@ class TieQuerySet[TieT: Tie](ProtectedQuerySet[TieT]):
                 for party in party_model.objects.canonical()
                 .filter(pk__in=set(candidate_party_ids).difference(parties))
                 .scoped()
+                .with_concrete_kind()
             }
             next_frontier: set[Any] = set()
             for party_id in candidate_party_ids:

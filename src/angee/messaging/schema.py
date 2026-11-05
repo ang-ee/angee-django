@@ -20,6 +20,7 @@ from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models, transaction
+from django.db.models import prefetch_related_objects
 from django.db.models.deletion import ProtectedError, RestrictedError
 from django.views.decorators.debug import sensitive_variables
 from graphql import GraphQLError
@@ -32,6 +33,7 @@ from strawberry_django.resolvers import django_resolver
 from strawberry_django.utils.requests import get_request
 
 from angee.base.models.identity import instance_from_public_id, public_id_of
+from angee.base.models.persistence import require_projection
 from angee.graphql.actions import ActionResult, ActionSelectionInput, action_guard
 from angee.graphql.data.hasura import (
     SortAlias,
@@ -89,6 +91,21 @@ MessageEdge = apps.get_model("messaging", "MessageEdge")
 Participant = apps.get_model("messaging", "Participant")
 Reaction = apps.get_model("messaging", "Reaction")
 MessageStar = apps.get_model("messaging", "MessageStar")
+
+
+def _needaction_expression(info: strawberry.Info, *, structural: bool = False) -> Any:
+    """Project the unread receipt rule in the selected message query."""
+
+    return Message.objects.all().needaction_expression(_request_user(info), structural=structural)
+
+
+def _needaction(message: Any, info: strawberry.Info) -> bool:
+    """Read a projected badge, with an explicit single-message fallback in production."""
+
+    if "_current_user_needaction" in message.__dict__:
+        return bool(message.__dict__["_current_user_needaction"])
+    require_projection(message, "_current_user_needaction")
+    return bool(ThreadFollower.objects.needaction_for_message(message, user=_request_user(info)))
 
 _CHANNEL_EXTENSION_READ_FIELDS = declared_hasura_resource_fields(
     Channel,
@@ -301,13 +318,21 @@ class FragmentType(ProtectedNode):
     hash: auto
     text: auto
 
-    @strawberry_django.field(name="part_count")
+    @strawberry_django.field(
+        name="part_count",
+        annotate={"_part_count": lambda info: Fragment.use_count_expression(current_actor())},
+    )
     def part_count(self) -> int:
         """How many actor-readable parts share this fragment."""
 
         return cast(Any, self).part_count()
 
-    @strawberry_django.field(name="message_count")
+    @strawberry_django.field(
+        name="message_count",
+        annotate={
+            "_message_count": lambda info: Fragment.use_count_expression(current_actor(), distinct_messages=True),
+        },
+    )
     def message_count(self) -> int:
         """How many distinct messages reference this fragment through their parts."""
 
@@ -510,14 +535,11 @@ class MessageType(TrashedRefMixin, TaggedNode, ProtectedNode):
                 part._state.fields_cache["file"] = readable_files.get(part.file_id)
         return ordered
 
-    @strawberry.field
+    @strawberry_django.field(annotate={"_title_text": lambda info: Message.objects.title_text_expression()})
     def title(self) -> str:
         """Return the message's title text — its ``TITLE`` part's fragment, or ``""``.
 
-        No optimizer prefetch hint here: a query that also selects ``parts`` makes
-        the optimizer build its own ``Prefetch("parts", …)``, and Django rejects a
-        second queryset for the same lookup. The model method rides an existing
-        parts prefetch when one is loaded and otherwise costs one indexed probe.
+        Select the sparse title through the model's query expression for lists.
         """
 
         return cast(Any, self).title()
@@ -547,14 +569,14 @@ class MessageType(TrashedRefMixin, TaggedNode, ProtectedNode):
 
         return bool(MessageStar.objects.is_starred(self, user=_request_user(info)))
 
-    @strawberry.field
+    @strawberry_django.field(
+        only=["thread_id", "is_trashed", "subtype_id", "sent_at", "created_at"],
+        annotate={"_current_user_needaction": _needaction_expression},
+    )
     def needaction(self, info: strawberry.Info) -> bool:
         """Return whether this message sits past the current user's read receipt."""
 
-        resolved = getattr(self, "_current_user_needaction", None)
-        if resolved is not None:
-            return bool(resolved)
-        return bool(ThreadFollower.objects.needaction_for_message(self, user=_request_user(info)))
+        return _needaction(self, info)
 
     @strawberry_django.field(
         only=["thread_id", "sender_id", "created_by_id", "message_type", "direction"],
@@ -675,17 +697,12 @@ class RecordMessageType(TrashedRefMixin, ProtectedNode):
 
     @strawberry_django.field(
         only=["thread_id", "is_trashed", "subtype_id", "sent_at", "created_at"],
-        annotate={"_current_user_needaction": lambda info: Message.objects.sudo(
-            reason="messaging.record_thread.needaction",
-        ).needaction_expression(_request_user(info))},
+        annotate={"_current_user_needaction": lambda info: _needaction_expression(info, structural=True)},
     )
     def needaction(self, info: strawberry.Info) -> bool:
         """Return whether this message sits past the current user's read receipt."""
 
-        resolved = getattr(self, "_current_user_needaction", None)
-        if resolved is not None:
-            return bool(resolved)
-        return bool(ThreadFollower.objects.needaction_for_message(self, user=_request_user(info)))
+        return _needaction(self, info)
 
     @strawberry_django.field(
         only=["thread_id", "sender_id", "created_by_id", "message_type", "direction"],
@@ -1927,6 +1944,13 @@ class MessagingMutation:
             )
         except (PermissionDenied, ValueError) as error:
             return RecordMessageReactionPayload.from_error(error, invalid_code="BAD_REACTION")
+        prefetch_related_objects(
+            [message],
+            models.Prefetch(
+                "reactions",
+                queryset=apps.get_model("messaging", "Reaction")._base_manager.select_related("handle").order_by("pk"),
+            ),
+        )
         return RecordMessageReactionPayload(
             _context=_RecordThreadContext(record=record, info=info, role=input.role), _message=message,
         )

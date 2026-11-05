@@ -138,7 +138,10 @@ class NexusQuery:
 
         if (root_id is None) == (circle_id is None):
             raise ValueError("party_graph requires exactly one root_id or circle_id")
-        party = Party.objects.all().scoped().from_public_id(str(root_id)) if root_id is not None else None
+        party = (
+            Party.objects.all().scoped().with_concrete_kind().from_public_id(str(root_id))
+            if root_id is not None else None
+        )
         circle = Circle.objects.all().scoped().from_public_id(str(circle_id)) if circle_id is not None else None
         if root_id is not None and party is None:
             raise ValueError("party not found")

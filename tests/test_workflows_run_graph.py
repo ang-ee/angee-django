@@ -8,6 +8,7 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from pydantic import BaseModel
 
+from angee.iam.testing.graphql import measure_graphql_document
 from angee.workflows import schema as workflow_schema
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
@@ -48,6 +49,155 @@ def schema():
 def read_graph(schema, run, actor):
     """Read only the graph summary, never execution payloads."""
     return result_data(execute_schema(schema, GRAPH, {"id": run.sqid}, user=actor))["workflowrun_by_pk"]
+
+
+def test_run_list_labels_failures_and_actions_are_flat_at_one_five_ten_twenty(schema, execution):
+    """One page projects workflow labels, retained errors, and cancellation policy."""
+
+    actor, _ = execution
+    failed_workflow = load_workflow({"nodes": {"entry": {"step": "reject"}}}, key="budget-failed", actor=actor)
+    finished_workflow = load_workflow({"nodes": {"entry": {"step": "echo"}}}, key="budget-finished", actor=actor)
+    for index in range(20):
+        run = start_run(finished_workflow if index % 2 == 0 else failed_workflow, actor=actor)
+        run_until(run)
+    document = """query RunList($limit: Int!) {
+        workflowrun(limit: $limit, order_by: [{created_at: asc}]) {
+            id display_name failure_reason can_cancel
+        }
+    }"""
+    reads = {
+        size: measure_graphql_document(schema, document, {"limit": size}, actor=actor)
+        for size in (1, 5, 10, 20)
+    }
+    for size, read in reads.items():
+        assert len(read.data["workflowrun"]) == size
+        assert all(row["display_name"] for row in read.data["workflowrun"])
+        assert [row["failure_reason"] for row in read.data["workflowrun"]] == [
+            None if index % 2 == 0 else "Rejected by the fixture." for index in range(size)
+        ]
+        assert read.statement_count == 10
+        read.assert_no_audit_writes()
+        read.assert_bytes(total=80_000, largest=25_000)
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reads[larger].assert_flat_from(reads[smaller])
+
+
+def test_nested_run_cancel_does_not_prepare_outer_run_page(schema, execution):
+    """A cancel field selected on related runs does not prepare the root run page."""
+
+    actor, _ = execution
+    workflow = load_workflow({"nodes": {"entry": {"step": "reject"}}}, key="deep-cancel-budget", actor=actor)
+    for _ in range(20):
+        run_until(start_run(workflow, actor=actor))
+    document = """query DeepCancel($limit: Int!) {
+        workflowrun(limit: $limit, order_by: [{created_at: asc}]) {
+            id step_runs { id run { id can_cancel } }
+        }
+    }"""
+    reads = {
+        size: measure_graphql_document(schema, document, {"limit": size}, actor=actor)
+        for size in (1, 5, 10, 20)
+    }
+    for size, read in reads.items():
+        assert len(read.data["workflowrun"]) == size
+        assert all(len(run["step_runs"]) == 1 and run["step_runs"][0]["run"] is not None
+                   for run in read.data["workflowrun"])
+        assert read.statement_count == 13, (size, read.statement_count)
+        read.assert_no_audit_writes()
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reads[larger].assert_flat_from(reads[smaller])
+
+
+def test_step_run_list_retry_projection_budget(schema, execution):
+    """A generic step list must not repeat policy and graph reads per step."""
+
+    actor, _ = execution
+    workflow = load_workflow({"nodes": {"entry": {"step": "reject"}}}, key="retry-budget", actor=actor)
+    for _ in range(20):
+        run_until(start_run(workflow, actor=actor))
+    document = """query RetryList($limit: Int!) {
+        steprun(limit: $limit, order_by: [{created_at: asc}]) { id can_retry }
+    }"""
+    reads = {
+        size: measure_graphql_document(schema, document, {"limit": size}, actor=actor)
+        for size in (1, 5, 10, 20)
+    }
+    for size, read in reads.items():
+        assert len(read.data["steprun"]) == size
+        assert read.statement_count == 9
+        read.assert_no_audit_writes()
+        read.assert_bytes(total=37_000, largest=21_000)
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reads[larger].assert_flat_from(reads[smaller])
+
+
+def test_empty_step_page_does_not_audit_effect_marker(schema, execution):
+    """A projected effect marker adds no bypass audit for an empty outsider page."""
+
+    actor, _ = execution
+    workflow = load_workflow({"nodes": {"entry": {"step": "reject"}}}, key="empty-hold-budget", actor=actor)
+    run_until(start_run(workflow, actor=actor))
+    outsider = create_user("empty-hold-outsider")
+    document = """query EmptySteps($limit: Int!) {
+        steprun(limit: $limit) { id hold requires_duplicate_acknowledgement map_total map_settled }
+    }"""
+    for size in (1, 5, 10, 20):
+        read = measure_graphql_document(schema, document, {"limit": size}, actor=outsider)
+        assert read.data["steprun"] == []
+        assert read.statement_count == 8
+        assert read.audit_inserts == 1
+
+
+def test_nested_step_run_retry_is_batched(schema, execution):
+    """A run page prepares nested retry facts once for all selected steps."""
+
+    actor, _ = execution
+    workflow = load_workflow({"nodes": {"entry": {"step": "reject"}}}, key="nested-retry-budget", actor=actor)
+    for _ in range(20):
+        run_until(start_run(workflow, actor=actor))
+    document = """query NestedRetry($limit: Int!) {
+        workflowrun(limit: $limit, order_by: [{created_at: asc}]) {
+            id step_runs { id can_retry }
+        }
+    }"""
+    reads = {
+        size: measure_graphql_document(schema, document, {"limit": size}, actor=actor)
+        for size in (1, 5, 10, 20)
+    }
+    for size, read in reads.items():
+        assert len(read.data["workflowrun"]) == size
+        assert all(len(run["step_runs"]) == 1 and run["step_runs"][0]["can_retry"]
+                   for run in read.data["workflowrun"])
+        assert read.statement_count == 13, (size, read.statement_count)
+        read.assert_no_audit_writes()
+        read.assert_bytes(total=100_000, largest=30_000)
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reads[larger].assert_flat_from(reads[smaller])
+
+
+def test_nested_run_cancel_is_batched(schema, execution):
+    """A step page prepares the related run's cancel facts once."""
+
+    actor, _ = execution
+    workflow = load_workflow({"nodes": {"entry": {"step": "reject"}}}, key="nested-cancel-budget", actor=actor)
+    for _ in range(20):
+        run_until(start_run(workflow, actor=actor))
+    document = """query NestedCancel($limit: Int!) {
+        steprun(limit: $limit, order_by: [{created_at: asc}]) {
+            id run { id can_cancel }
+        }
+    }"""
+    reads = {
+        size: measure_graphql_document(schema, document, {"limit": size}, actor=actor)
+        for size in (1, 5, 10, 20)
+    }
+    for size, read in reads.items():
+        assert len(read.data["steprun"]) == size
+        assert all(row["run"] is not None and row["run"]["can_cancel"] for row in read.data["steprun"])
+        assert read.statement_count == 9, (size, read.statement_count)
+        read.assert_no_audit_writes()
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reads[larger].assert_flat_from(reads[smaller])
 
 
 def test_fork_join_graph_keeps_pinned_labels_ports_and_taken_edges(schema, execution, register_step):
@@ -108,7 +258,7 @@ def test_run_reader_gets_graph_without_workflow_or_version_read(schema, executio
     node = visible["graph"]["nodes"][0]
     assert node["label"] == "Retained failure"
     assert node["step_run"]["failure_reason"] == "Rejected by the fixture."
-    assert StepRun.system_queryset().get(run=run).failure_reason == run.failure_reason
+    assert StepRun.system_queryset().get(run=run).failure_reason == run.get_failure_reason()
     assert read_graph(schema, run, outsider) is None
     assert result_data(execute_schema(schema, "{ workflow { id } workflowversion { id } }", user=reader)) == {
         "workflow": [], "workflowversion": [],
@@ -207,7 +357,7 @@ def test_run_failure_reason_prefers_output_then_first_retained_failed_error(exec
     run.output = {"error": "Run failure"}
     assert run.failure_reason == "Run failure"
     run.output = {}
-    assert run.failure_reason == "Second failure"
+    assert run.get_failure_reason() == "Second failure"
     run.outcome = "done"
     assert run.failure_reason is None
 
@@ -303,15 +453,15 @@ def test_drill_in_step_permission_queries_are_bounded(schema, execution):
     assert [node["step_run"]["can_retry"] for node in denied["graph"]["nodes"]] == [False] * 6
     operator = create_user("drill-in-operator")
     last_run.with_actor(starter).grant_record_access("operator", operator)
-    assert last_run.can_cancel(operator)
+    assert last_run.get_can_cancel(operator)
     graph = last_run.graph(operator, step_fields=frozenset({"can_retry"}))
     failed = graph.nodes[-1].step_run
     assert failed is not None and failed.can_retry(operator)
     last_run.with_actor(starter).revoke_record_access("operator", operator)
-    assert not last_run.can_cancel(operator)
+    assert not last_run.get_can_cancel(operator)
     unrelated = StepRun.system_queryset().get(pk=failed.pk)
     unrelated.run = last_run
-    assert not unrelated.can_retry(operator)
+    assert not unrelated.get_can_retry(operator)
 
 
 def test_drill_in_record_reference_queries_are_bounded(schema, execution, register_step):

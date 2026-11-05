@@ -7,7 +7,7 @@ from django.contrib.auth import get_user_model
 from django.db import connection
 from django.http import HttpRequest
 from django.test.utils import CaptureQueriesContext
-from rebac import actor_context
+from rebac import actor_context, system_context
 
 from angee.iam import identity as identity_module
 from angee.iam.identity import (
@@ -118,3 +118,12 @@ def test_label_projection_survives_user_field_redaction(composed_tables: None) -
         projected = user_label_queryset().get(pk=author.pk)
         assert projected.__dict__["_iam_display_label"] == "label-author"
         assert user_label(projected) == "label-author"
+
+
+@pytest.mark.django_db
+def test_user_str_keeps_structural_name_fallback() -> None:
+    user = get_user_model().objects.create_user(
+        username="identity-str", first_name="Identity", last_name="Reader",
+    )
+    with system_context(reason="tests.iam.user_str"):
+        assert str(get_user_model().objects.only("pk").get(pk=user.pk)) == "Identity Reader"

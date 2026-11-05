@@ -164,7 +164,7 @@ class ExtractionWorkflowTests(TransactionTestCase):
             self.assertEqual([body.map_index for body in bodies], list(range(pages)))
             self.assertEqual([body.attempts.count() for body in bodies], [1] * pages)
             self.assertEqual(mapped.outcome, "failed" if fail_page is not None else "done")
-            self.assertEqual((mapped.map_total, mapped.map_settled), (pages, pages))
+            self.assertEqual((mapped.get_map_total(), mapped.get_map_settled()), (pages, pages))
             self.assertEqual(process.input["recognition"], mapped.output)
             values = ProcessEvidenceInput.model_validate(process.input)
             self.assertTrue(all(isinstance(item, MapItem) for item in values.recognition))

@@ -5,8 +5,9 @@ from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ImproperlyConfigured
 from django.db import connection
-from django.test.utils import CaptureQueriesContext
+from django.test.utils import CaptureQueriesContext, override_settings
 from rebac import actor_context, current_actor, system_context
 
 from angee.messaging.managers import MessageQuerySet
@@ -16,6 +17,42 @@ from tests.messaging_campaign import grant
 from tests.test_messaging_graphql import _platform_admin, _schema
 
 pytestmark = pytest.mark.usefixtures("composed_tables")
+
+
+def test_missing_sender_projection_raises_and_explicit_single_row_read_works() -> None:
+    """List fields expose missing projections; one-row callers name the read."""
+
+    owner = get_user_model().objects.create_user(username="missing-sender-projection")
+    with system_context(reason="test.messaging.sender_projection.seed"):
+        handle = Handle.objects.create(
+            created_by=owner, platform="email", value="sender@example.test", display_name="Sender",
+        )
+        message = Message.objects.create(created_by=owner, sender=handle)
+        grant(message, "reader", owner)
+    with actor_context(owner):
+        with pytest.raises(
+            ImproperlyConfigured, match=r"messaging.Message._sender_name requires a queryset projection",
+        ):
+            message.sender_name()
+        assert message.get_sender_name() == "Sender"
+
+
+def test_projection_guard_setting_controls_single_row_fallback() -> None:
+    """The explicit setting, including its disabled path, owns fallback behavior."""
+
+    owner = get_user_model().objects.create_user(username="projection-guard-setting")
+    with system_context(reason="test.messaging.projection_guard_setting.seed"):
+        handle = Handle.objects.create(
+            created_by=owner, platform="email", value="guard@example.test", display_name="Guard Sender",
+        )
+        message = Message.objects.create(created_by=owner, sender=handle)
+        grant(message, "reader", owner)
+    with actor_context(owner):
+        with override_settings(ANGEE_REQUIRE_PROJECTIONS=True):
+            with pytest.raises(ImproperlyConfigured, match="_sender_name requires a queryset projection"):
+                message.sender_name()
+        with override_settings(ANGEE_REQUIRE_PROJECTIONS=False):
+            assert message.sender_name() == "Guard Sender"
 
 
 def test_unused_sender_order_does_not_prepare_identity_scopes() -> None:
@@ -153,14 +190,16 @@ def test_sender_projection_matches_visible_identity_and_regates_elevated_parents
             _sender_name=Message.objects.sender_name_expression(),
         )
         assert {str(row.sqid): row.sender_name() for row in rows} == expected
-        # A materialized parent without optimizer annotations uses the same
-        # Handle owner, including the denied sender and missing-sender cases.
-        assert {str(row.sqid): row.sender_name() for row in Message._base_manager.filter(sqid__in=expected)} == expected
+        # Explicit standalone reads use the same Handle owner, including
+        # the denied sender and missing-sender cases.
+        assert {
+            str(row.sqid): row.get_sender_name() for row in Message._base_manager.filter(sqid__in=expected)
+        } == expected
     # Native queryset materialization pins its actor on each model, even after
-    # leaving GraphQL's ambient context. The fallback must preserve that owner.
+    # leaving GraphQL's ambient context. The standalone read preserves that owner.
     assert current_actor() is None
     assert {
-        str(row.sqid): row.sender_name()
+        str(row.sqid): row.get_sender_name()
         for row in Message.objects.with_actor(owner).filter(sqid__in=expected)
     } == expected
 
@@ -275,7 +314,7 @@ def test_related_sort_values_ignore_denied_labels_and_regate_elevated_parents() 
     assert result_data(execute_schema(schema, query, user=owner))["messages"] == expected
     with actor_context(owner), system_context(reason="test.messaging.related_sort.elevated_parent"):
         materialized = Message._base_manager.filter(pk__in=[row.pk for row in rows]).order_by("pk")
-        assert [(row.thread_title(), row.channel_vendor_name()) for row in materialized] == [
+        assert [(row.get_thread_title(), row.get_channel_vendor_name()) for row in materialized] == [
             ("Visible thread", ""), ("", ""), ("", ""),
         ]
     for old_axis in ("thread__title__text", "channel__vendor__display_name"):

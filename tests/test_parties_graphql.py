@@ -12,6 +12,7 @@ from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_r
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam.identity import public_subject_ref
+from angee.iam.testing.graphql import measure_graphql_document
 from angee.messaging.testing import models as messaging_models
 from tests.conftest import (
     SchemaAddon,
@@ -620,6 +621,35 @@ def test_statement_reference_reads_have_a_page_query_budget(
     with django_assert_num_queries(10):
         rows = _data(execute_schema(schema, query, user=admin))["party_statements"]
     assert len(rows) == row_count
+
+
+def test_party_list_concrete_kind_projection_is_flat_at_one_five_ten_twenty(composed_tables: None) -> None:
+    """A parent page identifies concrete children without fetching each child row."""
+
+    del composed_tables
+    admin = _platform_admin("party-kind-budget")
+    with system_context(reason="tests.parties.kind_budget.seed"):
+        for index in range(20):
+            model = Person if index % 2 == 0 else Organization
+            model.objects.create(display_name=f"Kind {index:02d}", created_by=admin)
+    schema = _schema("public")
+    document = """query KindList($limit: Int!) {
+        parties(limit: $limit, order_by: [{display_name: asc}]) { id concrete_kind }
+    }"""
+    reads = {
+        size: measure_graphql_document(schema, document, {"limit": size}, actor=admin)
+        for size in (1, 5, 10, 20)
+    }
+    for size, read in reads.items():
+        assert len(read.data["parties"]) == size
+        assert [row["concrete_kind"] for row in read.data["parties"]] == [
+            "PERSON" if index % 2 == 0 else "ORGANIZATION" for index in range(size)
+        ]
+        assert read.statement_count == 5
+        read.assert_no_audit_writes()
+        read.assert_bytes(total=20_000, largest=13_000)
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reads[larger].assert_flat_from(reads[smaller])
 
 
 def test_party_statements_group_only_by_axes_the_party_reader_may_read() -> None:

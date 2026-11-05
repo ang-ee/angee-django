@@ -6,6 +6,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Any, Self
 
+from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 
@@ -21,6 +22,17 @@ def require_composed_type[T](value: object, expected: type[T]) -> T:
             f"received {type(value).__module__}.{type(value).__qualname__}."
         )
     return value
+
+
+def require_projection(instance: models.Model, name: str) -> None:
+    """Expose a missing list projection while developing or exercising tests.
+
+    Production callers may retain an explicit standalone read as a fallback.
+    A list field must request its projection from the owning queryset.
+    """
+
+    if getattr(settings, "ANGEE_REQUIRE_PROJECTIONS", settings.DEBUG):
+        raise ImproperlyConfigured(f"{instance._meta.label}.{name} requires a queryset projection.")
 
 
 class PersistenceMixin(models.Model):

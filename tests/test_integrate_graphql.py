@@ -31,8 +31,10 @@ from rebac import system_context
 
 from angee.base.models.identity import public_id_for
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.iam.testing.graphql import measure_graphql_document
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.events import EventKind
+from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.states import StreamKind, SyncFailure, SyncFailureKind, SyncFailureStatus
 from angee.integrate.testing.models import RecordLink, SyncStream
 from angee.integrate.webhooks import WebhookDeliveryError
@@ -143,6 +145,134 @@ def test_sync_identity_labels_are_batched_for_narrow_selections(composed_tables:
     }
     assert {row["display_name"] for row in rows["record_links"]} == {f"person:{index}" for index in range(1, 6)}
     assert len(many) <= len(one) + 1
+
+
+def test_record_link_source_fields_are_batched_at_one_five_ten_twenty(composed_tables: None) -> None:
+    """Connector URL and label share a page prefetch, independent of link count."""
+
+    del composed_tables
+    bridge = make_integration("link-source-budget", model=Channel)
+    with system_context(reason="test link source budget"):
+        stream = current_stream(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        for index in range(20):
+            RecordLink.objects.observe(stream, f"person:{index}")
+    schema = _schema()
+    document = """query LinkSources($limit: Int!) {
+        record_links(limit: $limit) { id source_url source_label }
+    }"""
+    reads = {
+        size: measure_graphql_document(schema, document, {"limit": size}, actor=bridge.owner)
+        for size in (1, 5, 10, 20)
+    }
+    admin = _platform_admin("link-source-budget-admin")
+    admin_reads = {
+        size: measure_graphql_document(schema, document, {"limit": size}, actor=admin)
+        for size in (1, 5, 10, 20)
+    }
+    for size, read in reads.items():
+        assert len(read.data["record_links"]) == size
+        assert [row["source_label"] for row in read.data["record_links"]] == [
+            f"person:{index}" for index in range(size)
+        ]
+        assert all(row["source_url"] is None for row in read.data["record_links"])
+        assert read.statement_count == 10, (size, read.statement_count)
+        read.assert_no_audit_writes()
+        read.assert_bytes(total=165_000, largest=17_000)
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reads[larger].assert_flat_from(reads[smaller])
+    for size, read in admin_reads.items():
+        assert len(read.data["record_links"]) == size
+        assert read.statement_count == 11, (size, read.statement_count)
+        read.assert_no_audit_writes()
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        admin_reads[larger].assert_flat_from(admin_reads[smaller])
+
+
+def test_stream_failure_labels_use_projected_source(composed_tables: None) -> None:
+    """A linked failure uses the stream's selected connector for its labels."""
+
+    del composed_tables
+    bridge = make_integration("failure-source-label", model=Channel)
+    with system_context(reason="test stream failure source label"):
+        stream = current_stream(bridge, "contacts", kind=StreamKind.RECORD_REPLICA)
+        link = RecordLink.objects.observe(stream, "person:1")
+        link.record_failure(kind=SyncFailureKind.SEMANTIC, code="invalid")
+    schema = _schema()
+    result = _data(_execute(schema, "{ sync_streams { failures { source_label source_url } } }", user=bridge.owner))
+    assert len(result["sync_streams"]) == 1
+    assert result["sync_streams"][0]["failures"] == [{"source_label": "person:1", "source_url": None}]
+
+
+def test_bridge_status_fields_share_page_reads_at_one_five_ten_twenty(
+    composed_tables: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bridge failure counts and live-lock status have fixed page query overhead."""
+
+    del composed_tables
+    admin = _platform_admin("bridge-status-budget")
+    for index in range(20):
+        make_integration(f"bridge-status-{index:02d}", model=VcsBridge)
+    schema = _schema()
+    document = """query BridgeStatus($limit: Int!) {
+        vcs_bridges(limit: $limit) { id open_failure_count is_syncing }
+    }"""
+    snapshot = integrate_schema.task_lock_snapshot
+    calls: list[str] = []
+
+    def record_snapshot(*, using: str) -> Any:
+        calls.append(using)
+        return snapshot(using=using)
+
+    monkeypatch.setattr(integrate_schema, "task_lock_snapshot", record_snapshot)
+    reads = {}
+    for size in (1, 5, 10, 20):
+        calls.clear()
+        reads[size] = measure_graphql_document(schema, document, {"limit": size}, actor=admin)
+        assert calls == ["default"], (size, calls)
+    for size, read in reads.items():
+        assert len(read.data["vcs_bridges"]) == size
+        assert all(row["open_failure_count"] == 0 and row["is_syncing"] is False
+                   for row in read.data["vcs_bridges"])
+        assert read.statement_count == (9 if connection.vendor == "postgresql" else 8), (size, read.statement_count)
+        read.assert_no_audit_writes()
+        read.assert_bytes(total=16_000, largest=4_000)
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reads[larger].assert_flat_from(reads[smaller])
+
+
+def test_live_bridge_stage_uses_one_postgresql_lock_snapshot(composed_tables: None) -> None:
+    """Live rows share a lock snapshot and distinguish a held lock from stale stages."""
+
+    del composed_tables
+    if connection.vendor != "postgresql":
+        pytest.skip("PostgreSQL advisory lock snapshot")
+    admin = _platform_admin("bridge-live-stage-budget")
+    bridges = [make_integration(f"bridge-live-stage-{index:02d}", model=VcsBridge) for index in range(20)]
+    with system_context(reason="test bridge live stage budget"):
+        VcsBridge._base_manager.filter(pk__in=[bridge.pk for bridge in bridges]).update(
+            sync_stage=VcsBridge.SyncStage.SYNCING,
+        )
+    schema = _schema()
+    document = """query BridgeStages($limit: Int!) {
+        vcs_bridges(limit: $limit, order_by: [{created_at: asc}]) { id is_syncing sync_stage }
+    }"""
+    with bridge_advisory_lock(bridges[0]) as acquired:
+        assert acquired
+        reads = {
+            size: measure_graphql_document(schema, document, {"limit": size}, actor=admin)
+            for size in (1, 5, 10, 20)
+        }
+    for size, read in reads.items():
+        assert len(read.data["vcs_bridges"]) == size
+        assert read.data["vcs_bridges"][0]["is_syncing"] is True
+        assert read.data["vcs_bridges"][0]["sync_stage"] == "SYNCING"
+        assert all(row["is_syncing"] is False and row["sync_stage"] == "FAILED"
+                   for row in read.data["vcs_bridges"][1:])
+        assert read.statement_count == 6, (size, read.statement_count)
+        read.assert_no_audit_writes()
+        read.assert_bytes(total=18_000, largest=8_000)
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reads[larger].assert_flat_from(reads[smaller])
 
 
 def test_sync_stream_filter_and_batched_integration_projection(composed_tables: None) -> None:
@@ -532,6 +662,24 @@ def test_concrete_target_list_query_cost_is_bounded_by_child_types(
         many_rows = _data(_execute(schema, query, user=admin))["integrations"]
     assert sum(row["concrete_target"]["state"] == "AVAILABLE" for row in many_rows) == 5
     assert len(many) <= len(one) + 1
+
+
+def test_prepared_concrete_children_rescope_actor_and_exposure(composed_tables: None) -> None:
+    """A page's visible child cannot be reused for a different actor or schema."""
+
+    del composed_tables
+    bridge = make_integration("target-cache-scope", model=VcsBridge)
+    admin = _platform_admin("target-cache-admin")
+    outsider = User.objects.create_user(username="target-cache-outsider")
+    exposed = {VcsBridge._meta.label}
+    row = (
+        Integration.objects.with_actor(admin)
+        .with_concrete_children(actor=admin, exposed_model_labels=exposed)
+        .get(pk=bridge.pk)
+    )
+    assert len(row.concrete_children(actor=admin, exposed_model_labels=exposed)[1]) == 1
+    assert row.concrete_children(actor=admin, exposed_model_labels=set())[1] == []
+    assert row.concrete_children(actor=outsider, exposed_model_labels=exposed)[1] == []
 
 
 def test_integration_groups_aggregate_runs_with_rebac_scope(

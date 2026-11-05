@@ -115,7 +115,7 @@ class PartyType(AuthoredRefMixin, ProtectedNode):
 
         return cast(Any, Party.objects.display_avatar(cast(Any, self), actor=session_user(info)))
 
-    @strawberry.field
+    @strawberry_django.field(annotate={"_concrete_kind": lambda info: Party.concrete_kind_expression()})
     def concrete_kind(parent: strawberry.Parent[PartyModel]) -> RelationshipKindModel.PartyKind | None:
         """Return the native MTI subtype used for canonical Party navigation."""
 

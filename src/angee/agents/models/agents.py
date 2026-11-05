@@ -22,6 +22,7 @@ from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.locks import LockKey, record_lock_key
+from angee.base.models.persistence import require_projection
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.iam.models import ServiceUserMixin
 from angee.iam.models.base import ProtectedDataModel
@@ -368,16 +369,25 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Prote
         )
 
     def delete_blocker(self) -> str | None:
-        """Require teardown and stopped turns before deleting the agent and its sessions."""
+        """Require teardown and stopped turns from the projected agent row."""
 
+        if "_has_active_turns" not in self.__dict__:
+            require_projection(self, "_has_active_turns")
+            return self.get_delete_blocker()
+        return self._delete_blocker(bool(self.__dict__["_has_active_turns"]))
+
+    def _delete_blocker(self, active: bool) -> str | None:
         if self.deprovision_blocker() is None:
             return "Deprovision this agent before deleting it."
-        active = getattr(self, "_has_active_turns", None)
-        if active is None:
-            active = type(self).system_queryset().filter(self.has_active_turns_expression(), pk=self.pk).exists()
         if active:
             return "Stop all active turns before deleting this agent."
         return None
+
+    def get_delete_blocker(self) -> str | None:
+        """Check one agent's deletion state explicitly outside a projected list."""
+
+        active = type(self).system_queryset().filter(self.has_active_turns_expression(), pk=self.pk).exists()
+        return self._delete_blocker(active)
 
     def provision_blocker(self, *, prerequisites: bool = True) -> str | None:
         """Return why Provision may not start now, or ``None``."""

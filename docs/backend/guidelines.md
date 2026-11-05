@@ -137,6 +137,15 @@ Use these owners instead of maintaining another contract in an addon:
 - Manager/QuerySet canon: chainable read scopes live on a `*QuerySet` exposed
   through `Manager.from_queryset(...)`. Factories and mutations stay on the
   manager that owns the write.
+- A list-only model fact is projected by its owning queryset or relation prefetch.
+  Its property calls [`require_projection`](../../src/angee/base/models/persistence.py)
+  when the hint is absent. `ANGEE_REQUIRE_PROJECTIONS` defaults to `DEBUG` and is
+  enabled explicitly by test settings, so those environments expose a missed list selection.
+  Single-record callers needing an unprojected value call an explicit `get_*` method.
+  Mutation payloads and other returned rows are single-record callers and must prepare the selected projection.
+  REBAC-scoped relation prefetches cannot load structural rows that the actor may not read independently.
+  Generic labels such as `__str__` retain their structural fallback because deletion,
+  history, and admin callers cannot request a projection.
 - Multi-owner setup belongs to one transactional verb. Projects'
   [`setup_from_task`](../../src/angee/projects/models.py) calls cooperative
   `apply_setup` hooks; each contributor consumes native values from its typed
@@ -145,9 +154,11 @@ Use these owners instead of maintaining another contract in an addon:
   they do not reset later edits. Resume existing partial rows through their
   owners instead of issuing independent browser writes.
 - Actor summary fields compose native SQL scopes before counting. Proposals'
-  [`clarification_waiting_users`](../../src/angee/proposals/models.py) owns
-  both recipient projections and attention counts, so hidden questions and
-  answered recipients cannot inflate dashboard totals.
+  [`clarification_waiting_users`](../../src/angee/proposals/models.py) owns the
+  disclosed recipient projection; `question_attention_annotations` checks the
+  assignee and current responder directly, and `question_attention_expression`
+  aggregates dashboard counts over each selected parent. Hidden questions and answered
+  recipients cannot inflate the totals.
 - A container scope key is an explicit filter-only contract, not a readable
   relation. [`hasura_container_scope_fields`](../../src/angee/work/models.py)
   lets a resource declare stable related keys such as `queue__slug`; the
@@ -896,8 +907,14 @@ data through REBAC, never a queryset bypass.
   correlated by admitted identity or proved concern links. For example, a
   relation sort alias may self-join the admitted row by primary key; the
   related-row expression still applies its own actor guard. A structural read
-  may also feed a fact the API already exposes without the rows. Never return
-  structural rows or their fields to a client. Prefer this shape to a duplicate
+  may also feed a fact the API already exposes without the rows. Child rows
+  that are reachable only through an admitted parent whose read implies them —
+  the parts of an admitted message, the updates of an admitted agent turn, the
+  carrier of an admitted extraction part — may be delivered structurally with
+  the parent's proof as the only gate; the owning policy states the implied
+  read in its `.zed` comment, and the batch is bounded by the admitted parents.
+  Any other structural row, and any field of a row the actor could not read on
+  its own, is never returned to a client. Prefer this shape to a duplicate
   actor-bound proof. Use an audited system read when the page intentionally
   exposes a fact across the ordinary row boundary.
   `TimelineSelection.open_decision_count` is audited because it counts decisions

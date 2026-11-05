@@ -1,11 +1,15 @@
 """A task's hand verbs are offered exactly where their owners admit them."""
 
+import re
 from pathlib import Path
 
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import connection, transaction
+from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 
+from angee.graphql.schema import GraphQLSchemas
+from angee.iam.testing.graphql import measure_graphql_document
 from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 
@@ -111,6 +115,71 @@ class TaskActionTests(WorkCase):
         task = self.task("Triage")
         self.share(task, self.reader)
         self.assertEqual(self.offered(task, user=self.reader), set())
+
+    def test_task_list_board_and_queue_action_projection_budgets(self):
+        """The three task list scopes share one permission expression per distinct verb permission."""
+
+        for index in range(20):
+            self.task("Ready", title=f"Budget task {index:02d}")
+        schema = GraphQLSchemas.from_discovery().build("public")
+        documents = {
+            "task_list": "query($limit: Int!) { project_tasks(limit: $limit) { id task_actions allowed_visibility } }",
+            "queue": """query($limit: Int!, $queue: String!) {
+                project_tasks(limit: $limit, where: {queue__slug: {_eq: $queue}}) {
+                    id task_actions allowed_visibility
+                }
+            }""",
+            "board": """query($limit: Int!, $queue: String!) {
+                project_tasks(limit: $limit, where: {
+                    queue__slug: {_eq: $queue}, status: {_eq: "open"}
+                }) { id task_actions allowed_visibility }
+            }""",
+        }
+        for name, document in documents.items():
+            variables = {"queue": self.queue.slug}
+            measure_graphql_document(schema, document, {**variables, "limit": 1}, actor=self.owner)
+            reads = {
+                size: measure_graphql_document(schema, document, {**variables, "limit": size}, actor=self.owner)
+                for size in (1, 5, 10, 20)
+            }
+            for size, read in reads.items():
+                self.assertEqual(len(read.data["project_tasks"]), size, name)
+                self.assertEqual(read.statement_count, 7, (name, size))
+                read.assert_no_audit_writes()
+                read.assert_bytes(total=185_000, largest=175_000)
+            with CaptureQueriesContext(connection) as queries:
+                self.graphql(document, {**variables, "limit": 1}, user=self.owner)
+            permission_aliases = [
+                alias
+                for query in queries
+                for alias in re.findall(r'AS "(_task_permission_[^"]+|_visibility_allowed_[^"]+)"', query["sql"])
+            ]
+            self.assertEqual(sorted(permission_aliases), [
+                "_task_permission_delete", "_task_permission_write",
+                "_visibility_allowed_inherited", "_visibility_allowed_restricted",
+            ], name)
+
+    def test_task_work_key_projection_is_flat_at_one_five_ten_twenty(self):
+        """The task list selects its queue key once with the page."""
+
+        for index in range(20):
+            self.task("Ready", title=f"Key task {index:02d}")
+        schema = GraphQLSchemas.from_discovery().build("public")
+        document = """query KeyList($limit: Int!) {
+            project_tasks(limit: $limit, order_by: [{created_at: asc}]) { id work_key }
+        }"""
+        reads = {
+            size: measure_graphql_document(schema, document, {"limit": size}, actor=self.owner)
+            for size in (1, 5, 10, 20)
+        }
+        for size, read in reads.items():
+            self.assertEqual(len(read.data["project_tasks"]), size)
+            self.assertTrue(all(row["work_key"] for row in read.data["project_tasks"]))
+            self.assertEqual(read.statement_count, 3)
+            read.assert_no_audit_writes()
+            read.assert_bytes(total=95_000, largest=92_000)
+        for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+            reads[larger].assert_flat_from(reads[smaller])
 
 
 def test_work_task_actions(tmp_path: Path):

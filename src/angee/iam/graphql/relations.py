@@ -514,7 +514,11 @@ def actor_scoped_relation_expression(
     )
 
 
-def actor_scoped_to_one(field_name: str) -> Any:
+def actor_scoped_to_one(
+    field_name: str,
+    *,
+    prepare: Callable[[models.QuerySet[Any], strawberry.Info], models.QuerySet[Any]] | None = None,
+) -> Any:
     """Return a nullable forward/reverse to-one field redacting unreadable targets.
 
     The native prefetch carries the selected target's optimized queryset;
@@ -523,10 +527,11 @@ def actor_scoped_to_one(field_name: str) -> Any:
     Unprefetched roots fall back to one actor-scoped lookup per row. The parent
     may be actor-scoped or sudo-loaded; cached targets are reused only for the
     current actor, and ``only`` keeps the parent projection to the FK id. The
-    target prefetch retains the selected type's nested optimizer hints.
+    target prefetch retains the selected type's nested optimizer hints. A
+    ``prepare`` callback may add the target owner's selected page batch.
     """
 
-    return _guarded_to_one_field(field_name, _actor_scoped_to_one_resolver(field_name))
+    return _guarded_to_one_field(field_name, _actor_scoped_to_one_resolver(field_name), prepare=prepare)
 
 
 def actor_scoped_public_id(field_name: str) -> Any:
@@ -586,18 +591,26 @@ def _actor_scoped_to_one_resolver(field_name: str) -> Callable[[models.Model], A
     return resolve
 
 
-def _guarded_to_one_field(field_name: str, resolver: Callable[[models.Model], Any]) -> Any:
+def _guarded_to_one_field(
+    field_name: str,
+    resolver: Callable[[models.Model], Any],
+    *,
+    prepare: Callable[[models.QuerySet[Any], strawberry.Info], models.QuerySet[Any]] | None = None,
+) -> Any:
     """Bind a relation projection to the native hint scoped by the REBAC optimizer."""
 
     return strawberry_django.field(
         resolver=resolver,
         field_name=field_name,
         only=[field_name],
-        prefetch_related=[_guarded_relation_prefetch(field_name)],
+        prefetch_related=[_guarded_relation_prefetch(field_name, prepare)],
     )
 
 
-def _guarded_relation_prefetch(field_name: str) -> Callable[[strawberry.Info], models.Prefetch]:
+def _guarded_relation_prefetch(
+    field_name: str,
+    prepare: Callable[[models.QuerySet[Any], strawberry.Info], models.QuerySet[Any]] | None = None,
+) -> Callable[[strawberry.Info], models.Prefetch]:
     """Apply selected node annotations and nested hints alongside the join key.
 
     The native optimizer resolves ``permissions_field`` annotation callbacks on
@@ -634,6 +647,8 @@ def _guarded_relation_prefetch(field_name: str) -> Callable[[strawberry.Info], m
         elif isinstance(relation, models.ForeignKey):
             store.only.append(relation.target_field.attname)
         optimized = optimize(queryset, info, store=store)
+        if prepare is not None:
+            optimized = prepare(optimized, info)
         if read_scoped and actor is not None:
             optimized = _share_permission_projections(_proven_read_annotation(optimized), actor)
         return models.Prefetch(field_name, queryset=optimized)
@@ -641,7 +656,11 @@ def _guarded_relation_prefetch(field_name: str) -> Callable[[strawberry.Info], m
     return prefetch
 
 
-def actor_scoped_to_many(field_name: str) -> Any:
+def actor_scoped_to_many(
+    field_name: str,
+    *,
+    prepare: Callable[[models.QuerySet[Any], strawberry.Info], models.QuerySet[Any]] | None = None,
+) -> Any:
     """Return a to-many field whose rows are scoped to the current actor.
 
     The parent may be actor-scoped through one relation while the selected
@@ -679,5 +698,5 @@ def actor_scoped_to_many(field_name: str) -> Any:
     return strawberry_django.field(
         resolver=resolve,
         field_name=field_name,
-        prefetch_related=[_guarded_relation_prefetch(field_name)],
+        prefetch_related=[_guarded_relation_prefetch(field_name, prepare)],
     )

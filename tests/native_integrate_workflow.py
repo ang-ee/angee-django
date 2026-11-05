@@ -185,7 +185,7 @@ class ArchiveWorkflowTests(TransactionTestCase):
                     self.assertEqual(run.status, "succeeded")
                     self.assertEqual(run.outcome, "complete")
                     mapped = run.step_runs.get(node_key="import_units")
-                    self.assertEqual(mapped.map_total, 1)
+                    self.assertEqual(mapped.get_map_total(), 1)
                     self.assertEqual(mapped.output[0]["outcome"], "completed")
                     self.assertEqual(mapped.output[0]["output"]["result"], {
                         "source": str(subject.sqid), "target": str(self.target.sqid),
@@ -251,7 +251,7 @@ class ArchiveWorkflowTests(TransactionTestCase):
                 run.refresh_from_db()
                 self.assertEqual((run.status, run.outcome), ("succeeded", "partial"))
                 mapped = run.step_runs.get(node_key="import_units")
-                self.assertEqual(mapped.map_total, 2)
+                self.assertEqual(mapped.get_map_total(), 2)
                 self.assertEqual([item["outcome"] for item in mapped.output], ["error", "completed"])
                 self.assertEqual(mapped.map_rows().filter(outcome="completed").get().records.count(), 1)
 

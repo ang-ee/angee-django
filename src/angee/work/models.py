@@ -31,6 +31,7 @@ from rebac.managers import TrackedManager
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.locks import ImmutableFieldsMixin
+from angee.base.models.persistence import require_projection
 from angee.base.models.stages import Stage as StagePrimitive
 from angee.base.models.stages import StagedModelMixin
 from angee.base.models.stages import StageManager as StageManagerPrimitive
@@ -1689,8 +1690,30 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
 
         if self.queue_id is None or self.number is None:
             return None
-        queue = self.queue
-        return f"{queue.key}-{self.number}" if queue is not None else None
+        if "_work_queue_key" not in self.__dict__:
+            require_projection(self, "_work_queue_key")
+            return self.get_work_key()
+        key = self.__dict__["_work_queue_key"]
+        return f"{key}-{self.number}" if key is not None else None
+
+    def get_work_key(self) -> str | None:
+        """Read one task's queue key explicitly outside a projected list."""
+
+        if self.queue_id is None or self.number is None:
+            return None
+        key = type(self)._base_manager.using(self._state.db).filter(pk=self.pk).annotate(
+            _key=type(self).work_queue_key_expression(),
+        ).values_list("_key", flat=True).get()
+        return f"{key}-{self.number}" if key is not None else None
+
+    @classmethod
+    def work_queue_key_expression(cls) -> models.Subquery:
+        """Read the structural queue key without loading one queue per task."""
+
+        queue_model = cls._meta.get_field("queue").related_model
+        return models.Subquery(
+            queue_model._base_manager.filter(pk=models.OuterRef("queue_id")).values("key")[:1],
+        )
 
     def validate_cycle_scope(self) -> None:
         """Reject a cycle outside the task's queue."""

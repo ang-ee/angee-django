@@ -229,6 +229,11 @@ class AgentType(ProtectedNode):
 class AgentSessionType(ProtectedNode):
     """Projection of one persisted agent conversation, readable by its user."""
 
+    display_name: str = strawberry_django.field(
+        resolver=ProtectedNode.display_name,
+        only=["title", "agent_id"],
+        annotate={"_agent_name": lambda info: AgentSessionModel.agent_name_expression()},
+    )
     agent: AgentType
     user: UserType | None
     title: auto

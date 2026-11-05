@@ -303,7 +303,7 @@ def test_retry_discovery_refuses_states_outside_its_admission(bridge, state):
         elif state == "disconnected":
             bridge.disconnect()
         generation = bridge.discovery_generation
-        assert not bridge.can_retry_discovery()
+        assert not bridge.get_can_retry_discovery()
         with pytest.raises(ValidationError, match="cannot retry discovery"):
             bridge.retry_discovery()
         bridge.refresh_from_db()
@@ -318,19 +318,19 @@ def test_oauth_connect_admission_requires_the_owner_and_does_not_compete_with_re
         bridge.save(update_fields=["config"])
         settle(bridge)
         bridge.refresh_from_db()
-        assert not bridge.can_connect(bridge.owner)
+        assert not bridge.get_can_connect(bridge.owner)
     with actor_context(bridge.owner):
-        assert bridge.can_retry_discovery()
+        assert bridge.get_can_retry_discovery()
     with system_context(reason="test connect admission without credential"):
         bridge.credential = None
         bridge.save(update_fields=["credential"])
     with actor_context(bridge.owner):
-        assert bridge.can_connect()
+        assert bridge.get_can_connect()
         bridge.require_connect(bridge.owner)
     visitor = create_platform_admin("connect-visitor")
     with actor_context(visitor):
         assert bridge.has_access("write")
-    assert not bridge.can_connect(visitor)
+    assert not bridge.get_can_connect(visitor)
     with pytest.raises(PermissionDenied):
         bridge.require_connect(visitor)
 
@@ -354,19 +354,19 @@ def test_retryable_discovery_is_durable_and_bounded_and_operator_retry_resets_it
         assert not bridge.discovery_pending and not bridge.discovery_ready
         assert bridge.runtime_status == "error" and bridge.next_sync_at is None
         generation = bridge.discovery_generation
-        assert not bridge.can_retry_discovery()
+        assert not bridge.get_can_retry_discovery()
         with pytest.raises(ValidationError, match="cannot retry discovery"):
             bridge.retry_discovery()
         bridge.refresh_from_db()
         assert bridge.discovery_generation == generation
     actor = bridge.owner if actor_kind == "owner" else create_platform_admin("discovery-operator")
     with actor_context(actor):
-        assert bridge.can_retry_discovery()
+        assert bridge.get_can_retry_discovery()
         bridge.retry_discovery()
         assert bridge.discovery_attempts == 0 and bridge.discovery_pending
         assert bridge.discovery_generation == generation + 1
         assert bridge.lifecycle == "connected" and bridge.runtime_status == "pending"
-        assert not bridge.can_retry_discovery()
+        assert not bridge.get_can_retry_discovery()
 
 
 def test_terminal_refusal_is_safe_and_resume_reruns_discovery(bridge):
@@ -553,8 +553,8 @@ def test_non_admin_owner_can_retry_discovery_but_cannot_resume(bridge):
         assert settle(bridge)["reason"] == "discovery-failed"
         bridge.pause()
     with actor_context(bridge.owner):
-        assert bridge.can_retry_discovery()
-        assert not bridge.can_resume()
+        assert bridge.get_can_retry_discovery()
+        assert not bridge.get_can_resume()
         with pytest.raises(ValidationError, match="cannot resume"):
             bridge.resume()
     info = connection_info(bridge)
@@ -593,7 +593,7 @@ def test_retry_discovery_authorizes_its_declared_permission(bridge):
     try:
         with actor_context(bridge.owner):
             assert not bridge.has_access("write")
-            assert bridge.can_retry_discovery()
+            assert bridge.get_can_retry_discovery()
         result = result_data(execute_schema(info.schema, f'''mutation {{
           retry_discovery(id: "{bridge.sqid}") {{ ok }}
         }}''', request=info.context.request))["retry_discovery"]

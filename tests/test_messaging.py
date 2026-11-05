@@ -2556,7 +2556,7 @@ def test_null_bytes_are_stripped_on_write(channel: Any) -> None:
 
     _ingest([_parsed("m1", subject="Hi\x00there", text="body\x00text", sent_at=_AT)], channel=channel)
     message = Message._base_manager.get(external_id="m1")
-    assert message.title() == "Hithere"
+    assert message.get_title() == "Hithere"
     assert message.preview == "bodytext"
     body_part = Part._base_manager.select_related("fragment").get(
         message=message, role=Part.PartRole.BODY, fragment__isnull=False
@@ -2716,7 +2716,7 @@ def test_long_subject_lands_intact_and_groups_replies(channel: Any) -> None:
     message = Message._base_manager.get(external_id="long1")
     title_part = Part._base_manager.select_related("fragment").get(message=message, role=Part.PartRole.TITLE)
     assert title_part.fragment.text == subject
-    assert message.title() == subject
+    assert message.get_title() == subject
     thread = message.thread
     assert thread is not None
     assert thread.title is not None
@@ -2724,7 +2724,7 @@ def test_long_subject_lands_intact_and_groups_replies(channel: Any) -> None:
 
     _ingest([_parsed("long2", subject="Re: " + subject, sent_at=_AT + timedelta(hours=1))], channel=channel)
     reply = Message._base_manager.get(external_id="long2")
-    assert reply.title() == "Re: " + subject
+    assert reply.get_title() == "Re: " + subject
     assert reply.thread_id == thread.pk
     assert Thread._base_manager.count() == 1
 

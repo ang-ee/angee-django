@@ -330,7 +330,7 @@ def test_retry_names_other_unrouted_failures_without_reopening_the_run(execution
         actor, step_fields=frozenset({"can_retry"}),
     )
     failed = {node.node.key: node.step_run for node in graph.nodes}
-    assert not failed["failed"].can_retry(actor) and not failed["sibling"].can_retry(actor)
+    assert not failed["failed"].get_can_retry(actor) and not failed["sibling"].get_can_retry(actor)
     assert "sibling" in failed["failed"].retry_blocker
     assert "failed" in failed["sibling"].retry_blocker
     for target, other in (("failed", "sibling"), ("sibling", "failed")):

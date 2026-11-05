@@ -486,4 +486,4 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
 
         if not link.source_payload:
             return super().source_label(link)
-        return NotionSnapshot.model_validate(link.source_payload).node.label
+        return NotionNode.model_validate(link.source_payload["node"]).label

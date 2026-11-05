@@ -9,6 +9,7 @@ from typing import Any, Self, TypeVar, cast
 from django.core.exceptions import EmptyResultSet, ValidationError
 from django.db import connections, models
 from django.db.models.functions import Coalesce
+from django.db.models.query import ModelIterable
 
 from angee.base.models.identity import instance_from_public_id
 from angee.base.pagination import KeysetOrder, KeysetPage, keyset_signer
@@ -191,6 +192,19 @@ class AngeeQuerySet(
     _AngeeQuerySetMixin[_ModelT],
 ):
     """QuerySet API shared by Angee source and runtime models."""
+
+    def with_page_hook(self, prepare: Callable[[models.QuerySet[_ModelT], list[_ModelT]], None]) -> Self:
+        """Prepare a selected page once after Django materializes its model rows."""
+
+        class PageHookIterable(ModelIterable):
+            def __iter__(self) -> Iterator[_ModelT]:
+                rows = list(super().__iter__())
+                prepare(cast(models.QuerySet[_ModelT], self.queryset), rows)
+                return iter(rows)
+
+        rows = self.all()
+        rows._iterable_class = PageHookIterable
+        return rows
 
     def _keyset_cursor_scope(self, scope: tuple[Any, ...]) -> tuple[Any, ...]:
         """Own collection identity; optional capabilities contribute their audience."""

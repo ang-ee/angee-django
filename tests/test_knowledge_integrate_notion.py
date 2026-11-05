@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
+from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import UUID
 
 import httpx2
@@ -16,7 +18,7 @@ from rebac import actor_context, system_context
 from angee.integrate.http import HttpClient
 from angee.integrate.states import SyncFailureKind
 from angee.integrate.streams import advance_stream, open_stream, sync_bridge
-from angee.knowledge_integrate_notion.backend import NotionBackend, NotionResponseError
+from angee.knowledge_integrate_notion.backend import NotionBackend, NotionNode, NotionResponseError, NotionSnapshot
 from angee.knowledge_integrate_notion.schema import schemas
 from tests.conftest import (
     Link,
@@ -42,6 +44,23 @@ def node(number, title, *, parent=None, source=False):
     if source:
         result["title"] = [{"plain_text": title}]
     return result
+
+
+def test_source_labels_validate_only_the_node_at_twenty_links(bridge) -> None:
+    """A source label parses its retained node without rebuilding the whole snapshot."""
+
+    backend = NotionBackend(bridge)
+    links = [SimpleNamespace(source_payload={"node": node(index + 1, f"Page {index}")}) for index in range(20)]
+    parse_node = NotionNode.model_validate
+    with (
+        patch.object(NotionNode, "model_validate", side_effect=parse_node) as node_reads,
+        patch.object(
+            NotionSnapshot, "model_validate", side_effect=AssertionError("Whole snapshot parsed"),
+        ) as snapshots,
+    ):
+        assert [backend.source_label(link) for link in links] == [f"Page {index}" for index in range(20)]
+    assert node_reads.call_count == 20
+    assert snapshots.call_count == 0
 
 
 class NotionAPI:
@@ -257,10 +276,10 @@ def test_incomplete_content_is_quarantined_without_overwriting_good_body(bridge,
     link = bridge.sync_streams.get().links.get(external_key=key)
     failure = link.failures(open_only=True)[0]
     assert failure.code == code
-    assert failure.source_label == "Complete"
-    assert failure.source_url == f"https://www.notion.so/{UUID(key).hex}"
+    assert failure.get_source_label() == "Complete"
+    assert failure.get_source_url() == f"https://www.notion.so/{UUID(key).hex}"
     assert failure.message
-    assert bridge.open_failure_count == 1
+    assert bridge.get_open_failure_count() == 1
 
 
 def test_rate_limit_preserves_cursor_and_honors_retry_after(bridge, api):

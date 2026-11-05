@@ -10,7 +10,7 @@ import pytest
 import strawberry_django
 from django.db import connection
 from django.test import override_settings
-from django.test.utils import CaptureQueriesContext
+from django.test.utils import CaptureQueriesContext, isolate_apps
 from rebac import (
     RelationshipTuple,
     actor_context,
@@ -24,6 +24,7 @@ from rebac.managers import RebacQuerySet
 
 from angee.agents import schema as agents_schema
 from angee.agents.testing.models import Agent, AgentSession
+from angee.base.lineage import concrete_child_models
 from angee.base.models.identity import public_id_of
 from angee.base.signals import mute_changes
 from angee.decisions import schema as decisions_schema
@@ -36,6 +37,7 @@ from angee.iam.graphql.capabilities import held_permissions, permissions_field
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import actor_scoped_to_one
 from angee.iam.testing.queries import is_permission_audit_insert
+from angee.integrate import querysets as integrate_querysets
 from angee.integrate import schema as integrate_schema
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
@@ -57,6 +59,7 @@ from tests.conftest import (
     Drive,
     Feed,
     File,
+    Integration,
     MimeType,
     Page,
     RecordBinding,
@@ -260,9 +263,14 @@ def record_sources_reads(request, composed_tables: None, capture_graphql_documen
     """Execute the authored pane at one, five, ten and twenty links from distinct integrations."""
 
     del composed_tables
-    kind = request.param
+    return _record_sources_reads(capture_graphql_document, kind=request.param, slug="document-budget-sources")
+
+
+def _record_sources_reads(capture_graphql_document, *, kind: type[Integration], slug: str):
+    """Execute the authored pane for one integration kind under a distinct slug."""
+
     options = {"backend_class": "feed", "feed_backend_class": "stub"} if kind is Feed else {}
-    bridge = make_integration("document-budget-sources", model=kind, **options)
+    bridge = make_integration(slug, model=kind, **options)
     schema = addon_schema(
         iam_schema.schemas, "console", integrate_schema.schemas, integrate_vcs_schema.schemas,
         posts_schema.schemas,
@@ -276,12 +284,13 @@ def record_sources_reads(request, composed_tables: None, capture_graphql_documen
         schema, SOURCES, {"modelLabel": stream._meta.label, "recordId": public_id_of(stream)}, actor=bridge.owner,
     )
     assert len(one.data["record_links"]) == 1
+    assert one.data["record_links"][0]["stream"]["integration"]["concrete_target"]["state"] == "UNAVAILABLE"
     reads = {1: one}
     many = {"modelLabel": many_stream._meta.label, "recordId": public_id_of(many_stream)}
     for index in range(2, 21):
         with system_context(reason="test.document_budget.sources.more"):
             another = make_integration(
-                f"document-budget-sources-{index}", model=kind, owner=bridge.owner, **options
+                f"{slug}-{index}", model=kind, owner=bridge.owner, **options
             )
             source_stream = current_stream(another, "records", kind=StreamKind.RECORD_REPLICA)
             RecordLink.objects.observe(source_stream, f"record:{index}", target=many_stream)
@@ -344,6 +353,50 @@ def test_record_link_source_fields_without_stream_stay_flat(record_sources_reads
     five.assert_flat_from(one)
     one.assert_no_audit_writes()
     five.assert_no_audit_writes()
+
+
+def test_record_sources_document_fixed_budgets(record_sources_reads) -> None:
+    for read in record_sources_reads[0].values():
+        assert read.statement_count == 15  # re-measure after integration
+
+
+def test_record_sources_ignore_registered_unused_concrete_kind(
+    record_sources_reads, capture_graphql_document, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Registering an unused Integration child adds no read to the Sources pane."""
+
+    reads, _, _, kind = record_sources_reads
+    with isolate_apps() as isolated:
+        class UnusedIntegration(Integration):
+            class Meta:
+                app_label = "integrate"
+                db_table = "test_unused_sources_integration"
+                rebac_resource_type = "tests/unused_sources_integration"
+
+        assert UnusedIntegration._meta.apps is isolated
+        assert isolated.all_models["integrate"]["unusedintegration"] is UnusedIntegration
+
+        # Isolated apps intentionally hide their models from the global parent.
+        # Include the registered child at the old prefetch discovery seam.
+        def registered_children(parent):
+            children = concrete_child_models(parent)
+            return (*children, UnusedIntegration) if parent is Integration else children
+
+        monkeypatch.setattr(integrate_querysets, "concrete_child_models", registered_children, raising=False)
+        extra_reads = _record_sources_reads(
+            capture_graphql_document, kind=kind, slug="document-budget-sources-extra"
+        )[0]
+
+    for size in (1, 5, 10, 20):
+        # re-measure after integration
+        assert extra_reads[size].statement_count == reads[size].statement_count == 15
+        assert extra_reads[size].total_sql_bytes == reads[size].total_sql_bytes
+
+
+def test_record_sources_document_byte_budget(record_sources_reads) -> None:
+    for read in record_sources_reads[0].values():
+        # re-measure after integration
+        read.assert_bytes(total=100_000, largest=15_000, cause="one batched source-label projection")
 
 
 def test_integration_ids_stay_flat_without_concrete_target(record_sources_reads, capture_graphql_document) -> None:

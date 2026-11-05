@@ -15,6 +15,7 @@ from rebac.database import write_alias
 from angee.base.fields.relations import RetainedGenericRelation
 from angee.base.lineage import concrete_child, concrete_child_models
 from angee.base.models.identity import public_id_of
+from angee.base.models.persistence import require_projection
 from angee.iam.models.base import ProtectedDataModel, ProtectedModel
 from angee.iam.models.merge import ProtectedMergeableMixin
 from angee.iam.models.ownership import OwnerMixin
@@ -211,11 +212,38 @@ class Party(
     def concrete_kind(self) -> RelationshipKind.PartyKind | None:
         """Return this party's concrete kind (``"person"`` / ``"organization"``), or ``None``.
 
-        A structural fact read straight from the multi-table-inheritance child rows
+        A structural fact projected from the multi-table-inheritance child rows
         that share this party's primary key — not a stored column (the child model
-        *is* the kind). Read through the base manager: it is a system integrity fact,
-        never actor-scoped user data.
+        *is* the kind). Standalone write paths use ``get_concrete_kind``.
         """
+
+        if "_concrete_kind" in self.__dict__:
+            value = self.__dict__["_concrete_kind"]
+            return cast(RelationshipKind.PartyKind, value) if value is not None else None
+        for kind in (RelationshipKind.PartyKind.ORGANIZATION, RelationshipKind.PartyKind.PERSON):
+            child_model = kind.model()
+            assert child_model is not None
+            if isinstance(self, child_model):
+                return kind
+        require_projection(self, "_concrete_kind")
+        return self.get_concrete_kind()
+
+    @classmethod
+    def concrete_kind_expression(cls) -> models.Case:
+        """Read the two declared child-row kinds in the party selection."""
+
+        choices = []
+        for kind in (RelationshipKind.PartyKind.ORGANIZATION, RelationshipKind.PartyKind.PERSON):
+            child_model = kind.model()
+            assert child_model is not None
+            choices.append(models.When(
+                models.Exists(child_model._base_manager.filter(pk=models.OuterRef("pk"))),
+                then=models.Value(str(kind)),
+            ))
+        return models.Case(*choices, default=models.Value(None), output_field=models.CharField())
+
+    def get_concrete_kind(self) -> RelationshipKind.PartyKind | None:
+        """Resolve one party's structural child kind explicitly for write paths."""
 
         for child_model in concrete_child_models(apps.get_model("parties", "Party")):
             if isinstance(self, child_model) or concrete_child(self, child_model) is not None:
@@ -232,7 +260,7 @@ class Party(
     @property
     def merge_scalar_fields(self) -> tuple[str, ...]:
         """Scalar choices admitted when merging this party's native subtype."""
-        if self.concrete_kind == "person":
+        if self.get_concrete_kind() == "person":
             return self.merge_common_scalar_fields + self._person_merge_scalar_fields
         return self.merge_common_scalar_fields
 
@@ -253,7 +281,7 @@ class Party(
         if not isinstance(field_overrides, Mapping):
             raise ValidationError({"field_overrides": "Expected an object of field values."})
 
-        both_people = self.concrete_kind == "person" and source.concrete_kind == "person"
+        both_people = self.get_concrete_kind() == "person" and source.get_concrete_kind() == "person"
         allowed = set(self.merge_scalar_fields).intersection(source.merge_scalar_fields)
         unknown = set(field_overrides) - allowed
         if unknown:

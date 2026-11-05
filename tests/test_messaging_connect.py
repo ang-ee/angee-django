@@ -267,7 +267,7 @@ def test_resume_channel_pairing_keeps_report_of_running_session(
     with system_context(reason="test.messaging.connect.running.seed"):
         channel.sync_progress = {"details": {"pairing": report}}
         channel.save(update_fields=["sync_progress", "updated_at"])
-    monkeypatch.setattr(Channel, "is_syncing", property(lambda _self: True))
+    monkeypatch.setattr(Channel, "get_is_syncing", lambda _self: True)
 
     connect.resume_channel_pairing(channel)
 

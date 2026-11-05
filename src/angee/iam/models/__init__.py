@@ -513,7 +513,7 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, Protect
     def __str__(self) -> str:
         """Use IAM's human label for person and service-user references alike."""
 
-        return user_label(self)
+        return user_label(self, guard=False)
 
     def get_full_name(self) -> str:
         """Return first and last name joined with a space."""

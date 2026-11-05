@@ -239,19 +239,23 @@ class ProposalRoundType(AuthoredRefMixin, ProtectedNode):
         return _user_id(cast(Any, self).closed_by_id)
 
 
-def question_attention_field(model: Any, *, passed_on: bool = False) -> Any:
-    """Bind the same recipient-scope annotation to task and project fields."""
+def _question_attention_annotation(project: bool, info: strawberry.Info) -> Any:
+    """Return the task owner's bounded count expression for this parent."""
 
-    name = "_questions_passed_on" if passed_on else "_questions_waiting_for_me"
+    del info
+    return Task.question_attention_expression(current_actor(), project=project)
+
+
+def question_attention_field(model: Any, *, passed_on: bool = False) -> Any:
+    """Read both attention counts from one grouped candidate expression."""
 
     def resolve(root: Any) -> int:
-        return getattr(root, name)
+        name = "passed" if passed_on else "waiting"
+        return int(root._question_attention_counts[name])
 
     return strawberry_django.field(
         resolver=resolve,
-        annotate={
-            name: lambda info: model.question_attention_expression(current_actor(), passed_on=passed_on),
-        },
+        annotate={"_question_attention_counts": partial(_question_attention_annotation, model is Project)},
     )
 
 

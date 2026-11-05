@@ -11,6 +11,7 @@ from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_r
 from angee.extraction import schema as evidence_schema
 from angee.extraction.acquisition import PageCarrier
 from angee.extraction.contracts import DocumentPart, ExtractionPartKind, Source
+from angee.iam.testing.graphql import measure_graphql_document
 from angee.messaging.testing.models import Part
 from tests.conftest import addon_schema, create_platform_admin, execute_schema, result_data
 from tests.test_extraction_models import evidence as evidence
@@ -32,6 +33,102 @@ def test_evidence_resources_expose_reads_without_generic_mutations(schema):
     assert schema._schema.mutation_type is None
     for name in ("extraction", "extractionsource", "extractionpage", "extractionpart"):
         assert {name, f"{name}_by_pk", f"{name}_aggregate"} <= set(schema._schema.query_type.fields)
+
+
+def test_extraction_part_values_are_batched_at_one_five_ten_twenty(schema, evidence):
+    """Each admitted part reads its retained carrier even without carrier access."""
+
+    retain, values = evidence
+    part = values["result"].parts[0]
+    result = replace(values["result"], parts=tuple(
+        replace(part, metadata={"budget_index": index}) for index in range(20)
+    ))
+    row = retain(result=result)
+    assert len(set(row.parts.values_list("carrier_file_id", flat=True))) == 20
+    document = """query PartValues($limit: Int!) {
+        extractionpart(limit: $limit, order_by: [{position: asc}]) { id value }
+    }"""
+    reads = {
+        size: measure_graphql_document(schema, document, {"limit": size}, actor=values["actor"])
+        for size in (1, 5, 10, 20)
+    }
+    for size, read in reads.items():
+        assert len(read.data["extractionpart"]) == size
+        assert [row["value"] for row in read.data["extractionpart"]] == [
+            values["result"].parts[0].value
+        ] * size
+        assert read.statement_count == 5
+        read.assert_no_audit_writes()
+        read.assert_bytes(total=260_000, largest=125_000)
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reads[larger].assert_flat_from(reads[smaller])
+
+    plain_pages = {
+        "root": (
+            "query($limit: Int!) { extractionpart(limit: $limit, order_by: [{position: asc}]) { id position } }", 3,
+        ),
+        "nested": ("query { extraction { parts { id position } } }", 7),
+        "source": (
+            "query($limit: Int!) { extractionpart(limit: $limit, order_by: [{position: asc}]) "
+            "{ id source { id position } } }", 4,
+        ),
+    }
+    for shape, (query, statements) in plain_pages.items():
+        pages = {
+            size: measure_graphql_document(
+                schema, query, {"limit": size} if shape != "nested" else {}, actor=values["actor"],
+            )
+            for size in (1, 5, 10, 20)
+        }
+        assert {page.statement_count for page in pages.values()} == {statements}
+        for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+            pages[larger].assert_flat_from(pages[smaller])
+
+    reader = get_user_model().objects.create_user(username="part-values-reader")
+    row.with_actor(values["actor"]).grant_record_access("viewer", reader)
+    values["target"].with_actor(values["actor"]).grant_record_access("viewer", reader)
+    carrier_id = row.parts.values_list("carrier_file_id", flat=True).first()
+    carrier = type(values["target"])._base_manager.get(pk=carrier_id)
+    assert not carrier.with_actor(reader).has_access("read")
+    reader_reads = {
+        size: measure_graphql_document(schema, document, {"limit": size}, actor=reader)
+        for size in (1, 5, 10, 20)
+    }
+    for size, read in reader_reads.items():
+        assert len(read.data["extractionpart"]) == size
+        assert [part["value"] for part in read.data["extractionpart"]] == [
+            values["result"].parts[0].value
+        ] * size
+        assert read.statement_count == 5
+        read.assert_no_audit_writes()
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reader_reads[larger].assert_flat_from(reader_reads[smaller])
+
+
+def test_nested_part_value_does_not_prepare_outer_part_page(schema, evidence):
+    """A value selected on related parts does not prepare the root part page."""
+
+    retain, values = evidence
+    part = values["result"].parts[0]
+    retain(result=replace(values["result"], parts=tuple(
+        replace(part, metadata={"budget_index": index}) for index in range(20)
+    )))
+    document = """query NestedPartValue($limit: Int!) {
+        extractionpart(limit: $limit, order_by: [{position: asc}]) {
+            id extraction { id parts { id value } }
+        }
+    }"""
+    reads = {
+        size: measure_graphql_document(schema, document, {"limit": size}, actor=values["actor"])
+        for size in (1, 5, 10, 20)
+    }
+    for size, read in reads.items():
+        assert len(read.data["extractionpart"]) == size
+        assert all(len(row["extraction"]["parts"]) == 20 for row in read.data["extractionpart"])
+        assert read.statement_count == 9, (size, read.statement_count)
+        read.assert_no_audit_writes()
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reads[larger].assert_flat_from(reads[smaller])
 
 
 @override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")

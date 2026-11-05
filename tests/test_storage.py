@@ -328,8 +328,8 @@ def test_file_storage_fetches_uncached_drive_and_backend_in_one_query(
         Drive._meta.get_field("backend").delete_cached_value(drive)
     row = File(drive=drive) if cached_drive else File(drive_id=drive.pk)
     with system_context(reason="test storage resolution") if system else actor_context(drive.alice):
-        # Native contexts audit each entry, including nested system contexts.
-        with django_assert_num_queries(2):
+        # Only the already cached drive's own backend lookup enters its native system context.
+        with django_assert_num_queries(2 if cached_drive else 1):
             backend = row.storage
             assert row.drive.backend.pk == drive.backend_id
         with django_assert_num_queries(0):

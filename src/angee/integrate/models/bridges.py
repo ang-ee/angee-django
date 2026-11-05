@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, cast
@@ -20,8 +20,8 @@ from rebac.database import write_alias
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
-from angee.base.locks import LockKey, record_lock_key, task_lock, task_locks_are_cross_process
-from angee.base.models.persistence import require_composed_type
+from angee.base.locks import LockKey, LockSnapshot, record_lock_key, task_lock, task_locks_are_cross_process
+from angee.base.models.persistence import require_composed_type, require_projection
 from angee.iam.models.base import ProtectedModel
 from angee.integrate.backends.base import BridgeImpl, ConnectionDiscovery, IntegrationImpl, LiveBridgeImpl
 from angee.integrate.choices import (
@@ -33,7 +33,7 @@ from angee.integrate.errors import (
     safe_integration_failure,
 )
 from angee.integrate.live import PairingProjection, PairingState, armed_material_key
-from angee.integrate.locks import bridge_advisory_lock, bridge_is_locked, bridge_session_is_hosted
+from angee.integrate.locks import bridge_advisory_lock, bridge_is_locked, bridge_lock_key, bridge_session_is_hosted
 from angee.integrate.querysets import IntegrationQuerySet
 from angee.integrate.states import (
     StreamState,
@@ -166,10 +166,19 @@ class Bridge(ProtectedModel, concrete=False, demands="integrate.Integration"):
     def open_failure_count(self) -> int:
         """Unresolved failures of current epochs, independent of the last run's completion."""
 
-        streams = getattr(self, "open_sync_streams", None)
-        if streams is None:
-            streams = self.sync_streams.filter(state=StreamState.OPEN)
+        if "open_sync_streams" not in self.__dict__:
+            require_projection(self, "open_sync_streams")
+            return self.get_open_failure_count()
+        streams = cast(list[Any], self.__dict__["open_sync_streams"])
         return sum(len(stream.sync_failures(open_only=True)) for stream in streams)
+
+    def get_open_failure_count(self) -> int:
+        """Count one bridge's unresolved failures explicitly outside a projected list."""
+
+        return sum(
+            len(stream.sync_failures(open_only=True))
+            for stream in self.sync_streams.filter(state=StreamState.OPEN)
+        )
 
     @classmethod
     def live_implementation_field(cls) -> ImplClassField | None:
@@ -230,6 +239,20 @@ class Bridge(ProtectedModel, concrete=False, demands="integrate.Integration"):
     @property
     def is_syncing(self) -> bool:
         """Return whether a worker currently holds this bridge's live sync lock."""
+
+        if "_is_syncing" not in self.__dict__:
+            require_projection(self, "_is_syncing")
+            return self.get_is_syncing()
+        return bool(self.__dict__["_is_syncing"])
+
+    def prime_is_syncing(self, locks: LockSnapshot) -> bool:
+        """Project this bridge's live lock from the page's one lock snapshot."""
+
+        self.__dict__["_is_syncing"] = locks.is_held(bridge_lock_key(self))
+        return self.is_syncing
+
+    def get_is_syncing(self) -> bool:
+        """Check one bridge's live lock explicitly for non-list operations."""
 
         return bridge_is_locked(self)
 
@@ -445,6 +468,16 @@ class Bridge(ProtectedModel, concrete=False, demands="integrate.Integration"):
         prove another worker's liveness, so that backend trusts the stored stage.
         """
 
+        return self._effective_sync_stage(lambda: self.is_syncing)
+
+    def get_effective_sync_stage(self) -> SyncStage:
+        """Reconcile one bridge outside a projected list."""
+
+        return self._effective_sync_stage(self.get_is_syncing)
+
+    def _effective_sync_stage(self, is_syncing: Callable[[], bool]) -> SyncStage:
+        """Apply the one live-lock reconciliation rule to either read shape."""
+
         using = write_alias(type(self), using=self._state.db, instance=self)
 
         stage = self.SyncStage(self.sync_stage)
@@ -452,7 +485,7 @@ class Bridge(ProtectedModel, concrete=False, demands="integrate.Integration"):
             stage in self.LIVE_SYNC_STAGES
             and not self.sync_is_dispatched
             and task_locks_are_cross_process(using=using)
-            and not self.is_syncing
+            and not is_syncing()
         ):
             return self.SyncStage.FAILED
         return stage

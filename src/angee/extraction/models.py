@@ -13,6 +13,7 @@ from django.db import models
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
+from angee.base.models.persistence import require_projection
 from angee.base.refs import RecordRef
 from angee.base.serialization import canonical_json
 from angee.extraction.contracts import (
@@ -29,7 +30,7 @@ from angee.extraction.contracts import (
 )
 from angee.extraction.enums import ExtractionErrorCode, ExtractionRole, ExtractionSourceKind, ExtractionStatus
 from angee.extraction.inference import RETAINED_AUTHORITY_COMPLETION_REVIEW
-from angee.extraction.managers import EvidenceManager, ExtractionManager
+from angee.extraction.managers import EvidenceManager, ExtractionManager, ExtractionPartManager
 from angee.extraction.pointers import (
     JSON_POINTER_MISSING,
     fact_pointers,
@@ -148,11 +149,20 @@ class Extraction(RetainedEvidence, AuditMixin, ProtectedDataModel, concrete=True
 
     @property
     def record_model_label(self) -> str:
-        return RecordRef.from_instance(self.target).model_label
+        return self.target_ref.model_label
 
     @property
     def record_public_id(self) -> str:
-        return RecordRef.from_instance(self.target).public_id
+        return self.target_ref.public_id
+
+    @property
+    def target_ref(self) -> RecordRef:
+        """Project the exclusive target from its stored key without loading it."""
+
+        name = "file" if self.file_id is not None else "message"
+        model = type(self)._meta.get_field(name).related_model
+        assert model is not None
+        return RecordRef.from_model(model, getattr(self, f"{name}_id"))
 
     def retain(self) -> None:
         """Validate the exclusive outcome before inserting immutable evidence."""
@@ -651,22 +661,28 @@ class ExtractionPart(RetainedEvidence, ProtectedDataModel, concrete=True):
     carrier_digest = models.CharField(max_length=64, editable=False)
     metadata = models.JSONField(default=dict, editable=False)
     duration_ms = models.PositiveIntegerField(default=0, editable=False)
-    objects = EvidenceManager()
+    objects = ExtractionPartManager()
 
     def document_part(self) -> DocumentPart:
         """Recover the exact part from its retained, digest-bound file."""
+
+        return self._document_part_from(self.source, self.carrier_file)
+
+    def _document_part_from(self, source: Any, file: Any) -> DocumentPart:
+        """Validate one retained carrier with its already selected structural rows."""
+
         from angee.extraction.acquisition import PartCarrier
 
         carrier = PartCarrier(
-            source_position=self.source.position,
+            source_position=source.position,
             source_page=self.source_page,
             kind=self.kind,
-            file_id=str(self.carrier_file.sqid),
+            file_id=str(file.sqid),
             content_hash=self.carrier_digest,
         )
-        part = carrier.read(self.carrier_file)
+        part = carrier.read(file)
         if (part.source_position, part.source_page, part.kind, part.content_hash) != (
-            self.source.position,
+            source.position,
             self.source_page,
             self.kind,
             self.content_hash,
@@ -677,6 +693,14 @@ class ExtractionPart(RetainedEvidence, ProtectedDataModel, concrete=True):
     @property
     def value(self) -> Any:
         """Read content from the single protected carrier shared by revisions."""
+        if "_part_source" not in self.__dict__ or "_part_carrier_file" not in self.__dict__:
+            require_projection(self, "_part_source/_part_carrier_file")
+            return self.get_value()
+        return self._document_part_from(self.__dict__["_part_source"], self.__dict__["_part_carrier_file"]).value
+
+    def get_value(self) -> Any:
+        """Read one retained part explicitly outside a projected list."""
+
         return self.document_part().value
 
     @property
