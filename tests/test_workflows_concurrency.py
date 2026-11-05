@@ -36,6 +36,7 @@ from tests.conftest import create_user, vault_for
 from tests.workflow_steps import Echo, document
 
 pytestmark = [
+    pytest.mark.postgresql,
     pytest.mark.django_db(transaction=True),
     pytest.mark.usefixtures("workflow_step_classes"),
     pytest.mark.skipif(

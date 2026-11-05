@@ -30,6 +30,7 @@ def _worker_wake(decision_id: int, url: str, result: multiprocessing.Queue) -> N
         result.put(wake_decisions(decision_id, using="default"))
 
 
+@pytest.mark.django_db(transaction=True)
 def test_worker_decision_wake_publishes_to_web_subscriber(execution) -> None:
     """A forked task's committed run update reaches another process."""
 

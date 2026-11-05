@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from itertools import chain
 from typing import Any, TypeVar, cast
 
 import strawberry
+from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models, router, transaction
 from django.db.models.deletion import (
@@ -16,7 +17,6 @@ from django.db.models.deletion import (
     ProtectedError,
     RestrictedError,
 )
-from rebac import decision_scope
 
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import public_id_of
@@ -335,10 +335,11 @@ def delete_by_public_id(
 ) -> DeletePreview:
     """Preview, then optionally delete, one public-id-addressed model row.
 
-    REBAC delete permission is checked before collecting or disclosing related
-    rows and before the model-owned confirmed-delete locks. ``queryset`` retains
-    the caller's target restrictions and must be unlocked. Passing ``reason`` elevates the
-    lookup/delete for admin/action surfaces that already authorized the request.
+    When REBAC is installed, its delete decision is scoped before collecting or
+    disclosing related rows and before the model-owned confirmed-delete locks.
+    ``queryset`` retains the caller's target restrictions and must be unlocked.
+    Passing ``reason`` elevates lookup/delete for admin/action surfaces that
+    already authorized the request.
     A receiver's late ``ValidationError`` rolls back deletion, before-delete writes
     and commit callbacks, and becomes a readable refusal in the same preview;
     FK races refresh the collector forecast.
@@ -347,7 +348,14 @@ def delete_by_public_id(
     extensions = resource_extensions(model)
     context = extensions.delete_context(reason) if extensions.delete_context is not None else nullcontext()
     targets = queryset if queryset is not None else model._default_manager.all()
-    with context, decision_scope(using=targets.db):
+    scope: AbstractContextManager[Any]
+    if apps.is_installed("rebac"):
+        from rebac import decision_scope
+
+        scope = decision_scope(using=targets.db)
+    else:
+        scope = nullcontext()
+    with context, scope:
         instance = require_instance_for_id(
             model,
             public_id,

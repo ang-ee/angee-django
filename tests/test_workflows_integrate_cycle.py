@@ -147,6 +147,7 @@ def test_delayed_delivery_reads_the_current_cycle_under_its_row_lock(cycle_facto
     assert bridge.sync_is_dispatched is not terminal
 
 
+@pytest.mark.postgresql
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
 def test_duplicate_delivery_cannot_clear_the_winners_queue_token(cycle_factory, monkeypatch):
     """The winner consumes its token under the row lock before a loser can clear it."""

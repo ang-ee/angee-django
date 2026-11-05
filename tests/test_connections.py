@@ -626,6 +626,7 @@ def test_ensure_fresh_renews_an_expiring_oauth_credential(monkeypatch: pytest.Mo
     assert reloaded.reveal()["access_token"] == "new-access"  # persisted, not just in-memory
 
 
+@pytest.mark.postgresql
 @pytest.mark.django_db(transaction=True)
 def test_ensure_fresh_serializes_two_processes_on_postgresql() -> None:
     """One exchange wins; an expired contender retries and adopts its token."""

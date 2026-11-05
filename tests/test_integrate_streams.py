@@ -1693,6 +1693,7 @@ def test_stream_rejects_non_json_cursors_before_applying(
     assert not AppliedRecord.objects.exists()
 
 
+@pytest.mark.postgresql
 @pytest.mark.parametrize("failed_partition", ["", "sent"])
 def test_parallel_partitions_close_each_adapter_once_even_after_failure(
     stream_bridge: Channel, monkeypatch: pytest.MonkeyPatch, failed_partition: str
@@ -1919,6 +1920,7 @@ def test_json_merge_uses_fresh_locked_row_for_stale_partition_instances(stream_b
     }
 
 
+@pytest.mark.postgresql
 def test_json_merge_preserves_concurrent_partition_writes(stream_bridge: Channel) -> None:
     if connection.vendor != "postgresql":
         pytest.skip("Concurrent row-lock contract requires PostgreSQL.")

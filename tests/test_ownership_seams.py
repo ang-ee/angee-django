@@ -186,6 +186,7 @@ def test_transfer_refuses_hidden_constraint_conflicts_before_save_and_keeps_tran
     assert (row.owner_id, row.created_by_id) == (owner.pk, owner.pk)
 
 
+@pytest.mark.postgresql
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL ownership concrete-parent row locks")
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("subject_tables")

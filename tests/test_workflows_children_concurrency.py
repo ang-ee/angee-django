@@ -16,6 +16,7 @@ from tests.test_workflows_review_concurrency import submit, wait_for_lock
 from tests.workflow_steps import Echo
 
 pytestmark = [
+    pytest.mark.postgresql,
     pytest.mark.django_db(transaction=True),
     pytest.mark.usefixtures("workflow_step_classes"),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),

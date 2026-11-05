@@ -112,8 +112,8 @@ def source_change_publishers() -> Iterator[None]:
 def composed_tables(composed_tables: None) -> None:
     """The source host's composed tables also carry the declared statement principals.
 
-    Extends the ``angee.iam.testing`` plugin fixture of the same name: after its REBAC
-    sync, the install-tier principals and grants that admission reads are loaded
+    Extends the ``angee.iam.testing`` plugin fixture of the same name: after its
+    session REBAC sync, the install-tier principals and grants that admission reads are loaded
     (``angee.provenance.testing.load_statement_sources``), exactly as the composed
     host does.
     """

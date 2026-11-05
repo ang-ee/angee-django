@@ -13,6 +13,7 @@ from tests.test_timeline_decisions import people as people
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
+@pytest.mark.postgresql
 def test_union_reads_committed_state_while_a_writer_holds_the_source(people, settings):
     if connection.vendor != "postgresql":
         pytest.skip("PostgreSQL MVCC acceptance test")

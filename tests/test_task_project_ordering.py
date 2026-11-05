@@ -9,6 +9,7 @@ from threading import Barrier, Event
 from types import SimpleNamespace
 from unittest import skipUnless
 
+import pytest
 from django.core.exceptions import ValidationError
 from django.db import connection, connections, models, transaction
 from django.test import RequestFactory
@@ -363,6 +364,7 @@ class TaskProjectOrderingTests(WorkCase):
         self.assertEqual(ranks, [0, 2048, 3072, 4096])
 
 
+@pytest.mark.postgresql
 def test_task_project_ordering(tmp_path: Path):
     run_composed_tests(
         tmp_path,

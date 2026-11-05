@@ -54,6 +54,7 @@ def sourced(composed_permissions: None) -> dict[str, Any]:
     return {"owner": owner, "reader": reader, "outsider": outsider, "task": task, "thread": thread}
 
 
+@pytest.mark.postgresql
 def test_record_source_threads_document_batches_nested_threads(
     sourced: dict[str, Any], capture_graphql_document: Any,
 ) -> None:

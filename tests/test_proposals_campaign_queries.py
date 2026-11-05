@@ -259,6 +259,7 @@ def test_single_assignee_stops_waiting_after_posting_and_other_threads_do_not_co
         assert as_actor(question, manager).get_clarification_waiting() == []
 
 
+@pytest.mark.postgresql
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Native PostgreSQL JSON aggregation is required.")
 def test_postgresql_waiting_projection_executes_with_empty_and_populated_recipients(campaign: ProposalCampaign) -> None:
     c = campaign

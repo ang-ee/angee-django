@@ -17,6 +17,7 @@ from tests.test_workflows_map import MapEcho, body_rows, start_map
 from tests.test_workflows_map import map_steps as map_steps
 
 pytestmark = [
+    pytest.mark.postgresql,
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),
 ]

@@ -4,12 +4,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from django.db import connection
 
 from angee.base.testing.packages import write_addon_distribution
 from tests.composed_host import COMPOSED_TEST_TIMEOUT, assert_composed_report
 
 
+@pytest.mark.postgresql
 def test_composed_knowledge_search(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[1]
     report = tmp_path / "knowledge-search.json"

@@ -18,6 +18,7 @@ from tests.test_agent_sessions import session as session
 from tests.test_decisions_concurrency import submit, wait_for_lock
 
 pytestmark = [
+    pytest.mark.postgresql,
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),
 ]

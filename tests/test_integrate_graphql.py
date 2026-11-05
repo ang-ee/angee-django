@@ -204,6 +204,7 @@ def test_stream_failure_labels_use_projected_source(composed_tables: None) -> No
     assert result["sync_streams"][0]["failures"] == [{"source_label": "person:1", "source_url": None}]
 
 
+@pytest.mark.postgresql
 def test_bridge_status_fields_share_page_reads_at_one_five_ten_twenty(
     composed_tables: None, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -241,6 +242,7 @@ def test_bridge_status_fields_share_page_reads_at_one_five_ten_twenty(
         reads[larger].assert_flat_from(reads[smaller])
 
 
+@pytest.mark.postgresql
 def test_live_bridge_stage_uses_one_postgresql_lock_snapshot(composed_tables: None) -> None:
     """Live rows share a lock snapshot and distinguish a held lock from stale stages."""
 

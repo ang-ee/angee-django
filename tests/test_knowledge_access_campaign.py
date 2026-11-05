@@ -496,6 +496,7 @@ def test_graphql_clone_rejects_unauthorized_or_malformed_requests_without_creati
         ).exists()
 
 
+@pytest.mark.postgresql
 @pytest.mark.parametrize("bound_manager", [False, True])
 def test_record_note_and_binding_keep_secondary_locks_and_rollback(
     composed_permissions, monkeypatch, bound_manager, django_db_blocker,

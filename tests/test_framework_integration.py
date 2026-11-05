@@ -1,10 +1,12 @@
 """Collect integration joins in native composed SQLite and PostgreSQL hosts."""
+import pytest
 from django.db import connection
 
 from angee.base.testing.packages import write_addon_distribution
 from tests.composed_host import run_composed_tests
 
 
+@pytest.mark.postgresql
 def test_framework_integration(tmp_path):
     addon = tmp_path / "addons" / "example" / "memory_test"
     addon.mkdir(parents=True)

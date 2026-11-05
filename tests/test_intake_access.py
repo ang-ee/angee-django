@@ -8,6 +8,7 @@ from django.db import connection
 from tests.composed_host import run_composed_tests
 
 
+@pytest.mark.postgresql
 def test_intake_access(tmp_path: Path) -> None:
     run_composed_tests(
         tmp_path,
@@ -17,6 +18,7 @@ def test_intake_access(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.postgresql
 @pytest.mark.parametrize("case", ("NeedViewAsAdminOnlyTests", "DenormalizedNeedViewAsAdminOnlyTests"))
 def test_task_writer_cannot_view_as_requester(tmp_path: Path, case: str) -> None:
     run_composed_tests(

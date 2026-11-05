@@ -904,6 +904,7 @@ def test_trigger_hook_contributions_are_source_scoped_and_conflicts_fail():
         Trigger._trigger_hooks(Conflict(), "trigger_input")
 
 
+@pytest.mark.postgresql
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires native PostgreSQL table lock modes.")
 def test_source_capture_locks_untyped_concrete_ancestors(monkeypatch):
     """Selecting only the child's PK must not silently drop its parent's OF lock."""

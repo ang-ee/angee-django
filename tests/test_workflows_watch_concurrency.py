@@ -20,6 +20,7 @@ from tests.test_workflows_watches import watched_source as watched_source
 from tests.workflow_steps import document
 
 pytestmark = [
+    pytest.mark.postgresql,
     pytest.mark.django_db(transaction=True),
     pytest.mark.usefixtures("workflow_step_classes"),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),

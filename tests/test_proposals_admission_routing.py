@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import environ
+import pytest
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -467,6 +468,7 @@ class AdmissionRoutingCases(TransactionTestCase):
         self.assertEqual(self.snapshot("default"), self.baseline)
 
 
+@pytest.mark.postgresql
 def test_native_proposal_admission_routing(tmp_path: Path):
     addon = tmp_path / "addons" / "example" / "proposal_admission"
     addon.mkdir(parents=True)

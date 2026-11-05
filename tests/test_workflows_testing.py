@@ -163,6 +163,7 @@ def test_registration_does_not_restore_unrelated_settings(settings, registration
             assert not hasattr(sys.modules[__name__], "TemporaryStep")
 
 
+@pytest.mark.django_db(transaction=True)
 def test_registered_local_step_runs_through_the_production_driver(execution, register_step):
     """A function-local step participates in normal definition validation and execution."""
 
@@ -186,6 +187,7 @@ def test_registered_local_step_runs_through_the_production_driver(execution, reg
     assert [name for name, _payload in sent] == ["workflows.execute", "workflows.wake_run"]
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("status", [StepRunStatus.READY, StepRunStatus.SUCCEEDED])
 def test_run_factory_reaches_node_with_real_predecessor_output(execution, run_factory, status):
     """Factory placement executes predecessors and honors the requested target status."""
@@ -204,6 +206,7 @@ def test_run_factory_reaches_node_with_real_predecessor_output(execution, run_fa
         assert run.output == {"value": 7}
 
 
+@pytest.mark.django_db(transaction=True)
 def test_run_factory_reaches_a_real_wait(execution, run_factory):
     """A requested waiting status preserves the target's actual checkpoint."""
 
@@ -224,6 +227,7 @@ def test_resource_key_names_the_addon_and_resource():
         drivers.load_workflow("unqualified")
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize(
     "publish,expected",
     [(None, True), (True, True), (False, False), ("0", False), ("false", False)],
@@ -254,6 +258,7 @@ def test_xref_driver_uses_native_publish_widget_defaults_and_retains_ledger(
             assert workflow.published.published_by_id == actor.pk
 
 
+@pytest.mark.django_db(transaction=True)
 def test_xref_driver_selects_longest_addon_prefix_and_only_requested_row(execution, workflow_resource):
     """A dotted xref selects one row without importing sibling rows or grants."""
     actor, _sent = execution
@@ -283,6 +288,7 @@ def test_xref_driver_selects_longest_addon_prefix_and_only_requested_row(executi
         )
 
 
+@pytest.mark.django_db(transaction=True)
 def test_xref_driver_preserves_ambient_actor_on_installation(execution, workflow_resource):
     """Loader elevation must not replace the caller's publication attribution."""
     actor, _sent = execution
@@ -292,6 +298,7 @@ def test_xref_driver_preserves_ambient_actor_on_installation(execution, workflow
     assert workflow.published.published_by_id == actor.pk
 
 
+@pytest.mark.django_db(transaction=True)
 def test_xref_lookup_does_not_order_unrelated_external_dependencies(execution, workflow_resource):
     """A selected row does not need its sibling's external dependency graph."""
     actor, _sent = execution
@@ -312,6 +319,7 @@ def test_xref_lookup_does_not_order_unrelated_external_dependencies(execution, w
         assert list(Resource.objects.filter(source_addon=addon.name).values_list("xref", flat=True)) == ["graph"]
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("ambient", [False, True])
 def test_xref_driver_denies_unauthorized_unchanged_replay(execution, workflow_resource, ambient):
     """Native hash skips still require the caller's write permission."""
@@ -332,6 +340,7 @@ def test_xref_driver_denies_unauthorized_unchanged_replay(execution, workflow_re
     assert WorkflowVersion.system_queryset().filter(workflow=workflow).count() == 1
 
 
+@pytest.mark.django_db(transaction=True)
 def test_xref_loading_keeps_native_demo_tier_guard(execution, workflow_resource, settings):
     actor, _sent = execution
     addon = workflow_resource([workflow_row()], tier="demo")
@@ -348,6 +357,7 @@ def test_xref_loading_keeps_native_demo_tier_guard(execution, workflow_resource,
     assert drivers.load_workflow(handle, actor=actor).pk == workflow.pk
 
 
+@pytest.mark.django_db(transaction=True)
 def test_xref_loading_rejects_missing_and_wrong_model_targets(execution, workflow_resource):
     actor, _sent = execution
     addon = workflow_resource([workflow_row()])
@@ -360,6 +370,7 @@ def test_xref_loading_rejects_missing_and_wrong_model_targets(execution, workflo
     assert not Workflow.system_queryset().exists()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_xref_loading_rejects_declaration_collisions(execution, workflow_resource):
     actor, _sent = execution
     addon = workflow_resource([workflow_row(), workflow_row(key="collision")])

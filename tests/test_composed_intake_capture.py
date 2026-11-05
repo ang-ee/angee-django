@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 from django.db import connection
 
 from tests.composed_host import run_composed_tests
@@ -17,5 +18,6 @@ def run_intake_tests(tmp_path: Path, test_class: str) -> None:
     )
 
 
+@pytest.mark.postgresql
 def test_composed_intake_capture(tmp_path: Path) -> None:
     run_intake_tests(tmp_path, "ChannelIntakeCaptureTests")
