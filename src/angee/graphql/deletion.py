@@ -16,6 +16,7 @@ from django.db.models.deletion import (
     ProtectedError,
     RestrictedError,
 )
+from rebac import decision_scope
 
 from angee.base.models.base import AngeeModel
 from angee.base.models.identity import public_id_of
@@ -345,8 +346,8 @@ def delete_by_public_id(
 
     extensions = resource_extensions(model)
     context = extensions.delete_context(reason) if extensions.delete_context is not None else nullcontext()
-    with context, transaction.atomic():
-        targets = queryset if queryset is not None else model._default_manager.all()
+    targets = queryset if queryset is not None else model._default_manager.all()
+    with context, decision_scope(using=targets.db):
         instance = require_instance_for_id(
             model,
             public_id,
@@ -364,8 +365,6 @@ def delete_by_public_id(
                 lock = getattr(targets, "lock_if_supported", None)
                 locked_targets = lock() if callable(lock) else targets.select_for_update()
                 instance = require_instance_for_id(model, public_id, queryset=locked_targets)
-        if extensions.validate_delete is not None:
-            extensions.validate_delete(instance)
         preview = DeletePreview.from_instance(instance)
         if confirm and not preview.has_blockers:
             deleted_pk = instance.pk

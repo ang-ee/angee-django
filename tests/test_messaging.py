@@ -83,6 +83,7 @@ from angee.messaging.testing.models import (
     ThreadFollower,
     ThreadNotification,
 )
+from angee.projects.testing.models import Project
 from angee.projects.testing.models import Task as ProjectTask
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.statements import (
@@ -1168,6 +1169,78 @@ def test_threaded_record_bulk_delete_tears_down_chatter_graph(composed_tables: N
     assert survivor_thread is not None
     assert Message._base_manager.filter(pk=survivor_message.pk).exists()
     assert Thread._base_manager.filter(pk=survivor_thread.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("survivor_first", (False, True))
+def test_deleting_merged_chatter_and_survivor_together_uses_native_protection(
+    composed_tables: None,
+    survivor_first: bool,
+) -> None:
+    """A batched host delete preserves Django's Thread.merged_into refusal."""
+    del composed_tables
+    with system_context(reason="test merged chatter batch protection"):
+        watcher = get_user_model().objects.create_user(username="merged-batch-watcher")
+        if survivor_first:
+            survivor = ThreadedTicket.objects.create(title="Survivor")
+            retired = ThreadedTicket.objects.create(title="Retired")
+        else:
+            retired = ThreadedTicket.objects.create(title="Retired")
+            survivor = ThreadedTicket.objects.create(title="Survivor")
+        retired.message_post("Before merge")
+        retired.message_subscribe(user=watcher, subtype_keys=("comment",))
+        retired.message_post("After subscription")
+        old_attachment = retired.message_thread_attachment()
+        old_thread = old_attachment.thread
+        survivor_attachment = survivor.message_thread_attachment()
+        survivor_attachment.thread.fold([old_thread])
+        with pytest.raises(models.deletion.ProtectedError) as refusal, transaction.atomic():
+            ThreadedTicket.objects.filter(pk__in=[retired.pk, survivor.pk]).delete()
+
+    assert refusal.value.args[0] == (
+        "Cannot delete some instances of model 'Thread' because they are referenced "
+        "through protected foreign keys: 'Thread.merged_into'."
+    )
+    assert refusal.value.protected_objects == {old_thread}
+    assert ThreadedTicket._base_manager.filter(pk__in=[retired.pk, survivor.pk]).count() == 2
+    assert ThreadAttachment._base_manager.filter(pk__in=[old_attachment.pk, survivor_attachment.pk]).count() == 2
+    assert Thread._base_manager.filter(pk__in=[old_thread.pk, survivor_attachment.thread_id]).count() == 2
+    assert ThreadFollower._base_manager.filter(thread_id=old_thread.pk).exists()
+    assert ThreadNotification._base_manager.filter(thread_id=old_thread.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_deleting_merged_chatter_with_shared_survivor_requires_chatter_attachment(
+    composed_tables: None,
+) -> None:
+    """A surviving source edge keeps the merged survivor thread out of Django's delete protection."""
+    del composed_tables
+    with system_context(reason="test merged chatter shared survivor"):
+        watcher = get_user_model().objects.create_user(username="merged-shared-watcher")
+        survivor = ThreadedTicket.objects.create(title="Survivor")
+        retired = ThreadedTicket.objects.create(title="Retired")
+        project = Project.objects.create(title="Source holder")
+        retired.message_post("Before merge")
+        retired.message_subscribe(user=watcher, subtype_keys=("comment",))
+        retired.message_post("After subscription")
+        old_attachment = retired.message_thread_attachment()
+        old_thread = old_attachment.thread
+        survivor_attachment = survivor.message_thread_attachment()
+        survivor_thread = survivor_attachment.thread
+        survivor_thread.fold([old_thread])
+        source_attachment = ThreadAttachment.objects.bind_source_thread(project, survivor_thread)
+        with pytest.raises(ValidationError) as refusal, transaction.atomic():
+            ThreadedTicket.objects.filter(pk__in=[retired.pk, survivor.pk]).delete()
+
+    assert refusal.value.messages == ["Retained chatter requires a surviving record attachment before deletion."]
+    assert ThreadedTicket._base_manager.filter(pk__in=[retired.pk, survivor.pk]).count() == 2
+    assert Project._base_manager.filter(pk=project.pk).exists()
+    assert ThreadAttachment._base_manager.filter(
+        pk__in=[old_attachment.pk, survivor_attachment.pk, source_attachment.pk],
+    ).count() == 3
+    assert Thread._base_manager.filter(pk__in=[old_thread.pk, survivor_thread.pk]).count() == 2
+    assert ThreadFollower._base_manager.filter(thread_id=old_thread.pk).exists()
+    assert ThreadNotification._base_manager.filter(thread_id=old_thread.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)

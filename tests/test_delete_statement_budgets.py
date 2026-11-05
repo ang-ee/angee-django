@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import pytest
-from django.db import connection, transaction
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
+from django.db import connection, models, transaction
 from django.test.utils import CaptureQueriesContext
 from rebac import system_context
 
+from angee.base.models import refs as record_refs
+from angee.iam.models.base import ProtectedDataModel
+from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.iam.testing.queries import is_permission_audit_insert
 from angee.projects.testing.models import Project
 from angee.workflows.testing.drivers import load_workflow
@@ -27,7 +33,7 @@ class DeleteCost:
 
 
 @pytest.fixture
-def delete_costs(execution, workflow_step_classes) -> tuple[DeleteCost, DeleteCost]:
+def measure_delete_cost(execution, workflow_step_classes) -> Callable[[int], DeleteCost]:
     """Measure a system-context queryset delete, excluding actor GraphQL validation.
 
     The always-installed scopedemo app declares both additional task hierarchies,
@@ -46,7 +52,7 @@ def delete_costs(execution, workflow_step_classes) -> tuple[DeleteCost, DeleteCo
             records = [Project.objects.create(title=f"Delete budget {index}", owner=actor) for index in range(size)]
             for record in records:
                 record.message_log("One chatter message")
-                RecordRefNullableEdge.objects.create(target=record)
+                RecordRefNullableEdge._default_manager.create(target=record)
                 WorkflowRun.objects.start(workflow, actor=actor, subject=record)
             with CaptureQueriesContext(connection) as captured:
                 Project._base_manager.filter(pk__in=[record.pk for record in records]).delete()
@@ -66,41 +72,67 @@ def delete_costs(execution, workflow_step_classes) -> tuple[DeleteCost, DeleteCo
             transaction.set_rollback(True)
         return cost
 
-    return measure(1), measure(10)
+    return measure
+
+
+@pytest.fixture
+def delete_costs(measure_delete_cost: Callable[[int], DeleteCost]) -> tuple[DeleteCost, DeleteCost, DeleteCost]:
+    return measure_delete_cost(1), measure_delete_cost(5), measure_delete_cost(10)
 
 
 @pytest.mark.django_db(transaction=True)
-def test_delete_cost_grows_only_with_collected_owner_rows(delete_costs: tuple[DeleteCost, DeleteCost]) -> None:
-    """Pin one/ten delete ceilings with both scopedemo task hierarchies installed."""
+def test_delete_cost_grows_only_with_collected_owner_rows(
+    delete_costs: tuple[DeleteCost, DeleteCost, DeleteCost],
+) -> None:
+    """Pin collected-owner ceilings for system-context QuerySet.delete."""
 
-    one, ten = delete_costs
-    # The collector's run cancellation, edge policy and chatter still carry
-    # per-row overhead; the growth law detects additions to that cost.
-    assert ten.statements - one.statements <= 9 * 175
-    assert ten.revisions - one.revisions <= 9 * 3
-    assert one.audits <= 26 and ten.audits <= 260
+    one, five, ten = delete_costs
+    # re-measure after integration
+    assert ten.statements - one.statements <= 9 * 16
+    assert one.statements <= five.statements <= ten.statements
+    assert one.revisions == five.revisions == ten.revisions == 2
+    assert one.audits == five.audits == ten.audits == 12
+    # Measured on both backends: alone 154/158/168, with two task modules 160/164/174.
+    # Headroom is +1 per empty record-edge model per delete scope (three scopes here).
+    assert one.statements <= 160 and ten.statements <= 174
     if connection.vendor == "sqlite":
-        assert one.statements <= 220 and ten.statements <= 1800
-        assert one.total_bytes <= 100_000 and ten.total_bytes <= 850_000
-        assert ten.largest_bytes <= 6_000
+        # re-measure after integration
+        assert one.total_bytes <= 105_000 and ten.total_bytes <= 150_000
+        assert ten.largest_bytes <= 24_000
     else:
-        assert one.statements <= 220 and ten.statements <= 1800
-        assert one.total_bytes <= 120_000 and ten.total_bytes <= 1_100_000
-        assert ten.largest_bytes <= 10_000
+        assert one.total_bytes <= 120_000 and ten.total_bytes <= 160_000
+        assert ten.largest_bytes <= 24_000
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("law", ("revisions", "audits", "statements"))
-@pytest.mark.xfail(strict=True, reason="collector batches must remove per-row delete overhead")
-def test_delete_cost_batch_laws(delete_costs: tuple[DeleteCost, DeleteCost], law: str) -> None:
-    """Keep the unmet flat revision/audit and owner-bounded statement laws visible."""
+def test_empty_registered_record_edge_costs_one_statement_per_delete_scope_without_audit(
+    measure_delete_cost: Callable[[int], DeleteCost],
+) -> None:
+    """An extra concrete edge adds one structural probe in each of three scopes."""
+    measure_delete_cost(1)  # Warm Django's content-type and relation caches equally.
+    baseline = measure_delete_cost(1)
 
-    one, ten = delete_costs
-    if law == "revisions":
-        assert ten.revisions == one.revisions
-    elif law == "audits":
-        assert ten.audits == one.audits
-    else:
-        # Six admitting edges plus ten possible host/run/chatter model owners
-        # leave at most sixteen statements per added host after batching.
-        assert ten.statements - one.statements <= 9 * 16
+    class EmptyBudgetEdge(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
+        sqid_prefix = "ebe_"
+        on_target_delete = models.CASCADE
+        content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, related_name="+")
+        object_id = models.PositiveBigIntegerField()
+        target = GenericForeignKey("content_type", "object_id")
+
+        class Meta:
+            app_label = "scopedemo"
+            db_table = "test_empty_budget_edge"
+            rebac_resource_type = "scopedemo/empty_budget_edge"
+
+    try:
+        with connection.schema_editor() as editor:
+            editor.create_model(EmptyBudgetEdge)
+        extra = measure_delete_cost(1)
+        assert extra.audits == baseline.audits
+        assert extra.statements == baseline.statements + 3
+    finally:
+        with connection.schema_editor() as editor:
+            editor.delete_model(EmptyBudgetEdge)
+        record_refs.apps.all_models["scopedemo"].pop("emptybudgetedge")
+        record_refs.apps.clear_cache()
+        record_refs._target_edge_index.clear()

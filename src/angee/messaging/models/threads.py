@@ -1249,6 +1249,11 @@ class ThreadAttachment(HistoryMixin, AuditMixin, ProtectedRecordRefMixin, Protec
 
         cls.objects.db_manager(hints={"instance": target}).teardown_for_target(target)
 
+    @classmethod
+    def teardown_for_targets(cls, content_type: ContentType, ids: tuple[Any, ...], *, using: str) -> None:
+        """Run the same retained-state cleanup for a collected host batch."""
+        cls.objects.db_manager(using).teardown_for_targets(content_type, ids, using=using)
+
     sqid_prefix = "tha_"
     thread = models.ForeignKey(
         "messaging.Thread",

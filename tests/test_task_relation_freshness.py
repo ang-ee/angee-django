@@ -34,9 +34,12 @@ def test_inherited_constraints_are_local_to_concrete_tables(
                     assert stored[constraint.name]["check"]
                 elif isinstance(constraint, models.UniqueConstraint) and constraint.condition is not None:
                     assert stored[constraint.name]["unique"]
-                    assert stored[constraint.name]["columns"] == [
-                        concrete._meta.get_field(name).column for name in constraint.fields
-                    ]
+                    columns = []
+                    for name in constraint.fields:
+                        field = concrete._meta.get_field(name)
+                        assert isinstance(field, models.Field)
+                        columns.append(field.column)
+                    assert stored[constraint.name]["columns"] == columns
 
 
 @pytest.fixture
@@ -51,7 +54,7 @@ def test_unsaved_stage_category_edit_cannot_allow_system_stage_entry(task_relati
     with system_context(reason="tests.task_relation_freshness.system_stage"):
         stage = FreshnessStage.objects.create(queue=task_relations, name="Triage", category="triage")
     task = FreshnessTask(title="Must use triage verb", queue=task_relations, number=1, estimate=1)
-    stage.category = "started"
+    stage.category = FreshnessStage.StageCategory.STARTED
     task.stage = stage
 
     with pytest.raises(ValidationError, match="Use capture to move a task into the system triage stage"):
@@ -72,7 +75,7 @@ def test_cached_stage_recategorization_projects_current_lifecycle(task_relations
             estimate=1,
         )
         changed_stage = FreshnessStage._base_manager.get(pk=stage.pk)
-        changed_stage.category = "completed"
+        changed_stage.category = FreshnessStage.StageCategory.COMPLETED
         changed_stage.save(update_fields=("category",))
         assert task.stage.category == "started"
 

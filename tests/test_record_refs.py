@@ -10,7 +10,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.sessions.backends.db import SessionStore
 from django.contrib.sessions.models import Session
 from django.core.exceptions import ValidationError
-from django.db import connection, connections, models
+from django.db import connection, connections, models, transaction
 from django.db.models.deletion import ProtectedError
 from django.db.models.signals import pre_delete
 from django.test.utils import CaptureQueriesContext, isolate_apps
@@ -372,6 +372,104 @@ def test_target_delete_protects_declared_record_edges(
     assert RecordRefSubjectEdge.objects.filter(pk=edge.pk).exists()
 
 
+def test_collected_target_batch_rolls_back_edge_cleanup_on_protection(
+    record_ref_tables: None,
+    record_ref_delete_receiver: None,
+) -> None:
+    """A protected member refuses the whole collected batch and keeps nullable edges."""
+    del record_ref_tables, record_ref_delete_receiver
+    with system_context(reason="record-ref collected protection"):
+        targets = [RecordRefTypedTarget.objects.create(name=f"batch-{index}") for index in range(2)]
+        nullable = RecordRefNullableEdge.objects.create(target=targets[0])
+        protected = RecordRefSubjectEdge.objects.create(subject=targets[1])
+        with pytest.raises(ProtectedError):
+            RecordRefTypedTarget._base_manager.filter(pk__in=[target.pk for target in targets]).delete()
+
+    assert RecordRefTypedTarget._base_manager.filter(pk__in=[target.pk for target in targets]).count() == 2
+    nullable.refresh_from_db()
+    content_type, object_id = generic_pointer_target(targets[0])
+    assert (nullable.content_type_id, nullable.object_id) == (content_type.pk, object_id)
+    assert RecordRefSubjectEdge.objects.filter(pk=protected.pk).exists()
+
+
+def test_collected_protection_names_first_target_and_only_its_blockers(
+    record_ref_tables: None,
+    record_ref_delete_receiver: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A collected refusal keeps the first target's first declared blocking edge."""
+    del record_ref_tables, record_ref_delete_receiver
+    monkeypatch.setattr(
+        record_refs,
+        "record_edges_by_target",
+        lambda: {RecordRefTypedTarget: (RecordRefCustomEdge, RecordRefSubjectEdge)},
+    )
+    with system_context(reason="record-ref collected protection order"):
+        first = RecordRefTypedTarget.objects.create(name="first")
+        second = RecordRefTypedTarget.objects.create(name="second")
+        first_edge = RecordRefSubjectEdge.objects.create(subject=first)
+        custom_edge = RecordRefCustomEdge.objects.create(linked=second)
+        with pytest.raises(ProtectedError) as refusal, transaction.atomic():
+            RecordRefTypedTarget._base_manager.filter(pk__in=[first.pk, second.pk]).delete()
+        assert refusal.value.args[0] == f"{RecordRefSubjectEdge._meta.label} rows still refer to {first}."
+        assert refusal.value.protected_objects == {first_edge}
+
+        first_edge.delete()
+        custom_edge.delete()
+        second_edge = RecordRefSubjectEdge.objects.create(subject=second)
+        first_edge = RecordRefSubjectEdge.objects.create(subject=first)
+        with pytest.raises(ProtectedError) as refusal, transaction.atomic():
+            RecordRefTypedTarget._base_manager.filter(pk__in=[first.pk, second.pk]).delete()
+        assert refusal.value.args[0] == f"{RecordRefSubjectEdge._meta.label} rows still refer to {first}."
+        assert refusal.value.protected_objects == {first_edge}
+        assert second_edge not in refusal.value.protected_objects
+
+
+def test_collected_protection_uses_pk_order_when_collector_set_order_differs(
+    record_ref_tables: None,
+    record_ref_delete_receiver: None,
+) -> None:
+    """The first refusal follows Django's sorted pre_delete order, not set order."""
+    del record_ref_tables, record_ref_delete_receiver
+    with system_context(reason="record-ref collector order"):
+        pool = [RecordRefTypedTarget.objects.create(name=f"order-{index}") for index in range(24)]
+        pair = next(
+            (
+                (low, high)
+                for index, low in enumerate(pool)
+                for high in pool[index + 1:]
+                if next(iter({low, high})) is high
+            ),
+            None,
+        )
+        assert pair is not None
+        low, high = pair
+        low_edge = RecordRefSubjectEdge.objects.create(subject=low)
+        high_edge = RecordRefSubjectEdge.objects.create(subject=high)
+
+        with pytest.raises(ProtectedError) as refusal, transaction.atomic():
+            RecordRefTypedTarget._base_manager.filter(pk__in=[low.pk, high.pk]).delete()
+
+    assert refusal.value.args[0] == f"{RecordRefSubjectEdge._meta.label} rows still refer to {low}."
+    assert refusal.value.protected_objects == {low_edge}
+    assert high_edge not in refusal.value.protected_objects
+    assert RecordRefTypedTarget._base_manager.filter(pk__in=[low.pk, high.pk]).count() == 2
+
+
+def test_collected_delete_chunks_run_lookup_beyond_sqlite_expression_depth(
+    record_ref_tables: None,
+) -> None:
+    """More than 1,000 admitted targets use bounded run-lookup statements."""
+    del record_ref_tables
+    with system_context(reason="record-ref large collected delete"):
+        targets = RecordRefTypedTarget.objects.bulk_create(
+            [RecordRefTypedTarget(name=f"large-{index}") for index in range(1_101)],
+        )
+        ids = [target.pk for target in targets]
+        RecordRefTypedTarget._base_manager.filter(pk__in=ids).delete()
+    assert not RecordRefTypedTarget._base_manager.filter(pk__in=ids).exists()
+
+
 def test_target_delete_nulls_declared_record_edges_from_a_queryset(
     record_ref_tables: None,
     record_ref_delete_receiver: None,
@@ -616,6 +714,7 @@ def test_concrete_child_keeps_the_loaded_parents_database(record_ref_tables, dja
 
 
 def test_inherited_record_refs_obey_the_native_parameter_budget(composed_tables, monkeypatch):
+    """SQLite chunks parameters; PostgreSQL binds the identities as one array."""
     with system_context(reason="test.refs.parameter_batches"):
         children = [MtiChild.objects.create(title=f"Parent {index}", detail="Child") for index in range(5)]
         identities = [RecordRef.from_model(MtiParent, child.pk) for child in children]
@@ -624,4 +723,4 @@ def test_inherited_record_refs_obey_the_native_parameter_budget(composed_tables,
             with CaptureQueriesContext(connection) as captured:
                 expanded = record_view_refs(*identities)
     assert set(expanded) == {*identities, *(RecordRef.from_instance(child) for child in children)}
-    assert len(captured) == 3
+    assert len(captured) == (1 if connection.vendor == "postgresql" else 3)

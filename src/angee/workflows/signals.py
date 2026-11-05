@@ -8,7 +8,6 @@ from typing import Any
 from asgiref.sync import iscoroutinefunction
 from django.apps import apps
 from django.db import models, transaction
-from django.db.models import Q
 from django.db.models.signals import post_delete, pre_delete
 from django.dispatch import Signal
 from rebac import database_context, system_context
@@ -19,7 +18,6 @@ from rebac.signals import collected_for_delete
 from angee.base.signals import connect_for_models
 from angee.decisions.signals import decision_answered
 from angee.jobs.enqueue import enqueue_task
-from angee.workflows.states import RunStatus
 
 logger = logging.getLogger(__name__)
 
@@ -60,29 +58,16 @@ def stop_deleted_record_runs(
     del sender, kwargs
     if not instances:
         return
-
     model = apps.get_model("workflows", "WorkflowRun")
-    evidence = apps.get_model("workflows", "StepRecord")
     with database_context(using), system_context(reason="workflows.deleted_record"):
-        changed = (
-            evidence._base_manager.using(using)
-            .filter(
-                evidence.record_filter_batch(instances),
-                operation__in=("created", "changed"),
-            )
-            .values("run_id")
+        runs = {}
+        manager = model.objects.db_manager(using, hints={"instance": instances[0]})
+        for start in range(0, len(instances), 256):
+            for run in manager.working_on(instances[start : start + 256]).select_related("run_as"):
+                runs[run.pk] = run
+        model.cancel_many_on_commit(
+            (run, run.run_as) for run in sorted(runs.values(), key=lambda run: (run.created_at, run.pk))
         )
-        runs = (
-            model.objects.db_manager(using, hints={"instance": instances[0]})
-            .exclude(
-                status__in=RunStatus.terminal_values(),
-            )
-            .filter(
-                model.record_filter_batch(instances) | Q(pk__in=changed),
-            )
-            .select_related("run_as")
-        )
-        model.cancel_many_on_commit((run, run.run_as) for run in runs)
 
 
 def connect() -> None:

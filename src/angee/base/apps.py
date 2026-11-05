@@ -48,7 +48,7 @@ class BaseConfig(AppConfig):
         from angee.base.models.locks import RowLockMixin, refuse_locked_row_delete
         from angee.base.models.refs import (
             delete_record_refs,
-            delete_record_refs_batch,
+            delete_record_refs_collected,
             possible_record_edges,
             record_ref_cleanup_edges_for_target,
         )
@@ -71,7 +71,7 @@ class BaseConfig(AppConfig):
             batch_model = RebacMixin
             connect_for_models(
                 collected_for_delete,
-                delete_record_refs_batch,
+                delete_record_refs_collected,
                 applies=lambda model: issubclass(model, RebacMixin) and has_refs(model),
                 dispatch_uid="angee.record_refs.target_delete.batch",
             )
