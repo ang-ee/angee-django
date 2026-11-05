@@ -18,14 +18,17 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, Vali
 from django.db import models, transaction
 from django.db.models.expressions import BaseExpression, Combinable, CombinedExpression
 from django.db.models.fields.reverse_related import ForeignObjectRel
-from django.db.models.functions import Cast, Concat
+from django.db.models.functions import Cast, Concat, RowNumber
 from django.db.models.lookups import Exact, In
 from django.utils.module_loading import import_string
 from strawberry.extensions import FieldExtension
+from strawberry.scalars import JSON
 from strawberry.types import get_object_definition
+from strawberry.types.field import StrawberryField
 from strawberry_django.fields.types import field_type_map
 from strawberry_django.mutations import resolvers as mutation_resolvers
 from strawberry_django.optimizer import optimizer
+from strawberry_django.resolvers import django_resolver
 from strawberry_django_aggregates import (
     default_operators_for,
     group_by_alias,
@@ -38,7 +41,9 @@ from strawberry_django_hasura import (
     NestedInsert,
     SortAlias,
     WriteBackend,
+    apply_ordering,
     input_to_dict,
+    prepare_sort_aliases,
 )
 from strawberry_django_hasura import (
     hasura_resource as build_hasura_resource,
@@ -48,6 +53,7 @@ from strawberry_django_hasura.inputs import comparison_for_python_type
 
 from angee.base.hooks import resolve_hooks
 from angee.base.identity import public_data_id_field
+from angee.base.models.base import record_display_label
 from angee.base.models.children import OwnedChildrenMixin
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for
 from angee.base.models.inputs import InputExtensionsMixin
@@ -1352,6 +1358,243 @@ def _positive_conjuncts(predicate: models.Q) -> list[tuple[str, Any]]:
     return clauses
 
 
+def _attach_grouped_rows(
+    resource: HasuraResource,
+    *,
+    model: type[models.Model],
+    groupable: tuple[str, ...],
+    node: type,
+    read_queryset: Callable[[strawberry.Info], models.QuerySet[Any]],
+    prepare_filters: Callable[[models.QuerySet[Any], models.Q], models.QuerySet[Any]],
+    id_column: str,
+    id_decode: Callable[[Any], Any] | None,
+    field_id_decode: Mapping[str, Callable[[Any], Any]] | None,
+    filter_lookups: Mapping[str, Any],
+    sortable_aliases: Mapping[str, str | SortAlias],
+) -> None:
+    """Add one windowed row read for the visible buckets of a model resource.
+
+    The native list field's input extensions carry its exact actor-scoped
+    filter translation. One source queryset and one SQL window replace one
+    list and one count root per bucket; the groups root already owns counts.
+    """
+
+    assert resource.name is not None
+    assert resource.filter_type is not None
+    assert resource.order_by_type is not None
+    assert resource.group_by_spec_type is not None
+
+    page_type = strawberry.input(
+        type(
+            f"{resource.name}_grouped_row_page",
+            (),
+            {
+                "__annotations__": {"key": JSON | None, "limit": int, "offset": int},
+                "offset": 0,
+            },
+        ),
+        name=f"{resource.name}_grouped_row_page",
+    )
+    resource.types.append(page_type)
+
+    def resolve_grouped_rows(
+        self: Any,
+        info: strawberry.Info,
+        group_by: Any,
+        pages: list[Any],
+        where: Any = None,
+        order_by: Any = None,
+    ) -> models.QuerySet[Any]:
+        del self
+        if group_by.granularity not in (None, strawberry.UNSET):
+            raise ValueError("Grouped row pages require a non-extracted group key.")
+        path = group_by.field.value
+        if path not in groupable:
+            raise ValueError(f"Unsupported grouped row key {path!r}.")
+        field = require_field_for_path(model, path)
+        if "." in path:
+            raise ValueError("Grouped row pages require a model field, not a JSON path.")
+        if not pages:
+            return read_queryset(info).none()
+        if len(pages) > 50:
+            raise ValueError("A grouped row read accepts at most 50 visible groups.")
+        converted: list[tuple[Any, int, int]] = []
+        for page in pages:
+            if page.limit < 0 or page.offset < 0:
+                raise ValueError("Grouped row limit and offset must be nonnegative.")
+            key = page.key
+            if key is not None:
+                if is_to_one_relation(field):
+                    target = field.related_model
+                    assert target is not None
+                    key = _public_pk(target, key)
+                    if key is None:
+                        raise ValidationError("Unknown grouped relation key.")
+                else:
+                    assert isinstance(field, models.Field)
+                    key = field.to_python(_choices_wire_value(model, path, key))
+            converted.append((key, page.limit, page.offset))
+        if any(key == other for index, (key, _, _) in enumerate(converted) for other, _, _ in converted[:index]):
+            raise ValueError("A grouped row read accepts each key once.")
+
+        predicate = where_to_q(
+            where,
+            id_column=id_column,
+            id_decode=id_decode,
+            field_decoders=field_id_decode,
+            lookups=filter_lookups,
+        )
+        queryset = filter_queryset(read_queryset(info), predicate, prepare_queryset=prepare_filters)
+        queryset = _relation_scalar_queryset(queryset, (path,))
+        queryset = prepare_sort_aliases(
+            queryset, order_by, info=info, id_column=id_column, sortable_aliases=sortable_aliases,
+        )
+        queryset = apply_ordering(
+            queryset, order_by, id_column=id_column, sortable_aliases=sortable_aliases,
+        )
+        clauses = queryset.query.order_by or model._meta.ordering or ("pk",)
+        group_expression = _relation_axis_alias(path) if is_to_one_relation(field) else path
+        queryset = queryset.annotate(
+            _angee_group_key=models.F(group_expression),
+            _angee_group_rank=models.Window(
+                expression=RowNumber(), partition_by=[models.F(group_expression)], order_by=cast(Any, clauses),
+            ),
+        )
+        keys = [key for key, _, _ in converted if key is not None]
+        scope = models.Q(_angee_group_key__in=keys)
+        if any(key is None for key, _, _ in converted):
+            scope |= models.Q(_angee_group_key__isnull=True)
+        windows = models.Q()
+        for key, limit, offset in converted:
+            if limit == 0:
+                continue
+            bucket = (
+                models.Q(_angee_group_key__isnull=True)
+                if key is None else models.Q(_angee_group_key=key)
+            )
+            windows |= bucket & models.Q(
+                _angee_group_rank__gt=offset,
+                _angee_group_rank__lte=offset + limit,
+            )
+        queryset = queryset.filter(scope & windows) if windows else queryset.none()
+        active = optimizer.get()
+        return (
+            active.optimize(queryset, info)
+            if active is not None
+            else strawberry_django.optimizer.optimize(queryset, info)
+        )
+
+    resolve_grouped_rows.__annotations__ = {
+        "self": Any,
+        "info": strawberry.Info,
+        "group_by": cast(Any, resource.group_by_spec_type),
+        "pages": _types.GenericAlias(list, (page_type,)),
+        "where": resource.filter_type | None,
+        "order_by": _types.GenericAlias(list, (resource.order_by_type,)) | None,
+        "return": _types.GenericAlias(list, (node,)),
+    }
+    root = f"{resource.name}_grouped_rows"
+    resolve_grouped_rows.__name__ = root
+    field = cast(StrawberryField, strawberry.field(resolver=django_resolver(resolve_grouped_rows), name=root))
+    field.python_name = root
+    definition = get_object_definition(resource.query, strict=True)
+    list_field = next(item for item in definition.fields if item.python_name == resource.list_root)
+    field.extensions.extend(list_field.extensions)
+    definition.fields.append(field)
+
+
+class _GroupLabels(FieldExtension):
+    """Fill one relation group's labels from one actor-admitted target read."""
+
+    def __init__(
+        self,
+        model: type[models.Model],
+        source: Callable[[strawberry.Info], models.QuerySet[Any]],
+    ) -> None:
+        self.model = model
+        self.source = source
+
+    def _label(self, groups: list[Any], info: strawberry.Info, group_by: list[Any]) -> list[Any]:
+        selected_fields = list(info.selected_fields)
+        label_selected = False
+        while selected_fields:
+            selected = selected_fields.pop()
+            if getattr(selected, "name", None) == "label":
+                label_selected = True
+                break
+            selected_fields.extend(getattr(selected, "selections", ()))
+        if not label_selected:
+            return groups
+        if len(group_by) != 1 or group_by[0].granularity not in (None, strawberry.UNSET):
+            return groups
+        path = group_by[0].field.value
+        try:
+            field = require_field_for_path(self.model, path)
+        except FieldPathError:
+            return groups
+        if not is_to_one_relation(field) or not groups:
+            return groups
+        key_name = group_by_alias(path, None, field)
+        ids = {getattr(group.key, key_name) for group in groups if getattr(group.key, key_name, None)}
+        if not ids:
+            return groups
+        target = field.related_model
+        assert target is not None
+        relation_source = resource_extensions(target).relation_queryset
+        queryset = (
+            relation_source(target, self.source(info))
+            if relation_source is not None
+            else target._default_manager.all()
+        )
+        display_paths = getattr(target, "record_display_paths", None)
+        if display_paths:
+            joins = [path for path in display_paths if target._meta.get_field(path).is_relation]
+            if joins:
+                queryset = queryset.select_related(*joins)
+        admitted = instances_from_public_ids(target, ids, queryset=queryset)
+        for group in groups:
+            key = getattr(group.key, key_name, None)
+            record = admitted.get(key) if key is not None else None
+            if record is not None:
+                group._angee_label = record_display_label(record)
+        return groups
+
+    def resolve(self, next_: Callable[..., Any], source: Any, info: strawberry.Info, **kwargs: Any) -> Any:
+        result = next_(source, info, **kwargs)
+        return self._label(result, info, kwargs["group_by"])
+
+    async def resolve_async(
+        self, next_: Callable[..., Awaitable[Any]], source: Any, info: strawberry.Info, **kwargs: Any,
+    ) -> Any:
+        result = await next_(source, info, **kwargs)
+        return await sync_to_async(self._label)(result, info, kwargs["group_by"])
+
+
+def _attach_group_labels(
+    resource: HasuraResource,
+    *,
+    model: type[models.Model],
+    source: Callable[[strawberry.Info], models.QuerySet[Any]],
+) -> None:
+    """Project model-owned relation labels beside native group keys and counts."""
+
+    if resource.group_type is None or resource.groups_root is None:
+        return
+
+    def resolve_label(self: Any) -> str | None:
+        return getattr(self, "_angee_label", None)
+
+    resolve_label.__annotations__ = {"self": Any, "return": str | None}
+    label_field = cast(StrawberryField, strawberry.field(resolver=resolve_label, name="label"))
+    label_field.python_name = "label"
+    get_object_definition(resource.group_type, strict=True).fields.append(label_field)
+    groups_field = next(
+        field for field in get_object_definition(resource.query, strict=True).fields
+        if field.python_name == resource.groups_root
+    )
+    groups_field.extensions.append(_GroupLabels(model, source))
+
+
 def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative builder.
     node: type,
     *,
@@ -1789,6 +2032,21 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
                         relation_filter_aliases,
                     )
                 )
+    if active_groupable:
+        _attach_group_labels(resource, model=model, source=aggregate_source)
+        _attach_grouped_rows(
+            resource,
+            model=model,
+            groupable=active_groupable,
+            node=node,
+            read_queryset=read_queryset,
+            prepare_filters=prepare_filters,
+            id_column=id_column,
+            id_decode=id_decode,
+            field_id_decode=field_id_decode,
+            filter_lookups=filter_lookups,
+            sortable_aliases=sortable_aliases,
+        )
     if lines is not None:
         resource = _attach_lines_save(resource, node=node, lines=lines, write_backend=active_write_backend)
     result_roots = {resource.insert_one_root, resource.update_by_pk_root}

@@ -40,6 +40,7 @@ from angee.iam.graphql.capabilities import permissions_field
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import actor_scoped_to_many, actor_scoped_to_one
 from angee.iam.models.base import ProtectedDataModel
+from angee.iam.testing.graphql import measure_graphql_document
 from tests.conftest import (
     SchemaAddon,
     execute_schema,
@@ -69,6 +70,9 @@ class GroupLabel(ProtectedDataModel):
         abstract = False
         app_label = "scopedemo"
         rebac_resource_type = "tests/group_label"
+
+    def __str__(self) -> str:
+        return self.display_name
 
 
 class GroupMiddle(ProtectedDataModel):
@@ -309,7 +313,7 @@ def relation_grouping_case(transactional_db: None):
                 alpha_middle = GroupMiddle.objects.create(target=alpha)
                 beta_middle = GroupMiddle.objects.create(target=beta)
                 hidden_middle = GroupMiddle.objects.create(target=duplicate_one)
-                plain = PlainGroupLabel.objects.create(display_name="Plain")
+                plain = PlainGroupLabel._default_manager.create(display_name="Plain")
                 parents = [
                     GroupParent.objects.create(
                         kind="target",
@@ -386,6 +390,95 @@ def relation_grouping_case(transactional_db: None):
 
 def _query(case: Any, actor: SubjectRef, document: str) -> dict[str, Any]:
     return result_data(execute_schema(case.schema, document, user=actor))
+
+
+def test_grouped_page_window_sql_budget(relation_grouping_case: Any) -> None:
+    """Fifty four-row groups retain one windowed leaf read and one label read."""
+
+    case = relation_grouping_case
+    with system_context(reason="test.grouped_page.window.seed"):
+        labels = [
+            GroupLabel.objects.create(external_key=f"window-{index}", display_name=f"Company {index}", rank=index)
+            for index in range(50)
+        ]
+        parents = [
+            GroupParent.objects.create(kind="window", target=label)
+            for label in labels for _ in range(4)
+        ]
+    write_relationships([
+        *(RelationshipTuple(to_object_ref(label), "reader", case.alice) for label in labels),
+        *(RelationshipTuple(to_object_ref(parent), "reader", case.alice) for parent in parents),
+    ])
+    metadata = next(resource for resource in case.owner.resources("public") if resource.model is GroupParent)
+    assert metadata.roots.grouped_rows_name == "group_parents_grouped_rows"
+    assert metadata.type_names.grouped_row_page == "group_parents_grouped_row_page"
+    # Measured SQLite leaf SQL bytes at 1/10/50 groups: 19,714/17,393/21,425;
+    # PostgreSQL: 20,485/18,004/21,964. Largest: 16,535/14,108/17,708
+    # and 17,169/14,615/18,215. The 30/25 KB ceilings leave CI headroom.
+    # Both backends issue two statements: the windowed rows and the selected
+    # relation projection. The rows statement itself is exactly one SELECT.
+    # Groups + labels measured 9,653/9,742/10,094 bytes on SQLite and
+    # 10,043/10,099/10,379 on PostgreSQL, also two flat statements.
+    for count in (1, 10, 50):
+        pages = ", ".join(f'{{key: "{label.sqid}", limit: 4}}' for label in labels[:count])
+        document = f'''query GroupedResourceList {{
+          group_parents_grouped_rows(group_by: {{field: TARGET}}, pages: [{pages}],
+            where: {{kind: {{_eq: "window"}}}}, order_by: [{{id: asc}}]) {{ id kind target {{ id display_name }} }}
+        }}'''
+        read = measure_graphql_document(case.schema, document, {}, actor=case.alice)
+        read.assert_no_audit_writes()
+        assert read.statement_count == 2
+        read.assert_bytes(total=30_000, largest=25_000)
+        assert sum("ROW_NUMBER" in sql.upper() for sql in read.statements) == 1
+        assert len(read.data["group_parents_grouped_rows"]) == count * 4
+        groups = measure_graphql_document(
+            case.schema,
+            """query GroupedResourceGroups($limit: Int) {
+              group_parents_groups(group_by: [{field: TARGET}],
+                where: {kind: {_eq: "window"}}, limit: $limit) {
+                key { target_id } label aggregate { count }
+              }
+            }""",
+            {"limit": count},
+            actor=case.alice,
+        )
+        groups.assert_no_audit_writes()
+        assert groups.statement_count == 2
+        groups.assert_bytes(total=16_000, largest=10_000)
+        assert all(group["aggregate"]["count"] == 4 for group in groups.data["group_parents_groups"])
+        assert {group["label"] for group in groups.data["group_parents_groups"]} == {
+            label.display_name for label in labels[:count]
+        }
+
+
+def test_grouped_row_pages_keep_offsets_and_redacted_null_bucket(relation_grouping_case: Any) -> None:
+    """Independent page offsets use the same guarded key as the groups read."""
+
+    case = relation_grouping_case
+    result = _query(
+        case,
+        case.alice,
+        f'''query {{
+          rows: group_parents_grouped_rows(
+            group_by: {{field: TARGET}},
+            pages: [{{key: "{case.alpha.sqid}", limit: 1, offset: 1}}, {{key: null, limit: 2}}],
+            where: {{kind: {{_eq: "target"}}}}, order_by: [{{id: asc}}]
+          ) {{ id target {{ id }} }}
+          groups: group_parents_groups(
+            group_by: [{{field: TARGET}}], where: {{kind: {{_eq: "target"}}}}
+          ) {{ key {{ target_id }} label aggregate {{ count }} }}
+        }}''',
+    )
+    assert [row["id"] for row in result["rows"]] == [
+        case.parents[index].sqid for index in (1, 2, 5)
+    ]
+    assert [row["target"] for row in result["rows"]] == [
+        {"id": case.alpha.sqid}, None, None,
+    ]
+    groups = {group["key"]["target_id"]: group for group in result["groups"]}
+    assert groups[case.alpha.sqid]["label"] == "Alpha"
+    assert groups[None]["label"] is None
+    assert groups[None]["aggregate"]["count"] == 2
 
 
 def test_related_axes_merge_unreadable_identities_into_null(

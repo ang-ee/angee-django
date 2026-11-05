@@ -256,6 +256,7 @@ class DataResourceRoots:
     aggregate_name: Annotated[str | None, Field(serialization_alias="aggregate")] = None
     group_name: Annotated[str | None, Field(serialization_alias="groups")] = None
     group_count_name: Annotated[str | None, Field(serialization_alias="groupsCount")] = None
+    grouped_rows_name: Annotated[str | None, Field(serialization_alias="groupedRows")] = None
     create_name: Annotated[str | None, Field(serialization_alias="create")] = None
     update_name: Annotated[str | None, Field(serialization_alias="update")] = None
     save_name: Annotated[str | None, Field(serialization_alias="save")] = None
@@ -276,6 +277,7 @@ class DataResourceTypeNames:
     grouped: str | None = None
     group_key: str | None = None
     group_by_spec: str | None = None
+    grouped_row_page: str | None = None
     group_order: str | None = None
     having: str | None = None
     create_input: str | None = None
