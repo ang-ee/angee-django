@@ -44,8 +44,17 @@ async function fixture() {
   });
   const provider = { getList,
     getOne: vi.fn(async ({ id }: { id: string }) => ({ data: rows.find((row) => row.id === id)! })),
-    custom: vi.fn(async () => ({ data: { notes_groups: [{ key: { updated_at_month: "2021-01-01T00:00:00Z",
-      updated_at_month_range: { from: "2021-01-01T00:00:00Z", to: "2021-02-01T00:00:00Z" } }, aggregate: { count: rows.length } }], totalCount: 1 } })),
+    custom: vi.fn(async ({ meta }) => {
+      const variables = meta?.gqlVariables as Record<string, unknown> | undefined;
+      if (variables && "group_0_limit" in variables) {
+        const offset = Number(variables.group_0_offset);
+        const limit = Number(variables.group_0_limit);
+        return { data: { data: { group_0_rows: rows.slice(offset, offset + limit),
+          group_0_aggregate: { aggregate: { count: rows.length } } } } };
+      }
+      return { data: { notes_groups: [{ key: { updated_at_month: "2021-01-01T00:00:00Z",
+        updated_at_month_range: { from: "2021-01-01T00:00:00Z", to: "2021-02-01T00:00:00Z" } }, aggregate: { count: rows.length } }], totalCount: 1 } };
+    }),
   } satisfies RefineTestDataProvider;
   function NotesPage() {
     React.useEffect(() => { lifecycle.mounts++; return () => { lifecycle.unmounts++; }; }, []);

@@ -76,9 +76,20 @@ function dataProvider({ count = 2, fail = false, transportFailure = false, limit
       }
       return { data: { send_held_drafts: results, discard_held_drafts: results } };
     }
+    const variables = meta?.gqlVariables as Record<string, unknown> | undefined;
+    if (variables && "group_0_limit" in variables) {
+      const data: Record<string, unknown> = {};
+      for (const variable of Object.keys(variables).filter((name) => /^group_\d+_limit$/.test(name))) {
+        const prefix = variable.slice(0, -"limit".length);
+        const offset = Number(variables[`${prefix}offset`]);
+        data[`${prefix}rows`] = rows.slice(offset, offset + Number(variables[variable]));
+        data[`${prefix}aggregate`] = { aggregate: { count } };
+      }
+      return { data: { data } };
+    }
     return { data: { messages_groups: [{ key: { channel_id: "channel", channel_name: "Discussion" }, aggregate: { count } }], totalCount: 1 } };
   });
-  const getList = vi.fn(async () => ({ data: [...rows], total: count }));
+  const getList = vi.fn(async () => ({ data: [], total: 0 }));
   return { rows, custom, getList, mutations: () => custom.mock.calls.filter(([request]) => request.meta?.gqlMutation) };
 }
 
@@ -167,7 +178,8 @@ test.each([false, true])("a grouped held action discarding=%s sends selected rev
   await waitFor(() => expect(checked(rowCheckbox("Message 1")) || checked(rowCheckbox("Message 2"))).toBe(false));
   expect(await screen.findByText(`${discarding ? "Discarded one held draft." : "Queued one held draft."}; Revision changed`, { selector: "h2" })).toBeTruthy();
   // Publishing invalidates the loaded rows. Reselecting captures the on-screen revision.
-  await waitFor(() => expect(f.getList.mock.calls.length).toBeGreaterThan(1));
+  await waitFor(() => expect(f.custom.mock.calls.filter(([request]) =>
+    "group_0_limit" in ((request.meta?.gqlVariables as Record<string, unknown> | undefined) ?? {})).length).toBeGreaterThan(1));
   fireEvent.click(rowCheckbox("Message 2"));
   const retry = await screen.findByRole("button", { name: discarding ? "Discard" : "Send now" });
   await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(false));
@@ -192,10 +204,10 @@ test("a transport refusal keeps selection and permits another attempt", async ()
 });
 
 test("both held verbs disable above the server's selection bound", async () => {
-  const f = await fixture({ held: true, count: 101 });
-  const all = screen.getByRole("checkbox", { name: "Select all loaded rows" });
-  fireEvent.click(all);
-  expect(checked(all)).toBe(true);
+  const f = dataProvider({ count: 101 });
+  mount(() => <ResourceViewProvider resource="messaging.Message" scope="local">
+    <HeldDraftActions ids={new Set(f.rows.map((row) => row.id))} rows={f.rows} />
+  </ResourceViewProvider>, f);
   expect((await screen.findByRole("button", { name: "Send now" })).hasAttribute("disabled")).toBe(true);
   expect(screen.getByRole("button", { name: "Discard" }).hasAttribute("disabled")).toBe(true);
   const reason = await screen.findByText("Select at most 100 held drafts.");

@@ -110,10 +110,10 @@ test("parent references and the child tab compose the existing scoped runs list"
   expect((await screen.findByRole("link", { name: "wfr_parent" })).getAttribute("href")).toBe("/workflows/runs/wfr_parent");
   fireEvent.click(await screen.findByRole("tab", { name: "Child runs" }));
   await waitFor(() => expect(requests.some(({ variables }) =>
-    (JSON.stringify(variables.where) ?? "").includes('"parent_step__run":{"_eq":"wfr_review"}'))).toBe(true));
+    (JSON.stringify(variables.group_0_where) ?? "").includes('"parent_step__run":{"_eq":"wfr_review"}'))).toBe(true));
   await waitFor(() => expect(document.querySelector('a[href="/workflows/runs/wfr_child"]')).not.toBeNull());
   expect(requests.some(({ query, variables }) => query.includes("display_name")
-    && (JSON.stringify(variables.where) ?? "").includes('"parent_step__run":{"_eq":"wfr_review"}'))).toBe(true);
+    && (JSON.stringify(variables.group_0_where) ?? "").includes('"parent_step__run":{"_eq":"wfr_review"}'))).toBe(true);
 });
 
 test("retained evidence links readable records and marks redacted records", async () => {

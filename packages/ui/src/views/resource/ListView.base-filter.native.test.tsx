@@ -39,7 +39,11 @@ afterEach(() => { cleanup(); clearClients(); });
 
 test("a base-filtered list reads its visible group while enum facets need no request", async () => {
   const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
-    const key = (meta!.gqlVariables as GroupVariables).group_by[0]!.field.toLowerCase();
+    const variables = meta!.gqlVariables as GroupVariables & Record<string, unknown>;
+    if ("group_0_limit" in variables) return { data: { data: {
+      group_0_rows: [], group_0_aggregate: { aggregate: { count: 0 } },
+    } } };
+    const key = variables.group_by[0]!.field.toLowerCase();
     return { data: { parts_groups: [{ key: { [key]: "BODY" }, aggregate: { count: 2 } }], totalCount: 1 } };
   });
   const getList = vi.fn(async () => ({ data: [], total: 0 }));
@@ -54,14 +58,16 @@ test("a base-filtered list reads its visible group while enum facets need no req
       </OperationDocumentsProvider>
     </Provider>,
   );
-  const requests = () => custom.mock.calls.map(([request]) => request.meta!.gqlVariables as GroupVariables);
-  const axes = () => [...new Set(requests().map(({ group_by, limit }) => `${group_by[0]!.field}:${limit}`))]
+  const requests = () => custom.mock.calls.map(([request]) => request.meta!.gqlVariables as GroupVariables & Record<string, unknown>);
+  const groupRequests = () => requests().filter((variables) => variables.group_by);
+  const axes = () => [...new Set(groupRequests().map(({ group_by, limit }) => `${group_by[0]!.field}:${limit}`))]
     .map((request) => request.split(":")[0]).sort();
   // The visible group reads once; enum choices come from metadata even while closed.
   await waitFor(() => expect(axes()).toEqual(["ROLE"]));
   fireEvent.click(await screen.findByRole("button", { name: "Search options" }));
   await waitFor(() => expect(axes()).toEqual(["ROLE", "STATUS"]));
   for (const variables of requests()) {
-    expect(terms(variables.where)).toContainEqual({ message: { _eq: "msg_1" } });
+    const where = (variables.group_by ? variables.where : variables.group_0_where) as Where | undefined;
+    expect(terms(where)).toContainEqual({ message: { _eq: "msg_1" } });
   }
 });

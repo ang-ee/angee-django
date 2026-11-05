@@ -65,10 +65,7 @@ import {
 import type {
   ResourceListSnapshot,
 } from "@angee/ui/views/resource-view-surface";
-import type {
-  AngeeListBatchScope,
-  GroupByBatchScope,
-} from "@angee/refine";
+import type { GroupByBatchScope } from "@angee/refine";
 import {
   Action,
   Column,
@@ -562,27 +559,6 @@ vi.mock("@angee/refine", async (importOriginal) => {
       refetch: vi.fn(),
     };
   }
-  function listBatchEntry(scope: AngeeListBatchScope) {
-    sdkMocks.listCalls.push({
-      page: scope.page,
-      pageSize: scope.pageSize,
-      filter: scope.where,
-      order: scope.orderBy,
-      enabled: true,
-    });
-    const matchingRows = refineRowsForWhere(sdkMocks.rows, scope.where);
-    const pageCount = Math.max(1, Math.ceil(matchingRows.length / scope.pageSize));
-    const page = Math.min(pageCount, Math.max(1, scope.page));
-    return {
-      rows: matchingRows.slice(
-        (page - 1) * scope.pageSize,
-        page * scope.pageSize,
-      ),
-      total: matchingRows.length,
-      fetching: sdkMocks.fetching,
-      error: null,
-    };
-  }
   function snakeToCamel(field: string): string {
     return field
       .toLowerCase()
@@ -608,17 +584,22 @@ vi.mock("@angee/refine", async (importOriginal) => {
           }),
         ]),
       ),
-    useAngeeListBatch: (
-      _resource: unknown,
-      scopes: readonly AngeeListBatchScope[],
-      options: { enabled?: boolean } = {},
-    ) =>
-      new Map(
-        (options.enabled === false ? [] : scopes).map((scope) => [
-          scope.key,
-          listBatchEntry(scope),
-        ]),
-      ),
+    useAuthoredQueryBatch: (requests: readonly { key: string; variables: Record<string, unknown> }[]) =>
+      new Map(requests.map(({ key, variables }) => {
+        const data: Record<string, unknown> = {};
+        for (const variable of Object.keys(variables).filter((name) => /^group_\d+_limit$/.test(name))) {
+          const prefix = variable.slice(0, -"limit".length);
+          const pageSize = Number(variables[variable]);
+          const offset = Number(variables[`${prefix}offset`]);
+          const where = variables[`${prefix}where`] as Record<string, unknown> | undefined;
+          const order = variables[`${prefix}order_by`];
+          const matchingRows = refineRowsForWhere(sdkMocks.rows, where);
+          sdkMocks.listCalls.push({ page: offset / pageSize + 1, pageSize, filter: where, order, enabled: true });
+          data[`${prefix}rows`] = matchingRows.slice(offset, offset + pageSize);
+          data[`${prefix}aggregate`] = { aggregate: { count: matchingRows.length } };
+        }
+        return [key, { data, isFetching: sdkMocks.fetching, error: null, refetch: vi.fn() }];
+      })),
     useAngeeAggregate: (
       _resource: unknown,
       options: AggregateRequestOptions & { enabled?: boolean },
