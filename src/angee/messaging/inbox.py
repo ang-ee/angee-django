@@ -458,33 +458,42 @@ class MessageInbox:
         """Batch both target counts; selecting more parts does not add count queries."""
 
         parts = list(self.parts.filter(message=message).select_related("fragment"))
-        files = {
-            row.pk: str(row.sqid)
-            for row in self.collection("storage", "File").filter(
-                pk__in=[part.file_id for part in parts if part.file_id]
-            )
+        file_ids = {part.file_id for part in parts if part.file_id is not None}
+        file_count = (
+            self.parts.filter(file_id=OuterRef("pk"))
+            .order_by().values("file_id")
+            .annotate(total=Count("message_id", distinct=True))
+            .values("total")[:1]
+        )
+        file_rows = {
+            row.pk: row for row in self.collection("storage", "File")
+            .filter(pk__in=file_ids or {0})
+            .select_related("mime_type")
+            .annotate(_inbox_use_count=Subquery(file_count))
         }
-        targets = {"file_id": list(files), "fragment_id": [part.fragment_id for part in parts if part.fragment_id]}
-        counts = {
-            field: dict(
-                self.parts.order_by()
-                .filter(**{f"{field}__in": ids})
-                .values(field)
-                .annotate(total=Count("message_id", distinct=True))
-                .values_list(field, "total")
-            )
-            for field, ids in targets.items()
-        }
+        message._inbox_part_files = file_rows
+        message._inbox_part_file_ids = file_ids
+        message._inbox_part_files_actor = self.actor
+        files = {pk: str(row.sqid) for pk, row in file_rows.items()}
+        fragment_counts = dict(
+            self.parts.order_by()
+            .filter(fragment_id__in=[part.fragment_id for part in parts if part.fragment_id])
+            .values("fragment_id")
+            .annotate(total=Count("message_id", distinct=True))
+            .values_list("fragment_id", "total")
+        )
         result = []
         for part in parts:
             if part.file_id in files:
                 result.append(
-                    InboxPartUse(str(part.sqid), f"file:{files[part.file_id]}", counts["file_id"].get(part.file_id, 0))
+                    InboxPartUse(
+                        str(part.sqid), f"file:{files[part.file_id]}", file_rows[part.file_id]._inbox_use_count or 0
+                    )
                 )
             if part.fragment_id:
                 result.append(
                     InboxPartUse(
-                        str(part.sqid), f"fragment:{part.fragment.sqid}", counts["fragment_id"].get(part.fragment_id, 0)
+                        str(part.sqid), f"fragment:{part.fragment.sqid}", fragment_counts.get(part.fragment_id, 0)
                     )
                 )
         return result

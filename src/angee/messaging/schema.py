@@ -468,9 +468,58 @@ class MessageType(TrashedRefMixin, TaggedNode, ProtectedNode):
     )
     @staticmethod
     def parts(parent: strawberry.Parent[MessageModel]) -> list[PartModel]:
-        """Return this message's MIME parts in depth-first reading order."""
+        """Return actor-admitted MIME parts with their readable parents and files cached."""
 
-        return Part.objects.reading_order_for_message(parent)
+        actor = current_actor()
+        if actor is None:
+            return Part.objects.reading_order_for_message(parent)
+
+        cache = getattr(parent, "_prefetched_objects_cache", {}).get("parts")
+        cached_rows = cache._result_cache if cache is not None else None
+        used_part_prefetch = cached_rows is not None and all(
+            getattr(part, "_rebac_actor", None) == actor
+            and not {"parent_id", "position", "sqid"} & part.get_deferred_fields()
+            for part in cached_rows
+        )
+        if used_part_prefetch:
+            ordered = Part.objects.reading_order_for_message(parent)
+        else:
+            rows = list(Part.objects.with_actor(actor).filter(message_id=parent.pk).select_related("fragment"))
+            ordered = Part.objects.reading_order_for_message(parent, rows=rows)
+        by_id = {part.pk: part for part in ordered}
+        for part in ordered:
+            if part.parent_id in by_id:
+                part._state.fields_cache["parent"] = by_id[part.parent_id]
+
+        file_ids = {part.file_id for part in ordered if part.file_id is not None}
+        if (
+            getattr(parent, "_inbox_part_files_actor", None) == actor
+            and file_ids <= getattr(parent, "_inbox_part_file_ids", set())
+        ):
+            readable_files = cast(dict[Any, Any], getattr(parent, "_inbox_part_files"))
+        else:
+            uncached = object()
+            prefetched_files: dict[Any, Any] = {}
+            files_prefetched = used_part_prefetch
+            if files_prefetched:
+                for part in ordered:
+                    if part.file_id is None:
+                        continue
+                    file = part._state.fields_cache.get("file", uncached)
+                    if file is uncached or (file is not None and getattr(file, "_rebac_actor", None) != actor):
+                        files_prefetched = False
+                        break
+                    if file is not None:
+                        prefetched_files[part.file_id] = file
+            if files_prefetched:
+                readable_files = prefetched_files
+            else:
+                file_rows = File.objects.with_actor(actor).select_related("mime_type")
+                readable_files = {file.pk: file for file in file_rows.filter(pk__in=file_ids or {0})}
+        for part in ordered:
+            if part.file_id is not None:
+                part._state.fields_cache["file"] = readable_files.get(part.file_id)
+        return ordered
 
     @strawberry.field
     def title(self) -> str:
