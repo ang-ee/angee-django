@@ -342,3 +342,22 @@ def test_native_history_opt_out_retains_model_save_behavior():
     row.refresh_from_db()
     assert row.title == "opted out"
     assert row.history.count() == 1
+
+    # Explicit registration uses the same native skip flag as the mixin's helper.
+    with changeset():
+        explicit = Explicit.objects.create(title="captured")
+    explicit.title = "opted out"
+    setattr(explicit, "skip_history_when_saving", True)
+    try:
+        explicit.save(update_fields=["title"])
+    finally:
+        delattr(explicit, "skip_history_when_saving")
+    explicit.refresh_from_db()
+    assert explicit.title == "opted out"
+    assert explicit.history.count() == 1
+
+    explicit.title = "requires boundary"
+    with pytest.raises(ChangesetRequired):
+        explicit.save(update_fields=["title"])
+    explicit.refresh_from_db()
+    assert explicit.title == "opted out"
