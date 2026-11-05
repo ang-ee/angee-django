@@ -33,11 +33,13 @@ from strawberry_django.optimizer import OptimizerStore
 from strawberry_django.queryset import run_type_get_queryset
 from strawberry_django.utils.requests import get_request
 
-from angee.base.models.base import record_display_label
+from angee.base.models.base import AngeeModel
 from angee.graphql.ids import PublicID, optional_public_id, to_public_id
 from angee.graphql.introspection import FieldPathError, fields_for_path, is_to_one_relation
+from angee.graphql.node import display_name_paths, node_display_name
 from angee.iam.graphql.capabilities import _proven_read_annotation, _share_permission_projections
 from angee.iam.graphql.node import ProtectedNode
+from angee.iam.models.base import ProtectedModel
 from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.iam.permissions import require_rebac_queryset
 
@@ -216,23 +218,25 @@ RECORD_REFERENCE_ANNOTATIONS = {"_angee_record_readable": _record_reference_disp
 
 
 def record_reference_field(
-    model: type[models.Model], *, only: Sequence[str] = (), **kwargs: Any,
+    model: type[models.Model], *, only: Sequence[str] = (), label: bool = False, **kwargs: Any,
 ) -> Any:
     """Declare a display reference with its model-owned pointer columns selected."""
     reference = cast(type[ProtectedRecordRefMixin], model).record_ref_field()
-    return strawberry_django.field(
+    field = strawberry_django.field(
         only=[*only, reference.ct_field_attname, reference.fk_field],
         annotate=RECORD_REFERENCE_ANNOTATIONS,
         **kwargs,
     )
+    field._angee_reference_label = label
+    return field
 
 
 def _record_reference_memo(
     request: HttpRequest | None,
-) -> dict[tuple[Any, str, type[models.Model], str], dict[Any, bool]] | None:
+) -> dict[tuple[Any, str, type[models.Model], str], dict[Any, models.Model | bool]] | None:
     if not isinstance(request, HttpRequest):
         return None
-    memo: dict[tuple[Any, str, type[models.Model], str], dict[Any, bool]] | None = getattr(
+    memo: dict[tuple[Any, str, type[models.Model], str], dict[Any, models.Model | bool]] | None = getattr(
         request,
         "_iam_record_reference_memo",
         None,
@@ -243,12 +247,16 @@ def _record_reference_memo(
     return memo
 
 
-def prove_record_references(rows: Sequence[ProtectedRecordRefMixin], *, request: HttpRequest | None = None) -> None:
-    """Prove only referenced keys on an already-admitted page, once per target model."""
+def prove_record_references(
+    rows: Sequence[ProtectedRecordRefMixin], *, request: HttpRequest | None = None,
+    label_models: frozenset[type[models.Model]] = frozenset(),
+) -> None:
+    """Prove referenced keys, loading label columns with the same admitted target read."""
     if not rows:
         return
     actor = current_actor()
     pointers: dict[tuple[str, int], set[Any]] = {}
+    labeled_pointers: set[tuple[str, int]] = set()
     row_pointers: list[tuple[ProtectedRecordRefMixin, str, int | None, Any]] = []
     for row in rows:
         reference = type(row).record_ref_field()
@@ -258,8 +266,10 @@ def prove_record_references(rows: Sequence[ProtectedRecordRefMixin], *, request:
         row_pointers.append((row, alias, content_type_id, object_id))
         if content_type_id is not None and object_id is not None:
             pointers.setdefault((alias, content_type_id), set()).add(object_id)
+            if type(row) in label_models:
+                labeled_pointers.add((alias, content_type_id))
     memo = _record_reference_memo(request)
-    visible: dict[tuple[str, int], dict[Any, bool]] = {}
+    visible: dict[tuple[str, int], dict[Any, models.Model | bool]] = {}
     with schema_operation_scope():
         for (alias, content_type_id), ids in pointers.items():
             try:
@@ -270,31 +280,55 @@ def prove_record_references(rows: Sequence[ProtectedRecordRefMixin], *, request:
                 continue
             key = (actor, alias, target_model, "read")
             decisions = memo.setdefault(key, {}) if memo is not None else {}
-            missing = ids - decisions.keys()
+            labels = (alias, content_type_id) in labeled_pointers
+            missing = {
+                identity for identity in ids
+                if identity not in decisions or (labels and decisions[identity] is True)
+            }
             if missing:
-                admitted = (
-                    set(
-                        require_rebac_queryset(target_model)
-                        .using(alias)
-                        .with_actor(actor)
-                        .with_action("read")
-                        .filter(pk__in=missing)
-                        .values_list("pk", flat=True)
-                    )
-                    if actor is not None
-                    else set()
-                )
                 pk_field = target_model._meta.pk
                 assert pk_field is not None
-                decisions.update({identity: pk_field.to_python(identity) in admitted for identity in missing})
+                admitted: dict[Any, models.Model | bool] = {}
+                if actor is not None:
+                    queryset = (
+                        require_rebac_queryset(target_model).using(alias)
+                        .with_actor(actor).with_action("read").filter(pk__in=missing)
+                    )
+                    if labels:
+                        only, related = display_name_paths(cast(type[AngeeModel], target_model))
+                        prefetches = []
+                        for path in related:
+                            field = cast(models.ForeignKey, target_model._meta.get_field(path))
+                            related_model = field.related_model
+                            assert related_model is not None
+                            related_rows = (
+                                require_rebac_queryset(related_model).using(alias)
+                                .with_actor(actor).with_action("read")
+                                if issubclass(related_model, ProtectedModel)
+                                else related_model._default_manager.using(alias).all()
+                            )
+                            prefetches.append(models.Prefetch(
+                                path, queryset=related_rows,
+                                to_attr=f"_angee_display_{path}",
+                            ))
+                        admitted = {
+                            target.pk: target for target in queryset.only(*only).prefetch_related(*prefetches)
+                        }
+                    else:
+                        admitted = {identity: True for identity in queryset.values_list("pk", flat=True)}
+                decisions.update({identity: admitted.get(pk_field.to_python(identity), False) for identity in missing})
             visible[alias, content_type_id] = decisions
     for row, alias, content_type_id, object_id in row_pointers:
+        target = (
+            visible.get((alias, content_type_id), {}).get(object_id, False)
+            if content_type_id is not None else False
+        )
         setattr(
             row,
             "_angee_record_readable",
-            visible.get((alias, content_type_id), {}).get(object_id, False)
-            if content_type_id is not None else False,
+            bool(target),
         )
+        row.__dict__["_angee_record_target"] = target if isinstance(target, models.Model) else None
         setattr(row, "_angee_record_readable_actor", actor)
 
 
@@ -305,7 +339,8 @@ class RecordReferencePageProof(FieldExtension):
         self.node = node
 
     def _materialize(self, result: Any, info: Info) -> Any:
-        if not _selected_record_reference(info.selected_fields, self.node, info):
+        selected, label_models = _selected_record_reference(info.selected_fields, self.node, info)
+        if not selected:
             return result
         rows = list(result)
         references: list[ProtectedRecordRefMixin] = []
@@ -321,7 +356,7 @@ class RecordReferencePageProof(FieldExtension):
             pending.extend(value for value in row._state.fields_cache.values() if isinstance(value, models.Model))
             for cached in getattr(row, "_prefetched_objects_cache", {}).values():
                 pending.extend(cached)
-        prove_record_references(references, request=get_request(info))
+        prove_record_references(references, request=get_request(info), label_models=frozenset(label_models))
         return rows
 
     def resolve(self, next_: Callable[..., Any], source: Any, info: Info, **kwargs: Any) -> Any:
@@ -340,10 +375,14 @@ class RecordReferencePageProof(FieldExtension):
         return await sync_to_async(self._materialize)(result, info)
 
 
-def _selected_record_reference(selections: Sequence[Selection], node: Any, info: Info) -> bool:
+def _selected_record_reference(
+    selections: Sequence[Selection], node: Any, info: Info,
+) -> tuple[bool, set[type[models.Model]]]:
     definition = get_object_definition(node, strict=False)
     if definition is None:
-        return False
+        return False, set()
+    selected = False
+    label_models: set[type[models.Model]] = set()
     for selection in selections:
         field = (
             info.schema.get_field_for_type(selection.name, definition.name)
@@ -353,24 +392,19 @@ def _selected_record_reference(selections: Sequence[Selection], node: Any, info:
             isinstance(field, StrawberryDjangoField)
             and field.store.annotate.get("_angee_record_readable") is _record_reference_display_hint
         ):
-            return True
+            selected = True
+            if getattr(field, "_angee_reference_label", False):
+                origin = getattr(field, "origin_django_type", None)
+                if origin is not None:
+                    label_models.add(origin.model)
         target = field.type if field is not None else node
         while isinstance(target, StrawberryContainer):
             target = target.of_type
-        if selection.selections and _selected_record_reference(selection.selections, target, info):
-            return True
-    return False
-
-
-def record_reference_label_field(model: type[models.Model]) -> Any:
-    """Select a generic target's label with its pointer and a native page prefetch."""
-    reference = cast(type[ProtectedRecordRefMixin], model).record_ref_field()
-    return strawberry_django.field(
-        resolver=RecordReferenceNode.reference_label,
-        only=[reference.ct_field_attname, reference.fk_field],
-        annotate=RECORD_REFERENCE_ANNOTATIONS,
-        prefetch_related=[reference.name],
-    )
+        if selection.selections:
+            nested, nested_labels = _selected_record_reference(selection.selections, target, info)
+            selected |= nested
+            label_models.update(nested_labels)
+    return selected, label_models
 
 
 def with_record_reference_access(
@@ -411,13 +445,16 @@ class RecordReferenceNode(ProtectedNode):
         row = cast(Any, self)
         return optional_public_id(row.record_public_id or None) if _record_readable(row, info) else None
 
-    def reference_label(self) -> str | None:
+    def reference_label(self, info: Info) -> str | None:
         """Project the readable target's model-owned label from the selected reference page."""
         row = cast(Any, self)
-        if not _record_readable(row):
+        if not _record_readable(row, info):
             return None
-        target = getattr(row, type(row).record_ref_field().name)
-        return record_display_label(target) if target is not None else None
+        target = row.__dict__.get("_angee_record_target")
+        if target is None:
+            prove_record_references([row], request=get_request(info), label_models=frozenset({type(row)}))
+            target = row.__dict__.get("_angee_record_target")
+        return node_display_name(target) if target is not None else None
 
 
 def _record_readable(row: Any, info: Info | None = None) -> bool:

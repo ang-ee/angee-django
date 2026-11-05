@@ -22,7 +22,7 @@ _MISSING = object()
 
 
 @cache
-def _display_name_paths(model: type[AngeeModel]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+def display_name_paths(model: type[AngeeModel]) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Resolve one model's direct label columns and related rows once."""
 
     paths = model.record_display_paths
@@ -49,7 +49,7 @@ def _display_name_paths(model: type[AngeeModel]) -> tuple[tuple[str, ...], tuple
 def _display_name_store(model: type[AngeeModel]) -> OptimizerStore:
     """Cache the native label hints without storing a request's actor or scope."""
 
-    only, related = _display_name_paths(model)
+    only, related = display_name_paths(model)
     return OptimizerStore.with_hints(
         only=only,
         prefetch_related=[Prefetch(path, to_attr=f"_angee_display_{path}") for path in related],
@@ -99,23 +99,28 @@ class AngeeNode:
         label sources with ``record_display_paths``.
         """
 
-        row = cast(models.Model, self)
-        hidden_related = False
-        if isinstance(row, AngeeModel):
-            for path in _display_name_paths(type(row))[1]:
-                related = getattr(row, f"_angee_display_{path}", _MISSING)
-                if related is _MISSING:
-                    continue  # Instance-returning resolvers have no optimizer prefetch.
-                field = cast(models.ForeignKey, row._meta.get_field(path))
-                if related is None:
-                    if getattr(row, field.attname) is not None:
-                        hidden_related = True
-                    field.set_cached_value(row, None)
-                else:
-                    field.set_cached_value(row, cast(models.Model, related))
-        try:
-            return record_display_label(row)
-        except ObjectDoesNotExist:
-            if not hidden_related:
-                raise
-            return str(row._meta.verbose_name)
+        return node_display_name(cast(models.Model, self))
+
+
+def node_display_name(row: models.Model) -> str:
+    """Render a node label with its prefetched related rows and privacy fallback."""
+
+    hidden_related = False
+    if isinstance(row, AngeeModel):
+        for path in display_name_paths(type(row))[1]:
+            related = getattr(row, f"_angee_display_{path}", _MISSING)
+            if related is _MISSING:
+                continue  # Instance-returning resolvers have no optimizer prefetch.
+            field = cast(models.ForeignKey, row._meta.get_field(path))
+            if related is None:
+                if getattr(row, field.attname) is not None:
+                    hidden_related = True
+                field.set_cached_value(row, None)
+            else:
+                field.set_cached_value(row, cast(models.Model, related))
+    try:
+        return record_display_label(row)
+    except ObjectDoesNotExist:
+        if not hidden_related:
+            raise
+        return str(row._meta.verbose_name)

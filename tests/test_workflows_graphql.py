@@ -1,5 +1,6 @@
 """Native execution reads and manager-backed operator mutations under REBAC."""
 
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -229,6 +230,53 @@ def test_artifact_reference_is_redacted_for_run_reader_without_source_read(schem
         "steprecord": [hidden],
         "steprun": [{"records": [hidden]}],
     }
+
+
+def test_run_subject_label_is_redacted_without_subject_read(schema, callers):
+    """Run visibility never lends its reader the subject's label."""
+
+    admin, owner, reader = callers
+    source = vault_for(owner, name="Private run subject")
+    workflow = load_workflow(document("entry"), actor=admin, subject_model=source._meta.label)
+    workflow.with_actor(admin).grant_record_access("starter", owner)
+    run = start_run(workflow, actor=owner, subject=source)
+    run.with_actor(owner).grant_record_access("reader", reader)
+    query = "{ workflowrun { subject_model subject_id subject_label } }"
+    assert result_data(execute_schema(schema, query, user=owner)) == {
+        "workflowrun": [{
+            "subject_model": source._meta.label, "subject_id": source.sqid, "subject_label": str(source),
+        }],
+    }
+    assert result_data(execute_schema(schema, query, user=reader)) == {
+        "workflowrun": [{"subject_model": None, "subject_id": None, "subject_label": None}],
+    }
+
+
+def test_run_subject_labels_share_the_target_proof(schema, execution, capture_graphql_document):
+    """One admitted subject read serves each run page and its label."""
+
+    actor, _sent = execution
+    workflow = load_workflow(document("entry"), actor=actor, subject_model="knowledge.Vault")
+    targets = [vault_for(actor, name=f"Run target {index}") for index in range(20)]
+    for target in targets:
+        start_run(workflow, actor=actor, subject=target)
+    query = """query($limit: Int!) {
+      workflowrun(limit: $limit, order_by: {created_at: asc}) { id subject_id subject_label }
+    }"""
+    reads = {
+        count: capture_graphql_document(schema, query, {"limit": count}, actor=actor)
+        for count in (1, 5, 20)
+    }
+    for count, read in reads.items():
+        assert [row["subject_label"] for row in read.data["workflowrun"]] == [
+            str(target) for target in targets[:count]
+        ]
+        assert sum(bool(re.match(rf'^SELECT .* FROM "{targets[0]._meta.db_table}"', statement))
+                   for statement in read.statements) == 1
+        read.assert_no_audit_writes()
+    reads[5].assert_flat_from(reads[1])
+    reads[20].assert_flat_from(reads[5])
+    assert reads[20].total_sql_bytes <= reads[1].total_sql_bytes + 8_000
 
 
 def test_run_input_reads_declared_mti_sources_under_their_own_permission(schema, callers, register_step):
