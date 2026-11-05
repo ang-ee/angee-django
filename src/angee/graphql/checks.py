@@ -15,11 +15,12 @@ def check_graphql_channel_layer(
 ) -> list[checks.CheckMessage]:
     """Report unsafe process-local change delivery before the first publish."""
 
-    from angee.graphql.publishing import validate_channel_layer
+    from angee.graphql.publishing import validate_channel_layer, validate_replay_redis_version
 
     del app_configs, kwargs
     try:
         validate_channel_layer()
+        validate_replay_redis_version()
     except ImproperlyConfigured as error:
         return [checks.Error(
             str(error),

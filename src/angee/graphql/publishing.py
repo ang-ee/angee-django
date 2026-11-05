@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import logging
 from collections.abc import Iterable, Mapping
 from contextvars import ContextVar
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
@@ -14,12 +16,15 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
 from angee.base import signals as model_signals
 from angee.base.refs import RecordRef, record_view_refs
 from angee.base.signals import ModelChange
 from angee.graphql.events import ChangePayload, ChangeRelatedRecord, ReadableFields
 from angee.graphql.mixins import ChangeBroadcastMixin
+from angee.graphql.replay import append_change, note_failed_append
 from angee.graphql.sdl import PUBLISHERS_ARTIFACT
 
 # Historical imports retain the one neutral implementation.
@@ -32,6 +37,8 @@ publication_ingestion_context = model_signals.publication_ingestion_context
 publish_bulk_update = model_signals.publish_bulk_update
 
 _INMEMORY_CHANNEL_LAYER = "channels.layers.InMemoryChannelLayer"
+_REDIS_CHANNEL_LAYER = "channels_redis.core.RedisChannelLayer"
+logger = logging.getLogger(__name__)
 _publisher_model_labels: frozenset[str] = frozenset()
 _publisher_fields: dict[type[models.Model], ReadableFields] = {}
 _explicit_readable_fields: ContextVar[tuple[models.Model, ReadableFields] | None] = ContextVar(
@@ -113,12 +120,19 @@ def change_channel_layer() -> Any:
 
 
 def validate_channel_layer() -> None:
-    """Refuse process-local delivery when writers can run in another process."""
+    """Refuse channel layers unable to retain and fan out model changes."""
 
     layer_config = getattr(settings, "CHANNEL_LAYERS", {}).get("default", {})
     backend = layer_config.get("BACKEND", "")
-    if backend != _INMEMORY_CHANNEL_LAYER:
+    if not backend:
         return
+    if backend == _REDIS_CHANNEL_LAYER:
+        return
+    if backend != _INMEMORY_CHANNEL_LAYER:
+        raise ImproperlyConfigured(
+            f"GraphQL change replay does not support CHANNEL_LAYERS backend {backend!r}; "
+            "use channels_redis.core.RedisChannelLayer or channels.layers.InMemoryChannelLayer."
+        )
     if getattr(settings, "ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER", False) is True:
         return
     if getattr(settings, "DEBUG", False) is True and (
@@ -133,6 +147,35 @@ def validate_channel_layer() -> None:
         "no CELERY_BROKER_URL or CELERY_TASK_ALWAYS_EAGER=True; use ANGEE_GRAPHQL_ALLOW_INMEMORY_CHANNEL_LAYER "
         "only for isolated tests."
     )
+
+
+def validate_replay_redis_version() -> None:
+    """Check the Redis feature required by the replay log at startup."""
+
+    layer_config = getattr(settings, "CHANNEL_LAYERS", {}).get("default", {})
+    if layer_config.get("BACKEND") != _REDIS_CHANNEL_LAYER:
+        return
+    from channels_redis.utils import create_pool, decode_hosts
+
+    hosts = layer_config.get("CONFIG", {}).get("hosts", [("127.0.0.1", 6379)])
+
+    async def check_versions() -> None:
+        for host in decode_hosts(hosts):
+            connection = Redis(connection_pool=create_pool(host))
+            try:
+                try:
+                    server_info = cast(Mapping[str, Any], await connection.info("server"))
+                    version = tuple(int(part) for part in server_info["redis_version"].split(".")[:2])
+                except (RedisError, OSError, KeyError, ValueError) as error:
+                    raise ImproperlyConfigured(
+                        f"Cannot verify Redis 6.2+ for GraphQL change replay: {error}"
+                    ) from error
+            finally:
+                await connection.aclose(close_connection_pool=True)
+            if version < (6, 2):
+                raise ImproperlyConfigured("GraphQL change replay requires Redis 6.2 or newer for XTRIM MINID.")
+
+    async_to_sync(check_versions)()
 
 
 def publish_change(instance: models.Model, *, action: str, update_fields: Iterable[str] | None,
@@ -205,12 +248,20 @@ def _queue_transport(model: type[models.Model], payload: ChangePayload) -> None:
 
 
 def _broadcast(model: type[models.Model], payload: dict[str, Any]) -> None:
-    """Send ``payload`` to the model's channel-layer change group."""
+    """Retain ``payload`` before sending it to the model's change group."""
 
     layer = change_channel_layer()
     if layer is None:
         return
-    async_to_sync(layer.group_send)(
-        change_group(model),
-        {"type": "angee.change", "payload": payload},
-    )
+    group = change_group(model)
+
+    async def send() -> None:
+        try:
+            await append_change(layer, group, payload)
+        except Exception:
+            logger.exception("Retaining the %s change failed; sending live delivery.", group)
+            with contextlib.suppress(Exception):
+                await note_failed_append(layer, group)
+        await layer.group_send(group, {"type": "angee.change", "payload": payload})
+
+    async_to_sync(send)()

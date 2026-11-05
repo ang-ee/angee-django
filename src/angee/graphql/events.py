@@ -256,13 +256,14 @@ class ChangeRelatedRecordType:
 class ChangeEvent:
     """Read-gated model change, or an empty-id ``ready`` registration control.
 
-    Readiness contains no record data or occurrence identity and precedes data
-    events. It is a snapshot reconciliation boundary, not a replay guarantee.
+    Readiness contains no record data or occurrence identity and follows replayed
+    data. Its opaque cursor marks the completed registration replay.
     """
 
     model: str
     id: strawberry.ID
     action: str
+    replay_cursor: str | None = None
     occurrence_id: str | None = None
     changed_fields: list[str] | None = None
     changed_values: JSON | None = None

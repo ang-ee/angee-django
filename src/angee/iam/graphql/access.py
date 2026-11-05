@@ -16,6 +16,7 @@ from rebac.field_visibility import check_field_access, gated_read_fields, visibl
 from rebac.resources import model_resource_type
 from rebac.schema import Definition
 from rebac.schema.walker import field_gated_actions
+from rebac.types import CheckItem
 from strawberry.permission import BasePermission
 from strawberry_django.auth.utils import get_current_user
 
@@ -212,6 +213,25 @@ class ChangeReadGate:
         if not allowed.allowed:
             return None
         return self._emit(change)
+
+    def filter_many(self, payloads: tuple[ChangePayload, ...]) -> tuple[ChangeEvent, ...]:
+        """Gate a bounded replay batch with one native bulk permission check."""
+
+        if type(self) is not ChangeReadGate:
+            return tuple(event for payload in payloads if (event := self.filter(payload)) is not None)
+        if not self.resource_type:
+            return tuple(self._emit(payload) for payload in payloads)
+        items = [CheckItem(
+            self.actor, "read",
+            ObjectRef(
+                payload.read_resource_type if payload.read_resource_type is not None
+                and payload.read_resource_id is not None else self.resource_type,
+                payload.read_resource_id if payload.read_resource_type is not None
+                and payload.read_resource_id is not None else payload.resource_identifier,
+            ),
+        ) for payload in payloads]
+        answers = self.active_backend.check_bulk_permissions(items)
+        return tuple(self._emit(payload) for payload, answer in zip(payloads, answers, strict=True) if answer.allowed)
 
     def _change(
         self,
