@@ -20,7 +20,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 | File or module | Owns | Reference |
 |---|---|---|
 | `<addon>/testing/models.py`, `tests/settings.py`, `tests/conftest.py` | concrete models of the bare host, the app roster, one-time registration | `src/angee/tags/testing/models.py:15-63`, `tests/settings.py:29-110`, `tests/conftest.py:645` |
-| `src/angee/iam/testing/fixtures.py`, `permissions.py` | `django_db_setup` (`:17`), `composed_tables` (`:58`); `composed_permissions` (`permissions.py:41`) | module docstrings |
+| `src/angee/iam/testing/fixtures.py`, `permissions.py` | `django_db_setup` (`fixtures.py:22`), `composed_tables` (`fixtures.py:61`), `composed_permissions` (`fixtures.py:73`); `permissions.py` emits merged schema inputs | module docstrings |
 | `tests/conftest.py` | actors and schema drivers: `create_user` (`:789`), `create_platform_admin` (`:974`), `vault_for` (`:795`), `addon_schema` (`:871`), `execute_schema` (`:893`), `result_data` (`:913`) | `tests/test_tags.py:46-55` |
 | `tests/test_<addon>*.py` (framework) / `<addon>/tests/test_*.py` (consumer) | the test modules, one per concern | `tests/test_tags.py`, `examples/src/example/notes/tests/` |
 | `tests/composed_host.py` | the composed-host subprocess that runs consumer `TransactionTestCase` modules in the framework suite | `tests/test_composed_note_workflow.py:17-40` |
@@ -65,7 +65,7 @@ This skill authors tests; running them, their roots and CI coverage belong to `d
 
    Then `"angee.tags"` in `tests/settings.py` `INSTALLED_APPS` (`:29-110`) and `from angee.tags.testing import models as tags_models  # noqa: F401` in `tests/conftest.py` after its FK targets (`:645`). If the addon is a consumer → no test models: its tests run on the composed host (step 3). **Owner rule:** Django owns static test-table lifecycle; one concrete model per resource type ([environment and checks](references/environment.md)).
 
-3. **Pick the database contract per module.** Framework modules take a fixture: `composed_tables` for transactional isolation plus REBAC sync, `composed_permissions` when the module needs other addons' `permissions.extends.zed` fragments merged (tags, MTI, placeable fields), native `db` for pure model tests.
+3. **Pick the database contract per module.** Framework modules take a fixture: `composed_tables` for savepoint isolation plus a session REBAC sync, `composed_permissions` when the module needs other addons' `permissions.extends.zed` fragments merged (tags, MTI, placeable fields), native `db` for pure model tests. Declare `pytest.mark.django_db(transaction=True)` only when separate connections or committed rows are required.
 
    ```python
    pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("composed_permissions")]
@@ -205,7 +205,7 @@ Validators: the new modules run standalone, the owning guards (`tests/test_layer
 - An abstract model imported while its app is absent keeps `app_label=None` for the whole process; the roster comment at `tests/settings.py:85-92` exists for that reason.
 - Patch an inherited manager method on `type(manager)`, not the instance; `db_manager()` copies lose an instance patch ([environment and checks](references/environment.md)).
 - A page rendered through the router must `findBy*` past the lazy boundary; importing the page component directly needs no wait ([page pitfalls](../angee-pages/references/pitfalls.md)).
-- A shared pytest plugin must defer model imports until the registry is populated (`src/angee/iam/testing/permissions.py:19`, [what CI runs](../../../docs/checks.md#what-ci-actually-runs)).
+- A shared pytest plugin must defer model discovery until the registry is populated (`src/angee/iam/testing/permissions.py:15-20`, called by `src/angee/iam/testing/fixtures.py:77-79`; [what CI runs](../../../docs/checks.md#what-ci-actually-runs)).
 - `composed_permissions` rewrites the synced schema with a forced overwrite into `tmp_path`; a module that edits a `.zed` on disk must do so under that fixture and never against the stack ([REBAC](../../../docs/backend/guidelines.md#rebac)).
 
 ## Read next

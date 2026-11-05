@@ -31,9 +31,10 @@ description: "Declares and wires REBAC permissions for an Angee addon: permissio
 | `src/angee/base/apps.py` | REBAC synchronization contribution to upstream provisioning | `BaseConfig.compose_provision`; explicit `ANGEE_REBAC_FORCE_OVERWRITE` setting |
 
 Parsing, sync, point checks, actor-scoped querysets and gated-field projection are
-`django-zed-rebac` (`docs/stack.md#backend`, line 76); `composed_tables`
-(`src/angee/iam/testing/fixtures.py:58`) and `composed_permissions`
-(`src/angee/iam/testing/permissions.py:41`) sync it into the test database.
+`django-zed-rebac` (`docs/stack.md#backend`). `src/angee/iam/testing/fixtures.py`
+owns `django_db_setup` (:22), `composed_tables` (:61), and `composed_permissions`
+(:73). The session fixture syncs the host schema; `composed_permissions` merges
+addon fragments and forces their sync into the disposable test database.
 
 ## Reuse first
 
