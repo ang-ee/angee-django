@@ -395,6 +395,11 @@ export function createAngeeChangeLiveProvider(
         if (!client) return;
         // Ignore late deliveries from a disposed subscription, even after resume.
         let active = true;
+        let started = liveInvalidation?.start(resource.modelLabel);
+        // graphql-ws reuses this sink when it resubscribes after reconnect.
+        const stopConnected = liveInvalidation
+          ? client.on("connected", () => { if (active) started = liveInvalidation.start(resource.modelLabel); })
+          : noopSubscription;
         const dispose = client.subscribe(
           { query: changeSubscriptionDocument(changesRoot) },
           {
@@ -402,9 +407,10 @@ export function createAngeeChangeLiveProvider(
               if (!active || !enabled) return;
               const payload = recordValue(recordValue(result.data)?.[changesRoot]);
               // A ready closes this operation's registration or reconnect gap
-              // for in-flight reads and retained snapshots without cancellation.
+              // for retained snapshots without cancellation.
               if (payload?.action === "ready") {
-                liveInvalidation?.ready(resource.modelLabel);
+                if (started) liveInvalidation?.ready(started);
+                started = undefined;
                 return;
               }
               // One upstream result is one change, however many consumers share it.
@@ -430,6 +436,7 @@ export function createAngeeChangeLiveProvider(
         entry.dispose = () => {
           if (active) {
             active = false;
+            stopConnected();
             dispose();
           }
         };

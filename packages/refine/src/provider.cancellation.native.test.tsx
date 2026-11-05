@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { useCustom, useInfiniteList, useInvalidate, useList, useMany, useOne, useUpdate } from "@refinedev/core";
+import { QueryObserver } from "@tanstack/react-query";
 import { parse } from "graphql";
 import type { ReactNode } from "react";
 import { afterEach, expect, test, vi } from "vitest";
@@ -8,7 +9,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { useAuthoredQuery } from "./dialect/authored-hooks";
 import { useAngeeListBatch } from "./dialect/hooks";
 import { createAngeeChangeLiveProvider, createAngeeHasuraDataProvider } from "./provider";
-import { createAuthoredLiveInvalidation, invalidateAuthoredQueries } from "./query-invalidation";
+import { createAuthoredLiveInvalidation, invalidateAuthoredQueries, mutationReconciliation, type ReconciliationPublish } from "./query-invalidation";
 import { createRefineTestProviders } from "./testing";
 import type { TypedDocumentNode } from "./typed-document";
 
@@ -36,12 +37,17 @@ function fixture() {
 
 function liveReadyFixture(client: ReturnType<typeof fixture>["client"]) {
   const sinks: ((result: { data: unknown }) => void)[] = [];
+  const connections = new Set<() => void>();
   const subscribe = vi.fn((_payload: unknown, sink: { next: (result: { data: unknown }) => void }) => {
     sinks.push(sink.next);
     return vi.fn();
   });
+  const on = vi.fn((event: string, callback: () => void) => {
+    if (event === "connected") connections.add(callback);
+    return () => { connections.delete(callback); };
+  });
   const live = createAngeeChangeLiveProvider(
-    { subscribe, on: vi.fn(() => () => undefined) } as never,
+    { subscribe, on } as never,
     [{ schemaName: "console", modelLabel: "example.Note", roots: { list: "notes", changes: "noteChanged" } }],
     { queryClient: client },
   );
@@ -56,7 +62,8 @@ function liveReadyFixture(client: ReturnType<typeof fixture>["client"]) {
     if (!next) throw new Error(`No upstream subscription at index ${index}`);
     next({ data: { noteChanged: { model: "example.Note", id: "one", action: "update" } } });
   }
-  return { live, subscribe, subscribeNotes, ready, change };
+  const reconnect = () => connections.forEach((connected) => connected());
+  return { live, subscribe, subscribeNotes, ready, change, reconnect };
 }
 
 const readers = [
@@ -159,7 +166,7 @@ test("live changes let data-less HTTP settle before one follow-up", async () => 
   }
 });
 
-test("ready recovers an HTTP read started after subscribe but before registration", async () => {
+test("parent repeats an in-flight read at ready; its response now suffices", async () => {
   const f = fixture();
   const { live, subscribe, subscribeNotes, ready } = liveReadyFixture(f.client);
   const subscription = subscribeNotes();
@@ -172,12 +179,10 @@ test("ready recovers an HTTP read started after subscribe but before registratio
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
     expect(f.attempts).toHaveLength(1);
     await act(async () => { f.attempts[0]?.resolve(response("pre-registration")); });
-    await waitFor(() => expect(f.attempts).toHaveLength(2));
+    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "pre-registration" }]));
     expect(f.attempts[0]?.signal?.aborted).toBe(false);
-    await act(async () => { f.attempts[1]?.resolve(response("registered")); });
-    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "registered" }]));
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
-    expect(f.attempts).toHaveLength(2);
+    expect(f.attempts).toHaveLength(1);
   } finally {
     live.unsubscribe(subscription);
     f.attempts.forEach((attempt) => attempt.resolve(response()));
@@ -185,7 +190,167 @@ test("ready recovers an HTTP read started after subscribe but before registratio
   }
 });
 
-test("ready lets an older data-less HTTP read settle before one recovery refetch", async () => {
+test("parent repeats old and fresh reads; ready refetches only the pre-window read once", async () => {
+  const f = fixture();
+  const reads = [0, 0];
+  const old = new QueryObserver(f.client, {
+    queryKey: ["ready", "old"], meta: { angeeModels: ["example.Note"] },
+    queryFn: async () => { const next = (reads[0] ?? 0) + 1; reads[0] = next; return next; },
+  });
+  const stopOld = old.subscribe(() => undefined);
+  await waitFor(() => expect(old.getCurrentResult().data).toBe(1));
+  const { live, subscribeNotes, ready } = liveReadyFixture(f.client);
+  let stopFresh: () => void = () => undefined;
+  const subscription = subscribeNotes();
+  try {
+    const fresh = new QueryObserver(f.client, {
+      queryKey: ["ready", "fresh"], meta: { angeeModels: ["example.Note"] },
+      queryFn: async () => { const next = (reads[1] ?? 0) + 1; reads[1] = next; return next; },
+    });
+    stopFresh = fresh.subscribe(() => undefined);
+    await waitFor(() => expect(fresh.getCurrentResult().data).toBe(1));
+    act(() => { ready(); });
+    await waitFor(() => expect(reads[0]).toBe(2));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(reads).toEqual([2, 1]);
+  } finally {
+    live.unsubscribe(subscription);
+    stopFresh(); stopOld();
+  }
+});
+
+test("reconnect recovers retained reads but not reads completed before its ready", async () => {
+  const f = fixture();
+  const { live, subscribe, subscribeNotes, ready, reconnect } = liveReadyFixture(f.client);
+  const subscription = subscribeNotes();
+  ready();
+  const reads = [0, 0];
+  const observer = new QueryObserver(f.client, {
+    queryKey: ["ready", "reconnect"], meta: { angeeModels: ["example.Note"] },
+    queryFn: async () => { const next = (reads[0] ?? 0) + 1; reads[0] = next; return next; },
+  });
+  const stop = observer.subscribe(() => undefined);
+  let stopFresh: () => void = () => undefined;
+  try {
+    await waitFor(() => expect(observer.getCurrentResult().data).toBe(1));
+    reconnect();
+    const fresh = new QueryObserver(f.client, {
+      queryKey: ["ready", "reconnect-fresh"], meta: { angeeModels: ["example.Note"] },
+      queryFn: async () => { const next = (reads[1] ?? 0) + 1; reads[1] = next; return next; },
+    });
+    stopFresh = fresh.subscribe(() => undefined);
+    await waitFor(() => expect(fresh.getCurrentResult().data).toBe(1));
+    ready();
+    await waitFor(() => expect(observer.getCurrentResult().data).toBe(2));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(subscribe).toHaveBeenCalledOnce();
+    expect(reads).toEqual([2, 1]);
+  } finally {
+    live.unsubscribe(subscription);
+    stopFresh(); stop();
+  }
+});
+
+test("cold socket recovers reads completed before connected once", async () => {
+  const f = fixture();
+  const { live, subscribeNotes, ready, reconnect: connected } = liveReadyFixture(f.client);
+  const subscription = subscribeNotes();
+  const reads = [0, 0];
+  const early = new QueryObserver(f.client, {
+    queryKey: ["ready", "cold-early"], meta: { angeeModels: ["example.Note"] },
+    queryFn: async () => { const next = (reads[0] ?? 0) + 1; reads[0] = next; return next; },
+  });
+  const stopEarly = early.subscribe(() => undefined);
+  let stopLate: () => void = () => undefined;
+  try {
+    await waitFor(() => expect(early.getCurrentResult().data).toBe(1));
+    connected();
+    const late = new QueryObserver(f.client, {
+      queryKey: ["ready", "cold-late"], meta: { angeeModels: ["example.Note"] },
+      queryFn: async () => { const next = (reads[1] ?? 0) + 1; reads[1] = next; return next; },
+    });
+    stopLate = late.subscribe(() => undefined);
+    await waitFor(() => expect(late.getCurrentResult().data).toBe(1));
+    ready();
+    await waitFor(() => expect(early.getCurrentResult().data).toBe(2));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(reads).toEqual([2, 1]);
+  } finally {
+    live.unsubscribe(subscription);
+    stopLate(); stopEarly();
+  }
+});
+
+test("a command change after subscription start covers its retained read before ready", async () => {
+  const f = fixture();
+  const { live, subscribeNotes, ready } = liveReadyFixture(f.client);
+  const hook = renderHook(() => useAuthoredQuery(DOCUMENT, {}, { models: ["example.Note"] }), { wrapper: f.wrapper });
+  let subscription: ReturnType<typeof subscribeNotes> | undefined;
+  try {
+    await waitFor(() => expect(f.attempts).toHaveLength(1));
+    await act(async () => { f.attempts[0]?.resolve(response("before change")); });
+    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "before change" }]));
+    subscription = subscribeNotes();
+    const command = (live.publish as ReconciliationPublish)[mutationReconciliation];
+    expect(command).toBeDefined();
+    act(() => { void command!.reconcile({ changes: [{ model: "example.Note", id: "one", action: "update" }] }); });
+    await waitFor(() => expect(f.attempts).toHaveLength(2));
+    await act(async () => { f.attempts[1]?.resolve(response("after change")); });
+    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "after change" }]));
+    act(() => { ready(); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(2);
+  } finally {
+    if (subscription) live.unsubscribe(subscription);
+    f.attempts.forEach((attempt) => attempt.resolve(response()));
+    hook.unmount();
+  }
+});
+
+test("ready alone refetches a retained HTTP read once", async () => {
+  const f = fixture();
+  const hook = renderHook(() => useAuthoredQuery(DOCUMENT, {}, { models: ["example.Note"] }), { wrapper: f.wrapper });
+  const { live, subscribeNotes, ready } = liveReadyFixture(f.client);
+  let subscription: ReturnType<typeof subscribeNotes> | undefined;
+  try {
+    await waitFor(() => expect(f.attempts).toHaveLength(1));
+    await act(async () => { f.attempts[0]?.resolve(response("before subscription")); });
+    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "before subscription" }]));
+    subscription = subscribeNotes();
+    act(() => { ready(); });
+    await waitFor(() => expect(f.attempts).toHaveLength(2));
+    await act(async () => { f.attempts[1]?.resolve(response("recovered")); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(2);
+  } finally {
+    if (subscription) live.unsubscribe(subscription);
+    f.attempts.forEach((attempt) => attempt.resolve(response()));
+    hook.unmount();
+  }
+});
+
+test("parent repeats N in-window reads at ready; the page now repeats zero", async () => {
+  const f = fixture();
+  const { live, subscribeNotes, ready } = liveReadyFixture(f.client);
+  const subscription = subscribeNotes();
+  const reads = [0, 0, 0, 0];
+  const observers = reads.map((_, index) => new QueryObserver(f.client, {
+    queryKey: ["page", index], meta: { angeeModels: ["example.Note"] },
+    queryFn: async () => { const next = (reads[index] ?? 0) + 1; reads[index] = next; return next; },
+  }));
+  const stops = observers.map((observer) => observer.subscribe(() => undefined));
+  try {
+    await waitFor(() => expect(observers.map((observer) => observer.getCurrentResult().data)).toEqual([1, 1, 1, 1]));
+    act(() => { ready(); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(reads).toEqual([1, 1, 1, 1]);
+  } finally {
+    live.unsubscribe(subscription);
+    stops.forEach((stop) => stop());
+  }
+});
+
+test("ready leaves even a pre-start in-flight read to finish once", async () => {
   const f = fixture();
   const hook = renderHook(() => useAuthoredQuery(DOCUMENT, {}, { models: ["example.Note"] }), { wrapper: f.wrapper });
   await waitFor(() => expect(f.attempts).toHaveLength(1));
@@ -194,16 +359,14 @@ test("ready lets an older data-less HTTP read settle before one recovery refetch
   try {
     act(() => { ready(); });
     expect(f.attempts[0]?.signal?.aborted).toBe(false);
-    expect(f.client.getQueryCache().getAll().some((query) => query.state.isInvalidated)).toBe(true);
+    expect(f.client.getQueryCache().getAll().some((query) => query.state.isInvalidated)).toBe(false);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
     expect(f.attempts).toHaveLength(1);
     await act(async () => { f.attempts[0]?.resolve(response("older snapshot")); });
-    await waitFor(() => expect(f.attempts).toHaveLength(2));
+    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "older snapshot" }]));
     expect(f.attempts[0]?.signal?.aborted).toBe(false);
-    await act(async () => { f.attempts[1]?.resolve(response("recovered")); });
-    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "recovered" }]));
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
-    expect(f.attempts).toHaveLength(2);
+    expect(f.attempts).toHaveLength(1);
   } finally {
     live.unsubscribe(subscription);
     f.attempts.forEach((attempt) => attempt.resolve(response()));
@@ -211,7 +374,7 @@ test("ready lets an older data-less HTTP read settle before one recovery refetch
   }
 });
 
-test("ready refetches a read that settled between subscribe and registration", async () => {
+test("ready leaves a read settled inside the subscription window fresh", async () => {
   const f = fixture();
   const { live, subscribeNotes, ready } = liveReadyFixture(f.client);
   const subscription = subscribeNotes();
@@ -221,11 +384,8 @@ test("ready refetches a read that settled between subscribe and registration", a
     await act(async () => { f.attempts[0]?.resolve(response("before ready")); });
     await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "before ready" }]));
     act(() => { ready(); });
-    await waitFor(() => expect(f.attempts).toHaveLength(2));
-    await act(async () => { f.attempts[1]?.resolve(response("after ready")); });
-    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "after ready" }]));
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
-    expect(f.attempts).toHaveLength(2);
+    expect(f.attempts).toHaveLength(1);
   } finally {
     live.unsubscribe(subscription);
     f.attempts.forEach((attempt) => attempt.resolve(response()));
@@ -233,7 +393,7 @@ test("ready refetches a read that settled between subscribe and registration", a
   }
 });
 
-test("the first native list consumer recovers its pre-registration read", async () => {
+test("the first native list consumer keeps its in-window read", async () => {
   const f = fixture();
   const { live, subscribe, ready } = liveReadyFixture(f.client);
   const wrapper = ({ children }: { children: ReactNode }) => <Provider
@@ -247,18 +407,16 @@ test("the first native list consumer recovers its pre-registration read", async 
     act(() => { ready(); });
     expect(f.attempts[0]?.signal?.aborted).toBe(false);
     await act(async () => { f.attempts[0]?.resolve(response("pre-registration")); });
-    await waitFor(() => expect(f.attempts).toHaveLength(2));
-    await act(async () => { f.attempts[1]?.resolve(response("registered")); });
-    await waitFor(() => expect(hook.result.current.data?.data).toEqual([{ id: "registered" }]));
+    await waitFor(() => expect(hook.result.current.data?.data).toEqual([{ id: "pre-registration" }]));
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
-    expect(f.attempts).toHaveLength(2);
+    expect(f.attempts).toHaveLength(1);
   } finally {
     f.attempts.forEach((attempt) => attempt.resolve(response()));
     hook.unmount();
   }
 });
 
-test("ready retries once after an older data-less read fails", async () => {
+test("ready does not retry a failed in-flight read without a change", async () => {
   const f = fixture();
   const { live, subscribeNotes, ready } = liveReadyFixture(f.client);
   const subscription = subscribeNotes();
@@ -269,10 +427,9 @@ test("ready retries once after an older data-less read fails", async () => {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
     expect(f.attempts).toHaveLength(1);
     await act(async () => { f.attempts[0]?.reject(new Error("controlled read failure")); });
-    await waitFor(() => expect(f.attempts).toHaveLength(2));
-    await act(async () => { f.attempts[1]?.resolve(response("recovered")); });
-    await waitFor(() => expect(hook.result.current.data?.notes).toEqual([{ id: "recovered" }]));
-    expect(f.attempts).toHaveLength(2);
+    await waitFor(() => expect(hook.result.current.isError).toBe(true));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 350)); });
+    expect(f.attempts).toHaveLength(1);
   } finally {
     live.unsubscribe(subscription);
     f.attempts.forEach((attempt) => attempt.resolve(response()));

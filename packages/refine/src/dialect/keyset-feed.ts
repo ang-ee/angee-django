@@ -155,6 +155,7 @@ export function keysetFeedOptions<TRow extends KeysetRow, TMetadata = undefined>
           // its normal fixed-window refresh; silence alone never removes a row.
           if (fresh.absent_ids.length === 0) {
             const replacements = new Map(fresh.rows.map((row) => [row.id, row]));
+            if (context.meta) context.meta.angeeTargetedRound = changes;
             return { ...oldPage, rows: oldPage.rows.map((row) => replacements.get(row.id) ?? row) };
           }
         }

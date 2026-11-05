@@ -78,18 +78,21 @@ Foreign live providers retain native direct refresh behavior.
 
 A subscription's `ready` result acknowledges model-group registration. The
 provider handles each operation's ready, including one sent after reconnect or
-resume. The reconciler snapshots matching reads at the ack and excludes an
-idle read that has fetched since; accepted mutation data does not count as a
-fetch. See the [readiness rule](../../docs/frontend/guidelines.md#rules) for the
-race contract. No read is cancelled by reconciliation:
-commands, live changes and ready let in-flight reads settle, then refetch once
-for coalesced effects. Idle retained reads refetch immediately for explicit
-batches and the exported invalidation helper; provider-scheduled commands
-without a batch flush within the 300 ms quiet gap. Actor switches reset queries
+resume. The reconciler snapshots matching retained data before each subscription
+request. Ready refetches only those older reads that have not had a full fetch
+since. Targeted row revalidation and accepted mutation data do not cover them.
+Reads without retained data that are in flight, and reads completed after
+subscription start, do not get a recovery refetch. The server replays changes
+from the registration gap. See the
+[readiness rule](../../docs/frontend/guidelines.md#rules) for the race contract.
+No read is cancelled by reconciliation: commands and live changes let in-flight
+reads settle before a coalesced follow-up. Idle retained reads refetch immediately
+for explicit batches and the exported invalidation helper; provider-scheduled
+commands without a batch flush within the 300 ms quiet gap. Actor switches reset queries
 in `create-app.tsx`; explicit keyset and dashboard store restarts, and
 user-triggered refetches retain TanStack's cancelling defaults because they
 replace the actor's or user's read, rather than reconcile a change. This
-transport has no replay cursor or total row ordering guarantee, and occurrence
+transport exposes no replay cursor or total row ordering guarantee, and occurrence
 IDs are not row versions. Later
 events may revalidate an accepted response because an echo cannot be
 distinguished safely from a newer remote write.
