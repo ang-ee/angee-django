@@ -309,8 +309,8 @@ def test_binding_without_record_owner_arm_is_absent_in_every_read_direction_and_
         _grant(knowledge, "viewer", viewer)
 
     with actor_context(viewer):
-        assert record.as_user(viewer).has_access("read") == (seat in {"record", "both", "administrator"})
-        assert page.as_user(viewer).has_access("read") == (seat in {"knowledge", "both", "administrator"})
+        assert record.with_actor(viewer).has_access("read") == (seat in {"record", "both", "administrator"})
+        assert page.with_actor(viewer).has_access("read") == (seat in {"knowledge", "both", "administrator"})
         assert list(RecordBinding.objects.for_record(record)) == []
         assert list(RecordBinding.objects.pages_for_record(record)) == []
         assert list(RecordBinding.objects.for_knowledge(page)) == []
@@ -442,7 +442,7 @@ def test_graphql_clone_replays_after_template_access_is_lost(clone_template, una
             ).created_row
             clone.transfer_ownership(fixture.reader)
         with actor_context(fixture.reader):
-            clone.as_user(fixture.reader).transfer_ownership(None)
+            clone.with_actor(fixture.reader).transfer_ownership(None)
     with actor_context(fixture.author):
         if unavailable == "deleted":
             fixture.source.delete()
@@ -497,6 +497,7 @@ def test_graphql_clone_rejects_unauthorized_or_malformed_requests_without_creati
 
 
 @pytest.mark.postgresql
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("bound_manager", [False, True])
 def test_record_note_and_binding_keep_secondary_locks_and_rollback(
     composed_permissions, monkeypatch, bound_manager, django_db_blocker,

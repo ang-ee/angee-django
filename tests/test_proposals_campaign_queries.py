@@ -100,7 +100,7 @@ def test_proposal_track_status_uses_one_application_select_and_constant_policy_r
 
     def read(limit: int) -> list[Any]:
         return list(
-            Proposal.objects.as_user(manager)
+            Proposal.objects.with_actor(manager)
             .order_by("pk")
             .annotate(
                 _track_status=Proposal.track_status_expression(manager),
@@ -133,7 +133,7 @@ def test_round_lists_use_one_application_select_and_constant_policy_and_roster_r
         c.admit(round, "responder")
 
     def read(limit: int, actor: Any, roster: bool) -> list[Any]:
-        rows = Round.objects.as_user(actor).order_by("pk")
+        rows = Round.objects.with_actor(actor).order_by("pk")
         if roster:
             rows = rows.annotate(**permission_annotations(Round, ("see_roster", "roster_status")))
             rows = rows.prefetch_related(Round.roster_prefetch())
@@ -204,7 +204,7 @@ def test_waiting_list_has_constant_query_count_and_is_private_to_each_recipient(
             categories = []
             for limit in (5, 50):
                 rows = (
-                    Task.objects.as_user(actor)
+                    Task.objects.with_actor(actor)
                     .scoped()
                     .filter(clarification_round=round)
                     .order_by("pk")
@@ -349,7 +349,7 @@ def test_task_audience_list_projection_has_constant_query_count(campaign: Propos
 
     def read(limit: int) -> list[Any]:
         return list(
-            Task.objects.as_user(manager)
+            Task.objects.with_actor(manager)
             .annotate(
                 **{
                     f"allowed_{value}": Task.visibility_allowed_expression(manager, value)

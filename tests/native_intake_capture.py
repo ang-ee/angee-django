@@ -279,7 +279,7 @@ class IntakeAccessCase(TransactionTestCase):
             )
 
     def as_user(self, need, user=None):
-        return self.Need.objects.as_user(user or self.admin).get(pk=need.pk)
+        return self.Need.objects.with_actor(user or self.admin).get(pk=need.pk)
 
     def party(self, user):
         with system_context(reason="test account identity"):
@@ -917,8 +917,8 @@ class NeedAccessTests(IntakeAccessCase):
         for permission in ("read", "comment"):
             self.assertTrue(requester_task.has_access(permission))
         for user in (self.owner, self.writer):
-            self.assertTrue(self.Party.objects.as_user(user).filter(pk=party.pk).exists())
-            self.assertTrue(apps.get_model("parties", "Person").objects.as_user(user).filter(pk=party.pk).exists())
+            self.assertTrue(self.Party.objects.with_actor(user).filter(pk=party.pk).exists())
+            self.assertTrue(apps.get_model("parties", "Person").objects.with_actor(user).filter(pk=party.pk).exists())
 
     def test_filer_name_sorts_readable_requesters_and_redacts_hidden_parties(self):
         with system_context(reason="test filer parties"):
@@ -949,7 +949,7 @@ class NeedAccessTests(IntakeAccessCase):
                 positions = sorted(ids.index(value) for value in null_group)
                 self.assertEqual(positions, list(range(positions[0], positions[0] + len(null_group))), direction)
 
-        self.assertFalse(self.Party.objects.as_user(self.writer).filter(pk=parties["Zed"].pk).exists())
+        self.assertFalse(self.Party.objects.with_actor(self.writer).filter(pk=parties["Zed"].pk).exists())
         assert_ordering(self.admin, [al.sqid, bea.sqid, hidden.sqid], [unnamed.sqid, blank.sqid])
         assert_ordering(self.writer, [al.sqid, bea.sqid], [unnamed.sqid, hidden.sqid, blank.sqid])
         before = {direction: ordered(self.writer, direction) for direction in ("asc", "desc")}
@@ -1100,7 +1100,7 @@ class NeedResetAccessTests(IntakeAccessCase):
             need.task.revoke_record_access("reader", self.reader)
         self.as_user(need).decide_access("intake.approve")
         need.refresh_from_db()
-        requester_task = self.Task.objects.as_user(self.reader).filter(pk=need.task_id)
+        requester_task = self.Task.objects.with_actor(self.reader).filter(pk=need.task_id)
         self.assertTrue(requester_task.exists())
         password = self.User._base_manager.get(pk=self.reader.pk).password
         previous = need.access_decision
@@ -1150,7 +1150,7 @@ class NeedViewAsAdminOnlyTests(IntakeAccessCase):
             for target in (self.reader, unrelated, writer):
                 self.assertFalse(target.with_actor(to_subject_ref(writer)).has_access("view_as"))
                 self.assertIsNone(self.User.objects.admit_view_as(writer, str(target.sqid)))
-            self.assertTrue(self.Party.objects.as_user(writer).filter(pk=party.pk).exists())
+            self.assertTrue(self.Party.objects.with_actor(writer).filter(pk=party.pk).exists())
             self.assertEqual(
                 self.graphql(
                     "{ project_tasks { requester { display_name } } }",

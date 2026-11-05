@@ -717,7 +717,7 @@ def test_storage_delete_preview_requires_delete_permission(drive: Any, resource:
     assert result.errors is not None
     assert result.errors[0].extensions == {"code": "PERMISSION_DENIED"}
     assert result.data is None
-    assert type(target).objects.as_user(drive.alice).filter(pk=target.pk).exists()
+    assert type(target).objects.with_actor(drive.alice).filter(pk=target.pk).exists()
 
 
 @pytest.mark.django_db(transaction=True)

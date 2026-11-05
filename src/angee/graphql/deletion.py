@@ -349,13 +349,16 @@ def delete_by_public_id(
     context = extensions.delete_context(reason) if extensions.delete_context is not None else nullcontext()
     targets = queryset if queryset is not None else model._default_manager.all()
     scope: AbstractContextManager[Any]
+    database_scope: AbstractContextManager[Any]
     if apps.is_installed("rebac"):
-        from rebac import decision_scope
+        from rebac import database_context, evaluator_scope
 
-        scope = decision_scope(using=targets.db)
+        database_scope = database_context(targets.db)
+        scope = evaluator_scope()
     else:
+        database_scope = nullcontext()
         scope = nullcontext()
-    with context, scope:
+    with context, database_scope, scope:
         instance = require_instance_for_id(
             model,
             public_id,
