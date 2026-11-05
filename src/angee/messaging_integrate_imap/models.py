@@ -13,6 +13,7 @@ from rebac import actor_context, system_context
 from angee.integrate.credentials import CredentialKind
 from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.streams import open_stream, reset_stream
+from angee.messaging.events import historical_import
 from angee.messaging_integrate_imap.backend import (
     NEW_MAIL_DELIVERY_MODE,
     ImapChannelBackend,
@@ -187,11 +188,10 @@ class ImapChannelSampling(Composable, extends="messaging.Channel"):
                 locked._require_paused_imap(actor)
                 if locked.config != current.config or locked.credential_id != current.credential_id:
                     raise ValidationError("The channel configuration changed. Preview the sample again.")
-                with system_context(reason="messaging_integrate_imap.historical_sample"):
+                with system_context(reason="messaging_integrate_imap.historical_sample"), historical_import():
                     messages = apps.get_model("messaging", "Message").objects.ingest(
                         parsed,
                         channel=locked,
-                        historical=True,
                     )
             return ImapSampleImport(
                 message_ids=[str(message.sqid) for message in messages],

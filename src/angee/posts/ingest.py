@@ -10,12 +10,15 @@ from typing import TYPE_CHECKING, Any
 from django.apps import apps
 from django.db import transaction
 
+from angee.messaging.events import historical_import
+
 if TYPE_CHECKING:
     from angee.posts.backends import ParsedPost
 
 
 def land_posts(
-    channel: Any, posts: list[ParsedPost], *, owner_id: Any, historical: bool = False, relations: bool = True,
+    channel: Any, posts: list[ParsedPost], *, owner_id: Any, relations: bool = True,
+    historical: bool = False,
 ) -> list[Any]:
     """Land public posts through messaging, then apply the posts-owned overlay.
 
@@ -23,8 +26,12 @@ def land_posts(
     owner supplies the public structural facts that make ingest derive COMMENT,
     disables email quotation edges, then writes payload, metrics, reactions, and
     cross-post relations exactly once through their existing owners.
+    ``historical=True`` enters messaging's historical import context for legacy callers.
     """
 
+    if historical:
+        with historical_import():
+            return land_posts(channel, posts, owner_id=owner_id, relations=relations)
     message_model = apps.get_model("messaging", "Message")
     thread_model = apps.get_model("messaging", "Thread")
     messages = []
@@ -34,14 +41,16 @@ def land_posts(
 
         def overlay(message: Any) -> None:
             post = by_id[message.external_id]
-            _overlay_engagement([post], [message], owner_id=owner_id)
             message.apply_provider_visibility(hidden=post.hidden)
+
+        def overlay_batch(landed: Sequence[Any]) -> None:
+            _overlay_engagement(list(chunk), list(landed), owner_id=owner_id)
         with transaction.atomic():
             messages.extend(message_model.objects.ingest(
                 [replace(post.message, metadata={**post.message.metadata, "tags": list(post.tags)}) for post in chunk],
                 channel=channel, created_by_id=owner_id, modality=thread_model.Modality.PUBLIC_THREAD,
-                visibility=thread_model.Visibility.PUBLIC, quote_edges=False, historical=historical,
-                after_landing=overlay,
+                visibility=thread_model.Visibility.PUBLIC, quote_edges=False,
+                after_landing=overlay, after_batch_landing=overlay_batch,
             ))
     if relations:
         land_post_relations(channel, posts, messages, owner_id=owner_id)

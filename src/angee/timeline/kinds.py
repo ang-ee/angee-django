@@ -41,6 +41,7 @@ class TimelineKind(ABC):
     id: str
     sequence: int
     source_models: tuple[str, ...] | Mapping[str, Iterable[str]]
+    previous_source_models: Mapping[str, Iterable[str]] | None = None
     explicit_publication = False
     occurrence = "1"
     at = models.F("created_at")
@@ -51,6 +52,25 @@ class TimelineKind(ABC):
     def relevant(self, model: type[models.Model], update_fields: Iterable[str] | None) -> bool:
         if update_fields is None or not isinstance(self.source_models, Mapping):
             return True
+        return not set(self.observed_fields(model)).isdisjoint(update_fields)
+
+    def previous_relevant(self, model: type[models.Model], update_fields: Iterable[str] | None) -> bool:
+        """Whether changing these columns may leave an old record membership."""
+        if update_fields is None or self.previous_source_models is None:
+            return self.relevant(model, update_fields)
+        return any(
+            name in update_fields
+            for owner in (model, *model._meta.get_parent_list())
+            for field_name in self.previous_source_models.get(owner._meta.label, ())
+            for field in (owner._meta.get_field(field_name),)
+            if isinstance(field, models.Field)
+            for name in (field.name, field.attname)
+        )
+
+    def observed_fields(self, model: type[models.Model]) -> tuple[str, ...]:
+        """Return the stored columns governing this kind's source invalidation."""
+        if not isinstance(self.source_models, Mapping):
+            return ()
         fields: set[str] = set()
         for owner in (model, *model._meta.get_parent_list()):
             for field_name in self.source_models.get(owner._meta.label, ()):
@@ -60,7 +80,7 @@ class TimelineKind(ABC):
                         f"Timeline kind {self.id!r} must observe a stored field: {owner._meta.label}.{field_name}."
                     )
                 fields.update((field.name, field.attname))
-        return not fields.isdisjoint(update_fields)
+        return tuple(sorted(fields))
 
     @abstractmethod
     def eligible(self, model: type[models.Model]) -> bool:

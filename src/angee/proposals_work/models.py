@@ -80,24 +80,37 @@ class TaskTrackQueue(Composable, extends="projects.Task"):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Validate the persisted placement inside the same atomic write.
 
-        Work infers queues from stages, cycles and personal defaults during save.
-        Reading its final columns avoids duplicating that policy and respects
-        partial/deferred saves. A rejected placement rolls the entire write back.
+        Work infers queues from stages, cycles and personal defaults before the
+        row write. The current queue is the written value when that column is
+        selected; otherwise Work's loaded snapshot is. The project snapshot
+        likewise retains the project ID for partial saves. A rejected placement
+        rolls the entire write back.
         """
 
         using = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
+        fields = kwargs.get("update_fields")
+        adding = self._state.adding
+        project_before = self._save_snapshot.get("project_id", models.DEFERRED)
+        queue_before = self._work_loaded_value("queue_id") if not adding and fields is None else None
         with database_context(using), transaction.atomic(using=using):
             super().save(*args, **kwargs)
-            if self._state.adding:
+            placement_written = (
+                bool({"project", "project_id", "queue", "queue_id", "stage", "stage_id", "cycle", "cycle_id"}
+                     .intersection(fields)) if fields is not None
+                else self.project_id != project_before or self.queue_id != queue_before
+            )
+            if not adding and not placement_written:
                 return
+            project_id = self._save_snapshot.get("project_id", self.project_id)
+            queue_written = adding or fields is None or bool({"queue", "queue_id"}.intersection(fields))
+            queue_id = self.queue_id if queue_written else self._work_loaded_value("queue_id")
             with system_context(reason="proposals_work.task.track_queue"):
-                placement = type(self)._base_manager.using(using).values("project_id", "queue_id").get(pk=self.pk)
-                if placement["project_id"] is None or placement["queue_id"] is None:
+                if project_id is None or queue_id is None:
                     return
                 proposal = (
                     apps.get_model("proposals", "Proposal")
                     ._base_manager.using(using)
-                    .filter(track_id=placement["project_id"], track_published_at__isnull=True)
+                    .filter(track_id=project_id, track_published_at__isnull=True)
                     .select_related("round")
                     .first()
                 )
@@ -107,7 +120,7 @@ class TaskTrackQueue(Composable, extends="projects.Task"):
                 queue = (
                     queue_model._base_manager.using(using)
                     .select_related("owner", "created_by")
-                    .get(pk=placement["queue_id"])
+                    .get(pk=queue_id)
                 )
                 owner = queue.owner
                 if queue.is_personal and owner is not None:

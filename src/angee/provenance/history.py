@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from copy import copy
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self, cast, runtime_checkable
 
@@ -10,7 +11,6 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist
 from django.db import models, router, transaction
 from django.db.models.base import ModelBase
-from django.db.models.signals import pre_save
 from django.utils import timezone
 from django.utils.functional import classproperty
 from simple_history.manager import HistoryManager
@@ -181,14 +181,9 @@ class ModelHistory(ModelHistoryReplayMixin, HistoricalRecords):
         if not issubclass(history_model, HistoryAttribution):
             raise ImproperlyConfigured("ModelHistory bases must compose HistoryAttribution.")
         self.source_database_attributes(history_model, using="default")
-        pre_save.connect(self.require_before_save, sender=sender, weak=False)
         pre_create_historical_record.connect(
             self.set_changeset, sender=get_history_manager_for_model(sender).model, weak=False
         )
-
-    def require_before_save(self, instance: models.Model, using: str, raw: bool = False, **kwargs: Any) -> None:
-        if self.capture_enabled and not raw and not hasattr(instance, "skip_history_when_saving"):
-            current_changeset(required=True, using=self.destination(type(instance), using))
 
     def destination(self, model: type[models.Model], using: str, explicit: str | None = None) -> str:
         history_model = get_history_manager_for_model(model._meta.concrete_model).model
@@ -211,7 +206,9 @@ class ModelHistory(ModelHistoryReplayMixin, HistoricalRecords):
         **kwargs: Any,
     ) -> None:
         alias = self.destination(type(instance), instance._state.db or "default", using)
-        context = self.require_context(alias)
+        context: Any = getattr(instance, "_history_capture_context", _UNLOADED)
+        if context is _UNLOADED:
+            context = self.require_context(alias)
         history_instance.history_changeset_id = context.pk if context is not None else None
         history_instance.history_source_complete = True
         for name, value in self.source_database_attributes(
@@ -220,7 +217,9 @@ class ModelHistory(ModelHistoryReplayMixin, HistoricalRecords):
             setattr(history_instance, name, value)
 
     def get_change_reason_for_object(self, instance: models.Model, history_type: str, using: str | None) -> str:
-        context = current_changeset(using=using)
+        context: Any = getattr(instance, "_history_capture_context", _UNLOADED)
+        if context is _UNLOADED:
+            context = current_changeset(using=using)
         return get_change_reason_from_object(instance) or (context.change_reason if context else "")
 
     def get_history_user(self, instance: models.Model) -> models.Model | None:
@@ -229,7 +228,9 @@ class ModelHistory(ModelHistoryReplayMixin, HistoricalRecords):
         from .context import actor_context, current_actor
 
         source = instance._state.db or router.db_for_write(type(instance), instance=instance)
-        context = current_changeset(using=self.destination(type(instance), source))
+        context: Any = getattr(instance, "_history_capture_context", _UNLOADED)
+        if context is _UNLOADED:
+            context = current_changeset(using=self.destination(type(instance), source))
         if context is None:
             return None
         with actor_context(getattr(context, "_provenance_actor", current_actor())):
@@ -238,17 +239,36 @@ class ModelHistory(ModelHistoryReplayMixin, HistoricalRecords):
             raise ValueError("A persisted history user must share the historical database.")
         return user
 
-    def record_rows(self, model: type[models.Model], count: int, *, using: str) -> None:
-        context = current_changeset(using=using)
-        if context is not None:
+    def record_rows(
+        self, model: type[models.Model], count: int, *, using: str, context: Any = _UNLOADED,
+    ) -> None:
+        """Refresh counts for models written in this commit, respecting savepoint rollbacks."""
+        if context is _UNLOADED:
+            context = current_changeset(using=using)
+        if context is None or not count:
+            return
+        connection = transaction.get_connection(using)
+        callback = context.__dict__.get("_history_count_callback")
+        if callback is not None and any(item[1] is callback for item in connection.run_on_commit):
+            tracked = cast(dict[str, type[models.Model]], context.__dict__["_history_count_models"])
+            tracked[model._meta.label_lower] = model
+            return
+        # A completed callback or rolled-back savepoint has left the queue.
+        # Start with this write, not every model touched by the changeset.
+        tracked = {model._meta.label_lower: model}
+        context.__dict__["_history_count_models"] = tracked
 
-            def committed() -> None:
-                label = model._meta.label_lower
-                if label not in context.touched:
-                    context.touched.append(label)
-                context.counts[label] = context.counts.get(label, 0) + count
+        def committed() -> None:
+            for label, owner in sorted(tracked.items()):
+                history_model = get_history_manager_for_model(owner).model
+                total = history_model._base_manager.using(using).filter(history_changeset_id=context.pk).count()
+                if total:
+                    if label not in context.touched:
+                        context.touched.append(label)
+                    context.counts[label] = total
 
-            transaction.on_commit(committed, using=using)
+        context.__dict__["_history_count_callback"] = committed
+        transaction.on_commit(committed, using=using)
 
     def diff(self, first: Any, last: Any, *, previous: Any = _UNLOADED) -> Any:
         """Return the native editable-field delta across a logical boundary.
@@ -372,20 +392,32 @@ class ModelHistory(ModelHistoryReplayMixin, HistoricalRecords):
                 group.seen.remove(key)
                 return
             destination = self.destination(model, alias)
-            self.require_context(destination)
-            try:
-                stored = (
-                    model._base_manager.using(alias)
-                    .only(*(f.attname for f in self.fields_included(model)))
-                    .get(pk=instance.pk)
-                )
-            except ObjectDoesNotExist:
-                if history_type == "-":
+            if history_type == "-":
+                # A delete did not write this instance; its in-memory fields may
+                # have drifted since it was loaded. Capture the persisted row.
+                try:
+                    stored = (
+                        model._base_manager.using(alias)
+                        .only(*(field.attname for field in self.fields_included(model)))
+                        .get(pk=instance.pk)
+                    )
+                except ObjectDoesNotExist:
                     return
-                raise
-            _metadata(instance, stored)
-            super().create_historical_record(stored, history_type, using=alias)
-            self.record_rows(model, 1, using=destination)
+                _metadata(instance, stored)
+                instance = stored
+            # On saves Django has assigned returned database defaults and auto_now
+            # values to the written instance; GeneratedField is excluded.
+            context = self.require_context(destination)
+            previous_context = getattr(instance, "_history_capture_context", _UNLOADED)
+            cast(Any, instance)._history_capture_context = context
+            try:
+                super().create_historical_record(instance, history_type, using=alias)
+            finally:
+                if previous_context is _UNLOADED:
+                    del cast(Any, instance)._history_capture_context
+                else:
+                    cast(Any, instance)._history_capture_context = previous_context
+            self.record_rows(model, 1, using=destination, context=context)
 
     def post_save(self, instance: models.Model, created: bool, using: str | None = None, **kwargs: Any) -> None:
         selected = kwargs.get("update_fields")
@@ -398,6 +430,14 @@ class ModelHistory(ModelHistoryReplayMixin, HistoricalRecords):
             }
             if not tracked.intersection(selected):
                 return
+            if not created and (persisted := getattr(instance, "_history_persisted_fields", None)):
+                snapshot = instance
+                for field in self.fields_included(type(instance)):
+                    if {field.name, field.attname}.isdisjoint(selected) and field.attname in persisted:
+                        if snapshot is instance:
+                            snapshot = copy(instance)
+                        snapshot.__dict__[field.attname] = persisted[field.attname]
+                instance = snapshot
         super().post_save(instance, created, using=using, **kwargs)
 
     def pre_delete(self, instance: models.Model, **kwargs: Any) -> None:
@@ -469,6 +509,29 @@ class CaptureHistoryMixin(models.Model):
         abstract = True
         base_manager_name = "objects"
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._history_persisted_fields = {
+            field.attname: self.__dict__[field.attname]
+            for field in type(self)._meta.concrete_fields if field.attname in self.__dict__
+        }
+
+    def refresh_from_db(self, *args: Any, **kwargs: Any) -> None:
+        fields = kwargs.get("fields", args[1] if len(args) > 1 else None)
+        super().refresh_from_db(*args, **kwargs)
+        self._history_persisted_fields.update({
+            field.attname: self.__dict__[field.attname]
+            for field in type(self)._meta.concrete_fields
+            if field.attname in self.__dict__
+            and (fields is None or not {field.name, field.attname}.isdisjoint(fields))
+        })
+
+    def _history_field_value(self, field: models.Field, written: set[str] | None) -> Any:
+        if written is not None and {field.name, field.attname}.isdisjoint(written):
+            if field.attname in self._history_persisted_fields:
+                return self._history_persisted_fields[field.attname]
+        return getattr(self, field.attname)
+
     def save_base(
         self,
         raw: bool = False,
@@ -478,10 +541,9 @@ class CaptureHistoryMixin(models.Model):
         update_fields: Iterable[str] | None = None,
     ) -> None:
         alias = using or router.db_for_write(type(self), instance=self)
+        written = set(update_fields) if update_fields is not None else None
         with transaction.atomic(using=alias, savepoint=not raw), write_group() as group:
             owner = model_history(type(self))
-            if not raw and owner and owner.capture_enabled and not hasattr(self, "skip_history_when_saving"):
-                owner.require_context(owner.destination(type(self), alias))
             super().save_base(raw, force_insert, force_update, alias, update_fields)
             if (
                 self._meta.proxy
@@ -490,7 +552,12 @@ class CaptureHistoryMixin(models.Model):
                 and owner.capture_enabled
                 and not hasattr(self, "skip_history_when_saving")
             ):
-                concrete = (self._meta.concrete_model or type(self))._base_manager.using(alias).get(pk=self.pk)
+                concrete_model = self._meta.concrete_model or type(self)
+                concrete = concrete_model(**{
+                    field.attname: self._history_field_value(field, written)
+                    for field in owner.fields_included(concrete_model)
+                })
+                concrete._state.db = alias
                 _metadata(self, concrete)
                 owner.create_historical_record(
                     concrete, "~" if group.saved[concrete._meta.label_lower] else "+", using=alias
@@ -499,13 +566,23 @@ class CaptureHistoryMixin(models.Model):
                 for parent in self._meta.get_parent_list():
                     parent_owner = model_history(parent)
                     if parent_owner and parent_owner.capture_enabled:
-                        stored = parent._base_manager.using(alias).get(pk=self._get_pk_val(parent._meta))
+                        stored = parent(**{
+                            field.attname: self._history_field_value(field, written)
+                            for field in parent_owner.fields_included(parent)
+                        })
+                        stored._state.db = alias
                         _metadata(self, stored)
                         parent_owner.create_historical_record(
                             stored,
                             "~" if group.saved[parent._meta.label_lower] else "+",
                             using=alias,
                         )
+            self._history_persisted_fields.update({
+                field.attname: self.__dict__[field.attname]
+                for field in type(self)._meta.concrete_fields
+                if field.attname in self.__dict__
+                and (written is None or not {field.name, field.attname}.isdisjoint(written))
+            })
 
     def _save_table(
         self,
@@ -521,6 +598,21 @@ class CaptureHistoryMixin(models.Model):
             bool,
             cast(Any, super())._save_table(raw, cls, force_insert, force_update, using, update_fields),
         )
+        if updated and not raw and update_fields is not None and (cls or type(self)) is self._meta.concrete_model:
+            written = set(update_fields)
+            unwritten = {
+                field.attname
+                for capture_model in (type(self), *self._meta.get_parent_list())
+                for owner in (model_history(capture_model),)
+                if owner and owner.capture_enabled
+                for field in owner.fields_included(capture_model)
+                if not field.primary_key and {field.name, field.attname}.isdisjoint(written)
+            }
+            if unwritten:
+                persisted = type(self)._base_manager.using(using).only(*sorted(unwritten)).get(pk=self.pk)
+                self._history_persisted_fields.update({
+                    name: persisted.__dict__[name] for name in unwritten
+                })
         with write_group() as group:
             group.saved[(cls or type(self))._meta.label_lower] = updated
         return updated

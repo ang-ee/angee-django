@@ -87,8 +87,8 @@ class SourceCopyMixin(ProtectedMergeableMixin, StatementsMixin):
         return pair.confirm(aspect="same_as", values={}) if same else pair.dismiss(aspect="same_as")
 
 
-def observe_email_identity(message: Any) -> None:
-    """Assert, once its envelope has committed, that an email's copies in other channels are the same message.
+def observe_email_identity(messages: Sequence[Any]) -> None:
+    """Assert cross-channel email identity once for a committed ingest batch.
 
     An RFC Message-ID names one email wherever it is received; chat and provider
     ids are account-local and never compared. The rule asserts the message pair
@@ -96,29 +96,49 @@ def observe_email_identity(message: Any) -> None:
     occurrence unless a person keeps them separate.
     """
 
+    if not messages:
+        return
     message_model = apps.get_model("messaging", "Message")
-    messages = message_model._base_manager.db_manager(hints={"instance": message})
+    using = messages[0]._state.db
+    keys = {message.pk for message in messages if message.message_type == "email"}
+    if not keys:
+        return
     rule_model = apps.get_model("provenance", "Rule")
     with system_context(reason=SOURCE_IDENTITY_RULE):
         try:
-            source = rule_model.objects.db_manager(hints={"instance": message}).get(key=SOURCE_IDENTITY_RULE)
+            source = rule_model.objects.db_manager(using).get(key=SOURCE_IDENTITY_RULE)
         except rule_model.DoesNotExist:
             # The envelope landed before the install resources (the rule and its grants).
             return
-        message = messages.select_related("thread").filter(pk=message.pk).first()
-    if message is None or message.message_type != "email" or not message.external_id or message.channel_id is None:
+        landed = list(message_model._base_manager.using(using).filter(pk__in=keys).select_related("thread"))
+    landed = [row for row in landed if row.external_id and row.channel_id is not None]
+    if not landed:
         return
     actor = to_subject_ref(source)
-    copies = (
-        message_model.objects.db_manager(hints={"instance": message}).with_actor(actor)
-        .with_external_ids((message.external_id,))
-        .filter(platform=message.platform, message_type="email", channel__isnull=False)
-        .exclude(channel_id=message.channel_id)
-        .select_related("thread")
-        .order_by("pk")
-    )
-    with changeset(fresh=True, activity="system", change_reason=SOURCE_IDENTITY_RULE, origin=source):
+    candidates: dict[tuple[str, str], list[Any]] = {}
+    for platform in sorted({row.platform for row in landed}):
+        external_ids = {row.external_id for row in landed if row.platform == platform}
+        copies = (
+            message_model.objects.db_manager(using).with_actor(actor)
+            .with_external_ids(sorted(external_ids))
+            .filter(platform=platform, message_type="email", channel__isnull=False)
+            .select_related("thread")
+            .order_by("pk")
+        )
         for copy in copies:
+            candidates.setdefault((copy.platform, copy.external_id), []).append(copy)
+    pairs = []
+    seen = set()
+    for message in landed:
+        for copy in candidates.get((message.platform, message.external_id), ()):
+            key = tuple(sorted((message.pk, copy.pk)))
+            if message.channel_id != copy.channel_id and key not in seen:
+                seen.add(key)
+                pairs.append((message, copy))
+    if not pairs:
+        return
+    with changeset(fresh=True, activity="system", change_reason=SOURCE_IDENTITY_RULE, origin=source):
+        for message, copy in pairs:
             evidence = [EvidenceReference.of(row) for row in sorted((message, copy), key=lambda row: row.pk)]
             for left, right in ((message, copy), (message.thread, copy.thread)):
                 if left is None or right is None or left.pk == right.pk:

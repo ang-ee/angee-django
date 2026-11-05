@@ -52,8 +52,13 @@ both threads to belong to that channel, and refuses locally authored messages.
 It preserves content and repairs participants and both physical thread counters.
 `ingest(..., explicit_thread=..., expected_thread=...)` composes the same command
 with envelope ingestion; absent the exact precondition, changing an explicit
-source thread remains refused. Historical ingestion suppresses live message
-events while retaining native content history and counter updates.
+source thread remains refused. Wrap a historical source import in
+`messaging.events.historical_import()` to mute live message, GraphQL change,
+timeline and workflow hooks while retaining native content history and counter
+updates. Legacy `ingest(historical=True)` and `land_posts(historical=True)` enter
+the same context. A changed provider envelope sends `message_ingested` inside its
+batch transaction with `instance` for every row. The final event carries the
+whole changed `created_batch`; workflows capture it before commit.
 
 Outbound transport implements `ChannelBackend.deliver(message)` and returns the
 two-field `DeliveryOutcome(accepted, provider_id=None)` from

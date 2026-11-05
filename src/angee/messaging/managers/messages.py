@@ -48,7 +48,7 @@ from angee.messaging.constants import (
     MAX_RECONCILE_ATTEMPTS,
     RECONCILE_BACKOFF,
 )
-from angee.messaging.events import message_ingested
+from angee.messaging.events import historical_import, historical_import_active, message_ingested, message_landed
 from angee.messaging.querysets import (
     ChannelQuerySet as ChannelQuerySet,
 )
@@ -1067,6 +1067,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             with system_context(reason="messaging.thread.count"):
                 self._advance_thread(thread, message.sent_at)
             type(message).thread.field.set_cached_value(message, thread)
+            message_landed.send(sender=self.model, instance=message)
             message_ingested.send(sender=self.model, instance=message)
             if idempotency_key is not None:
                 require_changeset().record_created(message)
@@ -1364,8 +1365,9 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         quote_edges: bool = True,
         explicit_thread: Any = None,
         expected_thread: Any = None,
-        historical: bool = False,
         after_landing: Callable[[Any], None] | None = None,
+        after_batch_landing: Callable[[Sequence[Any]], None] | None = None,
+        historical: bool = False,
     ) -> list[Any]:
         """Upsert each parsed message into a thread with its parts/participants/edges.
 
@@ -1399,14 +1401,26 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         external ID into a different explicit thread is rejected unless
         ``expected_thread`` names its exact previous source thread. That compare
         and set runs under the message lock, requires both threads to belong to
-        this channel, and never moves a locally authored message. ``historical``
-        suppresses the live message event and party-suggestion side effects while
-        retaining original timestamps, content history and thread counters.
+        this channel, and never moves a locally authored message. An explicit
+        ``historical_import()`` context suppresses live publication and party
+        suggestions while retaining content history and thread counters.
+        ``historical=True`` is a compatibility alias for that context.
         ``after_landing`` writes an addon's overlay and moderation before counters
         and live events; it also runs on unchanged observations without re-emitting.
+        One transaction covers the batch: a failing publication receiver or crash
+        rolls back every landed row, and row locks remain held until batch commit.
         """
 
+        if historical:
+            with historical_import():
+                return self.ingest(
+                    parsed_messages, channel=channel, created_by_id=created_by_id,
+                    modality=modality, visibility=visibility, quote_edges=quote_edges,
+                    explicit_thread=explicit_thread, expected_thread=expected_thread,
+                    after_landing=after_landing, after_batch_landing=after_batch_landing,
+                )
         created_by_id = created_by_id if created_by_id is not None else channel.owner_id
+        is_historical = historical_import_active()
         thread_model = apps.get_model("messaging", "Thread")
         if explicit_thread is not None:
             if not isinstance(explicit_thread, thread_model) or explicit_thread.pk is None:
@@ -1418,41 +1432,63 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         ):
             raise ValueError("Source thread correction requires saved previous and explicit target threads.")
         ingested: list[Any] = []
+        emitted: list[Any] = []
+        emails: list[Any] = []
         unresolved_handles: dict[Any, Any] = {}
-        for parsed in parsed_messages:
-            if not parsed.external_id:
-                continue
-            # The sync entrypoint (a stream cycle, a scheduled pull) owns the changeset.
-            with transaction.atomic():
-                message, handles = self._ingest_one(
-                    parsed,
-                    channel=channel,
-                    created_by_id=created_by_id,
-                    thread_model=thread_model,
-                    modality=modality,
-                    visibility=visibility,
-                    explicit_thread=explicit_thread,
-                    expected_thread=expected_thread,
-                    historical=historical,
-                    after_landing=after_landing,
+        def publish_batch() -> None:
+            batch = tuple(emitted)
+            for message in emitted:
+                message_ingested.send(
+                    sender=self.model, instance=message,
+                    created_batch=batch if message is emitted[-1] else (),
                 )
-                if message.message_type == "email":
-                    # Robust: identity evidence never fails a committed envelope or the rest of the batch.
-                    transaction.on_commit(
-                        partial(observe_email_identity, message), using=self.db, robust=True,
-                    )
-                ingested.append(message)
-                for handle in handles:
-                    if handle.party_id is None:
-                        unresolved_handles[handle.pk] = handle
-        # Quotation runs after the whole batch lands, so a message quoting a later
-        # one in the same batch still links (an inline pass would miss it). It is the
-        # email graph, so a non-email producer skips it via ``quote_edges=False``.
-        if quote_edges:
-            self.resolve_ingest_edges(ingested)
-        # Revisit unresolved envelopes after each committed batch so later directory
-        # evidence can resolve an older sender without coupling it to first contact.
-        if unresolved_handles and not historical:
+            if emails:
+                transaction.on_commit(partial(observe_email_identity, tuple(emails)), using=self.db, robust=True)
+
+        failure: Exception | None = None
+        with transaction.atomic(using=self.db):
+            try:
+                for parsed in parsed_messages:
+                    if not parsed.external_id:
+                        continue
+                    # Each envelope has a savepoint, so a later bad source row
+                    # cannot discard an earlier successful one.
+                    with transaction.atomic(using=self.db):
+                        message, handles, changed = self._ingest_one(
+                            parsed,
+                            channel=channel,
+                            created_by_id=created_by_id,
+                            thread_model=thread_model,
+                            modality=modality,
+                            visibility=visibility,
+                            explicit_thread=explicit_thread,
+                            expected_thread=expected_thread,
+                            historical=is_historical,
+                            after_landing=after_landing,
+                        )
+                        if changed and not is_historical:
+                            message_landed.send(sender=self.model, instance=message)
+                    if changed and not is_historical:
+                        emitted.append(message)
+                    if message.message_type == "email":
+                        emails.append(message)
+                    ingested.append(message)
+                    for handle in handles:
+                        if handle.party_id is None:
+                            unresolved_handles[handle.pk] = handle
+                # Batch overlays are isolated too; a failed overlay still allows
+                # earlier successful envelopes and their event capture to commit.
+                with transaction.atomic(using=self.db):
+                    if quote_edges:
+                        self.resolve_ingest_edges(ingested)
+                    if after_batch_landing is not None:
+                        after_batch_landing(ingested)
+            except Exception as error:
+                failure = error
+            publish_batch()
+        if failure is not None:
+            raise failure
+        if unresolved_handles and not is_historical:
             handles = tuple(unresolved_handles.values())
 
             def suggest_parties() -> None:
@@ -1469,12 +1505,9 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                         ):
                             parties.suggest_for(handle)
                     except Exception:
-                        logger.exception(
-                            "Could not suggest a party for messaging handle %s",
-                            handle.pk,
-                        )
+                        logger.exception("Could not suggest a party for messaging handle %s", handle.pk)
 
-            transaction.on_commit(suggest_parties)
+            transaction.on_commit(suggest_parties, using=self.db)
         return ingested
 
     def resolve_ingest_edges(self, messages: Sequence[Any]) -> None:
@@ -1497,7 +1530,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         expected_thread: Any = None,
         historical: bool = False,
         after_landing: Callable[[Any], None] | None = None,
-    ) -> Any:
+    ) -> tuple[Any, Sequence[Any], bool]:
         handle_model = apps.get_model("parties", "Handle")
         part_model = apps.get_model("messaging", "Part")
         envelope_metadata = self.model.ingest_metadata(_bounded_message_metadata(parsed.metadata))
@@ -1530,7 +1563,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         ):
             if after_landing is not None:
                 after_landing(prior)
-            return prior, ()
+            return prior, (), False
         # Lock Message before any thread resolution, but only for a mutation.
         if prior is not None:
             # Lock only the message row: the thread is a nullable (outer) join.
@@ -1610,9 +1643,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                     message.save(update_fields=("parent", "updated_at"))
             if after_landing is not None:
                 after_landing(message)
-            if source_thread_changed and not historical and not message.is_trashed:
-                message_ingested.send(sender=self.model, instance=message)
-            return message, ()
+            return message, (), bool(source_thread_changed and not historical and not message.is_trashed)
         metadata = {**envelope_metadata, _SYNC_HASH_KEY: content_hash}
         parent = self._resolve_reply_parent(parsed, channel=channel, explicit_thread=explicit_thread)
         defaults = {
@@ -1669,7 +1700,13 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             message.parts.all().delete()
             position = self._write_envelope_parts(message, parsed, created_by_id=created_by_id)
             if parsed.body is not None:
-                self._build_parts(message, parsed.body, parent=None, position=position, created_by_id=created_by_id)
+                flat_parts: list[Any] = []
+                self._build_parts(
+                    message, parsed.body, parent=None, position=position,
+                    created_by_id=created_by_id, flat_parts=flat_parts,
+                )
+                if flat_parts:
+                    part_model.objects.bulk_create(flat_parts)
             if not created:
                 new_hashes = self._content_fragment_hashes(part_model, message)
                 if new_hashes != prior_hashes:
@@ -1702,9 +1739,8 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             after_landing(message)
         if (created or thread_changed) and not message.is_trashed and thread is not None:
             self.advance_thread(message)
-        if (created or thread_changed or source_thread_changed) and not historical and not message.is_trashed:
-            message_ingested.send(sender=self.model, instance=message)
-        return message, handles
+        changed = (created or thread_changed or source_thread_changed) and not historical and not message.is_trashed
+        return message, handles, bool(changed)
 
     def _resolve_reply_parent(self, parsed: ParsedMessage, *, channel: Any, explicit_thread: Any = None) -> Any:
         """Resolve ``in_reply_to`` onto the parent ``Message`` row, or ``None``.
@@ -1755,17 +1791,19 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         part_model = apps.get_model("messaging", "Part")
         fragment_model = apps.get_model("messaging", "Fragment")
         position = 0
+        rows = []
         subject = strip_null_bytes(parsed.subject or "").strip()
         if subject:
             fragment = fragment_model.objects.upsert(text=subject, created_by_id=created_by_id)
-            part_model.objects.create(
+            rows.append(part_model(
                 message_id=message.pk,
                 position=position,
                 type="text/plain",
                 role=part_model.PartRole.TITLE,
                 fragment_id=fragment.pk if fragment is not None else None,
                 created_by_id=created_by_id,
-            )
+                updated_by_id=created_by_id,
+            ))
             position += 1
         for name, value in parsed.headers:
             name = strip_null_bytes(name or "").strip().lower()
@@ -1775,16 +1813,19 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             fragment = fragment_model.objects.upsert(
                 text=value, kind=fragment_model.FragmentKind.HEADER, created_by_id=created_by_id
             )
-            part_model.objects.create(
+            rows.append(part_model(
                 message_id=message.pk,
                 position=position,
                 type="text/plain",
                 role=part_model.PartRole.HEADER,
-                name=name,
+                name=part_model.objects.prepare_fields({"name": name})["name"],
                 fragment_id=fragment.pk if fragment is not None else None,
                 created_by_id=created_by_id,
-            )
+                updated_by_id=created_by_id,
+            ))
             position += 1
+        if rows:
+            part_model.objects.bulk_create(rows)
         return position
 
     def _build_parts(
@@ -1796,6 +1837,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         position: int,
         created_by_id: Any,
         nameless: list[int] | None = None,
+        flat_parts: list[Any] | None = None,
     ) -> None:
         part_model = apps.get_model("messaging", "Part")
         fragment_model = apps.get_model("messaging", "Fragment")
@@ -1839,19 +1881,27 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         part_role_value = part_model._meta.get_field("role").to_python(parsed.role)
         assert isinstance(part_disposition, part_model.Disposition)
         assert isinstance(part_role_value, part_model.PartRole)
-        part = part_model.objects.create(
+        bounded = part_model.objects.prepare_fields({
+            "type": parsed.type, "cid": parsed.cid, "name": part_name,
+        })
+        part = part_model(
             message_id=message.pk,
             parent_id=parent.pk if parent is not None else None,
             position=position,
-            type=parsed.type,
+            type=bounded["type"],
             disposition=part_disposition,
             role=part_role_value,
-            cid=parsed.cid,
-            name=part_name,
+            cid=bounded["cid"],
+            name=bounded["name"],
             fragment_id=fragment.pk if fragment is not None else None,
             file_id=file_ref.pk if file_ref is not None else None,
             created_by_id=created_by_id,
+            updated_by_id=created_by_id,
         )
+        if not parsed.children and flat_parts is not None:
+            flat_parts.append(part)
+            return
+        part.save()
         for index, child in enumerate(parsed.children):
             self._build_parts(
                 message,
@@ -1860,6 +1910,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                 position=index,
                 created_by_id=created_by_id,
                 nameless=nameless,
+                flat_parts=flat_parts,
             )
 
     def _ingest_file(self, parsed: ParsedPart, created_by_id: Any, *, filename: str) -> Any:
@@ -1896,25 +1947,31 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         participant_model.objects.filter(message=message).delete()
         seen: set[tuple[Any, str]] = set()
         handles: list[Any] = []
+        rows = []
+        resolved_handles: dict[tuple[str, str], Any] = {}
         if sender is not None:
             seen.add((sender.pk, str(participant_model.ParticipantRole.FROM)))
-            participant_model.objects.create(
+            rows.append(participant_model(
                 message_id=message.pk,
                 thread_id=thread.pk,
                 handle_id=sender.pk,
                 role=participant_model.ParticipantRole.FROM,
                 created_by_id=created_by_id,
-            )
+            ))
             handles.append(sender)
         for recipient in parsed.recipients:
-            handle = handle_model.objects.upsert(
-                platform=recipient.handle.platform,
-                value=recipient.handle.value,
-                created_by_id=created_by_id,
-                display_name=recipient.handle.display_name,
-                external_id=recipient.handle.external_id,
-                metadata=recipient.handle.metadata,
-            )
+            handle_key = (recipient.handle.platform, recipient.handle.value)
+            handle = resolved_handles.get(handle_key)
+            if handle is None:
+                handle = handle_model.objects.upsert(
+                    platform=recipient.handle.platform,
+                    value=recipient.handle.value,
+                    created_by_id=created_by_id,
+                    display_name=recipient.handle.display_name,
+                    external_id=recipient.handle.external_id,
+                    metadata=recipient.handle.metadata,
+                )
+                resolved_handles[handle_key] = handle
             # The write path owns envelope dedup (the unique constraint is the
             # backstop): any producer may repeat an address within one role.
             key = (handle.pk, str(recipient.role))
@@ -1923,12 +1980,14 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
             seen.add(key)
             recipient_role = participant_model._meta.get_field("role").to_python(recipient.role)
             assert isinstance(recipient_role, participant_model.ParticipantRole)
-            participant_model.objects.create(
+            rows.append(participant_model(
                 message_id=message.pk,
                 thread_id=thread.pk,
                 handle_id=handle.pk,
                 role=recipient_role,
                 created_by_id=created_by_id,
-            )
+            ))
             handles.append(handle)
+        if rows:
+            participant_model.objects.bulk_create(rows)
         return handles

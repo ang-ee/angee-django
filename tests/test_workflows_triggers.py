@@ -9,6 +9,7 @@ from django.core.exceptions import ImproperlyConfigured, PermissionDenied, Valid
 from django.db import IntegrityError, OperationalError, connection, models, transaction
 from django.db.models.functions import Now, Upper
 from django.db.models.signals import post_save
+from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, actor_context, current_actor, system_context, to_object_ref, to_subject_ref
 from rebac.actors import is_sudo
 from rebac.models import active_relationship_model
@@ -69,6 +70,19 @@ def capture(record):
     triggers.RecordChanged.dispatch(type(record), record)
 
 
+def test_disabled_trigger_dispatch_avoids_savepoint_and_target_lock(trigger_setup):
+    _actor, _workflow, record, _trigger = trigger_setup
+    with transaction.atomic(), CaptureQueriesContext(connection) as queries:
+        capture(record)
+    statements = [query["sql"].upper() for query in queries]
+    print(
+        f"no-trigger statements: {len(statements)}, "
+        f"savepoints: {sum('SAVEPOINT' in item for item in statements)}, "
+        f"locks: {sum('FOR UPDATE' in item for item in statements)}"
+    )
+    assert not any("SAVEPOINT" in statement or "FOR UPDATE" in statement for statement in statements)
+
+
 @pytest.mark.parametrize("failure", [ValueError, ValidationError])
 def test_trigger_capture_logs_unexpected_ledger_errors(trigger_setup, monkeypatch, caplog, failure):
     actor, _workflow, record, trigger = trigger_setup
@@ -114,7 +128,7 @@ def test_disabled_triggers_write_nothing_and_native_save_skips_raw(trigger_setup
     capture(record)
     assert not TriggerEvent.system_queryset().exists()
     Trigger.objects.enable(trigger, actor=actor)
-    post_save.send(sender=Vault, instance=record, raw=True, created=False, using="default")
+    post_save.send(sender=Vault, instance=record, raw=True, created=False, using=record._state.db)
     assert not TriggerEvent.system_queryset().exists()
     with actor_context(actor):
         record.save()

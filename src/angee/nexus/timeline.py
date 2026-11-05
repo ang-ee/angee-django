@@ -33,6 +33,17 @@ class CorrespondenceKind(TimelineKind):
         "parties.Circle": ("parent", "path"),
         "parties.CircleMember": ("party", "circle", "is_confirmed", "is_dismissed"),
     }
+    previous_source_models = {
+        "messaging.Message": ("sender", "thread", "is_trashed", "merged_into"),
+        "messaging.Part": ("message",),
+        "messaging.Participant": ("message", "handle"),
+        "messaging.Thread": ("merged_into",),
+        "messaging.ThreadAttachment": ("thread", "role"),
+        "parties.Handle": ("party",),
+        "parties.Party": ("merged_into", "is_trashed"),
+        "parties.Circle": ("parent", "path"),
+        "parties.CircleMember": ("party", "circle", "is_confirmed", "is_dismissed"),
+    }
 
     def eligible(self, model: type[models.Model]) -> bool:
         return issubclass(model, (apps.get_model("parties", "Party"), apps.get_model("parties", "Circle")))
@@ -66,6 +77,13 @@ class CorrespondenceKind(TimelineKind):
             messages = message.objects.filter(pk=row.message_id)
         elif label == "parties.Handle":
             messages = message.objects.filter(models.Q(participants__handle=row) | models.Q(sender=row))
+            if not messages.exists():
+                return []
+            parties = party.objects.canonical().filter(
+                models.Q(pk=row.party_id)
+                | models.Q(handles__participations__message__in=messages.order_by().values("pk"))
+            ).distinct()
+            return self._records(parties)
         elif label in ("messaging.Thread", "messaging.ThreadAttachment"):
             messages = message.objects.for_thread(row if label == "messaging.Thread" else row.thread)
         else:
@@ -83,6 +101,8 @@ class CorrespondenceKind(TimelineKind):
     @staticmethod
     def _records(parties: Iterable[models.Model]) -> list[RecordIdentity]:
         parties = list(parties)
+        if not parties:
+            return []
         circle_model = apps.get_model("parties", "Circle")
         circles = list(circle_model.objects.containing_parties(parties, confirmed_only=True))
         return list(dict.fromkeys((type(row), row.pk) for row in (

@@ -32,6 +32,15 @@ class CommentKind(TimelineKind):
         ),
         "messaging.ThreadNotification": ("thread", "attachment", "message", "read_at", "notification_status"),
     }
+    previous_source_models = {
+        "messaging.Message": ("thread", "is_trashed"),
+        "messaging.ThreadAttachment": ("thread", "role"),
+        "messaging.Thread": ("merged_into",),
+        "messaging.Reaction": ("message",),
+        "messaging.MessageStar": ("message",),
+        "messaging.ThreadFollower": ("thread", "attachment"),
+        "messaging.ThreadNotification": ("thread", "attachment", "message"),
+    }
 
     def eligible(self, model: type[models.Model]) -> bool:
         return issubclass(model, ThreadedModelMixin)
@@ -83,7 +92,14 @@ class ConversationKind(TimelineKind):
 
     id = "messaging.conversation"
     sequence = 70
-    source_models = ("messaging.ThreadAttachment", "messaging.Thread")
+    source_models = {
+        "messaging.ThreadAttachment": ("thread", "role", "content_type", "object_id", "label"),
+        "messaging.Thread": ("title", "message_count", "merged_into"),
+    }
+    previous_source_models = {
+        "messaging.ThreadAttachment": ("thread", "role", "content_type", "object_id"),
+        "messaging.Thread": ("merged_into",),
+    }
 
     def eligible(self, model: type[models.Model]) -> bool:
         return True

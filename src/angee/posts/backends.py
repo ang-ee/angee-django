@@ -21,7 +21,7 @@ non-empty when no source is installed.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
@@ -50,6 +50,7 @@ from angee.messaging.backends import (
     ParsedHandle,
     ParsedMessage,
 )
+from angee.messaging.events import historical_import
 from angee.posts.ingest import land_post_relations, land_posts
 from angee.provenance.statements import (
     SourceKind,
@@ -414,13 +415,10 @@ class FeedBackend(BridgeImpl, HttpClientMixin):
             # Repair before classification; NULL never makes backfilled records live.
             with system_context(reason="posts.discovery.horizon"):
                 self.bridge.discovery_finished()
-        (message,) = land_posts(
-            self.bridge,
-            [record],
-            owner_id=self.bridge.owner_id,
-            historical=self.bridge.is_historical(record),
-            relations=False,
-        )
+        with historical_import() if self.bridge.is_historical(record) else nullcontext():
+            (message,) = land_posts(
+                self.bridge, [record], owner_id=self.bridge.owner_id, relations=False,
+            )
         return ApplyResult(target=message)
 
     def finish_page(self, stream: Any, page: StreamPage, outcomes: Sequence[ApplyResult]) -> None:

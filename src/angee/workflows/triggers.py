@@ -307,6 +307,18 @@ class TriggerSource(ImplBase):
         else:
             records = (record,)
         using = record._state.db
+        # Most observed writes have neither an enabled trigger nor a watch.
+        # A database failure here must escape: there is no savepoint to repair
+        # the caller's transaction before it commits.
+        with database_context(using), system_context(reason="workflows.source_dispatch"):
+            trigger_model = apps.get_model("workflows", "Trigger")
+            watch_model = apps.get_model("workflows", "StepWatch")
+            sources = tuple(source.key for source in cls.registered())
+            triggers_exist = bool(sources) and trigger_model.system_queryset().using(using).filter(
+                enabled=True, source__in=sources,
+            ).exists()
+            if not triggers_exist and not watch_model.system_queryset().using(using).exists():
+                return
         try:
             with (
                 database_context(using),

@@ -507,6 +507,8 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
             # existing attachment for this record+role already points at this thread;
             # prime the FK cache to keep the select_related the callers relied on.
             attachment.thread = thread
+            if role == self.model.AttachmentRole.CHATTER:
+                thread.is_record_chatter = True
             return attachment
 
     @staticmethod
@@ -604,6 +606,9 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
                         hints={"instance": target}
                     ).filter(attachment_id=old_id).update(attachment_id=new_id)
             edges.filter(pk__in=attachment_ids).delete()
+            for thread_id in sorted(chatter_thread_ids):
+                if thread_model._base_manager.using(using).filter(pk=thread_id).exists():
+                    self.model.sync_chatter_flag(thread_id, using=using)
             orphaned_chatter_ids = [
                 thread_id for thread_id in chatter_thread_ids if not edges.filter(thread_id=thread_id).exists()
             ]
