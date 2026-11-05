@@ -50,8 +50,6 @@ function VcsBridgeForm({ resource: _resource, ...props }: RegisteredFormProps): 
         />
         {implConfig.fields.map((field) => <Field key={field.name} {...field} />)}
         {IntegrationSyncFields({ label: t("bridge.group.sync") })}
-        {/* Write-only signing secret — set on create, never read back. */}
-        <Field name="webhook_secret" widget="text" kind="string" createOnly />
         {syncAction}
         <Action id="discover" label={t("vcs.discover")} run={discoverAll} />
       </Form>
