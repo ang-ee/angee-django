@@ -1,8 +1,11 @@
 """Trigger authoring, activation and ledger reads use the framework resource owners."""
 
+import re
+
 import pytest
 import yaml
 from django.apps import apps
+from django.contrib.contenttypes.models import ContentType
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from graphql import GraphQLEnumType, GraphQLEnumValue
@@ -471,6 +474,43 @@ def test_trigger_ledger_reference_guard_batches_source_reads(trigger_surface):
             }
         counts.append(len(queries))
     assert counts[0] == counts[1]
+
+
+def test_trigger_event_labels_share_the_target_proof(trigger_surface, capture_graphql_document):
+    """The ledger list loads one bounded target page for its record labels."""
+
+    schema, workflow, editor, _viewer, _starter = trigger_surface
+    trigger = Trigger.objects.with_actor(editor).create(
+        workflow=workflow, source="record_changed", model_label="knowledge.vault",
+    )
+    targets = [vault_for(editor, name=f"Event target {index}") for index in range(20)]
+    content_type = ContentType.objects.get_for_model(Vault)
+    with system_context(reason="test.trigger_event.label_budget"):
+        TriggerEvent.system_queryset().bulk_create([
+            TriggerEvent(trigger=trigger, record_content_type=content_type, record_object_id=target.pk)
+            for target in targets
+        ])
+    document = """query($limit: Int!) {
+      triggerevent(limit: $limit, order_by: {changed_at: asc}) { id record_id record_label }
+    }"""
+    reads = {
+        count: capture_graphql_document(schema, document, {"limit": count}, actor=editor)
+        for count in (1, 5, 20)
+    }
+    for count, read in reads.items():
+        assert len(read.data["triggerevent"]) == count
+        assert {row["record_label"] for row in read.data["triggerevent"]} <= {
+            str(target) for target in targets
+        }
+        assert sum(bool(re.match(rf'^SELECT .* FROM "{targets[0]._meta.db_table}"', statement))
+                   for statement in read.statements) == 1
+        read.assert_no_audit_writes()
+    reads[5].assert_flat_from(reads[1])
+    reads[20].assert_flat_from(reads[5])
+    assert {row["record_label"] for row in reads[20].data["triggerevent"]} == {
+        str(target) for target in targets
+    }
+    assert reads[20].total_sql_bytes <= reads[1].total_sql_bytes + 8_000
 
 
 def test_resource_installs_trigger_disabled(trigger_surface, tmp_path, execution):

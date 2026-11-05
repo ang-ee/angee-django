@@ -25,6 +25,11 @@ COUNTS = (1, 5, 10, 20)
 LIST = """query($ids: [String!]!) {
   decision_records(where: {id: {_in: $ids}}, order_by: {id: asc}) { id record_model record_id }
 }"""
+LABELS = """query($ids: [String!]!) {
+  decision_records(where: {id: {_in: $ids}}, order_by: {id: asc}) {
+    id record_model record_id record_label
+  }
+}"""
 LIST_IDS = """query($ids: [String!]!) {
   decision_records(where: {id: {_in: $ids}}, order_by: {id: asc}) { id }
 }"""
@@ -82,6 +87,68 @@ def _assert_page_proofs(sql, model_count, *, row_root=True):
         for model in TARGETS[:model_count]:
             if model is not Decision:  # The source-row policy itself reads Decision.
                 assert f'FROM "{model._meta.db_table}"' not in list_statements[0]
+
+
+def test_inbox_record_labels_share_the_target_proof(composed_tables, capture_graphql_document):
+    """The decisions inbox records cell reads its targets once at each page size."""
+
+    owner = create_user("reference-inbox-labels")
+    targets = [vault_for(owner, name=f"Inbox target {index}") for index in range(20)]
+    for target in targets:
+        seed_decision(actor=owner, assignees=(owner,), reference=target)
+    schema = addon_schema(decision_schema.schemas, "console")
+    document = """query($limit: Int!) {
+      decisions(limit: $limit, order_by: {id: asc}) {
+        id records { record_model record_id record_label }
+      }
+    }"""
+    reads = {
+        count: capture_graphql_document(schema, document, {"limit": count}, actor=owner)
+        for count in (1, 5, 20)
+    }
+    for count, read in reads.items():
+        assert [row["records"][0]["record_label"] for row in read.data["decisions"]] == [
+            str(target) for target in targets[:count]
+        ]
+        target_reads = [statement for statement in read.statements if re.match(
+            rf'^SELECT .* FROM "{targets[0]._meta.db_table}"', statement,
+        )]
+        assert len(target_reads) == 1, (count, target_reads)
+        read.assert_no_audit_writes()
+    reads[5].assert_flat_from(reads[1])
+    reads[20].assert_flat_from(reads[5])
+    assert reads[20].total_sql_bytes <= reads[1].total_sql_bytes + 8_000
+
+
+def test_reference_labels_read_each_target_model_once(composed_tables, capture_graphql_document):
+    """Mixed reference columns share one admitted target read per model."""
+
+    owner = create_user("reference-mixed-labels")
+    rows, readable = _link_page(owner, len(TARGETS))
+    schema = addon_schema(decision_schema.schemas, "console")
+    reads = {
+        count: capture_graphql_document(
+            schema, LABELS, {"ids": [row.sqid for row in rows[:count * len(TARGETS)]]}, actor=owner,
+        )
+        for count in (1, 5, 20)
+    }
+    for count, read in reads.items():
+        assert len(read.data["decision_records"]) == count * len(TARGETS)
+        assert read.data["decision_records"][0]["record_label"] == str(readable)
+        if count > 1:
+            assert read.data["decision_records"][len(TARGETS)]["record_label"] is None
+        for model in TARGETS:
+            target_model = ContentType.objects.get_for_model(model).model_class()
+            assert target_model is not None
+            target_reads = [
+                statement for statement in read.statements
+                if statement.partition(' FROM "')[2].partition('"')[0] == target_model._meta.db_table
+            ]
+            assert len(target_reads) == 1, (count, model._meta.label, target_reads)
+        read.assert_no_audit_writes()
+    reads[5].assert_flat_from(reads[1])
+    reads[20].assert_flat_from(reads[5])
+    assert reads[20].total_sql_bytes <= reads[1].total_sql_bytes + 8_000
 
 
 @pytest.mark.parametrize("model_count", (1, 2, 5))
