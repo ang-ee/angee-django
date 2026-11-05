@@ -1223,8 +1223,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         if attachment is None:
             return None
         return (
-            self.sudo(reason="messaging.message.in_record")
-            .for_thread(attachment.thread)
+            self.record_scope(record, role=role, trashed=trashed)
             .filter(is_trashed=trashed, **self.model.public_id_lookup(str(message_id)))
             .first()
         )

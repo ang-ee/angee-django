@@ -53,30 +53,6 @@ def _proven_read_annotation(queryset: models.QuerySet[Any]) -> models.QuerySet[A
     return queryset
 
 
-def _share_permission_projections(queryset: models.QuerySet[Any], actor: SubjectRef) -> models.QuerySet[Any]:
-    """Attach one REBAC closure to selected permissions on a read-scoped relation."""
-
-    prefix = "_angee_permission_"
-    names = sorted(
-        name
-        for key in queryset.query.annotations
-        if key.startswith(prefix)
-        and key != _ACTOR
-        and not key.startswith(f"{prefix}owner_")
-        and (name := key.removeprefix(prefix)) != "read"
-    )
-    if not names:
-        return queryset
-    scope = (
-        require_rebac_queryset(queryset.model)
-        .using(queryset.db)
-        .with_actor(actor)
-        .with_action("read")
-        .scope_cte(actions=("read", *names))
-    )
-    return scope.attach(queryset)
-
-
 def held_permissions(
     record: models.Model,
     names: Iterable[str],
@@ -116,16 +92,6 @@ def held_permissions(
             .filter(pk=record.pk)
             .annotate(**annotations)
         )
-        if len(names) > 1:
-            scope = (
-                require_rebac_queryset(owner)
-                .using(rows.db)
-                .with_actor(actor)
-                .with_action(names[0])
-                .filter(pk=record.pk)
-                .scope_cte(actions=names)
-            )
-            rows = scope.attach(rows)
         values = rows.values(*annotations).first() or {}
     return frozenset(name for name in names if values.get(f"_angee_permission_{name}"))
 

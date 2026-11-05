@@ -87,6 +87,13 @@ def _prepare_cancel_batch(queryset: QuerySet[Any], rows: list[Any]) -> None:
         cast(Any, queryset.model)._prepare_cancel_for(tuple(rows), actor)
 
 
+def _prepare_policy_versions(queryset: QuerySet[Any], rows: list[Any]) -> None:
+    """Read each admitted run page's pinned policy in one structural batch."""
+
+    if rows:
+        cast(Any, queryset.model)._prepare_policy_versions(rows)
+
+
 def _prepare_retry_batch(queryset: QuerySet[Any], rows: list[Any]) -> None:
     """Seed the run owner's retry facts once for a selected step page."""
 
@@ -101,6 +108,11 @@ class WorkflowRunQuerySet[T: WorkflowRun](ProtectedQuerySet[T]):
         """Prepare cancellation over the materialized page before field resolution."""
 
         return self.with_page_hook(_prepare_cancel_batch)
+
+    def with_policy_versions(self) -> Self:
+        """Prepare pinned execution documents for the materialized run page."""
+
+        return self.with_page_hook(_prepare_policy_versions)
 
     def for_subject(self, record: Any) -> Any:
         """Select the canonical subject without changing this queryset's read scope."""

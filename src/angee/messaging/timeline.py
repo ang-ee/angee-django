@@ -51,7 +51,7 @@ class CommentKind(TimelineKind):
         if not readers.filter(pk=record.pk).exists():
             return messages.none().annotate(_order_at=messages.chronological_time()), self.fold(record)
         with actor_context(actor):
-            return messages.record_scope(record).scoped().prefetch_related(None).select_related(
+            return messages.record_scope(record).prefetch_related(None).select_related(
                 "subtype", "created_by",
             ), self.fold(record)
 

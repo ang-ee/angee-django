@@ -361,7 +361,7 @@ class Round(
     def can_open(self) -> bool:
         """Report whether this manager can lift an undisclosed round."""
         return (
-            type(self).system_queryset()
+            type(self)._base_manager
             .filter(pk=self.pk)
             .annotate(
                 ready=type(self).can_open_expression(instance_actor(self)),
@@ -373,7 +373,7 @@ class Round(
     def can_admit(self) -> bool:
         """Report whether this actor may admit a new shell now."""
         return (
-            type(self).system_queryset()
+            type(self)._base_manager
             .filter(pk=self.pk)
             .annotate(
                 ready=type(self).can_admit_expression(instance_actor(self)),
@@ -397,7 +397,7 @@ class Round(
     def roster_prefetch(cls) -> models.Prefetch:
         """Batch scalar roster facts without reading each peer's proposal."""
         rows = (
-            apps.get_model("proposals", "Proposal").system_queryset()
+            apps.get_model("proposals", "Proposal")._base_manager
             .filter(
                 retired_at__isnull=True,
                 responder__isnull=False,
@@ -1537,7 +1537,7 @@ class Proposal(OptimisticLockMixin, ImmutableFieldsMixin, AuditMixin, ProtectedD
     def track_status(self) -> str | None:
         """Read the scalar through the same gated expression as a list."""
         return (
-            type(self).system_queryset()
+            type(self)._base_manager
             .filter(pk=self.pk)
             .annotate(
                 _track_status=type(self).track_status_expression(instance_actor(self)),
@@ -1966,34 +1966,23 @@ class ProjectProposalAccess(Composable, extends="projects.Project"):
                 round.validate_build_subject(subject)
 
     def selectable_milestones(self) -> MilestoneQuerySet[Milestone]:
-        """Limit unopened rounds to the boundary and its immediate successor."""
+        """Limit an admitted project's choices by its unopened round boundaries."""
         choices = super().selectable_milestones()
-        with system_context(reason="proposals.track.phase_choices"):
-            rounds = (
-                apps.get_model("proposals", "Round")
-                ._base_manager.filter(
-                    models.Q(project_id=self.pk) | models.Q(task__project_id=self.pk),
-                    opened_at__isnull=True,
-                    closed_at__isnull=True,
-                    opens_after__isnull=False,
-                )
-                .select_related("opens_after")
+        boundaries = list(
+            apps.get_model("proposals", "Round")
+            ._base_manager.filter(
+                models.Q(project_id=self.pk) | models.Q(task__project_id=self.pk),
+                opened_at__isnull=True,
+                closed_at__isnull=True,
+                opens_after__isnull=False,
             )
-            for round in rounds:
-                boundary = round.opens_after
-                assert boundary is not None  # The queryset excludes NULL boundaries.
-                next_rank = (
-                    choices.filter(sort_order__gt=boundary.sort_order)
-                    .order_by(
-                        "sort_order",
-                    )
-                    .values_list("sort_order", flat=True)
-                    .first()
-                )
-                choices = choices.filter(
-                    sort_order__lte=boundary.sort_order if next_rank is None else next_rank,
-                )
-        return choices
+            .values_list("opens_after__sort_order", flat=True)
+        )
+        if not boundaries:
+            return choices
+        ranks = list(choices.order_by("sort_order").values_list("sort_order", flat=True))
+        limit = min(next((rank for rank in ranks if rank > boundary), boundary) for boundary in boundaries)
+        return choices.filter(sort_order__lte=limit)
 
     class Meta:
         """Abstract zero-column donor folded into the composed Project model."""
@@ -2120,9 +2109,9 @@ class TaskProposalAccess(ImmutableFieldsMixin, Composable, extends="projects.Tas
     def clarification_widen_blocker_expression(cls) -> Combinable:
         """Compute the publication blocker; callers must authorize its disclosure.
 
-        Keep the hidden asker's identity inside the model-owned system query.
-        The caller projects only the blocker, never a gated column from its
-        actor-scoped outer row.
+        The admitted task's attached message existence supplies the blocker;
+        its hidden asker's identity stays inside the correlated expression.
+        The caller projects only the blocker, never a gated identity column.
         """
         messages = cls.thread_messages_expression(models.OuterRef("pk"), structural_existence=True).filter(
             created_by_id=models.OuterRef("clarification_asker_id"),
@@ -2136,7 +2125,7 @@ class TaskProposalAccess(ImmutableFieldsMixin, Composable, extends="projects.Tas
             output_field=models.CharField(),
         )
         return models.Subquery(
-            cls.system_queryset().filter(pk=models.OuterRef("pk")).annotate(_blocker=blocker).values("_blocker"),
+            cls._base_manager.filter(pk=models.OuterRef("pk")).annotate(_blocker=blocker).values("_blocker"),
         )
 
     @classmethod
@@ -2388,16 +2377,13 @@ class TaskProposalAccess(ImmutableFieldsMixin, Composable, extends="projects.Tas
         """Read one task's recipients explicitly outside a projected list."""
 
         expression = type(self).clarification_waiting_expression(instance_actor(self))
-        with system_context(reason="proposals.clarification.waiting.row"):
-            return (
-                type(self)
-                ._base_manager.filter(pk=self.pk)
-                .annotate(
-                    _clarification_waiting=expression,
-                )
-                .values_list("_clarification_waiting", flat=True)
-                .get()
-            )
+        return (
+            type(self)
+            ._base_manager.filter(pk=self.pk)
+            .annotate(_clarification_waiting=expression)
+            .values_list("_clarification_waiting", flat=True)
+            .get()
+        )
 
 
 class DriveProposalAccess(Composable, extends="storage.Drive"):

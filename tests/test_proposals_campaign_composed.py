@@ -31,6 +31,7 @@ from rebac import (
 )
 
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.testing.queries import is_permission_audit_insert
 from angee.proposals.models import ClarificationWidenBlocked, PublishedQuestion
 from tests.composed_host import run_composed_tests
 from tests.test_proposals_clarifications import ClarificationCase
@@ -68,6 +69,45 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
 
     __test__ = False
     with_work = False
+
+    def test_project_phase_choices_read_without_permission_audit(self) -> None:
+        """An admitted project's phase choices include its unopened round boundary."""
+
+        with system_context(reason="tests.proposals.campaign.phase_choices.setup"):
+            boundary = self.round.clarifications_shared_until
+            self.Round._base_manager.filter(pk=self.round.pk).update(opens_after=boundary)
+            self.Milestone.objects.create(project=self.project, name="Build", sort_order=2048)
+        document = """query($id: String!) {
+          projects_by_pk(id: $id) { selectable_milestones { name } }
+        }"""
+        with CaptureQueriesContext(connection) as queries:
+            result = self.execute_named(document, {"id": str(self.project.sqid)}, self.manager, "console")
+        self.assertEqual(
+            [row["name"] for row in self.data(result)["projects_by_pk"]["selectable_milestones"]],
+            [boundary.name, "Build"],
+        )
+        self.assertEqual(sum(is_permission_audit_insert(query["sql"], connection) for query in queries), 0)
+        self.assertEqual(len(queries), 6)
+        self.assertLessEqual(sum(len(query["sql"].encode()) for query in queries), 55_000)
+        with system_context(reason="tests.proposals.campaign.phase_choices.more_rounds"):
+            for index in range(4):
+                self.Round.objects.create(
+                    project=self.project,
+                    facilitator=self.manager,
+                    name=f"Review {index}",
+                    last_call_at=self.round.last_call_at,
+                    submission_deadline=self.round.submission_deadline,
+                    clarifications_shared_until=boundary,
+                    opens_after=boundary,
+                )
+        with CaptureQueriesContext(connection) as expanded:
+            expanded_result = self.execute_named(
+                document, {"id": str(self.project.sqid)}, self.manager, "console",
+            )
+        self.assertEqual(expanded_result.data, result.data)
+        self.assertEqual(sum(is_permission_audit_insert(query["sql"], connection) for query in expanded), 0)
+        self.assertEqual(len(expanded), len(queries))
+        self.assertLessEqual(sum(len(query["sql"].encode()) for query in expanded), 55_000)
 
     def test_permission_checks_after_sync(self) -> None:
         """Every composed profile passes the database-aware permission checks."""
@@ -191,9 +231,9 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
             with CaptureQueriesContext(connection) as queries, self.assertRaises(ClarificationWidenBlocked) as error:
                 task.validate_visibility("inherited")
             self.assertEqual(error.exception.code, "HIDDEN_ASKER_IN_THREAD")
-            # The permission scopes and publication check now total three statements.
-            self.assertEqual(len(queries), 3, queries.captured_queries)  # re-measure after integration
-            self.assertTrue(all('INSERT INTO "rebac_permissionauditevent"' in queries[i]["sql"] for i in (0, 2)))
+            # The task lock is audited; its attached-message existence is structural.
+            self.assertEqual(len(queries), 2, queries.captured_queries)
+            self.assertEqual(sum(is_permission_audit_insert(query["sql"], connection) for query in queries), 1)
             self.assertIn("EXISTS", queries[1]["sql"].upper())
         before = self.Task._base_manager.filter(pk=task.pk).values().get()
         with actor_context(self.manager):

@@ -1,8 +1,11 @@
 // @rebac_package: decisions
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 7
+// @rebac_schema_revision: 9
 
 definition decisions/decision {
+    // A readable concerned record may display whether an open decision exists;
+    // its timeline may count those open decisions. Neither fact admits the
+    // decision or its protected fields.
     relation assignee: auth/user // rebac:field=assignees
     relation requester: auth/user // rebac:field=requester
     relation person: iam/kind // rebac:const=person

@@ -17,10 +17,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models, router, transaction
 from django.db.models.functions import MD5, Coalesce
 from django.utils import timezone
-from rebac import (
-    current_actor,
-    system_context,
-)
+from rebac import current_actor
 from rebac.relation_loading import relation_actor
 
 from angee.base.fields.implementation import ImplClassField
@@ -30,7 +27,7 @@ from angee.base.querysets import MergeableQuerySet
 from angee.base.serialization import strip_null_bytes
 from angee.iam.models.ownership import OwnerQuerySet
 from angee.iam.permissions import actor_user_id
-from angee.iam.querysets import ProtectedQuerySet
+from angee.iam.querysets import ProtectedQuerySet, ProtectedUnscopedQuerySet
 from angee.integrate.impl import LiveBridgeImpl
 from angee.integrate.models import IntegrationLifecycle, IntegrationQuerySet
 from angee.messaging.expressions import AttachedFileSkipReason
@@ -39,8 +36,6 @@ from angee.parties.managers import Signing
 from angee.provenance.contrib.angee.querysets import AngeeHistoryQuerySet
 
 if TYPE_CHECKING:
-    from django_stubs_ext import WithAnnotations
-
     from angee.messaging.models import (
         Channel,
         Message,
@@ -349,9 +344,6 @@ def _prepare_message_pointers(queryset: models.QuerySet[Any], rows: list[Any]) -
 class ThreadNotificationQuerySet[ThreadNotificationT: ThreadNotification](ProtectedQuerySet[ThreadNotificationT]):
     """Chainable read scopes for per-recipient delivery rows."""
 
-    DELIVERY_ERROR_STATUSES = ("bounce", "exception")
-    """Notification statuses that mean the author has a delivery error."""
-
     def prime_message_pointers(self, rows: Sequence[Any], actor: Any) -> None:
         """Load narrow message context, checking read once per distinct attached record.
 
@@ -370,23 +362,22 @@ class ThreadNotificationQuerySet[ThreadNotificationT: ThreadNotification](Protec
         rows = [row for row in rows if str(row.user_id) == str(recipient_id)]
         if not rows:
             return
-        with system_context(reason="messaging.notification.message_pointers"):
-            messages = {
-                message.pk: message
-                for message in apps.get_model("messaging", "Message")
-                ._base_manager.filter(pk__in={row.message_id for row in rows})
-                .select_related("subtype")
-            }
-            attachments = list(
-                apps.get_model("messaging", "ThreadAttachment")
-                ._base_manager.filter(
-                    models.Q(pk__in={row.attachment_id for row in rows if row.attachment_id is not None})
-                    | models.Q(thread_id__in={row.thread_id for row in rows}, role="chatter")
-                )
-                .select_related("thread").prefetch_related("target", "content_type")
+        messages = {
+            message.pk: message
+            for message in apps.get_model("messaging", "Message")
+            ._base_manager.filter(pk__in={row.message_id for row in rows})
+            .select_related("subtype")
+        }
+        attachments = list(
+            apps.get_model("messaging", "ThreadAttachment")
+            ._base_manager.filter(
+                models.Q(pk__in={row.attachment_id for row in rows if row.attachment_id is not None})
+                | models.Q(thread_id__in={row.thread_id for row in rows}, role="chatter")
             )
+            .select_related("thread").prefetch_related("target", "content_type")
+        )
         thread_model = apps.get_model("messaging", "Thread")
-        threads = thread_model.objects.system_context(reason="messaging.notification.redirect_groups")
+        threads = thread_model._base_manager
         redirect_groups: models.QuerySet[Thread] = threads.none()
         for survivor_id in {edge.thread.merged_into_id for edge in attachments if edge.thread.merged_into_id}:
             redirect_groups |= threads.redirect_group(thread_model(pk=survivor_id))
@@ -438,14 +429,18 @@ class ThreadNotificationQuerySet[ThreadNotificationT: ThreadNotification](Protec
     def for_attachment(self, attachment: Any) -> Self:
         """Return notifications bound to one record's chatter attachment edge."""
 
-        return self.filter(
-            thread_id__in=attachment.thread.member_threads().values("pk"),
-        )
+        return self.filter(self.attachment_filter(attachment))
+
+    @staticmethod
+    def attachment_filter(attachment: Any) -> models.Q:
+        """Scope notification facts to one admitted thread's physical members."""
+
+        return models.Q(thread_id__in=attachment.thread.member_threads().values("pk"))
 
     def delivery_errors(self) -> Self:
-        """Return notifications whose delivery bounced or raised an exception."""
+        """Return notifications retaining a delivery failure diagnosis."""
 
-        return self.filter(notification_status__in=self.DELIVERY_ERROR_STATUSES)
+        return self.exclude(failure_type="")
 
 
 def _resolve_user_id(*, user: Any = None, user_id: Any = None) -> Any | None:
@@ -465,6 +460,12 @@ class MessageQuerySet[MessageT: Message](
 ):
     """Chainable read scopes for chatter/ingest messages."""
 
+    @staticmethod
+    def thread_filter(thread: Any) -> models.Q:
+        """Select the physical messages belonging to one logical thread."""
+
+        return models.Q(thread_id__in=thread.member_threads().values("pk"))
+
     def record_scope(
         self,
         record: Any,
@@ -473,10 +474,10 @@ class MessageQuerySet[MessageT: Message](
         search: str = "",
         message_types: tuple[str, ...] = (),
         trashed: bool = False,
-    ) -> MessageQuerySet[WithAnnotations[MessageT, _MessageChronology]]:
+    ) -> models.QuerySet[Any]:
         """The parent-authorized message population, without presentation hydration."""
 
-        rows = self.using(self._db or router.db_for_read(self.model, instance=record))
+        rows = self.model._base_manager.using(self._db or router.db_for_read(self.model, instance=record))
         using = rows.db
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
         attachment = attachment_model.objects.db_manager(using, hints={"instance": record}).for_record(
@@ -484,11 +485,10 @@ class MessageQuerySet[MessageT: Message](
         )
         if attachment is None:
             return rows.none().annotate(_order_at=self.chronological_time())
-        # Chatter reads bypass per-row REBAC: the record-level gate already authorised
-        # the whole feed, so scope with sudo and compose the chainable read predicates.
+        # The admitted record implies its chatter. The thread membership narrows
+        # this structural read to that record's transcript.
         queryset = (
-            rows.sudo(reason="messaging.message.for_record")
-            .for_thread(attachment.thread)
+            rows.filter(self.thread_filter(attachment.thread))
             .filter(is_trashed=trashed)
             .annotate(_order_at=MessageQuerySet.chronological_time())
         )
@@ -504,7 +504,7 @@ class MessageQuerySet[MessageT: Message](
             queryset = queryset.filter(message_type__in=kinds)
         search = strip_null_bytes(search or "").strip()
         for term in (item for item in _WS_RE.split(search) if item):
-            queryset = queryset.searching(term)
+            queryset = queryset.filter(_message_search_query(term))
         return queryset.distinct()
 
 
@@ -520,7 +520,7 @@ class MessageQuerySet[MessageT: Message](
         around: Any | None = None,
         message_types: tuple[str, ...] = (),
         trashed: bool = False,
-    ) -> tuple[MessageQuerySet[WithAnnotations[MessageT, _MessageChronology]], int]:
+    ) -> tuple[models.QuerySet[Any], int]:
         """Select bounded chatter identities while leaving the rows composable.
 
         The same parent scope owns filtering, count and chronological cuts.
@@ -705,7 +705,7 @@ class MessageQuerySet[MessageT: Message](
     def for_thread(self, thread: Any) -> Self:
         """Return messages belonging to one thread."""
 
-        return self.filter(thread_id__in=thread.member_threads().values("pk"))
+        return self.filter(self.thread_filter(thread))
 
     def for_channel(self, channel: Any) -> Self:
         """Return the messages that belong to ``channel`` — the purge-scope predicate.
@@ -882,17 +882,18 @@ class MessageQuerySet[MessageT: Message](
         the canonical rows, under the same current scope and search predicates.
         """
 
-        queryset = self.scoped().annotate(_order_at=MessageQuerySet.chronological_time())
-        terms = self._feed_search(search).split()
+        rows = self if isinstance(self, ProtectedUnscopedQuerySet) else self.scoped()
+        queryset = rows.annotate(_order_at=MessageQuerySet.chronological_time())
+        terms = MessageQuerySet._feed_search(search).split()
         for term in terms:
-            queryset = queryset.searching(term)
+            queryset = queryset.filter(_message_search_query(term))
         if terms:
             queryset = queryset.distinct()
         if not all_copies:
             canonical = queryset.canonical()
             kind, _, value = anchor.partition(":")
             if kind == "message":
-                canonical |= queryset.untrashed().filter(sqid=value)
+                canonical |= queryset.filter(is_trashed=False, sqid=value)
             queryset = canonical
         return queryset.order_by("-_order_at", "-pk")
 
@@ -922,8 +923,8 @@ class MessageQuerySet[MessageT: Message](
         and history below the fixed lower cut are separate facts, even if empty.
         """
 
-        search = self._feed_search(search)
-        queryset = self.for_feed(search, all_copies=all_copies, anchor=anchor)
+        search = MessageQuerySet._feed_search(search)
+        queryset = MessageQuerySet.for_feed(self, search, all_copies=all_copies, anchor=anchor)
         around = None
         if anchor and before_cursor is None and after_cursor is None:
             kind, _, value = anchor.partition(":")
@@ -944,7 +945,8 @@ class MessageQuerySet[MessageT: Message](
         try:
             page = queryset.keyset_page(
                 order=_MESSAGE_ORDER,
-                cursor_scope=(scope, search, all_copies),
+                cursor_scope=((scope, search, all_copies, str(current_actor()))
+                              if isinstance(self, ProtectedUnscopedQuerySet) else (scope, search, all_copies)),
                 cursor_salt="angee.messaging.feed.v1",
                 before_cursor=before_cursor,
                 after_cursor=after_cursor,
@@ -969,7 +971,7 @@ class MessageQuerySet[MessageT: Message](
         if len(ids) > 200:
             raise ValueError("Message feed revalidation accepts at most 200 IDs.")
         unique = list(dict.fromkeys(ids))
-        queryset = self.for_feed(search, all_copies=all_copies, anchor=anchor)
+        queryset = MessageQuerySet.for_feed(self, search, all_copies=all_copies, anchor=anchor)
         survivors = {
             str(value) for value in queryset.filter(sqid__in=unique).values_list("sqid", flat=True)
         } if unique else set()

@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from functools import cached_property
-from typing import Any
+from typing import Any, cast
 
 from django.apps import apps
 from django.db import models
 from django.db.models.query import EmptyQuerySet
-from rebac import GenericTarget, generic_target, system_context
+from rebac import GenericTarget, generic_target
 
+from angee.decisions.querysets import DecisionQuerySet
 from angee.iam.graphql.relations import with_record_reference_access
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, actor_label
 from angee.workflows.states import RunStatus, StepRunStatus, WaitingKind
@@ -86,7 +87,7 @@ class RunKind(TimelineKind):
         if isinstance(record, rows.model):
             rows = (rows | runs.filter(parent_step__run=record).distinct()).exclude(pk=record.pk)
         rows = rows.scoped()
-        waiting = apps.get_model("workflows", "StepRun").system_queryset().filter(
+        waiting = apps.get_model("workflows", "StepRun")._base_manager.filter(
             status=StepRunStatus.WAITING,
         ).defer("input", "output", "state", "notes").order_by("rank", "map_index")
         return rows.select_related("version__workflow", "run_as").prefetch_related(
@@ -165,9 +166,13 @@ class TimelineSelection:
     def open_decision_count(self) -> int:
         """Preserve record-level attention independently of question readability."""
 
+        if not self.records:
+            return 0
         decisions = apps.get_model("decisions", "Decision")
-        with system_context(reason="workflows.timeline.selection_attention"):
-            return int(decisions.objects.open_for(*self.records).count())
+        rows = decisions._base_manager.using(self.records[0]._state.db)
+        return int(DecisionQuerySet.for_records(cast(Any, rows.all()), *self.records).filter(
+            verdict__isnull=True,
+        ).count())
 
     @cached_property
     def runs_by_record(self) -> dict[GenericTarget, tuple[int, ...]]:

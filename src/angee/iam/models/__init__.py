@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import Mapping
+from contextlib import nullcontext
 from typing import Any, ClassVar, Self, cast
 
 from django.conf import settings
@@ -35,6 +36,7 @@ from rebac import (
     to_subject_ref,
     user_subject_type,
 )
+from rebac.evaluator import current_evaluator, evaluator_scope
 from rebac.memberships import grant as grant_membership
 from rebac.memberships import revoke as revoke_membership
 from rebac.models import active_relationship_model
@@ -309,19 +311,20 @@ class User(AbstractBaseUser, RebacPermissionsMixin, OptimisticLockMixin, Protect
         return annotations
 
     def account_actions_for(self, actor: Any) -> list[str]:
-        """Return the account verbs ``actor`` may run on this row, in declaration order."""
+        """Return allowed verbs, sharing one native policy snapshot for a direct call."""
 
         if actor is None:
             return []
-        annotations = type(self).account_action_annotations(actor)
-        allowed = (
-            type(self)
-            .objects.system_context(reason="iam.account.actions")
-            .filter(pk=self.pk)
-            .annotate(**{f"_iam_{name}": expression for name, expression in annotations.items()})
-            .values(*(f"_iam_{name}" for name in annotations))
-            .first()
-        ) or {}
+        with evaluator_scope() if current_evaluator() is None else nullcontext():
+            annotations = type(self).account_action_annotations(actor)
+            allowed = (
+                type(self)
+                ._base_manager
+                .filter(pk=self.pk)
+                .annotate(**{f"_iam_{name}": expression for name, expression in annotations.items()})
+                .values(*(f"_iam_{name}" for name in annotations))
+                .first()
+            ) or {}
         return [action for action in UserAccountAction.values if allowed.get(f"_iam_{action}")]
 
     def protected_against(self, actor: Any) -> bool:

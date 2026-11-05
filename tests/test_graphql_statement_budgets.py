@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -507,14 +506,14 @@ def test_record_thread_document_file_part_growth(
         for message in transcript["messages"] for part in message["parts"]
     )
     five.assert_flat_from(one)
-    # Messaging's audited system reads remain: follower person and effective rows, suggested-recipient
-    # suppression, the notification error count and record rows, and the record-gated attachment count.
+    # The admitted record owns chatter, follower and notification display facts;
+    # those reads have no separate bypass audit.
     for read in (one, five):
-        read.assert_statements(41)
+        assert read.statement_count == 40
         read.assert_bytes(
             total=150_000, largest=30_000, cause="the read requirement in the messaging held_permissions check",
         )
-        read.assert_audit_inserts(6)
+        read.assert_no_audit_writes()
 
 
 @pytest.fixture
@@ -541,6 +540,7 @@ def timeline_rail_reads(activity_catalog: None, composed_permissions: None, capt
     return one, five
 
 
+@pytest.mark.django_db(transaction=True)
 def test_timeline_rail_document_budget(timeline_rail_reads) -> None:
     for read in timeline_rail_reads:
         read.assert_bytes(
@@ -549,9 +549,10 @@ def test_timeline_rail_document_budget(timeline_rail_reads) -> None:
         )
         # The full-profile host adds about four statements to the local rail.
         read.assert_statements(60)
-        read.assert_audit_inserts(2)
+        read.assert_no_audit_writes()
 
 
+@pytest.mark.django_db(transaction=True)
 def test_timeline_rail_document_statement_count(timeline_rail_reads) -> None:
     one, five = timeline_rail_reads
     five.assert_flat_from(one)
@@ -595,7 +596,7 @@ def test_timeline_rail_sender_statement_budget(comment_record, capture_graphql_d
     reads[1].assert_flat_from(reads[0])
 
 
-@pytest.mark.xfail(strict=True, reason="Provenance ChangeKind: record history still audits")
+@pytest.mark.django_db(transaction=True)
 def test_timeline_rail_document_audit(timeline_rail_reads) -> None:
     for read in timeline_rail_reads:
         read.assert_no_audit_writes()
@@ -971,7 +972,7 @@ def test_related_type_hook_keeps_write_scope(composed_tables: None, capture_grap
 
 
 def test_four_related_permission_names_reuse_proven_read(composed_tables: None, capture_graphql_document) -> None:
-    """A related Project answers four named actions without a second read proof."""
+    """A related Project answers four named actions without another read proof."""
 
     del composed_tables
     owner = create_user("document-budget-four-project")
@@ -1002,7 +1003,7 @@ def test_four_related_permission_names_reuse_proven_read(composed_tables: None, 
         count: capture_graphql_document(schema, document, {"limit": count}, actor=owner) for count in (1, 5, 10, 20)
     }
     for count, read in reads.items():
-        read.assert_bytes(total=38_000, largest=21_000, cause="one bounded related permission closure")
+        read.assert_bytes(total=50_000, largest=28_000, cause="native permission expressions after scope_cte removal")
         read.assert_statements(4)
         read.assert_no_audit_writes()
         assert len(read.data["four_permission_tasks"]) == count
@@ -1010,7 +1011,6 @@ def test_four_related_permission_names_reuse_proven_read(composed_tables: None, 
             row["project"]["permissions"] == ["delete", "read", "share", "write"]
             for row in read.data["four_permission_tasks"]
         )
-        assert sum(len(re.findall(r'"rebac_scope_[0-9a-f]+_closure" AS \(', sql)) for sql in read.statements) == 1
     for count in (5, 10, 20):
         reads[count].assert_flat_from(reads[1])
     reader_rows = capture_graphql_document(schema, document, {"limit": 5}, actor=reader)
@@ -1019,7 +1019,7 @@ def test_four_related_permission_names_reuse_proven_read(composed_tables: None, 
 
 
 def test_recursive_permission_policy_keeps_inline_proofs(composed_tables: None) -> None:
-    """A recursive page policy cannot use the multi-action closure."""
+    """A recursive page policy keeps its native permission expression."""
 
     del composed_tables
     actor = create_user("document-budget-recursive-page")
@@ -1029,15 +1029,8 @@ def test_recursive_permission_policy_keeps_inline_proofs(composed_tables: None) 
         .filter(pk__in=(1,))
         .annotate(can_write=permission_expression(Page, "write_granted", actor=actor))
     )
-    scope = (
-        Page.objects.with_actor(actor)
-        .with_action("read_granted")
-        .filter(pk__in=(1,))
-        .scope_cte(actions=("read_granted", "write_granted"))
-    )
-    query = scope.attach(rows)
-    assert "_closure" not in str(query.query)
-    list(query.values_list("pk", flat=True))
+    assert "_closure" not in str(rows.query)
+    list(rows.values_list("pk", flat=True))
 
 
 def test_unoptimized_permission_fallback_uses_one_unbypassed_proof(composed_tables: None) -> None:
@@ -1050,8 +1043,7 @@ def test_unoptimized_permission_fallback_uses_one_unbypassed_proof(composed_tabl
     with actor_context(actor), CaptureQueriesContext(connection) as queries:
         held = held_permissions(project, ("read", "write", "share", "delete"))
     assert held == {"read", "write", "share", "delete"}
-    # The shared read scope now supplies the proof for all four projected permissions.
-    assert len(queries) == 3
-    assert sum(len(query["sql"].encode("utf-8")) for query in queries) <= 18_000
+    # Native expressions reuse the caller's actor without a bypass or extra statement.
+    assert len(queries) == 2
+    assert sum(len(query["sql"].encode("utf-8")) for query in queries) <= 30_000
     assert not any(is_permission_audit_insert(query["sql"], connection) for query in queries)
-    assert sum(len(re.findall(r'"rebac_scope_[0-9a-f]+_closure" AS \(', query["sql"])) for query in queries) == 1

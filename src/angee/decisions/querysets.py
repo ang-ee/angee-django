@@ -81,9 +81,10 @@ class DecisionQuerySet[T: Decision](ProtectedAppendOnlyQuerySet[T], ProtectedQue
         ).values("pk")[:1]
         # Attention belongs to the readable record, regardless of who can answer
         # or read the question. Only the boolean crosses that permission boundary.
-        rows = self.model.system_queryset().using(queryset.db)
+        rows = self.model._base_manager.using(queryset.db)
         return Exists(
-            rows.open().filter(
+            rows.filter(
+                verdict__isnull=True,
                 records__content_type_id__in=content_type_id,
                 records__object_id=OuterRef("pk"),
             )

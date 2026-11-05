@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
@@ -56,6 +56,7 @@ if TYPE_CHECKING:
 
 from angee.messaging.managers.threads import _record_attachment, _record_thread_title
 from angee.messaging.querysets import _MESSAGE_ORDER, _UNRESOLVED, _resolve_user_id
+from angee.parties.querysets import PartyQuerySet
 
 _ThreadFollowerManagerBase = ProtectedManager.from_queryset(ThreadFollowerQuerySet)
 
@@ -95,10 +96,8 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
                     pk=resolved_user_id,
                 )
                 return apps.get_model("parties", "Party").objects.db_manager(self.db).for_user(account).pk
-        parties = apps.get_model("parties", "Party").objects.system_context(
-            reason="messaging.follower.person"
-        ).using(self.db)
-        return parties.person_id_for_user(resolved_user_id)
+        parties = apps.get_model("parties", "Party")._base_manager.using(self.db)
+        return PartyQuerySet.person_id_for_user(cast(Any, parties.all()), resolved_user_id)
 
     def _require_follow_access(self, record: Any, party_id: Any) -> None:
         """A person manages their own follow; a record writer may manage others."""
@@ -481,7 +480,9 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
             return apps.get_model("messaging", "Message")._base_manager.none()
         message_model = apps.get_model("messaging", "Message")
         follower = (
-            self.sudo(reason="messaging.follower.effective").effective_for_thread(thread).filter(party_id=party_id)
+            self.model._base_manager.using(self.db).filter(
+                cast(Any, self.get_queryset())._effective_thread_filter(thread), party_id=party_id,
+            )
             .select_related("last_read_message")
             .first()
         )
@@ -554,9 +555,8 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         if party_id is None:
             return False
         follower = (
-            self.sudo(reason="messaging.follower.effective")
-            .effective_for_thread(message.thread)
-            .filter(party_id=party_id)
+            self.model._base_manager.using(self.db)
+            .filter(cast(Any, self.get_queryset())._effective_thread_filter(message.thread), party_id=party_id)
             .select_related("last_read_message")
             .first()
         )
@@ -643,12 +643,11 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         resolved_user_id = _resolve_user_id(user=user, user_id=user_id)
         if attachment is None or resolved_user_id is None:
             return self.none()
-        # Notification bookkeeping bypasses per-row REBAC: the record-level gate has
-        # already authorised the whole chatter read, so scope the reads with sudo
-        # and let the chainable predicates own the filters.
+        # The admitted record owns the chatter view; restrict delivery facts to
+        # that attachment and the requesting account.
         return (
-            self.sudo(reason="messaging.notification.for_record")
-            .for_attachment(attachment)
+            self.model._base_manager.using(self.db)
+            .filter(ThreadNotificationQuerySet.attachment_filter(attachment))
             .filter(
                 user_id=resolved_user_id,
             )
@@ -678,10 +677,10 @@ class ThreadNotificationManager[ThreadNotificationT: ThreadNotification](
         if attachment is None or resolved_user_id is None:
             return 0
         return int(
-            self.sudo(reason="messaging.notification.error_count")
-            .for_attachment(attachment)
+            self.model._base_manager.using(self.db)
+            .filter(ThreadNotificationQuerySet.attachment_filter(attachment))
             .filter(created_by_id=resolved_user_id)
-            .delivery_errors()
+            .exclude(failure_type="")
             .count()
         )
 

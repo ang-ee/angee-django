@@ -9,6 +9,7 @@ from django.test.utils import CaptureQueriesContext
 from pydantic import BaseModel
 
 from angee.iam.testing.graphql import measure_graphql_document
+from angee.iam.testing.queries import is_permission_audit_insert
 from angee.workflows import schema as workflow_schema
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
@@ -144,8 +145,8 @@ def test_empty_step_page_does_not_audit_effect_marker(schema, execution):
     for size in (1, 5, 10, 20):
         read = measure_graphql_document(schema, document, {"limit": size}, actor=outsider)
         assert read.data["steprun"] == []
-        assert read.statement_count == 8
-        assert read.audit_inserts == 1
+        assert read.statement_count == 7
+        read.assert_no_audit_writes()
 
 
 def test_nested_step_run_retry_is_batched(schema, execution):
@@ -253,11 +254,37 @@ def test_run_reader_gets_graph_without_workflow_or_version_read(schema, executio
     run = start_run(workflow, actor=actor)
     run.with_actor(actor).grant_record_access("reader", reader)
     run_until(run)
-    visible = read_graph(schema, run, reader)
+    with CaptureQueriesContext(connection) as queries:
+        visible = read_graph(schema, run, reader)
+    assert sum(is_permission_audit_insert(query["sql"], connection) for query in queries) == 0
+    # One admitted run batches its pinned execution policy without exposing version.
+    assert len(queries) == 21
+    assert sum(len(query["sql"].encode("utf-8")) for query in queries) <= 180_000
     assert visible["version"] is None
     node = visible["graph"]["nodes"][0]
     assert node["label"] == "Retained failure"
     assert node["step_run"]["failure_reason"] == "Rejected by the fixture."
+    with CaptureQueriesContext(connection) as outcome_queries:
+        outcome = result_data(execute_schema(
+            schema,
+            "query($id:String!) { workflowrun_by_pk(id:$id) { outcome_label } }",
+            {"id": run.sqid}, user=reader,
+        ))["workflowrun_by_pk"]["outcome_label"]
+    assert outcome
+    assert sum(is_permission_audit_insert(query["sql"], connection) for query in outcome_queries) == 0
+    # The selected run's pinned outcome vocabulary is one page-level policy read.
+    assert len(outcome_queries) == 4
+    assert sum(len(query["sql"].encode("utf-8")) for query in outcome_queries) <= 50_000
+    with CaptureQueriesContext(connection) as input_queries:
+        result_data(execute_schema(
+            schema,
+            "query($id:String!) { workflowrun_by_pk(id:$id) { input } }",
+            {"id": run.sqid}, user=reader,
+        ))
+    assert sum(is_permission_audit_insert(query["sql"], connection) for query in input_queries) == 0
+    # Input redaction shares the admitted run's pinned policy page read.
+    assert len(input_queries) == 4
+    assert sum(len(query["sql"].encode("utf-8")) for query in input_queries) <= 50_000
     assert StepRun.system_queryset().get(run=run).failure_reason == run.get_failure_reason()
     assert read_graph(schema, run, outsider) is None
     assert result_data(execute_schema(schema, "{ workflow { id } workflowversion { id } }", user=reader)) == {

@@ -401,7 +401,7 @@ def _prime_subject_labels(tasks: list[Any]) -> None:
 def _task_annotations(row: Any, info: strawberry.Info, annotations: dict[str, Any]) -> dict[str, Any]:
     """The row's verb annotations: optimized on reads, read once for a mutation payload."""
 
-    return row_annotations(row, {name: make(info) for name, make in annotations.items()}, Task.system_queryset())
+    return row_annotations(row, {name: make(info) for name, make in annotations.items()}, Task._base_manager.all())
 
 
 @strawberry.type

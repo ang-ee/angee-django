@@ -3,16 +3,21 @@
 import pytest
 from django.apps import apps
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from rebac import PermissionDenied, actor_context, system_context
 from rebac.backends import backend
 from rebac.evaluator import evaluator_scope
 
 from angee.iam.testing.permissions import installed_field_owners
+from angee.iam.testing.queries import is_permission_audit_insert
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Project
 from angee.spaces.testing.models import Group, Membership
+from angee.work import schema as work_schema
 from angee.work.models import ProjectWork
+from tests.conftest import addon_schema, execute_schema
 from tests.test_productivity_write_behavior import Queue, Stage
 from tests.test_project_access import project_access_schema as project_access_schema
 
@@ -43,6 +48,21 @@ def team_case(team_storage, project_access_schema):
     with actor_context(author):
         project = Project.objects.create(title="Team project", team=team)
     return project, team, replacement, author, users
+
+
+def test_project_manager_roster_read_has_no_audit_insert(team_case):
+    project, _, _, author, _ = team_case
+    schema = addon_schema(work_schema.schemas, "console")
+    with CaptureQueriesContext(connection) as captured:
+        result = execute_schema(schema, """query($project: ID!) {
+          project_manager_roster(project: $project) { people { label } }
+        }""", {"project": project.sqid}, user=author)
+    assert result.errors is None
+    assert len(result.data["project_manager_roster"]["people"]) == 1
+    assert sum(is_permission_audit_insert(query["sql"], connection) for query in captured) == 0
+    # The admitted project's team supplies one bounded roster read and no bypass.
+    assert len(captured) == 19
+    assert sum(len(query["sql"].encode("utf-8")) for query in captured) <= 50_000
 
 
 def test_project_roster_access_matrix_does_not_carry_share_or_delete(team_case):

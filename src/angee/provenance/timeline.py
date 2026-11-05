@@ -10,6 +10,7 @@ from django.db import models
 from django.db.models.functions import Cast
 from rebac import SubjectRef, resolve_subjects
 
+from angee.provenance.changeset_querysets import ChangesetQuerySet
 from angee.provenance.contrib.angee.history import record_history
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, timeline_subject
 
@@ -26,15 +27,8 @@ class ChangeKind(TimelineKind):
 
     def queryset(self, record: Any, actor: Any) -> models.QuerySet:
         model = apps.get_model("provenance", "Changeset")
-        return (
-            model.objects.db_manager(record._state.db, hints={"instance": record})
-            .sudo(reason="provenance.record_history")
-            .touching(record)
-            .filter(
-                state=model.State.CLOSED,
-            )
-            .scoped()
-        )
+        rows = model._base_manager.db_manager(record._state.db, hints={"instance": record}).all()
+        return ChangesetQuerySet.touching_document(rows, record).filter(state=model.State.CLOSED)
 
     def fold(self, record: Any) -> tuple[Any, Any]:
         integer_key = models.Q(origin_object_id__regex=r"^[0-9]{1,18}$") | models.Q(

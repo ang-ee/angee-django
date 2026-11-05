@@ -41,6 +41,7 @@ from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
 from angee.iam.graphql.actions import authorized_permission_target
 from angee.iam.identity import public_subject_ref
 from angee.iam.permissions import require_rebac_queryset
+from angee.provenance.changeset_querysets import ChangesetQuerySet
 from angee.provenance.context import changeset_model
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory, record_history
 from angee.provenance.evidence import FactAuthority
@@ -349,11 +350,8 @@ class RecordHistory:
     def changesets(self) -> models.QuerySet[Any]:
         """The record's changesets, newest first; ordering is the changeset owner's."""
 
-        return (
-            Changeset.objects.db_manager(self.record._state.db, hints={"instance": self.record})
-            .sudo(reason="provenance.record_history")
-            .touching(self.record)
-        )
+        rows = Changeset._base_manager.db_manager(self.record._state.db, hints={"instance": self.record}).all()
+        return ChangesetQuerySet.touching_document(rows, self.record)
 
     def entries(self, changesets: Iterable[Any]) -> list[HistoryEntryType]:
         """Project an already bounded window, also used by the combined Comments feed."""

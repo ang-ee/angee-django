@@ -1,9 +1,13 @@
 // Authorization schema for the agents addon.
 // @rebac_package: agents
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 18
+// @rebac_schema_revision: 20
 
 definition agents/agent {
+    // An admitted agent may expose whether its own sessions have active turns;
+    // the correlated turn read returns only that boolean.
+    // An actor's own agents and their model readiness may be read for chat selection;
+    // selection returns only the actor's running, callable agent.
     relation owner: auth/user // rebac:field=owner
     relation actor: auth/user // rebac:field=user
     relation reader: auth/user | auth/group#member
@@ -104,6 +108,8 @@ definition agents/mcp_server {
 }
 
 definition agents/session {
+    // The calling user may structurally select their own current session for
+    // an admitted in-process agent; both agent and account ids bound the read.
     relation user: auth/user // rebac:field=user
     relation agent: agents/agent // rebac:field=agent
     relation admin: angee/role // rebac:const=admin

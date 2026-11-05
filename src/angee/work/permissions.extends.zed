@@ -1,8 +1,10 @@
 // Additive task and project authorization contributed by the work addon.
 // @rebac_package: work
-// @rebac_schema_revision: 9
+// @rebac_schema_revision: 10
 
 definition projects/project {
+    // An admitted project displays the confirmed moderator roster of its
+    // current team; those membership and person rows are bounded by team ID.
     relation team: spaces/group // rebac:field=team
 
     permission read = team->post

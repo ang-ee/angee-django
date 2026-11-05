@@ -26,6 +26,7 @@ from rebac import (
 
 from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.base.models.locks import StaleRevisionError
+from angee.iam.testing.queries import is_permission_audit_insert
 from angee.messaging.testing.models import Person
 from angee.projects.testing.models import Project, Task
 from angee.provenance.engine.exceptions import CreationKeyConflict
@@ -374,7 +375,9 @@ def test_question_surrender_replay_and_both_immutable_donors(proposal_schema):
         with pytest.raises(ValidationError, match="surrendered"):
             round.with_actor(admin).pass_clarification(question, recipient)
         passed = round.pass_clarification(question, recipient, audience="asker")
-        assert passed.get_clarification_waiting() == [{"id": recipient.pk, "name": recipient.username}]
+        with CaptureQueriesContext(connection) as waiting_queries:
+            assert passed.get_clarification_waiting() == [{"id": recipient.pk, "name": recipient.username}]
+        assert sum(is_permission_audit_insert(query["sql"], connection) for query in waiting_queries) == 0
     assert passed.created_by_id is None
     assert passed.updated_by_id is None
     with system_context(reason="tests.proposals.immutable_donors"):

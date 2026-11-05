@@ -95,7 +95,7 @@ class ExternalAccountQuerySet[ExternalAccountT: ExternalAccount](
 class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[CredentialT]):
     """REBAC-scoped reads for credential health and connected accounts."""
 
-    def connection_health(self) -> Self:
+    def connection_health(self) -> models.QuerySet[CredentialT]:
         """Load current health and refresh evidence for an integration-owned projection.
 
         Native prefetch hints batch non-secret facts. Only an expired OAuth row
@@ -103,7 +103,7 @@ class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[Credentia
         """
 
         return (
-            self.sudo(reason="integrate.connection.health")
+            self.model._base_manager.using(self.db)
             .select_related("oauth_client")
             .only(
                 "status",
