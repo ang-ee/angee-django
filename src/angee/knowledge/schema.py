@@ -45,16 +45,15 @@ from angee.iam.graphql.relations import actor_scoped_to_one
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.identity import user_display_label, user_label_annotation, user_public_id
 from angee.iam.permissions import instance_actor
-from angee.knowledge.models import (
+from angee.knowledge.exceptions import (
     AmbiguousMatchError,
-    PageQuerySet,
-    RecordBindingManager,
     SectionNotFoundError,
-    SectionOp,
     StaleBodyError,
     StructuredEditError,
     UnsupportedPageKindError,
 )
+from angee.knowledge.models.bindings import RecordBindingManager
+from angee.knowledge.models.pages import PageQuerySet, SectionOp
 from angee.tags.schema import TaggedNode, tags_input_extensions
 
 if TYPE_CHECKING:

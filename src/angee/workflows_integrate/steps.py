@@ -288,7 +288,7 @@ def bridge_io(ctx: StepContext, bridge: Bridge) -> Iterator[BridgeImpl | Wait]:
         SoftTimeLimitExceeded,
     ):
         raise
-    except Exception as error:  # noqa: BLE001 -- adapters quarantine semantic errors in the page owner.
+    except Exception as error:  # adapters quarantine semantic errors in the page owner.
         raise Retryable("Stream transport failed.") from error
 
 

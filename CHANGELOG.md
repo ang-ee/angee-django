@@ -8,6 +8,23 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — extraction correction cleanup
+
+- Remove the unused decision-backed extraction correction writer and its
+  `Extraction.correction_decision` foreign key. Projects must drop that column
+  and its foreign-key constraint in their own native migration history.
+  Previously retained correction provenance remains in the extraction outcome
+  JSON for read and inference preservation.
+
+## Unreleased — notification delivery cleanup
+
+- Remove unused notification delivery transitions and their pending/error
+  indexes. Projects must, in their own native migration history, reset obsolete
+  statuses to `ready`, restrict the field's choices to `ready`, and drop
+  `ix_thread_notification_pending` and `ix_thread_notification_failed`. The
+  `notification_status` and failure fields remain until the messaging schema
+  and querysets can be changed together.
+
 ## Unreleased — core owner cleanup
 
 - Removed unused party association, stage category, IAM lookup, and provenance

@@ -22,7 +22,7 @@ from angee.agents.models import AgentLifecycle, RuntimeStatus, SessionStatus, Tu
 from angee.agents.runners import SessionUpdateSink, TurnOutcome
 from angee.agents.tasks import run_session
 from angee.agents.testing.drivers import FakeRunner
-from angee.agents.testing.drivers import runner as runner  # noqa: F401 - shared provider fixture
+from angee.agents.testing.drivers import runner as runner
 from angee.agents.testing.drivers import update_chunk as _chunk
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn
 from angee.base.exceptions import TransitionNotAllowed

@@ -39,7 +39,7 @@ from angee.agents.protocol import ACP_PATH, TURN_FAILED_STOP_REASON, TURN_FAILUR
 from angee.agents.runners import TurnOutcome
 from angee.agents.tasks import run_session
 from angee.agents.testing.drivers import FakeRunner
-from angee.agents.testing.drivers import runner as runner  # noqa: F401 - shared provider fixture
+from angee.agents.testing.drivers import runner as runner
 from angee.agents.testing.drivers import update_chunk as _chunk
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceModel
 from angee.agents_runtime_pydantic import runner as pydantic_runner

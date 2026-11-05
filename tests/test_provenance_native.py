@@ -78,7 +78,7 @@ class RetainedRow(models.Model):
             models_path.read_text()
             .replace(
                 "from angee.provenance.history import CaptureHistoryMixin, ModelHistory",
-                "from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory",
+                "from angee.provenance.contrib.angee.history import HistoryMixin as CaptureHistoryMixin, ModelHistory",
             )
             .replace("use_base_model_db=False", "use_base_model_db=True")
         )

@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import pytest
 
-from angee.knowledge.models import (
+from angee.knowledge.exceptions import (
     AmbiguousMatchError,
-    MarkdownPage,
-    OutlineEntry,
     SectionNotFoundError,
     StructuredEditError,
 )
+from angee.knowledge.models import MarkdownPage
+from angee.knowledge.models.pages import OutlineEntry
 from tests.conftest import MarkdownPage as ConcreteMarkdownPage
 
 # Ported verbatim from the proven spike (scratchpad/md_spike.py): a nested

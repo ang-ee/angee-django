@@ -67,7 +67,7 @@ def test_rows_answer_open_access_questions_as_the_named_decider(composed_tables:
         denied = need.objects.get(body="Me too.")
         pending = need.objects.get(body="Still waiting.")
         assert approved.access_verdict == [NeedAccessAction.INTAKE_APPROVE]
-        assert approved.access_answered_by_id == decider.pk
+        assert approved.access_decision.answered_by_id == decider.pk
         assert approved.requester_access_granted
         assert approved.admitted_user.username == "request-requester"
         assert denied.access_verdict == [NeedAccessAction.INTAKE_DENY]

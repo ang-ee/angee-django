@@ -15,9 +15,9 @@ from angee.messaging.timeline import CommentKind
 from angee.projects.testing.models import Task
 from angee.timeline.reading import Timeline
 from tests.conftest import create_user
-from tests.messaging_campaign import comment_record as comment_record  # noqa: F401 -- fixture
+from tests.messaging_campaign import comment_record as comment_record
 from tests.messaging_campaign import grant
-from tests.test_messaging_source_threads import sourced as sourced  # noqa: F401 -- fixture
+from tests.test_messaging_source_threads import sourced as sourced
 from tests.test_timeline import KINDS, read_timeline, timeline_entries
 
 pytestmark = pytest.mark.django_db(transaction=True)

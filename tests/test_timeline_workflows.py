@@ -40,7 +40,7 @@ from angee.workflows.timeline import RunKind
 from tests.conftest import create_user, vault_for
 from tests.mtidemo.models import MtiChild, MtiParent
 from tests.test_timeline import read_timeline, timeline_entries
-from tests.test_workflows_review import review as review  # noqa: F401 -- shared real review driver
+from tests.test_workflows_review import review as review
 from tests.test_workflows_review import start_review
 from tests.workflow_steps import document
 

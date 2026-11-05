@@ -18,11 +18,10 @@ from django.apps import apps
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from PIL import Image
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai.settings import ThinkingLevel
 from rebac import to_subject_ref
 
-from angee.agents.backends import InferenceBackend
 from angee.base.validators import validate_value
 from angee.extraction.contracts import (
     DocumentPart,
@@ -44,12 +43,6 @@ class ExtractionRequestConfig(BaseModel):
     max_tokens: int = Field(default=8192, gt=0, le=32768)
     temperature: float = Field(default=0, ge=0, le=2)
     thinking: ThinkingLevel | None = None
-
-    @field_validator("timeout")
-    @classmethod
-    def valid_timeout(cls, value: float) -> float:
-        InferenceBackend.validate_timeout(value)
-        return value
 
 
 class ExtractionConfig(BaseModel):
@@ -226,7 +219,7 @@ def prepare_pages(
                 parser = _Text()
                 parser.feed(text)
                 text = "\n".join(parser.chunks)
-            parts.append(_text_part(position, 0, text, "native_text"))
+            parts.append(text_part(position, 0, text, "native_text"))
             pages.append(PageCarrier(source_position=position, page_position=0))
         elif mime == "application/pdf":
             with pdfium.PdfDocument(content) as document:
@@ -237,7 +230,7 @@ def prepare_pages(
                     with closing(document[number]) as page, closing(page.get_textpage()) as textpage:
                         text = textpage.get_text_range().strip()
                         if text:
-                            parts.append(_text_part(position, number, text, "pdf_text"))
+                            parts.append(text_part(position, number, text, "pdf_text"))
                             pages.append(PageCarrier(source_position=position, page_position=number))
                         else:
                             dimensions = page.get_size()
@@ -284,7 +277,7 @@ def _raster(
     )
 
 
-def _text_part(
+def text_part(
     source: int,
     page: int,
     text: str,

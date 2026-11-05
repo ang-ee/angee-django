@@ -16,6 +16,7 @@ from angee.base.models.audit import AuditMixin
 from angee.base.models.persistence import require_projection
 from angee.base.refs import RecordRef
 from angee.base.serialization import canonical_json
+from angee.extraction.acquisition import PartCarrier
 from angee.extraction.contracts import (
     CorrectionRef,
     DocumentPart,
@@ -33,7 +34,6 @@ from angee.extraction.inference import RETAINED_AUTHORITY_COMPLETION_REVIEW
 from angee.extraction.managers import EvidenceManager, ExtractionManager, ExtractionPartManager
 from angee.extraction.pointers import (
     JSON_POINTER_MISSING,
-    fact_pointers,
     json_pointer_value,
     json_pointer_value_or_missing,
     materialize_missing_json_pointer_path,
@@ -100,14 +100,6 @@ class Extraction(RetainedEvidence, AuditMixin, ProtectedDataModel, concrete=True
         related_name="recognition_extraction_evidence",
     )
     profile_config = models.JSONField(default=dict, editable=False)
-    correction_decision = models.ForeignKey(
-        "decisions.Decision",
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
-        related_name="extraction_corrections",
-        editable=False,
-    )
     result = models.JSONField(editable=False)
     document_map = models.JSONField(default=list, editable=False)
     retired_identities = models.JSONField(default=list, editable=False)
@@ -330,32 +322,6 @@ class Extraction(RetainedEvidence, AuditMixin, ProtectedDataModel, concrete=True
         if not isinstance(value, Mapping):
             raise ValueError("The document selector does not point to an object.")
         return value, reference
-
-    def reviewed_facts(
-        self,
-        value: Mapping[str, Any],
-        *,
-        identity_mapping: Mapping[str, str],
-        retired_identities: Mapping[str, str],
-        confirmed_paths: tuple[str, ...],
-    ) -> tuple[dict[str, Any], list[str]]:
-        """Carry unchanged source claims and attribute changed or confirmed scalar facts."""
-        unchanged = {}
-        for pointer in fact_pointers(self.result):
-            destination = self._authority_destination(pointer, identity_mapping, retired_identities)
-            if destination is not None:
-                after = json_pointer_value_or_missing(value, destination)
-                if after is not JSON_POINTER_MISSING and canonical_json(self.fact(pointer)) == canonical_json(after):
-                    unchanged[destination] = pointer
-        paths = set(fact_pointers(value))
-        if not set(confirmed_paths) <= paths:
-            raise ValidationError("Confirmed paths must name retained scalar facts.")
-        claims = {
-            destination: deepcopy(self.claims[pointer])
-            for destination, pointer in unchanged.items()
-            if pointer in self.claims and destination not in confirmed_paths
-        }
-        return claims, sorted(paths - unchanged.keys() | set(confirmed_paths))
 
     def selected_line(self, document_identity: str, line_identity: str) -> tuple[Mapping[str, Any], LineRef]:
         """Resolve a line within its owning document without positional fallback."""
@@ -670,8 +636,6 @@ class ExtractionPart(RetainedEvidence, ProtectedDataModel, concrete=True):
 
     def _document_part_from(self, source: Any, file: Any) -> DocumentPart:
         """Validate one retained carrier with its already selected structural rows."""
-
-        from angee.extraction.acquisition import PartCarrier
 
         carrier = PartCarrier(
             source_position=source.position,

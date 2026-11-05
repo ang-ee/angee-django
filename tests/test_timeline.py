@@ -24,7 +24,7 @@ from angee.timeline import schema as timeline_schema
 from angee.timeline.kinds import timeline_kinds
 from angee.timeline.reading import Timeline
 from tests.conftest import addon_schema, create_platform_admin, execute_schema, result_data, vault_for
-from tests.messaging_campaign import comment_record as comment_record  # noqa: F401 - shared record fixture
+from tests.messaging_campaign import comment_record as comment_record
 
 KINDS = [
     "angee.provenance.timeline.timeline_kinds",

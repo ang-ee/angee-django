@@ -634,7 +634,7 @@ def _document(
         if isinstance(argument.type, GraphQLNonNull) and argument.default_value is not Undefined:
             try:
                 default = ast_from_value(argument.default_value, argument.type)
-            except Exception:  # noqa: BLE001 - scalar literal conversion must not disable other tools.
+            except Exception:
                 # An omitted nullable variable lets the field apply its native
                 # default, including custom scalar values with no literal form.
                 variable_type = argument.type.of_type

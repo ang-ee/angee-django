@@ -13,15 +13,15 @@ from rebac import system_context
 
 from angee.messaging.testing.models import Message, Thread, ThreadAttachment
 from angee.projects.testing.models import Task
-from angee.provenance.history import HistoryMixin, ModelHistory
+from angee.provenance.history import CaptureHistoryMixin, ModelHistory
 from tests.tables import model_tables
 from tests.test_messaging import ThreadedTicket, _parsed
-from tests.test_messaging import channel as channel  # noqa: F401  (fixture)
+from tests.test_messaging import channel as channel
 
 pytestmark = [pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("composed_tables")]
 
 
-class RvHistoryProbe(HistoryMixin):
+class RvHistoryProbe(CaptureHistoryMixin):
     value = models.CharField(max_length=80)
     note = models.CharField(max_length=80, default="n1")
     counter = models.IntegerField(default=0)
@@ -125,7 +125,7 @@ def test_probe_task_snapshot_laundered_by_deferred_load(monkeypatch: pytest.Monk
         loaded.assignee_id = owner.pk
         try:
             loaded.save()
-        except Exception as error:  # noqa: BLE001 - the validation itself may refuse; we count the call
+        except Exception as error:
             print(f"RV control save raised {type(error).__name__}")
         control = len(calls)
         calls.clear()
@@ -136,7 +136,7 @@ def test_probe_task_snapshot_laundered_by_deferred_load(monkeypatch: pytest.Monk
         raised = None
         try:
             loaded.save()
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:
             raised = type(error).__name__
         persisted = Task._base_manager.filter(pk=task.pk).values_list("assignee_id", flat=True).get()
     print(f"RV task snapshot: control_validations={control} laundered_validations={len(calls)} "
@@ -145,7 +145,7 @@ def test_probe_task_snapshot_laundered_by_deferred_load(monkeypatch: pytest.Monk
     assert len(calls) >= 1, "the assignee written by a full save was never validated"
 
 
-def test_probe_chatter_flag_paths(channel: Any) -> None:  # noqa: F811
+def test_probe_chatter_flag_paths(channel: Any) -> None:
     out = {}
     with system_context(reason="tests.write_path.chatter"):
         ticket = ThreadedTicket.objects.create(title="RV chatter")
@@ -180,7 +180,7 @@ def test_probe_chatter_flag_paths(channel: Any) -> None:  # noqa: F811
     assert out["merged_member_after_merge"] and out["plain_survivor_of_chatter"]
 
 
-def test_probe_ingest_event_transaction_scope(channel: Any) -> None:  # noqa: F811
+def test_probe_ingest_event_transaction_scope(channel: Any) -> None:
     from angee.messaging.events import message_ingested
 
     seen = []
@@ -216,7 +216,7 @@ def test_probe_timeline_db_error_is_isolated(monkeypatch: pytest.MonkeyPatch) ->
             task.title = "RV timeline 2"
             task.save(update_fields={"title"})
             Task._base_manager.filter(pk=task.pk).count()
-    except Exception as error:  # noqa: BLE001
+    except Exception as error:
         outcome = f"{type(error).__name__}: {str(error).splitlines()[0][:120]}"
     print(f"RV timeline DB-error isolation: {outcome}")
     assert outcome == "ok"

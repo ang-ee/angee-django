@@ -13,7 +13,7 @@ from angee.projects.testing.models import ActivityType, Task
 from angee.projects.timeline import TaskKind
 from angee.timeline import reading
 from angee.timeline.reading import Timeline
-from tests.messaging_campaign import comment_record as comment_record  # noqa: F401 - shared actor/record fixture
+from tests.messaging_campaign import comment_record as comment_record
 from tests.test_timeline import read_timeline, timeline_entries
 
 pytestmark = [

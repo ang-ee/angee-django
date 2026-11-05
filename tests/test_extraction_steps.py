@@ -148,9 +148,8 @@ def step_evidence(execution, drive, monkeypatch):
     DeterministicExtraction.calls = []
     DeterministicExtraction.recognized = False
     DeterministicExtraction.fail = False
-    from angee.extraction.managers import ExtractionManager
     from angee.workflows_extraction import steps as step_module
-    def prepare(_manager, *args, **kwargs):
+    def prepare(*args, **kwargs):
         return DeterministicExtraction().prepare(*args, **kwargs)
 
     def recognize(page, file, model, *, config):
@@ -159,7 +158,7 @@ def step_evidence(execution, drive, monkeypatch):
     def infer(parts, schema, model, *, config):
         return DeterministicExtraction().infer(parts, schema, model, config=config)
 
-    monkeypatch.setattr(ExtractionManager, "prepare_pages", prepare)
+    monkeypatch.setattr(step_module, "prepare_pages", prepare)
     monkeypatch.setattr(step_module, "recognize_page", recognize)
     monkeypatch.setattr(step_module, "map_parts", infer)
     provider = make_integration("extraction-test", model=InferenceProvider, backend_class="manual", name="Test")

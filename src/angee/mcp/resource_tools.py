@@ -24,7 +24,7 @@ from strawberry.utils.str_converters import to_snake_case
 
 from angee.graphql.data.contracts import DataResourceFieldMetadata, DataResourceMetadata
 from angee.graphql.schema import GraphQLSchemas
-from angee.mcp import RESOURCE_READER_TOOL_TAG as RESOURCE_READER_TOOL_TAG
+from angee.mcp import RESOURCE_READER_TOOL_TAG
 from angee.mcp.graphql import GraphQLTool, register_graphql_tools
 from mcp.types import ToolAnnotations
 
@@ -142,7 +142,7 @@ def check_resource_tool_specs(
     del app_configs, kwargs
     try:
         resource_tool_specs()
-    except Exception as error:  # noqa: BLE001 - system checks must report drift, not abort registration
+    except Exception as error:
         return [
             checks.Error(
                 f"Generated MCP resource tools do not match the console schema: {error}",

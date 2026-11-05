@@ -24,10 +24,10 @@ from angee.iam.permissions import instance_actor
 from angee.parties.managers import (
     AddressManager,
     PartyManager,
-    PartyStatementQuerySet,
 )
 from angee.parties.mixins import PartyStatementMixin
 from angee.parties.models.relationships import RelationshipKind
+from angee.parties.querysets import PartyStatementQuerySet
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.managers import AngeeHistoryMergeableUnscopedManager
 from angee.provenance.statements import (

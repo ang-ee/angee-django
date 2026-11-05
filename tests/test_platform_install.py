@@ -31,7 +31,7 @@ from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.platform import managers as platform_managers
 from angee.platform import models as platform_models
 from angee.platform.installer import AddonInstallerBackend
-from angee.platform.models import _preview_revision
+from angee.platform.managers import _preview_revision
 from tests.conftest import SchemaAddon, catalogue_package, execute_schema
 from tests.conftest import create_platform_admin as _platform_admin
 from tests.conftest import result_data as _data

@@ -327,7 +327,7 @@ class NeedAccessDecisionTests(IntakeAccessCase):
         self.assertTrue(accepted["decide"]["ok"])
         need.refresh_from_db()
         self.assertEqual(need.access_verdict, ["intake.approve"])
-        self.assertEqual(need.access_answered_by_id, self.admin.pk)
+        self.assertEqual(need.access_decision.answered_by_id, self.admin.pk)
         self.assertEqual(need._account_for_party(need.party_id).pk, self.reader.pk)
         self.assertEqual([grant_rows(store) for store in stores], before)
 
@@ -370,7 +370,7 @@ class NeedAccessDecisionTests(IntakeAccessCase):
         need.decide_access("intake.deny", expected_revision=before)
         denied = need.access_decision
         self.assertEqual(need.access_verdict, ["intake.deny"])
-        self.assertEqual(need.access_answered_by_id, self.owner.pk)
+        self.assertEqual(need.access_decision.answered_by_id, self.owner.pk)
         self.assertEqual(need.revision, before + 1)
         self.assertIsNotNone(need.access_answered_at)
         need.decide_access("intake.deny")
@@ -525,7 +525,7 @@ class NeedAccessDecisionTests(IntakeAccessCase):
                     need.refresh_from_db()
                     self.assertEqual(need.revision, before + 1)
                     self.assertEqual(need.access_verdict, None)
-                    self.assertIsNone(need.access_answered_by_id)
+                    self.assertIsNone(need.access_decision_id)
                     self.assertIsNone(need.access_answered_at)
                     previous_decision.refresh_from_db()
                     self.assertEqual(previous_decision.verdict, ["intake.approve"])
@@ -874,7 +874,7 @@ class NeedAccessTests(IntakeAccessCase):
         for candidate in (reader, writer):
             self.assertIsNone(candidate.access_decision_id)
             self.assertIsNone(candidate.access_verdict)
-            self.assertIsNone(candidate.access_answered_by_id)
+            self.assertIsNone(candidate.access_decision_id)
             self.assertIsNone(candidate.access_answered_at)
             with self.assertRaises(PermissionDenied):
                 candidate.decide_access("intake.deny")
@@ -902,7 +902,7 @@ class NeedAccessTests(IntakeAccessCase):
         need = self.Need._base_manager.get(pk=need.pk)
         self.assertEqual(need.access_decision_id, decision_id)
         self.assertEqual(need.access_verdict, ["intake.deny"])
-        self.assertEqual(need.access_answered_by_id, self.owner.pk)
+        self.assertEqual(need.access_decision.answered_by_id, self.owner.pk)
 
     def test_requester_comment_and_filer_read_derive_from_need(self):
         party = self.party(self.reader)

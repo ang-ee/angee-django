@@ -7,7 +7,7 @@ from rebac import anonymous_actor
 
 from angee.dashboards.validators import canonical_dashboard_snapshot, widget_visibility_answers
 from angee.projects.testing import (
-    models as projects_models,  # noqa: F401 -- registers the concrete work.Queue and projects.Task
+    models as projects_models,
 )
 
 

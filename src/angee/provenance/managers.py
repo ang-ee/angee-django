@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from angee.iam.managers import ProtectedManager
-from angee.provenance.changeset_querysets import ChangesetQuerySet as ChangesetQuerySet
+from angee.provenance.changeset_querysets import ChangesetQuerySet
 from angee.provenance.contrib.angee.serialization import creation_fingerprint
 from angee.provenance.engine.managers import ChangesetManager as NativeChangesetManager
 

@@ -13,16 +13,16 @@ from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.locks import ImmutableFieldsMixin, OptimisticLockMixin
 from angee.base.models.trash import ArchiveMixin
-from angee.dashboards.exceptions import DashboardConflictError as DashboardConflictError
-from angee.dashboards.managers import DashboardManager as DashboardManager
-from angee.dashboards.managers import DashboardWidgetManager as DashboardWidgetManager
-from angee.dashboards.querysets import DashboardQuerySet as DashboardQuerySet
-from angee.dashboards.querysets import DashboardWidgetQuerySet as DashboardWidgetQuerySet
+from angee.dashboards.managers import DashboardManager, DashboardWidgetManager
 from angee.dashboards.resources import DashboardResource
-from angee.dashboards.validators import DASHBOARD_SCHEMA_VERSION, MAX_COLUMNS, MAX_LAYOUT_ROWS, MAX_WIDGET_HEIGHT
-from angee.dashboards.validators import canonical_dashboard_snapshot as canonical_dashboard_snapshot
-from angee.dashboards.validators import validate_dashboard_queries as validate_dashboard_queries
-from angee.dashboards.validators import widget_visibility_answers as widget_visibility_answers
+from angee.dashboards.validators import (
+    DASHBOARD_SCHEMA_VERSION,
+    MAX_COLUMNS,
+    MAX_LAYOUT_ROWS,
+    MAX_WIDGET_HEIGHT,
+    canonical_dashboard_snapshot,
+    validate_dashboard_queries,
+)
 from angee.iam.models.base import ProtectedDataModel
 from angee.iam.models.ownership import OwnerMixin
 from angee.iam.models.trash import ProtectedTrashMixin

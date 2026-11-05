@@ -641,6 +641,3 @@ class ReplayHistoryMixin(CaptureHistoryMixin, HistoryReplayMixin):
 
     class Meta(CaptureHistoryMixin.Meta, HistoryReplayMixin.Meta):
         abstract = True
-
-
-# Historical Angee import name for the canonical capture owner.

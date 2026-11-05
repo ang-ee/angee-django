@@ -1595,7 +1595,7 @@ def _attach_group_labels(
     groups_field.extensions.append(_GroupLabels(model, source))
 
 
-def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative builder.
+def hasura_model_resource(
     node: type,
     *,
     model: type[models.Model],

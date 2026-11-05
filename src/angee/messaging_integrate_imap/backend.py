@@ -689,7 +689,7 @@ class ImapChannelBackend(AnymailEmailChannelBackend):
                         truncated_bytes=int(item[b"RFC822.SIZE"]) if truncated else None,
                     )
                 )
-            except Exception as error:  # noqa: BLE001 — one poison message must not abort the sync.
+            except Exception as error:  # one poison message must not abort the sync.
                 messages.append(
                     fallback_message(
                         bytes(raw),

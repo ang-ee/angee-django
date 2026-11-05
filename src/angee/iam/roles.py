@@ -32,9 +32,8 @@ from rebac.memberships import revoke as revoke_membership
 from rebac.models import active_relationship_model
 from rebac.models.relationship import RelationshipQuerySet, RelationshipRegistryQuerySet
 from rebac.resources import model_for_resource_type, model_resource_type
-from rebac.roles import ROLE_INCLUDES_RELATION, ROLE_RELATION
+from rebac.roles import ROLE_INCLUDES_RELATION, ROLE_RELATION, is_role_type
 from rebac.roles import ROLE_TYPE_SUFFIX as ROLE_SUFFIX
-from rebac.roles import is_role_type as is_role_type
 from rebac.schema import (
     Definition,
     Schema,

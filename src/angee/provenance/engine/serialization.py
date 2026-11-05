@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from angee.base.serialization import canonical_json as canonical_json
+from angee.base.serialization import canonical_json
 
 
 def json_safe(value: Any) -> Any:
