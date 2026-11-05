@@ -97,6 +97,7 @@ export {
   type AuthoredOperationOptions,
   type AuthoredQueryOptions,
   type AuthoredQueryBatchScope,
+  type AuthoredQueryBatchTransport,
   type AuthoredVariables,
 } from "./dialect/authored-hooks";
 export {
@@ -169,6 +170,7 @@ export {
 } from "./router";
 export {
   authoredQueryReadsAnyModel,
+  authoredQueryReadsLiveChange,
   invalidateAuthoredQueries,
   acceptQueryData,
   useAcceptQueryData,

@@ -1,14 +1,14 @@
 import { defineBaseAddon } from "@angee/app";
 import { History } from "lucide-react";
 
-import { FieldProvenanceMarks } from "./FieldProvenanceMarks";
+import { FieldProvenanceChrome } from "./FieldProvenanceMarks";
 import { RecordHistoryTimeline } from "./RecordHistory";
 import { enProvenanceMessages } from "./i18n";
 
 /**
- * Provenance contributes field-statement marks to saved forms, the change kind
- * on the Timeline, and the history drill-in its lines open; the Python source
- * declines resources without native history.
+ * Provenance contributes field-statement marks to saved forms that declare
+ * statements, the change kind on the Timeline, and the history drill-in its
+ * lines open.
  */
 const provenance = defineBaseAddon({
   id: "provenance",
@@ -22,7 +22,7 @@ const provenance = defineBaseAddon({
     "form#chrome": {
       "provenance.field-provenance": {
         sequence: 10,
-        content: <FieldProvenanceMarks />,
+        content: <FieldProvenanceChrome />,
       },
     },
     "timeline#kinds": {

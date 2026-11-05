@@ -51,6 +51,7 @@ export type { RecordTargetSearch } from "./resource/record-navigation-context";
 export { RowsListView, type RowsListViewProps } from "./resource/RowsListView";
 export {
   collectionQuery,
+  collectionBatchQuery,
   type CollectionSource,
   type CollectionPage,
   type CollectionPageRequest,

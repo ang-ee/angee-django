@@ -134,7 +134,10 @@ changeset collision did not overwrite.
 `revert_changeset(model, id, changeset)` is the `ActionResult` verb behind an
 Activity history entry's Revert: the record's `history_revert_permission` is the one
 admission rule and `Changeset.revert()` restores. Resource metadata marks a model that keeps history with
-`history: true`, the fact [`web/`](web/) uses to read entries.
+`history: true`, the fact [`web/`](web/) uses to read entries. A resource whose
+`StatementsMixin` declares an aspect with subject fields has `fieldProvenance: true`;
+the web mounts source marks for those fields even when the resource has no native history.
+Only a resource with history can open a changeset pane from a mark.
 
 [`web/`](web/) contributes the `provenance.change` Timeline kind and the history drill-in, visible on every
 saved record whose resource keeps history, and exports `RecordHistoryTimeline`

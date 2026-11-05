@@ -69,6 +69,8 @@ export const inboxMessages = {
   "inbox.title": "Inbox",
   "inbox.senders": "Senders",
   "inbox.related": "Links",
+  "inbox.showLinks": "Show message links",
+  "inbox.hideLinks": "Hide message links",
   "inbox.coverage": "Search coverage",
   "inbox.platform": "Platforms",
   "inbox.account": "Accounts",

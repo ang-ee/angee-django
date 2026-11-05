@@ -13,7 +13,10 @@ import {
   useQuery,
   useQueries,
   useQueryClient,
+  queryOptions,
+  type QueryKey,
   type UseQueryResult,
+  type UseQueryOptions,
   type Query,
 } from "@tanstack/react-query";
 
@@ -36,7 +39,7 @@ import type {
 } from "../typed-document";
 import { useActiveDataProviderName } from "./data-provider-context";
 import { authoredOperationData, mutationMeta } from "./wire";
-import { authoredQueryKey, authoredQueryOptions, useAuthoredErrorPolicy } from "./authored-query-options";
+import { authoredQueryKey, authoredQueryOptions, requestAuthoredData, sharedAuthoredMeta, useAuthoredErrorPolicy } from "./authored-query-options";
 export { authoredQueryKey, authoredQueryOptions } from "./authored-query-options";
 export { authoredOperationData } from "./wire";
 
@@ -73,7 +76,7 @@ export interface AuthoredQueryOptions extends AuthoredOperationOptions {
   keepPreviousData?: boolean;
   /** Exact rows whose live changes invalidate this read; omitted keeps model-wide semantics. */
   records?: readonly { model: string; id: string }[];
-  /** Models whose changes match only through their event's related records. */
+  /** Models with no named rows match through event related records; named rows also match directly. */
   relatedModels?: readonly string[];
   /** Native TanStack Query polling policy for durable external operations. */
   refetchInterval?: number | false | ((query: Pick<Query<unknown, Error>, "state">) => number | false | undefined);
@@ -89,16 +92,29 @@ export interface AuthoredQueryOptions extends AuthoredOperationOptions {
 /** One authored read in a dynamic batch, addressed by a caller-stable key. */
 export interface AuthoredQueryBatchScope<TDocument extends AuthoredDocument>
   extends Pick<AuthoredQueryOptions, "models" | "records" | "relatedModels"> {
-  /** Result label only; document/provider/variables own query identity. */
+  /** Result label; a transport also includes it in each page's query identity. */
   key: string;
   document: TDocument;
   variables?: AuthoredVariables<TDocument>;
+  /** Stable family of page variables that may retain one another as placeholders. */
+  placeholderKey?: string;
+}
+
+/** Coalesce independently keyed native reads into one authored wire operation. */
+export interface AuthoredQueryBatchTransport<TDocument extends AuthoredDocument, TResult> {
+  /** Maximum pages accepted by one wire request. */
+  maxPages?: number;
+  variables: (scopes: readonly AuthoredQueryBatchScope<TDocument>[]) => AuthoredVariables<TDocument>;
+  select: (data: DocumentData<TDocument>, scopes: readonly AuthoredQueryBatchScope<TDocument>[]) => ReadonlyMap<string, TResult>;
 }
 
 export function useAuthoredQuery<TDocument extends AuthoredDocument>(
   document: TDocument,
   variables?: AuthoredVariables<TDocument>,
-  options: AuthoredQueryOptions = {},
+  options: AuthoredQueryOptions & {
+    /** Name related rows from the resolved projection without a caller state copy. */
+    recordsFromData?: (data: DocumentData<TDocument>) => readonly { model: string; id: string }[];
+  } = {},
 ): UseQueryResult<DocumentData<TDocument>, Error> {
   const activeProvider = useActiveDataProviderName();
   const provider = options.dataProviderName ?? activeProvider ?? "default";
@@ -115,29 +131,127 @@ export function useAuthoredQuery<TDocument extends AuthoredDocument>(
     enabled: options.enabled ?? true,
     refetchInterval: options.refetchInterval,
   });
+  if (result.data !== undefined && options.recordsFromData) {
+    sharedAuthoredMeta(client, configured.queryKey, models,
+      options.recordsFromData(result.data), relatedModels);
+  }
   useAuthoredLiveInterest(options.enabled ?? true, models);
   useAuthoredErrorPolicy([configured.queryKey], { notify: options.errorNotification !== false });
   return result;
 }
 
-/** Native query results addressed by a domain label; labels never key the cache. */
-export function useAuthoredQueryBatch<TDocument extends AuthoredDocument>(
+/** Native query results addressed by a domain label; a transport keys each label separately. */
+export function useAuthoredQueryBatch<TDocument extends AuthoredDocument, TResult = DocumentData<TDocument>>(
   scopes: readonly AuthoredQueryBatchScope<TDocument>[],
   options: AuthoredOperationOptions & Pick<AuthoredQueryOptions, "enabled" | "errorNotification" | "refetchInterval"> = {},
-): ReadonlyMap<string, UseQueryResult<DocumentData<TDocument>, Error>> {
+  transport?: AuthoredQueryBatchTransport<TDocument, TResult>,
+): ReadonlyMap<string, UseQueryResult<TResult, Error>> {
   const activeProvider = useActiveDataProviderName();
   const provider = options.dataProviderName ?? activeProvider ?? "default";
   const dataProvider = useDataProvider();
   const client = useQueryClient();
-  const configured = scopes.map((scope) => authoredQueryOptions(
-    client, dataProvider, provider, scope.document, scope.variables, scope.models, scope.records, scope.relatedModels,
-  ));
-  // Labels address results; only native provider/document/variables identity owns
-  // requests. A dynamic batch may contain several labels for the same request.
+  const pending: Array<{
+    scope: AuthoredQueryBatchScope<TDocument>;
+    queryKey: readonly unknown[];
+    resolve: (value: TResult) => void;
+    reject: (error: Error) => void;
+  }> = [];
+  let scheduled = false;
+  const enqueue = (scope: AuthoredQueryBatchScope<TDocument>, queryKey: readonly unknown[]) => new Promise<TResult>((resolve, reject) => {
+    pending.push({ scope, queryKey, resolve, reject });
+    if (scheduled) return;
+    scheduled = true;
+    queueMicrotask(() => {
+      const entries = pending.splice(0);
+      scheduled = false;
+      if (entries.length === 0) return;
+      if (!transport) {
+        entries.forEach((entry) => entry.reject(new Error("Authored batch transport is unavailable.")));
+        return;
+      }
+      const chunkSize = Math.max(1, transport.maxPages ?? entries.length);
+      for (let start = 0; start < entries.length; start += chunkSize) {
+        const chunk = entries.slice(start, start + chunkSize);
+        const batchScopes = chunk.map((entry) => entry.scope);
+        let variables: AuthoredVariables<TDocument>;
+        try {
+          variables = transport.variables(batchScopes);
+        } catch (error) {
+          const failure = error instanceof Error ? error : new Error(String(error));
+          chunk.forEach((entry) => entry.reject(failure));
+          continue;
+        }
+        const request = () => requestAuthoredData<DocumentData<TDocument>>(
+          dataProvider, provider, batchScopes[0]!.document,
+          variables, { queryKey: chunk[0]!.queryKey },
+        );
+        // Page queries disable native retries below: retry this wire request
+        // once under the client's policy so a failure stays one shared batch.
+        const retryPolicy = client.getDefaultOptions().queries;
+        void request().catch(async (error: unknown) => {
+          const failure = error instanceof Error ? error : new Error(String(error));
+          const retry = retryPolicy?.retry ?? 3;
+          const allowed = retry === true || typeof retry === "number" && retry > 0
+            || typeof retry === "function" && retry(0, failure);
+          if (!allowed) throw failure;
+          const delay = retryPolicy?.retryDelay ?? 1000;
+          const milliseconds = typeof delay === "function" ? delay(0, failure) : delay;
+          await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+          return request();
+        }).then((data) => {
+          try {
+            const pages = transport.select(data, batchScopes);
+            chunk.forEach((entry) => {
+              if (pages.has(entry.scope.key)) entry.resolve(pages.get(entry.scope.key)!);
+              else entry.reject(new Error(`Authored batch omitted page "${entry.scope.key}".`));
+            });
+          } catch (error) {
+            const failure = error instanceof Error ? error : new Error(String(error));
+            chunk.forEach((entry) => entry.reject(failure));
+          }
+        }, (error: unknown) => {
+          const failure = error instanceof Error ? error : new Error(String(error));
+          chunk.forEach((entry) => entry.reject(failure));
+        });
+      }
+    });
+  });
+  // Both arms are checked where built; erase their distinct key/data generics
+  // only when collecting native options for hashing and useQueries.
+  const configured = scopes.map((scope) => {
+    if (!transport) return authoredQueryOptions(
+      client, dataProvider, provider, scope.document, scope.variables, scope.models, scope.records, scope.relatedModels,
+    );
+    // A page contains a projection of the batch response, so its cache key and
+    // typed data stay distinct from an authored read of the complete document.
+    const queryKey = [...authoredQueryKey(scope.document, scope.variables, provider), "batch-page", scope.placeholderKey, scope.key] as const;
+    return queryOptions<TResult, Error, TResult, typeof queryKey>({
+      queryKey,
+      meta: sharedAuthoredMeta(client, queryKey, scope.models ?? [], scope.records, scope.relatedModels),
+      queryFn: (context) => enqueue(scope, context.queryKey),
+      // useQueries gives a changed page a fresh observer. Read its last settled
+      // sibling from the native cache rather than the observer's empty history.
+      // The parameter is unused: with the generics pinned it no longer drives
+      // inference, and `typeof previous` is TanStack's own guarded data type.
+      placeholderData: (previous) => {
+        if (scope.placeholderKey === undefined) return undefined;
+        const family = client.getQueryCache().findAll({
+          queryKey: authoredQueryKey(scope.document, undefined, provider).slice(0, 5),
+          predicate: (query) => query.queryKey.at(-2) === scope.placeholderKey
+            && query.queryKey.at(-1) === scope.key && query.state.data !== undefined,
+        });
+        return family.sort((a, b) => b.state.dataUpdatedAt - a.state.dataUpdatedAt)[0]?.state.data as typeof previous;
+      },
+      retry: false,
+    });
+  }) as UseQueryOptions<unknown, Error, unknown, QueryKey>[];
+  // Without a transport, matching document/provider/variables share a query.
+  // A transport coalesces one microtask's labels on the wire; each labeled page
+  // retains its own native key, even when its variables match another label.
   const hashes = configured.map((query) => client.defaultQueryOptions(query).queryHash);
   const unique = new Map(hashes.map((hash, index) => [hash, configured[index]!]));
   const indexByHash = new Map([...unique.keys()].map((hash, index) => [hash, index]));
-  const queries = [...unique.values()].map((query) => ({
+  const queries = [...unique.entries()].map(([, query]) => ({
     ...query,
     enabled: options.enabled ?? true,
     refetchInterval: options.refetchInterval,
@@ -146,7 +260,7 @@ export function useAuthoredQueryBatch<TDocument extends AuthoredDocument>(
   const models = useStableArray([...new Set(scopes.flatMap((scope) => scope.models ?? []))].sort());
   useAuthoredLiveInterest(options.enabled ?? true, models);
   useAuthoredErrorPolicy(queries.map((query) => query.queryKey), { notify: options.errorNotification !== false });
-  return new Map(scopes.map((scope, index) => [scope.key, results[indexByHash.get(hashes[index]!)!]!]));
+  return new Map(scopes.map((scope, index) => [scope.key, results[indexByHash.get(hashes[index]!)!]! as UseQueryResult<TResult, Error>]));
 }
 
 /** Invalidate every authored read registered against any supplied model. */

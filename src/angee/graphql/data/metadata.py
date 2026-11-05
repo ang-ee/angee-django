@@ -84,6 +84,8 @@ class DataResourcePolicy:
     row_model: str | None = None
     history: bool | None = None
     """Whether the contributing schema exposes readable history for this model."""
+    field_provenance: bool | None = None
+    """Whether the contributing schema serves declared field statements for this model."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,6 +323,9 @@ def finalize_data_resources(
             concrete_kinds=_concrete_kinds(item.model, resources_by_model),
             mergeable=item.model is not None and issubclass(item.model, MergeableMixin),
             history=bool(_single_policy_value(item.model_label, by_label[item.model_label], "history")),
+            field_provenance=bool(
+                _single_policy_value(item.model_label, by_label[item.model_label], "field_provenance")
+            ),
         )
         for item in finalized
     )

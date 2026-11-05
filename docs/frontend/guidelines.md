@@ -1091,6 +1091,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   explicit choice to cancel.
   Declare authored `models`, exact `records` and related interests from the
   owners the resolver actually reads. Unknown effects retain model fallback.
+  Use `recordsFromData` for related record ids discovered in a resolved authored
+  projection; the query owner adds those interests to its native cache metadata.
   Do not add a page-local invalidator, polling loop or second row cache.
 - **Registration readiness closes read and reconnect gaps without cancellation.**
   The [live provider](../../packages/refine/src/provider.ts) consumes the server's

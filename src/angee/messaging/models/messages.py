@@ -649,6 +649,11 @@ class Message(
             return None
         return thread.chatter_record_ref()
 
+    def change_related_records(self) -> tuple[RecordRef, ...]:
+        """Name the parent whose reply and relation projections this row changes."""
+
+        return (RecordRef.from_model(type(self), self.parent_id),) if self.parent_id is not None else ()
+
     def sender_name(self) -> str:
         """Return the actor-visible sender label, using its selected SQL value."""
 

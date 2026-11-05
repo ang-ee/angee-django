@@ -746,13 +746,15 @@ class HistoryMutation:
 
 
 for _model in sorted(apps.get_models(), key=lambda model: model._meta.label_lower):
-    if issubclass(_model, HistoryMixin) and record_history(_model) is not None:
+    has_history = issubclass(_model, HistoryMixin) and record_history(_model) is not None
+    has_field_statements = issubclass(_model, StatementsMixin) and _model.has_field_statements()
+    if has_history or has_field_statements:
         attach_data_resource_contribution(
             HistoryQuery,
             DataResourceContribution(
                 model=_model,
                 model_label=_model._meta.label,
-                policy=DataResourcePolicy(history=True),
+                policy=DataResourcePolicy(history=has_history, field_provenance=has_field_statements),
             ),
         )
 

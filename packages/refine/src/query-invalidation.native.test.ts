@@ -28,6 +28,21 @@ test("a related-only model with no target rows is fail-closed", () => {
   }, "workflows.StepRun", "wsr_unrelated")).toBe(false);
 });
 
+test("an exact row still refreshes when its model also admits related-record events", () => {
+  const meta = {
+    angeeModels: ["messaging.Message", "messaging.Thread"],
+    angeeRelatedModels: ["messaging.Message", "messaging.Thread"],
+    angeeRecords: [
+      { model: "messaging.Message", id: "msg_current" },
+      { model: "messaging.Thread", id: "thd_current" },
+    ],
+  };
+  expect(authoredQueryReadsChange(meta, "messaging.Message", "msg_current")).toBe(true);
+  expect(authoredQueryReadsChange(meta, "messaging.Message", "msg_other")).toBe(false);
+  expect(authoredQueryReadsChange(meta, "messaging.Thread", "thd_current")).toBe(true);
+  expect(authoredQueryReadsChange(meta, "messaging.Thread", "thd_other")).toBe(false);
+});
+
 test("a related-only feed refreshes its record interest without subscribing to that record's model", async () => {
   vi.useFakeTimers();
   const cache = client();
