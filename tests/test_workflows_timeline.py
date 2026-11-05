@@ -21,6 +21,7 @@ from rebac import (
 
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.querysets import DecisionQuerySet
+from angee.iam.testing.queries import is_permission_audit_insert
 from angee.workflows import schema as timeline_schema
 from angee.workflows.decision_steps import AskDecision, DecisionStep
 from angee.workflows.querysets import WorkflowRunQuerySet
@@ -244,12 +245,15 @@ def test_timeline_selection_owner_matches_graphql_and_keeps_empty_records(schema
     assert [list(ids) for _, ids, _ in entries] == ([[run.pk], []] if include_runs else [[], []])
     assert [[row.pk for row in decisions] for _, _, decisions in entries] == [[questions(step)[0].pk], []]
     assert count == 1
-    result = result_data(execute_schema(schema, """query($records:[TimelineRecordInput!]!, $include:Boolean!) {
-      record_timeline(records:$records, include_runs:$include, run_limit:1) {
-        open_decision_count has_runs records { record_id runs { id } decisions { id } }
-      }
-    }""", {"records": [{"model": item._meta.label, "id": item.sqid} for item in [record, record, unrelated]],
-            "include": include_runs}, user=actor))["record_timeline"]
+    with CaptureQueriesContext(connection) as captured:
+        result = result_data(execute_schema(schema, """query($records:[TimelineRecordInput!]!, $include:Boolean!) {
+          record_timeline(records:$records, include_runs:$include, run_limit:1) {
+            open_decision_count has_runs records { record_id runs { id } decisions { id } }
+          }
+        }""", {"records": [{"model": item._meta.label, "id": item.sqid} for item in [record, record, unrelated]],
+                "include": include_runs}, user=actor))["record_timeline"]
+    assert sum(is_permission_audit_insert(query["sql"], connection) for query in captured) == 0
+    assert len(captured) == (28 if include_runs else 21)
     assert result == {"open_decision_count": 1, "has_runs": True, "records": [
         {"record_id": record.sqid, "runs": [{"id": run.sqid}] if include_runs else [],
          "decisions": [{"id": questions(step)[0].sqid}]},
@@ -545,7 +549,9 @@ def test_record_timeline_executes_only_requested_projections(
     run, step = start_review(review)
 
     calls = {"decisions": 0, "runs": 0}
-    original_decisions = DecisionQuerySet.open_for
+    # Both readable questions and the record's structural attention count use
+    # this membership owner; the latter has no question-level read proof.
+    original_decisions = DecisionQuerySet.for_records
     original_runs = WorkflowRunQuerySet.about
 
     def decisions(self, *records):
@@ -556,7 +562,7 @@ def test_record_timeline_executes_only_requested_projections(
         calls["runs"] += 1
         return original_runs(self, *args, **kwargs)
 
-    monkeypatch.setattr(DecisionQuerySet, "open_for", decisions)
+    monkeypatch.setattr(DecisionQuerySet, "for_records", decisions)
     monkeypatch.setattr(WorkflowRunQuerySet, "about", runs)
     data = result_data(execute_schema(
         schema,

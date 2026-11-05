@@ -1,9 +1,12 @@
 // Proposal access through live planning and identity relations. Round managers
 // see responder names through the round's roster, not through account preview.
 // @rebac_package: proposals
-// @rebac_schema_revision: 10
+// @rebac_schema_revision: 13
 
 definition projects/project {
+    // An admitted project's selectable phase choices may inspect unopened
+    // proposal-round boundaries on this project and its tasks by project id.
+    // Only the resulting eligible milestone ids are exposed.
     relation proposal_viewer: auth/user | auth/group#member
     relation source_proposal: proposals/proposal // rebac:field=source_proposal
     relation round_responder: auth/user // rebac:field={"path":"proposal_rounds__proposals__responder","filters":{"proposal_rounds__proposals__retired_at__isnull":true}}
@@ -13,6 +16,10 @@ definition projects/project {
 }
 
 definition projects/task {
+    // An admitted task's publication blocker may inspect its own hidden asker
+    // and attached-message existence by id; it exposes only the blocker value.
+    // Its one-row clarification-recipient fallback reuses the task gate and
+    // keeps the recipient expression's own actor checks.
     relation subject_round: proposals/round // rebac:field=subject
     permission subject_read = subject_round->manage
     permission subject_write = subject_round->manage

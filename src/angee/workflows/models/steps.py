@@ -370,7 +370,9 @@ class StepRun(ProtectedDataModel, concrete=True):
     @classmethod
     def map_settled_expression(cls) -> Coalesce:
         """Count terminal body rows in one correlated expression for bulk reads."""
-        rows = cast(Any, cls.system_queryset()).for_map(models.OuterRef("run_id"), models.OuterRef("node_key"))
+        rows = StepRunQuerySet.for_map(
+            cast(Any, cls._base_manager.all()), models.OuterRef("run_id"), models.OuterRef("node_key"),
+        )
         counts = (
             rows.filter(status__in=StepRunStatus.terminal_values())
             .order_by()
@@ -393,7 +395,7 @@ class StepRun(ProtectedDataModel, concrete=True):
 
         return int(
             type(self)
-            .system_queryset()
+            ._base_manager
             .using(self._state.db)
             .filter(pk=self.pk)
             .annotate(_map_settled=self.map_settled_expression())
@@ -417,17 +419,16 @@ class StepRun(ProtectedDataModel, concrete=True):
     def get_requires_duplicate_acknowledgement(self) -> bool:
         """Check one step's current-page effect marker explicitly."""
 
-        with system_context(reason="workflows.effect_policy"):
-            return (
-                not self.step.effect_idempotent
-                and apps.get_model("workflows", "StepAttempt")
-                ._default_manager.db_manager(self._state.db)
-                .filter(
-                    step_run_id=self.pk,
-                    page_index=self.page_index,
-                    effect_started_at__isnull=False,
-                ).exists()
-            )
+        return (
+            not self.step.effect_idempotent
+            and apps.get_model("workflows", "StepAttempt")
+            ._base_manager.db_manager(self._state.db)
+            .filter(
+                step_run_id=self.pk,
+                page_index=self.page_index,
+                effect_started_at__isnull=False,
+            ).exists()
+        )
 
     @classmethod
     def effect_started_expression(cls) -> models.Exists:

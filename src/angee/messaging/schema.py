@@ -70,7 +70,7 @@ from angee.messaging.models import Part as PartModel
 from angee.messaging.models import Thread as ThreadModel
 from angee.messaging.models import ThreadedModelMixin, chatter_record
 from angee.messaging.models.threads import chatter_record_with_attachment
-from angee.messaging.querysets import _UNRESOLVED, ChannelQuerySet, MessageQuerySet, ThreadQuerySet
+from angee.messaging.querysets import _UNRESOLVED, ChannelQuerySet, MessageQuerySet, PartQuerySet, ThreadQuerySet
 from angee.parties.schema import HandleType, PartyType
 from angee.storage.schema import FileType
 from angee.tags.schema import TaggedNode, tags_input_extensions
@@ -608,7 +608,7 @@ class RecordMessageParentType(ProtectedNode):
 def _record_parts_prefetch(info: strawberry.Info) -> models.Prefetch:
     """Keep trusted parent membership while native hints project selected part fields."""
 
-    rows = Part.objects.sudo(reason="messaging.record_thread.parts")
+    rows = Part._base_manager
     return models.Prefetch("parts", queryset=optimize(
         rows, info, store=OptimizerStore(only=["message_id", "parent_id", "position", "sqid"]),
     ))
@@ -1215,8 +1215,8 @@ class _RecordThreadContext:
     def removed_message_count(self) -> int | None:
         if not self.access[1]:
             return None
-        return (Message.objects.sudo(reason="messaging.record_thread.removed_count")
-                .for_thread(self.thread).trashed().count() if self.thread is not None else 0)
+        return (Message._base_manager.filter(MessageQuerySet.thread_filter(self.thread), is_trashed=True).count()
+                if self.thread is not None else 0)
 
 
 @strawberry.type
@@ -1286,9 +1286,10 @@ class RecordThreadStatePayload:
         thread = self._context.thread if self._context is not None else None
         if thread is None:
             return 0
-        return (Part.objects.using(thread._state.db).sudo(reason="messaging.record_thread.attachment_count")
-                .filter(message__thread_id__in=thread.member_threads().values("pk"), message__is_trashed=False)
-                .attachments().count())
+        rows = Part._base_manager.using(thread._state.db).filter(
+            message__thread_id__in=thread.member_threads().values("pk"), message__is_trashed=False,
+        )
+        return PartQuerySet.attachments(cast(Any, rows)).count()
 
 
 @strawberry.type
@@ -1514,10 +1515,10 @@ class MessageFeedWindow(MessageProjection[_FeedMessage], Generic[_FeedMessage]):
     has_newer_than_before: bool
 
     @classmethod
-    def from_scope(cls, queryset: MessageQuerySet, **options: Any) -> Self:
+    def from_scope(cls, queryset: models.QuerySet[Any], **options: Any) -> Self:
         """Project a domain-scoped message window without re-deciding its scope."""
 
-        page = queryset.feed_page(**options)
+        page = MessageQuerySet.feed_page(cast(Any, queryset), **options)
         return cls(
             _rows=page.rows,
             count=page.count,
@@ -1539,12 +1540,12 @@ class MessageFeedPartition(MessageProjection[_FeedMessage], Generic[_FeedMessage
 
     @classmethod
     def from_scope(
-        cls, queryset: MessageQuerySet, ids: list[strawberry.ID], *, search: str = "", all_copies: bool = False,
+        cls, queryset: models.QuerySet[Any], ids: list[strawberry.ID], *, search: str = "", all_copies: bool = False,
         anchor: str = "",
     ) -> Self:
         """Revalidate the same readable domain scope using public message IDs."""
 
-        partition = queryset.feed_revalidate(
+        partition = MessageQuerySet.feed_revalidate(cast(Any, queryset),
             [str(value) for value in ids], search=search, all_copies=all_copies, anchor=anchor,
         )
         return cls(_rows=partition["messages"], absent_ids=partition["absent_ids"])

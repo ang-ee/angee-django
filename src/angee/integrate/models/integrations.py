@@ -350,10 +350,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
 
         credential = (
             apps.get_model("integrate", "Credential")
-            .objects.db_manager(using)
-            .sudo(
-                reason="integrate.connection.public_health",
-            )
+            ._base_manager.db_manager(using)
             .filter(pk=OuterRef("credential_id"))
         )
         return {
@@ -369,10 +366,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
 
         vendor = (
             apps.get_model("integrate", "Vendor")
-            .objects.db_manager(using)
-            .sudo(
-                reason="integrate.connection.public_vendor",
-            )
+            ._base_manager.db_manager(using)
             .filter(pk=OuterRef("vendor_id"))
         )
         selectors = []
@@ -384,8 +378,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
                 continue
             field = model.capability_impl_field()
             rows = (
-                model.objects.db_manager(using)
-                .sudo(reason="integrate.connection.public_selector")
+                model._base_manager.db_manager(using)
                 .filter(pk=OuterRef("pk"))
             )
             selectors.append(
@@ -413,8 +406,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
         using = write_alias(type(self), using=self._state.db, instance=self)
         vendor = apps.get_model("integrate", "Vendor")
         return str(
-            vendor.objects.db_manager(using)
-            .sudo(reason="integrate.connection.vendor")
+            vendor._base_manager.db_manager(using)
             .values_list(
                 "slug",
                 flat=True,

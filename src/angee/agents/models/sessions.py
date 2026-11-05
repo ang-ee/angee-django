@@ -63,13 +63,13 @@ class AgentSessionManager[SessionT: AgentSession](_AgentSessionManagerBase[Sessi
         user_id = actor_user_id(current_actor())
         if user_id is None or not agent.runs_in_process:
             return None
-        with system_context(reason="agents.session.current_for_agent"):
-            return (
-                self.filter(agent=agent, user_id=user_id)
-                .exclude(status=SessionStatus.CLOSED)
-                .order_by("-updated_at", "-pk")
-                .first()
-            )
+        return (
+            self.model._base_manager.using(self._db or agent._state.db)
+            .filter(agent=agent, user_id=user_id)
+            .exclude(status=SessionStatus.CLOSED)
+            .order_by("-updated_at", "-pk")
+            .first()
+        )
 
     def start(self, agent: Any, *, user: Any, context: Mapping[str, Any], actor: Any = None) -> Any:
         """Start an idle conversation with a callable, running in-process agent.

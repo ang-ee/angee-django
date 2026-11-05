@@ -24,6 +24,7 @@ from rebac import (
 
 from angee.base.models.locks import StaleRevisionError
 from angee.iam.signals import DJANGO_LAST_LOGIN_UID, stamp_last_login
+from angee.iam.testing.queries import is_permission_audit_insert
 from angee.spaces.testing.models import Group, Membership
 from tests.conftest import create_platform_admin, execute_schema, graphql_request, result_data
 from tests.iam_campaign import Person
@@ -323,6 +324,19 @@ def test_account_actions_projection_query_count_stays_flat(iam_admin):
     for index in range(6):
         User.objects.create_user(f"later-row-{index}", password="secret" if index % 2 else None)
     assert count() == few
+
+
+@pytest.mark.django_db(transaction=True)
+def test_single_account_action_fallback_reads_without_audit(iam_admin):
+    target = User.objects.create_user("fallback-actions")
+    stored = _stored(target)
+    with actor_context(iam_admin), CaptureQueriesContext(connection) as captured:
+        actions = stored.account_actions_for(to_subject_ref(iam_admin))
+    assert actions == ["set_active", "rename", "issue_password"]
+    assert sum(is_permission_audit_insert(query["sql"], connection) for query in captured) == 0
+    # A direct call opens one REBAC evaluator scope for all four verb expressions.
+    assert len(captured) == 16
+    assert sum(len(query["sql"].encode("utf-8")) for query in captured) <= 65_000
 
 
 def test_last_login_reads_through_its_field_gate(spaces_tables):

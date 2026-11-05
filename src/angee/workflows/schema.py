@@ -74,15 +74,10 @@ DecisionRecord = apps.get_model("decisions", "DecisionRecord")
 StepWatch = apps.get_model("workflows", "StepWatch")
 Trigger = apps.get_model("workflows", "Trigger")
 TriggerEvent = apps.get_model("workflows", "TriggerEvent")
-_RUN_POLICY_VERSION = Prefetch(
-    "version",
-    queryset=WorkflowVersion.system_queryset().only("document"),
-    to_attr="policy_version",
-)
 _STEP_POLICY_VERSION = Prefetch(
     "run__version",
-    queryset=WorkflowVersion.system_queryset().only("document"),
-    to_attr="policy_version",
+    queryset=WorkflowVersion._base_manager.only("document"),
+    to_attr="_policy_version",
 )
 
 
@@ -179,9 +174,7 @@ class WorkflowRunType(RecordReferenceNode):
         return definition.redacted_input(run.input, {(ref.model.lower(), ref.id) for ref in readable})
     output: JSON
     outcome: auto
-    outcome_label: str = strawberry_django.field(
-        only=["outcome", "version_id"], prefetch_related=[_RUN_POLICY_VERSION],
-    )
+    outcome_label: str = strawberry_django.field(only=["outcome", "version_id"])
     error: str | None
     failure_reason: str | None = strawberry_django.field(
         only=["outcome", "output"],
@@ -193,7 +186,7 @@ class WorkflowRunType(RecordReferenceNode):
     finished_at: auto
     stopped_at: auto
 
-    @strawberry_django.field(only=["version_id", "status", "stopped_at"], prefetch_related=[_RUN_POLICY_VERSION])
+    @strawberry_django.field(only=["version_id", "status", "stopped_at"])
     def graph(self, info: strawberry.Info) -> WorkflowRunGraph:
         """Read one run's bounded graph with its selected step details."""
         run = cast(Any, self)
@@ -594,10 +587,14 @@ _VERSION_RESOURCE = hasura_model_resource(
     delete=False,
 )
 def _run_queryset(info: strawberry.Info) -> Any:
-    """Batch run cancellation only when selected by this document."""
+    """Prepare selected run actions and display facts on their owner."""
 
     rows = WorkflowRun.objects.all()
-    return rows.with_cancel_batch() if selected_field(info.selected_fields, "can_cancel") else rows
+    if selected_field(info.selected_fields, "can_cancel"):
+        rows = rows.with_cancel_batch()
+    if any(selected_field(info.selected_fields, name) for name in ("outcome_label", "input")):
+        rows = rows.with_policy_versions()
+    return rows
 
 
 _RUN_RESOURCE = hasura_model_resource(
@@ -1065,7 +1062,10 @@ class RecordTimelineSelectionType:
             projected_runs = tuple(self._run_projections[key].values())
             writable = (WorkflowRun._prepare_cancel_for(projected_runs, self._selection.actor)
                         if projected_runs and "can_cancel" in selected else None)
-            if self._run_projections[key] and _selected_children(run_fields, "graph"):
+            graph_selected = bool(_selected_children(run_fields, "graph"))
+            if projected_runs and not graph_selected and {"outcome_label", "input"} & selected:
+                WorkflowRun._prepare_policy_versions(projected_runs)
+            if projected_runs and graph_selected:
                 graphs = WorkflowRunType._graphs_for_runs(projected_runs, info, writable_run_ids=writable)
                 for pk, graph in graphs.items():
                     self._run_projections[key][pk].__dict__["_record_timeline_graph"] = graph

@@ -37,7 +37,7 @@ from angee.base.models.base import AngeeModel
 from angee.graphql.ids import PublicID, optional_public_id, to_public_id
 from angee.graphql.introspection import FieldPathError, fields_for_path, is_to_one_relation
 from angee.graphql.node import display_name_paths, node_display_name
-from angee.iam.graphql.capabilities import _proven_read_annotation, _share_permission_projections
+from angee.iam.graphql.capabilities import _proven_read_annotation
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.models.base import ProtectedModel
 from angee.iam.models.refs import ProtectedRecordRefMixin
@@ -687,7 +687,7 @@ def _guarded_relation_prefetch(
         if prepare is not None:
             optimized = prepare(optimized, info)
         if read_scoped and actor is not None:
-            optimized = _share_permission_projections(_proven_read_annotation(optimized), actor)
+            optimized = _proven_read_annotation(optimized)
         return models.Prefetch(field_name, queryset=optimized)
 
     return prefetch

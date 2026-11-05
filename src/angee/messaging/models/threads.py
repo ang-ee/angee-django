@@ -756,9 +756,11 @@ class ThreadedModelMixin(models.Model):
         follower_ids = (
             {
                 str(user_id)
-                for user_id in apps.get_model("messaging", "ThreadFollower").objects.sudo(
-                    reason="messaging suggested recipients follower suppression"
-                ).for_attachment(attachment)
+                for user_id in apps.get_model("messaging", "ThreadFollower")._base_manager.filter(
+                    ThreadFollowerQuerySet._effective_thread_filter(
+                        apps.get_model("messaging", "ThreadFollower").objects.all(), attachment.thread,
+                    )
+                )
                 .values_list("party__person__user_id", flat=True)
             }
             if attachment is not None else set()

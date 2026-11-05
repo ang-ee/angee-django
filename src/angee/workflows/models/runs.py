@@ -181,6 +181,8 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
     @cached_property
     def policy_version(self) -> Any:
         """Reuse loaded policy, resolving a viewer-redacted relation by its pinned ID."""
+        if version := self.__dict__.get("_policy_version"):
+            return version
         if version := self._state.fields_cache.get("version"):
             return version
         if "version" not in self._state.fields_cache:
@@ -533,6 +535,24 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
         )[self.pk]
 
     @classmethod
+    def _prepare_policy_versions(cls, runs: Iterable[WorkflowRun]) -> None:
+        """Attach pinned policy documents to one admitted run page."""
+
+        page = tuple(runs)
+        if not page:
+            return
+        using = page[0]._state.db
+        if any(run._state.db != using for run in page):
+            raise ValueError("A policy batch must use one database.")
+        version_model = cls._meta.get_field("version").related_model
+        assert version_model is not None
+        versions = version_model._base_manager.using(using).filter(
+            pk__in={run.version_id for run in page},
+        ).only("document").in_bulk()
+        for run in page:
+            run.__dict__["policy_version"] = versions[run.version_id]
+
+    @classmethod
     def graphs_for(
         cls,
         runs: tuple[WorkflowRun, ...],
@@ -561,6 +581,7 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
         )
         if readable != by_id.keys():
             raise PermissionDenied("A run graph requires a reader.")
+        cls._prepare_policy_versions(runs)
         related_querysets = related_querysets or {}
         rows_by_run: dict[int, dict[str, Any]] = {pk: {} for pk in by_id}
         map_rows: dict[int, dict[str, list[Any]]] = {pk: {} for pk in by_id}

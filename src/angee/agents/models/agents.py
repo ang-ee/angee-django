@@ -10,10 +10,10 @@ from typing import Any, ClassVar, cast
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models, router, transaction
 from pydantic_ai.models import Model
-from rebac import SubjectRef, current_actor, system_context, to_subject_ref
+from rebac import SubjectRef, current_actor, to_subject_ref
 
 from angee.agents.models.choices import AgentLifecycle, RuntimeStatus
-from angee.agents.models.sessions import AgentSession
+from angee.agents.models.sessions import AgentSession, AgentTurnQuerySet
 from angee.agents.models.tools import MCPServer
 from angee.agents.reader_role import sync_resource_reader_role
 from angee.agents.resources import AgentResource
@@ -53,13 +53,13 @@ class AgentManager[AgentT: Agent](AngeeHistoryManager[AgentT]):
         user_id = actor_user_id(current_actor())
         if user_id is None:
             return None
-        with system_context(reason="agents.chat_for_actor"):
-            candidates = (
-                self.filter(owner_id=user_id, is_template=False, runtime_status=RuntimeStatus.RUNNING)
-                .select_related("model")
-                .order_by("-updated_at", "-pk")
-            )
-            return next((agent for agent in candidates if agent.can_chat), None)
+        candidates = (
+            self.model._base_manager.using(self._db)
+            .filter(owner_id=user_id, is_template=False, runtime_status=RuntimeStatus.RUNNING)
+            .select_related("model")
+            .order_by("-updated_at", "-pk")
+        )
+        return next((agent for agent in candidates if agent.can_chat), None)
 
 
 class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, ProtectedDataModel, concrete=True):
@@ -355,9 +355,7 @@ class Agent(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Prote
         if session_model is None or not issubclass(session_model, AgentSession):
             raise ImproperlyConfigured(f"{cls._meta.label}.sessions must target an AgentSession model.")
         return models.Exists(
-            session_model.turn_model()
-            .objects.system_context(reason="agents.agent.active_turns")
-            .active()
+            AgentTurnQuerySet.active(cast(Any, session_model.turn_model()._base_manager.all()))
             .filter(session__agent_id=models.OuterRef("pk"))
         )
 

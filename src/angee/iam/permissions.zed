@@ -1,9 +1,11 @@
 // Authorization schema for the IAM addon.
 // @rebac_package: iam
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 24
+// @rebac_schema_revision: 25
 
 definition auth/user {
+    // An admitted account may display its own account-action booleans from
+    // its row; each verb still uses its actor-scoped permission expression.
     // Const-backed universal admin: every user points at angee/role:admin
     // (synthetic — no per-user tuple), so admin->member resolves the actor's
     // platform-admin membership. The role accepts direct user and group grants;

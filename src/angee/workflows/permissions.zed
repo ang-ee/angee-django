@@ -1,7 +1,7 @@
 // Authorization schema for the workflows addon.
 // @rebac_package: workflows
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 24
+// @rebac_schema_revision: 25
 
 definition workflows/workflow {
     relation owner: auth/user // rebac:field=owner
@@ -39,6 +39,9 @@ definition workflows/version {
 }
 
 definition workflows/run {
+    // An admitted run's pinned version document, outcome vocabulary, input
+    // redaction, and waiting steps are structural execution facts bounded by
+    // that run; its public version relation retains its own read gate.
     relation run_as: auth/user // rebac:field=run_as
     relation workflow: workflows/workflow // rebac:field=version__workflow
     relation parent: workflows/run // rebac:field=parent_step__run
@@ -55,6 +58,7 @@ definition workflows/run {
 }
 
 definition workflows/step_run {
+    // An admitted map step may count terminal body steps of its own run and key.
     relation run: workflows/run // rebac:field=run
     relation admin: angee/role // rebac:const=admin
 
@@ -67,6 +71,8 @@ definition workflows/step_run {
 }
 
 definition workflows/step_attempt {
+    // An admitted step may read its current-page attempt effect marker by id;
+    // only the boolean reaches its retry projection.
     relation step_run: workflows/step_run // rebac:field=step_run
     relation admin: angee/role // rebac:const=admin
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from typing import Any, Self
+from typing import Any, Self, cast
 
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
@@ -24,7 +24,13 @@ class ChangesetQuerySet[T: models.Model](ProtectedQuerySet[T], NativeChangesetQu
     def touching(self, record: Any) -> Self:
         """Return changesets belonging to ``record``'s declared history document."""
 
-        return super().touching(record) | self.filter(self._merge_touching(record))
+        return self.touching_document(self, record)
+
+    @classmethod
+    def touching_document(cls, rows: models.QuerySet[Any], record: Any) -> Any:
+        """Apply the document's retained membership to the supplied row scope."""
+
+        return NativeChangesetQuerySet.touching(cast(Any, rows), record) | rows.filter(cls._merge_touching(record))
 
     @staticmethod
     def _merge_touching(record: HistoryMixin) -> Q:

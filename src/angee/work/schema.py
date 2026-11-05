@@ -9,7 +9,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db.models import F
-from rebac import system_context, to_subject_ref
+from rebac import to_subject_ref
 from strawberry import auto
 from strawberry_django.auth.utils import get_current_user
 from strawberry_django.utils.requests import get_request
@@ -27,6 +27,7 @@ from angee.iam.graphql.relations import actor_scoped_to_many, actor_scoped_to_on
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
 from angee.iam.identity import public_subject_ref, user_display_labels, user_label, user_public_id
 from angee.projects.schema import DroppedReason, TaskType
+from angee.spaces.managers import MembershipQuerySet
 from angee.spaces.schema import SpaceGroupType
 from angee.work.models import Stage as StageModel
 
@@ -367,15 +368,14 @@ class WorkPeopleQuery:
         offered = target.has_access("share") and (
             Membership.MembershipRole.MODERATOR in Membership.objects.available_roles(group=target.team)
         )
-        with system_context(reason="work.project.manager_roster"):
-            seats = list(Membership.objects.confirmed().filter(
-                group_id=target.team_id, role=Membership.MembershipRole.MODERATOR,
-            ).order_by("pk")[:100])
-            people = {
-                person.pk: person.user for person in Person._base_manager.filter(
-                    pk__in=[seat.party_id for seat in seats], user__kind="person",
-                ).select_related("user")
-            }
+        seats = list(MembershipQuerySet.confirmed(cast(Any, Membership._base_manager.all())).filter(
+            group_id=target.team_id, role=Membership.MembershipRole.MODERATOR,
+        ).order_by("pk")[:100])
+        people = {
+            person.pk: person.user for person in Person._base_manager.filter(
+                pk__in=[seat.party_id for seat in seats], user__kind="person",
+            ).select_related("user")
+        }
         return ProjectManagerRosterType(offered=offered, people=[
             ProjectManagerPersonType(
                 subject=str(public_subject_ref(to_subject_ref(people[seat.party_id]))),
