@@ -64,14 +64,17 @@ live in code docstrings.
 
 ## Unreleased — REBAC decided statements per request
 
-- Pin django-zed-rebac at `93b9e90d9446` for bounded, witnessed read scopes
+- Pin django-zed-rebac at `5356ad6c9b86` for bounded, witnessed read scopes
   that compile decided statements per request while retaining reusable
   value-independent statements, and reuse decided statements across requests
   keyed on the decision outcome. The update also preserves Django's collected
   delete order, clears default ordering in recursive permission paths, shares
   compiled identity projections by use count with native statement probes, and
   bounds the library's compiled-statement cache by bytes
-  (`REBAC_STATEMENT_CACHE_BYTES`).
+  (`REBAC_STATEMENT_CACHE_BYTES`). The pinned head removes the queryset and
+  instance `as_user()` / `as_agent()` aliases (pin actors with `with_actor()`),
+  `scope_cte()`, `decision_scope()` and five inert settings, and adds
+  `RebacQuerySet.action()` and `rebac.relation_loading.pinned_actor()`.
 
 ## Unreleased — messaging historical import compatibility
 
