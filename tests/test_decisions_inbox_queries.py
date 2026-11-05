@@ -117,7 +117,8 @@ def test_inbox_list_group_count_and_record_queries_do_not_scale_per_row(composed
     # population plan stays fixed as the inbox grows from ten to fifty seats.
     assert counts["list"][0] <= counts["list"][1] == counts["list"][2], counts
     assert all(len(set(counts[name])) == 1 for name in ("groups", "record")), counts
-    for name, budget in (("list", 300), ("groups", 285), ("record", 310)):
+    # PostgreSQL currently measures 8/3/7; leave CI headroom for stable plan costs.
+    for name, budget in (("list", 10), ("groups", 5), ("record", 10)):
         assert max(counts[name]) <= budget, counts
 
 

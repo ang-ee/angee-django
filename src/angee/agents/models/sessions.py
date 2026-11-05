@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
 from datetime import datetime
 from types import MappingProxyType
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ValidationError
@@ -107,6 +107,7 @@ class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
     """
 
     sqid_prefix = "ase_"
+    record_display_paths: ClassVar[tuple[str, ...]] = ("title", "agent")
     agent = models.ForeignKey("agents.Agent", on_delete=models.CASCADE, related_name="sessions")
     # A session is its user's own conversation, not a transferable grant root: deleting
     # the user deletes it, and refuses while one of its turns still runs.

@@ -8,7 +8,7 @@ import secrets
 from collections.abc import Mapping
 from io import Reader
 from pathlib import Path
-from typing import Any, Self, cast
+from typing import Any, ClassVar, Self, cast
 from urllib.parse import urlencode
 
 from django.conf import settings
@@ -77,6 +77,8 @@ class File(TaggedModel, ProtectedTrashMixin, OwnerMixin, HistoryMixin, Protected
     ``owner`` grants access; ``created_by`` retains upload attribution.
     ``delete()`` moves the file to the trash; :meth:`purge` is the real delete.
     """
+
+    record_display_paths: ClassVar[tuple[str, ...]] = ("title", "filename")
 
     def _grant_dedup_reach(self, owner_id: Any) -> None:
         """Grant a dedup-hit file read reach to the requested ingest owner."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import ClassVar
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
@@ -32,6 +33,8 @@ class FileAttachment(AuditMixin, ProtectedRecordRefMixin, HistoryMixin, Protecte
     parent; creation follows the target relation the target's app declares in
     ``permissions.zed``.
     """
+
+    record_display_paths: ClassVar[tuple[str, ...]] = ("label", "file_id")
 
     merge_policy = MergePolicy.MOVE
     merge_identity = (("file", "content_type", "object_id"),)

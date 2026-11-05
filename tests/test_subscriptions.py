@@ -492,21 +492,23 @@ def test_change_gate_omits_an_unreadable_related_parent(monkeypatch) -> None:
     monkeypatch.setattr(access.apps, "get_model", lambda label: ScopedDoc)
     scopes = []
 
-    def unreadable(model, public_id, *, queryset):
+    def unreadable(model, public_ids, *, queryset):
         assert model is ScopedDoc
         assert queryset.model is ScopedDoc
-        scopes.append(queryset)
-        return None
+        scopes.append((queryset, tuple(public_ids)))
+        return {}
 
-    monkeypatch.setattr(access, "instance_from_public_id", unreadable)
+    monkeypatch.setattr(access, "instances_from_public_ids", unreadable)
+    references = tuple(ChangeRelatedRecord(model="tests.Parent", id=f"parent-{index}") for index in range(5))
     change = ChangePayload(
         model="tests.Child",
         id="child-1",
         action="update",
-        related_records=(ChangeRelatedRecord(model="tests.Parent", id="parent-1"),),
+        related_records=references,
     )
     assert gate._filter_related_records(change).related_records == ()
     assert len(scopes) == 1
+    assert scopes[0][1] == tuple(reference.id for reference in references)
 
 
 def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:

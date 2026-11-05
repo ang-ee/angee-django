@@ -46,7 +46,6 @@ class RecordBindingQuerySet[BindingT: RecordBinding](AngeeHistoryQuerySet[Bindin
 
         target = generic_target(self.model.require_saved(record, "record"))
         queryset = self.filter(**target.lookups(self.model, "target"))
-        queryset = queryset.select_related("page", "vault")
         return queryset if role is None else queryset.filter(role=self.model.normalize_role(role))
 
     def pages_for_record(self, record: models.Model, *, role: str | None = None) -> Self:

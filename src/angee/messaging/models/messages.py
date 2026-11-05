@@ -60,6 +60,8 @@ class MessageSubtype(AuditMixin, ProtectedDataModel, concrete=True):
     model; an empty value is a global subtype.
     """
 
+    record_display_paths: ClassVar[tuple[str, ...]] = ("name",)
+
 
     # The built-in subtype catalogue this base messaging slice ships: the closed set of
     # keys the chatter write path classifies messages under. The model owns the catalogue
@@ -194,6 +196,8 @@ class Message(
     message is withheld from every reader but channel managers and admins, and
     record chatter leaves it out of every read but its moderators' removed list.
     """
+
+    record_display_paths: ClassVar[tuple[str, ...]] = ("preview",)
 
     _inbox_attachment: ThreadAttachment | None = None
     """Authorized notification context set by the notification read owner."""
@@ -874,6 +878,8 @@ class Fragment(AuditMixin, ProtectedDataModel, concrete=True):
     own, mirroring storage's unscoped ``MimeType`` catalogue.
     """
 
+    record_display_paths: ClassVar[tuple[str, ...]] = ("text",)
+
 
     class FragmentKind(models.TextChoices):
         """What a fragment of text is."""
@@ -940,6 +946,8 @@ class Part(AuditMixin, ProtectedDataModel, concrete=True):
     inline document (``disposition=inline`` with a filename and a document type, as
     forwarded bills arrive); inline images are ``disposition=inline`` + ``cid``.
     """
+
+    record_display_paths: ClassVar[tuple[str, ...]] = ("type", "role")
 
 
     class Disposition(models.TextChoices):

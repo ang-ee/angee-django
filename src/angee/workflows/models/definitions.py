@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, ClassVar
 
 from django.apps import apps
 from django.conf import settings
@@ -41,6 +41,8 @@ class Workflow(ServiceUserMixin, ResourceLoadMixin, OwnerMixin, HistoryMixin, Pr
     An install without a user-backed actor leaves it ownerless, for platform
     administrators to manage or transfer.
     """
+
+    record_display_paths: ClassVar[tuple[str, ...]] = ("name",)
 
     resource_class = WorkflowDefinitionResource
     rebac_grantable = {"editor": "write", "viewer": "write", "starter": "write", "operator": "write"}
@@ -112,6 +114,8 @@ WorkflowVersionManager = AngeeHistoryManager.from_queryset(WorkflowVersionQueryS
 
 class WorkflowVersion(ProtectedAppendOnlyModel, ProtectedDataModel, concrete=True):
     """Immutable normalized graph document selected when a run starts."""
+
+    record_display_paths: ClassVar[tuple[str, ...]] = ("number",)
 
     sqid_prefix = "wfv_"
 

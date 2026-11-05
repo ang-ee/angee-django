@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 from django.core.exceptions import ValidationError
 from django.db import models, router, transaction
@@ -41,6 +41,8 @@ class Dashboard(
     concrete=True,
 ):
     """One installed baseline or actor-owned complete dashboard snapshot."""
+
+    record_display_paths: ClassVar[tuple[str, ...]] = ("name",)
 
     resource_class = DashboardResource
     immutable_fields = ("is_baseline",)

@@ -9,6 +9,7 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.db import models
+from django.db.models import Prefetch, prefetch_related_objects
 from rebac.graphql.strawberry_django import optimize
 from strawberry import auto
 from strawberry.scalars import JSON
@@ -37,6 +38,15 @@ from angee.iam.schema import UserType
 
 Decision = apps.get_model("decisions", "Decision")
 DecisionRecord = apps.get_model("decisions", "DecisionRecord")
+
+
+def _concern_links(info: strawberry.Info) -> Prefetch:
+    """Batch readable concern links and their generic targets for label projection."""
+    actor = get_current_user(info)
+    links = with_record_reference_access(
+        DecisionRecord.objects.with_actor(actor).with_action("read"), select=False,
+    ).filter(_angee_record_readable=True).prefetch_related("record")
+    return Prefetch("records", queryset=links, to_attr="_concern_links")
 
 
 @strawberry_django.type(DecisionRecord)
@@ -73,21 +83,16 @@ class DecisionType(ProtectedNode):
     revision: auto
     created_at: auto
     updated_at: auto
-    display_name: str = strawberry_django.field(resolver=ProtectedNode.display_name, only=["kind"])
     is_open: bool = strawberry_django.field(only=["verdict"])
     permissions = permissions_field(("act",))
 
-    @strawberry_django.field(only=["id"])
+    @strawberry_django.field(prefetch_related=[_concern_links])
     def concerns_label(self, info: strawberry.Info) -> str:
-        """The readable records this question concerns, by their own labels (a bill number, a supplier).
-
-        One read per decision when selected: the dashboard's attention table names the bill
-        beside the question; the inbox list links the records through ``records`` instead.
-        """
-        actor = get_current_user(info)
-        links = DecisionRecord.objects.with_actor(actor).filter(decision_id=cast(Any, self).pk)
-        return "; ".join(str(link.record) for link in with_record_reference_access(links)
-                         if link._angee_record_readable and link.record is not None)
+        """Label readable concern targets from the selected decision batch."""
+        row = cast(models.Model, self)
+        if not hasattr(row, "_concern_links"):
+            prefetch_related_objects([row], _concern_links(info))
+        return "; ".join(str(link.record) for link in cast(Any, row)._concern_links if link.record is not None)
 
 
 _DECISIONS = hasura_model_resource(

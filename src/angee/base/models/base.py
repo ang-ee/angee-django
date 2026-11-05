@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import ClassVar, Self
 
-from django.core.exceptions import ValidationError
+from django.core import checks
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import models
 from django_compose.models import Composable
 
@@ -33,10 +34,46 @@ class AngeeModel(
 
     objects: ClassVar[models.Manager[Self]] = AngeeManager()
     _angee_base: ClassVar[models.Manager[Self]] = AngeeManager()
+    record_display_paths: ClassVar[tuple[str, ...] | None] = None
+    """Direct columns and forward relations used by ``record_display_label``.
+
+    ``None`` loads only the key for Django's default ``__str__``, or every
+    concrete column for a custom label. Related rows are prefetched separately;
+    an unreadable related label falls back to the model name in GraphQL.
+    """
 
     class Meta:
         abstract = True
         base_manager_name = "_angee_base"
+
+    @classmethod
+    def check(cls, **kwargs: object) -> list[checks.CheckMessage]:
+        """Reject label dependencies that the generic GraphQL hint cannot express."""
+
+        errors = super().check(**kwargs)
+        paths = cls.record_display_paths
+        if paths is None:
+            return errors
+        if not isinstance(paths, tuple):
+            return [
+                *errors,
+                checks.Error("record_display_paths must be a tuple of direct field names.", obj=cls, id="angee.E050"),
+            ]
+        for path in paths:
+            if not isinstance(path, str) or "__" in path:
+                errors.append(
+                    checks.Error(f"record_display_paths requires a direct field: {path!r}.", obj=cls, id="angee.E050")
+                )
+                continue
+            try:
+                field = cls._meta.get_field(path)
+            except FieldDoesNotExist:
+                field = None
+            if field is None or not field.concrete or field.many_to_many:
+                errors.append(
+                    checks.Error(f"record_display_paths names no concrete field: {path!r}.", obj=cls, id="angee.E050")
+                )
+        return errors
 
     def retained(self) -> bool:
         """Whether an installed live or historical reference retains this row."""

@@ -62,6 +62,8 @@ from angee.provenance.statements import (
 class SyncStream(SyncStateMixin, AuditMixin, ProtectedDataModel, concrete=True):
     """An epoch's opaque progress and adapter-owned policy for one partition."""
 
+    record_display_paths: ClassVar[tuple[str, ...]] = ("key", "partition")
+
     sqid_prefix = "sst_"
     integration = models.ForeignKey("integrate.Integration", on_delete=models.PROTECT, related_name="sync_streams")
     key = models.CharField(max_length=160)
@@ -224,6 +226,8 @@ class RecordLink(
     ``outbox_last_error`` retains the same evidence shape for the latest refused
     or failed write; a null outbox state means no write is pending.
     """
+
+    record_display_paths: ClassVar[tuple[str, ...]] = ("external_key",)
 
     # A link's history is sync evidence read through its target: no timeline of its own.
     timeline_subject = False

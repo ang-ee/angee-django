@@ -12,15 +12,15 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from rebac import ObjectRef, SubjectRef, current_actor
 from rebac.backends import backend
-from rebac.field_visibility import check_field_access, gated_read_fields
+from rebac.field_visibility import check_field_access, gated_read_fields, visible_id_sets
 from rebac.resources import model_resource_type
 from rebac.schema import Definition
 from rebac.schema.walker import field_gated_actions
 from strawberry.permission import BasePermission
 from strawberry_django.auth.utils import get_current_user
 
-from angee.base.models.identity import instance_from_public_id
-from angee.graphql.events import ChangeEvent, ChangePayload
+from angee.base.models.identity import instances_from_public_ids
+from angee.graphql.events import ChangeEvent, ChangePayload, ChangeRelatedRecord
 from angee.iam.permissions import (
     current_actor_has_role,
     effective_rebac_definition,
@@ -233,15 +233,21 @@ class ChangeReadGate:
     def _filter_related_records(self, change: ChangePayload) -> ChangePayload:
         """Retain only canonical related rows readable by this subscriber."""
 
-        readable = []
+        references: list[tuple[ChangeRelatedRecord, type[models.Model]]] = []
+        by_model: dict[type[models.Model], list[str]] = {}
         for reference in change.related_records:
             try:
                 model = apps.get_model(reference.model)
             except LookupError, ValueError:
                 continue
+            references.append((reference, model))
+            by_model.setdefault(model, []).append(reference.id)
+
+        readable_ids: dict[type[models.Model], set[str]] = {}
+        for model, ids in by_model.items():
             scope = require_rebac_queryset(model).with_actor(self.actor).with_action("read")
-            if instance_from_public_id(model, reference.id, queryset=scope) is not None:
-                readable.append(reference)
+            readable_ids[model] = set(instances_from_public_ids(model, ids, queryset=scope))
+        readable = [reference for reference, model in references if reference.id in readable_ids[model]]
         return replace(change, related_records=tuple(readable))
 
     def _redact(
@@ -260,16 +266,12 @@ class ChangeReadGate:
         if not self.gated_fields or payload.changed_fields is None:
             return payload
 
-        denied: set[str] = set()
-        for field_name in set(payload.changed_fields) & set(self.gated_fields):
-            result = check_field_access(
-                self.active_backend,
-                subject=self.actor,
-                action=f"read__{field_name}",
-                resource=resource,
-            )
-            if not result.allowed:
-                denied.add(field_name)
+        fields = frozenset(payload.changed_fields) & self.gated_fields
+        visible = visible_id_sets(
+            model=self.model, actor=self.actor, fields=fields,
+            resource_ids=(resource.resource_id,), active_backend=self.active_backend,
+        )
+        denied = {field_name for field_name in fields if resource.resource_id not in visible[field_name]}
         return payload.redacted(denied)
 
 

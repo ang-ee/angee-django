@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from typing import Any
+from typing import Any, ClassVar
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -41,6 +41,8 @@ def _user(actor: Any, *, using: str, active: bool = True) -> Any:
 
 class Decision(OptimisticLockMixin, ProtectedAppendOnlyModel, ProtectedDataModel, concrete=True):
     """An immutable question; answering records choices without applying them."""
+
+    record_display_paths: ClassVar[tuple[str, ...]] = ("kind",)
 
     sqid_prefix = "dcn_"
     kind = models.CharField(max_length=200)

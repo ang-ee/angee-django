@@ -249,6 +249,11 @@ jobs:
             tests/test_task_project_ordering.py \
             tests/test_rebac_queries.py::test_recursive_reads_stay_bounded_across_nineteen_levels \
             tests/test_graphql_statement_budgets.py \
+            tests/test_storage_access_campaign.py::test_record_files_document_batches_nested_file_rows \
+            tests/test_storage_access_campaign.py::test_record_files_document_has_no_audit_writes \
+            tests/test_storage_access_campaign.py::test_file_attachments_document_stays_flat_at_one_and_five \
+            tests/test_messaging_source_threads.py::test_record_source_threads_document_batches_nested_threads \
+            tests/test_decisions_inbox_queries.py::test_inbox_list_group_count_and_record_queries_do_not_scale_per_row \
             tests/test_messaging_delivery.py tests/test_messaging_delivery_concurrency.py \
             tests/test_base_row_lock.py \
             tests/test_connections.py::test_ensure_fresh_serializes_two_processes_on_postgresql \

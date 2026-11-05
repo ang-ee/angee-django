@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -26,6 +26,7 @@ class Note(
     Metadata and body changes are recorded through native ``history``.
     """
 
+    record_display_paths: ClassVar[tuple[str, ...]] = ("title",)
 
     @classmethod
     def record_changed_grant_targets(cls, trigger: Any) -> tuple[TriggerGrantTarget, ...]:

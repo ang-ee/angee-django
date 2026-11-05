@@ -61,7 +61,7 @@ class NotesQueryBudgetTests(TransactionTestCase):
         self.assertEqual(counts[1], counts[2], f"Reading label titles must batch across populations: {counts}")
 
     def test_audit_labels_batch_distinct_editors(self) -> None:
-        """The real HTTP optimizer batches 25 distinct editors into one relation read."""
+        """One Notes SELECT projects both User labels for 25 distinct editors."""
 
         call_command("rebac", "sync", verbosity=0)
         note_model = apps.get_model("notes", "Note")
@@ -112,7 +112,7 @@ class NotesQueryBudgetTests(TransactionTestCase):
                     for item in captured
                 )
             )
-        self.assertEqual(counts, [2, 2])
+        self.assertEqual(counts, [1, 1])
 
         # This composed host provisions the whole relation graph, so it can
         # exercise the real User deletion collector and native SET_NULL behavior.

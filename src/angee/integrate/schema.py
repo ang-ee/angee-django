@@ -1385,7 +1385,6 @@ class SyncFailureType:
 class SyncStreamType(ProtectedNode):
     """Read-only inspection of a bridge partition's retained epoch."""
 
-    display_name = strawberry_django.field(resolver=ProtectedNode.display_name, only=["key", "partition"])
     integration: IntegrationType
     key: auto
     partition: auto
@@ -1433,7 +1432,6 @@ class SyncStreamType(ProtectedNode):
 class RecordLinkType(ProtectedNode):
     """Read-only identity, comparison bases and deletion evidence."""
 
-    display_name = strawberry_django.field(resolver=ProtectedNode.display_name, only=["external_key"])
     stream: SyncStreamType
     external_key: auto
     status: auto

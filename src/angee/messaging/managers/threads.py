@@ -381,7 +381,6 @@ class ThreadAttachmentManager[ThreadAttachmentT: ThreadAttachment](AngeeHistoryM
         return (
             self.all()
             .scoped()
-            .select_related("thread")
             .filter(
                 **generic_target(record).lookups(self.model, "target"),
                 role="source",
