@@ -11,7 +11,10 @@ from angee.provenance.context import changeset_model
 from tests.conftest import MarkdownPage, Page, Vault
 from tests.knowledge_campaign import clone_template as clone_template
 
-pytestmark = pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL clone two-writer contract")
+pytestmark = [
+    pytest.mark.postgresql,
+    pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL clone two-writer contract"),
+]
 
 
 def test_two_same_key_claims_commit_one_complete_clone(clone_template, monkeypatch):

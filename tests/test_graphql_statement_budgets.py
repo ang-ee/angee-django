@@ -76,6 +76,8 @@ from tests.messaging_campaign import make_user
 from tests.test_messaging_graphql import _storage_drive
 from tests.test_timeline import KINDS
 
+pytestmark = pytest.mark.postgresql
+
 ROOT = Path(__file__).resolve().parents[1]
 DECISIONS = authored_graphql_document(
     ROOT / "src/angee/decisions/web/src/documents.console.ts", "RecordDecisionsDocument"

@@ -5,11 +5,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from django.db import connection
 
 from tests.composed_host import COMPOSED_TEST_TIMEOUT, assert_composed_report
 
 
+@pytest.mark.postgresql
 def test_composed_workflows_parties(tmp_path: Path) -> None:
     """Keep composition, connections and registries local to the selected worker."""
     root = Path(__file__).resolve().parents[1]

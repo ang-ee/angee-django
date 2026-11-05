@@ -520,6 +520,7 @@ def test_path_index_declares_pattern_ops() -> None:
         assert len(path_indexes) == 1, f"{model.__name__} must carry one path pattern-ops index"
 
 
+@pytest.mark.postgresql
 @pytest.mark.skipif(
     os.environ.get("DATABASE_URL", "").split(":", 1)[0] not in {"postgres", "postgresql"},
     reason="requires DATABASE_URL backed by PostgreSQL",

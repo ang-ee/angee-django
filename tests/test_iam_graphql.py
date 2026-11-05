@@ -1849,6 +1849,7 @@ def test_disconnect_account_blocks_last_oidc_sign_in_method_for_passwordless_use
         assert Credential.objects.filter(user=user, external_account=account).exists()
 
 
+@pytest.mark.postgresql
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required.")
 @pytest.mark.parametrize("second_path", ("self_service", "administrator"))
 def test_competing_oidc_disconnects_keep_one_sign_in_method(

@@ -88,6 +88,7 @@ postgres = ["psycopg[binary,pool]>=3.2"]
 [dependency-groups]
 dev = [
     "daphne>=4.0",
+    "copier>=9,<10",
     "django-zed-rebac[caveats] @ git+https://github.com/ang-ee/django-zed-rebac.git@93b9e90d9446fb4e575bc54e3261bf43914cd359",
     "faker>=30.0",
     "psycopg[binary,pool]>=3.2",
@@ -202,6 +203,7 @@ only-include = ["pyproject.toml", "LICENSE", "LICENSE.GPL"]
 
 [tool.pytest.ini_options]
 cache_dir = ".pytest_cache"
+django_find_project = false
 DJANGO_SETTINGS_MODULE = "tests.settings"
 python_files = ["test_*.py"]
 testpaths = ["tests", "src/angee/resources/tests"]

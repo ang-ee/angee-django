@@ -5,9 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
-import pytest
-from django.apps import AppConfig, apps
-from django.core.management import call_command
+from django.apps import AppConfig
 from django_compose.artifacts import atomic_write
 
 
@@ -33,17 +31,3 @@ def emit_permissions(app_configs: Iterable[AppConfig], runtime: Path, *, sources
         relative = merged_schema_relpath(config.name)
         path = runtime / relative if relative in sources else declared_schema_path(config)
         bind_rebac_schema(config, path)
-
-
-@pytest.fixture
-def composed_permissions(composed_tables: None, restore_composed_permission_bindings: None, tmp_path: Path) -> None:
-    """Bind installed contributions and let native sync persist their schema."""
-
-    # Permission compilation reads Django models; fixture execution follows setup.
-    from angee.iam.build import extension_source_map
-
-    configs = list(apps.get_app_configs())
-    sources = extension_source_map(configs, field_owners=installed_field_owners(configs))
-    runtime = tmp_path / "permissions"
-    emit_permissions(configs, runtime, sources=sources)
-    call_command("rebac", "sync", "--force-overwrite", "--yes", verbosity=0)

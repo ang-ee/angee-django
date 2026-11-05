@@ -713,6 +713,7 @@ def test_concrete_child_keeps_the_loaded_parents_database(record_ref_tables, dja
         del connections.databases[alias]
 
 
+@pytest.mark.postgresql
 def test_inherited_record_refs_obey_the_native_parameter_budget(composed_tables, monkeypatch):
     """SQLite chunks parameters; PostgreSQL binds the identities as one array."""
     with system_context(reason="test.refs.parameter_batches"):

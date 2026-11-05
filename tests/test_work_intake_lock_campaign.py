@@ -16,6 +16,7 @@ from tests.test_decisions_concurrency import submit
 from tests.test_projects_wave3_campaign import project_case as project_case
 
 pytestmark = [
+    pytest.mark.postgresql,
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="Real PostgreSQL row locks are required."),
 ]

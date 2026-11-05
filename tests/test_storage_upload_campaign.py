@@ -293,6 +293,7 @@ def test_prune_cascades_failed_and_abandoned_edges_without_deleting_surviving_by
     assert (tmp_path / survivor.storage_path).read_bytes() == PNG_BYTES
 
 
+@pytest.mark.postgresql
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL canonical upload-target locking contract")
 def test_draft_locks_canonical_mti_target_before_inserting_file(drive: Any, composed_permissions: None) -> None:
     admin = create_platform_admin("target-lock-admin")
@@ -326,6 +327,7 @@ def test_draft_locks_canonical_mti_target_before_inserting_file(drive: Any, comp
     assert edge.object_id == child.pk
 
 
+@pytest.mark.postgresql
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL two-writer ingest collision contract")
 def test_two_ingest_writers_converge_without_losing_rows_or_objects(
     drive: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,

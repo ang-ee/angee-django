@@ -409,6 +409,7 @@ def test_file_attachment_attach_converges_across_mti_levels(tmp_path: Path, driv
         assert FileAttachment._base_manager.count() == 1
 
 
+@pytest.mark.postgresql
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(
     connection.vendor != "postgresql",

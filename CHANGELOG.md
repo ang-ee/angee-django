@@ -8,6 +8,13 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — test contract coverage
+
+- The PostgreSQL CI lane selects marked contracts; isolated settings, the notes
+  example, Redis publication, template rendering, and generated adapters have
+  executable CI checks. Neutral GraphQL delete operations load REBAC only when
+  the REBAC app is installed.
+
 ## Unreleased — integration dead paths
 
 - Removed the outbound integration event fan-out and inbound VCS webhook dispatch,

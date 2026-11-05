@@ -154,6 +154,7 @@ def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: No
     assert read_timeline(vault, owner, kinds=["workflows.run"])["timeline"]["entries"] == []
 
 
+@pytest.mark.postgresql
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("activity_catalog")
 @override_settings(ANGEE_TIMELINE_KINDS=KINDS)

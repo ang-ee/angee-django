@@ -291,6 +291,7 @@ def test_ingest_batch_write_cost_and_events(
         assert current - previous <= 105 * (current_size - previous_size)
 
 
+@pytest.mark.postgresql
 @pytest.mark.django_db(transaction=True)
 def test_ingest_trigger_probe_database_error_rolls_back_batch(
     channel: Any, monkeypatch: pytest.MonkeyPatch,
@@ -723,6 +724,7 @@ def test_source_thread_correction_compares_locked_prior_and_keeps_native_counter
             Message.objects.ingest([parsed], channel=channel, explicit_thread=first, expected_thread=third)
 
 
+@pytest.mark.postgresql
 @pytest.mark.django_db(transaction=True)
 def test_source_thread_correction_race_has_one_compare_and_set_winner(channel: Any) -> None:
     if connection.vendor != "postgresql":

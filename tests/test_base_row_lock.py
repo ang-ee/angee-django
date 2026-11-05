@@ -93,6 +93,7 @@ def test_unfiltered_conflict_updates_cannot_mutate_system_rows(composed_tables: 
     assert row.label == "System"
 
 
+@pytest.mark.postgresql
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Real READ COMMITTED interleaving is required.")
 @pytest.mark.parametrize("manager_path", ("default", "base"))

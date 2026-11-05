@@ -15,6 +15,7 @@ from tests.iam_campaign import Person
 from tests.iam_campaign import iam_admin as iam_admin
 
 pytestmark = [
+    pytest.mark.postgresql,
     pytest.mark.django_db(transaction=True),
     pytest.mark.skipif(connection.vendor != "postgresql", reason="PostgreSQL IAM row-lock and two-writer contract"),
 ]

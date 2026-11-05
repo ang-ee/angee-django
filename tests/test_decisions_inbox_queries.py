@@ -4,6 +4,7 @@ import json
 from collections import Counter
 from unittest.mock import patch
 
+import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relationships
@@ -35,6 +36,7 @@ RECORD = """query InboxRecord($id: String!) {
 }""".replace("FIELDS", FIELDS)
 
 
+@pytest.mark.postgresql
 def test_inbox_list_group_count_and_record_queries_do_not_scale_per_row(composed_tables, tmp_path):
     """Measure real non-admin list, grouped counts, and detail at 1, 10, 50 seats."""
     issuer = create_user("inbox-cost-issuer")

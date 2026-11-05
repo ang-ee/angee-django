@@ -62,6 +62,7 @@ def test_large_permission_reads_keep_one_application_statement(
     assert counts == [3, 3], (resource_type, permission, counts)
 
 
+@pytest.mark.postgresql
 @pytest.mark.parametrize(
     "resource_type",
     ("storage/folder", "knowledge/page"),

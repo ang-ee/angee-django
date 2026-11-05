@@ -77,6 +77,7 @@ def record_files_reads(drive: Any, capture_graphql_document: Any) -> list[Any]:
     return reads
 
 
+@pytest.mark.postgresql
 def test_record_files_document_batches_nested_file_rows(record_files_reads: list[Any]) -> None:
     one, five, ten, twenty = record_files_reads
     for read in (five, ten, twenty):
@@ -87,11 +88,13 @@ def test_record_files_document_batches_nested_file_rows(record_files_reads: list
         read.assert_no_audit_writes()
 
 
+@pytest.mark.postgresql
 def test_record_files_document_has_no_audit_writes(record_files_reads: list[Any]) -> None:
     for read in record_files_reads:
         read.assert_no_audit_writes()
 
 
+@pytest.mark.postgresql
 def test_file_attachments_document_stays_flat_at_one_and_five(
     drive: Any,
     capture_graphql_document: Any,

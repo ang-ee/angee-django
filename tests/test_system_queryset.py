@@ -129,6 +129,7 @@ def system_query_tables() -> Iterator[None]:
         yield
 
 
+@pytest.mark.postgresql
 @POSTGRESQL_ONLY
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("model", [SystemQueryThing])
@@ -145,6 +146,7 @@ def test_system_queryset_emits_for_update_on_postgresql(system_query_tables: Non
 
 
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.postgresql
 def test_queryset_lock_facade_executes_skip_locked_no_key(system_query_tables: None) -> None:
     """The public facade executes PostgreSQL lock options and SQLite's unlocked floor."""
 

@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from django.apps import apps
-from django.conf import settings
 from django.core.management import call_command
 from django.db.models.signals import post_migrate
 from pytest_django.plugin import DjangoDbBlocker
 
-from angee.iam.testing.permissions import composed_permissions as composed_permissions
+from angee.iam.testing.permissions import emit_permissions, installed_field_owners
 
 if TYPE_CHECKING:
     from angee.iam.testing.graphql import GraphQLDocumentRead
@@ -25,14 +25,10 @@ def django_db_setup(
 ) -> Iterator[None]:
     """Install the host's permission schema and restore it after transaction flushes.
 
-    Native Django database setup owns table creation. A composed host gets the
-    same REBAC lifecycle as a provisioned application. Bare source-model tests
-    own their per-test schemas through ``composed_permissions`` instead.
+    Native Django database setup owns table creation. Synchronize the host
+    schema once and after each transactional test flush. Tests that bind their
+    own schema use ``composed_permissions`` for the additional sync.
     """
-
-    if not getattr(settings, "COMPOSE_OUTPUT_DIR", None):
-        yield
-        return
 
     rebac_app = apps.get_app_config("rebac")
 
@@ -62,16 +58,28 @@ def restore_composed_permission_bindings(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 @pytest.fixture()
-def composed_tables(transactional_db: None) -> None:
-    """Use Django's test tables and synchronize their REBAC permissions.
+def composed_tables(db: None) -> None:
+    """Use Django's savepoint-isolated tables and session-synchronized permissions.
 
-    ``transactional_db`` delegates table creation and per-test cleanup to
-    pytest-django and Django. Permission synchronization runs after native
-    database setup and after the previous test's flush.
+    Tests requiring separate connections or commit visibility declare
+    ``django_db(transaction=True)``; pytest-django then selects its transactional
+    database fixture and the post-migrate hook restores the REBAC schema.
     """
 
-    del transactional_db
-    call_command("rebac", "sync", verbosity=0)
+    del db
+
+
+@pytest.fixture
+def composed_permissions(composed_tables: None, restore_composed_permission_bindings: None, tmp_path: Path) -> None:
+    """Bind installed contributions and let native sync persist their schema."""
+
+    from angee.iam.build import extension_source_map
+
+    configs = list(apps.get_app_configs())
+    sources = extension_source_map(configs, field_owners=installed_field_owners(configs))
+    runtime = tmp_path / "permissions"
+    emit_permissions(configs, runtime, sources=sources)
+    call_command("rebac", "sync", "--force-overwrite", "--yes", verbosity=0)
 
 
 @pytest.fixture

@@ -575,6 +575,7 @@ def test_project_setup_contracts(tmp_path: Path, storage: str, group: str):
     )
 
 
+@pytest.mark.postgresql
 def test_project_attention_postgresql_contracts(tmp_path: Path):
     """Run the attention projection pins in a composed PostgreSQL host."""
 

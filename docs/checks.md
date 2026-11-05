@@ -91,50 +91,18 @@ boundaries and optional state-field declarations. See the
 [Database routing rule](backend/guidelines.md#rules) for persistence checks.
 
 The PostgreSQL lane in [reusable checks](../.github/workflows/reusable-checks.yml)
-covers workflow definition, publication, execution,
-[settlement recovery](../tests/test_workflows_fix_round.py), authorization, concurrency,
-test-harness and composed-consumer contracts, plus decision
-[lifecycle](../tests/test_decisions_lifecycle.py) and
-[concurrency](../tests/test_decisions_concurrency.py). This named file selection
-also covers [review waiters](../tests/test_workflows_review.py), their
-[locking races](../tests/test_workflows_review_concurrency.py),
-[execution links](../tests/test_workflows_review_graphql.py), and
-[inbox predicates](../tests/test_decisions_inbox.py),
-[committed timeline waits and inherited record feeds](../tests/test_timeline_workflows.py),
-[shared Timeline source and nullable fold columns](../tests/test_timeline_tasks.py),
-[the one-statement, 275 KB Timeline read guard](../tests/test_timeline.py), plus the
-[agent session loop](../tests/test_agent_sessions.py) and its
-[locking races](../tests/test_agent_sessions_concurrency.py), plus
-[connection discovery races](../tests/test_integrate_discovery_concurrency.py),
-[cross-addon reply and inbound joins](../tests/test_framework_integration.py),
-[task project ordering locks](../tests/test_task_project_ordering.py),
-[delivery contracts](../tests/test_messaging_delivery.py) with PostgreSQL
-[sweep, claim-fence and held-action races](../tests/test_messaging_delivery_concurrency.py), and the
-[comment reply workflow and scheduling races](../tests/test_workflows_posts.py).
-It also runs [task ordering](../tests/test_task_rank_allocation.py),
-[record tasks](../tests/test_projects_record_tasks.py), and the
-[projects access campaign](../tests/test_projects_wave3_campaign.py). The selection
-runs the remaining PostgreSQL-only row-lock, hierarchy, IAM, knowledge,
-messaging, proposal, sequence, space, storage, system-queryset, work and
-integration contracts, including the composed
-[intake access decision](../tests/test_intake_access_decision.py). The
-`test_connections.py` and `test_system_queryset.py` files contribute only their
-PostgreSQL test nodes because each also has SQLite-only tests. The PostgreSQL
-branches in `test_extraction_models.py` and `test_knowledge_access_campaign.py`
-also run by node; other listed files run whole. This preserves the SQLite floor
-tests and the PostgreSQL zero-skip gate, which counts strict expected failures
-as executed tests rather than skips. The six
-groups use the [PostgreSQL timing map](../.test_durations_postgres) with
-pytest-split's `least_duration` algorithm, four xdist workers grouped by file,
-`--nomigrations`, a JUnit report, and a zero-skip gate. Pytest-django creates a
-separate PostgreSQL test database for each worker. The composed-host subprocess
-tests use Django's test runner to create separate worker-named secondary test
-databases; every caller bounds the subprocess with the one hang limit in
-[`composed_host.py`](../tests/composed_host.py). The full suite runs on SQLite
-with migrations enabled and `DATABASE_URL` unset; do not
-apply the PostgreSQL lane's settings to the full suite. PostgreSQL-only modules
-skip explicitly on SQLite. Report those skips separately from the PostgreSQL
-lane's executed coverage.
+selects `@pytest.mark.postgresql` contracts from the `tests` tree. Tests that
+require row locks, independent connections, or PostgreSQL-specific SQL carry
+this marker at the test or module owner. The six groups use the
+[PostgreSQL timing map](../.test_durations_postgres) with pytest-split's
+`least_duration` algorithm, four xdist workers grouped by file,
+`--nomigrations --create-db`, a JUnit report, and a gate that requires marked
+tests and zero skips. Pytest-django creates a separate PostgreSQL test database
+for each worker. Composed-host subprocess tests use Django's test runner to
+create separate worker-named secondary databases; callers bound the subprocess
+with the shared limit in [`composed_host.py`](../tests/composed_host.py).
+The full suite runs on SQLite with migrations enabled and `DATABASE_URL` unset.
+PostgreSQL-only modules skip explicitly on SQLite.
 
 Local pytest remains serial and keeps its normal ordering: `addopts` disables
 pytest-randomly and does not select workers. An explicit `-p randomly` re-enables
@@ -168,33 +136,19 @@ for read in (one, many):
     read.assert_bytes(total=120_000, largest=80_000)
 ```
 
-Every ceiling is a maximum. Set it from today's measured value with CI headroom;
-a lane that lowers a cost lowers its ceiling in the same change. Compare one and
-five rows by default. Pin exact statement equality at one, five, ten and twenty
-rows to catch fixed membership steps as well as per-row growth:
+Every ceiling is a maximum. Set it from measured values with headroom, and
+lower it when a change reduces the cost. Compare one and at least five visible
+rows, then use `assert_flat_from` across larger sizes where policy or row-count
+growth matters. Pin the document's behavior and cost rather than a dependency's
+SQL spelling, statement order, or exact internal count. Pass `cause=` to
+`assert_bytes` to name the mechanism behind a changed byte ceiling. Read paths
+should assert zero permission-audit writes. When that contract is still failing,
+keep a separate strict expected failure naming the owning behavior.
 
-```python
-assert five.statement_count == one.statement_count == 7
-ten.assert_flat_from(five)
-twenty.assert_flat_from(ten)
-```
-
-Name the library mechanism and the lane that removes the step; a count growing
-from five to ten or twenty rows is a defect, not a fixed step. Pass `cause=` to
-`assert_bytes` to name the library mechanism behind a changed byte ceiling in
-its failure message. Pin any remaining audit INSERTs with
-`assert_audit_inserts(maximum)` while keeping the
-zero-write assertion in a separate test marked
-`@pytest.mark.xfail(strict=True, reason="<fixing lane>: ...")`. A strict xfail
-turns an unexpectedly passing assertion into a failure for cleanup. The
-[first document pins](../tests/test_graphql_statement_budgets.py) run on SQLite
-and in the PostgreSQL selection in [reusable checks](../.github/workflows/reusable-checks.yml).
-
-Consumer suites register `angee.iam.testing.fixtures` in `pytest_plugins`,
-request its `capture_graphql_document` fixture, and pass their authored list or
-form document against the consumer's composed schema. This lets ARP's bill
-list and form tests use the same statement, audit and byte assertions without
-importing the framework's `tests` package.
+Consumer suites can register `angee.iam.testing.fixtures` in `pytest_plugins`
+and use `capture_graphql_document` with their authored documents. ARP does not
+yet use this guard for its bill list or form; its invoice test has a separate
+SQL measurement.
 
 ### Source-addon Test Models
 
@@ -206,9 +160,11 @@ package docstrings own the adoption contract. Other reusable concrete
 compositions, including [`decisions`](../src/angee/decisions/testing/models.py)
 and [`messaging`](../src/angee/messaging/testing/models.py), register once
 through imports in the root conftest before database setup. The IAM-owned
-[`composed_tables`](../src/angee/iam/testing/fixtures.py) fixture uses native transactional
-isolation and synchronizes REBAC after each flush; use the native `db` fixture
-when a test needs neither transaction behavior nor permission synchronization.
+[`composed_tables`](../src/angee/iam/testing/fixtures.py) fixture uses
+pytest-django's savepoint isolation by default. The database setup fixture
+synchronizes REBAC once and again after a transactional test flush. Tests needing
+independent connections or commit visibility declare `django_db(transaction=True)`;
+`composed_permissions` resynchronizes a temporary schema for its test.
 Composed hosts also install their schema during native database setup. Register
 `angee.iam.testing.fixtures` through the root conftest's `pytest_plugins`; a runner
 that loads it explicitly must pass `-p django -p angee.iam.testing.fixtures` in that
@@ -479,8 +435,13 @@ database, and these commands do not create one.
 [reusable checks](../.github/workflows/reusable-checks.yml) on pull requests and
 pushes to `main`. The current tiers are:
 
-- **Python quality:** Ruff over the source tree and mypy over addons,
-  using the locked framework environment.
+- **Python quality:** Ruff, mypy, the four isolated-settings modules, the
+  generated-adapter check, and the provenance engine checks use the locked
+  framework environment.
+- **Notes example:** the composed host runs the complete `example.notes.tests`
+  package in its own 60-minute job using the locked framework environment.
+- **Redis publication:** a Redis service runs the cross-process workflow wake
+  contract in a separate job.
 - **SQLite:** the full framework Python suite once, as six shards that
   pytest-split cuts into contiguous chunks of equal stored time from the
   committed [durations](../.test_durations), so each test file stays in one or two
@@ -490,21 +451,20 @@ pushes to `main`. The current tiers are:
   remain part of this suite. Per-file scheduling keeps a file on one worker, so the
   heaviest files (the proposals access, owner-gate adopters and agents GraphQL
   campaigns, about 700 stored seconds each) set a floor near 25 minutes on CI.
-  Their cost is per-test fixture setup, a `rebac sync` before every test; making
-  that setup cheaper is how the limit comes down.
+  The default source fixture now uses savepoint isolation and a session-level
+  REBAC sync; tests that request transactional isolation still pay for a flush.
 - **PostgreSQL:** in six shards of its own beside the SQLite ones, assigned by
   pytest-split's `least_duration` algorithm over
-  [PostgreSQL timings](../.test_durations_postgres), the named PostgreSQL contract
-  selection runs with `-n 4 --dist loadfile --nomigrations` and a 60-minute
-  limit (four groups ran 28-40 min of CI wall in run 41777088918, one cancelled
-  at the old 40-minute limit). It prints its 25
+  [PostgreSQL timings](../.test_durations_postgres), the `postgresql` marker
+  selection runs with `-n 4 --dist loadfile --nomigrations --create-db` and a
+  60-minute limit. It prints its 25
   slowest test durations; each shard writes JUnit output and checks that it did
   not skip tests. Its server runs with `max_locks_per_transaction = 256`, since
   each worker creates every table in one transaction. The `uv` job passes only
   when Python quality and every shard of both test suites pass, so callers keep
   one check name.
-- **Packages:** framework package typecheck/test/build and export/distribution
-  checks.
+- **Packages:** framework package typecheck/test/build, FormSpec generation
+  check, and export/distribution checks.
 - **Composed stack:** compose the host, check generated documents
   and addon fragments, and run the bridges repository's pytest suite with its
   native source-test settings and collection policy. Bridge tests use the
@@ -515,10 +475,12 @@ pushes to `main`. The current tiers are:
   metadata guard checks that the collection requirements match its workspace
   member distributions.
   Framework composed-host tests, including `test_full_model_graph.py`, create
-  temporary hosts in the SQLite suite. `test_composed_note_workflow.py` also runs
-  in the PostgreSQL selection above. The full-profile stack job installs the
+  temporary hosts in the SQLite suite. The full-profile stack job installs the
   blank-choice test addon and runs `test_full_model_graph.py` on its first shard
   against every installed addon; it does not repeat the rest of the framework suite.
+  The first framework stack shard also runs the native project template input
+  tests with the installed `angee` CLI. The SQLite shard has Copier from the
+  locked dev group for addon template rendering.
 
 A test missing from the durations still runs: pytest-split gives it the average
 duration and places it in exactly one shard. Refresh the file when a shard nears
@@ -528,31 +490,12 @@ framework checkout and commit `.test_durations`. Ties in the assignment fall bac
 to collection order, so an opt-in `-p randomly` run must give every shard one
 shared `--randomly-seed`.
 
-Refresh `.test_durations_postgres` after changing the PostgreSQL selection or
-when its shard balance drifts. Run the selected tests serially on PostgreSQL so
-the map records per-test costs without xdist scheduling effects:
-
-```bash
-export DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/angee
-pg_tests=$(uv run --locked python - <<'PY'
-import shlex
-from pathlib import Path
-
-import yaml
-
-steps = yaml.safe_load(Path('.github/workflows/reusable-checks.yml').read_text())['jobs']['uv-postgres']['steps']
-run = next(step['run'] for step in steps if step.get('name') == 'Verify PostgreSQL contracts execute without skips')
-print(' '.join(arg for arg in shlex.split(run.split('uv run --locked python -c', 1)[0]) if arg.startswith('tests/')))
-PY
-)
-test -n "$pg_tests"
-uv run --locked python -m pytest -q -n 0 --nomigrations --store-durations --durations-path .test_durations_postgres $pg_tests
-```
-
-The current map came from a local serial macOS arm64 run against PostgreSQL
-16.14; host load was not fixed. CI per-test durations have been 1.9–2.6 times
-the local measurements, so use the map for relative shard balance and check
-actual CI wall times against the 60-minute limit.
+Refresh `.test_durations_postgres` after changing marked coverage or when its
+shard balance drifts. Run `pytest -m postgresql --nomigrations --create-db
+--store-durations --durations-path .test_durations_postgres tests` against an
+isolated PostgreSQL test service. The current timing map was measured on
+PostgreSQL 16.14, while CI uses PostgreSQL 17; use it for relative placement
+until a PostgreSQL 17 refresh is available.
 
 Separate structural and downstream tiers are not implemented. Separate workflows
 enforce private-path exclusion and other repository policies. Executable jobs in
@@ -562,7 +505,8 @@ not accept `timeout-minutes`.
 Consumer repositories call the same reusable checks with `uv-enabled: false`,
 `pnpm-enabled: false`, and `stack-enabled: true`. Their caller owns the explicit
 `consumer-sources` (repository, sibling slot path, ref), `consumer-roots`,
-`consumer-path`, `consumer-tests`, and optional `consumer-pytest-plugins` inputs.
+`consumer-path`, and `consumer-tests` inputs. The consumer's root conftest
+registers its fixture plugins.
 The caller revision replaces its source ref; dependency revisions remain explicit.
 The full declared Python collection runs once across six `stack-shard` jobs,
 using native pytest-split `least_duration` assignment. Without stored consumer
