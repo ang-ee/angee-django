@@ -346,7 +346,7 @@ export function useOptionalAppearance(): AppearanceState | null {
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
-export function readAppearancePreferences(preferences: RuntimeUserPreferences): AppearancePreferenceRead {
+function readAppearancePreferences(preferences: RuntimeUserPreferences): AppearancePreferenceRead {
   const raw = preferences[APPEARANCE_PREFERENCE_KEY];
   if (raw === undefined) return { value: EMPTY_PREFERENCES, notice: null, writable: true, hasRawOptions: false };
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { value: EMPTY_PREFERENCES, notice: "version-unsupported", writable: false, hasRawOptions: false };
@@ -368,7 +368,7 @@ export function readAppearancePreferences(preferences: RuntimeUserPreferences): 
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
-export function writeAppearancePreferences(preferences: RuntimeUserPreferences, appearance: AppearancePreferences | (Omit<AppearancePreferences, "options"> & { options?: unknown }) | undefined): RuntimeUserPreferences {
+function writeAppearancePreferences(preferences: RuntimeUserPreferences, appearance: AppearancePreferences | (Omit<AppearancePreferences, "options"> & { options?: unknown }) | undefined): RuntimeUserPreferences {
   if (appearance === undefined) {
     const { [APPEARANCE_PREFERENCE_KEY]: _appearance, ...rest } = preferences;
     return rest;

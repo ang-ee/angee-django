@@ -407,7 +407,6 @@ export {
   useRelationOptions,
   useRelationPickerOptions,
   useRelationSelectedOption,
-  relationOptionsFromRows,
   relationSelectedOption,
   type RelationOptionsConfig,
   type RelationOptionsList,
@@ -417,7 +416,6 @@ export * from "./resource/resource-view-model";
 export * from "./resource/resource-view-context";
 export {
   ResourceViewUtilities,
-  useResourceViewUtilities,
   useResourceViewUtilityContext,
   type ResourceViewUtilityContext,
 } from "./resource/resource-view-utilities";

@@ -337,8 +337,8 @@ function useGroupByRequestBatch(
 }
 
 /**
- * Batch the per-level `_groups` aggregates of a server-grouped view into one
- * request round. Each scope resolves to the same {@link GroupByResult} a single
+ * Run the per-level `_groups` aggregates concurrently, one request per scope.
+ * Each scope resolves to the same {@link GroupByResult} a single
  * {@link useAngeeGroupBy} would, keyed by the scope's `key`.
  */
 export function useAngeeGroupByBatch(

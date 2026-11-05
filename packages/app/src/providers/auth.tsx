@@ -305,7 +305,7 @@ export function createAngeeAuthProviderFromRequest(
  * @kind null
  * @reason Codec and transport infrastructure: translates runtime data and addresses.
  */
-export const IDENTITY_STALE_TIME = Number.POSITIVE_INFINITY;
+const IDENTITY_STALE_TIME = Number.POSITIVE_INFINITY;
 const IDENTITY_QUERY_SETTINGS = {
   staleTime: IDENTITY_STALE_TIME,
   retry: false,
@@ -413,7 +413,7 @@ export function useLogoutAction(): {
  * @kind null
  * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
  */
-export function useUpdatePreferences(
+function useUpdatePreferences(
   options: UseUpdatePreferencesOptions = {},
 ): UseUpdatePreferencesResult {
   const [run, mutation] = useAuthoredMutation(

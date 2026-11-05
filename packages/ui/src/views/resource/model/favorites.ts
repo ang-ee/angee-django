@@ -160,7 +160,7 @@ export function resourceViewFavoritesFromUnknown(
   });
 }
 
-export function nextResourceViewFavoriteId(
+function nextResourceViewFavoriteId(
   label: string,
   favorites: readonly ResourceViewFavorite[],
 ): string {

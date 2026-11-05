@@ -366,14 +366,14 @@ export function createAuthoredLiveInvalidation(
       const collected: Request[] = [];
       const accepted = new Set<string>();
       let background = false;
-      let legacy = false;
+      let modelWide = false;
       let collecting = true;
       const scope: MutationReconciliationScope = {
         reconcile(effect) {
           if (started !== generation || !collecting) return Promise.resolve();
           effect.accepted?.forEach((key) => accepted.add(key));
           if (effect.background) background = true;
-          else if (!effect.queryKeys?.length) legacy = true;
+          else if (!effect.queryKeys?.length) modelWide = true;
           const request = { ...effect, fallbackAccepted: accepted };
           prepare(request);
           collected.push(request);
@@ -390,7 +390,7 @@ export function createAuthoredLiveInvalidation(
         collecting = false;
         if (started === generation) {
           const refreshed = refresh(collected);
-          if (background && !legacy) void refreshed.catch(() => undefined);
+          if (background && !modelWide) void refreshed.catch(() => undefined);
           else {
             try { await awaitRefresh(refreshed); }
             catch (error) { if (!failed) throw error; }

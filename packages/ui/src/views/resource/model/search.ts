@@ -144,7 +144,7 @@ export function mergeResourceViewSearch(
 }
 
 // The model emits numbers in memory; reads also accept URL-stringified values.
-export function parseSearchInteger(value: unknown): number | null {
+function parseSearchInteger(value: unknown): number | null {
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : null;
   }
@@ -157,13 +157,13 @@ export function isClearedSearchValue(value: unknown): boolean {
   return value === "";
 }
 
-export function parseSearchSort(value: unknown): ResourceViewSort | null {
+function parseSearchSort(value: unknown): ResourceViewSort | null {
   if (value == null) return null;
   if (typeof value !== "string") throw new QueryParseError("sort", "expected a string");
   return parseResourceViewSort(value);
 }
 
-export function parseSearchFilter(value: unknown): ResourceViewFilter | null {
+function parseSearchFilter(value: unknown): ResourceViewFilter | null {
   if (value == null || value === "") return null;
   if (typeof value !== "string") throw new QueryParseError("filter", "expected JSON text");
   let parsed: unknown;
@@ -173,13 +173,13 @@ export function parseSearchFilter(value: unknown): ResourceViewFilter | null {
   return parsed;
 }
 
-export function parseSearchGroup(value: unknown): ResourceViewGroup | null {
+function parseSearchGroup(value: unknown): ResourceViewGroup | null {
   if (value == null) return null;
   if (typeof value !== "string") throw new QueryParseError("group", "expected a string");
   return parseResourceViewGroup(value);
 }
 
-export function parseSearchGroupStack(
+function parseSearchGroupStack(
   value: unknown,
 ): readonly ResourceViewGroup[] | null {
   if (value == null) return null;
@@ -187,17 +187,17 @@ export function parseSearchGroupStack(
   return parseResourceViewGroupStack(value);
 }
 
-export function parseSearchView(value: unknown): ResourceViewKind | null {
+function parseSearchView(value: unknown): ResourceViewKind | null {
   if (typeof value !== "string") return null;
   return isResourceViewKind(value) ? value : null;
 }
 
-export function parseSearchMode(value: unknown): CalendarViewMode | null {
+function parseSearchMode(value: unknown): CalendarViewMode | null {
   if (typeof value !== "string") return null;
   return isCalendarViewMode(value) ? value : null;
 }
 
-export function parseSearchAnchor(value: unknown): string | null {
+function parseSearchAnchor(value: unknown): string | null {
   return typeof value === "string" && CALENDAR_ANCHOR_PATTERN.test(value)
     ? value
     : null;
