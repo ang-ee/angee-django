@@ -238,13 +238,13 @@ def record_decisions_reads(composed_tables: None, capture_graphql_document):
 
 def test_record_decisions_document_budget(record_decisions_reads) -> None:
     empty, open_one, answered = record_decisions_reads
-    empty.assert_bytes(total=43_000, largest=41_000, cause="REBAC L2 bounded target proof in the empty record scope")
+    empty.assert_bytes(total=43_000, largest=41_000, cause="bounded target proof in the empty record scope")
     empty.assert_statements(4)
-    open_one.assert_bytes(total=47_000, largest=41_000, cause="REBAC L2 bounded target proof")
+    open_one.assert_bytes(total=47_000, largest=41_000, cause="bounded target proof")
     open_one.assert_statements(5)
     open_one.assert_no_audit_writes()
     for count, read in answered.items():
-        read.assert_bytes(total=55_000, largest=41_000, cause="REBAC L2 candidate scope and L5 held_many field gates")
+        read.assert_bytes(total=55_000, largest=41_000, cause="candidate scope and held_many field gates")
         assert read.statement_count == 7, (count, read.statement_count)
         read.assert_no_audit_writes()
     empty.assert_no_audit_writes()
@@ -565,7 +565,7 @@ def test_related_permission_resource_list_budget(composed_tables: None, capture_
         read.assert_bytes(
             total=56_000,
             largest=40_000,
-            cause="REBAC L8 shared actor-set proof for one and many rows; the related permission proof is shared",
+            cause="shared actor-set proof for one and many rows; the related permission proof is shared",
         )
         assert read.statement_count == 4, (count, read.statement_count)
         read.assert_no_audit_writes()
@@ -849,7 +849,7 @@ def test_knowledge_authored_documents(knowledge_authored_reads) -> None:
         read.assert_flat_from(notes[0])
 
 
-@pytest.mark.xfail(strict=True, reason="P2b: page_can_write checks the related page once per row")
+@pytest.mark.xfail(strict=True, reason="page_can_write checks the related page once per row")
 def test_knowledge_record_pages_page_write_growth(knowledge_authored_reads) -> None:
     knowledge_authored_reads["pages"][1].assert_flat_from(knowledge_authored_reads["pages"][0])
 

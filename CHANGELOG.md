@@ -8,6 +8,17 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — REBAC decided statements per request
+
+- Pin django-zed-rebac at `93b9e90d9446` for bounded, witnessed read scopes
+  that compile decided statements per request while retaining reusable
+  value-independent statements, and reuse decided statements across requests
+  keyed on the decision outcome. The update also preserves Django's collected
+  delete order, clears default ordering in recursive permission paths, shares
+  compiled identity projections by use count with native statement probes, and
+  bounds the library's compiled-statement cache by bytes
+  (`REBAC_STATEMENT_CACHE_BYTES`).
+
 ## Unreleased — messaging historical import compatibility
 
 - `Message.objects.ingest(historical=True)` and `posts.land_posts(historical=True)`
