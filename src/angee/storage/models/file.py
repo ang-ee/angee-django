@@ -42,7 +42,7 @@ from angee.iam.identity import public_subject_ref
 from angee.iam.models.base import ProtectedDataModel
 from angee.iam.models.ownership import OwnerMixin
 from angee.iam.models.trash import ProtectedTrashMixin
-from angee.iam.permissions import actor_user_id
+from angee.iam.permissions import actor_user_id, instance_actor
 from angee.provenance.contrib.angee.history import HistoryMixin
 from angee.provenance.contrib.angee.managers import AngeeHistoryUnscopedManager
 from angee.storage import exceptions
@@ -247,7 +247,7 @@ class File(TaggedModel, ProtectedTrashMixin, OwnerMixin, HistoryMixin, Protected
             visibility = FileVisibility(value)
         except ValueError as error:
             raise ValidationError({"visibility": "Invalid file visibility."}) from error
-        actor = self.actor() or current_actor()
+        actor = instance_actor(self)
         if actor is None:
             raise PermissionDenied("File visibility requires an acting user.")
         with database_context(using), transaction.atomic(using=using):
@@ -607,7 +607,7 @@ class File(TaggedModel, ProtectedTrashMixin, OwnerMixin, HistoryMixin, Protected
 
         if duplicate.storage_path != self.storage_path:
             storage.discard(self.storage_path, context="finalize.duplicate")
-        actor = self.actor() or current_actor()
+        actor = instance_actor(self)
         if duplicate.is_trashed and actor is not None and duplicate.with_actor(actor).has_access("read"):
             duplicate.sudo(reason="storage.finalize.restore_duplicate").restore()
         self._fail(reason="duplicate")

@@ -40,11 +40,10 @@ from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.iam.permissions import actor_user_id, instance_actor
 from angee.provenance.context import actor_context as provenance_actor_context
 from angee.provenance.context import is_current_changeset
-from angee.provenance.contrib.angee.exceptions import ChangesetRequired
+from angee.provenance.contrib.angee.exceptions import AngeeChangesetRequired
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.contrib.angee.policy import angee_policy
 from angee.provenance.engine.base import AbstractChangeset
-from angee.provenance.engine.replay import ordered_states
 from angee.provenance.managers import ChangesetManager
 from angee.provenance.querysets import model_history
 
@@ -60,7 +59,7 @@ class Changeset(AbstractChangeset, ProtectedRecordRefMixin, SqidMixin, RebacMixi
     proposed-relationships contract. History user stamps derive from the column.
     """
 
-    required_context_error: ClassVar[type[Exception]] = ChangesetRequired
+    required_context_error: ClassVar[type[Exception]] = AngeeChangesetRequired
 
     sqid_prefix = "cst_"
     merge_policy: ClassVar[MergePolicy] = MergePolicy.KEEP
@@ -261,7 +260,4 @@ class Changeset(AbstractChangeset, ProtectedRecordRefMixin, SqidMixin, RebacMixi
         for model, _rows in self.history_rows():
             if not isinstance(model_history(model), ModelHistory):
                 raise ValidationError(f"{model._meta.label}: no record history policy owner.")
-        return super().revert(actor=actor if actor is not None else instance_actor(self) or current_actor())
-
-    # Historical private import/caller compatibility; native replay owns ordering.
-    _revert_states = staticmethod(ordered_states)
+        return super().revert(actor=actor if actor is not None else instance_actor(self))

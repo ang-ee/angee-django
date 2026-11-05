@@ -22,10 +22,7 @@ def test_disabled_storage_required_fails_closed(settings, opened):
 
 def test_strictness_is_only_storage_policy(settings, monkeypatch):
     from angee.provenance.contrib.angee.exceptions import AngeeChangesetRequired
-    from angee.provenance.contrib.angee.exceptions import ChangesetRequired as ProtectedRequired
-
-    assert ProtectedRequired is AngeeChangesetRequired
-    assert issubclass(ProtectedRequired, ChangesetRequired)
+    assert issubclass(AngeeChangesetRequired, ChangesetRequired)
     model = apps.get_model(changeset_model_label())
     settings.REBAC_STRICT_MODE = False
     monkeypatch.setattr(model, "context_required", classmethod(lambda cls: True))
@@ -56,9 +53,7 @@ def test_retired_storage_setting_is_refused_even_when_values_agree(settings):
 
 
 def test_creation_conflict_has_one_class_and_domain_refusal_contract():
-    from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
-    from angee.provenance.engine.exceptions import CreationKeyConflict as StorageConflict
+    from angee.provenance.engine.exceptions import CreationKeyConflict
 
-    assert CreationKeyConflict is StorageConflict
     assert isinstance(CreationKeyConflict("duplicate"), DomainError)
     assert not isinstance(CreationKeyConflict("duplicate"), ValidationError)

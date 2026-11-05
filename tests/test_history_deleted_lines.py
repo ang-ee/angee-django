@@ -137,8 +137,8 @@ def test_core_history_owners_scope_changesets_and_admit_one_document(line_policy
         touching = type(edit).objects.touching(project)
         assert touching.filter(pk=edit.pk).exists()
         assert not touching.filter(pk=unrelated.pk).exists()
-    assert project.admits_revert(edit)
-    assert not project.admits_revert(unrelated)
+    assert edit.pk in project.admitted_reverts((edit,))
+    assert unrelated.pk not in project.admitted_reverts((unrelated,))
     assert edit.revertable(project, actor=owner)
     assert not edit.revertable(project, actor=reader)
 

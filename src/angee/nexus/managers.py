@@ -94,7 +94,7 @@ class TieQuerySet[TieT: Tie](ProtectedQuerySet[TieT]):
         return (
             apps.get_model("parties", "Party")
             .objects.all()
-            .with_actor(self.actor() or current_actor())
+            .with_actor(self.effective_actor()[0])
             .filter(
                 models.Q(pk__in=models.Subquery(ties.values("party_a_id")))
                 | models.Q(pk__in=models.Subquery(ties.values("party_b_id")))

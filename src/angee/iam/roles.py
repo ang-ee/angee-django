@@ -46,7 +46,7 @@ from rebac.schema import (
 )
 
 from angee.base.models.identity import public_id_for
-from angee.iam.identity import canonical_subject_ref, group_subject_type, public_subject_ref, user_label
+from angee.iam.identity import canonical_subject_ref, group_subject_type, public_subject_ref
 
 IAM_OVERVIEW_DEFAULT_PEEK_LIMIT = 6
 IAM_OVERVIEW_MAX_PEEK_LIMIT = 100
@@ -470,7 +470,7 @@ def assignment_subject_labels(subjects: Iterable[str], *, actor: Any) -> dict[st
             continue
         ids = {ref.subject_id for ref in references.values() if ref.subject_type == subject_type}
         for row in model.objects.with_actor(actor).with_action("read").filter(pk__in=ids):
-            labels[to_subject_ref(row)] = user_label(row) if subject_type == user_subject_type() else str(row)
+            labels[to_subject_ref(row)] = str(row)
     return {value: labels[ref] for value, ref in references.items() if ref in labels}
 
 

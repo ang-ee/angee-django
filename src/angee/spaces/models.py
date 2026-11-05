@@ -18,7 +18,7 @@ from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.utils.text import slugify
 from django_compose.models import Composable
-from rebac import PermissionDenied, current_actor
+from rebac import PermissionDenied
 
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
@@ -26,6 +26,7 @@ from angee.base.models.hierarchy import HierarchyMixin
 from angee.base.models.scope import NullableScopeMixin
 from angee.iam.models.base import ProtectedDataModel
 from angee.iam.models.ownership import OwnerMixin
+from angee.iam.permissions import instance_actor
 from angee.messaging.models import AudienceMember, NotificationPolicy, ThreadAudienceMixin
 from angee.parties.mixins import MembershipDecisionMixin
 from angee.spaces.managers import GroupManager, MembershipManager, ThreadSpaceManager
@@ -195,7 +196,7 @@ class Membership(MembershipDecisionMixin, AuditMixin, ProtectedDataModel, concre
     def set_notifications(self, policy: NotificationPolicy, subtype_keys: Sequence[str]) -> Self:
         """Set this holder's preference after checking its live identity under a row lock."""
 
-        actor = self.actor() or current_actor()
+        actor = instance_actor(self)
         if actor is None:
             raise PermissionDenied("An acting user is required to set notification preferences.")
         with transaction.atomic():

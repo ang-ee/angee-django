@@ -27,13 +27,14 @@ def check_configuration(app_configs: Any = None, **kwargs: Any) -> list[checks.C
                 id="provenance.E004",
             )
         )
-    label = getattr(settings, "ANGEE_CHANGESET_MODEL", "provenance.Changeset")
-    try:
-        model = apps.get_model(label)
-        if not issubclass(model, AbstractChangeset):
-            raise ImproperlyConfigured("Changeset storage must subclass AbstractChangeset.")
-    except (ValueError, LookupError, ImproperlyConfigured, TypeError) as error:
-        errors.append(checks.Error(str(error), id="provenance.E001"))
+    label = changeset_model_label()
+    if label or hasattr(settings, "ANGEE_CHANGESET_MODEL"):
+        try:
+            model = apps.get_model(label)
+            if not issubclass(model, AbstractChangeset):
+                raise ImproperlyConfigured("Changeset storage must subclass AbstractChangeset.")
+        except (ValueError, LookupError, ImproperlyConfigured, TypeError) as error:
+            errors.append(checks.Error(str(error), id="provenance.E001"))
     try:
         get_policy()
     except (ImportError, AttributeError, ImproperlyConfigured, TypeError) as error:

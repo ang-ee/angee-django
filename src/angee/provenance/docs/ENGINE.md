@@ -58,8 +58,8 @@ supports sync and async context management and yields a failure callback.
 An explicit `using` binds attribution to that database and refuses a conflicting
 write or nested join; an unbound boundary retains separate native rows per alias.
 `current_changeset(required=False, record=False)` returns lazy storage;
-`require_changeset()` requires it. `mark_changeset_failed()` records handled
-failure. Empty boundaries create no rows and work before migrations.
+`require_changeset()` requires it. The callback yielded by `changeset()` marks
+handled failure. Empty boundaries create no rows and work before migrations.
 
 An ordinary nested boundary joins/refines its owner before the first write;
 conflicting explicit facts fail. `fresh=True` creates a distinct logical write
@@ -73,7 +73,7 @@ the owner records success/failure only for committed changesets. A failure flag
 does not itself roll back an application's writes; `transaction.atomic` owns
 that choice.
 
-`HistoryMixin` opts ordinary models into capture, using `ModelHistory`,
+`CaptureHistoryMixin` opts ordinary models into capture, using `ModelHistory`,
 `CaptureManager` and `HistoryQuerySet`. Explicit `ModelHistory` declaration is
 supported. History is captured on saves, expressions, queryset updates, bulk
 create/update, deletes and collector cascades. Capture reads authoritative

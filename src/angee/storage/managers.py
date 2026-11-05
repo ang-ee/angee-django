@@ -397,7 +397,7 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         drive_slug: str = "",
         folder_id: str = "",
     ) -> FileT:
-        """Compatibility file-return API over the canonical creation-status factory."""
+        """Ingest bytes and return the file; the status-aware factory returns both values."""
 
         return self.get_or_ingest_bytes(
             content,
@@ -475,7 +475,7 @@ class FileManager[FileT: File](_FileManagerBase[FileT]):
         drive_slug: str = "",
         folder_id: str = "",
     ) -> FileT:
-        """Compatibility file-return API over the canonical creation-status factory."""
+        """Ingest a stream and return the file; the status-aware factory returns both values."""
 
         return self.get_or_ingest_stream(
             reader,
@@ -901,7 +901,7 @@ class FileAttachmentManager[AttachmentT: FileAttachment](_FileAttachmentManagerB
             target = generic_target(record)
             with transaction.atomic(using=self.db):
                 self._lock_target(target)
-                file = type(file).system_queryset(lock=("self",)).using(self.db).get(pk=file.pk)
+                file = file.lock_subject()
                 return self._attach(file, target, label=label)
 
     def has_record_arm(self, target: GenericTarget) -> bool:

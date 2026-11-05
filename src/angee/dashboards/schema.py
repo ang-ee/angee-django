@@ -29,7 +29,7 @@ from angee.iam.graphql.actions import session_user
 from angee.iam.graphql.capabilities import held_permissions, permission_annotations, permissions_field
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.identity import user_display_label, user_public_id
-from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
+from angee.provenance.engine.exceptions import CreationKeyConflict
 
 Dashboard = apps.get_model("dashboards", "Dashboard")
 DashboardWidget = apps.get_model("dashboards", "DashboardWidget")

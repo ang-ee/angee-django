@@ -10,12 +10,12 @@ from django.db import models
 
 from angee.base.models.persistence import PersistenceMixin
 from angee.base.models.timestamps import update_fields_with_auto_now
-from angee.base.querysets import _AngeeQuerySetMixin, by_key
+from angee.base.querysets import AngeeQuerySetMixin, by_key
 
 _ModelT = TypeVar("_ModelT", bound=PersistenceMixin)
 
 
-class RetainedReferenceQuerySet(_AngeeQuerySetMixin[_ModelT]):
+class RetainedReferenceQuerySet(AngeeQuerySetMixin[_ModelT]):
     """Django collector updates dispatched to the record's declared persistence owner."""
 
     _hints: dict[str, models.Model]

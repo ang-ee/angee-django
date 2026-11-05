@@ -288,13 +288,9 @@ class OwnerMixin(AuditMixin, PersistenceMixin):
                     raise ImproperlyConfigured("The owner field must be declared by OwnerMixin.")
                 parent_pk = owner_model._meta.pk
                 assert parent_pk is not None
-                target = (
-                    owner_model.system_queryset()
-                    .using(using)
-                    .get(
-                        pk=parent_pk.value_from_object(locked),
-                    )
-                )
+                target = owner_model._base_manager.db_manager(
+                    using, hints={"instance": locked}
+                ).get(pk=parent_pk.value_from_object(locked))
             if not isinstance(target, RebacMixin):
                 raise ImproperlyConfigured("Ownership transfer requires a model composing RebacMixin.")
             target.with_actor(actor)

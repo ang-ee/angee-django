@@ -13,7 +13,7 @@ from rebac.actors import NoActorResolvedError
 from rebac.backends import backend as rebac_backend
 from rebac.checks import check_field_backed_relations
 from rebac.errors import PermissionDenied
-from rebac.models import active_relationship_model
+from rebac.models import PermissionAuditEvent, active_relationship_model
 
 from angee.base.exceptions import RecordAccessSubjectRefused
 from angee.iam.graphql.relations import actor_scoped_public_id, actor_scoped_to_one
@@ -375,7 +375,10 @@ def test_attach_lists_and_detaches_under_the_actor_with_one_scoped_statement(
         drive.with_actor(drive.alice).grant_record_access("editor", editor)
         row.with_actor(drive.alice).grant_record_access("viewer", reader)
     with actor_context(editor):
+        before_audit = PermissionAuditEvent.objects.count()
         attachment = FileAttachment.objects.attach(row, target, label="Declared")
+        # Measured after the admitted file reload uses its base manager: 3 -> 2 audit rows.
+        assert PermissionAuditEvent.objects.count() - before_audit == 2
         assert attachment.created_by_id == editor.pk
         assert FileAttachment.objects.attach(row, target).pk == attachment.pk
     with actor_context(reader):

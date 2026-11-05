@@ -29,6 +29,7 @@ from simple_history.exceptions import NotHistoricalModelError
 from simple_history.manager import HistoryManager
 from simple_history.utils import get_history_manager_for_model
 
+import angee.provenance.history as native_history
 from angee.base.lineage import concrete_child_models, concrete_lineage
 from angee.base.models.merge_references import MergeContractMixin
 from angee.base.models.persistence import PersistenceMixin
@@ -38,13 +39,8 @@ from angee.provenance.contrib.angee.managers import AngeeHistoryManager, AngeeHi
 from angee.provenance.engine.replay import HistoryScopeMixin
 from angee.provenance.history import (
     _UNLOADED,
+    CaptureHistoryMixin,
     HistoryAttribution,
-)
-from angee.provenance.history import (
-    HistoryMixin as CaptureHistoryMixin,
-)
-from angee.provenance.history import (
-    ModelHistory as CaptureHistory,
 )
 from angee.provenance.querysets import model_history
 
@@ -101,7 +97,7 @@ def record_history(model: type[models.Model]) -> HistoryManager | None:
         return None
 
 
-class ModelHistory(CaptureHistory):
+class ModelHistory(native_history.ModelHistory):
     """Native history adapted to abstract sources and generated module names.
 
     Every concrete descendant of a tracked source owns a history table, including
@@ -565,11 +561,6 @@ class HistoryMixin(CaptureHistoryMixin, PersistenceMixin, RebacTrackedMixin, His
                     refused.add(changeset_id)
         admitted.update(pk for pk in candidates if pk in touched and pk not in refused)
         return frozenset(admitted)
-
-    def admits_revert(self, changeset: Any) -> bool:
-        """Return whether one successful changeset belongs wholly to this document."""
-
-        return changeset.pk in self.admitted_reverts((changeset,))
 
     def revertable_changesets(self, changesets: Iterable[Any], *, actor: Any = None) -> frozenset[Any]:
         """Return admitted page keys when the reader may replay this record."""

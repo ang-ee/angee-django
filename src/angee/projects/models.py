@@ -48,7 +48,7 @@ from angee.iam.models.merge import ProtectedMergeableMixin
 from angee.iam.models.ownership import ItemOwnershipMixin, OwnerMixin, OwnerQuerySet
 from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.iam.models.trash import ProtectedTrashMixin
-from angee.iam.permissions import actor_user_id, candidate_relationships
+from angee.iam.permissions import actor_user_id, candidate_relationships, instance_actor
 from angee.messaging.models import AudienceMember, ThreadedModelMixin
 from angee.projects.access import require_binding_access, require_target_binding_access
 from angee.projects.events import (
@@ -1496,7 +1496,7 @@ class Task(
 
         if hasattr(self, "_promoted_phase"):
             return self._promoted_phase
-        actor = self.actor() or current_actor()
+        actor = instance_actor(self)
         if self.pk is None or actor is None:
             return None
         return (

@@ -70,8 +70,8 @@ def generic_pointer_model(model: type[models.Model]) -> type[models.Model]:
 def generic_pointer_target(record: models.Model) -> tuple[ContentType, Any]:
     """Return the content type and id a generic pointer stores for ``record``.
 
-    the model identity owner's identity for a gated row, Django's own for an
-    ungated one; see :func:`generic_pointer_model`.
+    Protected rows use their REBAC canonical model; other rows use Django's
+    concrete model. See :func:`generic_pointer_model`.
     """
 
     content_type = ContentType.objects.db_manager(record._state.db, hints={"instance": record}).get_for_model(

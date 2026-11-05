@@ -25,7 +25,7 @@ from angee.messaging.backends import ParsedHandle
 from angee.posts.backends import FeedBackend
 from angee.posts.ingest import land_posts
 from angee.posts.models import CommentAnswered
-from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
+from angee.provenance.engine.exceptions import CreationKeyConflict
 from tests.native_messaging_delivery import Channel, DeliveryFixtures, Feed, Message
 
 

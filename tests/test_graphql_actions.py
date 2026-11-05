@@ -34,7 +34,7 @@ from angee.iam.graphql.actions import (
     authorized_permission_target,
     resolve_action_target,
 )
-from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
+from angee.provenance.engine.exceptions import CreationKeyConflict
 from tests.conftest import create_user
 from tests.linesdemo.models import Document
 

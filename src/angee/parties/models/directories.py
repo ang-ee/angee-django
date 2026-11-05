@@ -31,8 +31,7 @@ class Folder(OwnerMixin, ProtectedDataModel, concrete=True):
     source_href)`` makes the folder upsert idempotent). Sync progress belongs to
     ``integrate.SyncStream``. Owned through its transferable ``owner``, which a
     sync's insert takes from the directory owner it stamps as ``created_by``;
-    deleting a folder leaves its linked parties. Manual creation and a folder
-    tree (``parent``) are deferred until a create path lands to exercise them.
+    deleting a folder leaves its linked parties.
     """
 
     sqid_prefix = "fol_"
