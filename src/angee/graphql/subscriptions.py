@@ -22,8 +22,22 @@ from angee.graphql.data.metadata import (
 )
 from angee.graphql.events import ChangeEvent, ChangePayload
 from angee.graphql.publishing import change_channel_layer, change_group
+from angee.graphql.replay import Replay, read_changes
 
 logger = logging.getLogger(__name__)
+
+
+REPLAY_BATCH_MAX = 16
+
+
+class _Registration:
+    """Coordinate the GraphQL replay after group join and gate construction."""
+
+    def __init__(self) -> None:
+        self.joined = asyncio.Event()
+        self.capture = asyncio.Event()
+        self.ready = asyncio.Event()
+        self.snapshot: Replay | None = None
 
 
 def changes(
@@ -34,8 +48,8 @@ def changes(
 ) -> type:
     """Stream a registration-ready control followed by read-gated model changes.
 
-    ``ready`` has this model's label and an empty id, with no record data. It
-    confirms group registration for snapshot reconciliation, not event replay.
+    ``ready`` has this model's label, an empty id and a replay cursor. Changes
+    retained during registration pass through the actor's read gate before it.
     """
 
     label = model._meta.label
@@ -48,31 +62,62 @@ def changes(
         """Yield read-gated change events for one subscriber."""
 
         del self
-        # The gate work stays on the general sync executor so subscriptions can
-        # filter concurrently. The wrappers bracket that thread's ORM work with
-        # Django's connection lifecycle because long-lived subscriptions do not
-        # ride the normal request boundary.
-        filters = await sync_to_async(_change_filters, thread_sensitive=False)(model, info, gate_type)
-        if filters is None:
-            return
-        ready = asyncio.Event()
-        async with contextlib.aclosing(subscribe(model, ready=ready)) as stream:
+        # Register first: the gate may wait on the ORM's sync executor.
+        registration = _Registration()
+        async with contextlib.aclosing(subscribe(model, registration=registration)) as stream:
             # An async generator registers only when advanced. Start its first
             # receive before waiting, and surface registration failures promptly.
             pending = asyncio.ensure_future(anext(stream))
-            registered = asyncio.create_task(ready.wait())
+            joined = asyncio.create_task(registration.joined.wait())
+            registered = asyncio.create_task(registration.ready.wait())
             try:
-                await asyncio.wait((registered, pending), return_when=asyncio.FIRST_COMPLETED)
-                if not ready.is_set():
+                await asyncio.wait((joined, pending), return_when=asyncio.FIRST_COMPLETED)
+                if not registration.joined.is_set():
                     await pending
                     return
-                yield ChangeEvent(model=label, id=strawberry.ID(""), action="ready")
+                # Gate construction remains on the general sync executor and
+                # brackets ORM work with Django's connection lifecycle.
+                filters = await sync_to_async(_change_filters, thread_sensitive=False)(model, info, gate_type)
+                if filters is None:
+                    return
+                registration.capture.set()
+                await asyncio.wait((registered, pending), return_when=asyncio.FIRST_COMPLETED)
+                if not registration.ready.is_set():
+                    await pending
+                    return
+                snapshot = registration.snapshot
+                assert snapshot is not None
+
+                async def gated(payload: ChangePayload) -> ChangeEvent | None:
+                    return await sync_to_async(_filter_change_event, thread_sensitive=False)(filters, payload)
+
+                if snapshot.truncated or snapshot.incomplete or len(snapshot.changes) > REPLAY_BATCH_MAX:
+                    yield ChangeEvent(model=label, id=strawberry.ID(""), action="update")
+                else:
+                    retained = []
+                    for _ in snapshot.changes:
+                        retained.append(await pending)
+                        pending = asyncio.ensure_future(anext(stream))
+                    if retained:
+                        events = await sync_to_async(_filter_replay_events, thread_sensitive=False)(
+                            filters, tuple(retained),
+                        )
+                        for replayed_event in events:
+                            yield replayed_event
+                        if events:
+                            del replayed_event
+                        del events
+                    del retained
+                cursor = snapshot.cursor
+                registration.snapshot = None
+                del snapshot
+                yield ChangeEvent(model=label, id=strawberry.ID(""), action="ready", replay_cursor=cursor)
                 while True:
                     try:
                         payload = await pending
                     except StopAsyncIteration:
                         return
-                    event = await sync_to_async(_filter_change_event, thread_sensitive=False)(filters, payload)
+                    event = await gated(payload)
                     if event is not None:
                         yield event
                     pending = asyncio.ensure_future(anext(stream))
@@ -80,8 +125,9 @@ def changes(
                 # Cancel the outstanding receive before closing the generator;
                 # its native finally releases group membership and renewal.
                 pending.cancel()
+                joined.cancel()
                 registered.cancel()
-                await asyncio.gather(pending, registered, return_exceptions=True)
+                await asyncio.gather(pending, joined, registered, return_exceptions=True)
 
     resolve.__name__ = field
     namespace = {field: strawberry.subscription(resolver=resolve, name=field)}
@@ -124,12 +170,32 @@ def _filter_change_event(filters: tuple[Callable[..., Any], ...], payload: Chang
         close_old_connections()
 
 
+def _filter_replay_events(
+    filters: tuple[Callable[..., Any], ...], payloads: tuple[ChangePayload, ...],
+) -> tuple[ChangeEvent, ...]:
+    """Evaluate a bounded registration batch on one sync executor hop."""
+
+    close_old_connections()
+    try:
+        if filters:
+            owner = getattr(filters[0], "__self__", None)
+            batch = getattr(owner, "filter_many", None)
+            if batch is not None:
+                return batch(payloads)
+        return tuple(event for payload in payloads if (event := (
+            filters[0](payload) if filters else ChangeEvent.from_payload(payload)
+        )) is not None)
+    finally:
+        close_old_connections()
+
+
 async def subscribe(
     model: type[models.Model],
     *,
     ready: asyncio.Event | None = None,
+    registration: _Registration | None = None,
 ) -> AsyncGenerator[ChangePayload, None]:
-    """Yield model changes; signal ``ready`` after subscribing, before a caller's snapshot.
+    """Yield live changes, optionally replaying for a GraphQL registration.
 
     Payloads are unfiltered. Callers must read through their actor's row scope.
     A change publisher must be connected for this model, normally through a
@@ -155,13 +221,38 @@ async def subscribe(
 
     renewal = asyncio.create_task(renew_lease(), name=f"angee-change-lease:{group}")
     try:
+        if registration is not None:
+            registration.joined.set()
+            await registration.capture.wait()
+            snapshot = await read_changes(layer, group)
+            registration.snapshot = snapshot
+            retained = (
+                () if snapshot.truncated or snapshot.incomplete or len(snapshot.changes) > REPLAY_BATCH_MAX
+                else snapshot.changes
+            )
+            replayed = {payload.occurrence_id for payload in retained if payload.occurrence_id is not None}
+            registration.ready.set()
+        else:
+            retained = ()
+            replayed = set()
         if ready is not None:
             ready.set()
+        for payload in retained:
+            yield payload
+        if retained:
+            del payload
+        del retained
+        if registration is not None:
+            del snapshot
         while True:
             message = await layer.receive(channel)
             payload = message.get("payload")
             if payload:
-                yield ChangePayload.from_mapping(payload)
+                change = ChangePayload.from_mapping(payload)
+                if change.occurrence_id is not None and change.occurrence_id in replayed:
+                    replayed.discard(change.occurrence_id)
+                    continue
+                yield change
     finally:
         # Stop renewing before leaving, so an in-flight renewal cannot re-add.
         renewal.cancel()

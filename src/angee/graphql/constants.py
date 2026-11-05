@@ -16,3 +16,9 @@ are the only group users today.
 
 CHANGE_GROUP_RENEW_SECONDS = 300
 """How often a live subscriber renews its change-group lease (well inside expiry)."""
+
+CHANGE_REPLAY_SECONDS = 60
+"""Age of changes available to a newly registered subscriber."""
+
+CHANGE_REPLAY_MAXLEN = 1024
+"""Maximum retained changes per model group before a full-read fallback."""

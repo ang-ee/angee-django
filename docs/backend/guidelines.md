@@ -1596,17 +1596,33 @@ open fresh evaluator scopes for authorization and change-feed reads.
 
 ### Schema lifecycle and change publication
 
-- **Registration readiness is a control, not a row event or replay contract.**
+- **Registration readiness follows bounded replay, not a row event.**
   [`changes`](../../src/angee/graphql/subscriptions.py) emits the existing
   [`ChangeEvent`](../../src/angee/graphql/events.py) with `action="ready"`, the
   canonical model label and an empty id only after native Channels group
-  registration. It contains no record values, related rows or occurrence id.
+  registration and replay capture. It contains no record values, related rows or
+  occurrence id; its optional `replayCursor` is an opaque position in the
+  model-group log. The publisher appends before group fanout. Registration
+  replays changes within `CHANGE_REPLAY_SECONDS` through the actor's read gate,
+  and suppresses repeated occurrence ids across replay and live delivery. The
+  log holds at most `CHANGE_REPLAY_MAXLEN` changes per model group. When the
+  in-window log is at that limit, or a replay batch exceeds `REPLAY_BATCH_MAX`,
+  registration sends one bare model-wide update so clients reread the entire
+  authorized scope. Ageing alone never triggers fallback. Log and layer payloads,
+  including empty-id payloads, always pass through the read gate. A failed log
+  append does not block live fanout; an expiring failure marker requests fallback
+  for registrations while that missing change remains in the replay window. An
+  expiring last-append marker detects a Redis stream evicted within the window.
+  Startup checks require a supported Channels layer and Redis 6.2 or newer for
+  the stream age trim.
   Data events continue through the actor's `ChangeReadGate`; a direct GraphQL
   consumer must distinguish this control before interpreting record data. Raw
-  `subscribe(..., ready=...)` callers keep their existing readiness event and
-  unfiltered payload contract. Native cancellation closes membership and lease
-  renewal. Reconcile actor-scoped snapshots after readiness/reconnect: occurrence
-  identity deduplicates delivery but supplies neither a row revision nor replay.
+  `subscribe(..., ready=...)` callers keep their existing live-only readiness
+  event and unfiltered payload contract. Native cancellation closes membership
+  and lease renewal. Reconcile actor-scoped snapshots retained before subscription start
+  after readiness/reconnect. A change published while registration and read-gate
+  construction run is replayed or delivered live, so overlapping reads do not
+  miss it. The cursor is not a row revision or a substitute for actor-scoped reads.
 - **Denied delivery cannot prove absence or revoke a session.**
   [`ChangeReadGate`](../../src/angee/iam/graphql/access.py) suppresses unreadable
   rows and redacts field values; do not broadcast denied row identities to make

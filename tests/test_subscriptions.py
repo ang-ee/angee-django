@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
+import threading
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from types import SimpleNamespace
 from typing import Any, cast
+from uuid import uuid4
 
 import pytest
 import strawberry
@@ -14,6 +17,7 @@ import strawberry_django
 from asgiref.sync import sync_to_async
 from channels.layers import InMemoryChannelLayer
 from channels.testing import WebsocketCommunicator
+from channels_redis.core import RedisChannelLayer
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser, Group
 from django.core.exceptions import ImproperlyConfigured, ValidationError
@@ -33,9 +37,11 @@ from rebac import (
 from rebac.graphql.strawberry import RebacChannelsConsumerMixin
 from rebac.roles import grant as grant_role
 from rebac.roles import revoke as revoke_role
+from redis import Redis
+from redis.exceptions import RedisError
 from strawberry_django.utils.requests import get_request
 
-from angee.graphql import publishing, subscriptions
+from angee.graphql import publishing, replay, subscriptions
 from angee.graphql.events import ChangeEvent, ChangePayload, ChangeRelatedRecord
 from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.graphql.schema import GraphQLSchemas
@@ -98,6 +104,7 @@ def test_changes_builds_a_named_subscription_field() -> None:
 
     sdl = strawberry.Schema(query=Query, subscription=surface).as_str()
     assert "groupChanged: ChangeEvent!" in sdl
+    assert "replayCursor: String" in sdl
     assert _receiver_count(post_save, "angee-changes-auth.Group-save") == receiver_count
 
 
@@ -158,6 +165,344 @@ def test_subscribe_yields_broadcast_payloads(monkeypatch) -> None:
 
     payload = asyncio.run(scenario())
     assert payload.id == "7"
+
+
+def test_raw_subscribe_does_not_replay_history(monkeypatch) -> None:
+    """Direct callers retain their live-only and readiness contract."""
+
+    layer = InMemoryChannelLayer()
+    monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: layer)
+
+    async def scenario() -> ChangePayload:
+        group = publishing.change_group(Group)
+        await replay.append_change(layer, group, _payload(id="old", occurrence_id="old"))
+        ready = asyncio.Event()
+        stream = subscriptions.subscribe(Group, ready=ready)
+        pending = asyncio.ensure_future(anext(stream))
+        try:
+            await asyncio.wait_for(ready.wait(), 1)
+            await layer.group_send(group, {"type": "angee.change", "payload": _payload(id="live")})
+            return await asyncio.wait_for(pending, 1)
+        finally:
+            await stream.aclose()
+
+    assert asyncio.run(scenario()).id == "live"
+
+
+def test_failed_log_write_still_fans_out_once(monkeypatch, caplog, replay_layer) -> None:
+    """Retention failure does not suppress live delivery."""
+
+    layer = replay_layer
+    monkeypatch.setattr(publishing, "change_channel_layer", lambda: layer)
+
+    async def fail_append(*args):
+        raise RuntimeError("log unavailable")
+
+    monkeypatch.setattr(publishing, "append_change", fail_append)
+
+    async def scenario() -> tuple[ChangePayload, replay.Replay]:
+        group = publishing.change_group(Group)
+        channel = await layer.new_channel()
+        await layer.group_add(group, channel)
+        await asyncio.to_thread(publishing._broadcast, Group, _payload(id="live"))
+        payload = ChangePayload.from_mapping((await layer.receive(channel))["payload"])
+        return payload, await replay.read_changes(layer, group)
+
+    payload, snapshot = asyncio.run(scenario())
+    assert payload.id == "live"
+    assert snapshot.incomplete
+    assert caplog.text.count("Retaining the angee.changes.auth.group change failed") == 1
+
+
+@pytest.fixture(params=["memory", "redis"])
+def replay_layer(request):
+    """Use one isolated layer; Redis uses only caller-declared private keys."""
+
+    if request.param == "memory":
+        yield InMemoryChannelLayer()
+        return
+    url = os.environ.get("ANGEE_TEST_CHANNEL_REDIS_URL")
+    if not url:
+        pytest.skip("Set ANGEE_TEST_CHANNEL_REDIS_URL to a private Redis database")
+    client = Redis.from_url(url)
+    try:
+        client.ping()
+    except RedisError, OSError:
+        pytest.skip("ANGEE_TEST_CHANNEL_REDIS_URL is unreachable")
+    prefix = f"angee-test-replay-{uuid4().hex}"
+    layer = RedisChannelLayer(hosts=[url], prefix=prefix)
+    try:
+        yield layer
+    finally:
+        keys = list(client.scan_iter(match=f"{prefix}*"))
+        if keys:
+            client.delete(*keys)
+        asyncio.run(layer.close_pools())
+        client.close()
+
+
+def test_change_before_registration_replays_for_overlapping_read(
+    monkeypatch, replay_layer,
+) -> None:
+    """A committed change sent before group registration is replayed."""
+
+    monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: replay_layer)
+    monkeypatch.setattr(publishing, "change_channel_layer", lambda: replay_layer)
+    monkeypatch.setattr(subscriptions, "_change_filters", lambda *args: ())
+    resolver = _subscription_resolver(changes(Group, field="groupChanged"))
+
+    async def scenario() -> list[ChangeEvent]:
+        stream = resolver(object(), SimpleNamespace(context={}))
+        # The publisher finishes before the async generator reaches group_add.
+        await asyncio.to_thread(publishing._broadcast, Group, _payload(id="17", occurrence_id="one"))
+        try:
+            return [
+                await asyncio.wait_for(anext(stream), 2),
+                await asyncio.wait_for(anext(stream), 2),
+            ]
+        finally:
+            await stream.aclose()
+
+    change, ready = asyncio.run(scenario())
+    assert (ready.action, ready.id, ready.model) == ("ready", "", "auth.Group")
+    assert ready.replay_cursor and ready.replay_cursor != "0-0"
+    assert (change.action, change.id, change.occurrence_id) == ("update", "17", "one")
+
+
+def test_replay_and_live_delivery_deduplicate_occurrence(monkeypatch, replay_layer) -> None:
+    """An event in the snapshot and the live queue is sent once."""
+
+    monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: replay_layer)
+    monkeypatch.setattr(publishing, "change_channel_layer", lambda: replay_layer)
+    monkeypatch.setattr(subscriptions, "_change_filters", lambda *args: ())
+    resolver = _subscription_resolver(changes(Group, field="groupChanged"))
+
+    async def scenario() -> list[str]:
+        first = _payload(id="18", occurrence_id="duplicate")
+        await asyncio.to_thread(publishing._broadcast, Group, first)
+        stream = resolver(object(), SimpleNamespace(context={}))
+        try:
+            replayed = await asyncio.wait_for(anext(stream), 2)
+            ready = await asyncio.wait_for(anext(stream), 2)
+            group = publishing.change_group(Group)
+            await replay_layer.group_send(group, {"type": "angee.change", "payload": first})
+            await replay_layer.group_send(
+                group, {"type": "angee.change", "payload": _payload(id="19", occurrence_id="next")},
+            )
+            live = await asyncio.wait_for(anext(stream), 2)
+            return [str(replayed.id), ready.action, str(live.id)]
+        finally:
+            await stream.aclose()
+
+    assert asyncio.run(scenario()) == ["18", "ready", "19"]
+
+
+def test_expired_replay_sends_only_ready(monkeypatch, replay_layer) -> None:
+    """A quiet group has no replay and no model-wide fallback."""
+
+    monkeypatch.setattr(replay, "CHANGE_REPLAY_SECONDS", 1)
+    monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: replay_layer)
+    monkeypatch.setattr(publishing, "change_channel_layer", lambda: replay_layer)
+    monkeypatch.setattr(subscriptions, "_change_filters", lambda *args: ())
+    resolver = _subscription_resolver(changes(Group, field="groupChanged"))
+
+    async def scenario() -> list[ChangeEvent]:
+        await asyncio.to_thread(publishing._broadcast, Group, _payload(id="20", occurrence_id="expired"))
+        await asyncio.sleep(1.2)
+        stream = resolver(object(), SimpleNamespace(context={}))
+        try:
+            return [await asyncio.wait_for(anext(stream), 2)]
+        finally:
+            await stream.aclose()
+
+    (ready,) = asyncio.run(scenario())
+    assert ready.action == "ready"
+
+
+def test_new_publish_after_replay_expiry_replays_only_fresh_change(monkeypatch, replay_layer) -> None:
+    """A change outside the window is not replayed with a later fresh change."""
+
+    monkeypatch.setattr(replay, "CHANGE_REPLAY_SECONDS", 1)
+    monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: replay_layer)
+    monkeypatch.setattr(publishing, "change_channel_layer", lambda: replay_layer)
+    monkeypatch.setattr(subscriptions, "_change_filters", lambda *args: ())
+    resolver = _subscription_resolver(changes(Group, field="groupChanged"))
+
+    async def scenario() -> tuple[ChangeEvent, ChangeEvent]:
+        await asyncio.to_thread(publishing._broadcast, Group, _payload(id="old", occurrence_id="old"))
+        await asyncio.sleep(1.2)
+        await asyncio.to_thread(publishing._broadcast, Group, _payload(id="new", occurrence_id="new"))
+        stream = resolver(object(), SimpleNamespace(context={}))
+        try:
+            return await asyncio.wait_for(anext(stream), 2), await asyncio.wait_for(anext(stream), 2)
+        finally:
+            await stream.aclose()
+
+    change, ready = asyncio.run(scenario())
+    assert (change.id, change.action, ready.action) == ("new", "update", "ready")
+
+
+def test_evicted_replay_sends_model_wide_fallback(monkeypatch, replay_layer) -> None:
+    """The max-length bound never silently discards an overlapping change."""
+
+    monkeypatch.setattr(replay, "CHANGE_REPLAY_MAXLEN", 1)
+    monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: replay_layer)
+    monkeypatch.setattr(publishing, "change_channel_layer", lambda: replay_layer)
+    monkeypatch.setattr(subscriptions, "_change_filters", lambda *args: ())
+    resolver = _subscription_resolver(changes(Group, field="groupChanged"))
+
+    async def scenario() -> tuple[ChangeEvent, ChangeEvent]:
+        await asyncio.to_thread(publishing._broadcast, Group, _payload(id="21", occurrence_id="evicted"))
+        await asyncio.to_thread(publishing._broadcast, Group, _payload(id="22", occurrence_id="retained"))
+        stream = resolver(object(), SimpleNamespace(context={}))
+        try:
+            return await asyncio.wait_for(anext(stream), 2), await asyncio.wait_for(anext(stream), 2)
+        finally:
+            await stream.aclose()
+
+    fallback, ready = asyncio.run(scenario())
+    assert (fallback.id, fallback.action, ready.action) == ("", "update", "ready")
+
+
+def test_registration_precedes_read_gate_and_replays_change(monkeypatch, replay_layer) -> None:
+    """A blocked gate leaves the subscriber joined to its group."""
+
+    layer = replay_layer
+    entered = threading.Event()
+    release = threading.Event()
+    monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: layer)
+
+    def gate(*args):
+        entered.set()
+        assert release.wait(2)
+        return ()
+
+    monkeypatch.setattr(subscriptions, "_change_filters", gate)
+    resolver = _subscription_resolver(changes(Group, field="groupChanged"))
+
+    async def scenario() -> tuple[ChangeEvent, ChangeEvent]:
+        stream = resolver(object(), SimpleNamespace(context={}))
+        pending = asyncio.ensure_future(anext(stream))
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            if isinstance(layer, InMemoryChannelLayer):
+                assert layer.groups[publishing.change_group(Group)]
+            await replay.append_change(
+                layer, publishing.change_group(Group), _payload(id="23", occurrence_id="during-gate"),
+            )
+            await layer.group_send(
+                publishing.change_group(Group),
+                {"type": "angee.change", "payload": _payload(id="23", occurrence_id="during-gate")},
+            )
+            release.set()
+            return await asyncio.wait_for(pending, 2), await asyncio.wait_for(anext(stream), 2)
+        finally:
+            release.set()
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+            await stream.aclose()
+
+    change, ready = asyncio.run(scenario())
+    assert (change.id, change.occurrence_id, ready.action) == ("23", "during-gate", "ready")
+
+
+def test_replay_uses_subscribers_read_gate(monkeypatch) -> None:
+    """A replayed private row cannot bypass per-subscriber filtering."""
+
+    layer = InMemoryChannelLayer()
+    monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: layer)
+    monkeypatch.setattr(publishing, "change_channel_layer", lambda: layer)
+    monkeypatch.setattr(subscriptions, "_change_filters", lambda *args: (lambda payload: None,))
+    resolver = _subscription_resolver(changes(Group, field="groupChanged"))
+
+    async def scenario() -> ChangeEvent:
+        await asyncio.to_thread(publishing._broadcast, Group, _payload(id="private", occurrence_id="private"))
+        stream = resolver(object(), SimpleNamespace(context={}))
+        try:
+            return await asyncio.wait_for(anext(stream), 2)
+        finally:
+            await stream.aclose()
+
+    ready = asyncio.run(scenario())
+    assert (ready.action, ready.id) == ("ready", "")
+
+
+@pytest.mark.parametrize("path", ["replay", "live"])
+def test_empty_id_values_never_bypass_denying_gate(monkeypatch, replay_layer, path: str) -> None:
+    """Empty-id data from either transport path is still read-gated."""
+
+    monkeypatch.setattr(subscriptions, "change_channel_layer", lambda: replay_layer)
+    monkeypatch.setattr(subscriptions, "_change_filters", lambda *args: (lambda payload: None,))
+    resolver = _subscription_resolver(changes(Group, field="groupChanged"))
+    secret = _payload(
+        id="", occurrence_id=f"{path}-secret", changed_values={"name": "secret"},
+        related_records=[{"model": "auth.Group", "id": "9"}],
+    )
+
+    async def scenario() -> ChangeEvent:
+        group = publishing.change_group(Group)
+        if path == "replay":
+            await replay.append_change(replay_layer, group, secret)
+        stream = resolver(object(), SimpleNamespace(context={}))
+        try:
+            ready = await asyncio.wait_for(anext(stream), 2)
+            if path == "live":
+                await replay_layer.group_send(group, {"type": "angee.change", "payload": secret})
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(anext(stream), 0.1)
+            return ready
+        finally:
+            await stream.aclose()
+
+    ready = asyncio.run(scenario())
+    assert (ready.action, ready.id, ready.changed_values) == ("ready", "", None)
+
+
+def test_redis_replay_adds_one_publish_round_trip(replay_layer) -> None:
+    """Count client Redis commands around native empty-group publication."""
+
+    if not isinstance(replay_layer, RedisChannelLayer):
+        pytest.skip("Redis command count")
+
+    async def scenario() -> tuple[list[str], list[str]]:
+        group = publishing.change_group(Group)
+        connection = replay_layer.connection(replay_layer.consistent_hash(group))
+        original = connection.execute_command
+        calls: list[str] = []
+
+        async def counted(command, *args, **kwargs):
+            calls.append(str(command))
+            return await original(command, *args, **kwargs)
+
+        connection.execute_command = counted
+        await replay_layer.group_send(group, {"type": "angee.change", "payload": _payload(id="24")})
+        before = calls.copy()
+        calls.clear()
+        await replay.append_change(replay_layer, group, _payload(id="25", occurrence_id="cost"))
+        await replay_layer.group_send(group, {"type": "angee.change", "payload": _payload(id="25")})
+        return before, calls
+
+    before, after = asyncio.run(scenario())
+    assert before == ["ZREMRANGEBYSCORE", "ZRANGE"]
+    assert after == ["EVAL", *before]
+
+
+def test_redis_missing_stream_uses_expiring_last_append_marker(replay_layer) -> None:
+    """Evicting the stream within the window requests a model-wide refresh."""
+
+    if not isinstance(replay_layer, RedisChannelLayer):
+        pytest.skip("Redis stream eviction")
+
+    async def scenario() -> replay.Replay:
+        group = publishing.change_group(Group)
+        await replay.append_change(replay_layer, group, _payload(id="evicted", occurrence_id="evicted"))
+        connection = replay_layer.connection(replay_layer.consistent_hash(group))
+        await connection.delete(replay._redis_key(replay_layer, group))
+        return await replay.read_changes(replay_layer, group)
+
+    snapshot = asyncio.run(scenario())
+    assert snapshot.changes == ()
+    assert snapshot.incomplete
 
 
 def test_subscribe_requires_a_channel_layer(monkeypatch) -> None:
@@ -254,8 +599,11 @@ def test_resolver_ready_follows_registration_and_precedes_buffered_data(monkeypa
 def test_resolver_readiness_never_exposes_a_denied_payload(monkeypatch) -> None:
     """The control contains no row data and does not exempt data from the read gate."""
 
-    async def hidden_payload(model, *, ready):
-        ready.set()
+    async def hidden_payload(model, *, registration):
+        registration.joined.set()
+        await registration.capture.wait()
+        registration.snapshot = replay.Replay((), "opaque", False)
+        registration.ready.set()
         yield _payload(id="private-row", changed_values={"name": "private-value"})
 
     monkeypatch.setattr(subscriptions, "subscribe", hidden_payload)
@@ -322,11 +670,14 @@ def test_subscription_resolver_gates_events_through_sync_adapter(
     closed_connections: list[str] = []
     thread_flags: list[bool] = []
 
-    async def subscribe(model: type[Group], *, ready: asyncio.Event):
+    async def subscribe(model: type[Group], *, registration: subscriptions._Registration):
         """Yield one payload after registering without touching the channel layer."""
 
         assert model is Group
-        ready.set()
+        registration.joined.set()
+        await registration.capture.wait()
+        registration.snapshot = replay.Replay((), "opaque", False)
+        registration.ready.set()
         yield _payload(id="9")
 
     class Gate:
@@ -391,11 +742,14 @@ def test_subscription_resolver_uses_current_actor(monkeypatch) -> None:
 
     seen: list[object] = []
 
-    async def subscribe(model: type[Group], *, ready: asyncio.Event):
+    async def subscribe(model: type[Group], *, registration: subscriptions._Registration):
         """Yield one payload after registering without touching the channel layer."""
 
         assert model is Group
-        ready.set()
+        registration.joined.set()
+        await registration.capture.wait()
+        registration.snapshot = replay.Replay((), "opaque", False)
+        registration.ready.set()
         yield _payload(id="10")
 
     class Gate:
@@ -435,11 +789,14 @@ def test_subscription_resolver_denies_without_current_actor(
 
     calls: list[object] = []
 
-    async def subscribe(model: type[Group], *, ready: asyncio.Event):
+    async def subscribe(model: type[Group], *, registration: subscriptions._Registration):
         """Yield one payload after registering without touching the channel layer."""
 
         assert model is Group
-        ready.set()
+        registration.joined.set()
+        await registration.capture.wait()
+        registration.snapshot = replay.Replay((), "opaque", False)
+        registration.ready.set()
         yield _payload(id="11")
 
     class Gate:
@@ -509,6 +866,32 @@ def test_change_gate_omits_an_unreadable_related_parent(monkeypatch) -> None:
     assert gate._filter_related_records(change).related_records == ()
     assert len(scopes) == 1
     assert scopes[0][1] == tuple(reference.id for reference in references)
+
+
+def test_replay_read_gate_batches_resource_checks() -> None:
+    """The native gate checks replay ids together before emitting readable values."""
+
+    calls: list[object] = []
+
+    class Backend:
+        def check_bulk_permissions(self, items):
+            calls.append(items)
+            return [SimpleNamespace(allowed=item.resource.resource_id == "visible") for item in items]
+
+    gate = object.__new__(access.ChangeReadGate)
+    gate.model = Group
+    gate.actor = ANON
+    gate.resource_type = "group"
+    gate.gated_fields = frozenset()
+    gate.active_backend = Backend()
+    hidden = ChangePayload.from_mapping(_payload(id="hidden", changed_values={"name": "secret"}))
+    visible = ChangePayload.from_mapping(_payload(id="visible", changed_values={"name": "public"}))
+
+    events = gate.filter_many((hidden, visible))
+
+    assert len(calls) == 1
+    assert len(calls[0]) == 2
+    assert [(event.id, event.changed_values) for event in events] == [("visible", {"name": "public"})]
 
 
 def test_publish_respects_broadcasts_changes_optout(monkeypatch) -> None:
@@ -587,6 +970,33 @@ def test_inmemory_channel_layer_requires_eager_dev_or_test_opt_in(
         else:
             with pytest.raises(ImproperlyConfigured, match="cannot deliver GraphQL changes across processes"):
                 publishing.change_channel_layer()
+
+
+def test_unsupported_change_layer_is_refused_at_startup() -> None:
+    with override_settings(CHANNEL_LAYERS={"default": {"BACKEND": "channels_redis.pubsub.RedisPubSubChannelLayer"}}):
+        with pytest.raises(ImproperlyConfigured, match="does not support CHANNEL_LAYERS backend"):
+            publishing.validate_channel_layer()
+
+
+def test_redis_without_minid_is_refused_at_startup(monkeypatch) -> None:
+    class OldRedis:
+        def __init__(self, *, connection_pool: object) -> None:
+            del connection_pool
+
+        async def info(self, section: str) -> dict[str, str]:
+            assert section == "server"
+            return {"redis_version": "6.0.9"}
+
+        async def aclose(self, *, close_connection_pool: bool) -> None:
+            assert close_connection_pool
+
+    monkeypatch.setattr(publishing, "Redis", OldRedis)
+    monkeypatch.setattr("channels_redis.utils.create_pool", lambda host: object())
+    with override_settings(CHANNEL_LAYERS={"default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer", "CONFIG": {"hosts": [("127.0.0.1", 6379)]},
+    }}):
+        with pytest.raises(ImproperlyConfigured, match="Redis 6.2 or newer for XTRIM MINID"):
+            publishing.validate_replay_redis_version()
 
 
 def test_ws_consumer_uses_rebac_channels_mixin() -> None:
