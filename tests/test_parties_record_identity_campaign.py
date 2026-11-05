@@ -60,13 +60,13 @@ def test_record_follower_sql_is_bounded_and_unfollow_revokes_parent_and_child(re
     monkeypatch.setattr(type(local), "accessible", lambda *args, **kwargs: pytest.fail("Enumerated identity IDs"))
     for model in (Party, Person):
         query = model.objects.with_actor(reader).scoped().filter(pk=person.pk)
-        # Compile once first: Django resolves content types while compiling, and
-        # those cold lookups are not part of the scoped read being counted.
+        # Warm Django's content types while compiling; those cold lookups are
+        # unrelated to the scoped read being counted.
         str(query.query)
         with CaptureQueriesContext(connection) as queries:
             assert list(query.values_list("pk", flat=True)) == [person.pk]
-        # Recovery REBAC compiles source facts into the application read. The
-        # revision and actor-set reads remain fixed across the MTI identities.
+        # Bounded identity proof puts the actor set in the application read;
+        # the revision remains a separate fixed-cost read across MTI identities.
         row_field = model._meta.pk
         assert row_field is not None
         quote = connection.ops.quote_name
@@ -76,15 +76,12 @@ def test_record_follower_sql_is_bounded_and_unfollow_revokes_parent_and_child(re
             sql = query["sql"]
             if is_rebac_revision_read(sql):
                 phases["schema_revision"] += 1
-            elif sql.startswith("SELECT DISTINCT "):
-                phases["actor_sets"] += 1
             elif sql.startswith(row_prefix):
                 phases["application"] += 1
             else:
                 pytest.fail(f"Unexpected statement in exact follower read: {sql}")
         assert phases == {
             "schema_revision": 1,
-            "actor_sets": 1,
             "application": 1,
         }, queries.captured_queries
     before = relationship_snapshot()

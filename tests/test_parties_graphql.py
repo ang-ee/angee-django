@@ -615,10 +615,9 @@ def test_statement_reference_reads_have_a_page_query_budget(
     # The same count for 2 and 8 rows is the invariant: evidence and asserting
     # principals are admitted in batches. StatementQuerySet.for_reader scopes the
     # subject (parties/party read) and the handle member (parties/handle read);
-    # recovery REBAC memoizes actor-set decisions per permission root, so the handle
-    # scope repeats the subject scope's two-statement role/group traversal (+2, REBAC
-    # follow-up: share actor-set decisions across roots).
-    with django_assert_num_queries(17):
+    # REBAC's shared actor-set decisions reuse the subject scope for the handle
+    # scope: the page costs ten statements at both fixture sizes.
+    with django_assert_num_queries(10):
         rows = _data(execute_schema(schema, query, user=admin))["party_statements"]
     assert len(rows) == row_count
 

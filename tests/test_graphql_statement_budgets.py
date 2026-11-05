@@ -90,7 +90,7 @@ def test_record_decisions_document_budget(record_decisions_reads) -> None:
     open_one.assert_no_audit_writes()
     for count, read in answered.items():
         read.assert_bytes(total=55_000, largest=41_000, cause="REBAC L2 candidate scope and L5 held_many field gates")
-        read.assert_statements(7 if count == 1 else 8)
+        assert read.statement_count == 7, (count, read.statement_count)
         read.assert_no_audit_writes()
     empty.assert_no_audit_writes()
 
@@ -98,9 +98,7 @@ def test_record_decisions_document_budget(record_decisions_reads) -> None:
 def test_record_decisions_document_statement_count(record_decisions_reads) -> None:
     _, _, answered = record_decisions_reads
     one, five, ten, twenty = (answered[count] for count in (1, 5, 10, 20))
-    assert five.statement_count == one.statement_count + 1, (
-        "L2 multi-row TupleIn repeats actor role/group membership; L8 removes this step"
-    )
+    assert five.statement_count == one.statement_count == 7
     ten.assert_flat_from(five)
     twenty.assert_flat_from(ten)
 
@@ -237,13 +235,11 @@ def test_related_permission_resource_list_budget(composed_tables: None, capture_
         read.assert_bytes(
             total=70_000,
             largest=40_000,
-            cause="REBAC L2 one-row candidate proof; multi-row TupleIn retains the general scope",
+            cause="REBAC L8 shared actor-set proof for one and many candidate rows",
         )
-        read.assert_statements(4 if count == 1 else 6)
+        assert read.statement_count == 4, (count, read.statement_count)
         read.assert_no_audit_writes()
-    assert reads[5].statement_count == reads[1].statement_count + 2, (
-        "L2 multi-row TupleIn repeats membership and population reads; L8 removes this step"
-    )
+    assert reads[5].statement_count == reads[1].statement_count == 4
     reads[10].assert_flat_from(reads[5])
     reads[20].assert_flat_from(reads[10])
 

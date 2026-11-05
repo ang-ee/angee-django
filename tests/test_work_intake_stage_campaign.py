@@ -199,15 +199,16 @@ def test_stage_position_orders_the_task_list_by_the_queue_workflow(queue_case):
         ((first.pk, task.pk), [first.pk, task.pk]),
         (tuple(early_ids + late_ids), early_ids + late_ids),
     ):
-        # Both sizes use REBAC's set plan. A fresh scope measures its actor-set
-        # decision, revision and ordered application SELECT together.
+        # Both sizes use REBAC's bounded identity-set plan. A fresh scope
+        # measures its revision and ordered application SELECT together.
         query = Task.objects.with_actor(people["member"]).scoped().filter(pk__in=ids).order_by("stage__position", "pk")
         with CaptureQueriesContext(connection) as queries:
             assert list(query.values_list("pk", flat=True)) == expected
         # Recovery REBAC compiles task arrows into the ordered SELECT. The
         # predicate and stage ordering survive in that one application read.
         assert sum(is_rebac_revision_read(item["sql"]) for item in queries) == 1
-        assert sum(item["sql"].startswith("SELECT DISTINCT ") for item in queries) == 1
+        # Bounded identity proof avoids DISTINCT; the application read is still
+        # exactly one ordered SELECT carrying the scoped predicate.
         ordered = [
             item["sql"]
             for item in queries
@@ -217,4 +218,4 @@ def test_stage_position_orders_the_task_list_by_the_queue_workflow(queue_case):
         assert len(ordered) == 1, queries.captured_queries
         assert "WITH RECURSIVE" in ordered[0] and "EXISTS(" in ordered[0]
         counts.append(len(queries))
-    assert counts == [3, 3], counts
+    assert counts == [2, 2], counts

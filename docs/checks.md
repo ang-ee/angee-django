@@ -170,11 +170,11 @@ for read in (one, many):
 
 Every ceiling is a maximum. Set it from today's measured value with CI headroom;
 a lane that lowers a cost lowers its ceiling in the same change. Compare one and
-five rows by default. If a native one-row scope has a measured fixed step, pin
-the exact statement delta and compare five, ten and twenty rows for flat counts:
+five rows by default. Pin exact statement equality at one, five, ten and twenty
+rows to catch fixed membership steps as well as per-row growth:
 
 ```python
-assert five.statement_count == one.statement_count + 1, "L2 repeats a membership read; L8 removes the step"
+assert five.statement_count == one.statement_count == 7
 ten.assert_flat_from(five)
 twenty.assert_flat_from(ten)
 ```

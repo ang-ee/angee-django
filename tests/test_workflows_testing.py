@@ -60,7 +60,7 @@ def test_declared_trigger_source_has_one_native_receiver():
     from angee.workflows.triggers import RecordChanged, RecordChangedOptIn
 
     assert issubclass(Vault, RecordChangedOptIn)
-    receivers = post_save.send(sender=Vault, instance=object(), raw=True, created=False)
+    receivers = post_save.send(sender=Vault, instance=object(), raw=True, created=False, using="default")
     assert sum(receiver == RecordChanged.changed for receiver, _ in receivers) == 1
 
 
