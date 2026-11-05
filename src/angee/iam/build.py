@@ -34,6 +34,8 @@ package name):
   or many-to-many fields. A second package cannot extend a contributed
   declaration; base-declared permissions keep the ordinary union-arm behavior.
   Missing field ownership and all declaration-name collisions fail closed.
+  The IAM-owned ``auth/user#view_as`` is reserved for platform admins and
+  rejects any fragment arm.
 - Extending a definition no installed package declares is a hard error.
 
 The merged definition's identity changes whenever any contribution changes: the
@@ -249,6 +251,11 @@ def _merge_definition(
     for package, extension in contributed:
         arms: list[Permission] = []
         for permission in extension.permissions:
+            if base.resource_type == "auth/user" and permission.name == "view_as":
+                raise SchemaExtensionError(
+                    f"{package}: permissions.extends.zed cannot extend auth/user#view_as; "
+                    "account preview is granted to platform admins only"
+                )
             verb, separator, field = permission.name.partition("__")
             if permission.name in base_permissions:
                 arms.append(permission)
