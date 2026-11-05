@@ -6,7 +6,7 @@ import logging
 from collections.abc import Hashable
 from dataclasses import dataclass, field, replace
 from inspect import getattr_static
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import Any, ClassVar
 
 from django.apps import apps
 from django.core import checks
@@ -34,11 +34,6 @@ from angee.base.querysets import by_key, row_lock_paths
 from angee.base.signals import connect_for_models
 from angee.iam.identity import user_label
 from angee.iam.permissions import effective_rebac_definition
-
-if TYPE_CHECKING:
-    pass
-
-from angee.workflows.querysets import TriggerEventQuerySet as TriggerEventQuerySet
 
 logger = logging.getLogger(__name__)
 

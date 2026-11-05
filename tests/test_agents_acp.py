@@ -39,7 +39,6 @@ from angee.agents.protocol import ACP_PATH, TURN_FAILED_STOP_REASON, TURN_FAILUR
 from angee.agents.runners import TurnOutcome
 from angee.agents.tasks import run_session
 from angee.agents.testing.drivers import FakeRunner
-from angee.agents.testing.drivers import runner as runner
 from angee.agents.testing.drivers import update_chunk as _chunk
 from angee.agents.testing.models import Agent, AgentSession, AgentTurn, InferenceModel
 from angee.agents_runtime_pydantic import runner as pydantic_runner
@@ -48,6 +47,8 @@ from angee.graphql import asgi
 from angee.graphql.publishing import connect_publishers, disconnect_publishers
 from tests.conftest import create_platform_admin
 from tests.test_agents import _provider
+
+pytest_plugins = ("angee.agents.testing.drivers",)
 
 
 @pytest.fixture
@@ -234,22 +235,17 @@ def test_initialize_new_prompt_stream_and_queued_turns(chat: Any, runner: FakeRu
 
 
 @pytest.mark.parametrize("version", [1, 2])
-@pytest.mark.parametrize("approval", [False, True])
 def test_failed_turn_and_failure_replay_keep_error_out_of_history(
     chat: Any,
     runner: FakeRunner,
     version: int,
-    approval: bool,
 ) -> None:
     agent, owner, application, _ = chat
     cookie = _cookie(owner)
     completed = runner.outcome
     runner.during_turn = lambda session, turn, emit: None
-    if approval:
-        runner.outcome = TurnOutcome(kind="needs_approval", replay_state=[{"must_not_enter_history": True}])
-    else:
-        runner.error = RuntimeError("Private provider diagnostics")
-    readable_error = "Tool approvals are not available yet." if approval else "Agent runtime failed."
+    runner.error = RuntimeError("Private provider diagnostics")
+    readable_error = "Agent runtime failed."
 
     async def scenario() -> None:
         peer = Peer(application, agent, cookie, version)
@@ -1801,26 +1797,3 @@ def test_refusals_share_the_graphql_classifier_without_internal_details(
     if kind == "internal":
         assert "Unexpected ACP operation error (RuntimeError)" in caplog.text
         assert "Private operation diagnostics" not in caplog.text
-
-
-@pytest.mark.parametrize("replay", [False, True])
-def test_resume_awaiting_approval_is_idle_without_a_stop_reason(chat: Any, replay: bool) -> None:
-    agent, owner, application, _ = chat
-    cookie = _cookie(owner)
-    session = AgentSession.objects.start(agent, user=owner, context={})
-    session.post("Suspended")
-    turn = session.claim_turn()
-    with system_context(reason="test future approval state"):
-        turn.mark_awaiting_approval()
-
-    async def scenario() -> None:
-        peer = Peer(application, agent, cookie, 2)
-        await peer.connect()
-        await peer.resume(str(session.sqid), replay=replay)
-        assert [u for u in peer.updates if u["sessionUpdate"] == "state_update"] == [
-            {"sessionUpdate": "state_update", "state": "running"},
-            {"sessionUpdate": "state_update", "state": "idle"},
-        ]
-        await peer.socket.disconnect()
-
-    asyncio.run(scenario())

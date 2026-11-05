@@ -1,6 +1,5 @@
 """Explicit public model imports retained across native owner modules."""
 
-from angee.agents.constants import BUILTIN_MCP_ANGEE as BUILTIN_MCP_ANGEE
 from angee.agents.models.agents import Agent as Agent
 from angee.agents.models.agents import AgentManager as AgentManager
 from angee.agents.models.choices import ACTIVE_TURN_DELETE_MESSAGE as ACTIVE_TURN_DELETE_MESSAGE

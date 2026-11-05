@@ -25,6 +25,7 @@ from angee.knowledge import schema as knowledge_schema
 from angee.workflows import managers as workflow_managers
 from angee.workflows import schema as workflow_schema
 from angee.workflows import triggers
+from angee.workflows.querysets import TriggerEventQuerySet
 from angee.workflows.steps import Step
 from angee.workflows.testing.drivers import load_workflow, run_until
 from angee.workflows.testing.models import (
@@ -91,7 +92,7 @@ def test_trigger_capture_logs_unexpected_ledger_errors(trigger_setup, monkeypatc
     def fail_write(*args, **kwargs):
         raise failure("Trigger ledger interrupted")
 
-    monkeypatch.setattr(triggers.TriggerEventQuerySet, "update_or_create", fail_write)
+    monkeypatch.setattr(TriggerEventQuerySet, "update_or_create", fail_write)
     capture(record)
     assert not TriggerEvent.system_queryset().filter(trigger=trigger).exists()
     assert "Workflow trigger capture failed" in caplog.text and "Trigger ledger interrupted" in caplog.text
@@ -514,7 +515,7 @@ def test_capture_failure_preserves_the_enclosing_write(trigger_setup, monkeypatc
     def fail(*args, **kwargs):
         raise IntegrityError("capture failed")
 
-    monkeypatch.setattr(triggers.TriggerEventQuerySet, "update_or_create", fail)
+    monkeypatch.setattr(TriggerEventQuerySet, "update_or_create", fail)
     with transaction.atomic(), actor_context(actor):
         record.name = "Retained"
         record.save()
@@ -906,8 +907,10 @@ def test_trigger_hook_contributions_are_source_scoped_and_conflicts_fail():
 
 @pytest.mark.postgresql
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Requires native PostgreSQL table lock modes.")
-def test_source_capture_locks_untyped_concrete_ancestors(monkeypatch):
+def test_source_capture_locks_untyped_concrete_ancestors(trigger_setup, monkeypatch):
     """Selecting only the child's PK must not silently drop its parent's OF lock."""
+    actor, _workflow, _subject, trigger = trigger_setup
+    Trigger.objects.enable(trigger, actor=actor)
     with system_context(reason="native source ancestor lock fixture"):
         record = TypedCaptureChild.objects.create(title="Parent", detail="Observed child")
     seen = []

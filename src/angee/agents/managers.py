@@ -28,7 +28,7 @@ class MCPServerManager[ServerT: MCPServer](AngeeHistoryManager[ServerT]):
         """Return the one declared builtin, preserving authored name and credential."""
 
         rows = self.sudo(reason="agents.builtin_server")
-        servers = [server for server in rows.order_by("pk") if server.builtin == BUILTIN_MCP_ANGEE]
+        servers = list(rows.filter(config__builtin=BUILTIN_MCP_ANGEE).order_by("pk"))
         if not servers and create:
             server, _ = rows.get_or_create(
                 name="angee", defaults={"placement": "internal", "config": {"builtin": BUILTIN_MCP_ANGEE}},
@@ -54,7 +54,7 @@ class MCPToolManager[ToolT: MCPTool](ProtectedManager[ToolT]):
         return {
             str(name): str(pk)
             for name, pk in self.sudo(reason="agents.tool_grant_ids").filter(
-                **lookup, name__in=tool_names,
+                **lookup, name__in=tool_names, enabled=True,
             ).values_list("name", "pk")
         }
 

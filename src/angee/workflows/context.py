@@ -60,16 +60,6 @@ class StepContext:
         return f"{self.step_run.idempotency_token}:{self.step_run.page_index}"
 
     @property
-    def is_last_attempt(self) -> bool:
-        """Whether another failure exhausts the current page's retry allowance."""
-        return self.step_run.retries + 1 >= self.step.retry.max_attempts
-
-    @property
-    def retry_acknowledged(self) -> bool:
-        """Whether an operator accepted a possible duplicate for this attempt."""
-        return self.attempt.acknowledged_by_id is not None
-
-    @property
     def subject(self) -> models.Model | None:
         """Resolve the run's declared subject through the shared reference owner."""
         return self._subject(lock=False)
@@ -118,7 +108,7 @@ class StepContext:
 
     def done(self, output: Any = None, *, outcome: str = DONE_OUTCOME) -> Done:
         """Construct this step's completion for checking at the body boundary."""
-        return self.step.done(output, outcome=outcome)
+        return Done(output=output, outcome=outcome)
 
     def wait(self, *, until: datetime | None = None, state: Any = None) -> Wait:
         """Wait for registered records or an aware deadline, retaining the checkpoint."""
@@ -222,10 +212,6 @@ class StepContext:
                 version=version,
             )
         )
-
-    def cancel_run(self, run: Any) -> None:
-        """Request cancellation as this run's actor after the body commits."""
-        run.cancel_on_commit(self.actor)
 
     def _require_mode(self, mode: StepMode) -> None:
         """Reject operations outside their declared transaction boundary."""

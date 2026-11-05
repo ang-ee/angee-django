@@ -11,7 +11,7 @@ from django.db.models.functions import Now
 from rebac import system_context
 
 from angee.graphql.publishing import change_published
-from angee.workflows.managers import StepRunQuerySet, WorkflowRunQuerySet
+from angee.workflows.querysets import StepRunQuerySet, WorkflowRunQuerySet
 from angee.workflows.runner import runner
 from angee.workflows.states import RunStatus, StepRunStatus
 from angee.workflows.steps import Retryable, RetryPolicy, Step, StepMode, Superseded
@@ -172,7 +172,7 @@ def test_effect_marker_controls_retryable_body_failures(execution, register_step
         retry = RetryPolicy(max_attempts=2, backoff=timedelta())
 
         def run(self, ctx):
-            acknowledgements.append(ctx.retry_acknowledged)
+            acknowledgements.append(ctx.attempt.acknowledged_by_id is not None)
             if ctx.attempt.number == 1:
                 ctx.begin_effect()
                 if failure == "retryable":

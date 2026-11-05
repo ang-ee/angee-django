@@ -26,7 +26,6 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError, transaction
 from rebac import system_context
 
-from angee.agents.grants import sync_builtin_tool_catalogue
 from angee.base.exceptions import TransitionNotAllowed
 from angee.base.locks import task_lock
 from angee.operator.daemon import OperatorDaemon, OperatorDaemonConflict, OperatorInstanceKind, WorkspaceStatus
@@ -120,7 +119,7 @@ class _CreatedInstances:
                 workspace=self.names.get(OperatorInstanceKind.WORKSPACE, ""),
                 gone=gone,
             )
-        except Exception:  # noqa: BLE001 - a rollback failure never hides the original one
+        except Exception:  # a rollback failure never hides the original one
             logger.warning("agents: operator rollback failed; the agent keeps the instances it holds", exc_info=True)
         return gone
 
@@ -204,7 +203,7 @@ def _provision(agent: Any, daemon: OperatorDaemon) -> ProvisionResult:
         in_process = agent.runs_in_process
         try:
             if in_process:
-                sync_builtin_tool_catalogue()
+                apps.get_model("agents", "MCPTool").objects.sync_builtin()
             agent.mark_provisioning()
             if in_process:
                 agent.mark_provisioned(workspace="", service="")
@@ -222,7 +221,7 @@ def _provision(agent: Any, daemon: OperatorDaemon) -> ProvisionResult:
             on_workspace_created=created.workspace,
             on_service_created=created.service,
         )
-    except Exception as error:  # noqa: BLE001 - a render/plan failure is the result, not a 500
+    except Exception as error:  # a render/plan failure is the result, not a 500
         return _failed(agent, error, verb="Provisioning", daemon=daemon, created=created)
     with system_context(reason="agents.graphql.provision_agent.recorded"):
         try:
@@ -250,7 +249,7 @@ def _adopt(agent: Any, daemon: OperatorDaemon) -> ProvisionResult:
             return ProvisionResult(ok=False, message=blocker)
     try:
         status, refusal = _inspect_conflict(agent, daemon)
-    except Exception as error:  # noqa: BLE001 - a daemon failure is the result, not a 500
+    except Exception as error:  # a daemon failure is the result, not a 500
         return ProvisionResult(ok=False, message=f"Adopt failed: {error}")
     if refusal:
         return ProvisionResult(ok=False, message=f"Adopt refused: {refusal}")
@@ -270,7 +269,7 @@ def _adopt(agent: Any, daemon: OperatorDaemon) -> ProvisionResult:
     try:
         if service and daemon.service_status(service) != "running":
             daemon.start_service(service)
-    except Exception as error:  # noqa: BLE001 - a daemon failure is the result, not a 500
+    except Exception as error:  # a daemon failure is the result, not a 500
         return _failed(agent, error, verb="Adopt", daemon=daemon)
     unserved = not service and agent.runtime_backend.renders_service
     with system_context(reason="agents.graphql.adopt_agent.provisioned"):
@@ -301,7 +300,7 @@ def _replace(agent: Any, daemon: OperatorDaemon) -> ProvisionResult:
             return ProvisionResult(ok=False, message=blocker)
     try:
         status, refusal = _inspect_conflict(agent, daemon)
-    except Exception as error:  # noqa: BLE001 - a daemon failure is the result, not a 500
+    except Exception as error:  # a daemon failure is the result, not a 500
         return ProvisionResult(ok=False, message=f"Replace failed: {error}")
     if refusal:
         return ProvisionResult(
@@ -338,7 +337,7 @@ def _reprovision(agent: Any, daemon: OperatorDaemon) -> ProvisionResult:
             with system_context(reason="agents.graphql.reprovision_agent.service_destroyed"):
                 agent.mark_service_destroyed()
         new_service = _render_service(daemon, plan, workspace, on_service_created=created.service)
-    except Exception as error:  # noqa: BLE001 - a render/plan failure is the result, not a 500
+    except Exception as error:  # a render/plan failure is the result, not a 500
         return _failed(agent, error, verb="Reprovisioning", daemon=daemon, created=created)
     with system_context(reason="agents.graphql.reprovision_agent.recorded"):
         try:
@@ -369,7 +368,7 @@ def _deprovision(agent: Any, daemon: OperatorDaemon) -> ProvisionResult:
     if agent.conflict_kind is not None:
         try:
             status, refusal = _inspect_conflict(agent, daemon)
-        except Exception as error:  # noqa: BLE001 - a daemon failure is the result, not a 500
+        except Exception as error:  # a daemon failure is the result, not a 500
             return ProvisionResult(ok=False, message=f"Teardown failed: {error}")
         if refusal:
             note = f" Left “{agent.conflict_name}” in place: {refusal}"
@@ -388,7 +387,7 @@ def _deprovision(agent: Any, daemon: OperatorDaemon) -> ProvisionResult:
     gone: dict[OperatorInstanceKind, str] = {}
     try:
         _destroy(daemon, service=agent.service, workspace=agent.workspace, gone=gone)
-    except Exception as error:  # noqa: BLE001 - teardown failure is the result, not a 500
+    except Exception as error:  # teardown failure is the result, not a 500
         with system_context(reason="agents.graphql.deprovision_agent.failed"):
             _record_provision_failure(agent, message=f"Teardown failed: {error}", destroyed=gone)
         return ProvisionResult(ok=False, message=f"Teardown failed: {error}")

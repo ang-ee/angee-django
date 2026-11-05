@@ -166,7 +166,6 @@ class MCPToolType(ProtectedNode):
     description: auto
     input_schema: JSON
     enabled: auto
-    requires_approval: auto
     created_at: auto
     updated_at: auto
 
@@ -433,8 +432,8 @@ _MCP_TOOL_RESOURCE = hasura_model_resource(
     sortable=["server", "name", "enabled", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["server", "server__name", "enabled", "updated_at"],
-    insertable=["server", "name", "description", "input_schema", "enabled", "requires_approval"],
-    updatable=["description", "input_schema", "enabled", "requires_approval"],
+    insertable=["server", "name", "description", "input_schema", "enabled"],
+    updatable=["description", "input_schema", "enabled"],
     field_id_decode={"server": public_pk_decoder(MCPServer)},
     write_backend=ProtectedHasuraWriteBackend(MCPTool, public_id_fields=("server",)),
 )
@@ -592,7 +591,7 @@ class InferenceActionMutation:
         ) as provider:
             try:
                 count = provider.refresh_models()
-            except Exception as error:  # noqa: BLE001 — backend failure is the result, not a 500
+            except Exception as error:  # backend failure is the result, not a 500
                 return ActionResult(ok=False, message=f"Refresh failed: {error}")
         return ActionResult(ok=True, message=f"Synced {count} model(s).")
 

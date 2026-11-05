@@ -4,7 +4,7 @@ from typing import Any
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import transaction
+from django.db import models, transaction
 from pydantic import BaseModel, ConfigDict, Field
 from rebac import actor_context
 
@@ -19,7 +19,8 @@ from angee.workflows.steps import Settlement, Step, StepMode
 def apply_proposals(decision: Any, *, actor: Any, ctx: Any = None) -> str:
     """Apply one verdict in authored order through each record's write owner."""
     outcomes = set()
-    with transaction.atomic(), actor_context(actor):
+    using = decision._state.db if isinstance(decision, models.Model) else None
+    with transaction.atomic(using=using), actor_context(actor):
         if decision.is_open:
             raise ValidationError("The decision is still open.")
         if decision.verdict == []:
@@ -37,7 +38,7 @@ def apply_proposals(decision: Any, *, actor: Any, ctx: Any = None) -> str:
                     raise ValidationError("The record for a chosen action is missing or inaccessible.")
                 target_model = actions.target_model(reference)
                 record = (
-                    require_rebac_queryset(target_model).with_actor(actor).for_write()
+                    require_rebac_queryset(target_model).using(using).with_actor(actor).for_write()
                     .filter(pk=reference.pk).select_for_update(of=row_lock_paths(target_model)).get()
                 )
                 try:

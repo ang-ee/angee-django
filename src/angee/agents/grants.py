@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from typing import Any
 
 from django.apps import apps
@@ -29,32 +28,12 @@ def tool_grant_ref(server_sqid: str, tool_name: str, *, using: str | None = None
     """
 
     tool_model = apps.get_model("agents", "MCPTool")
-    grant_ids = tool_grant_ids(server_sqid, (tool_name,), using=using)
+    grant_ids = tool_model.objects.db_manager(using).authorization_ids(server_sqid, (tool_name,))
     try:
         grant_id = grant_ids[tool_name]
     except KeyError as error:
         raise tool_model.DoesNotExist(f"No MCP tool {tool_name!r} exists for server {server_sqid!r}.") from error
     return ObjectRef(TOOL_GRANT_RESOURCE_TYPE, grant_id)
-
-
-def tool_grant_ids(
-    server_sqid: str, tool_names: Iterable[str], *, using: str | None = None
-) -> dict[str, str]:
-    """Resolve catalogue keys on ``using`` or the native manager router."""
-
-    return apps.get_model("agents", "MCPTool").objects.db_manager(using).authorization_ids(server_sqid, tool_names)
-
-
-def builtin_mcp_server(*, create: bool = False, using: str | None = None) -> Any:
-    """Historical catalogue import; select ``using`` through the native server manager."""
-
-    return apps.get_model("agents", "MCPServer").objects.db_manager(using).builtin(create=create)
-
-
-def sync_builtin_tool_catalogue() -> int:
-    """Historical catalogue import; synchronization belongs to MCPTool's manager."""
-
-    return int(apps.get_model("agents", "MCPTool").objects.sync_builtin())
 
 
 def sync_resource_reader_grants(server: Any, registered: list[Any]) -> None:

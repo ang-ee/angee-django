@@ -41,8 +41,8 @@ definition agents/toolrole {
 // The public server/tool-name pair resolves that row at the API boundary.
 // Agent selections resolve live through `selected_agent`; independent direct
 // and group grants remain tuple-backed in `grantee`, while bundles use `role`.
-// Advertisement and execution check `use`. `use_approved` is a separate
-// standing-approval arm; requires_approval still drives per-call Decisions.
+// Advertisement and execution check `use`; `use_approved` is a separate
+// standing-approval arm.
 definition agents/tool_grant {
     relation server: agents/mcp_server // rebac:field=server
     relation selected_agent: auth/user // rebac:field={"path":"agents__user"}

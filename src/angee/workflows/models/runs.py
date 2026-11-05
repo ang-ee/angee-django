@@ -36,7 +36,7 @@ from angee.jobs.enqueue import enqueue_task
 from angee.workflows.definition import MAP_BODY_SUFFIX, GraphEdge, GraphNode, StepRow, map_body_key
 from angee.workflows.managers import WorkflowRunManager
 from angee.workflows.models.definitions import WorkflowVersion
-from angee.workflows.querysets import RETRYABLE_SQLSTATES, StepRunQuerySet, _record_failure, _sqlstate
+from angee.workflows.querysets import RETRYABLE_SQLSTATES, StepRunQuerySet, record_failure, sqlstate
 from angee.workflows.signals import run_stopping
 from angee.workflows.states import (
     CANCELED_OUTCOME,
@@ -304,7 +304,7 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
                 robust=True,
                 using=self._state.db,
             )
-        with _record_failure("run change publication", using=self._state.db):
+        with record_failure("run change publication", using=self._state.db):
             run.refresh_from_db(using=self._state.db)
             publish_change(run, action="update", update_fields=None)
 
@@ -433,7 +433,7 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
                 raise
             except Exception as failure:
                 if isinstance(failure, OperationalError) and (
-                    _sqlstate(failure) in RETRYABLE_SQLSTATES
+                    sqlstate(failure) in RETRYABLE_SQLSTATES
                     or step_run is not None
                     and step_run.step.mode == StepMode.IO
                 ):
@@ -444,7 +444,7 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
                 timed_out = isinstance(failure, SoftTimeLimitExceeded)
                 recorded_on_attempt = False
                 if step_run is not None:
-                    with _record_failure("settlement failure", using=self._state.db):
+                    with record_failure("settlement failure", using=self._state.db):
                         # A planning error follows a completed settlement and
                         # cannot replace it. A failed settlement still owns its fence.
                         if step_runs.filter(pk=step_run.pk, status=StepRunStatus.RUNNING).exists():
@@ -458,7 +458,7 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
                                 ),
                             )
                             recorded_on_attempt = True
-                with _record_failure("attempt close", using=self._state.db):
+                with record_failure("attempt close", using=self._state.db):
                     if step_run is not None:
                         closed = step_run.attempts.close(
                             AttemptResult.TIMED_OUT if timed_out else AttemptResult.FAILED,
@@ -468,7 +468,7 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
                         if recorded_on_attempt or timed_out and closed:
                             run_error = ""
                 if not terminal:
-                    with _record_failure("run state", using=self._state.db):
+                    with record_failure("run state", using=self._state.db):
                         run._write_state(
                             status=RunStatus.FAILED,
                             outcome=ERROR_OUTCOME,
@@ -477,7 +477,7 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
                         )
             if terminal:
                 # Preserved IO evidence changed without a run state transition.
-                with _record_failure("run change publication", using=self._state.db):
+                with record_failure("run change publication", using=self._state.db):
                     run.refresh_from_db(using=self._state.db)
                     publish_change(run, action="update", update_fields=None)
 
@@ -688,10 +688,9 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
             if run.pk not in writable:
                 continue
             definition = run.policy_version.definition
-            allowed = tuple(
-                (pk, key)
-                for owner_id, pk, key in failures
-                if owner_id == run.pk and definition.retry_allowed(key)
+            allowed = StepRunQuerySet.unrouted_failures(
+                definition,
+                [(pk, key) for owner_id, pk, key in failures if owner_id == run.pk],
             )
             for step in steps:
                 step.__dict__["_graph_unrouted_failures"] = allowed
@@ -797,7 +796,7 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
         step_runs = require_composed_type(self.step_runs.all(), StepRunQuerySet)
         changed = step_runs.cancel_open()
         if not transitioning and (changed or stopped):
-            with _record_failure("run change publication", using=self._state.db):
+            with record_failure("run change publication", using=self._state.db):
                 self.refresh_from_db(using=self._state.db)
                 publish_change(self, action="update", update_fields=None)
         return transitioning, changed

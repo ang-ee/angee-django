@@ -81,7 +81,6 @@ def run_next_turn(session_id: int, *, using: str | None = None) -> None:
                     outcome = agent.runtime_backend.session_runner().run_turn(
                         session,
                         turn,
-                        deferred_results=[],
                         emit=sink,
                         deadline=deadline,
                     )
@@ -96,7 +95,7 @@ def run_next_turn(session_id: int, *, using: str | None = None) -> None:
         except asyncio.CancelledError:
             logger.warning("Agent turn %s was interrupted.", turn.pk)
             outcome = TurnOutcome(kind="failed", error="The agent turn was interrupted.")
-        except Exception:  # noqa: BLE001 - runtime failures settle this turn without retry.
+        except Exception:  # runtime failures settle this turn without retry.
             logger.exception("Agent turn %s failed.", turn.pk)
             outcome = TurnOutcome(kind="failed", error="Agent runtime failed.")
         session.settle_turn(turn, outcome)

@@ -222,12 +222,13 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, ProtectedDataModel,
         else:
             Trigger.check_admission(self, record, actor=actor)
 
-    def clean(self) -> None:
+    def clean(self, *, previous: Trigger | None = None) -> None:
         """Validate authoring and require disabling before changing an enabled rule."""
         super().clean()
         self.model_label = "" if self.source_class.model_label else ModelLabelField.normalize(self.model_label)
         self.validate_configuration()
-        previous = type(self).system_queryset().filter(pk=self.pk).first() if self.pk else None
+        if previous is None and self.pk:
+            previous = type(self).system_queryset().filter(pk=self.pk).first()
         self.granted_targets = previous.granted_targets if previous is not None else []
         if previous is not None and self.workflow_id != previous.workflow_id:
             raise ValidationError("A trigger's workflow cannot be changed.")
@@ -253,7 +254,7 @@ class Trigger(ImplementationChoicesMixin, ResourceLoadMixin, ProtectedDataModel,
             previous = None
             if not self._state.adding:
                 previous = type(self).system_queryset().filter(pk=self.pk).lock_if_supported(no_key=True).get()
-            self.clean()
+            self.clean(previous=previous)
             self.workflow.require_access("write", self.actor())
             if not self.enabled and kwargs.get("update_fields") is not None:
                 kwargs["update_fields"] = {*kwargs["update_fields"], "enabled", "disabled_reason"}

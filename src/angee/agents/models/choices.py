@@ -85,7 +85,6 @@ class SessionStatus(models.TextChoices):
 
     IDLE = "idle", "Idle"
     RUNNING = "running", "Running"
-    AWAITING_APPROVAL = "awaiting_approval", "Awaiting approval"
     CLOSED = "closed", "Closed"
     ERROR = "error", "Error"
 
@@ -95,16 +94,15 @@ class TurnStatus(models.TextChoices):
 
     PENDING = "pending", "Pending"
     RUNNING = "running", "Running"
-    AWAITING_APPROVAL = "awaiting_approval", "Awaiting approval"
     COMPLETED = "completed", "Completed"
     FAILED = "failed", "Failed"
     CANCELED = "canceled", "Canceled"
 
 
-ACTIVE_TURN_STATUSES = (TurnStatus.RUNNING, TurnStatus.AWAITING_APPROVAL)
+ACTIVE_TURN_STATUSES = (TurnStatus.RUNNING,)
 
 
-ACTIVE_TURN_DELETE_MESSAGE = "An agent turn is still running or awaiting approval; stop it first."
+ACTIVE_TURN_DELETE_MESSAGE = "An agent turn is still running; stop it first."
 
 
 OPEN_TURN_STATUSES = (TurnStatus.PENDING, *ACTIVE_TURN_STATUSES)

@@ -48,7 +48,6 @@ from rebac.relationships import write_relationships
 from angee.agents import provisioning
 from angee.agents.grants import (
     TOOL_GRANT_RESOURCE_TYPE,
-    sync_builtin_tool_catalogue,
     tool_grant_ref,
 )
 from angee.agents.models import ToolRole
@@ -67,11 +66,10 @@ from angee.agents_runtime_pydantic.toolsets import (
     AngeeToolset,
     ToolGrantAccess,
     _accessible_tool_grant_ids,
-    _assert_in_process_compatible,
 )
 from angee.base.models.audit import AuditMixin
 from angee.iam.models.base import ProtectedModel
-from angee.mcp.graphql import _CompiledTool
+from angee.mcp.graphql import _CompiledTool, actor_tool_read_only
 from angee.mcp.resource_tools import RESOURCE_READER_TOOL_TAG
 
 User = get_user_model()
@@ -438,8 +436,8 @@ def test_builtin_catalogue_sync_is_deterministic_and_seeds_reader_bundle(
     )
     monkeypatch.setattr("angee.agents.managers.mcp_server", lambda: registry)
 
-    assert sync_builtin_tool_catalogue() == 2
-    assert sync_builtin_tool_catalogue() == 2
+    assert MCPTool.objects.sync_builtin() == 2
+    assert MCPTool.objects.sync_builtin() == 2
     with system_context(reason="test builtin catalogue verify"):
         rows = list(MCPTool.objects.filter(server=server).order_by("name"))
     assert [row.name for row in rows] == ["query_records", "write_records"]
@@ -525,7 +523,7 @@ def test_production_reader_grant_path_advertises_and_executes_generated_tool(
 
     monkeypatch.setattr(mcp_graphql, "execute_under_actor", execute_probe)
 
-    sync_builtin_tool_catalogue()
+    MCPTool.objects.sync_builtin()
     assert "query_probes" not in async_to_sync(
         AngeeToolset(
             session,
@@ -630,7 +628,7 @@ def test_native_tool_error_mapping_ceiling_and_context_constraint(
         meta={"angee": {"execution_context": "request"}},
     )
     with pytest.raises(Exception, match="request-scoped FastMCP Context"):
-        _assert_in_process_compatible(request_tool)
+        actor_tool_read_only(request_tool)
 
 
 @pytest.mark.django_db(transaction=True)

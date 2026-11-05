@@ -666,8 +666,6 @@ class V2SessionAgent(SessionAgent):
         # from a newest-turn snapshot or repeat a historical settlement.
         if attachment.state is None and not attachment.pending:
             await self._state(session_id, "idle", None)
-        elif any(turn.status == TurnStatus.AWAITING_APPROVAL for turn in attachment.pending.values()):
-            await self._state(session_id, "idle", None)
 
     async def _state(self, session_id: str, state: str, settled: Any) -> None:
         stop = STOP_REASONS[settled.status] if settled is not None else None

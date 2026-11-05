@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from asgiref.sync import sync_to_async
+from django.apps import apps
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError, ValidationError
 from fastmcp.tools import Tool as FastMCPTool
@@ -26,7 +27,6 @@ from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.toolsets import (
     AbstractToolset,
-    ApprovalRequiredToolset,
     FilteredToolset,
     ToolsetTool,
 )
@@ -38,8 +38,6 @@ from rebac.backends import backend
 from angee.agents.constants import BUILTIN_MCP_ANGEE
 from angee.agents.grants import (
     TOOL_GRANT_RESOURCE_TYPE,
-    builtin_mcp_server,
-    tool_grant_ids,
     tool_grant_ref,
 )
 from angee.base.serialization import canonical_json, json_safe
@@ -118,15 +116,18 @@ class AngeeToolset(AbstractToolset[Any]):
         server_sqid = self.server_sqid
         if server_sqid is None:
             server_sqid = await sync_to_async(
-                lambda: str(builtin_mcp_server(using=self.access.using).sqid), thread_sensitive=True,
+                lambda: str(apps.get_model("agents", "MCPServer").objects.db_manager(self.access.using).builtin().sqid),
+                thread_sensitive=True,
             )()
         server = await sync_to_async(mcp_server, thread_sensitive=True)()
         tools: dict[str, ToolsetTool[Any]] = {}
         registered_tools = sorted(await server.list_tools(), key=lambda item: item.name)
-        grant_ids = await sync_to_async(tool_grant_ids, thread_sensitive=True)(
+        grant_ids = await sync_to_async(
+            apps.get_model("agents", "MCPTool").objects.db_manager(self.access.using).authorization_ids,
+            thread_sensitive=True,
+        )(
             server_sqid,
             tuple(tool.name for tool in registered_tools),
-            using=self.access.using,
         )
         for registered in registered_tools:
             name = registered.name
@@ -169,7 +170,10 @@ class AngeeToolset(AbstractToolset[Any]):
         try:
             if self.server_sqid is None:
                 self.server_sqid = await sync_to_async(
-                    lambda: str(builtin_mcp_server(using=self.access.using).sqid), thread_sensitive=True
+                    lambda: str(
+                        apps.get_model("agents", "MCPServer").objects.db_manager(self.access.using).builtin().sqid
+                    ),
+                    thread_sensitive=True,
                 )()
             await self.access.check(self.server_sqid, name)
         except PermissionDenied as error:
@@ -207,10 +211,12 @@ class ToolGrantToolset(WrapperToolset[Any]):
 
         granted = await self.access.granted_ids()
         tools = await self.wrapped.get_tools(ctx)
-        grant_ids = await sync_to_async(tool_grant_ids, thread_sensitive=True)(
+        grant_ids = await sync_to_async(
+            apps.get_model("agents", "MCPTool").objects.db_manager(self.access.using).authorization_ids,
+            thread_sensitive=True,
+        )(
             self.server_sqid,
             tools,
-            using=self.access.using,
         )
         return {
             name: tool
@@ -238,40 +244,24 @@ def toolsets_for_session(session: Any) -> list[Any]:
     """Return native plus remote toolsets authorized for ``session``."""
 
     agent = session.agent
-    selected: dict[Any, dict[str, bool]] = defaultdict(dict)
-    for tool in agent.mcp_tools.select_related("server"):
+    selected: dict[Any, set[str]] = defaultdict(set)
+    for tool in agent.mcp_tools.all():
         if tool.enabled:
-            selected[tool.server_id][tool.name] = bool(tool.requires_approval)
+            selected[tool.server_id].add(tool.name)
 
     access = ToolGrantAccess(agent.principal_subject(), using=session._state.db)
-    builtin = builtin_mcp_server(using=session._state.db)
-    native: Any = AngeeToolset(session, access, str(builtin.sqid))
-    native_approvals = frozenset(
-        name for name, required in selected.get(builtin.pk, {}).items() if required
-    )
-    if native_approvals:
-        native = ApprovalRequiredToolset(
-            native,
-            approval_required_func=_approval_filter(native_approvals),
-        )
-
-    toolsets: list[Any] = [native]
+    builtin = apps.get_model("agents", "MCPServer").objects.db_manager(session._state.db).builtin()
+    toolsets: list[Any] = [AngeeToolset(session, access, str(builtin.sqid))]
     for server in agent.mcp_servers.select_related("credential").order_by("name"):
         if server.builtin == BUILTIN_MCP_ANGEE:
             continue
-        tools = selected.get(server.pk, {})
-        if not tools:
+        selected_tools: set[str] = selected.get(server.pk, set())
+        if not selected_tools:
             continue
         transport = _transport_for(server)
         toolset: Any = MCPToolset(transport, id=str(server.sqid))
-        toolset = FilteredToolset(toolset, filter_func=_tool_filter(frozenset(tools)))
+        toolset = FilteredToolset(toolset, filter_func=_tool_filter(frozenset(selected_tools)))
         toolset = ToolGrantToolset(toolset, access, str(server.sqid))
-        approvals = frozenset(name for name, required in tools.items() if required)
-        if approvals:
-            toolset = ApprovalRequiredToolset(
-                toolset,
-                approval_required_func=_approval_filter(approvals),
-            )
         toolsets.append(toolset)
     return toolsets
 
@@ -304,10 +294,6 @@ def _tool_access_allowed(
             )
             .allowed
         )
-
-
-# Historical import used by runtime acceptance tests; MCP owns the contract.
-_assert_in_process_compatible = actor_tool_read_only
 
 
 def _tool_result_value(result: ToolResult) -> Any:
@@ -361,12 +347,3 @@ def _tool_filter(names: frozenset[str]) -> Callable[[Any, Any], bool]:
         return bool(definition.name in names)
 
     return includes
-
-
-def _approval_filter(names: frozenset[str]) -> Callable[[Any, Any, Any], bool]:
-    """Return a typed approval predicate for selected tool names."""
-
-    def requires_approval(_context: Any, definition: Any, _args: Any) -> bool:
-        return bool(definition.name in names)
-
-    return requires_approval

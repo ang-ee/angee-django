@@ -75,6 +75,6 @@ class Map(Step[MapInput, list[MapItem[Any]], None]):
     def run(self, ctx: Any) -> _Settlement:
         """Wait for bodies or return ordered typed evidence."""
         items = ctx.step_run.map_rows().collect_map(len(ctx.input.items))
-        return _MapWait() if items is None else self.done(
+        return _MapWait() if items is None else ctx.done(
             items, outcome="failed" if any("error" in item for item in items) else "done",
         )

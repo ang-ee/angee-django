@@ -346,7 +346,7 @@ def test_trigger_ledger_origin_and_filters_require_operator_visibility(trigger_s
         workflow=workflow, source="record_changed", model_label="knowledge.vault",
     )
     Trigger.objects.enable(trigger, actor=editor)
-    TriggerEvent.objects.record_change(Vault, record)
+    TriggerEvent.objects.record_changes(Vault, (record,))
     Trigger.objects.drain()
     event = TriggerEvent.system_queryset().get(trigger=trigger)
     assert event.admitted_at is not None, event.rejection
@@ -407,7 +407,7 @@ def test_trigger_ledger_redacts_unreadable_source_identity_and_filter_oracles(tr
         workflow=workflow, source="record_changed", model_label="knowledge.vault",
     )
     Trigger.objects.enable(trigger, actor=editor)
-    TriggerEvent.objects.record_change(Vault, record)
+    TriggerEvent.objects.record_changes(Vault, (record,))
     event = TriggerEvent.system_queryset().get(trigger=trigger)
     query = """query($model: String!, $record: String!) {
       triggerevent { id record_model record_id evaluated_at admitted_at }
@@ -463,7 +463,7 @@ def test_trigger_ledger_reference_guard_batches_source_reads(trigger_surface):
     counts = []
     for count in (1, 5):
         for index in range(TriggerEvent.system_queryset().count(), count):
-            TriggerEvent.objects.record_change(Vault, vault_for(source_owner, name=f"Private source {index}"))
+            TriggerEvent.objects.record_changes(Vault, (vault_for(source_owner, name=f"Private source {index}"),))
         result_data(execute_schema(schema, query, user=editor))
         with CaptureQueriesContext(connection) as queries:
             assert result_data(execute_schema(schema, query, user=editor)) == {

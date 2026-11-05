@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager, nullcontext
 from contextvars import ContextVar
 from datetime import datetime, timedelta
@@ -63,13 +63,13 @@ _held_runs: ContextVar[dict[str, set[int]] | None] = ContextVar("workflows_held_
 _BLOCK_ACTION: TypeAdapter[NodeKey] = TypeAdapter(NodeKey)
 
 
-def _sqlstate(error: Exception) -> str | None:
+def sqlstate(error: Exception) -> str | None:
     """Read the native database driver's SQLSTATE at one boundary."""
     return getattr(error.__cause__, "sqlstate", None)
 
 
 @contextmanager
-def _record_failure(operation: str, *, using: str | None = None) -> Iterator[None]:
+def record_failure(operation: str, *, using: str | None = None) -> Iterator[None]:
     """Isolate diagnostic writes; a lost claim still aborts its execution transaction."""
     try:
         with transaction.atomic(using=using):
@@ -254,7 +254,7 @@ class WorkflowRunQuerySet[T: WorkflowRun](ProtectedQuerySet[T]):
                 with (
                     system_context(reason="workflows.hold"),
                     (
-                        _database_timeout(timeout, setting="lock_timeout", using=self.db)
+                        database_timeout(timeout, setting="lock_timeout", using=self.db)
                         if timeout is not None
                         else nullcontext()
                     ),
@@ -343,6 +343,11 @@ class StepRecordQuerySet[T: StepRecord](ProtectedAppendOnlyQuerySet[T], Protecte
 
 class StepRunQuerySet[T: StepRun](ProtectedQuerySet[T]):
     """Own conditional step transitions and database-clock candidate scopes."""
+
+    @staticmethod
+    def unrouted_failures(definition: Definition, failures: Iterable[tuple[int, str]]) -> tuple[tuple[int, str], ...]:
+        """Keep failed nodes whose definitions have no failure route."""
+        return tuple((pk, key) for pk, key in failures if definition.retry_allowed(key))
 
     def with_retry_batch(self) -> Self:
         """Prepare retry eligibility over the materialized step page."""
@@ -717,7 +722,7 @@ class StepAttemptQuerySet[T: StepAttempt](ProtectedQuerySet[T]):
 
 
 @contextmanager
-def _database_timeout(
+def database_timeout(
     timeout: timedelta,
     *,
     setting: str = "statement_timeout",

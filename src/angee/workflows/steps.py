@@ -353,11 +353,6 @@ class Step[I, O, C](ImplBase):
         """Return JSON input after applying its model's defaults and validation."""
         return get_type_adapter(cls.input_model).dump_python(cls.parse_input(value), mode="json", by_alias=True)
 
-    @staticmethod
-    def done(output: Any = None, *, outcome: str = DONE_OUTCOME) -> Done:
-        """Construct a completion without validating or serializing the body's values."""
-        return Done(output=output, outcome=outcome)
-
     @classmethod
     def serialize_state(cls, state: Any) -> Any:
         """Serialize a continuation checkpoint once at the body boundary."""

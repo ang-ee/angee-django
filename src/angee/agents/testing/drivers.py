@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -41,14 +41,12 @@ class FakeRunner(SessionRunner):
         session: Any,
         turn: Any,
         *,
-        deferred_results: list[Mapping[str, Any]],
         emit: SessionUpdateSink,
         deadline: float,
     ) -> TurnOutcome:
         assert current_actor() == session.agent.principal_subject()
         assert not connection.in_atomic_block
         assert deadline > time.monotonic()
-        assert deferred_results == []
         self.prompts.append(turn.prompt)
         self.history.append(session.replay_state)
         if self.during_turn is not None:
