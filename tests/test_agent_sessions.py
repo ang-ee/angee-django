@@ -622,6 +622,32 @@ def test_append_reads_only_lock_and_save_fields_without_system_audits(session: A
     assert turn.updates == [_chunk("First batch"), _chunk("Second batch")]
 
 
+def test_update_flush_and_follower_delta_stay_flat_as_transcript_grows(session: AgentSession) -> None:
+    """A flush writes one batch and a follower reads only the unseen batch."""
+    turn = session.post("A long streamed turn")
+    claimed = session.claim_turn()
+    assert claimed is not None and claimed.pk == turn.pk
+    samples: list[tuple[int, int]] = []
+    with actor_context(session.agent.principal_subject()):
+        for size in (10, 50, 200):
+            for index in range(claimed.update_count, size - 1):
+                claimed.append_updates([_chunk(f"{index:04d}")])
+            with CaptureQueriesContext(connection) as queries:
+                assert claimed.append_updates([_chunk(f"{size - 1:04d}")])
+            writes = [query["sql"] for query in queries if query["sql"].startswith(("INSERT", "UPDATE"))]
+            assert len(writes) <= 3
+            samples.append((len(queries), sum(len(sql.encode()) for sql in writes)))
+            fresh = AgentTurn.objects.get(pk=turn.pk)
+            with CaptureQueriesContext(connection) as delta_queries:
+                updates, _previous, _segment = fresh.updates_since(size - 1)
+            assert updates == [_chunk(f"{size - 1:04d}")]
+            assert len(delta_queries) <= 8
+    assert all(count <= 40 for count, _bytes in samples)
+    assert all(size <= 2_000 for _count, size in samples)
+    print(f"Agent flush SQL: {samples}")
+    assert len(AgentTurn.objects.get(pk=turn.pk).updates) == 200
+
+
 def test_failed_runner_outcome_keeps_completed_replay_history(session: AgentSession, runner: FakeRunner) -> None:
     session.post("Complete first")
     run_session.run(session.pk)

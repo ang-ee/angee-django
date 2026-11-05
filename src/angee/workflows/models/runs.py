@@ -33,7 +33,7 @@ from angee.base.signals import publish_change
 from angee.iam.models.base import ProtectedDataModel
 from angee.iam.models.refs import ProtectedRecordRefMixin
 from angee.jobs.enqueue import enqueue_task
-from angee.workflows.definition import MAP_BODY_SUFFIX, GraphEdge, GraphNode
+from angee.workflows.definition import MAP_BODY_SUFFIX, GraphEdge, GraphNode, StepRow, map_body_key
 from angee.workflows.managers import WorkflowRunManager
 from angee.workflows.models.definitions import WorkflowVersion
 from angee.workflows.querysets import RETRYABLE_SQLSTATES, StepRunQuerySet, _record_failure, _sqlstate
@@ -48,6 +48,7 @@ from angee.workflows.states import (
     RunRelation,
     RunStatus,
     StepRunStatus,
+    WaitingKind,
 )
 from angee.workflows.steps import Fail, StepMode, Superseded, _AttemptRecord
 from angee.workflows.subjects import RunSubject
@@ -322,23 +323,47 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
                 if not terminal:
                     with transaction.atomic(using=self._state.db):
                         rows = list(
-                            step_runs.only(
-                                "run_id",
-                                "node_key",
-                                "map_index",
-                                "status",
-                                "outcome",
-                                "waiting_kind",
-                                "input",
+                            step_runs.exclude(node_key__endswith=MAP_BODY_SUFFIX)
+                            .only("run_id", "node_key", "map_index", "status", "outcome", "waiting_kind")
+                            .annotate(
+                                _map_input=models.Case(
+                                    models.When(
+                                        status=StepRunStatus.WAITING,
+                                        waiting_kind=WaitingKind.MAP,
+                                        then=models.F("input"),
+                                    ),
+                                    default=models.Value(None),
+                                    output_field=models.JSONField(),
+                                )
                             )
                         )
+                        for row in rows:
+                            if row._map_input is not None:
+                                row.input = row._map_input
+                        progress = {
+                            item["node_key"]: (
+                                item["count"],
+                                item["open_count"],
+                                item["last_index"],
+                                item["failed_count"],
+                            )
+                            for item in step_runs.body_progress()
+                        }
                         definition = run.version.definition
-                        if definition.unrouted_failure(rows):
+                        unrouted_bodies = [
+                            map_body_key(key)
+                            for key, node in definition.nodes.items()
+                            if node.body is not None and definition.retry_allowed(map_body_key(key))
+                        ]
+                        if definition.unrouted_failure(cast(list[StepRow], rows)) or (
+                            unrouted_bodies and any(progress.get(key, (0, 0, -1, 0))[3] for key in unrouted_bodies)
+                        ):
                             status, outcome, output = RunStatus.FAILED, ERROR_OUTCOME, {}
                         else:
                             planned = definition.ready_nodes(
-                                rows,
+                                cast(list[StepRow], rows),
                                 map_concurrency=settings.ANGEE_WORKFLOW_MAP_CONCURRENCY,
+                                body_progress=progress,
                             )
                             wake = [node.node_key for node in planned if node.existing]
                             if wake:
@@ -356,14 +381,19 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
                             ]
                             if new_steps:
                                 step_runs.bulk_create(new_steps)
-                            statuses = set(step_runs.values_list("status", flat=True))
+                            statuses = set(step_runs.order_by().values_list("status", flat=True).distinct())
                             if statuses & {StepRunStatus.READY, StepRunStatus.RUNNING}:
                                 status, outcome, output = RunStatus.RUNNING, "", {}
                             elif StepRunStatus.WAITING in statuses:
                                 status, outcome, output = RunStatus.WAITING, "", {}
                             else:
                                 status = RunStatus.SUCCEEDED
-                                outcome, output = definition.result_for(step_runs.all(), run.input) or (
+                                outcome, output = definition.result_for(
+                                    step_runs.exclude(node_key__endswith=MAP_BODY_SUFFIX).only(
+                                        "node_key", "status", "outcome", "output"
+                                    ),
+                                    run.input,
+                                ) or (
                                     DONE_OUTCOME,
                                     {},
                                 )

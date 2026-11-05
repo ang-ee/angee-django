@@ -17,6 +17,7 @@ import strawberry_django
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ObjectDoesNotExist
+from django.db.models import Prefetch
 from strawberry import auto
 from strawberry.permission import BasePermission, PermissionExtension
 from strawberry.scalars import JSON
@@ -62,6 +63,11 @@ AgentRuntimeImpl = Agent._meta.get_field("runtime_class").choices_enum
 strawberry.enum(cast(Any, AgentRuntimeImpl))
 AgentSessionModel = apps.get_model("agents", "AgentSession")
 AgentTurn = apps.get_model("agents", "AgentTurn")
+_TURN_UPDATE_BATCHES = Prefetch(
+    "update_batches",
+    queryset=AgentTurn.update_model()._base_manager.order_by("start_index"),
+    to_attr="_prefetched_update_batches",
+)
 Integration = apps.get_model("integrate", "Integration")
 Vendor = apps.get_model("integrate", "Vendor")
 Credential = apps.get_model("integrate", "Credential")
@@ -243,7 +249,7 @@ class AgentTurnType(ProtectedNode):
     prompt: auto
     context: JSON
     status: auto
-    updates: JSON
+    updates: JSON = strawberry_django.field(prefetch_related=[_TURN_UPDATE_BATCHES], metadata={"angee_widget": "json"})
     text: auto
     usage: JSON
     error: auto

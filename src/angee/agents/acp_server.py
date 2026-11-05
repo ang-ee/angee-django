@@ -24,6 +24,7 @@ from acp.experimental.v2 import schema as v2
 from channels.db import database_sync_to_async
 from django.apps import apps
 from django.db import transaction
+from django.db.models import Prefetch
 from rebac import evaluator_scope
 
 from angee.agents.models import TurnStatus
@@ -206,6 +207,7 @@ class SessionAgent(ABC):
         await self._attach(session, replay=False)
         async with self.lock:
             turn = await self._db(session.post, "\n".join(blocks), context=context, actor=self.user)
+            turn._delivery_updates = []
             self.attachments[session_id].observe(turn)
             acknowledgment = await self._accepted(session_id, turn)
         return await self._acknowledge(turn, acknowledgment)
@@ -287,10 +289,27 @@ class SessionAgent(ABC):
             if session_id in self.attachments and not replay and not current_state:
                 return
             self.attachments.setdefault(session_id, _Attachment(session))
-            turns = await self._db(
-                lambda: list(session.turns.with_actor(self.user).order_by("index")),
-                thread_sensitive=False,
-            )
+
+            def load_turns() -> list[Any]:
+                turns = list(
+                    session.turns.with_actor(self.user)
+                    .order_by("index")
+                    .prefetch_related(
+                        Prefetch(
+                            "update_batches",
+                            queryset=self.turn_model.update_model()._base_manager.order_by("start_index"),
+                            to_attr="_prefetched_update_batches",
+                        )
+                    )
+                )
+                historical = not replay
+                for turn in turns:
+                    historical = historical and turn.status in STOP_REASONS
+                    if not historical:
+                        turn._delivery_updates = turn.updates
+                return turns
+
+            turns = await self._db(load_turns, thread_sensitive=False)
             await self._restore(session_id, turns, replay=replay)
             if current_state:
                 await self._report_state(session_id)
@@ -304,7 +323,7 @@ class SessionAgent(ABC):
                 await self._deliver(session_id, turn, replay=True)
         elif not attachment.turns:
             for turn in turns:
-                attachment.turns[str(turn.sqid)] = _Delivery(len(turn.updates), True, turn.status)
+                attachment.turns[str(turn.sqid)] = _Delivery(turn.update_count, True, turn.status)
 
     async def _follow(self) -> None:
         try:
@@ -315,19 +334,28 @@ class SessionAgent(ABC):
                 session_ids = related.intersection(self.attachments)
                 if not session_ids:
                     continue
-                # Copy on the loop: database threads never iterate mutable attachments.
-                attached = {self.attachments[sid].session.pk: sid for sid in session_ids}
-
-                def changed_turn() -> Any:
-                    return instance_from_public_id(
-                        self.turn_model,
-                        payload.id,
-                        queryset=self.turn_model.objects.with_actor(self.user).filter(
-                            session_id__in=tuple(attached)
-                        ),
-                    )
-
                 async with self.lock:
+                    # Copy on the loop: database threads never inspect mutable attachments.
+                    attached = {self.attachments[sid].session.pk: sid for sid in session_ids}
+                    cursors = {
+                        session_pk: self.attachments[sid].turns[payload.id].updates
+                        if payload.id in self.attachments[sid].turns
+                        else 0
+                        for session_pk, sid in attached.items()
+                    }
+
+                    def changed_turn() -> Any:
+                        turn = instance_from_public_id(
+                            self.turn_model,
+                            payload.id,
+                            queryset=self.turn_model.objects.with_actor(self.user)
+                            .filter(session_id__in=tuple(attached))
+                            .only("session_id", "index", "prompt", "status", "error", "update_count"),
+                        )
+                        if turn is not None:
+                            turn.set_delivery_delta(cursors[turn.session_id])
+                        return turn
+
                     turn = await self._db(changed_turn, thread_sensitive=False)
                     if turn is None:
                         if payload.action == "delete":
@@ -354,10 +382,10 @@ class SessionAgent(ABC):
         if not delivery.prompt_sent:
             await self._user_message(session_id, turn)
             delivery.prompt_sent = True
-        for position, update in enumerate(self._project_updates(turn)):
+        for position, update in enumerate(self._project_updates(turn), start=turn.delivery_start):
             if position >= delivery.updates:
                 await self._update(session_id, update)
-        delivery.updates = len(turn.updates)
+        delivery.updates = turn.delivery_start + len(turn.delivery_updates)
         if delivery.status != turn.status:
             await self._status_changed(session_id, turn, replay=replay)
         delivery.status = turn.status
@@ -455,7 +483,7 @@ class V1SessionAgent(SessionAgent):
         )
 
     def _project_updates(self, turn: Any) -> Iterator[dict[str, Any]]:
-        return iter(turn.updates)
+        return iter(turn.delivery_updates)
 
     async def _update(self, session_id: str, update: dict[str, Any]) -> None:
         note = v1.SessionNotification.model_validate({"sessionId": session_id, "update": update})
@@ -535,7 +563,7 @@ class V2SessionAgent(SessionAgent):
             turn_id = str(turn.sqid)
             historical = historical and turn.status in STOP_REASONS
             if historical and turn_id not in attachment.turns:
-                attachment.turns[turn_id] = _Delivery(len(turn.updates), True, turn.status)
+                attachment.turns[turn_id] = _Delivery(turn.update_count, True, turn.status)
             attachment.observe(turn)
             if turn_id in unacknowledged:
                 attachment.turns[turn_id].acknowledged = False
@@ -577,10 +605,10 @@ class V2SessionAgent(SessionAgent):
             if opening:
                 await self._state(session_id, "running", None)
                 delivery.started = True
-            projected = list(self._project_updates(turn))[delivery.updates :]
+            projected = list(self._project_updates(turn))[max(0, delivery.updates - turn.delivery_start) :]
             for update in self._snapshot_updates(projected) if snapshot and opening else projected:
                 await self._update(session_id, update)
-            delivery.updates = len(turn.updates)
+            delivery.updates = turn.delivery_start + len(turn.delivery_updates)
             delivery.status = turn.status
             if turn.status not in STOP_REASONS:
                 break
@@ -613,9 +641,9 @@ class V2SessionAgent(SessionAgent):
         the full retained prefix so batching, snapshots and replay agree.
         """
 
-        previous = None
-        segment = 0
-        for position, update in enumerate(turn.updates):
+        previous = turn.delivery_previous_kind
+        segment = turn.delivery_segment_start
+        for position, update in enumerate(turn.delivery_updates, start=turn.delivery_start):
             kind = update["sessionUpdate"]
             if kind != previous:
                 segment = position

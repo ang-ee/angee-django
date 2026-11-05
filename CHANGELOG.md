@@ -8,6 +8,21 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — agent transcript storage
+
+- `AgentTurn` stores ACP updates in ordered `AgentTurnUpdate` batches with turn
+  counters. Projects with existing turn data must author the upgrade in their
+  own native migration history: rename `updates` to `_legacy_updates` in
+  migration state while retaining the `updates` column. Add the three turn
+  counters and the `AgentTurnUpdate` table, copy retained JSON in primary-key
+  order into batches, then drop the old column. The reverse must restore JSON
+  before dropping the batch table. The composition drop guard refuses an
+  automatic column drop while legacy updates remain.
+- `AgentTurn.updates` is now a read-only transcript property. Call
+  `append_updates()` to write batches; constructing turns with `updates=`,
+  filtering by `updates`, and `values("updates")` are no longer supported Python
+  model APIs. GraphQL continues to expose the same `updates` JSON field.
+
 ## Unreleased — jj workspace slots in the templates
 
 - The `src` workspace template takes `slot_mode` (`worktree`, the default, or

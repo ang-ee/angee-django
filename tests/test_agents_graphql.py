@@ -35,7 +35,7 @@ from rebac.memberships import containers_of
 
 from angee.agents import signals as agent_signals
 from angee.agents.context import render_view_context
-from angee.agents.models import MCPPlacement
+from angee.agents.models import AgentLifecycle, MCPPlacement, RuntimeStatus, TurnStatus
 from angee.agents.reader_role import RESOURCE_READER_ROLE
 from angee.agents.testing.models import (
     Agent,
@@ -3456,6 +3456,11 @@ def test_agent_session_reads_and_view_resolution(composed_tables: None, capture_
     with actor_context(owner):
         session = AgentSession.objects.start(agent, user=owner, context={"kind": "list"})
         turn = session.post("Private question", context={"kind": "record"})
+    claimed = session.claim_turn()
+    assert claimed is not None
+    update = {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Reply"}}
+    with actor_context(agent.principal_subject()):
+        assert claimed.append_updates([update])
     console = _schema()
     target = _data(
         _execute(
@@ -3468,20 +3473,65 @@ def test_agent_session_reads_and_view_resolution(composed_tables: None, capture_
     query = """
         query Chat($id: String!) {
           agent_sessions { id context agent { permissions } }
-          agent_turns { id prompt context }
-          agent_turns_by_pk(id: $id) { id prompt context }
+          agent_turns { id prompt context updates }
+          agent_turns_by_pk(id: $id) { id prompt context updates }
         }
     """
     mine = _data(_execute(console, query, {"id": str(turn.sqid)}, user=owner))
     assert mine == {
         "agent_sessions": [{"id": str(session.sqid), "context": {"kind": "list"}, "agent": {"permissions": ["call"]}}],
-        "agent_turns": [{"id": str(turn.sqid), "prompt": "Private question", "context": {"kind": "record"}}],
-        "agent_turns_by_pk": {"id": str(turn.sqid), "prompt": "Private question", "context": {"kind": "record"}},
+        "agent_turns": [
+            {"id": str(turn.sqid), "prompt": "Private question", "context": {"kind": "record"}, "updates": [update]}
+        ],
+        "agent_turns_by_pk": {
+            "id": str(turn.sqid),
+            "prompt": "Private question",
+            "context": {"kind": "record"},
+            "updates": [update],
+        },
     }
     hidden = _data(_execute(console, query, {"id": str(turn.sqid)}, user=reader))
     assert hidden == {"agent_sessions": [], "agent_turns": [], "agent_turns_by_pk": None}
     mutation_fields = _data(_execute(console, "{ __schema { mutationType { fields { name } } } }", user=owner))
     assert not any("agent_turns" in field["name"] for field in mutation_fields["__schema"]["mutationType"]["fields"])
+
+
+def test_agent_turn_list_updates_prefetch_batches_at_flat_statement_cost(composed_tables: None) -> None:
+    """One GraphQL list fetches the batches for all retained turns together."""
+    owner = User.objects.create_user(username="agt-batch-reader")
+    with system_context(reason="test agents batch list seed"):
+        agent = Agent.objects.create(
+            name="Batch agent",
+            owner=owner,
+            runtime_class="pydantic",
+            lifecycle=AgentLifecycle.READY,
+            runtime_status=RuntimeStatus.RUNNING,
+        )
+    with actor_context(owner):
+        session = AgentSession.objects.start(agent, user=owner, context={})
+    console = _schema()
+    counts = []
+    previous = 0
+    for target in (1, 5, 10):
+        with system_context(reason="test agents batch list history"):
+            for index in range(previous, target):
+                turn = AgentTurn.objects.create(
+                    session=session, index=index + 1, prompt=f"Old {index}", status=TurnStatus.RUNNING
+                )
+                for offset in range(3):
+                    assert turn.append_updates(
+                        [{"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": str(offset)}}]
+                    )
+                turn.mark_completed(text="Old", usage={})
+        with CaptureQueriesContext(connection) as queries:
+            rows = _data(_execute(console, "{ agent_turns { id updates } }", user=owner))["agent_turns"]
+        assert sum(f'FROM "{AgentTurn.update_model()._meta.db_table}"' in query["sql"] for query in queries) == 1
+        assert len(rows) == target
+        assert all(len(row["updates"]) == 3 for row in rows)
+        counts.append(len(queries))
+        previous = target
+    assert counts[0] == counts[1] == counts[2], counts
+    print(f"GraphQL turn list SQL: {counts}")
 
 
 def test_deprovision_in_process_agent_closes_open_sessions(composed_tables: None) -> None:

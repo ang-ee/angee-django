@@ -28,6 +28,8 @@ from angee.base.models.audit import AuditMixin
 from angee.base.models.persistence import require_composed_type
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.base.refs import RecordRef
+from angee.iam.managers import ProtectedManager
+from angee.iam.models.append_only import ProtectedAppendOnlyModel, ProtectedAppendOnlyQuerySet
 from angee.iam.models.base import ProtectedDataModel
 from angee.iam.permissions import actor_user_id, instance_actor
 from angee.jobs.enqueue import enqueue_task
@@ -475,7 +477,9 @@ class AgentTurn(AuditMixin, ProtectedDataModel, concrete=True):
     context = models.JSONField(default=dict, blank=True, editable=False)
     """Server-retained view context supplied when this message was posted."""
     status = StateField(choices_enum=TurnStatus, default=TurnStatus.PENDING)
-    updates = models.JSONField(default=list, blank=True)
+    update_count = models.PositiveIntegerField(default=0, editable=False)
+    last_update_kind = models.CharField(max_length=64, blank=True, editable=False)
+    segment_start = models.PositiveIntegerField(default=0, editable=False)
     text = models.TextField(blank=True)
     usage = models.JSONField(default=dict, blank=True)
     error = DiagnosticTextField(blank=True)
@@ -529,7 +533,7 @@ class AgentTurn(AuditMixin, ProtectedDataModel, concrete=True):
             locked = (
                 type(self)
                 .objects.using(using)
-                .only("pk", "status", "updated_at")
+                .only("pk", "status", "updated_at", "update_count", "last_update_kind", "segment_start")
                 .lock_if_supported()
                 .filter(pk=self.pk)
                 .order_by("pk")
@@ -538,10 +542,104 @@ class AgentTurn(AuditMixin, ProtectedDataModel, concrete=True):
             if locked is None:
                 return False
             if batch and locked.status in (TurnStatus.RUNNING, TurnStatus.CANCELED):
-                locked.updates = [*(self.updates or []), *batch]
-                locked.save(update_fields=["updates", "updated_at"])
-                self.updates = locked.updates
+                start = locked.update_count
+                previous_kind = locked.last_update_kind
+                previous_segment_start = locked.segment_start
+                for offset, update in enumerate(batch):
+                    kind = update["sessionUpdate"]
+                    if kind != previous_kind:
+                        locked.segment_start = start + offset
+                    previous_kind = kind
+                type(self).update_model().objects.db_manager(using).create(
+                    turn=locked,
+                    start_index=start,
+                    end_index=start + len(batch),
+                    previous_kind=locked.last_update_kind,
+                    previous_segment_start=previous_segment_start,
+                    updates=list(batch),
+                )
+                locked.update_count += len(batch)
+                locked.last_update_kind = previous_kind
+                locked.save(update_fields=["update_count", "last_update_kind", "segment_start", "updated_at"])
+                self.update_count = locked.update_count
+                self.last_update_kind = locked.last_update_kind
+                self.segment_start = locked.segment_start
             return locked.status == TurnStatus.RUNNING
+
+    @classmethod
+    def update_model(cls) -> type[AgentTurnUpdate]:
+        """Resolve the composed batch row through this turn's declared relation."""
+        model = cls._meta.get_field("update_batches").related_model
+        if model is None or not issubclass(model, AgentTurnUpdate):
+            raise ImproperlyConfigured(f"{cls._meta.label}.update_batches must target AgentTurnUpdate.")
+        return model
+
+    @property
+    def updates(self) -> list[dict[str, Any]]:
+        """Return the retained transcript in wire order."""
+        if "_prefetched_update_batches" in self.__dict__:
+            batches = self.__dict__["_prefetched_update_batches"]
+        else:
+            batches = (
+                self.update_model()
+                ._base_manager.db_manager(self._state.db)
+                .filter(turn_id=self.pk)
+                .order_by("start_index")
+            )
+        return [update for batch in batches for update in batch.updates]
+
+    def updates_since(self, index: int) -> tuple[list[dict[str, Any]], str, int]:
+        """Read only batches overlapping an attachment's delivered position."""
+        batches = (
+            self.update_model()
+            ._base_manager.db_manager(self._state.db)
+            .filter(turn_id=self.pk, end_index__gt=index)
+            .order_by("start_index")
+            .values("start_index", "updates", "previous_kind", "previous_segment_start")
+        )
+        updates: list[dict[str, Any]] = []
+        previous_kind = ""
+        segment_start = 0
+        for batch in batches:
+            if not updates:
+                previous_kind = batch["previous_kind"]
+                segment_start = batch["previous_segment_start"]
+            for offset, update in enumerate(batch["updates"]):
+                position = batch["start_index"] + offset
+                if position < index:
+                    if update["sessionUpdate"] != previous_kind:
+                        segment_start = position
+                    previous_kind = update["sessionUpdate"]
+                else:
+                    updates.append(update)
+        return updates, previous_kind, segment_start
+
+    @property
+    def delivery_updates(self) -> list[dict[str, Any]]:
+        """Use the follower's bounded delta, or the full transcript for replay."""
+        if "_delivery_updates" in self.__dict__:
+            return self._delivery_updates
+        return self.updates
+
+    @property
+    def delivery_start(self) -> int:
+        return getattr(self, "_delivery_start", 0)
+
+    @property
+    def delivery_previous_kind(self) -> str:
+        return getattr(self, "_delivery_previous_kind", "")
+
+    @property
+    def delivery_segment_start(self) -> int:
+        return getattr(self, "_delivery_segment_start", 0)
+
+    def set_delivery_delta(self, index: int) -> None:
+        """Attach one read-only delivery slice to this fetched turn instance."""
+        updates, previous_kind, segment_start = self.updates_since(index)
+        self._delivery_updates = updates
+        self._delivery_start = index
+        self._delivery_previous_kind = previous_kind
+        self._delivery_segment_start = segment_start
 
     def change_related_records(self) -> tuple[RecordRef, ...]:
         """Name the session without loading its guarded relation, including on delete."""
@@ -610,3 +708,31 @@ class AgentTurn(AuditMixin, ProtectedDataModel, concrete=True):
     )
     def mark_canceled(self) -> None:
         """Cancel this turn without deleting its audit trail."""
+
+
+class AgentTurnUpdateQuerySet[UpdateT: AgentTurnUpdate](ProtectedAppendOnlyQuerySet[UpdateT]):
+    """Keep persisted transcript batches immutable through the collection API."""
+
+
+_AgentTurnUpdateManager = ProtectedManager.from_queryset(AgentTurnUpdateQuerySet)
+
+
+class AgentTurnUpdate(ProtectedAppendOnlyModel, ProtectedDataModel, concrete=True):
+    """One immutable flush batch ordered within its owning turn."""
+
+    sqid_prefix = "atu_"
+    turn = models.ForeignKey("agents.AgentTurn", on_delete=models.CASCADE, related_name="update_batches")
+    start_index = models.PositiveIntegerField(editable=False)
+    end_index = models.PositiveIntegerField(editable=False)
+    previous_kind = models.CharField(max_length=64, blank=True, editable=False)
+    previous_segment_start = models.PositiveIntegerField(default=0, editable=False)
+    updates = models.JSONField(default=list, editable=False)
+
+    objects = _AgentTurnUpdateManager()
+
+    class Meta:
+        abstract = True
+        ordering = ("turn_id", "start_index")
+        rebac_resource_type = "agents/turn_update"
+        constraints = (models.UniqueConstraint(fields=("turn", "start_index"), name="uniq_agents_turn_update_start"),)
+        indexes = (models.Index(fields=("turn", "end_index"), name="agents_turn_update_delta"),)

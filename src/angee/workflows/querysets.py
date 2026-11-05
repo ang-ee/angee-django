@@ -359,6 +359,20 @@ class StepRunQuerySet[T: StepRun](ProtectedQuerySet[T]):
             .order_by("run_id", "node_key", "status")
         )
 
+    def body_progress(self) -> Any:
+        """Count map slots and locate the next index without loading item rows."""
+        return (
+            self.filter(node_key__endswith=MAP_BODY_SUFFIX)
+            .values("node_key")
+            .annotate(
+                count=Count("pk"),
+                open_count=Count("pk", filter=~Q(status__in=StepRunStatus.terminal_values())),
+                last_index=Max("map_index"),
+                failed_count=Count("pk", filter=Q(status=StepRunStatus.FAILED)),
+            )
+            .order_by("node_key")
+        )
+
     def for_map(self, run_id: Any, node_key: Any) -> Any:
         """Select a containing map's body rows, accepting native ORM expressions."""
         key = Value(node_key) if isinstance(node_key, str) else node_key
@@ -427,10 +441,15 @@ class StepRunQuerySet[T: StepRun](ProtectedQuerySet[T]):
                 if step.mode == StepMode.IO:
                     deadline = step.timeout
                     until = attempt.started_at + task_time_budget()
-                step_run.input = step_run.run.version.definition.input_for(
+                definition = step_run.run.version.definition
+                parent = step_run.node_key.partition(".")[0]
+                sources = definition.ancestors(parent)
+                if parent != step_run.node_key:
+                    sources.add(parent)
+                step_run.input = definition.input_for(
                     step_run.node_key,
                     step_run.run.input,
-                    step_run.run.step_runs.all(),
+                    step_run.run.step_runs.filter(node_key__in=sources).only("node_key", "status", "output", "input"),
                     map_index=step_run.map_index,
                 )
                 self.filter(pk=step_run.pk).to_running(deadline, until=until, input=step_run.input)

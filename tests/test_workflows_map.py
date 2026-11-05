@@ -1,10 +1,11 @@
 """Map bodies use the ordinary planner, settlements, recovery and read resources."""
 
+import json
 from datetime import timedelta
 
 import pytest
 from django.core.exceptions import ValidationError
-from django.db import connection
+from django.db import connection, transaction
 from django.test.utils import CaptureQueriesContext
 from pydantic import BaseModel, TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
@@ -195,6 +196,88 @@ def test_map_orders_results_and_bounds_planning(execution, map_steps, settings):
     assert run.status == "succeeded" and mapped.attempt == 2
     assert (mapped.map_total, mapped.map_settled) == (5, 5)
     assert all(row.rank == mapped.rank and row.is_mapped for row in body_rows(run))
+
+
+def test_map_claim_and_planning_load_bounded_rows(execution, map_steps, settings, monkeypatch):
+    """Claim and advancement keep map item JSON out of the planner's row scan."""
+    actor, _ = execution
+    settings.ANGEE_WORKFLOW_MAP_CONCURRENCY = 1
+    samples = []
+    original = StepRun.from_db
+    for size in (10, 50, 200):
+        run, parent = start_map(actor, [{"value": index} for index in range(size)])
+        body = body_rows(run).get(map_index=0)
+        materialized = []
+
+        def observe(cls, db, field_names, values, **kwargs):
+            fields = dict(zip(field_names, values))
+            materialized.append(
+                (
+                    fields.get("node_key"),
+                    sum(
+                        len(json.dumps(fields[name]).encode())
+                        for name in ("input", "output", "state", "notes")
+                        if name in fields
+                    ),
+                )
+            )
+            return original(db, field_names, values, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(StepRun, "from_db", classmethod(observe))
+            with system_context(reason="tests.map.claim.measure"), transaction.atomic():
+                with CaptureQueriesContext(connection) as claim_queries:
+                    attempt = StepRun.system_queryset().claim(body)
+        claim_rows = list(materialized)
+        materialized.clear()
+        assert attempt is not None
+        with system_context(reason="tests.map.seed.progress"):
+            StepRun.system_queryset().filter(pk=body.pk).to_succeeded(output={"value": 0}, outcome="done")
+            StepRun.system_queryset().bulk_create(
+                StepRun(
+                    run=run,
+                    node_key="items.body",
+                    map_index=index,
+                    rank=parent.rank,
+                    status="succeeded",
+                    outcome="done",
+                    output={"value": index},
+                )
+                for index in range(1, size - 1)
+            )
+        with monkeypatch.context() as patch:
+            patch.setattr(StepRun, "from_db", classmethod(observe))
+            with system_context(reason="tests.map.advance.measure"):
+                with CaptureQueriesContext(connection) as advance_queries:
+                    run.advance()
+        assert body_rows(run).filter(map_index=size - 1).exists()
+        assert len(claim_rows) <= 6
+        assert sum(key == "items.body" for key, _bytes in claim_rows) <= 1
+        assert len(materialized) <= 5
+        assert not any(key == "items.body" for key, _bytes in materialized)
+        if size == 50:
+            status_queries = [
+                query["sql"]
+                for query in advance_queries
+                if query["sql"].startswith("SELECT DISTINCT ")
+                and f'FROM "{StepRun._meta.db_table}"' in query["sql"]
+                and '"status"' in query["sql"]
+            ]
+            assert status_queries and all(" ORDER BY " not in sql for sql in status_queries)
+        samples.append(
+            (
+                len(claim_queries),
+                len(claim_rows),
+                len(advance_queries),
+                len(materialized),
+                sum(n for _, n in materialized),
+            )
+        )
+    assert all(
+        claim_statements <= 50 and advance_statements <= 52 for claim_statements, _, advance_statements, _, _ in samples
+    )
+    assert all(claim_rows <= 6 and advance_rows <= 5 for _, claim_rows, _, advance_rows, _ in samples)
+    assert all(payload_bytes <= 500 for _, _, _, _, payload_bytes in samples)
 
 
 def test_routed_body_failure_keeps_typed_partial_results(execution, map_steps, register_step):
