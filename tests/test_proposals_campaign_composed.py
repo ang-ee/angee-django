@@ -193,7 +193,7 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
             self.assertEqual(error.exception.code, "HIDDEN_ASKER_IN_THREAD")
             # The permission scopes and publication check now total three statements.
             self.assertEqual(len(queries), 3, queries.captured_queries)  # re-measure after integration
-            self.assertTrue(all('INSERT INTO "rebac_permissionauditevent"' in queries[i]["sql"] for i in (0, 2, 3)))
+            self.assertTrue(all('INSERT INTO "rebac_permissionauditevent"' in queries[i]["sql"] for i in (0, 2)))
             self.assertIn("EXISTS", queries[1]["sql"].upper())
         before = self.Task._base_manager.filter(pk=task.pk).values().get()
         with actor_context(self.manager):

@@ -69,10 +69,10 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         """Correlate follows to an outer message, ordered by the effective preference."""
 
         thread_model = self.model.thread.field.related_model
-        survivor = thread_model(pk=MergeableQuerySet.survivor_id(
+        survivor = MergeableQuerySet.survivor_id(
             "thread__", ref=lambda name: models.OuterRef(models.OuterRef(name)),
-        ))
-        members = thread_model._base_manager.redirect_group(survivor).values("pk")
+        )
+        members = thread_model._base_manager.survivor_ids().filter(survivor=survivor).values("pk")
         current_thread = MergeableQuerySet.survivor_id("thread__", ref=models.OuterRef)
         preference, tie = ThreadFollowerQuerySet._preference_order(current_thread)
         return self.model._base_manager.using(self.db).filter(
@@ -192,10 +192,10 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
             return 0
         attachment_model = apps.get_model("messaging", "ThreadAttachment")
         thread_model = apps.get_model("messaging", "Thread")
-        survivor = thread_model(pk=MergeableQuerySet.survivor_id("thread__", ref=models.OuterRef))
+        survivor = MergeableQuerySet.survivor_id("thread__", ref=models.OuterRef)
         selected_group = thread_model.objects.system_context(
             reason="messaging.follower.redirect_group"
-        ).redirect_group(survivor).filter(attachments__pk__in=selected)
+        ).survivor_ids().filter(survivor=survivor, attachments__pk__in=selected)
         members = list(attachment_model._base_manager.alias(
             _selected_group=models.Exists(selected_group),
         ).filter(

@@ -1464,7 +1464,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
                             after_landing=after_landing,
                         )
                         if changed and not is_historical:
-                            message_landed.send(sender=self.model, instance=message)
+                            message_landed.send(sender=self.model, instance=message, channel=channel)
                     if changed and not is_historical:
                         emitted.append(message)
                     if message.message_type == "email":

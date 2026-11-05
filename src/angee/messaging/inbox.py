@@ -430,7 +430,7 @@ class MessageInbox:
     def message(self, public_id: str) -> Any:
         """Read a message independently of the current result filters."""
 
-        message = self.messages.from_public_id(public_id)
+        message = self.messages.with_title_text().from_public_id(public_id)
         if message is None:
             raise ValueError("Message unavailable.")
         return message

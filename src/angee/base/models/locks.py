@@ -17,7 +17,7 @@ from angee.base.models.persistence import PersistenceMixin
 from angee.base.querysets import AngeeQuerySet, by_key
 
 
-class ImmutableFieldsMixin(models.Model):
+class ImmutableFieldsMixin(PersistenceMixin):
     """Reject changes to loaded immutable attnames declared anywhere in the MRO.
 
     Donors contribute plain tuples. An owning verb permits its next write through
@@ -57,7 +57,7 @@ class ImmutableFieldsMixin(models.Model):
                 )
                 if checked:
                     # Compare committed identities without loading unrelated deferred columns.
-                    persisted = cast(PersistenceMixin, self).persisted_for_save(using=using)
+                    persisted = self.persisted_for_save(using=using)
                     if persisted is not None:
                         changed = [name for name in checked if getattr(persisted, name) != getattr(self, name)]
                         if changed:

@@ -35,21 +35,20 @@ def capture_channel_message(sender: Any, instance: Any, **kwargs: Any) -> None:
     """
 
     del sender
+    channel = kwargs.get("channel")
     for message in kwargs.get("created_batch") or (instance,):
-        _capture_channel_message(message)
+        _capture_channel_message(message, channel=channel)
 
 
-def _capture_channel_message(instance: Any) -> None:
+def _capture_channel_message(instance: Any, *, channel: Any = None) -> None:
     """Capture one admitted channel message within its ingest transaction."""
     if instance.channel_id is None:
         return
-    channel_model = apps.get_model("messaging", "Channel")
-    if not channel_model._base_manager.using(instance._state.db).filter(
-        pk=instance.channel_id, intake_queue_id__isnull=False,
-    ).exists():
-        return
     try:
-        instance.transport_channel(reason="intake.capture.channel").capture_ingested_message(instance)
+        if channel is None:
+            channel = instance.transport_channel(reason="intake.capture.channel")
+        if channel is not None:
+            channel.capture_ingested_message(instance)
     except (DomainError, ValidationError, PermissionDenied) as error:
         logger.warning(
             "Skipped intake capture for message %s on channel %s: %s",

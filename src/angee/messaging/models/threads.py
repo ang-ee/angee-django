@@ -195,12 +195,13 @@ class ThreadedModelMixin(models.Model):
             message_model._base_manager.all()
             if structural_existence else message_model.objects.system_context(reason="messaging.record.messages")
         ).alias(_record_id=record_ref)
-        survivor = thread_model(pk=rows.survivor_id("thread__", ref=models.OuterRef))
+        survivor = rows.survivor_id("thread__", ref=models.OuterRef)
         # The thread rows are structural plumbing for an already-authorized
         # record projection.  The message queryset below is the content-bearing
         # elevated read; auditing this attachment subquery as a second content
         # read adds a duplicate bypass event every time the expression runs.
-        attached = thread_model._base_manager.redirect_group(survivor).filter(
+        attached = thread_model._base_manager.survivor_ids().filter(
+            survivor=survivor,
             attachments__content_type_id=models.Subquery(content_type),
             attachments__object_id=models.OuterRef("_record_id"),
             attachments__role=cls.thread_attachment_role,

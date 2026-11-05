@@ -37,6 +37,7 @@ message_landed = Signal()
 """Sent for each changed envelope inside that message's landing transaction.
 
 Transactional receivers use this event to keep their state with that envelope.
+Source ingestion supplies its already resolved ``channel`` to avoid a second read.
 """
 
 message_ingested = Signal()

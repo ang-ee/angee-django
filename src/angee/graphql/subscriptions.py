@@ -45,11 +45,13 @@ def changes(
     *,
     field: str,
     read_gate: type | None = None,
+    replay: bool = True,
 ) -> type:
     """Stream a registration-ready control followed by read-gated model changes.
 
-    ``ready`` has this model's label, an empty id and a replay cursor. Changes
-    retained during registration pass through the actor's read gate before it.
+    ``ready`` has this model's label and an empty id. With ``replay``, it also
+    carries a cursor, and retained changes pass the actor's read gate before it.
+    A live-only stream passes ``ready`` to the transport instead of registration.
     """
 
     label = model._meta.label
@@ -64,7 +66,11 @@ def changes(
         del self
         # Register first: the gate may wait on the ORM's sync executor.
         registration = _Registration()
-        async with contextlib.aclosing(subscribe(model, registration=registration)) as stream:
+        stream_source = (
+            subscribe(model, registration=registration) if replay
+            else subscribe(model, ready=registration.joined)
+        )
+        async with contextlib.aclosing(stream_source) as stream:
             # An async generator registers only when advanced. Start its first
             # receive before waiting, and surface registration failures promptly.
             pending = asyncio.ensure_future(anext(stream))
@@ -80,37 +86,42 @@ def changes(
                 filters = await sync_to_async(_change_filters, thread_sensitive=False)(model, info, gate_type)
                 if filters is None:
                     return
-                registration.capture.set()
+                if replay:
+                    registration.capture.set()
+                else:
+                    registration.ready.set()
                 await asyncio.wait((registered, pending), return_when=asyncio.FIRST_COMPLETED)
                 if not registration.ready.is_set():
                     await pending
                     return
-                snapshot = registration.snapshot
-                assert snapshot is not None
 
                 async def gated(payload: ChangePayload) -> ChangeEvent | None:
                     return await sync_to_async(_filter_change_event, thread_sensitive=False)(filters, payload)
 
-                if snapshot.truncated or snapshot.incomplete or len(snapshot.changes) > REPLAY_BATCH_MAX:
-                    yield ChangeEvent(model=label, id=strawberry.ID(""), action="update")
-                else:
-                    retained = []
-                    for _ in snapshot.changes:
-                        retained.append(await pending)
-                        pending = asyncio.ensure_future(anext(stream))
-                    if retained:
-                        events = await sync_to_async(_filter_replay_events, thread_sensitive=False)(
-                            filters, tuple(retained),
-                        )
-                        for replayed_event in events:
-                            yield replayed_event
-                        if events:
-                            del replayed_event
-                        del events
-                    del retained
-                cursor = snapshot.cursor
-                registration.snapshot = None
-                del snapshot
+                cursor = None
+                if replay:
+                    snapshot = registration.snapshot
+                    assert snapshot is not None
+                    if snapshot.truncated or snapshot.incomplete or len(snapshot.changes) > REPLAY_BATCH_MAX:
+                        yield ChangeEvent(model=label, id=strawberry.ID(""), action="update")
+                    else:
+                        retained = []
+                        for _ in snapshot.changes:
+                            retained.append(await pending)
+                            pending = asyncio.ensure_future(anext(stream))
+                        if retained:
+                            events = await sync_to_async(_filter_replay_events, thread_sensitive=False)(
+                                filters, tuple(retained),
+                            )
+                            for replayed_event in events:
+                                yield replayed_event
+                            if events:
+                                del replayed_event
+                            del events
+                        del retained
+                    cursor = snapshot.cursor
+                    registration.snapshot = None
+                    del snapshot
                 yield ChangeEvent(model=label, id=strawberry.ID(""), action="ready", replay_cursor=cursor)
                 while True:
                     try:
