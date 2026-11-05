@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Self
@@ -595,25 +595,51 @@ class Message(
             raise ValueError("Message feed positions require an aware timestamp and signed-64-bit PK.")
         return f"1:{at.astimezone(UTC).isoformat(timespec='microseconds')}:{pk + 2**63:020d}"
 
+    @classmethod
+    def prime_reaction_groups(cls, messages: Sequence[Self], user: Any) -> None:
+        """Load admitted messages' reactions and the actor's readable handles in two reads."""
+
+        if not messages:
+            return
+        reaction_model = apps.get_model("messaging", "Reaction")
+        handle_model = apps.get_model("parties", "Handle")
+        handles = handle_model.objects.with_actor(user) if user is not None else handle_model.objects.none()
+        models.prefetch_related_objects(
+            list(messages),
+            models.Prefetch("reactions", queryset=reaction_model._base_manager.order_by("pk")),
+            models.Prefetch("reactions__handle", queryset=handles),
+        )
+
     def reaction_groups(self, user: Any = None) -> list[MessageReactionGroup]:
         """Return this message's reactions grouped by content, with ``user``'s state.
 
         The chatter feed shows reactions grouped by content — each with a count, the
-        reacting handles, and whether ``user`` reacted. A ``reactions`` prefetch is
-        reused when present so a page of messages groups without a per-row query. This
-        is the single owner of the grouping fact; the GraphQL resolver only projects it.
+        reacting handles the user may read, and whether ``user`` reacted. Handles come
+        from an actor-scoped relation cache (``prime_reaction_groups`` or a REBAC-scoped
+        prefetch); any other handle is proved for ``user`` in one statement.
+        With no user, the returned groups contain no handles.
+        This is the single owner of grouping; GraphQL only projects it.
         """
 
+        reaction_model = apps.get_model("messaging", "Reaction")
         cache = getattr(self, "_prefetched_objects_cache", None)
         if cache is not None and "reactions" in cache:
             reactions = list(self.reactions.all())
         else:
-            reactions = list(
-                apps.get_model("messaging", "Reaction")
-                ._base_manager.filter(message=self)
-                .select_related("handle")
-                .order_by("pk")
-            )
+            reactions = list(reaction_model._base_manager.filter(message=self).order_by("pk"))
+        actor = to_subject_ref(user) if user is not None else None
+
+        def proved(row: Any) -> bool:
+            if not reaction_model.handle.is_cached(row):
+                return False
+            return row.handle is None or (actor is not None and getattr(row.handle, "_rebac_actor", None) == actor)
+
+        unproved = {row.handle_id for row in reactions if row.handle_id is not None and not proved(row)}
+        readable_handles = (
+            apps.get_model("parties", "Handle").objects.db_manager(self._state.db)
+            .with_actor(user).filter(pk__in=unproved).in_bulk()
+            if unproved and user is not None else {}
+        )
         user_id = getattr(user, "pk", None)
         grouped: dict[str, list[Any]] = {}
         for reaction in reactions:
@@ -623,7 +649,10 @@ class Message(
                 reaction=content,
                 count=len(rows),
                 self_reacted=user_id is not None and any(row.created_by_id == user_id for row in rows),
-                handles=tuple(row.handle for row in rows if row.handle is not None),
+                handles=tuple(
+                    handle for row in rows
+                    if (handle := row.handle if proved(row) else readable_handles.get(row.handle_id)) is not None
+                ),
             )
             for content, rows in grouped.items()
         ]

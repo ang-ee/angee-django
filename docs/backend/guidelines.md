@@ -896,11 +896,12 @@ data through REBAC, never a queryset bypass.
   correlated by admitted identity or proved concern links. For example, a
   relation sort alias may self-join the admitted row by primary key; the
   related-row expression still applies its own actor guard. A structural read
-  may also feed a fact the API already exposes without the rows, such as the
-  concern links behind `open_decision_count`. Never return structural rows or
-  their fields to a client. Prefer this shape to a duplicate actor-bound proof;
-  use an audited system read when the page intentionally exposes a fact across
-  the ordinary row boundary.
+  may also feed a fact the API already exposes without the rows. Never return
+  structural rows or their fields to a client. Prefer this shape to a duplicate
+  actor-bound proof. Use an audited system read when the page intentionally
+  exposes a fact across the ordinary row boundary.
+  `TimelineSelection.open_decision_count` is audited because it counts decisions
+  the actor cannot read for record-level attention.
   Django's signed-session principal reload is identity bootstrap before an
   actor exists; `UserManager.get_for_session` owns that separate auth path.
   IAM's record label is a declared scalar disclosure: a nameless account's
@@ -1628,9 +1629,9 @@ open fresh evaluator scopes for authorization and change-feed reads.
   [RunKind](../../src/angee/workflows/timeline.py) is the exception: during Timeline
   construction it re-reads the branch's record-bounded, admitted waiting runs, then
   makes up to two bounded reads for readable decision steps and actionable decisions.
-  The initial read writes one StepRecord bypass audit for a user actor even when the
-  record has no runs. This keeps the related gates within the
-  [Timeline statement guard](../../tests/test_timeline.py).
+  Its StepRecord read is structural and unaudited. The StepRun waits prefetch
+  writes one bypass audit only when admitted runs are hydrated. This keeps the
+  related gates within the [Timeline statement guard](../../tests/test_timeline.py).
   Display payloads are hydrated only for selected source rows.
   There is no event projection table or backfill requirement. Folding hides a
   child only when a readable parent target occurs on the same record; counts

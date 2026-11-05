@@ -1460,6 +1460,147 @@ def test_record_chatter_toggles_message_reaction(composed_tables: None) -> None:
     ]
 
 
+@pytest.mark.parametrize("root", ["record_thread", "record_message_feed", "record_message_feed_revalidate"])
+def test_record_reaction_handles_require_their_own_read_and_batch(
+    composed_tables: None, root: str, record_property: Any,
+) -> None:
+    """A record reader sees reaction counts, not another reactor's private handle."""
+
+    owner = User.objects.create_user(username="reaction-handle-owner")
+    reader = User.objects.create_user(username="reaction-record-reader")
+    with system_context(reason="test.messaging.reaction_handle.seed"), mute_changes():
+        doc = messaging_models.ChatterDoc.objects.create(title="Reaction visibility")
+        attachment = messaging_models.ThreadAttachment.objects.ensure_for_record(doc)
+        handle = messaging_models.Handle.objects.create(
+            platform="email", value="private-reactor@example.test",
+            display_name="Private Reactor", created_by=owner,
+        )
+        messages = [
+            messaging_models.Message.objects.create(
+                thread=attachment.thread, message_type="comment", direction="internal",
+                created_by=owner, preview=f"Comment {index}",
+            )
+            for index in range(20)
+        ]
+        for message in messages:
+            messaging_models.Reaction.objects.create(
+                message=message, handle=handle, reaction="like", created_by=owner,
+            )
+    _grant(doc, "reader", owner)
+    _grant(doc, "reader", reader)
+    schema = _schema()
+    arguments = 'input: {model_label: "chatterdemo.ChatterDoc", record_id: $id'
+    declarations = '$id: ID!, $limit: Int!'
+    if root == "record_thread":
+        arguments += ', message_limit: $limit}'
+    elif root == "record_message_feed":
+        arguments += '}, limit: $limit'
+    else:
+        arguments += '}, ids: $ids'
+        declarations = '$id: ID!, $ids: [ID!]!'
+    query = f"query({declarations}) {{ {root}({arguments}) {{" + """
+        messages { reaction_groups { count handles { value display_name } } }
+      }
+    }"""
+    for actor, expected in ((owner, [{"value": handle.value, "display_name": handle.display_name}]),
+                            (reader, [])):
+        variables = {"id": doc.sqid, "limit": 1, "ids": [messages[0].sqid]}
+        _data(execute_schema(schema, query, variables, request=_request(actor)))
+        counts = []
+        handle_counts = []
+        for size in (1, 5, 20):
+            variables = {"id": doc.sqid, "limit": size, "ids": [row.sqid for row in messages[:size]]}
+            with CaptureQueriesContext(connection) as queries:
+                rows = _data(execute_schema(
+                    schema, query, variables, request=_request(actor),
+                ))[root]["messages"]
+            assert len(rows) == size
+            assert all(row["reaction_groups"] == [{"count": 1, "handles": expected}] for row in rows), (
+                actor.username, rows, expected,
+            )
+            counts.append(len(queries))
+            handle_counts.append(sum(
+                f'FROM "{messaging_models.Handle._meta.db_table}"' in item["sql"] for item in queries
+            ))
+        assert counts[0] == counts[1] == counts[2], counts
+        assert handle_counts == [1, 1, 1], handle_counts
+        record_property(f"{root}_{actor.username}_sql", counts)
+        record_property(f"{root}_{actor.username}_handle_sql", handle_counts)
+
+    proof_counts = []
+    for size in (1, 5, 20):
+        fresh = list(messaging_models.Message._base_manager.filter(pk__in=[row.pk for row in messages[:size]]))
+        with CaptureQueriesContext(connection) as queries:
+            messaging_models.Message.prime_reaction_groups(fresh, reader)
+        proof_counts.append(len(queries))
+        assert not any('INSERT INTO "rebac_permissionauditevent"' in row["sql"] for row in queries)
+        assert sum(f'FROM "{messaging_models.Reaction._meta.db_table}"' in row["sql"] for row in queries) == 1
+        assert sum(f'FROM "{messaging_models.Handle._meta.db_table}"' in row["sql"] for row in queries) == 1
+        assert all(message.reaction_groups(reader)[0].handles == () for message in fresh)
+    assert proof_counts[0] == proof_counts[1] == proof_counts[2], proof_counts
+    record_property("direct_reaction_prime_sql", proof_counts)
+
+
+@pytest.mark.parametrize("window", [1, 5, 20])
+def test_trash_payload_primes_message_and_messages_reactions(
+    composed_tables: None, window: int, record_property: Any,
+) -> None:
+    """Selecting both payload fields batches each bound set, including the later window."""
+
+    actor = User.objects.create_user(username="double-payload-moderator")
+    owner = User.objects.create_user(username="double-payload-reactor")
+    with system_context(reason="test.messaging.double_reaction_payload.seed"), mute_changes():
+        ticket = messaging_models.ChatterDoc.objects.create(title="Double payload")
+        attachment = messaging_models.ThreadAttachment.objects.ensure_for_record(ticket)
+        handle = messaging_models.Handle.objects.create(
+            platform="email", value="double-payload@example.test",
+            display_name="Double Payload", created_by=owner,
+        )
+        messages = [
+            messaging_models.Message.objects.create(
+                thread=attachment.thread, message_type="comment", direction="internal",
+                created_by=owner, preview=f"Comment {index}",
+            )
+            for index in range(window + 1)
+        ]
+        for message in messages:
+            messaging_models.Reaction.objects.create(
+                message=message, handle=handle, reaction="like", created_by=owner,
+            )
+    _grant(ticket, "writer", actor)
+    schema = _schema()
+    mutation = """mutation($id: ID!, $message: ID!) {
+      trash_record_message(input: {
+        model_label: "chatterdemo.ChatterDoc", record_id: $id,
+        message_id: $message, confirm: true
+      }) {
+        error
+        message { reaction_groups { count handles { value } } }
+        messages { reaction_groups { count handles { value } } }
+      }
+    }"""
+    variables = {"id": ticket.sqid, "message": messages[-1].sqid}
+    with CaptureQueriesContext(connection) as queries:
+        payload = _data(execute_schema(schema, mutation, variables, request=_request(actor)))["trash_record_message"]
+    assert payload["error"] is None
+    assert payload["message"]["reaction_groups"] == [{"count": 1, "handles": []}]
+    assert len(payload["messages"]) == window
+    assert all(row["reaction_groups"] == [{"count": 1, "handles": []}]
+               for row in payload["messages"])
+    reaction_reads = sum(
+        item["sql"].lstrip().upper().startswith("SELECT")
+        and f'FROM "{messaging_models.Reaction._meta.db_table}"' in item["sql"]
+        for item in queries
+    )
+    handle_reads = sum(
+        item["sql"].lstrip().upper().startswith("SELECT")
+        and f'FROM "{messaging_models.Handle._meta.db_table}"' in item["sql"]
+        for item in queries
+    )
+    record_property(f"double_payload_{window}_sql", (len(queries), reaction_reads, handle_reads))
+    assert reaction_reads == handle_reads == 2, (reaction_reads, handle_reads)
+
+
 def test_record_chatter_toggles_message_starred(composed_tables: None) -> None:
     """The record chatter API exposes Odoo-style current-user message stars."""
 

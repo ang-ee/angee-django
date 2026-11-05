@@ -100,6 +100,70 @@ def _ids(page: dict[str, Any]) -> list[str]:
     return [row["id"] for row in page["messages"]]
 
 
+@pytest.mark.parametrize("projection", ["window", "revalidate", "posts_list"])
+def test_generic_reaction_handles_are_redacted_with_flat_page_cost(
+    projection: str, record_property: Any,
+) -> None:
+    """The transcript and posts list use one actor-scoped handle read per page."""
+
+    owner = User.objects.create_user(username="generic-reaction-owner")
+    reader = User.objects.create_user(username="generic-reaction-reader")
+    outsider = User.objects.create_user(username="generic-reaction-outsider")
+    thread, rows = _messages(owner, size=20)
+    with system_context(reason="test.generic_reaction_handles.seed"):
+        handle = Handle._base_manager.create(
+            platform="email", value="private-generic@example.test",
+            display_name="Private Generic", created_by=owner,
+        )
+        Reaction._base_manager.bulk_create([
+            Reaction(message=row, handle=handle, reaction="like", created_by=owner) for row in rows
+        ])
+    _grant(thread, "reader", reader)
+    for row in rows:
+        _grant(row, "reader", reader)
+    selection = "reaction_groups { count handles { value display_name } }"
+
+    def read(actor: Any, size: int) -> Any:
+        if projection == "window":
+            return _query("thread", actor, thread, limit=size, selection=selection)
+        if projection == "revalidate":
+            return _revalidate(
+                "thread", actor, thread, [str(row.sqid) for row in rows[:size]], selection=selection,
+            )
+        request = RequestFactory().post("/graphql/console/")
+        request.user = actor
+        return execute_schema(
+            _schema(),
+            f"query Posts($limit: Int!) {{ messages(limit: $limit) {{ {selection} }} }}",
+            {"limit": size}, request=request,
+        )
+
+    for actor, expected in ((owner, [{"value": handle.value, "display_name": handle.display_name}]),
+                            (reader, [])):
+        result_data(read(actor, 1))
+        totals = []
+        handle_reads = []
+        for size in (1, 5, 20):
+            with CaptureQueriesContext(connection) as queries:
+                payload = result_data(read(actor, size))
+            messages = payload["messages"] if projection == "posts_list" else (
+                payload["page"]["messages"] if projection == "window" else payload["result"]["messages"]
+            )
+            assert len(messages) == size
+            assert all(row["reaction_groups"] == [{"count": 1, "handles": expected}] for row in messages)
+            totals.append(len(queries))
+            handle_reads.append(sum(f'FROM "{Handle._meta.db_table}"' in item["sql"] for item in queries))
+        record_property(f"{projection}_{actor.username}_sql", (totals, handle_reads))
+        assert totals[0] == totals[1] == totals[2], totals
+        assert handle_reads == [1, 1, 1], handle_reads
+
+    hidden = read(outsider, 1)
+    if projection == "posts_list":
+        assert result_data(hidden)["messages"] == []
+    else:
+        assert hidden.errors
+
+
 def test_equal_timestamps_traverse_both_directions_without_gaps() -> None:
     """Database PK breaks a page boundary containing only equal timestamps."""
 

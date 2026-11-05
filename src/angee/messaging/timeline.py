@@ -36,15 +36,21 @@ class CommentKind(TimelineKind):
     def eligible(self, model: type[models.Model]) -> bool:
         return issubclass(model, ThreadedModelMixin)
 
-    def queryset(self, record: Any, actor: Any) -> models.QuerySet:
+    def source(self, record: Any, actor: Any) -> tuple[models.QuerySet, tuple[Any, Any] | None]:
         messages = apps.get_model("messaging", "Message").objects
         readers = type(record).objects.with_actor(actor).with_action(record.thread_read_access)
         if not readers.filter(pk=record.pk).exists():
-            return messages.none().annotate(_order_at=messages.chronological_time())
+            return messages.none().annotate(_order_at=messages.chronological_time()), self.fold(record)
         with actor_context(actor):
             return messages.record_scope(record).scoped().prefetch_related(None).select_related(
-                "subtype", "sender", "created_by",
-            )
+                "subtype", "created_by",
+            ), self.fold(record)
+
+    def queryset(self, record: Any, actor: Any) -> models.QuerySet:
+        rows, _ = self.source(record, actor)
+        messages = apps.get_model("messaging", "Message").objects
+        with actor_context(actor):
+            return rows.annotate(_sender_name=messages.sender_name_expression())
 
     def targets(self, row: Any) -> Iterable[models.Model]:
         if row._meta.label == "messaging.ThreadAttachment" and row.role != "chatter":
@@ -53,7 +59,8 @@ class CommentKind(TimelineKind):
 
     def present(self, rows: Iterable[Any]) -> dict[int, Presentation]:
         return {row.pk: Presentation(
-            row.preview, row.subtype.name if row.subtype_id else row.get_message_type_display(), row.authorship()[1],
+            row.preview, row.subtype.name if row.subtype_id else row.get_message_type_display(),
+            row.sender_name() if row.sender_id else str(row.created_by) if row.created_by_id else "",
         ) for row in rows}
 
     def records(self, row: Any) -> Iterable[RecordIdentity]:
