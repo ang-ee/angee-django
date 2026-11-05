@@ -26,14 +26,12 @@ from simple_history.signals import post_create_historical_record
 
 from angee.base.models.merge_references import references
 from angee.base.refs import generic_pointer_target
-from angee.base.serialization import canonical_json
 from angee.integrate.choices import (
     AccountStatus,
     CredentialStatus,
     IntegrationLifecycle,
 )
 from angee.integrate.credentials import CredentialKind
-from angee.integrate.events import EventKind
 from angee.integrate.oauth.errors import INVALID_STATE, OAuthFlowError
 from angee.integrate.querysets import (
     CredentialQuerySet,
@@ -205,6 +203,7 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
         external_id: str,
         tokens: dict[str, Any],
         claims: dict[str, Any],
+        reason: str,
     ) -> ExternalAccountT:
         """Link a verified identity and its credential in one transaction."""
 
@@ -212,7 +211,7 @@ class ExternalAccountManager[ExternalAccountT: ExternalAccount](_ExternalAccount
 
         email = oauth_client.email_from_claims(claims) or ""
         with (
-            system_context(reason="integrate.connections.connect_oauth"),
+            system_context(reason=reason),
             database_context(bound_manager.db),
             transaction.atomic(using=bound_manager.db),
         ):
@@ -491,15 +490,8 @@ class CredentialManager[CredentialT: Credential](_CredentialManagerBase[Credenti
     def _oauth_credential_name(oauth_client: Any, external_account: Any | None) -> str:
         """Return a default label for an OAuth credential: the provider, plus its subject."""
 
-        label = str(getattr(oauth_client, "display_name", "") or getattr(oauth_client, "slug", "") or "OAuth")
-        subject = ""
-        if external_account is not None:
-            subject = str(
-                getattr(external_account, "email", "")
-                or getattr(external_account, "display_name", "")
-                or getattr(external_account, "external_id", "")
-                or ""
-            )
+        label = oauth_client.provider_label
+        subject = external_account.subject_label if external_account is not None else ""
         return f"{label} ({subject})" if subject else label
 
     def create_local_credential(
@@ -665,7 +657,7 @@ _IntegrationManagerBase = AngeeHistoryManager.from_queryset(IntegrationQuerySet)
 
 
 class IntegrationManager[IntegrationT: Integration](_IntegrationManagerBase[IntegrationT]):
-    """Keep a stable import identity for integration and bridge collection scopes."""
+    """Own integration connection writes and concrete capability creation."""
 
     def attach_completed_connect(
         self,
@@ -726,78 +718,6 @@ class WebhookSubscriptionManager[WebhookSubscriptionT: WebhookSubscription](
     _WebhookSubscriptionManagerBase[WebhookSubscriptionT]
 ):
     """Manager for webhook subscriptions."""
-
-    def enqueue_event(
-        self,
-        *,
-        kind: EventKind,
-        payload: Any,
-        impl_app: str = "",
-        integration: Any | None = None,
-    ) -> None:
-        """Queue one event fan-out after the current transaction commits."""
-
-        bound_manager = self.db_manager(write_alias(self.model, using=self._db))
-
-        kind_value = str(kind)
-        body = bound_manager._event_body(payload)
-        integration_pk = getattr(integration, "pk", None)
-        transaction.on_commit(
-            lambda: bound_manager._deliver_event_body(
-                kind=kind_value, body=body, impl_app=impl_app, integration_pk=integration_pk
-            ),
-        )
-
-    def deliver_event(
-        self,
-        *,
-        kind: EventKind,
-        payload: Any,
-        impl_app: str = "",
-        integration: Any | None = None,
-    ) -> dict[str, int]:
-        """Deliver one integration event to every matching enabled subscription.
-
-        Actor-less framework fan-out: it reads subscriptions across all owners, so
-        it runs under ``system_context``. Each subscription matches and delivers
-        itself; this method only owns the row-set loop and the success/error tally.
-        """
-
-        return self._deliver_event_body(
-            kind=str(kind),
-            body=self._event_body(payload),
-            impl_app=impl_app,
-            integration_pk=getattr(integration, "pk", None),
-        )
-
-    @staticmethod
-    def _event_body(payload: Any) -> bytes:
-        """Return the canonical webhook JSON body for an event payload."""
-
-        return canonical_json(payload).encode("utf-8")
-
-    def _deliver_event_body(
-        self,
-        *,
-        kind: str,
-        body: bytes,
-        impl_app: str,
-        integration_pk: Any | None,
-    ) -> dict[str, int]:
-        """Deliver a pre-serialized event body to matching enabled subscriptions."""
-
-        delivered = 0
-        errors = 0
-        with system_context(reason="integrate.webhooks.deliver"):
-            for subscription in self.matching(kind=kind, impl_app=impl_app, integration_pk=integration_pk).iterator():
-                if not subscription.matches(kind=kind, impl_app=impl_app, integration_pk=integration_pk):
-                    continue
-                ok, _message = subscription.deliver_recorded(body)
-                if ok:
-                    delivered += 1
-                else:
-                    errors += 1
-        return {"delivered": delivered, "errors": errors}
 
 
 _SyncStreamManagerBase = AngeeHistoryManager.from_queryset(SyncStreamQuerySet)

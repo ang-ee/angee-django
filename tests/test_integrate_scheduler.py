@@ -73,17 +73,6 @@ class SchedulerBridge(Bridge, Integration):
         manager.advance(stream, {"seen": items}, exhausted=True)
         return items
 
-    def handle_webhook(self, payload: Any) -> None:
-        """Accept one webhook payload for the test fixture."""
-
-        del payload
-
-    def verify_webhook(self, request: Any) -> bool:
-        """Return whether a webhook request is accepted by the fixture."""
-
-        del request
-        return True
-
     def start_live(self) -> None:
         """Start the fixture live subscription."""
 
@@ -429,7 +418,7 @@ def test_sync_completion_uses_finish_time_and_keeps_detached_progress(
     del transactional_db
     queued_at = timezone.now()
     finished_at = queued_at + timedelta(seconds=17)
-    monkeypatch.setattr("angee.integrate.models.timezone.now", lambda: finished_at)
+    monkeypatch.setattr("django.utils.timezone.now", lambda: finished_at)
     with system_context(reason="test integrate scheduler setup"):
         bridge = make_integration(
             "detached-progress",

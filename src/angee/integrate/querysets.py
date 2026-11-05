@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Self, cast
 
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
-from django.db import connections, models
+from django.db import models
 from django.db.models import OuterRef, Q, Subquery
 from django.utils import timezone
 from rebac import to_subject_ref
@@ -36,6 +36,13 @@ if TYPE_CHECKING:
 class OAuthClientQuerySet[OAuthClientT: OAuthClient](AngeeHistoryQuerySet[OAuthClientT]):
     """REBAC-scoped reads for OAuth client registration."""
 
+    def ready(self) -> Self:
+        """Select enabled clients with identity and resolvable OAuth endpoints."""
+
+        return self.filter(is_enabled=True).exclude(client_id="").filter(
+            Q(discovery_url__gt="") | Q(authorize_endpoint__gt="", token_endpoint__gt="")
+        )
+
     def preferred(self, *, environment: str = "prod") -> Self:
         """Select the first registration per slug under a deterministic priority.
 
@@ -58,23 +65,20 @@ class OAuthClientQuerySet[OAuthClientT: OAuthClient](AngeeHistoryQuerySet[OAuthC
         return self.filter(pk=Subquery(alternatives.values("pk")[:1]))
 
     def ready_registrations(self) -> tuple[OAuthClientT, ...]:
-        """Evaluate the one model readiness rule on preferred public registrations."""
+        """Return preferred ready public registrations without secret columns."""
 
-        return tuple(
-            row for row in self.preferred().only(*self.model.readiness_fields) if row.configuration_state == "ready"
-        )
+        return tuple(self.preferred().ready().only(*self.model.readiness_fields))
 
     def connectable(self) -> Self:
-        """Use the model's readiness rule for the public connection picker."""
+        """Select public ready clients for the connection picker."""
 
         public = self.system_context(reason="integrate.oauth.connectable")
-        return public.filter(pk__in=[row.pk for row in public.ready_registrations()])
+        return public.preferred().ready()
 
     def enabled_for_slug(self, slug: str, *, environment: str = "prod") -> OAuthClientT | None:
         """Resolve the same ready registration the picker and projection offer."""
 
-        client = self.filter(slug=slug).preferred(environment=environment).first()
-        return client if client is not None and client.configuration_state == "ready" else None
+        return self.filter(slug=slug).preferred(environment=environment).ready().first()
 
 
 class ExternalAccountQuerySet[ExternalAccountT: ExternalAccount](
@@ -318,19 +322,6 @@ class WebhookSubscriptionQuerySet[WebhookSubscriptionT: WebhookSubscription](
 ):
     """Chainable reads owned by WebhookSubscription."""
 
-    def matching(self, *, kind: str, impl_app: str, integration_pk: Any | None) -> Self:
-        """Return the narrowest portable candidate queryset for one webhook event."""
-
-        queryset = self.filter(enabled=True)
-        if integration_pk is None:
-            queryset = queryset.filter(integration_filter__isnull=True)
-        else:
-            queryset = queryset.filter(Q(integration_filter__isnull=True) | Q(integration_filter_id=integration_pk))
-        if connections[self.db].features.supports_json_field_contains:
-            queryset = queryset.filter(event_kinds__contains=[kind])
-            queryset = queryset.filter(Q(impl_app_filter=[]) | Q(impl_app_filter__contains=[impl_app]))
-        return queryset.order_by("pk")
-
 
 class SyncStreamQuerySet[SyncStreamT: SyncStream](AngeeHistoryQuerySet[SyncStreamT]):
     """Chainable reads owned by SyncStream."""
@@ -368,9 +359,8 @@ def _prepare_concrete_sources(queryset: models.QuerySet[Any], rows: list[Any], *
     integrations = list(
         integration_model.objects.db_manager(queryset.db).with_actor(actor).filter(
             pk__in={stream.integration_id for stream in streams}
-        ).with_vendor_label()
+        ).with_vendor_label().with_concrete_children(actor=actor)
     )
-    IntegrationQuerySet.prime_concrete_children(integrations, actor=actor, using=queryset.db)
     by_integration = {integration.pk: integration for integration in integrations}
     by_stream = {stream.pk: stream for stream in streams}
     for stream in streams:

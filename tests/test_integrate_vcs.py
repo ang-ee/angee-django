@@ -8,7 +8,6 @@ themselves).
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,7 +20,7 @@ from django.utils import timezone
 from rebac import system_context
 from rebac.models import PermissionAuditEvent
 
-from angee.integrate_vcs.backend import LocalVCSBackend, VCSBackend, source_path, tree_entries
+from angee.integrate_vcs.backend import LocalVCSBackend, source_path, tree_entries
 from angee.integrate_vcs.managers import TemplateManager
 from tests.conftest import (
     Repository,
@@ -226,41 +225,6 @@ def test_local_vcs_backend_walks_the_working_tree(tmp_path: Any) -> None:
     assert backend.cat_file(None, ref="main", path="templates/services/demo/copier.yml").startswith(b"_angee")
     with pytest.raises(FileNotFoundError):
         backend.cat_file(None, ref="main", path="../escape")
-
-
-def test_remote_materialization_pins_the_backend_revision_and_scopes_cleanup(tmp_path):
-    events = []
-
-    class Backend(VCSBackend):
-        def rev_parse(self, repository, ref):
-            assert ref == "main"
-            return "a" * 40
-
-    @contextmanager
-    def checkout(remote, revision):
-        assert remote == "https://example.com/repo.git" and revision == "a" * 40
-        events.append("open")
-        try:
-            yield tmp_path, revision
-        finally:
-            events.append("closed")
-
-    backend = Backend(SimpleNamespace(config={}))
-    repository = SimpleNamespace(remote="https://example.com/repo.git")
-    with backend.materialize(repository, ref="main", checkout=checkout) as source:
-        assert source == (tmp_path, "a" * 40) and events == ["open"]
-    assert events == ["open", "closed"]
-
-
-def test_local_materialization_retains_unsaved_working_tree_files(tmp_path):
-    (tmp_path / "uncommitted").write_text("current")
-    backend = LocalVCSBackend(SimpleNamespace(config={"local_root": str(tmp_path)}))
-
-    def no_remote(*args):
-        raise AssertionError("Local working trees must not ask the operator to clone")
-
-    with backend.materialize(None, ref="main", checkout=no_remote) as (root, revision):
-        assert (root / "uncommitted").read_text() == "current" and revision == ""
 
 
 def test_materialized_marker_policy_preserves_path_boundaries_and_ignores_jj(tmp_path, monkeypatch):

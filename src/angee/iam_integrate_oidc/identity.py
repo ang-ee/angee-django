@@ -92,7 +92,7 @@ class OidcLoginCompletion:
         _tokens, claims = self._exchange_verify(code, state_token, redirect_uri, record)
         sub = self._required_sub(claims)
         email = self._claim_email(claims)
-        user = resolve(self.oauth_client, sub=sub, email=email, claims=claims)
+        user = OidcIdentityResolver(self.oauth_client).resolve(sub=sub, email=email, claims=claims)
         if email and claims.get("email_verified") is True:
             try:
                 _claim_login_handle(user, email, claims)
@@ -215,7 +215,8 @@ class OidcIdentityResolver:
                             owner=user,
                             email=normalized_email,
                             identity_claims=claims,
-                            display_name=Account.display_name_from_claims(claims, normalized_email),
+                            display_name=self.oauth_client.display_name_from_claims(claims, normalized_email),
+                            avatar_url=self.oauth_client.avatar_url_from_claims(claims),
                         )
                         return user
 
@@ -227,7 +228,8 @@ class OidcIdentityResolver:
                         owner=user,
                         email=normalized_email,
                         identity_claims=claims,
-                        display_name=Account.display_name_from_claims(claims, normalized_email),
+                        display_name=self.oauth_client.display_name_from_claims(claims, normalized_email),
+                        avatar_url=self.oauth_client.avatar_url_from_claims(claims),
                     )
                     return user
         except ValidationError as error:
@@ -282,22 +284,6 @@ class OidcIdentityResolver:
             raise IdentityFlowError(IDENTITY_RESOLUTION_FAILED, 403) from None
 
 
-def resolve(
-    oauth_client: Any,
-    *,
-    sub: str,
-    email: str | None,
-    claims: dict[str, Any],
-) -> _User:
-    """Resolve OIDC claims to a host user, linking or provisioning when policy allows.
-
-    The identity-resolution seam the login completion calls (and callers/tests can
-    substitute); delegates to :class:`OidcIdentityResolver`.
-    """
-
-    return OidcIdentityResolver(oauth_client).resolve(sub=sub, email=email, claims=claims)
-
-
 def _claim_login_handle(user: Any, email: str, claims: dict[str, Any]) -> None:
     """Record the signed-in user's own email address as their own handle.
 
@@ -314,24 +300,4 @@ def _claim_login_handle(user: Any, email: str, claims: dict[str, Any]) -> None:
         value=email,
         asserted_by=user,
         display_name=str(claims.get("name") or "").strip(),
-    )
-
-
-def complete_login(oauth_client: Any, *, code: str, state_token: str, redirect_uri: str) -> LoginCompletion:
-    """Complete an OIDC login redirect and return the resolved user with claims."""
-
-    return OidcLoginCompletion(oauth_client).complete_login(
-        code=code, state_token=state_token, redirect_uri=redirect_uri
-    )
-
-
-def complete_link(oauth_client: Any, *, code: str, state_token: str, redirect_uri: str) -> LinkCompletion:
-    """Complete an authenticated OIDC account-link redirect and return the linked account.
-
-    The linked user is the one captured in state when the flow started, never a
-    later session user.
-    """
-
-    return OidcLoginCompletion(oauth_client).complete_link(
-        code=code, state_token=state_token, redirect_uri=redirect_uri
     )

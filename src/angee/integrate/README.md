@@ -102,11 +102,6 @@ Connection adapters declare `IntegrationImpl.requires_connection_discovery = Tru
 to opt into asynchronous `discover_connection`/`apply_discovery`. Manual and
 credential-only implementations leave it false. Overriding a method alone does not enable discovery.
 
-`Bridge.dispatch_inbound` verifies and lands through the concrete capability
-under its polling advisory lock. Call it outside atomic blocks so the lock
-covers committed landing. A busy bridge raises transient `IntegrationError`;
-the inbound transport must arrange redelivery.
-
 Provider presets can compute `userinfo_params(protocol, access_token)`;
 connect and OIDC login/link pass them to
 `OAuthClientProtocol.fetch_userinfo(access_token, params=…)`.
@@ -208,8 +203,8 @@ account, and disconnect releases only the caller's ownership. Its transfer is
 admin-only because sign-in resolves an identity to its owner. A credential's
 `user` relation names whose authority it carries; it is not ownership.
 
-OAuth discovery cache lifetime is configured by integrate through the historical
-`ANGEE_OIDC_DISCOVERY_TTL` setting, shared by connect and OIDC login. Credential
+OAuth discovery cache lifetime is configured by integrate through the
+`ANGEE_INTEGRATE_OAUTH_DISCOVERY_TTL` setting, shared by connect and OIDC login. Credential
 refresh uses the session advisory lock for rotating-token exclusion; provider
 exchange runs in autocommit and a short row transaction checks the original
 grant before retaining success or permanent refusal.

@@ -10,8 +10,6 @@ from django.core.exceptions import ValidationError
 from angee.storage_integrate.models import MountMode
 from angee.storage_integrate.mounts import LocalFolderMountBackend, validate_local_folder_root
 
-_LOCAL_VENDOR_SLUG = "local"
-
 
 def create_local_folder_mount(user: Any, *, name: str, path: str, mode: MountMode | str) -> Any:
     """Validate and provision one local-folder Mount."""

@@ -33,7 +33,6 @@ from angee.base.models.identity import public_id_for
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam.testing.graphql import measure_graphql_document
 from angee.integrate.credentials import CredentialKind
-from angee.integrate.events import EventKind
 from angee.integrate.locks import bridge_advisory_lock
 from angee.integrate.states import StreamKind, SyncFailure, SyncFailureKind, SyncFailureStatus
 from angee.integrate.testing.models import RecordLink, SyncStream
@@ -66,7 +65,7 @@ User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
 integrate_schema = importlib.import_module("angee.integrate.schema")
 integrate_vcs_schema = importlib.import_module("angee.integrate_vcs.schema")
-_BRIDGE_SYNCED = str(EventKind.BRIDGE_SYNCED)
+_BRIDGE_SYNCED = "bridge.synced"
 """Raw stored value of one integration event kind (``str`` for clean typing)."""
 
 
@@ -1004,7 +1003,6 @@ def test_vcs_bridge_child_creation_creates_parent_identity(composed_tables: None
             owner=user,
             backend_class="stub",
             lifecycle="disconnected",
-            webhook_secret="created-secret",
         )
         integration = Integration.objects.get(pk=bridge.pk)
 
@@ -1015,7 +1013,6 @@ def test_vcs_bridge_child_creation_creates_parent_identity(composed_tables: None
         assert bridge.owner_id == integration.owner_id
         assert bridge.vendor_id == integration.vendor_id
         assert bridge.credential_id == integration.credential_id
-        assert str(bridge.webhook_secret) == "created-secret"
 
 
 def test_vcs_bridge_create_maps_typed_config_errors_to_nested_field(

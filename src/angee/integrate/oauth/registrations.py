@@ -33,12 +33,6 @@ def operation_registration_slugs() -> frozenset[str]:
     return operation["ready"]
 
 
-def oauth_client_is_ready(slug: str) -> bool:
-    """Read one registration from the GraphQL operation's owner-derived snapshot."""
-
-    return slug in operation_registration_slugs()
-
-
 class OAuthRegistrationExtension(SchemaExtension):
     """Keep cached readiness local to one GraphQL operation."""
 

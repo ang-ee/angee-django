@@ -25,7 +25,7 @@ from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol, with_query
 from angee.integrate.oauth.errors import OAuthFlowError
 from angee.integrate.oauth.providers import OAuthProviderType
-from angee.integrate.oauth.registrations import OAuthRegistrationExtension, oauth_client_is_ready
+from angee.integrate.oauth.registrations import OAuthRegistrationExtension, operation_registration_slugs
 from angee.integrate.schema import IntegrationConnectionMixin, IntegrationOAuthMixin
 from tests.conftest import Credential, ExternalAccount, Feed, OAuthClient, create_user, make_integration
 
@@ -105,9 +105,7 @@ def test_registration_snapshot_uses_readiness_and_environment_priority_without_s
     next(operation)
     try:
         with CaptureQueriesContext(connection) as queries:
-            assert not oauth_client_is_ready("preferred")
-            assert not oauth_client_is_ready("incomplete")
-            assert not oauth_client_is_ready("missing")
+            assert operation_registration_slugs() == frozenset()
     finally:
         operation.close()
     reads = [query["sql"] for query in queries if query["sql"].startswith("SELECT")]
@@ -118,7 +116,7 @@ def test_registration_snapshot_uses_readiness_and_environment_priority_without_s
         production.save(update_fields=["is_enabled"])
         assert list(OAuthClient.objects.connectable()) == [production]
         assert OAuthClient.objects.enabled_for_slug("preferred") == production
-    assert oauth_client_is_ready("preferred")
+    assert "preferred" in operation_registration_slugs()
 
 
 @pytest.mark.usefixtures("composed_tables")

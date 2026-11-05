@@ -157,7 +157,7 @@ class RoutingContract(TransactionTestCase):
             self.assertEqual(Imported.objects.db_manager("producer").get().value, 7)
             self.assertFalse(Imported.objects.db_manager("default").exists())
             applied = Link.objects.db_manager("producer").get(external_key="remote:applied")
-            self.assertEqual(applied.applied_snapshot._state.db, "producer")
+            self.assertEqual(applied.aggregate_root.applied_base._state.db, "producer")
             self.assertEqual(applied.resolve_target()._state.db, "producer")
         with patch("angee.jobs.enqueue.celery_app.send_task") as send:
             other.request_sync()

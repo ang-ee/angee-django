@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from django.db import transaction
 from django.utils import timezone
@@ -17,11 +17,8 @@ from angee.integrate_vcs.templates import parse_template_meta
 if TYPE_CHECKING:
     from angee.integrate_vcs.models import Repository, Template
 
-_RepositoryT = TypeVar("_RepositoryT", bound="Repository")
-_TemplateT = TypeVar("_TemplateT", bound="Template")
 
-
-class RepositoryManager(ProtectedManager[_RepositoryT]):
+class RepositoryManager[RepositoryT: Repository](ProtectedManager[RepositoryT]):
     """Manager owning the upsert/reconcile of repository rows from a host listing."""
 
     def reconcile(self, vcs_bridge: Any, descriptors: Iterable[Any]) -> int:
@@ -107,7 +104,7 @@ class RepositoryManager(ProtectedManager[_RepositoryT]):
         }
 
 
-class TemplateManager(ProtectedManager[_TemplateT], registry.VcsOutputManager[_TemplateT]):
+class TemplateManager[TemplateT: Template](ProtectedManager[TemplateT], registry.VcsOutputManager[TemplateT]):
     """Manager owning the reconcile of template rows from a template source."""
 
     def sync_from_source(self, source: Any) -> int:

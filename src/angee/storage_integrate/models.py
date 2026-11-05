@@ -53,7 +53,6 @@ class Mount(Bridge, inherits="integrate.Integration"):
     objects = MountManager()
 
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = IntegrationCreateMode.CONNECT
-    live_impl_field = "backend_class"
 
     backend_class = ImplClassField(
         MountBackend,
@@ -83,7 +82,7 @@ class Mount(Bridge, inherits="integrate.Integration"):
     def backend(self) -> MountBackend:
         """Return the selected mount backend bound to this row."""
 
-        return cast(MountBackend, self.live_impl)
+        return cast(MountBackend, self.capability_impl)
 
     def _next_sync_at(self, *, now: Any) -> Any:
         """Keep manual mounts unscheduled unless polling is explicitly enabled."""

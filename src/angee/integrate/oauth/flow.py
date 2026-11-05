@@ -19,6 +19,7 @@ from django.apps import apps
 from django.http import HttpRequest
 from django.utils.http import url_has_allowed_host_and_scheme
 
+from angee.base.models.identity import public_id_of
 from angee.integrate.oauth import state
 from angee.integrate.oauth.client import OAuthClientProtocol
 from angee.integrate.oauth.errors import INVALID_STATE, OAuthFlowError
@@ -128,7 +129,7 @@ def consume_validated_state(
     """Consume one state record and fail closed when it does not match this flow."""
 
     record = state.consume(state_token)
-    oauth_client_id = str(getattr(oauth_client, "sqid", getattr(oauth_client, "pk", "")))
+    oauth_client_id = str(public_id_of(oauth_client))
     if record.flow != expected_flow or record.oauth_client_id != oauth_client_id or record.redirect_uri != redirect_uri:
         raise OAuthFlowError(INVALID_STATE, 400)
     return record

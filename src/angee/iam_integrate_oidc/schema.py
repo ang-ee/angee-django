@@ -165,8 +165,7 @@ class OidcLoginMutation:
         request = get_request(info)
         try:
             oauth_client = oauth_flow.remembered_oauth_client(request, state)
-            result = identity.complete_login(
-                oauth_client,
+            result = identity.OidcLoginCompletion(oauth_client).complete_login(
                 code=code,
                 state_token=state,
                 redirect_uri=redirect_uri,
@@ -229,8 +228,7 @@ class OidcLoginMutation:
         _session_user(info)
         try:
             oauth_client = oauth_flow.remembered_oauth_client(request, state)
-            result = identity.complete_link(
-                oauth_client,
+            result = identity.OidcLoginCompletion(oauth_client).complete_link(
                 code=code,
                 state_token=state,
                 redirect_uri=redirect_uri,

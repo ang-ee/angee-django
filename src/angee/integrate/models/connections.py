@@ -151,6 +151,12 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, ProtectedDataModel, concrete=Tr
     """Public facts used by the single connection readiness rule."""
 
     @property
+    def provider_label(self) -> str:
+        """Return the configured public provider name for account labels."""
+
+        return str(self.display_name or self.slug or "OAuth")
+
+    @property
     def configuration_state(self) -> str:
         """Return this OAuth client's operator-facing configuration readiness."""
 
@@ -334,8 +340,13 @@ class OAuthClient(ImplDefaultsMixin, AuditMixin, ProtectedDataModel, concrete=Tr
         set them by name.
         """
 
+        return self.fill_blank_discovery_fields(discovery, self.DISCOVERY_ENDPOINT_FIELDS)
+
+    def fill_blank_discovery_fields(self, discovery: Mapping[str, Any], fields: Mapping[str, str]) -> bool:
+        """Fill configured blank fields from named discovery keys."""
+
         changed = False
-        for field, key in self.DISCOVERY_ENDPOINT_FIELDS.items():
+        for field, key in fields.items():
             if getattr(self, field, ""):
                 continue
             value = discovery.get(key)
@@ -419,10 +430,15 @@ class ExternalAccount(OwnerMixin, ProtectedDataModel, concrete=True):
         return None
 
     def __str__(self) -> str:
-        """Return a stable provider-qualified account label."""
+        """Return a stable label without fetching the OAuth client relation."""
 
-        client_slug = getattr(getattr(self, "oauth_client", None), "slug", "?")
-        return f"{client_slug}:{self.external_id}"
+        return f"{self.oauth_client_id}:{self.external_id}"
+
+    @property
+    def subject_label(self) -> str:
+        """Return the best available account subject for a visible label."""
+
+        return str(self.email or self.display_name or self.external_id or "")
 
     @property
     def credential_status(self) -> str:
@@ -658,9 +674,9 @@ class Credential(AuditMixin, ProtectedDataModel, concrete=True):
             return str(self.name)
         client = getattr(self, "oauth_client", None)
         if client is not None:
-            provider = str(getattr(client, "slug", "") or getattr(client, "display_name", "") or "credential")
+            provider = str(client.slug or client.display_name or "credential")
             account = getattr(self, "external_account", None)
-            subject = str(getattr(account, "external_id", "") or "") if account else ""
+            subject = str(account.external_id or "") if account else ""
             return f"{provider}: {subject}" if subject else provider
         return "credential"
 
@@ -672,12 +688,7 @@ class Credential(AuditMixin, ProtectedDataModel, concrete=True):
             return str(self.name)
         account = getattr(self, "external_account", None)
         if account is not None:
-            subject = str(
-                getattr(account, "email", "")
-                or getattr(account, "display_name", "")
-                or getattr(account, "external_id", "")
-                or ""
-            )
+            subject = account.subject_label
             if subject:
                 return subject
         return "credential"

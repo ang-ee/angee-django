@@ -8,6 +8,19 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — integration dead paths
+
+- Removed the outbound integration event fan-out and inbound VCS webhook dispatch,
+  which had no production producer or receiver route. Subscription CRUD and signed
+  test delivery remain available.
+- Removed `VcsBridge.webhook_secret`, `Bridge.next_subscription_refresh_at`, and
+  `Integration.use_count_24h` / `error_count_24h`. Projects must, in their own
+  native migration history, remove the secret from VcsBridge, the refresh
+  timestamp from VcsBridge, Channel, Directory, Mount, and NotionConnection, and
+  the counters from Integration.
+- OAuth discovery now uses `ANGEE_INTEGRATE_OAUTH_DISCOVERY_TTL`; the old
+  `ANGEE_OIDC_DISCOVERY_TTL` setting no longer applies.
+
 ## Unreleased — intake trigger cleanup
 
 - Channel intake now offers only `all_messages`. The selectable `reaction`,

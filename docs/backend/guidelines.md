@@ -1960,8 +1960,8 @@ delivery settlement](../glossary.md#workflows) through the
 [messaging](../../src/angee/messaging/README.md) and
 [thin workflow](../../src/angee/workflows_posts/README.md) owners.
 Eligibility and the locked pre-create recheck belong to the message owner;
-steps call that predicate and factory. Verified webhook landing uses the same
-bridge advisory lock as polling and delivery settlement.
+steps call that predicate and factory. Bridge polling and delivery settlement
+share the bridge advisory lock.
 
 - **The cursor commits with the records it covers.** Extract outside the database
   transaction; commit the applied page, its quarantine and the stream cursor in

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured
@@ -22,10 +22,8 @@ from angee.platform_integrate_vcs.catalog import source_descriptors
 if TYPE_CHECKING:
     from angee.platform.models import Addon
 
-_AddonT = TypeVar("_AddonT", bound="Addon")
 
-
-class AddonCatalogManager(ProtectedManager[_AddonT], VcsOutputManager[_AddonT]):
+class AddonCatalogManager[AddonT: Addon](ProtectedManager[AddonT], VcsOutputManager[AddonT]):
     """Owns the reconcile of marketplace rows from an addon ``Source``."""
 
     @staticmethod
@@ -126,7 +124,9 @@ class AddonCatalogManager(ProtectedManager[_AddonT], VcsOutputManager[_AddonT]):
                     row, created = rows.select_for_update().get_or_create(name=name, defaults=defaults)
                     if not created:
                         self._check_source_owner(row, source.pk)
-                        rows.update_or_create(name=name, defaults=defaults)
+                        for field, value in defaults.items():
+                            setattr(row, field, value)
+                        row.save(update_fields={*defaults, "updated_at"})
 
                 (
                     rows.filter(vcs_source=source, source=addon.AddonSource.REMOTE)

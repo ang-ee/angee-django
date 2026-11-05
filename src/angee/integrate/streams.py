@@ -6,7 +6,6 @@ re-read by identity when supported; there is no durable work queue.
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -20,7 +19,6 @@ from time import monotonic
 from typing import Any
 from urllib.parse import urlsplit
 
-from deepdiff import DeepDiff
 from django.core.exceptions import ValidationError
 from django.db import DataError, close_old_connections, connections, transaction
 from django.utils import timezone
@@ -255,11 +253,11 @@ def classify_change(
     mapping_changed: bool = False,
 ) -> ChangeKind:
     """Compare nested mapped facts; concurrent divergent edits require a choice."""
-    base, local, remote = (json.loads(canonical_json(value)) for value in (base, local, remote))
-    local_changed = bool(DeepDiff(base, local))
-    remote_changed = bool(DeepDiff(base, remote)) or mapping_changed
+    base, local, remote = (canonical_json(value) for value in (base, local, remote))
+    local_changed = base != local
+    remote_changed = base != remote or mapping_changed
     if local_changed and (remote_changed or tombstone):
-        if not tombstone and not mapping_changed and not DeepDiff(local, remote):
+        if not tombstone and not mapping_changed and local == remote:
             return ChangeKind.APPLY
         return ChangeKind.CONFLICT
     if remote_changed:
@@ -445,7 +443,7 @@ def advance_stream(
             return reset_stream(stream, cursor=error.cursor)
         if page.resync_required:
             return reset_stream(stream, cursor={})
-        return _apply_page(stream, adapter, page, original_cursor=original_cursor)
+        return _apply_page(stream, adapter, page)
 
 
 def _apply_page(
@@ -453,7 +451,6 @@ def _apply_page(
     adapter: BridgeImpl,
     page: StreamPage,
     *,
-    original_cursor: dict[str, Any],
     advance_cursor: bool = True,
     reconcile_state: dict[str, Any] | None = None,
     force_apply: frozenset[str] = frozenset(),
@@ -890,7 +887,6 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
                 locked,
                 adapter,
                 page,
-                original_cursor=original_cursor,
                 advance_cursor=False,
                 reconcile_state=state,
             ).stream
@@ -909,7 +905,6 @@ def reconcile_stream(stream: Any, adapter: BridgeImpl, *, page_bound: int = 100,
                     locked,
                     adapter,
                     page,
-                    original_cursor=original_cursor,
                     advance_cursor=False,
                     reconcile_state=next_state,
                 ).stream
@@ -1034,7 +1029,6 @@ def begin_stream_cycle(
             stream,
             adapter,
             StreamPage(records, original_cursor, exhausted=False),
-            original_cursor=original_cursor,
             advance_cursor=False,
             force_apply=force_apply,
             reapply=reapply,
@@ -1139,7 +1133,7 @@ def _drain(bridge: Any, adapter: BridgeImpl, definition: StreamDefinition, deadl
                 budget_exhausted=True,
             )
         return landed
-    except Exception as error:  # noqa: BLE001 -- retain the operation that actually failed.
+    except Exception as error:
         raise BridgeSyncError((PartitionFailure(definition, stage, error),)) from error
 
 
@@ -1205,7 +1199,7 @@ def sync_bridge(bridge: Any) -> int:
                             landed += future.result()
                         except BridgeSyncError as error:
                             failures.extend(error.failures)
-                        except Exception as error:  # noqa: BLE001 -- partition setup/cleanup can also fail.
+                        except Exception as error:
                             failures.append(PartitionFailure(futures[future], "partition", error))
             if failures:
                 sync_error = BridgeSyncError(failures)

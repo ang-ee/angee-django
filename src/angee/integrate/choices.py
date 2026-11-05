@@ -8,6 +8,17 @@ from typing import cast
 from django.db import models
 
 
+def _choice_from_value[T: models.TextChoices](choice: type[T], value: object, label: str) -> T:
+    raw = str(getattr(value, "value", value)).strip()
+    member = choice.__members__.get(raw)
+    if member is not None:
+        return cast(T, member)
+    try:
+        return choice(raw)
+    except ValueError as error:
+        raise ValueError(f"Unsupported {label}: {raw}") from error
+
+
 class AccountStatus(models.TextChoices):
     """Connection lifecycle for a linked external account.
 
@@ -39,14 +50,7 @@ class IntegrationLifecycle(models.TextChoices):
     def from_value(cls, value: object) -> IntegrationLifecycle:
         """Return the member for one string or enum integration-lifecycle value."""
 
-        raw = str(getattr(value, "value", value)).strip()
-        member = cls.__members__.get(raw)
-        if member is not None:
-            return cast(IntegrationLifecycle, member)
-        try:
-            return cast(IntegrationLifecycle, cls(raw))
-        except ValueError as error:
-            raise ValueError(f"Unsupported integration lifecycle: {raw}") from error
+        return _choice_from_value(cls, value, "integration lifecycle")
 
 
 class IntegrationRuntimeStatus(models.TextChoices):
@@ -60,14 +64,7 @@ class IntegrationRuntimeStatus(models.TextChoices):
     def from_value(cls, value: object) -> IntegrationRuntimeStatus:
         """Return the member for one string or enum runtime-status value."""
 
-        raw = str(getattr(value, "value", value)).strip()
-        member = cls.__members__.get(raw)
-        if member is not None:
-            return cast(IntegrationRuntimeStatus, member)
-        try:
-            return cast(IntegrationRuntimeStatus, cls(raw))
-        except ValueError as error:
-            raise ValueError(f"Unsupported integration runtime status: {raw}") from error
+        return _choice_from_value(cls, value, "integration runtime status")
 
 
 class IntegrationCreateMode(StrEnum):

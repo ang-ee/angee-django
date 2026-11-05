@@ -13,8 +13,6 @@ imports no models, so it breaks no import cycle.
 from __future__ import annotations
 
 import pathlib
-from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -27,10 +25,6 @@ from angee.integrate.http import HttpClientMixin
 # Directories the local backend never treats as source — a broad ``Source.path`` on a
 # working tree would otherwise walk (and ingest stray ``copier.yml`` from) these.
 _LOCAL_SKIP_DIRS = frozenset({".git", ".jj", ".venv", "node_modules", "__pycache__", ".angee"})
-
-
-Checkout = Callable[[str, str], AbstractContextManager[tuple[pathlib.Path, str]]]
-"""A transport-owned complete checkout scoped to the caller's context."""
 
 
 def source_path(root: pathlib.Path, path: str) -> pathlib.Path:
@@ -145,23 +139,6 @@ class VCSBackend(BridgeImpl, HttpClientMixin):
 
         raise NotImplementedError("VCSBackend subclasses must implement rev_parse().")
 
-    @contextmanager
-    def materialize(self, repository: Any, *, ref: str, checkout: Checkout) -> Iterator[tuple[pathlib.Path, str]]:
-        """Resolve once and ask the supplied transport for a complete pinned checkout."""
-
-        revision = self.rev_parse(repository, ref)
-        if not revision:
-            raise ValueError("The VCS backend returned no source revision")
-        with checkout(str(repository.remote), revision) as (root, resolved):
-            if resolved != revision:
-                raise ValueError("Materialized source revision differs from the indexed VCS revision")
-            yield root, resolved
-
-    def verify_webhook(self, vcs_bridge: Any, request: Any) -> bool:
-        """Return whether an inbound webhook request is authentic for this bridge."""
-
-        raise NotImplementedError("VCSBackend subclasses must implement verify_webhook().")
-
     def search_repos(self, query: str, *, org: str = "") -> list[RepoDescriptor]:
         """Return repositories whose name matches ``query`` — the typeahead source."""
 
@@ -237,13 +214,6 @@ class LocalVCSBackend(VCSBackend):
         except FileNotFoundError:
             raise FileNotFoundError(path) from None
 
-    @contextmanager
-    def materialize(self, repository: Any, *, ref: str, checkout: Checkout) -> Iterator[tuple[pathlib.Path, str]]:
-        """Use current local files directly; a working tree has no immutable commit."""
-
-        del repository, ref, checkout
-        yield self._root, ""
-
     def rev_parse(self, repository: Any, ref: str) -> str:
         """Return ``ref`` unchanged — a local working tree resolves no commit oid."""
 
@@ -264,12 +234,6 @@ class LocalVCSBackend(VCSBackend):
         if name and name != descriptor.name:
             raise FileNotFoundError(name)
         return descriptor
-
-    def verify_webhook(self, vcs_bridge: Any, request: Any) -> bool:
-        """Reject inbound webhooks: a local working tree has no host to authenticate."""
-
-        del vcs_bridge, request
-        return False
 
     @property
     def _root(self) -> pathlib.Path:
