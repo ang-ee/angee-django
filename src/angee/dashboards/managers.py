@@ -58,7 +58,7 @@ class DashboardManager[DashboardT: Dashboard](_DashboardManagerBase[DashboardT])
                 return dashboard.with_actor(actor)
             dashboard = self.model(
                 owner=owner,
-                scope="personal",
+                scope=self.model.DashboardScope.PERSONAL,
                 scope_key=None,
                 name=name,
                 description=description,
@@ -102,7 +102,7 @@ class DashboardManager[DashboardT: Dashboard](_DashboardManagerBase[DashboardT])
                 return created
             return rows.save_snapshot(
                 owner,
-                scope="personal",
+                scope=self.model.DashboardScope.PERSONAL,
                 scope_key=None,
                 persisted_id=created.pk,
                 expected_revision=created.revision,
@@ -128,7 +128,7 @@ class DashboardManager[DashboardT: Dashboard](_DashboardManagerBase[DashboardT])
         actor = current_actor()
         if actor is None:
             raise PermissionDenied("Dashboard snapshots require an acting user.")
-        if scope not in {"personal", "addon", "resource"}:
+        if scope not in self.model.DashboardScope.values:
             raise ValidationError({"scope": "Unknown dashboard scope."})
         using = self._db or router.db_for_write(self.model, instance=owner)
         with (
@@ -141,7 +141,7 @@ class DashboardManager[DashboardT: Dashboard](_DashboardManagerBase[DashboardT])
                 current = self.model.system_queryset(lock=("self",)).using(using).filter(pk=persisted_id).first()
                 if current is None:
                     raise DashboardConflictError()
-                if scope != "personal" and current.owner_id != owner.pk:
+                if scope != self.model.DashboardScope.PERSONAL and current.owner_id != owner.pk:
                     raise DashboardConflictError()
                 if expected_revision is None:
                     raise DashboardConflictError(current.revision)
@@ -153,7 +153,7 @@ class DashboardManager[DashboardT: Dashboard](_DashboardManagerBase[DashboardT])
                     raise PermissionDenied("New scoped dashboards can only be created for the acting user.")
                 if expected_revision is not None:
                     raise DashboardConflictError()
-                if scope == "personal":
+                if scope == self.model.DashboardScope.PERSONAL:
                     raise ValidationError({"scope": "Create personal dashboards before saving them."})
                 current = (
                     self.model.system_queryset(lock=("self",)).using(using)
@@ -182,7 +182,7 @@ class DashboardManager[DashboardT: Dashboard](_DashboardManagerBase[DashboardT])
                 except IntegrityError as error:
                     raise DashboardConflictError() from error
 
-            if current.scope != "personal" and to_subject_ref(current.owner) != actor:
+            if current.scope != self.model.DashboardScope.PERSONAL and to_subject_ref(current.owner) != actor:
                 raise PermissionDenied("Scoped dashboards can only be edited by their owner.")
             if not current.with_actor(actor).has_access("write"):
                 raise PermissionDenied("You cannot edit this dashboard.")
@@ -247,8 +247,6 @@ class DashboardManager[DashboardT: Dashboard](_DashboardManagerBase[DashboardT])
                     using=using, update_fields=["columns", "declaration_revision", *dashboard_fields],
                 )
             return current.with_actor(actor)
-
-
 
 
 DashboardWidgetManager = AngeeHistoryManager.from_queryset(DashboardWidgetQuerySet)

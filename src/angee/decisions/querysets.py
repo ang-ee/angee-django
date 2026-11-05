@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Self
 
 from django.apps import apps
+from django.contrib.contenttypes.models import ContentType
 from django.db.models import BooleanField, Case, Exists, ExpressionWrapper, ManyToManyField, OuterRef, Q, Value, When
 from rebac import permission_expression, to_subject_ref
 
@@ -75,13 +76,15 @@ class DecisionQuerySet[T: Decision](ProtectedAppendOnlyQuerySet[T], ProtectedQue
 
     def attention_expression(self, queryset: Any) -> Exists:
         model = generic_pointer_model(queryset.model)
+        content_type_id = ContentType.objects.db_manager(queryset.db).filter(
+            app_label=model._meta.app_label, model=model._meta.model_name,
+        ).values("pk")[:1]
         # Attention belongs to the readable record, regardless of who can answer
         # or read the question. Only the boolean crosses that permission boundary.
         rows = self.model.system_queryset().using(queryset.db)
         return Exists(
             rows.open().filter(
-                records__content_type__app_label=model._meta.app_label,
-                records__content_type__model=model._meta.model_name,
+                records__content_type_id__in=content_type_id,
                 records__object_id=OuterRef("pk"),
             )
         )

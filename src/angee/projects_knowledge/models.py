@@ -36,8 +36,12 @@ class ProjectKnowledge(Composable, extends="projects.Project"):
         """Add readable vault-binding evidence to the existing setup condition."""
 
         bindings = apps.get_model("projects", "ProjectBinding").objects.with_actor(actor).scoped()
+        vault = apps.get_model("knowledge", "Vault")
+        vault_type_id = ContentType.objects.db_manager(bindings.db).filter(
+            app_label=vault._meta.app_label, model=vault._meta.model_name,
+        ).values("pk")[:1]
         return super().setup_complete_condition(actor) & models.Q(models.Exists(bindings.filter(
-            project_id=models.OuterRef("pk"), content_type__app_label="knowledge", content_type__model="vault",
+            project_id=models.OuterRef("pk"), content_type_id__in=vault_type_id,
         )))
 
 

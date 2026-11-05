@@ -920,7 +920,11 @@ class Round(
                 for name, identifier in changed_ids.items():
                     if identifier not in valid:
                         raise ValidationError({name: "The milestone must belong to the target project."})
-            if self.pk is not None and not self._state.adding:
+            if (
+                self.pk is not None
+                and not self._state.adding
+                and (update_fields is None or "opening_policy" in update_fields)
+            ):
                 # Opening-policy immutability depends on the committed lifecycle state.
                 with system_context(reason="proposals.round.opening_policy"):
                     persisted = (

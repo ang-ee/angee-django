@@ -53,11 +53,6 @@ class RecordBindingQuerySet[BindingT: RecordBinding](AngeeHistoryQuerySet[Bindin
 
         return self.for_record(record, role=role).filter(page__isnull=False)
 
-    def vaults_for_record(self, record: models.Model, *, role: str | None = None) -> Self:
-        """Return vault bindings on ``record`` without loading gated vault content."""
-
-        return self.for_record(record, role=role).filter(vault__isnull=False)
-
     def for_knowledge(
         self,
         knowledge: models.Model,
@@ -69,16 +64,6 @@ class RecordBindingQuerySet[BindingT: RecordBinding](AngeeHistoryQuerySet[Bindin
         knowledge, owner_field = self.model.knowledge_owner_instance(knowledge)
         queryset = self.filter(**{owner_field: knowledge})
         return queryset if role is None else queryset.filter(role=self.model.normalize_role(role))
-
-    def records_for_page(self, page: models.Model, *, role: str | None = None) -> tuple[RecordRef, ...]:
-        """Return public refs for actor-readable records bound from ``page``."""
-
-        return tuple(binding.record_ref for binding in self.for_knowledge(page, role=role))
-
-    def records_for_vault(self, vault: models.Model, *, role: str | None = None) -> tuple[RecordRef, ...]:
-        """Return public refs for actor-readable records bound from ``vault``."""
-
-        return tuple(binding.record_ref for binding in self.for_knowledge(vault, role=role))
 
 
 _RecordBindingManagerBase = AngeeHistoryManager.from_queryset(RecordBindingQuerySet)

@@ -1441,7 +1441,7 @@ class Task(
         if actor is None:
             return models.Value(ProjectSetupState.NOT_SET_UP.value)
         project = apps.get_model("projects", "Project")
-        rows = project.objects.with_actor(actor).scoped().filter(converted_from_id=models.OuterRef("pk"))
+        rows = project.objects.filter(converted_from_id=models.OuterRef("pk"))
         return rows.annotate(_setup=project.setup_state_expression(actor)).readable_scalar_subquery(
             "_setup",
             actor=actor,
@@ -1462,8 +1462,7 @@ class Task(
             return models.Value(0)
         project = apps.get_model("projects", "Project")
         rows = (
-            project.objects.with_actor(actor)
-            .scoped()
+            project.objects
             .filter(
                 Q(converted_from_id=models.OuterRef("pk")) | Q(pk=models.OuterRef("project_id")),
             )
@@ -1907,9 +1906,7 @@ class TaskRelation(HistoryMixin, AuditMixin, ProtectedDataModel, concrete=True):
         RELATES = "relates", "Relates"
 
     SYMMETRIC_KINDS = frozenset({TaskRelationKind.RELATES})
-    """Kinds whose endpoints have no semantic direction.
-
-    """
+    """Kinds whose endpoints have no semantic direction."""
 
     task = models.ForeignKey(
         "projects.Task",

@@ -91,5 +91,4 @@ class DecisionManager[T: Decision](_DecisionManagerBase[T]):
         return decision.with_actor(asking) if asking is not None else decision
 
 
-
 DecisionRecordManager = ProtectedManager.from_queryset(DecisionRecordQuerySet)

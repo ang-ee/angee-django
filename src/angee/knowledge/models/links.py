@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 from django.apps import apps
 from django.db import models, router, transaction
@@ -42,18 +42,6 @@ _LinkManagerBase = AngeeHistoryManager.from_queryset(LinkQuerySet)
 class LinkManager[LinkT: Link](_LinkManagerBase[LinkT]):
     """Owns the wikilink edge set derived from page bodies."""
 
-    def rebuild_for(self, markdown: Any) -> None:
-        """Replace the source page's outgoing links from its current body.
-
-        The indexer is the author: it resolves ``[[title]]`` targets against
-        the page's own vault and DELETE+INSERTs the edge set under
-        ``system_context``. There is no per-link gate — backlink reads
-        inherit the source page's permissions through the schema. Target
-        lifecycle changes also refresh the affected incoming links.
-        """
-
-        self.rebuild_many((markdown,))
-
     def rebuild_many(self, bodies: Iterable[MarkdownPage]) -> None:
         """Replace a batch's wikilinks, resolving titles once per source vault."""
 
@@ -62,13 +50,14 @@ class LinkManager[LinkT: Link](_LinkManagerBase[LinkT]):
             return
         page_model = apps.get_model("knowledge", "Page")
         vault_ids = {body.vault_id for body in batch}
+        targets = {target for body in batch for target in parse_wikilinks(body.body)}
         using = self._db or router.db_for_write(self.model, instance=batch[0])
         links = self.model._base_manager.db_manager(using)
         with database_context(using), system_context(reason="knowledge.backlinks"), transaction.atomic(using=using):
             resolved = {
                 (vault_id, title): pk
                 for vault_id, title, pk in page_model._base_manager.using(using).filter(
-                    vault_id__in=vault_ids, is_trashed=False,
+                    vault_id__in=vault_ids, title__in=targets, is_trashed=False,
                 )
                 .values_list("vault_id", "title", "pk")
             }

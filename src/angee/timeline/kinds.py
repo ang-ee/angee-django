@@ -147,8 +147,6 @@ def actor_label(user: Any) -> str:
     return str(user) if user is not None else ""
 
 
-
-
 def timeline_subject(model: type[models.Model]) -> bool:
     """Whether a model's rows have a timeline of their own.
 

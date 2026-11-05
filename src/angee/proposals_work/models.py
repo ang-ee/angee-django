@@ -55,7 +55,6 @@ class RoundQuestionsQueue(Composable, extends="proposals.Round"):
             with system_context(reason="proposals_work.round.queue_validation"):
                 queue = (
                     queue_model._base_manager.using(self._state.db)
-                    .select_related("created_by")
                     .get(pk=self.clarification_queue_id)
                 )
             if queue.is_personal:
@@ -119,7 +118,7 @@ class TaskTrackQueue(Composable, extends="projects.Task"):
                 queue_model = apps.get_model("work", "Queue")
                 queue = (
                     queue_model._base_manager.using(using)
-                    .select_related("owner", "created_by")
+                    .select_related("owner")
                     .get(pk=queue_id)
                 )
                 owner = queue.owner
