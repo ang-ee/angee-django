@@ -82,7 +82,7 @@ const { Provider, clearClients } = createUiTestProviders({
 });
 afterEach(() => { cleanup(); clearClients(); });
 
-function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested = false, customIdentity = false, refreshAction = false }: {
+function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested = false, customIdentity = false, refreshAction = false, noGroupKeyLabel = false }: {
   pageSize?: number;
   error?: "root" | "leaf";
   baseFilter?: Record<string, unknown>;
@@ -90,13 +90,19 @@ function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested 
   nested?: boolean;
   customIdentity?: boolean;
   refreshAction?: boolean;
+  noGroupKeyLabel?: boolean;
 } = {}) {
-  const activeResource = customIdentity ? { ...resource,
+  const baseResource = customIdentity ? { ...resource,
     fields: [scalarField("public_key"), ...resource.fields!.filter((field) => field.name !== "id")],
     query: { ...query, identity: { field: "public_key" }, fields: { ...query.fields,
       ...ResourceQuery.forRows({ fields: { public_key: { scalar: "ID" } } }).contract.fields,
     } },
   } : resource;
+  const activeResource = noGroupKeyLabel ? { ...baseResource, query: {
+    ...baseResource.query, axes: { ...baseResource.query.axes, channel: {
+      ...baseResource.query.axes.channel!, server: { input: "CHANNEL", key: "channel_id" },
+    } },
+  } } : baseResource;
   const activeRows: MessageRow[] = customIdentity ? rows.map(({ id, ...row }) => ({ ...row, public_key: id })) : rows;
   let refreshedTitle: string | undefined;
   const selectRows = (where: Where | undefined, offset: number, limit: number) => {
@@ -133,7 +139,7 @@ function fixture({ pageSize = 50, error, baseFilter, viewKind = "board", nested 
       ? channels.filter((channel) => channel.id === "signal") : channels;
     return { data: {
       messages_groups: filtered.slice(groupVariables.offset, groupVariables.offset + groupVariables.limit).map((channel) => ({
-        key: { channel_id: channel.id, channel_name: channel.label }, aggregate: { count: channel.count },
+        key: { channel_id: channel.id, ...(!noGroupKeyLabel ? { channel_name: channel.label } : {}) }, aggregate: { count: channel.count },
       })), totalCount: filtered.length,
     } };
   });
@@ -186,6 +192,81 @@ test("server board discovers all channel buckets before fetching bounded card pa
   fireEvent.click(within(shared[0]!).getByRole("button", { name: "Shared name" }));
   await waitFor(() => expect(within(shared[0]!).queryByRole("article")).toBeNull());
   expect(within(shared[1]!).getByText("shared-second message 1")).toBeTruthy();
+});
+
+test("a relation group without a key label uses its batched leaf label, including while collapsed", async () => {
+  const f = fixture({ noGroupKeyLabel: true });
+  const mail = await screen.findByRole("region", { name: "Mail" });
+  expect(await screen.findByRole("region", { name: "Signal" })).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "mail" })).toBeNull();
+  const leaf = f.leafRequests();
+  expect(leaf.length).toBeGreaterThan(1);
+  expect(JSON.stringify(leaf[0]?.document)).toContain("display_name");
+  expect(JSON.stringify(leaf[0]?.document)).toContain("channel");
+  fireEvent.click(within(mail).getByRole("button", { name: "Mail" }));
+  await waitFor(() => expect(within(mail).queryByRole("article")).toBeNull());
+  expect(screen.getByRole("region", { name: "Mail" })).toBeTruthy();
+  expect(f.leafRequests().some((request) => request.limit === 1)).toBe(true);
+});
+
+test("a grouped company header and readable supplier cell use labels selected in the same leaf document", async () => {
+  const invoiceQuery = ResourceQuery.forRows({ fields: {
+    id: { scalar: "ID" }, number: { scalar: "String" },
+    company: { kind: "relation", identityPath: "company.id", labelPath: "company.display_name" },
+    partner: { kind: "relation", identityPath: "partner.id", labelPath: "partner.display_name" },
+  } }).contract;
+  invoiceQuery.fields.company!.relation = { model: "arp.Company", identityPath: "company.id", labelPath: "company.display_name" };
+  invoiceQuery.fields.partner!.relation = { model: "parties.Party", identityPath: "partner.id", labelPath: "partner.display_name" };
+  invoiceQuery.axes.company!.server = { input: "COMPANY", key: "company_id" };
+  invoiceQuery.axes.company!.drill = { kind: "identity", field: "company", valueKey: "company_id", nullMode: "isNull", valueMap: [] };
+  const invoice = testDataResource("accounting.Invoice", {
+    roots: { groups: "invoices_groups", aggregate: "invoices_aggregate" },
+    typeNames: { filter: "InvoiceBoolExp", order: "InvoiceOrderBy" }, query: invoiceQuery,
+    fields: [scalarField("id"), scalarField("number"), ...["company", "partner"].map((name) => ({
+      ...scalarField(name), kind: "relation" as const, scalar: null, relationObject: true,
+      relationModelLabel: name === "company" ? "arp.Company" : "parties.Party",
+    }))],
+  });
+  const custom = vi.fn(async ({ meta }: { meta?: Record<string, unknown> }) => {
+    const variables = meta!.gqlVariables as Record<string, unknown>;
+    if ("group_by" in variables) return { data: { invoices_groups: [
+      { key: { company_id: "pty_acme" }, aggregate: { count: 1 } },
+      { key: { company_id: "pty_beta" }, aggregate: { count: 1 } },
+    ], totalCount: 2 } };
+    const data: Record<string, unknown> = {};
+    for (const key of Object.keys(variables).filter((name) => /^group_\d+_limit$/.test(name))) {
+      const alias = key.slice(0, -"limit".length);
+      const acme = JSON.stringify(variables[`${alias}where`]).includes("pty_acme");
+      data[`${alias}rows`] = [{ id: acme ? "bill-1" : "bill-2", number: "",
+        company: { id: acme ? "pty_acme" : "pty_beta", display_name: acme ? "Acme" : "Beta" },
+        partner: { id: acme ? "pty_supplier" : "pty_other", display_name: acme ? "Supplier Inc" : "Other Supplier" },
+      }];
+      data[`${alias}aggregate`] = { aggregate: { count: 1 } };
+    }
+    return { data: { data } };
+  });
+  render(<Provider resources={[invoice]} dataProvider={{ custom }}>
+    <OperationDocumentsProvider documents={{ console: { groups: { "accounting.Invoice":
+      "query InvoiceGroups { invoices_groups { key { company_id } aggregate { count } } totalCount }",
+    } } }}><ToastProvider><ResourceViewProvider resource="accounting.Invoice" scope="local" initialState={{
+      view: "list", groupStack: [{ field: "company" }], columnVisibility: { company: false },
+    }}><ListView resource="accounting.Invoice" columns={[
+      { field: "number", header: "Number" }, { field: "company", header: "Company" },
+      { field: "partner", header: "Supplier" },
+    ]} /></ResourceViewProvider></ToastProvider></OperationDocumentsProvider>
+  </Provider>);
+  expect(await screen.findByRole("button", { name: "Acme" })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: "Beta" })).toBeTruthy();
+  expect(await screen.findByText("Supplier Inc")).toBeTruthy();
+  expect(screen.getByText("Other Supplier")).toBeTruthy();
+  expect(screen.getAllByText("—")).toHaveLength(2);
+  const leafCalls = custom.mock.calls.filter(([request]) =>
+    Object.keys(request.meta?.gqlVariables as Record<string, unknown>).some((name) => /^group_\d+_limit$/.test(name)));
+  expect(leafCalls).toHaveLength(1);
+  const leafDocument = JSON.stringify(leafCalls[0]![0].meta?.gqlQuery);
+  expect(leafDocument).toContain("company");
+  expect(leafDocument).toContain("partner");
+  expect(leafDocument).toContain("display_name");
 });
 
 test("the root pager pages channel groups, so older channels remain reachable independently of record totals", async () => {

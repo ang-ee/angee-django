@@ -65,6 +65,7 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   const aggregateOperation = useAggregateOperation(dataResource);
   const groupOperation = useGroupOperation(dataResource);
   const listTarget = listBatchTarget(dataResource);
+  const rowGroupStack = groupStack ?? resourceView.state.groupStack;
 
   const { requestedFields, mergedFilter, sortOrder } =
     useResourceViewQueryFacts({
@@ -75,13 +76,12 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       resourceView,
       modelMetadata,
       laneSource,
-      groupStack: EMPTY_ARRAY,
+      groupStack: rowGroupStack,
     });
   const leafOrder = React.useMemo<ResourceListOrder | undefined>(
     () => sortOrder ?? order,
     [sortOrder, order],
   );
-  const rowGroupStack = groupStack ?? resourceView.state.groupStack;
   // Shared table state plus per-group/footer measures.
   const tableState = useResourceViewTableState({
     query,
@@ -172,6 +172,9 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     () => ({
       query,
       leafPageSize: source?.leafPageSize,
+      nativeRelationLabels: !source,
+      autoExpandRoot: !source && defaultExpandedGroups === "all",
+      collapsedKeys: activeExpansion.collapsedKeys,
       groupStack: rowGroupStack,
       baseFilter: mergedFilter,
       expandedKeys,
@@ -193,6 +196,9 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     [
       query,
       source?.leafPageSize,
+      source,
+      defaultExpandedGroups,
+      activeExpansion.collapsedKeys,
       rowGroupStack,
       mergedFilter,
       expandedKeys,

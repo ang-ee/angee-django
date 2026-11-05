@@ -34,6 +34,11 @@ const EMPTY_ARRAY = [] as const;
 export interface GroupedRenderParams {
   query?: ResourceQuery;
   leafPageSize?: number;
+  /** Native bucket keys can contain an id without a selectable label dimension. */
+  nativeRelationLabels?: boolean;
+  /** Root groups that default open can request their full page immediately. */
+  autoExpandRoot?: boolean;
+  collapsedKeys?: ReadonlySet<string>;
   groupStack: readonly ResourceViewGroup[];
   baseFilter: ResourceViewFilter | undefined;
   expandedKeys: ReadonlySet<string>;
@@ -277,8 +282,9 @@ export function buildGroupedRenderModel<TRow extends Row>(
         scope: levelScopeKey,
         bucket: bucket.key ?? null,
       });
-      const expanded = expandable && expandedKeys.has(bucketKey);
-      const label = bucketLabel(
+      const expanded = expandable && (expandedKeys.has(bucketKey)
+        || (depth === 0 && params.autoExpandRoot === true && !params.collapsedKeys?.has(bucketKey)));
+      let label = bucketLabel(
         bucket,
         axisGroup,
         modelMetadata,
@@ -287,6 +293,15 @@ export function buildGroupedRenderModel<TRow extends Row>(
         emptyRelationLabel,
         resourceQuery,
       );
+      const needsRelationLabel = params.nativeRelationLabels === true
+        && axis.declaration.kind === "relation" && !projection.labelKey;
+      if (needsRelationLabel) {
+        const firstRow = leafResults.get(bucketKey)?.rows[0];
+        if (firstRow) {
+          const rowLabel = axis.label(firstRow);
+          if (rowLabel != null && rowLabel !== "") label = String(rowLabel);
+        }
+      }
       const header: Extract<GroupedListItem<TRow>, { kind: "groupHeader" }> = {
         kind: "groupHeader",
         bucketKey,
@@ -300,8 +315,15 @@ export function buildGroupedRenderModel<TRow extends Row>(
         bucket,
       };
       items.push(header);
-      if (!expanded || bucketFilter === undefined) continue;
+      if (bucketFilter === undefined) continue;
       const cumulativeFilter = Filter.combine(parentFilter ?? {}, bucketFilter);
+      // A collapsed relation still needs one row for its label. These scopes
+      // share the same aliased leaf document as expanded record pages.
+      if (needsRelationLabel && (!expanded || !isLeafLevel)) {
+        leafScopes.push({ key: bucketKey, filter: cumulativeFilter,
+          order: leafOrder, page: 1, pageSize: 1 });
+      }
+      if (!expanded) continue;
       header.pager = isLeafLevel
         ? emitLeaf(bucketKey, cumulativeFilter, bucket, depth)
         : walkLevel(depth + 1, cumulativeFilter);
