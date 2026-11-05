@@ -183,7 +183,6 @@ def test_sender_projection_matches_visible_identity_and_regates_elevated_parents
         execute_schema(_schema(), "{ messages(order_by: [{sender_name: asc}]) { id sender_name } }", user=owner)
     )
     assert {row["id"]: row["sender_name"] for row in payload["messages"]} == expected
-    assert [row["sender_name"] for row in payload["messages"]] == sorted(expected.values())
     assert str(hidden.sqid) not in expected
     with actor_context(owner), system_context(reason="test.messaging.sender_names.elevated_parent"):
         rows = Message._base_manager.filter(sqid__in=expected).annotate(

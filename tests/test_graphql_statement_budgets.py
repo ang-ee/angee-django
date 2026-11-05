@@ -71,6 +71,7 @@ from tests.conftest import (
     vault_for,
 )
 from tests.conftest import File as StorageFile
+from tests.messaging_campaign import comment_record as comment_record  # noqa: F401 -- fixture
 from tests.messaging_campaign import make_user
 from tests.test_messaging_graphql import _storage_drive
 from tests.test_timeline import KINDS
@@ -550,6 +551,44 @@ def test_timeline_rail_document_budget(timeline_rail_reads) -> None:
 def test_timeline_rail_document_statement_count(timeline_rail_reads) -> None:
     one, five = timeline_rail_reads
     five.assert_flat_from(one)
+
+
+def test_timeline_rail_sender_statement_budget(comment_record, capture_graphql_document) -> None:
+    """The admitted message's sender label is a small structural join in the rail."""
+
+    record, owner = comment_record.record, comment_record.author
+    with system_context(reason="test.document_budget.timeline_sender"), mute_changes():
+        attachment = messaging_models.ThreadAttachment.objects.ensure_for_record(record)
+        party = PartyModel._base_manager.create(display_name="Rail party", created_by=comment_record.outsider)
+        sender = messaging_models.Handle.objects.create(
+            platform="email", value="rail-sender@example.test", display_name="Rail handle",
+            party=party, party_link_confirmed=True, created_by=owner,
+        )
+        for index in range(5):
+            Message.objects.create(
+                thread=attachment.thread, sender=sender, created_by=owner,
+                message_type="comment", direction="internal", preview=f"Rail comment {index}",
+            )
+    with override_settings(ANGEE_TIMELINE_KINDS=KINDS):
+        schema = addon_schema(timeline_schema.schemas, "console")
+        variables = {"model": record._meta.label, "id": public_id_of(record), "kinds": ["messaging.comment"]}
+        capture_graphql_document(schema, TIMELINE, {**variables, "limit": 1}, actor=owner)
+        reads = [capture_graphql_document(schema, TIMELINE, {**variables, "limit": size}, actor=owner)
+                 for size in (1, 5)]
+    for size, read in zip((1, 5), reads, strict=True):
+        entries = read.data["timeline"]["entries"]
+        assert len(entries) == size
+        assert {entry["actor"] for entry in entries} == {"Rail party"}
+        message_sql = [sql for sql in read.statements if ' AS "_sender_name"' in sql]
+        assert len(message_sql) == 1
+        assert 'JOIN "test_parties_handle"' in message_sql[0]
+        assert 'JOIN "test_parties_party"' in message_sql[0]
+        assert 'FROM "test_parties_handle"' not in message_sql[0]
+        assert 'FROM "test_parties_party"' not in message_sql[0]
+        assert len(message_sql[0].encode("utf-8")) <= 5_000
+        read.assert_statements(27)
+        read.assert_bytes(total=175_000, largest=75_000, cause="timeline union plus structural sender join")
+    reads[1].assert_flat_from(reads[0])
 
 
 @pytest.mark.xfail(strict=True, reason="Provenance ChangeKind: record history still audits")

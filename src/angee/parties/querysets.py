@@ -7,7 +7,21 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Self, TypedDict
 
 from django.apps import apps
-from django.db.models import Case, Count, Exists, IntegerField, OuterRef, Prefetch, Q, Subquery, TextField, Value, When
+from django.db.models import (
+    Case,
+    Count,
+    Exists,
+    F,
+    IntegerField,
+    OuterRef,
+    Prefetch,
+    Q,
+    Subquery,
+    TextField,
+    Value,
+    When,
+)
+from django.db.models.expressions import BaseExpression
 from django.db.models.functions import Coalesce, NullIf
 from rebac import (
     current_actor,
@@ -120,19 +134,25 @@ class HandleQuerySet[HandleT: Handle](MergeableQuerySet[HandleT], AngeeHistoryQu
         handles = self.with_actor(actor).scoped() if actor is not None else self.none()
         return handles.annotate(_sender_name=handles.sender_name_expression())
 
-    def sender_name_expression(self, prefix: str = "") -> Coalesce:
+    def sender_name_expression(self, prefix: str = "", *, party_read_implied: bool = False) -> Coalesce:
         """Project the name rule onto an already-readable handle or handle join.
 
-        Callers authorize the handle population; the party fallback keeps its
-        own read gate. Prefix follows Django relation paths, including ``__``.
+        Callers authorize the handle population. A confirmed party name keeps
+        its own read gate unless the admitted parent also implies that display
+        fact, as a message does for its sender. Prefix follows Django relation
+        paths, including ``__``.
         """
 
-        actor = self.actor() or current_actor()
-        party_model = apps.get_model("parties", "Party")
-        party_name = party_model.objects.filter(pk=OuterRef(f"{prefix}party_id")).readable_scalar_subquery(
-            "display_name",
-            actor=actor,
-        )
+        party_name: BaseExpression | F
+        if party_read_implied:
+            party_name = F(f"{prefix}party__display_name")
+        else:
+            actor = self.actor() or current_actor()
+            party_model = apps.get_model("parties", "Party")
+            party_name = party_model.objects.filter(pk=OuterRef(f"{prefix}party_id")).readable_scalar_subquery(
+                "display_name",
+                actor=actor,
+            )
         return Coalesce(
             NullIf(
                 Case(

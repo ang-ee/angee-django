@@ -50,10 +50,10 @@ def test_comment_post_then_trash_then_restore(comment_record) -> None:
     assert timeline_entries(record, author, kind="messaging.comment")[0].target_id == public_id_of(message)
 
 
-def test_comment_timeline_sender_label_requires_handle_read_and_batches(
+def test_comment_timeline_sender_label_is_implied_and_batches(
     comment_record, record_property, settings,
 ) -> None:
-    """A record share never reveals the private sender's display name."""
+    """A record share admits each message's sender label without a sender grant."""
 
     record, owner, reader = comment_record.record, comment_record.author, comment_record.peer
     with system_context(reason="test.timeline.sender.seed"), mute_changes():
@@ -67,7 +67,7 @@ def test_comment_timeline_sender_label_requires_handle_read_and_batches(
                 thread=attachment.thread, sender=handle, created_by=owner,
                 message_type="comment", direction="internal", preview=f"Private comment {index}",
             )
-    for actor, label in ((owner, handle.display_name), (reader, "")):
+    for actor, label in ((owner, handle.display_name), (reader, handle.display_name)):
         Timeline(record, actor).page(kinds=["messaging.comment"], limit=1)
         counts = []
         for size in (1, 5, 20):
@@ -77,7 +77,7 @@ def test_comment_timeline_sender_label_requires_handle_read_and_batches(
             assert {entry.actor for entry in entries} == {label}
             counts.append(len(queries))
         assert counts[0] == counts[1] == counts[2], counts
-        assert counts[0] == 26, counts
+        assert counts[0] == 20, counts
         record_property(f"comment_timeline_{actor.username}_sql", counts)
 
     source, _ = CommentKind().source(record, reader)
@@ -85,7 +85,7 @@ def test_comment_timeline_sender_label_requires_handle_read_and_batches(
     hydrated = list(CommentKind().queryset(record, reader).filter(sender_id=handle.pk))
     with CaptureQueriesContext(connection) as queries:
         labels = CommentKind().present(hydrated)
-    assert len(labels) == 20 and {item.actor for item in labels.values()} == {""}
+    assert len(labels) == 20 and {item.actor for item in labels.values()} == {handle.display_name}
     assert not queries
 
     settings.ANGEE_TIMELINE_KINDS = KINDS
@@ -96,7 +96,7 @@ def test_comment_timeline_sender_label_requires_handle_read_and_batches(
             entries = Timeline(record, owner).page(kinds=["messaging.comment"], limit=size).entries
         assert len(entries) == size
         full_counts.append(len(queries))
-    assert full_counts == [44, 44, 44], full_counts
+    assert full_counts == [38, 38, 38], full_counts
     record_property("full_comment_timeline_sql", full_counts)
     with CaptureQueriesContext(connection) as queries:
         assert Timeline(record, owner).page(kinds=["workflows.run"], limit=20).entries == []
@@ -104,10 +104,10 @@ def test_comment_timeline_sender_label_requires_handle_read_and_batches(
     record_property("full_no_comment_timeline_sql", len(queries))
 
 
-def test_comment_timeline_uses_readable_confirmed_party_name(comment_record) -> None:
-    """A readable linked sender uses the party label shown by chatter."""
+def test_comment_timeline_uses_implied_confirmed_party_name(comment_record) -> None:
+    """A visible message carries its confirmed sender name without party read."""
 
-    record, owner = comment_record.record, comment_record.author
+    record, owner, reader = comment_record.record, comment_record.author, comment_record.peer
     with system_context(reason="test.timeline.linked_sender.seed"), mute_changes():
         attachment = ThreadAttachment.objects.ensure_for_record(record)
         party = apps.get_model("parties", "Party").objects.create(
@@ -122,8 +122,9 @@ def test_comment_timeline_uses_readable_confirmed_party_name(comment_record) -> 
             thread=attachment.thread, sender=handle, created_by=owner,
             message_type="comment", direction="internal", preview="Linked comment",
         )
-    hydrated = list(CommentKind().queryset(record, owner).filter(pk=message.pk))
-    assert CommentKind().present(hydrated)[message.pk].actor == "Timeline Party"
+    for actor in (owner, reader):
+        hydrated = list(CommentKind().queryset(record, actor).filter(pk=message.pk))
+        assert CommentKind().present(hydrated)[message.pk].actor == "Timeline Party"
 
 
 def test_binding_two_records_and_unbinding_one_preserves_the_other(sourced) -> None:
