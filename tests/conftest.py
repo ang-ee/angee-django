@@ -19,7 +19,6 @@ import pytest
 import tomlkit
 from django.apps import AppConfig
 from django.contrib.auth import get_user_model
-from django.db import models
 from rebac import ObjectRef, actor_context, system_context, to_object_ref
 from rebac.roles import grant as grant_role
 
@@ -92,14 +91,6 @@ collect_ignore = ["provenance_engine"]
 # Settings reloads in the suite compose through ProjectContract, which starts
 # Sentry for a configured DSN; a developer's exported DSN never receives test errors.
 os.environ.pop("SENTRY_DSN", None)
-
-
-def standalone_relation(source: type[models.Model], name: str) -> models.Field:
-    """Keep a test model's copied FK without claiming its source's reverse accessor."""
-
-    field = source._meta.get_field(name)
-    _, _, args, kwargs = field.deconstruct()
-    return type(field)(*args, **(kwargs | {"related_name": "+"}))
 
 
 @pytest.fixture(scope="session", autouse=True)

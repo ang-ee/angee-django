@@ -1,4 +1,4 @@
-"""A locally scoped, create-gated document for create-gate regression tests.
+"""Installed test models for create gates and task composition regression tests.
 
 ``ScopedDoc`` composes this test app's local ``ScopeScopedMixin``. The blank-on-
 input ``scope`` FK defaults from the actor's sole direct scope membership and
@@ -10,6 +10,7 @@ without depending on any framework-owned business scope.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any, cast
 
 from django.core.exceptions import ValidationError
@@ -22,9 +23,29 @@ from angee.iam.managers import ProtectedManager
 from angee.iam.models.base import ProtectedDataModel
 from angee.iam.models.ownership import OwnerMixin
 from angee.iam.querysets import ProtectedQuerySet
+from angee.projects.models import Milestone as AbstractMilestone
+from angee.projects.models import Task as AbstractTask
+from angee.work.models import Stage as AbstractStage
+from angee.work.models import TaskWork
 
 SCOPE_MEMBER_RELATION = "direct_member"
 """Direct membership relation on the local ``scopedemo/scope`` test resource."""
+
+
+def standalone_relation(source: type[models.Model], name: str) -> models.Field:
+    """Copy a test model's FK without its source's reverse accessor."""
+
+    field = deepcopy(source._meta.get_field(name))
+    field.remote_field.related_name = "+"
+    return field
+
+
+def _local_constraint(constraint: models.BaseConstraint) -> models.BaseConstraint:
+    """Retain an inherited rule under a test-app-unique database name."""
+
+    local = constraint.clone()
+    local.name = f"{constraint.name}_scopedemo"
+    return local
 
 
 class ProposalTarget(OwnerMixin, ProtectedDataModel):
@@ -226,3 +247,79 @@ class NativeAttachmentTarget(RebacMixin):
 
     class Meta:
         rebac_resource_type = "scopedemo/native_attachment_target"
+
+
+class ProjectAccessTask(AbstractTask):
+    """Production task lifecycle with a small, independently protected project."""
+
+    sqid_prefix = "pat_"
+    owner_container = None
+    assignee = standalone_relation(AbstractTask, "assignee")
+    delegate = standalone_relation(AbstractTask, "delegate")
+    activity_type = standalone_relation(AbstractTask, "activity_type")
+    project = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)
+    milestone = None
+    milestone_id = None
+    links = None
+    file_attachments = None
+    thread_attachments = None
+    thread_create_autofollow_author = False
+
+    class Meta(AbstractTask.Meta):
+        abstract = False
+        app_label = "scopedemo"
+        rebac_resource_type = "scopedemo/project_access_task"
+
+
+class TaskPromotion(models.Model):
+    """Minimal relation target for the production task's phase expression."""
+
+    converted_from = models.ForeignKey(ProjectAccessTask, on_delete=models.CASCADE, related_name="promoted_projects")
+    current_milestone = models.ForeignKey(Scope, null=True, on_delete=models.SET_NULL)
+
+    class Meta:
+        app_label = "scopedemo"
+
+
+class FreshnessStage(AbstractStage):
+    queue = models.ForeignKey(Scope, on_delete=models.CASCADE)
+
+    class Meta(AbstractStage.Meta):
+        abstract = False
+        app_label = "scopedemo"
+        rebac_resource_type = "scopedemo/freshness_stage"
+
+
+class FreshnessMilestone(AbstractMilestone):
+    project = models.ForeignKey(Scope, on_delete=models.CASCADE)
+
+    class Meta(AbstractMilestone.Meta):
+        abstract = False
+        app_label = "scopedemo"
+        rebac_resource_type = "scopedemo/freshness_milestone"
+        constraints = tuple(_local_constraint(constraint) for constraint in AbstractMilestone.Meta.constraints)
+
+
+class FreshnessTask(TaskWork, AbstractTask):
+    """Task with persisted stage and milestone relations for freshness checks."""
+
+    # This scope intentionally supplies no item-ownership policy.
+    owner_container = None
+    assignee = standalone_relation(AbstractTask, "assignee")
+    delegate = standalone_relation(AbstractTask, "delegate")
+    activity_type = standalone_relation(AbstractTask, "activity_type")
+    project = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)
+    milestone = models.ForeignKey(FreshnessMilestone, null=True, blank=True, on_delete=models.SET_NULL)
+    queue = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)
+    stage = models.ForeignKey(FreshnessStage, null=True, blank=True, on_delete=models.SET_NULL)
+    cycle = None
+    cycle_id = None
+    links = None
+    file_attachments = None
+    thread_attachments = None
+    thread_create_autofollow_author = False
+
+    class Meta(AbstractTask.Meta):
+        abstract = False
+        app_label = "scopedemo"
+        rebac_resource_type = "scopedemo/freshness_task"

@@ -31,6 +31,7 @@ from rebac import (
 )
 
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.testing.queries import is_permission_audit_insert
 from angee.proposals.models import ClarificationWidenBlocked, PublishedQuestion
 from tests.composed_host import run_composed_tests
 from tests.test_proposals_clarifications import ClarificationCase
@@ -191,11 +192,14 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
             with CaptureQueriesContext(connection) as queries, self.assertRaises(ClarificationWidenBlocked) as error:
                 task.validate_visibility("inherited")
             self.assertEqual(error.exception.code, "HIDDEN_ASKER_IN_THREAD")
-            # Auditing the two task scopes and the message scope adds three
-            # INSERTs; the publication check itself remains one SELECT.
+            # The refusal audits all three system scopes and reads the blocker.
             self.assertEqual(len(queries), 4, queries.captured_queries)
-            self.assertTrue(all('INSERT INTO "rebac_permissionauditevent"' in q["sql"] for q in queries[:3]))
-            self.assertIn("EXISTS", queries[3]["sql"].upper())
+            self.assertEqual(
+                sum(is_permission_audit_insert(item["sql"], connection) for item in queries),
+                3,
+                queries.captured_queries,
+            )
+            self.assertEqual(sum("EXISTS" in item["sql"].upper() for item in queries), 1)
         before = self.Task._base_manager.filter(pk=task.pk).values().get()
         with actor_context(self.manager):
             with self.assertRaises(ClarificationWidenBlocked):

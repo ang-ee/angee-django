@@ -18,7 +18,7 @@ from django.apps import AppConfig
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.core.checks.registry import registry
-from django.db import connection, models, transaction
+from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
 from django.db.models.signals import post_save
 from django.test.utils import CaptureQueriesContext, isolate_apps
 from django.utils import timezone
@@ -289,7 +289,9 @@ def test_readable_fields_provider_resolves_only_for_observable_partial_updates(
     publishing.publish_change(group, action="create", update_fields=None, readable_fields=readable_fields)
     publishing.publish_change(group, action="update", update_fields=None, readable_fields=readable_fields)
     publishing.publish_change(group, action="delete", update_fields=None, readable_fields=readable_fields)
-    post_save.send(sender=Group, instance=group, raw=True, created=False, update_fields=("name",))
+    post_save.send(
+        sender=Group, instance=group, raw=True, created=False, update_fields=("name",), using=DEFAULT_DB_ALIAS,
+    )
     with publishing.mute_changes():
         publishing.publish_change(
             group,

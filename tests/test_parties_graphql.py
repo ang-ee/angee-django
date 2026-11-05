@@ -12,6 +12,7 @@ from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_r
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam.identity import public_subject_ref
+from angee.iam.testing.graphql import measure_graphql_document
 from angee.messaging.testing import models as messaging_models
 from tests.conftest import (
     SchemaAddon,
@@ -586,41 +587,42 @@ def test_statement_reads_never_widen_what_the_party_reader_sees(composed_tables:
     ]
 
 
-@pytest.mark.parametrize("row_count", [2, 8])
+@pytest.mark.parametrize("row_counts", ((2, 8), (8,)), ids=("warm-eight", "cold-eight"))
 def test_statement_reference_reads_have_a_page_query_budget(
     composed_tables: None,
-    django_assert_num_queries: Any,
-    row_count: int,
+    row_counts: tuple[int, ...],
 ) -> None:
     """Evidence and asserting principals add a fixed query count, not one per statement."""
 
     del composed_tables
-    admin = _platform_admin(f"statement-query-budget-{row_count}")
-    with system_context(reason="test.parties.statement_query_budget.seed"):
-        for index in range(row_count):
-            party = messaging_models.Party.objects.create(display_name=f"Party {index}", created_by=admin)
-            handle = Handle.objects.create(
-                platform="email",
-                value=f"statement-query-{row_count}-{index}@example.test",
-                created_by=admin,
-            )
-            messaging_models.Party.objects.assert_handle(
-                party,
-                handle,
-                asserted_by=admin,
-                evidence=[party],
-            )
+    admin = _platform_admin("statement-query-budget")
     schema = _schema("public")
     query = "query Statements { party_statements { asserted_by evidence { model id } } }"
-    # The same count for 2 and 8 rows is the invariant: evidence and asserting
-    # principals are admitted in batches. StatementQuerySet.for_reader scopes the
-    # subject (parties/party read) and the handle member (parties/handle read);
-    # recovery REBAC memoizes actor-set decisions per permission root, so the handle
-    # scope repeats the subject scope's two-statement role/group traversal (+2, REBAC
-    # follow-up: share actor-set decisions across roots).
-    with django_assert_num_queries(17):
-        rows = _data(execute_schema(schema, query, user=admin))["party_statements"]
-    assert len(rows) == row_count
+    reads = {}
+    seeded = 0
+    for row_count in row_counts:
+        with system_context(reason="test.parties.statement_query_budget.seed"):
+            for row_index in range(seeded, row_count):
+                party = messaging_models.Party.objects.create(display_name=f"Party {row_index}", created_by=admin)
+                handle = Handle.objects.create(
+                    platform="email",
+                    value=f"statement-query-{row_index}@example.test",
+                    created_by=admin,
+                )
+                messaging_models.Party.objects.assert_handle(
+                    party,
+                    handle,
+                    asserted_by=admin,
+                    evidence=[party],
+                )
+        seeded = row_count
+        read = measure_graphql_document(schema, query, {}, actor=admin)
+        assert len(read.data["party_statements"]) == row_count
+        read.assert_no_audit_writes()
+        reads[row_count] = read
+    if 2 in reads:
+        reads[8].assert_flat_from(reads[2])
+    assert reads[8].statement_count == 10
 
 
 def test_party_statements_group_only_by_axes_the_party_reader_may_read() -> None:

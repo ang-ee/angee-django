@@ -25,6 +25,7 @@ from rebac import (
 )
 
 from angee.graphql.schema import GraphQLSchemas
+from angee.iam.testing.queries import is_permission_audit_insert
 from angee.proposals.models import ClarificationWidenBlocked, PublishedQuestion
 from tests.composed_host import run_composed_tests
 
@@ -133,10 +134,18 @@ class PublicationCases(TransactionTestCase):
             # Three audited system scopes (task twice, message once) and one
             # application SELECT containing the complete blocker predicate.
             self.assertEqual(len(queries), 4, queries.captured_queries)
-            self.assertTrue(all('INSERT INTO "rebac_permissionauditevent"' in q["sql"] for q in queries[:3]))
+            self.assertEqual(
+                sum(is_permission_audit_insert(item["sql"], connection) for item in queries),
+                3,
+                queries.captured_queries,
+            )
             # One EXISTS selects messages; its nested EXISTS follows the
             # canonical (possibly merged) thread attachment for this record.
-            self.assertEqual(queries[3]["sql"].upper().count("EXISTS("), 2)
+            self.assertEqual(
+                sum(item["sql"].upper().count("EXISTS(") for item in queries),
+                2,
+                queries.captured_queries,
+            )
         before = self.Task._base_manager.filter(pk=question.pk).values().get()
         with actor_context(self.manager):
             with self.assertRaises(ClarificationWidenBlocked):

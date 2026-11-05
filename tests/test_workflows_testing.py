@@ -10,6 +10,7 @@ import yaml
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied
+from django.db import DEFAULT_DB_ALIAS
 from django.db.models.signals import post_save
 from django.test import override_settings
 from rebac import actor_context, system_context
@@ -60,7 +61,7 @@ def test_declared_trigger_source_has_one_native_receiver():
     from angee.workflows.triggers import RecordChanged, RecordChangedOptIn
 
     assert issubclass(Vault, RecordChangedOptIn)
-    receivers = post_save.send(sender=Vault, instance=object(), raw=True, created=False)
+    receivers = post_save.send(sender=Vault, instance=object(), raw=True, created=False, using=DEFAULT_DB_ALIAS)
     assert sum(receiver == RecordChanged.changed for receiver, _ in receivers) == 1
 
 

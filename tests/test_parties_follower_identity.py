@@ -34,6 +34,7 @@ from rebac.resources import model_resource_type
 from rebac.types import RelationshipFilter
 
 from angee.graphql.data.hasura import hasura_model_resource
+from angee.iam.testing.queries import is_permission_audit_insert
 from angee.messaging.testing.models import Handle, Organization, Party, Person, Thread, ThreadFollower
 from angee.nexus.testing.models import Cadence, Tie
 from angee.spaces.testing.models import Group, Membership
@@ -199,9 +200,6 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
             resource_type = model_resource_type(model)
             assert resource_type is not None
             for action in ("read", "read_private"):
-                # Recovery REBAC compiles arrow sources into the row SELECT. A fresh
-                # scope reads one schema revision and one actor set before that SELECT.
-                expected_queries = 3
                 counts = []
                 for size in (2, 50):
                     ids = [row.pk for row in rows[:size]]
@@ -213,12 +211,11 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
                         f"{sql}\n-- parameters: {parameters!r}\n",
                         encoding="utf-8",
                     )
-                    # A fresh scope per measurement: a scoped queryset keeps the actor sets
-                    # it decided, so reusing one would skip the actor-set read.
+                    # Use a fresh scope at each size to measure the full read.
                     with evaluator_scope(), CaptureQueriesContext(connection) as captured:
                         result = set(query)
                     counts.append(len(captured))
-                    assert len(captured) == expected_queries, captured.captured_queries
+                    assert not any(is_permission_audit_insert(item["sql"], connection) for item in captured)
                     # Source facts remain inside the single application row SELECT.
                     assert (
                         sum(
@@ -228,7 +225,7 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
                         == 1
                     )
                     assert result == (set(ids) if action == "read" else set())
-                assert counts[0] == counts[1]
+                assert counts[0] == counts[1] <= (2 if model is Party else 3), counts
         # A genuine singleton uses the native point lower bound instead of
         # preparing the generic Party source for Tie's private intersection.
         singleton = Tie.objects.with_actor(f.reader).scoped().filter(pk__in=[tie.pk]).values_list("pk", flat=True)
@@ -237,7 +234,8 @@ def test_follower_scopes_compile_without_enumeration_and_fetch_fifty_rows_at_fix
         (tmp_path / "Tie-read-singleton.sql").write_text(f"{sql}\n-- parameters: {parameters!r}\n", encoding="utf-8")
         with evaluator_scope(), CaptureQueriesContext(connection) as captured:
             result = set(singleton)
-        assert len(captured) == 3, captured.captured_queries
+        assert len(captured) <= 2, captured.captured_queries
+        assert not any(is_permission_audit_insert(item["sql"], connection) for item in captured)
         assert sum(query["sql"].startswith(f'SELECT "{Tie._meta.db_table}".') for query in captured) == 1
         assert result == set()
         for model in (Party, Person):

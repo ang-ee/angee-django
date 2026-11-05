@@ -114,7 +114,7 @@ def test_disabled_triggers_write_nothing_and_native_save_skips_raw(trigger_setup
     capture(record)
     assert not TriggerEvent.system_queryset().exists()
     Trigger.objects.enable(trigger, actor=actor)
-    post_save.send(sender=Vault, instance=record, raw=True, created=False)
+    post_save.send(sender=Vault, instance=record, raw=True, created=False, using=record._state.db)
     assert not TriggerEvent.system_queryset().exists()
     with actor_context(actor):
         record.save()

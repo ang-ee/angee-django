@@ -1,7 +1,5 @@
 """Follower identity is reachable through record read, without private contact access."""
 
-from collections import Counter
-
 import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.db import connection
@@ -9,6 +7,7 @@ from django.test.utils import CaptureQueriesContext
 from rebac import actor_context, system_context
 from rebac.backends import backend
 
+from angee.iam.testing.queries import is_permission_audit_insert
 from angee.messaging.testing.models import Party, Person, ThreadFollower
 from angee.nexus.testing.models import Cadence, Tie
 from tests.chatterdemo.models import ChatterDoc
@@ -57,36 +56,49 @@ def test_record_arm_exposes_accountless_follower_identity_and_no_private_fields(
 def test_record_follower_sql_is_bounded_and_unfollow_revokes_parent_and_child(record_identity, monkeypatch):
     record, person, _, reader, _ = record_identity
     local = backend()
+    with system_context(reason="tests.t3.record_identity.candidates"):
+        hidden = [
+            Person.objects.create(display_name=f"Hidden candidate {index}", created_by=person.created_by)
+            for index in range(49)
+        ]
     monkeypatch.setattr(type(local), "accessible", lambda *args, **kwargs: pytest.fail("Enumerated identity IDs"))
+    counts = []
     for model in (Party, Person):
-        query = model.objects.with_actor(reader).scoped().filter(pk=person.pk)
-        # Compile once first: Django resolves content types while compiling, and
-        # those cold lookups are not part of the scoped read being counted.
-        str(query.query)
-        with CaptureQueriesContext(connection) as queries:
-            assert list(query.values_list("pk", flat=True)) == [person.pk]
-        # Recovery REBAC compiles source facts into the application read. The
-        # revision and actor-set reads remain fixed across the MTI identities.
-        row_field = model._meta.pk
-        assert row_field is not None
-        quote = connection.ops.quote_name
-        row_prefix = f"SELECT {quote(row_field.model._meta.db_table)}.{quote(row_field.column)} AS {quote('pk')} FROM "
-        phases = Counter()
-        for query in queries.captured_queries:
-            sql = query["sql"]
-            if is_rebac_revision_read(sql):
-                phases["schema_revision"] += 1
-            elif sql.startswith("SELECT DISTINCT "):
-                phases["actor_sets"] += 1
-            elif sql.startswith(row_prefix):
-                phases["application"] += 1
-            else:
-                pytest.fail(f"Unexpected statement in exact follower read: {sql}")
-        assert phases == {
-            "schema_revision": 1,
-            "actor_sets": 1,
-            "application": 1,
-        }, queries.captured_queries
+        model_counts = []
+        for size in (1, 50):
+            ids = [person.pk, *(row.pk for row in hidden[: size - 1])]
+            query = model.objects.with_actor(reader).scoped().filter(pk__in=ids)
+            # Compile once first: Django resolves content types while compiling.
+            str(query.query)
+            with CaptureQueriesContext(connection) as queries:
+                assert list(query.values_list("pk", flat=True)) == [person.pk]
+            assert not any(is_permission_audit_insert(item["sql"], connection) for item in queries)
+            row_field = model._meta.pk
+            assert row_field is not None
+            quote = connection.ops.quote_name
+            row_prefix = (
+                f"SELECT {quote(row_field.model._meta.db_table)}.{quote(row_field.column)} AS {quote('pk')} FROM "
+            )
+            phases = {"schema_revision": 0, "actor_sets": 0, "application": 0}
+            for item in queries:
+                sql = item["sql"]
+                if is_rebac_revision_read(sql):
+                    phases["schema_revision"] += 1
+                elif sql.startswith("SELECT DISTINCT "):
+                    phases["actor_sets"] += 1
+                elif sql.startswith(row_prefix):
+                    phases["application"] += 1
+                else:
+                    pytest.fail(f"Unexpected statement in follower read: {sql}")
+            assert phases == {
+                "schema_revision": 1,
+                "actor_sets": 0 if model is Party else 1,
+                "application": 1,
+            }, queries.captured_queries
+            model_counts.append(len(queries))
+        counts.append(model_counts)
+    assert counts[0][0] == counts[0][1] <= 2, counts
+    assert counts[1][0] == counts[1][1] <= 3, counts
     before = relationship_snapshot()
     with system_context(reason="tests.t3.unfollow"):
         record.message_unsubscribe(party=person)

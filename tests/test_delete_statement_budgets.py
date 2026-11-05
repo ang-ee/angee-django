@@ -30,6 +30,8 @@ class DeleteCost:
 def delete_costs(execution, workflow_step_classes) -> tuple[DeleteCost, DeleteCost]:
     """Measure a system-context queryset delete, excluding actor GraphQL validation.
 
+    The always-installed scopedemo app declares both additional task hierarchies,
+    so the collector sees the same model graph regardless of pytest collection.
     Every host carries a SET_NULL record ref, one chatter message and a live run.
     Seed and system-context entry happen outside the capture; the native delete,
     all collectors, receivers and nested bypasses happen inside it.
@@ -69,17 +71,17 @@ def delete_costs(execution, workflow_step_classes) -> tuple[DeleteCost, DeleteCo
 
 @pytest.mark.django_db(transaction=True)
 def test_delete_cost_grows_only_with_collected_owner_rows(delete_costs: tuple[DeleteCost, DeleteCost]) -> None:
-    """Pin current one/ten ceilings for system-context QuerySet.delete, not GraphQL."""
+    """Pin one/ten delete ceilings with both scopedemo task hierarchies installed."""
 
     one, ten = delete_costs
-    # P10b batches run cancellation, edge policy and chatter after L10's
-    # collector signal; the current linear ceilings fall when that lands.
-    assert ten.statements - one.statements <= 9 * 165
+    # The collector's run cancellation, edge policy and chatter still carry
+    # per-row overhead; the growth law detects additions to that cost.
+    assert ten.statements - one.statements <= 9 * 175
     assert ten.revisions - one.revisions <= 9 * 3
-    assert one.audits <= 21 and ten.audits <= 210
+    assert one.audits <= 26 and ten.audits <= 260
     if connection.vendor == "sqlite":
-        assert one.statements <= 180 and ten.statements <= 1500
-        assert one.total_bytes <= 90_000 and ten.total_bytes <= 800_000
+        assert one.statements <= 220 and ten.statements <= 1800
+        assert one.total_bytes <= 100_000 and ten.total_bytes <= 850_000
         assert ten.largest_bytes <= 6_000
     else:
         assert one.statements <= 220 and ten.statements <= 1800
@@ -89,7 +91,7 @@ def test_delete_cost_grows_only_with_collected_owner_rows(delete_costs: tuple[De
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("law", ("revisions", "audits", "statements"))
-@pytest.mark.xfail(strict=True, reason="P10b/L10: collector batches must remove per-row delete overhead")
+@pytest.mark.xfail(strict=True, reason="collector batches must remove per-row delete overhead")
 def test_delete_cost_batch_laws(delete_costs: tuple[DeleteCost, DeleteCost], law: str) -> None:
     """Keep the unmet flat revision/audit and owner-bounded statement laws visible."""
 

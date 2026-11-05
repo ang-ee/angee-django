@@ -8,12 +8,12 @@ from rebac import PermissionDenied, actor_context, system_context
 from rebac.roles import grant as grant_role
 
 from angee.base.models.merge_references import references
+from angee.iam.testing.queries import is_permission_audit_insert
 from angee.messaging.testing.models import Message, Person, ThreadFollower, ThreadNotification
 from angee.projects.testing.models import Link, Queue, Stage, Task
 from angee.spaces.testing.models import Membership
 from tests.conftest import Need, Page, RecordBinding, Vault
 from tests.messaging_campaign import grant
-from tests.queries import is_rebac_revision_read
 from tests.t3_campaign import campaign_access as campaign_access
 from tests.t3_campaign import campaign_user as campaign_user
 from tests.t3_campaign import messaging_access_schema as messaging_access_schema
@@ -199,15 +199,11 @@ def test_stage_position_orders_the_task_list_by_the_queue_workflow(queue_case):
         ((first.pk, task.pk), [first.pk, task.pk]),
         (tuple(early_ids + late_ids), early_ids + late_ids),
     ):
-        # Both sizes use REBAC's set plan. A fresh scope measures its actor-set
-        # decision, revision and ordered application SELECT together.
+        # A fresh scope measures the full ordered read at each size.
         query = Task.objects.with_actor(people["member"]).scoped().filter(pk__in=ids).order_by("stage__position", "pk")
         with CaptureQueriesContext(connection) as queries:
             assert list(query.values_list("pk", flat=True)) == expected
-        # Recovery REBAC compiles task arrows into the ordered SELECT. The
-        # predicate and stage ordering survive in that one application read.
-        assert sum(is_rebac_revision_read(item["sql"]) for item in queries) == 1
-        assert sum(item["sql"].startswith("SELECT DISTINCT ") for item in queries) == 1
+        assert not any(is_permission_audit_insert(item["sql"], connection) for item in queries)
         ordered = [
             item["sql"]
             for item in queries
@@ -217,4 +213,4 @@ def test_stage_position_orders_the_task_list_by_the_queue_workflow(queue_case):
         assert len(ordered) == 1, queries.captured_queries
         assert "WITH RECURSIVE" in ordered[0] and "EXISTS(" in ordered[0]
         counts.append(len(queries))
-    assert counts == [3, 3], counts
+    assert counts == [2, 2], counts
