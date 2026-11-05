@@ -109,7 +109,7 @@ class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
     """
 
     sqid_prefix = "ase_"
-    record_display_paths: ClassVar[tuple[str, ...]] = ("title", "agent")
+    record_display_paths: ClassVar[tuple[str, ...]] = ("title",)
     agent = models.ForeignKey("agents.Agent", on_delete=models.CASCADE, related_name="sessions")
     # A session is its user's own conversation, not a transferable grant root: deleting
     # the user deletes it, and refuses while one of its turns still runs.
@@ -179,20 +179,9 @@ class AgentSession(AuditMixin, ProtectedDataModel, concrete=True):
         if self.title:
             return self.title
         if "agent" in self._state.fields_cache:
-            return str(self._state.fields_cache["agent"])
-        if "_agent_name" in self.__dict__:
-            return str(self.__dict__["_agent_name"])
-        agent_model = type(self)._meta.get_field("agent").related_model
-        return str(agent_model._base_manager.db_manager(self._state.db).get(pk=self.agent_id))
-
-    @classmethod
-    def agent_name_expression(cls) -> models.Subquery:
-        """Project the agent label without loading one agent per session."""
-
-        agent_model = cls._meta.get_field("agent").related_model
-        return models.Subquery(
-            agent_model._base_manager.filter(pk=models.OuterRef("agent_id")).values("name")[:1],
-        )
+            agent = self._state.fields_cache["agent"]
+            return str(agent) if agent is not None else str(self._meta.verbose_name)
+        return str(self._meta.verbose_name)
 
     def post(
         self,

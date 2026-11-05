@@ -107,21 +107,6 @@ def _source_integrations(info: strawberry.Info) -> Any:
     return integrations
 
 
-def _record_link_capability_prefetches(info: strawberry.Info) -> list[Prefetch]:
-    """Attach the stream then its selected connector to every retained link row."""
-
-    request = get_request(info)
-    cached = getattr(request, "_angee_record_link_capability_prefetches", None)
-    if cached is not None:
-        return cast(list[Prefetch], cached)
-    selected = [
-        Prefetch("stream", queryset=SyncStream._base_manager.all(), to_attr="_source_stream"),
-        Prefetch("_source_stream__integration", queryset=_source_integrations(info)),
-    ]
-    setattr(request, "_angee_record_link_capability_prefetches", selected)
-    return selected
-
-
 def _sync_stream_capability_prefetch(info: strawberry.Info) -> Prefetch:
     """Attach the same connector selection when failure links inherit their stream."""
 
@@ -1527,10 +1512,6 @@ class RecordLinkType(ProtectedNode):
 
     @strawberry_django.field(
         only=["stream_id", "external_key"],
-        prefetch_related=[
-            lambda info: _record_link_capability_prefetches(info)[0],
-            lambda info: _record_link_capability_prefetches(info)[1],
-        ],
     )
     def source_url(self) -> str | None:
         """Return the selected connector's provider URL for this remote identity."""
@@ -1539,10 +1520,6 @@ class RecordLinkType(ProtectedNode):
 
     @strawberry_django.field(
         only=["stream_id", "external_key", "source_payload"],
-        prefetch_related=[
-            lambda info: _record_link_capability_prefetches(info)[0],
-            lambda info: _record_link_capability_prefetches(info)[1],
-        ],
     )
     def source_label(self) -> str:
         """Connector-owned human label, shared by record sources and failures."""
@@ -1551,10 +1528,6 @@ class RecordLinkType(ProtectedNode):
 
     @strawberry_django.field(
         only=["stream_id", "inbound", "outbox_last_error"],
-        prefetch_related=[
-            lambda info: _record_link_capability_prefetches(info)[0],
-            lambda info: _record_link_capability_prefetches(info)[1],
-        ],
     )
     def failures(self, open_only: bool = True) -> list[SyncFailureType]:
         return [cast(Any, SyncFailureType).from_pydantic(row) for row in cast(Any, self).failures(open_only=open_only)]

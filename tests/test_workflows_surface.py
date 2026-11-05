@@ -50,7 +50,9 @@ EXPECTED_VERBS = {
     "workflows.StepRecord.queryset": "change_related_records",
     "workflows.StepRun.manager": "record_await retry_step",
     "workflows.StepRun.queryset": (
-        "answered_decisions cancel_open changed_records claim collect_map count_redispatch dispatch due expire expired "
+        # WorkflowRun's map completion now reads one aggregate body_progress projection.
+        "answered_decisions body_progress cancel_open changed_records claim collect_map count_redispatch "
+        "dispatch due expire expired "
         "extend_deadline fail_attempt fenced for_map item_counts nodes settle terminal_runs to_ready to_running "
         "to_succeeded to_waiting undispatched with_retry_batch"
     ),

@@ -175,14 +175,16 @@ def test_record_link_source_fields_are_batched_at_one_five_ten_twenty(composed_t
             f"person:{index}" for index in range(size)
         ]
         assert all(row["source_url"] is None for row in read.data["record_links"])
-        assert read.statement_count == 10, (size, read.statement_count)
+        # One page hook supplies streams and connectors; authorization adds
+        # the two reads previously hidden by duplicate prefetch hints.
+        assert read.statement_count == 12, (size, read.statement_count)
         read.assert_no_audit_writes()
         read.assert_bytes(total=165_000, largest=17_000)
     for smaller, larger in ((1, 5), (5, 10), (10, 20)):
         reads[larger].assert_flat_from(reads[smaller])
     for size, read in admin_reads.items():
         assert len(read.data["record_links"]) == size
-        assert read.statement_count == 11, (size, read.statement_count)
+        assert read.statement_count == 13, (size, read.statement_count)
         read.assert_no_audit_writes()
     for smaller, larger in ((1, 5), (5, 10), (10, 20)):
         admin_reads[larger].assert_flat_from(admin_reads[smaller])
@@ -674,7 +676,7 @@ def test_prepared_concrete_children_rescope_actor_and_exposure(composed_tables: 
     exposed = {VcsBridge._meta.label}
     row = (
         Integration.objects.with_actor(admin)
-        .with_concrete_children(actor=admin, exposed_model_labels=exposed)
+        .with_concrete_children(actor=admin)
         .get(pk=bridge.pk)
     )
     assert len(row.concrete_children(actor=admin, exposed_model_labels=exposed)[1]) == 1

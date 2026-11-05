@@ -254,10 +254,6 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
         returned to a client or used for a capability operation.
         """
 
-        prepared = self.__dict__.get("_concrete_children")
-        if prepared is not None and prepared[0] == actor and prepared[1] == frozenset(exposed_model_labels):
-            return cast(tuple[list[Integration], list[Integration]], prepared[2:])
-
         integrity: list[Integration] = []
         authorized: list[Integration] = []
         declared = self.declared_concrete_model()

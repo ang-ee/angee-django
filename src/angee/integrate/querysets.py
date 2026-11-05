@@ -9,7 +9,6 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections, models
 from django.db.models import OuterRef, Q, Subquery
-from django.db.models.query import ModelIterable
 from django.utils import timezone
 from rebac import to_subject_ref
 
@@ -263,7 +262,7 @@ class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[Integr
         )
 
     @staticmethod
-    def prime_concrete_children(rows: list[Integration], *, actor: Any, using: str) -> None:
+    def prime_concrete_children(rows: list[IntegrationT], *, actor: Any, using: str) -> None:
         """Fill the owner's integrity and actor-readable child caches for this page."""
 
         if not rows:
@@ -288,21 +287,23 @@ class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[Integr
             row = by_pk[pk]
             direct_model = direct[index]
             declared = row.declared_concrete_model()
-            model = declared if declared is not None and issubclass(declared, direct_model) else direct_model
-            by_model.setdefault((model, direct_model), set()).add(pk)
-        for (model, direct_model), keys in by_model.items():
-            integrity = {child.pk: child for child in model._base_manager.using(using).filter(pk__in=keys)}
+            child_model: type[Integration] = (
+                declared if declared is not None and issubclass(declared, direct_model) else direct_model
+            )
+            by_model.setdefault((child_model, direct_model), set()).add(pk)
+        for (child_type, parent_type), keys in by_model.items():
+            integrity = {child.pk: child for child in child_type._base_manager.using(using).filter(pk__in=keys)}
             readable_children = {
-                child.pk: child for child in model.objects.db_manager(using).with_actor(actor).filter(pk__in=keys)
+                child.pk: child for child in child_type.objects.db_manager(using).with_actor(actor).filter(pk__in=keys)
             }
             for pk in keys:
                 row = by_pk[pk]
-                if model is not direct_model:
-                    direct_attr = row.concrete_child_cache_attr(direct_model, authorized=False)
+                if child_type is not parent_type:
+                    direct_attr = row.concrete_child_cache_attr(parent_type, authorized=False)
                     child = integrity.get(pk)
                     setattr(row, direct_attr, [child] if child else [])
                 for scope, found in ((False, integrity.get(pk)), (True, readable_children.get(pk))):
-                    setattr(row, row.concrete_child_cache_attr(model, authorized=scope), [found] if found else [])
+                    setattr(row, row.concrete_child_cache_attr(child_type, authorized=scope), [found] if found else [])
 
     def with_concrete_children(self, *, actor: Any) -> Self:
         """Prime child caches only for a selected concrete target or source label."""
@@ -352,42 +353,44 @@ class SyncStreamQuerySet[SyncStreamT: SyncStream](AngeeHistoryQuerySet[SyncStrea
         return rows.filter(generation=Subquery(latest)).order_by("key", "partition")
 
 
+def _prepare_concrete_sources(queryset: models.QuerySet[Any], rows: list[Any], *, actor: Any) -> None:
+    """Attach each selected link's readable stream and its connector once."""
+
+    if not rows:
+        return
+    stream_model = apps.get_model("integrate", "SyncStream")
+    integration_model = apps.get_model("integrate", "Integration")
+    streams = list(
+        stream_model.objects.db_manager(queryset.db).with_actor(actor).filter(
+            pk__in={row.stream_id for row in rows}
+        )
+    )
+    integrations = list(
+        integration_model.objects.db_manager(queryset.db).with_actor(actor).filter(
+            pk__in={stream.integration_id for stream in streams}
+        ).with_vendor_label()
+    )
+    IntegrationQuerySet.prime_concrete_children(integrations, actor=actor, using=queryset.db)
+    by_integration = {integration.pk: integration for integration in integrations}
+    by_stream = {stream.pk: stream for stream in streams}
+    for stream in streams:
+        if integration := by_integration.get(stream.integration_id):
+            stream_model._meta.get_field("integration").set_cached_value(stream, integration)
+    for row in rows:
+        if linked_stream := by_stream.get(row.stream_id):
+            row._meta.get_field("stream").set_cached_value(row, linked_stream)
+            row.__dict__["_source_stream"] = linked_stream
+
+
 class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeHistoryQuerySet[RecordLinkT]):
     """Load comparison evidence for a bounded collection of replica identities."""
 
     def with_concrete_sources(self, *, actor: Any) -> Self:
         """Prime the selected link page's readable streams and capabilities once."""
 
-        class ConcreteSourceIterable(ModelIterable):
-            def __iter__(self):
-                rows = list(super().__iter__())
-                if not rows:
-                    return
-                stream_model = apps.get_model("integrate", "SyncStream")
-                integration_model = apps.get_model("integrate", "Integration")
-                streams = list(
-                    stream_model.objects.db_manager(self.queryset.db)
-                    .with_actor(actor).filter(pk__in={row.stream_id for row in rows})
-                )
-                integrations = list(
-                    integration_model.objects.db_manager(self.queryset.db)
-                    .with_actor(actor).filter(pk__in={stream.integration_id for stream in streams})
-                    .with_vendor_label()
-                )
-                IntegrationQuerySet.prime_concrete_children(integrations, actor=actor, using=self.queryset.db)
-                by_integration = {integration.pk: integration for integration in integrations}
-                by_stream = {stream.pk: stream for stream in streams}
-                for stream in streams:
-                    if integration := by_integration.get(stream.integration_id):
-                        stream_model._meta.get_field("integration").set_cached_value(stream, integration)
-                for row in rows:
-                    if stream := by_stream.get(row.stream_id):
-                        row._meta.get_field("stream").set_cached_value(row, stream)
-                yield from rows
-
-        queryset = self.all()
-        queryset._iterable_class = ConcreteSourceIterable
-        return queryset
+        return self.with_page_hook(
+            lambda queryset, rows: _prepare_concrete_sources(queryset, rows, actor=actor)
+        )
 
     def current_for_bridge(self, bridge: models.Model) -> Self:
         """Keep this selection within the bridge's current stream generations."""
