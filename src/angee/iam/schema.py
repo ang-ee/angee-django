@@ -1163,6 +1163,7 @@ schemas: dict[str, dict[str, list[object]]] = {
                 User,
                 field="userChanged",
                 read_gate=ActorSelfChangeReadGate,
+                replay=False,
             )
         ],
         "types": [

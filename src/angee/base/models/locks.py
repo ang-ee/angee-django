@@ -17,7 +17,7 @@ from angee.base.models.persistence import PersistenceMixin
 from angee.base.querysets import AngeeQuerySet, by_key
 
 
-class ImmutableFieldsMixin(models.Model):
+class ImmutableFieldsMixin(PersistenceMixin):
     """Reject changes to loaded immutable attnames declared anywhere in the MRO.
 
     Donors contribute plain tuples. An owning verb permits its next write through

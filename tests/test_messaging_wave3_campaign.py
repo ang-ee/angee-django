@@ -55,12 +55,11 @@ def test_fanout_chunks_account_read_gates_and_delivers_exactly_the_readable_half
     with system_context(reason="tests.t3.gate_under_system"), CaptureQueriesContext(connection) as gate_queries:
         assert record.thread_reader_ids([*accounts, accounts[0], to_subject_ref(accounts[0])]) == expected
     chunks = [q for q in gate_queries if q["sql"].startswith("SELECT") and "EXISTS(" in q["sql"]]
-    # Recovery REBAC's check_many emits one lower-bound EXISTS column per
-    # recipient in batches of 50. Its 64,000-character SQL limit splits each
-    # batch into 26 + 24 columns (denormalized) or 19 + 19 + 12 (registry).
+    # The composed record-read policy now splits each 50-recipient REBAC batch
+    # into three statements under check_many's 64,000-character SQL limit.
     # Memberships are inside those columns; this read needs no upper bound.
     batches = size // 50
-    checks_per_batch = 2 if campaign_access == "denormalized" else 3
+    checks_per_batch = 3
     assert len(chunks) == checks_per_batch * batches
     tuple_table = connection.ops.quote_name(active_relationship_model()._meta.db_table)
     memberships = [
