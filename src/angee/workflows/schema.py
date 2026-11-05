@@ -38,6 +38,7 @@ from angee.iam.graphql.relations import (
     actor_scoped_to_many,
     actor_scoped_to_one,
     record_reference_field,
+    record_reference_label_field,
     with_record_reference_access,
 )
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
@@ -248,6 +249,8 @@ class WorkflowRunType(RecordReferenceNode):
     subject_model: str | None = record_reference_field(WorkflowRun, resolver=RecordReferenceNode.reference_model)
     subject_id: PublicID | None = record_reference_field(WorkflowRun, resolver=RecordReferenceNode.reference_id)
 
+    subject_label: str | None = record_reference_label_field(WorkflowRun)
+
 
 @strawberry.type
 class StepNoteType:
@@ -425,6 +428,7 @@ class StepWatchType(RecordReferenceNode):
     """A waiting step's reference, visible through its execution read policy."""
 
     step_run: StepRunType | None = actor_scoped_to_one("step_run")
+    record_label: str | None = record_reference_label_field(StepWatch)
 
     record_model: str | None = record_reference_field(StepWatch, resolver=RecordReferenceNode.reference_model)
     record_id: PublicID | None = record_reference_field(StepWatch, resolver=RecordReferenceNode.reference_id)
@@ -438,6 +442,7 @@ class StepRecordType(RecordReferenceNode):
     step_run: StepRunType | None = actor_scoped_to_one("step_run")
     operation: auto
     label: auto
+    record_label: str | None = record_reference_label_field(StepRecord)
     created_at: auto
 
     record_model: str | None = record_reference_field(StepRecord, resolver=RecordReferenceNode.reference_model)
@@ -522,6 +527,7 @@ class TriggerEventType(RecordReferenceNode):
     """Durable admission evidence with a started run until that run is pruned."""
 
     trigger: TriggerType | None = actor_scoped_to_one("trigger")
+    record_label: str | None = record_reference_label_field(TriggerEvent)
     started_run: WorkflowRunType | None = actor_scoped_to_one("started_run")
     changed_at: auto
     evaluated_at: auto

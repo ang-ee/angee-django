@@ -68,7 +68,8 @@ export function DecisionStory({ appearance, multiple = false, closed = false, in
       if (query.includes("decisions_by_pk")) return jsonResponse({ data: { decisions_by_pk: { ...current, kind_label: "Review",
         assignees: [{ id: "usr_reviewer", display_name: "Reviewer" }] } } });
       if (query.includes("notes_by_pk")) return jsonResponse({ data: { notes_by_pk: { id: "nte_7", display_name: "Review notes" } } });
-      return jsonResponse({ data: { decisions: [{ ...current, kind_label: "Review", assignees: [{ id: "usr_reviewer", display_name: "Reviewer" }] }], decisions_aggregate: { aggregate: { count: 1 } } } });
+      return jsonResponse({ data: { decisions: [{ ...current, kind_label: "Review", assignees: [{ id: "usr_reviewer", display_name: "Reviewer" }],
+        records: current.records.map((record) => ({ ...record, record_label: "Review notes" })) }], decisions_aggregate: { aggregate: { count: 1 } } } });
     }).public!;
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
       decisionResourceFixture,

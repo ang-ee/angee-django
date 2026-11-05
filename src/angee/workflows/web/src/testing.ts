@@ -33,7 +33,7 @@ export const runResourceFixture = testDataResource("workflows.WorkflowRun", {
   typeNames: { filter: "workflowrun_bool_exp", order: "workflowrun_order_by",
     groupBySpec: "workflowrunGroupBySpec", groupOrder: "workflowrunGroupOrder", having: "workflowrunHaving" },
   recordRepresentation: "display_name",
-  fields: [...["id", "display_name", "subject_id", "subject_model", "created_at", "finished_at", "outcome", "outcome_label"].map((name) => ({
+  fields: [...["id", "display_name", "subject_id", "subject_model", "subject_label", "created_at", "finished_at", "outcome", "outcome_label"].map((name) => ({
     name, kind: "scalar" as const, scalar: "String", readable: true, aggregatable: false,
     creatable: false, updatable: false, requiredOnCreate: false,
   })), { name: "version", kind: "relation", relationObject: true, relationModelLabel: "workflows.WorkflowVersion",
@@ -54,7 +54,7 @@ export const runResourceFixture = testDataResource("workflows.WorkflowRun", {
   }))],
   query: testResourceQuery({ fields: {
     ...Object.fromEntries([
-      "id", "display_name", "origin", "outcome", "outcome_label", "subject_model", "subject_id", "error", "failure_reason", "input", "output", "can_cancel", "can_reprocess",
+      "id", "display_name", "origin", "outcome", "outcome_label", "subject_model", "subject_id", "subject_label", "error", "failure_reason", "input", "output", "can_cancel", "can_reprocess",
       "run_as.id", "run_as.display_name", "reprocess_of.id",
       "version.id", "version.number", "version.workflow.id", "version.workflow.name",
       "version.workflow.key", "parent_step.id", "parent_step.run.id", "trigger_event.id",
@@ -141,11 +141,11 @@ export const attemptResourceFixture = testDataResource("workflows.StepAttempt", 
 });
 export const recordResourceFixture = testDataResource("workflows.StepRecord", {
   recordRepresentation: "label",
-  fields: ["id", "run", "step_run", "label", "operation", "record_model", "record_id"].map((name) => retainedField(name)),
+  fields: ["id", "run", "step_run", "label", "operation", "record_model", "record_id", "record_label"].map((name) => retainedField(name)),
   capabilities: ["list", "detail"], roots: { list: "steprecord", detail: "steprecord_by_pk", aggregate: "steprecord_aggregate" },
   typeNames: { filter: "steprecord_bool_exp", order: "steprecord_order_by" },
   query: testResourceQuery({ fields: Object.fromEntries(
-    ["id", "run", "step_run", "label", "operation", "record_model", "record_id"].map((name) => [name, testQueryField(name)]),
+    ["id", "run", "step_run", "label", "operation", "record_model", "record_id", "record_label"].map((name) => [name, testQueryField(name)]),
   ) }),
 });
 export const userResourceFixture = testDataResource("iam.User", {
@@ -155,11 +155,11 @@ export const userResourceFixture = testDataResource("iam.User", {
 });
 
 export const watchResourceFixture = testDataResource("workflows.StepWatch", {
-  fields: ["id", "step_run", "record_model", "record_id"].map((name) => retainedField(name)),
+  fields: ["id", "step_run", "record_model", "record_id", "record_label"].map((name) => retainedField(name)),
   capabilities: ["list", "detail"], roots: { list: "stepwatch", detail: "stepwatch_by_pk", aggregate: "stepwatch_aggregate" },
   typeNames: { filter: "stepwatch_bool_exp", order: "stepwatch_order_by" },
   query: testResourceQuery({ fields: Object.fromEntries(
-    ["id", "step_run", "record_model", "record_id"].map((name) => [name, testQueryField(name)]),
+    ["id", "step_run", "record_model", "record_id", "record_label"].map((name) => [name, testQueryField(name)]),
   ) }),
 });
 

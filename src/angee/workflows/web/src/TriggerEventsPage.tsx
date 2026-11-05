@@ -1,3 +1,4 @@
+import { rowValueAtPath } from "@angee/metadata";
 import { Column, Field, Form, Group, List, RecordReference, ResourceList, relationValueId, useRouteHref, type StringIdRow } from "@angee/ui";
 import { RUN_MODEL } from "./documents.console";
 import { useWorkflowsT } from "./i18n";
@@ -15,19 +16,23 @@ export function TriggerEventsList({ triggerId }: { triggerId?: string }) {
     rowHref={triggerId ? (row) => href("workflows.trigger-events.record", { id: row.id }) : undefined}>
     <List order={{ changed_at: "DESC" }} emptyContent={t("trigger.noEvents")}>
       <Column field="display_name" header={t("trigger.event")} />
-      <Column field="record_id" header={t("trigger.record")} render={(row) => typeof row.record_model === "string" && typeof row.record_id === "string"
-        ? <RecordReference model={row.record_model} id={row.record_id} /> : null} />
+      <Column field="record_id" header={t("trigger.record")} selectionPaths={["record_id", "record_label"]}
+        render={(row) => typeof row.record_model === "string" && typeof row.record_id === "string"
+          ? <RecordReference model={row.record_model} id={row.record_id}
+            label={typeof row.record_label === "string" && row.record_label ? row.record_label : row.record_id} /> : null} />
       <Column field="changed_at" header={t("trigger.changed")} />
       <Column field="admitted_at" header={t("trigger.admitted")} />
-      <Column field="started_run" header={t("trigger.run")} render={(row) => {
+      <Column field="started_run" header={t("trigger.run")} selectionPaths={["started_run.id", "started_run.display_name"]} render={(row) => {
         const id = relationValueId(row.started_run);
-        return id ? <RecordReference model={RUN_MODEL} id={id} /> : null;
+        const label = rowValueAtPath(row, "started_run.display_name");
+        return id ? <RecordReference model={RUN_MODEL} id={id} label={typeof label === "string" && label ? label : id} /> : null;
       }} />
       <Column field="rejection" header={t("trigger.rejection")} />
     </List>
-    <Form readOnly eyebrow={t("trigger.event")} returning={["record_model", "record_id"]} headerExtras={({ record }) =>
+    <Form readOnly eyebrow={t("trigger.event")} returning={["record_model", "record_id", "record_label"]} headerExtras={({ record }) =>
       typeof record?.record_model === "string" && typeof record.record_id === "string"
-        ? <RecordReference model={record.record_model} id={record.record_id} /> : null}>
+        ? <RecordReference model={record.record_model} id={record.record_id}
+          label={typeof record.record_label === "string" && record.record_label ? record.record_label : record.record_id} /> : null}>
       <Field name="display_name" title />
       <Group columns={2}>
         <Field name="trigger" label={t("trigger.title")} />

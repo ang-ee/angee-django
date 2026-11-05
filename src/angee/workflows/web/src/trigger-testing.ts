@@ -29,12 +29,12 @@ export const triggerEventResourceFixture = testDataResource(TRIGGER_EVENT_MODEL,
   capabilities: ["list", "detail"], recordRepresentation: "display_name",
   roots: { list: "triggerevent", detail: "triggerevent_by_pk", aggregate: "triggerevent_aggregate" },
   typeNames: { node: "TriggerEventType", filter: "triggerevent_bool_exp", order: "triggerevent_order_by" },
-  fields: [...["id", "display_name", "record_model", "record_id", "changed_at", "evaluated_at", "admitted_at", "rejection"].map((name) => retainedField(name)),
+  fields: [...["id", "display_name", "record_model", "record_id", "record_label", "changed_at", "evaluated_at", "admitted_at", "rejection"].map((name) => retainedField(name)),
     relation("trigger", TRIGGER_MODEL), relation("started_run", "workflows.WorkflowRun")],
   query: testResourceQuery({ fields: {
-    ...Object.fromEntries(["id", "display_name", "record_model", "record_id", "evaluated_at", "admitted_at", "rejection", "trigger.id", "started_run.id"].map((name) => [name, testQueryField(name)])),
+    ...Object.fromEntries(["id", "display_name", "record_model", "record_id", "record_label", "evaluated_at", "admitted_at", "rejection", "trigger.id", "started_run.id", "started_run.display_name"].map((name) => [name, testQueryField(name)])),
     changed_at: testQueryField("changed_at", { sort: { field: "changed_at" } }),
-    started_run: testQueryField("started_run", { kind: "relation", scalar: "ID", relation: { model: "workflows.WorkflowRun", identityPath: "started_run.id", labelPath: "started_run.id" }, row: { path: "started_run.id", paths: ["started_run.id"] } }),
+    started_run: testQueryField("started_run", { kind: "relation", scalar: "ID", relation: { model: "workflows.WorkflowRun", identityPath: "started_run.id", labelPath: "started_run.display_name" }, row: { path: "started_run.id", paths: ["started_run.id", "started_run.display_name"] } }),
     trigger: testQueryField("trigger", { kind: "relation", scalar: "ID", relation: { model: TRIGGER_MODEL, identityPath: "trigger.id", labelPath: "trigger.id" }, row: { path: "trigger.id", paths: ["trigger.id"] } }),
   } }),
 });
@@ -44,8 +44,8 @@ export const triggerFixture = { id: "wft_review", display_name: "Review admissio
   enable_preview: { grants: ["member on trigger editor (notes role)"], run_readers: ["User: Review owner", "Group: Reviewers"] },
   grants: [{ resource_type: "notes/role", resource_id: "trigger_editor", relation: "member", target_label: null, target_kind: "Role" }] };
 export const triggerEventFixture = { id: "wte_review", display_name: "Review event", trigger: { id: "wft_review" },
-  record_model: "notes.Note", record_id: "nte_7", changed_at: "2026-09-29T09:00:00Z", evaluated_at: "2026-09-29T09:00:01Z",
-  admitted_at: "2026-09-29T09:00:01Z", rejection: "", started_run: { id: "wfr_review" } };
+  record_model: "notes.Note", record_id: "nte_7", record_label: "Review notes", changed_at: "2026-09-29T09:00:00Z", evaluated_at: "2026-09-29T09:00:01Z",
+  admitted_at: "2026-09-29T09:00:01Z", rejection: "", started_run: { id: "wfr_review", display_name: "Record review run" } };
 
 const noteStatuses = [{ value: "IN_REVIEW", description: "In review" }];
 export const triggerNoteResourceFixture = testDataResource("notes.Note", {

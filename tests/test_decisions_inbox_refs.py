@@ -98,7 +98,7 @@ def test_mti_inbox_reference_resolves_the_readable_canonical_parent_label(compos
             schema,
             """
         query {
-          decisions { id records { record_model record_id } }
+          decisions { id records { record_model record_id record_label } }
         }
     """,
             user=reviewer,
@@ -108,7 +108,8 @@ def test_mti_inbox_reference_resolves_the_readable_canonical_parent_label(compos
         "decisions": [
             {
                 "id": str(decision.sqid),
-                "records": [{"record_model": MtiParent._meta.label, "record_id": str(parent.sqid)}],
+                "records": [{"record_model": MtiParent._meta.label, "record_id": str(parent.sqid),
+                             "record_label": str(parent)}],
             }
         ]
     }

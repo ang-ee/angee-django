@@ -33,6 +33,7 @@ from strawberry_django.optimizer import OptimizerStore
 from strawberry_django.queryset import run_type_get_queryset
 from strawberry_django.utils.requests import get_request
 
+from angee.base.models.base import record_display_label
 from angee.graphql.ids import PublicID, optional_public_id, to_public_id
 from angee.graphql.introspection import FieldPathError, fields_for_path, is_to_one_relation
 from angee.iam.graphql.capabilities import _proven_read_annotation, _share_permission_projections
@@ -361,6 +362,17 @@ def _selected_record_reference(selections: Sequence[Selection], node: Any, info:
     return False
 
 
+def record_reference_label_field(model: type[models.Model]) -> Any:
+    """Select a generic target's label with its pointer and a native page prefetch."""
+    reference = cast(type[ProtectedRecordRefMixin], model).record_ref_field()
+    return strawberry_django.field(
+        resolver=RecordReferenceNode.reference_label,
+        only=[reference.ct_field_attname, reference.fk_field],
+        annotate=RECORD_REFERENCE_ANNOTATIONS,
+        prefetch_related=[reference.name],
+    )
+
+
 def with_record_reference_access(
     queryset: models.QuerySet[Any],
     *,
@@ -398,6 +410,14 @@ class RecordReferenceNode(ProtectedNode):
     def reference_id(self, info: Info) -> PublicID | None:
         row = cast(Any, self)
         return optional_public_id(row.record_public_id or None) if _record_readable(row, info) else None
+
+    def reference_label(self) -> str | None:
+        """Project the readable target's model-owned label from the selected reference page."""
+        row = cast(Any, self)
+        if not _record_readable(row):
+            return None
+        target = getattr(row, type(row).record_ref_field().name)
+        return record_display_label(target) if target is not None else None
 
 
 def _record_readable(row: Any, info: Info | None = None) -> bool:
