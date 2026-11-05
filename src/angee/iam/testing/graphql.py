@@ -64,6 +64,7 @@ class GraphQLDocumentRead:
     total_sql_bytes: int
     largest_sql_bytes: int
     audit_inserts: int
+    statements: tuple[str, ...] = field(default=(), repr=False)
 
     def assert_bytes(self, *, total: int, largest: int, cause: str = "") -> None:
         """Pin both the complete document and its largest generated statement."""
@@ -128,4 +129,5 @@ def measure_graphql_document(
         total_sql_bytes=sum(sizes),
         largest_sql_bytes=max(sizes, default=0),
         audit_inserts=sum(is_permission_audit_insert(statement, database) for database, statement in sql),
+        statements=tuple(statement for _, statement in sql),
     )
