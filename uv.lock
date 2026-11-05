@@ -312,7 +312,7 @@ dev = [
     { name = "angee-mypy", specifier = "==2.1.0" },
     { name = "copier", specifier = ">=9,<10" },
     { name = "daphne", specifier = ">=4.0" },
-    { name = "django-zed-rebac", extras = ["caveats"], git = "https://github.com/ang-ee/django-zed-rebac.git?rev=5356ad6c9b86f177cfe2cd9bfe83c57cf9a5a0eb" },
+    { name = "django-zed-rebac", extras = ["caveats"], git = "https://github.com/ang-ee/django-zed-rebac.git?rev=89a982e3d1e6773bc0a2b0e21c13a32cbbcbe07b" },
     { name = "example-notes", editable = "examples/src/example/notes" },
     { name = "example-theme", editable = "examples/src/example/theme" },
     { name = "faker", specifier = ">=30.0" },
@@ -686,7 +686,7 @@ dependencies = [
 requires-dist = [
     { name = "angee-base", editable = "src/angee/base" },
     { name = "django-axes", specifier = ">=8.0" },
-    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=5356ad6c9b86f177cfe2cd9bfe83c57cf9a5a0eb" },
+    { name = "django-zed-rebac", git = "https://github.com/ang-ee/django-zed-rebac.git?rev=89a982e3d1e6773bc0a2b0e21c13a32cbbcbe07b" },
 ]
 
 [[package]]
@@ -2791,7 +2791,7 @@ wheels = [
 [[package]]
 name = "django-zed-rebac"
 version = "0.31.0.dev0"
-source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=5356ad6c9b86f177cfe2cd9bfe83c57cf9a5a0eb#5356ad6c9b86f177cfe2cd9bfe83c57cf9a5a0eb" }
+source = { git = "https://github.com/ang-ee/django-zed-rebac.git?rev=89a982e3d1e6773bc0a2b0e21c13a32cbbcbe07b#89a982e3d1e6773bc0a2b0e21c13a32cbbcbe07b" }
 dependencies = [
     { name = "django" },
     { name = "django-cte" },

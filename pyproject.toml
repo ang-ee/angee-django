@@ -89,7 +89,7 @@ postgres = ["psycopg[binary,pool]>=3.2"]
 dev = [
     "daphne>=4.0",
     "copier>=9,<10",
-    "django-zed-rebac[caveats] @ git+https://github.com/ang-ee/django-zed-rebac.git@5356ad6c9b86f177cfe2cd9bfe83c57cf9a5a0eb",
+    "django-zed-rebac[caveats] @ git+https://github.com/ang-ee/django-zed-rebac.git@89a982e3d1e6773bc0a2b0e21c13a32cbbcbe07b",
     "faker>=30.0",
     "psycopg[binary,pool]>=3.2",
     "angee-django-stubs[compatible-mypy] @ git+https://github.com/ang-ee/django-stubs.git@10bf2bdd683fc11a9def78a8e985edb3a8717dc6",
