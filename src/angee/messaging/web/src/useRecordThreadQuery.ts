@@ -5,10 +5,10 @@ import { READ_MODELS, RecordFollowingDocument, RecordThreadDocument, SetRecordFo
 
 /** Record chatter refreshes through its parent's ledger feed even when the
  * private thread and messages have no generic change feed. */
-export function useRecordThreadQuery(variables: AuthoredVariables<typeof RecordThreadDocument>) {
+export function useRecordThreadQuery(variables: AuthoredVariables<typeof RecordThreadDocument>, enabled = true) {
   const model = useModelMetadata(variables.modelLabel)?.resource.canonicalLabel ?? variables.modelLabel;
   return useAuthoredQuery(RecordThreadDocument, { modelLabel: variables.modelLabel, recordId: variables.recordId }, {
-    enabled: Boolean(model && variables.recordId),
+    enabled: enabled && Boolean(model && variables.recordId),
     models: [...READ_MODELS, model],
     records: [{ model, id: String(variables.recordId) }],
   });

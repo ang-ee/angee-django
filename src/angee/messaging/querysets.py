@@ -55,6 +55,9 @@ if TYPE_CHECKING:
 _SIGNING_TEXT_BATCH = 2000
 """Signature fragments whose texts one query loads for signature mining."""
 
+_UNRESOLVED = object()
+"""Mark an optional thread component that has not been resolved yet."""
+
 
 AUTOMATED_MAIL_HEADERS: Mapping[str, models.Q] = {
     "auto-submitted": ~models.Q(fragment__text__iexact="no"),
@@ -316,6 +319,11 @@ class ThreadFollowerQuerySet[ThreadFollowerT: ThreadFollower](ProtectedQuerySet[
         own scope (an actor, a sudo) applies to the rows it returns.
         """
 
+        return self.filter(self._effective_thread_filter(thread))
+
+    def _effective_thread_filter(self, thread: Any) -> models.Q:
+        """Select the same physical preference row on scoped or plain querysets."""
+
         members = thread.member_threads().values("pk")
         physical = self.model._base_manager.using(self.db).filter(thread_id__in=members)
         kept = (
@@ -323,9 +331,11 @@ class ThreadFollowerQuerySet[ThreadFollowerT: ThreadFollower](ProtectedQuerySet[
             .order_by(*self._preference_order(thread.canonical().pk))
             .values("pk")[:1]
         )
-        return self.filter(thread_id__in=members, pk=models.Subquery(kept))
+        return models.Q(thread_id__in=members, pk=models.Subquery(kept))
 
     def for_attachment(self, attachment: Any) -> Self:
+        """Retain the caller's actor scope, queryset API and row stamping."""
+
         return self.effective_for_thread(attachment.thread)
 
 

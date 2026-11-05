@@ -21,6 +21,7 @@ from rebac import (
     PermissionDenied,
     database_context,
     system_context,
+    to_subject_ref,
 )
 from rebac.database import read_alias, write_alias
 
@@ -137,6 +138,9 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
 
     rebac_grantable = {"reader": "write"}
     integration_create_mode: ClassVar[IntegrationCreateMode | None] = None
+    _concrete_child_actor: Any
+    _vendor_display_name: str | None
+    _vendor_slug: str | None
 
     Lifecycle = IntegrationLifecycle
     """Expose the lifecycle vocabulary off the row for callers that cannot import this module."""
@@ -210,6 +214,12 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
 
         using = write_alias(type(self), using=self._state.db, instance=self)
 
+        cache_attr = type(self).concrete_child_cache_attr(model, authorized=authorized)
+        same_actor = actor is not None and getattr(self, "_concrete_child_actor", None) == to_subject_ref(actor)
+        if hasattr(self, cache_attr) and (not authorized or same_actor):
+            cached = getattr(self, cache_attr)
+            return cast(ChildT | None, cached[0] if cached else None)
+
         # Native concrete_child reads structural MTI identity through the base
         # manager. Only the returned capability uses the actor-scoped queryset.
         queryset = model.objects.db_manager(using).with_actor(actor) if authorized else None
@@ -223,13 +233,15 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
                 parent,
                 model,
                 queryset=queryset,
-                cache_attr=type(self).concrete_child_cache_attr(model, authorized=authorized),
+                cache_attr=(
+                    cache_attr if not authorized or same_actor else None
+                ),
             )
         return concrete_child(
             self,
             model,
             queryset=queryset,
-            cache_attr=type(self).concrete_child_cache_attr(model, authorized=authorized),
+            cache_attr=cache_attr if not authorized or same_actor else None,
         )
 
     def concrete_children(
@@ -599,6 +611,8 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
 
         actor, unscoped = self.effective_actor(strict=True)
         declared = self.declared_concrete_model()
+        if declared is type(self):
+            return self
         if declared is not None and declared is not type(self) and issubclass(declared, type(self)):
             child = self._concrete_child(declared, actor=actor, authorized=not unscoped)
             return child if child is not None else self
@@ -820,6 +834,9 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
 
         if self.display_name:
             return str(self.display_name)
+        if "_vendor_display_name" in self.__dict__:
+            label = str(self._vendor_display_name or self._vendor_slug or "integration")
+            return f"{label} ({self.lifecycle})"
         vendor = getattr(self, "vendor", None)
         label = str(getattr(vendor, "display_name", "") or getattr(vendor, "slug", "") or "integration")
         return f"{label} ({self.lifecycle})"

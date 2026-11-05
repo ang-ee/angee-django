@@ -8,10 +8,11 @@ from typing import TYPE_CHECKING, Any, Self, cast
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections, models
-from django.db.models import OuterRef, Prefetch, Q, Subquery
+from django.db.models import OuterRef, Q, Subquery
+from django.db.models.query import ModelIterable
 from django.utils import timezone
+from rebac import to_subject_ref
 
-from angee.base.lineage import concrete_child_accessor, concrete_child_models
 from angee.base.refs import generic_pointer_target
 from angee.iam.models.ownership import OwnerQuerySet
 from angee.integrate.choices import (
@@ -136,6 +137,14 @@ class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[Credentia
 class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[IntegrationT]):
     """Chainable collection scopes for integration and bridge rows."""
 
+    def with_vendor_label(self) -> Self:
+        """Carry the two public vendor-name columns used by Integration.display_label."""
+
+        return self.annotate(
+            _vendor_display_name=models.F("vendor__display_name"),
+            _vendor_slug=models.F("vendor__slug"),
+        )
+
     def of_concrete_type(self) -> Self:
         """Keep rows whose declared final MTI kind is this queryset's model."""
 
@@ -212,35 +221,60 @@ class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[Integr
             .order_by("pk")
         )
 
-    def with_concrete_children(self, *, actor: Any, exposed_model_labels: set[str]) -> Self:
-        """Prefetch structural MTI identity and actor-readable descendants in fixed queries."""
+    @staticmethod
+    def prime_concrete_children(rows: list[Integration], *, actor: Any, using: str) -> None:
+        """Fill the owner's integrity and actor-readable child caches for this page."""
 
-        prefetches: list[Prefetch] = []
+        if not rows:
+            return
+        direct = type(rows[0]).concrete_child_models()
+        ids = {row.pk for row in rows}
+        probes = [
+            model._base_manager.using(using).filter(pk__in=ids).order_by()
+            .annotate(_child_kind=models.Value(index, output_field=models.IntegerField()))
+            .values_list("pk", "_child_kind")
+            for index, model in enumerate(direct)
+        ]
+        present = list(probes[0].union(*probes[1:], all=True).order_by()) if probes else []
+        by_pk = {row.pk: row for row in rows}
+        for row in rows:
+            row._concrete_child_actor = to_subject_ref(actor)
+            for model in direct:
+                for authorized in (False, True):
+                    setattr(row, row.concrete_child_cache_attr(model, authorized=authorized), [])
+        by_model: dict[tuple[type[Integration], type[Integration]], set[Any]] = {}
+        for pk, index in present:
+            row = by_pk[pk]
+            direct_model = direct[index]
+            declared = row.declared_concrete_model()
+            model = declared if declared is not None and issubclass(declared, direct_model) else direct_model
+            by_model.setdefault((model, direct_model), set()).add(pk)
+        for (model, direct_model), keys in by_model.items():
+            integrity = {child.pk: child for child in model._base_manager.using(using).filter(pk__in=keys)}
+            readable_children = {
+                child.pk: child for child in model.objects.db_manager(using).with_actor(actor).filter(pk__in=keys)
+            }
+            for pk in keys:
+                row = by_pk[pk]
+                if model is not direct_model:
+                    direct_attr = row.concrete_child_cache_attr(direct_model, authorized=False)
+                    child = integrity.get(pk)
+                    setattr(row, direct_attr, [child] if child else [])
+                for scope, found in ((False, integrity.get(pk)), (True, readable_children.get(pk))):
+                    setattr(row, row.concrete_child_cache_attr(model, authorized=scope), [found] if found else [])
 
-        def add_children(parent_model: type[Integration], prefix: str = "") -> None:
-            for child_model in concrete_child_models(parent_model):
-                accessor = concrete_child_accessor(parent_model, child_model)
-                path = f"{prefix}__{accessor}" if prefix else accessor
-                integrity_attr = self.model.concrete_child_cache_attr(child_model, authorized=False)
-                prefetches.append(
-                    Prefetch(
-                        path,
-                        queryset=child_model._base_manager.db_manager(self.db).all(),
-                        to_attr=integrity_attr,
-                    )
-                )
-                if child_model._meta.label in exposed_model_labels:
-                    prefetches.append(
-                        Prefetch(
-                            path,
-                            queryset=child_model.objects.db_manager(self.db).with_actor(actor),
-                            to_attr=self.model.concrete_child_cache_attr(child_model, authorized=True),
-                        )
-                    )
-                add_children(child_model, f"{prefix}__{integrity_attr}" if prefix else integrity_attr)
+    def with_concrete_children(self, *, actor: Any) -> Self:
+        """Prime child caches only for a selected concrete target or source label."""
 
-        add_children(self.model)
-        return self.prefetch_related(*prefetches)
+        class ConcreteIntegrationIterable(ModelIterable):
+            def __iter__(self):
+                rows = list(super().__iter__())
+                IntegrationQuerySet.prime_concrete_children(rows, actor=actor, using=self.queryset.db)
+                yield from rows
+
+        queryset = self.only("concrete_type_id")
+        queryset._iterable_class = ConcreteIntegrationIterable
+        return queryset
 
 
 class WebhookSubscriptionQuerySet[WebhookSubscriptionT: WebhookSubscription](
@@ -285,6 +319,40 @@ class SyncStreamQuerySet[SyncStreamT: SyncStream](AngeeHistoryQuerySet[SyncStrea
 
 class RecordLinkQuerySet[RecordLinkT: RecordLink](AngeeHistoryQuerySet[RecordLinkT]):
     """Load comparison evidence for a bounded collection of replica identities."""
+
+    def with_concrete_sources(self, *, actor: Any) -> Self:
+        """Prime the selected link page's readable streams and capabilities once."""
+
+        class ConcreteSourceIterable(ModelIterable):
+            def __iter__(self):
+                rows = list(super().__iter__())
+                if not rows:
+                    return
+                stream_model = apps.get_model("integrate", "SyncStream")
+                integration_model = apps.get_model("integrate", "Integration")
+                streams = list(
+                    stream_model.objects.db_manager(self.queryset.db)
+                    .with_actor(actor).filter(pk__in={row.stream_id for row in rows})
+                )
+                integrations = list(
+                    integration_model.objects.db_manager(self.queryset.db)
+                    .with_actor(actor).filter(pk__in={stream.integration_id for stream in streams})
+                    .with_vendor_label()
+                )
+                IntegrationQuerySet.prime_concrete_children(integrations, actor=actor, using=self.queryset.db)
+                by_integration = {integration.pk: integration for integration in integrations}
+                by_stream = {stream.pk: stream for stream in streams}
+                for stream in streams:
+                    if integration := by_integration.get(stream.integration_id):
+                        stream_model._meta.get_field("integration").set_cached_value(stream, integration)
+                for row in rows:
+                    if stream := by_stream.get(row.stream_id):
+                        row._meta.get_field("stream").set_cached_value(row, stream)
+                yield from rows
+
+        queryset = self.all()
+        queryset._iterable_class = ConcreteSourceIterable
+        return queryset
 
     def current_for_bridge(self, bridge: models.Model) -> Self:
         """Keep this selection within the bridge's current stream generations."""

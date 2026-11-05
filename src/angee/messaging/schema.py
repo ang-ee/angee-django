@@ -67,7 +67,8 @@ from angee.messaging.models import Message as MessageModel
 from angee.messaging.models import Part as PartModel
 from angee.messaging.models import Thread as ThreadModel
 from angee.messaging.models import ThreadedModelMixin, chatter_record
-from angee.messaging.querysets import ChannelQuerySet, MessageQuerySet, ThreadQuerySet
+from angee.messaging.models.threads import chatter_record_with_attachment
+from angee.messaging.querysets import _UNRESOLVED, ChannelQuerySet, MessageQuerySet, ThreadQuerySet
 from angee.parties.schema import HandleType, PartyType
 from angee.storage.schema import FileType
 from angee.tags.schema import TaggedNode, tags_input_extensions
@@ -764,11 +765,11 @@ class RecordThreadType(ProtectedNode):
     title: FragmentType | None
     @strawberry_django.field(only=["merged_into_id"])
     def message_count(self) -> int:
-        return int(cast(Any, self).chatter_totals()["count"] or 0)
+        return int(_record_thread_totals(self)["count"] or 0)
 
     @strawberry_django.field(only=["merged_into_id"])
     def last_message_at(self) -> datetime | None:
-        return cast(Any, self).chatter_totals()["latest"]
+        return cast(datetime | None, _record_thread_totals(self)["latest"])
 
     @strawberry_django.field(graphql_type=list[RecordMessageType])
     def messages(self, info: strawberry.Info) -> list[Any]:
@@ -781,6 +782,11 @@ class RecordThreadType(ProtectedNode):
 
     created_at: auto
     updated_at: auto
+
+
+def _record_thread_totals(thread: Any) -> dict[str, Any]:
+    context = getattr(thread, "_record_thread_context", None)
+    return context.thread_totals if context is not None else thread.chatter_totals()
 
 
 _FOLLOWER_PARTY_FIELD = actor_scoped_to_one("party")
@@ -1100,6 +1106,7 @@ class _RecordThreadContext:
 
     record: Any
     info: strawberry.Info | None
+    _attachment: Any = _UNRESOLVED
     role: str = "chatter"
     search: str = ""
     message_limit: int = 50
@@ -1114,12 +1121,20 @@ class _RecordThreadContext:
         return _request_user(self.info)
 
     @cached_property
+    def attachment(self) -> Any:
+        return (ThreadAttachment.objects.for_record(self.record, role=self.role)
+                if self._attachment is _UNRESOLVED else self._attachment)
+
+    @cached_property
     def thread(self) -> Any:
-        attachment = ThreadAttachment.objects.for_record(self.record, role=self.role)
-        thread: Any = attachment.thread if attachment is not None else None
+        thread = self.attachment.thread if self.attachment is not None else None
         if thread is not None:
             thread._record_thread_context = self
         return thread
+
+    @cached_property
+    def thread_totals(self) -> dict[str, Any]:
+        return self.thread.chatter_totals() if self.thread is not None else {"count": 0, "latest": None}
 
     @cached_property
     def access(self) -> tuple[bool, bool]:
@@ -1157,23 +1172,26 @@ class _RecordThreadContext:
 
     @cached_property
     def followers(self) -> list[Any]:
-        followers = list(self.record.message_followers()) if self.thread is not None else []
+        followers = list(ThreadFollower.objects.for_attachment(self.attachment)) if self.attachment is not None else []
         _prime_follower_identities(followers, current_actor())
         return followers
 
     @cached_property
     def self_follower(self) -> Any:
-        party_id = ThreadFollower.objects.get_party_id(user=self.user) if self.user is not None else None
-        return next((row for row in self.followers if row.party_id == party_id), None)
+        return next((row for row in self.followers if row.party_id == self.party_id), None)
+
+    @cached_property
+    def party_id(self) -> Any:
+        return ThreadFollower.objects.get_party_id(user=self.user) if self.user is not None else None
 
     @cached_property
     def unread_count(self) -> int:
-        return (ThreadFollower.objects.unread_count_for_record(self.record, user=self.user, role=self.role)
+        return (ThreadFollower.objects.unread_count_for_attachment(self.attachment, party_id=self.party_id)
                 if self.user is not None else 0)
 
     @cached_property
     def message_has_error_counter(self) -> int:
-        return (ThreadNotification.objects.error_count_for_record(self.record, user=self.user, role=self.role)
+        return (ThreadNotification.objects.error_count_for_attachment(self.attachment, user=self.user)
                 if self.user is not None else 0)
 
     @cached_property
@@ -1215,8 +1233,8 @@ class RecordThreadStatePayload:
     def notifications(self) -> list[RecordThreadNotificationType]:
         if self._context is None or self._context.user is None:
             return []
-        return list(ThreadNotification.objects.for_record(
-            self._context.record, user=self._context.user, role=self._context.role,
+        return list(ThreadNotification.objects.for_attachment_for_user(
+            self._context.attachment, user=self._context.user,
         ).select_related("thread", "attachment", "follower", "message", "message__subtype", "user")[:50])
 
     @strawberry.field(name="unread_count")
@@ -1242,10 +1260,16 @@ class RecordThreadStatePayload:
     @strawberry.field(name="attachment_count")
     @django_resolver
     def attachment_count(self) -> int:
+        """Count transcript parts under the enclosing record's read gate.
+
+        Readers of the record see the same attachments in the transcript even
+        when they do not hold the thread's independent read permission.
+        """
+
         thread = self._context.thread if self._context is not None else None
         if thread is None:
             return 0
-        return (Part.objects.using(thread._state.db)
+        return (Part.objects.using(thread._state.db).sudo(reason="messaging.record_thread.attachment_count")
                 .filter(message__thread_id__in=thread.member_threads().values("pk"), message__is_trashed=False)
                 .attachments().count())
 
@@ -1348,7 +1372,7 @@ class RecordThreadPayload(RecordThreadMessagesPayload, RecordErrorPayload):
             return []
         return [SuggestedRecipientType(user=row["user"], reason=str(row["reason"]), source=str(row["source"]))
                 for row in self._context.record.message_suggested_recipients(
-                    role=self._context.role, user=self._context.user,
+                    role=self._context.role, user=self._context.user, attachment=self._context.attachment,
                 )]
 
     @strawberry.field
@@ -1654,14 +1678,18 @@ class MessagingQuery:
         """Return the existing chatter thread attached to a model record."""
 
         try:
-            record = chatter_record(input.model_label, input.record_id)
+            resolved = chatter_record_with_attachment(input.model_label, input.record_id)
         except ValueError as error:
             return RecordThreadPayload(error=str(error), error_code="BAD_RECORD")
-        if record is None:
+        if resolved is None:
             return RecordThreadPayload(error="record not found", error_code="NOT_FOUND")
+        record, attachment = resolved
+        if input.role != record.thread_attachment_role:
+            attachment = ThreadAttachment.objects.for_record(record, role=input.role)
         return RecordThreadPayload(_context=_RecordThreadContext(
             record=record,
             info=info,
+            _attachment=attachment,
             role=input.role,
             search=input.search,
             message_limit=input.message_limit,
