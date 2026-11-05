@@ -17,25 +17,86 @@ from graphql import (
     GraphQLNonNull,
     GraphQLObjectType,
     build_schema,
+    get_named_type,
 )
 
+from angee.graphql.schema import GraphQLSchemas
 from tests.composed_host import COMPOSED_TEST_TIMEOUT
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _composed_notes_sdl(tmp_path: Path) -> str:
-    """Render the reference addon's schema through the isolated composed host."""
+def test_every_server_grouped_resource_emits_both_roots_and_metadata() -> None:
+    """Audit the executable SDL, including computed resources, in both named schemas."""
+
+    schemas = GraphQLSchemas.from_discovery()
+    audited: set[tuple[str, str]] = set()
+    for schema_name in ("public", "console"):
+        schema = schemas.build(schema_name)
+        query = schema._schema.query_type
+        assert query is not None
+        for resource in schema.angee_resources:
+            if not any(axis.server is not None for axis in resource.query.axes.values()):
+                continue
+            audited.add((schema_name, resource.model_label))
+            roots = resource.roots
+            types = resource.type_names
+            assert roots.group_name in query.fields, (schema_name, resource.model_label, roots)
+            assert roots.grouped_rows_name in query.fields, (schema_name, resource.model_label, roots)
+            assert types.group_by_spec is not None, (schema_name, resource.model_label)
+            assert types.grouped_row_page is not None, (schema_name, resource.model_label)
+            grouped_rows = query.fields[roots.grouped_rows_name]
+            assert set(grouped_rows.args) == {"group_by", "pages", "where", "order_by"}
+            assert get_named_type(grouped_rows.args["group_by"].type).name == types.group_by_spec
+            page_type = get_named_type(grouped_rows.args["pages"].type)
+            assert isinstance(page_type, GraphQLInputObjectType)
+            assert page_type.name == types.grouped_row_page
+            assert set(page_type.fields) == {"key", "limit", "offset"}
+    assert ("console", "platform.Field") in audited
+    assert any(label != "platform.Field" for _, label in audited)
+
+
+def test_composed_grouped_resources_emit_group_and_row_roots(tmp_path: Path) -> None:
+    """Audit the full generated host, whose addon roster exceeds the source fixture."""
+
+    rendered = _composed_sdl(tmp_path)
+    for schema_name in ("public", "console"):
+        schema = build_schema(rendered[schema_name])
+        query = schema.query_type
+        assert query is not None
+        grouped = {
+            name.removesuffix("_groups")
+            for name, field in query.fields.items()
+            if name.endswith("_groups") and "group_by" in field.args
+        }
+        assert grouped, schema_name
+        for name in grouped:
+            rows_root = f"{name}_grouped_rows"
+            assert rows_root in query.fields, (schema_name, name)
+            rows = query.fields[rows_root]
+            assert set(rows.args) == {"group_by", "pages", "where", "order_by"}
+            page_type = get_named_type(rows.args["pages"].type)
+            assert isinstance(page_type, GraphQLInputObjectType)
+            assert set(page_type.fields) == {"key", "limit", "offset"}
+        if schema_name == "console":
+            assert "platform_fields_grouped_rows" in query.fields
+
+
+def _composed_sdl(tmp_path: Path, *, app: str | None = None) -> dict[str, str]:
+    """Render SDL from the isolated composed host."""
 
     report = tmp_path / "schemas.json"
     result = subprocess.run(
         [
             sys.executable,
             str(ROOT / "tests" / "composed_host.py"),
-            "--runtime-dir", str(tmp_path / "runtime"),
-            "--app", "example.notes",
-            "--action", "schemas",
-            "--output", str(report),
+            "--runtime-dir",
+            str(tmp_path / "runtime"),
+            *(["--app", app] if app is not None else []),
+            "--action",
+            "schemas",
+            "--output",
+            str(report),
         ],
         cwd=ROOT,
         capture_output=True,
@@ -44,7 +105,7 @@ def _composed_notes_sdl(tmp_path: Path) -> str:
         check=False,
     )
     assert result.returncode == 0, f"fresh schema composition failed:\n{result.stdout}\n{result.stderr}"
-    return json.loads(report.read_text())["public"]
+    return json.loads(report.read_text())
 
 
 @dataclass(frozen=True)
@@ -83,7 +144,11 @@ GROUP_CONTRACT_CASES = (
 def test_grouped_resource_roots_share_hasura_ndc_contract(case: GroupContractCase, tmp_path: Path) -> None:
     """Django and operator grouped roots expose the same typed-key DDN/NDC shape."""
 
-    sdl = case.sdl_path.read_text(encoding="utf-8") if case.sdl_path is not None else _composed_notes_sdl(tmp_path)
+    sdl = (
+        case.sdl_path.read_text(encoding="utf-8")
+        if case.sdl_path is not None
+        else _composed_sdl(tmp_path, app="example.notes")["public"]
+    )
     schema = build_schema(sdl)
 
     query = schema.get_type("Query")
