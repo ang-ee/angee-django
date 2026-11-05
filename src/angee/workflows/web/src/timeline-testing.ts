@@ -27,7 +27,7 @@ export function timelineFixture(state: TimelineState = "decision"): TimelineSele
   nodes.push(node("review", "Review the record", 7, "current"), node("finish", "Finish the plan", 8, "certain"), node("extra", "Check a related record", 9, "optional"));
   const review = nodes[7]!.step_run!;
   review.decision = decision;
-  review.records = [{ id: "wsrec_7", label: "Review notes", operation: "read", record_model: "notes.Note", record_id: "nte_7" }];
+  review.records = [{ id: "wsrec_7", label: "Review notes", operation: "READ", record_model: "notes.Note", record_id: "nte_7" }];
   const run: Run = {
     id: "wfr_review", display_name: "Record review", status: "WAITING", origin: "MANUAL", outcome_label: "", failure_reason: null,
     version: { workflow: { display_name: "Record review" } },

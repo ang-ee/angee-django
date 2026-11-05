@@ -1,3 +1,4 @@
+import type { RecordOperation } from "@angee/gql/console/graphql";
 import { useAuthoredQuery } from "@angee/refine";
 import {
   AbsoluteTime, ErrorBanner, PaneRow, PaneRows, RecordReferenceRow, Skeleton, SkeletonStatus, StatusBadge, useEnumOptions, useRouteHref,
@@ -13,6 +14,9 @@ const RELATED_MODELS = [...RUN_MODELS, DECISION_MODEL] as const;
 /** The roles a record plays in a run, most telling first: the one it keeps when several steps touched it. */
 const ROLES = ["source", "created", "changed", "read"] as const;
 type Role = (typeof ROLES)[number];
+const RECORD_ROLES: Record<RecordOperation, Role> = {
+  CALLED: "read", CHANGED: "changed", CREATED: "created", DELETED: "read", READ: "read",
+};
 const ROLE_LABELS = {
   source: "related.role.source", created: "related.role.created", changed: "related.role.changed", read: "related.role.read",
 } as const;
@@ -55,7 +59,7 @@ export function runRecords(data: ReturnType<typeof useRunRelated>["data"]): read
   keep(run?.subject_model, run?.subject_id, "source");
   keep(run?.trigger_event?.record_model, run?.trigger_event?.record_id, "source");
   for (const row of data.steprecord ?? []) {
-    const role: Role = row.operation === "created" ? "created" : row.operation === "changed" ? "changed" : "read";
+    const role = RECORD_ROLES[row.operation];
     keep(row.record_model, row.record_id, role, row.step_run?.node_label);
   }
   return [...byKey.values()].sort((a, b) => ROLES.indexOf(a.role) - ROLES.indexOf(b.role))
