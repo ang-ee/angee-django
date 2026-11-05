@@ -79,17 +79,43 @@ live in code docstrings.
 
 ## Unreleased — REBAC decided statements per request
 
-- Pin django-zed-rebac at `5356ad6c9b86` for bounded, witnessed read scopes
-  that compile decided statements per request while retaining reusable
+- Pin django-zed-rebac at `89a982e3d1e6`: bounded, witnessed read scopes
+  compile decided statements per request while retaining reusable
   value-independent statements, and reuse decided statements across requests
-  keyed on the decision outcome. The update also preserves Django's collected
-  delete order, clears default ordering in recursive permission paths, shares
-  compiled identity projections by use count with native statement probes, and
-  bounds the library's compiled-statement cache by bytes
-  (`REBAC_STATEMENT_CACHE_BYTES`). The pinned head removes the queryset and
-  instance `as_user()` / `as_agent()` aliases (pin actors with `with_actor()`),
-  `scope_cte()`, `decision_scope()` and five inert settings, and adds
-  `RebacQuerySet.action()` and `rebac.relation_loading.pinned_actor()`.
+  keyed on the decision outcome; compiled identity projections are shared by
+  use count with native statement probes; Django's collected delete order is
+  preserved; default ordering is cleared in recursive permission paths; the
+  compiled-statement cache is bounded by bytes (`REBAC_STATEMENT_CACHE_BYTES`).
+  The pinned head removes the queryset and instance `as_user()` / `as_agent()`
+  aliases (pin actors with `with_actor()`), `decision_scope()` and five inert
+  settings; `scope_cte(actions=...)` remains the owned API for sharing one
+  proven read across several permission names of one resource.
+
+## Unreleased — grouped lists, list labels and projections
+
+- Every grouped list reads the first rows of its visible groups through one
+  `<resource>_grouped_rows(group_by, pages, where, order_by)` root (a window per
+  group under one proof) and the group headers and counts through the
+  `<resource>_groups` root, which now returns each relation group's `label`;
+  the per-group row and aggregate aliases are gone. Date-bucket, JSON-path and
+  computed-resource axes use the same root. Fifty groups cost 2 statements
+  instead of 200.
+- List columns that show a record reference select `record_label` and
+  `record_id` through the list document; no list cell resolves a label with a
+  per-row read, and a hidden target renders no label.
+- `Message.title` requires the title projection the message queryset provides
+  (`with_title_text()`); both inbox result paths apply it. Reading the title
+  on an unprojected instance raises `ImproperlyConfigured` instead of issuing a
+  per-row read.
+- Live subscriptions replay the changes published in the registration window:
+  publication appends each change to a per-model log before fanout, a
+  registration replays the retained changes through its read gate, and
+  `ready` carries an opaque cursor. The window and length are
+  `CHANGE_REPLAY_SECONDS` and `CHANGE_REPLAY_MAXLEN`; a log truncated inside
+  the window sends one model-wide change.
+- `Thread.is_record_chatter` marks the threads attached as record chatter;
+  projects add a migration that adds the column and backfills it from the
+  chatter attachments (this stack's runtime carries it as messaging 0008).
 
 ## Unreleased — messaging historical import compatibility
 

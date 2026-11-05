@@ -507,12 +507,12 @@ def test_record_thread_document_file_part_growth(
         for message in transcript["messages"] for part in message["parts"]
     )
     five.assert_flat_from(one)
-    # P23: messaging's audited system reads remain: follower person and effective rows, suggested-recipient
+    # Messaging's audited system reads remain: follower person and effective rows, suggested-recipient
     # suppression, the notification error count and record rows, and the record-gated attachment count.
     for read in (one, five):
         read.assert_statements(41)
         read.assert_bytes(
-            total=150_000, largest=30_000, cause="P5's read requirement in the messaging held_permissions check",
+            total=150_000, largest=30_000, cause="the read requirement in the messaging held_permissions check",
         )
         read.assert_audit_inserts(6)
 
