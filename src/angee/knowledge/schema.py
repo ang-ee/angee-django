@@ -11,7 +11,6 @@ import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db.models import F, Prefetch, prefetch_related_objects
-from rebac import system_context
 from rebac.graphql.strawberry_django import optimize
 from rebac.resources import model_resource_type
 from strawberry import auto
@@ -39,13 +38,13 @@ from angee.graphql.ids import (
 )
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
 from angee.graphql.subscriptions import changes
-from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin, user_label_prefetch
+from angee.iam.audit import AuthoredRefMixin, TrashedRefMixin
 from angee.iam.graphql.actions import session_user
 from angee.iam.graphql.capabilities import permission_expression, permissions_field
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import actor_scoped_to_one
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
-from angee.iam.identity import user_display_label, user_label, user_public_id
+from angee.iam.identity import user_display_label, user_label_annotation, user_public_id
 from angee.knowledge.models import (
     AmbiguousMatchError,
     PageQuerySet,
@@ -92,13 +91,12 @@ class VaultType(TrashedRefMixin, ProtectedNode):
 
         return optional_public_id(user_public_id(cast(Any, self).owner_id))
 
-    @strawberry_django.field(only=["owner_id"], prefetch_related=[partial(user_label_prefetch, "owner")])
+    @strawberry_django.field(only=["owner_id"], annotate={"_iam_owner_label": user_label_annotation("owner")})
     def owner_label(self, info: strawberry.Info) -> str | None:
         """Return the owner's display label — no user object exposed."""
 
-        if hasattr(self, "_iam_owner_label_source"):
-            user = cast(Any, self)._iam_owner_label_source
-            return user_label(user) if user is not None else None
+        if "_iam_owner_label" in cast(Any, self).__dict__:
+            return cast(str | None, cast(Any, self)._iam_owner_label)
         return user_display_label(cast(Any, self).owner_id, request=get_request(info))
 
 
@@ -250,9 +248,9 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, ProtectedNode):
         page = cast(Any, self)
         if "_vault_label" in page.__dict__:
             return cast(str | None, page._vault_label)
-        # Mutation resolvers return an instance rather than an annotated queryset.
-        with system_context(reason="knowledge.graphql.vault_label"):
-            return str(page.vault)
+        # Mutation resolvers return an instance without the list annotation.
+        # The page already discloses its vault name; fetch that scalar alone.
+        return cast(str, Vault._base_manager.using(page._state.db).values_list("name", flat=True).get(pk=page.vault_id))
 
     @strawberry_django.field(only=["parent_id"])
     def parent(self) -> strawberry.ID | None:

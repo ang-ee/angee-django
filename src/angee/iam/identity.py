@@ -12,7 +12,7 @@ from typing import Any
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db.models import CharField, QuerySet, Value
+from django.db.models import CharField, OuterRef, QuerySet, Subquery, Value
 from django.db.models.functions import Coalesce, Concat, NullIf, Trim
 from django.http import HttpRequest
 from rebac import SubjectRef, system_context
@@ -34,19 +34,28 @@ def group_subject_type() -> str:
 def user_label(user: Any) -> str:
     """Return any user model's human label from the Django auth contract.
 
-    A row loaded for a viewer who cannot read the sign-in name carries it as
-    None; such a row's label is its full name alone.
+    A dedicated label queryset projects the display scalar before field
+    redaction. An ordinary actor-scoped User row still respects redaction.
     """
 
+    if "_iam_display_label" in user.__dict__:
+        return str(user.__dict__["_iam_display_label"] or "")
     return str(user.get_full_name() or user.username or "")
 
 
 def user_label_queryset() -> QuerySet[Any]:
-    """Keep scalar-label source rows narrow and explicitly elevated inside IAM."""
+    """Read only the display label disclosed by an already-readable record.
 
-    return get_user_model().objects.system_context(reason="iam.identity.user_label").only(
+    Audit references expose a scalar label, not a User row. The unscoped base
+    manager avoids a REBAC bypass event for this narrow projection; callers
+    must return only :func:`user_label`'s result, never the source instance.
+    A nameless account's label is its sign-in name, even though username is a
+    read_private field; this scalar disclosure follows every readable record.
+    """
+
+    return get_user_model()._base_manager.only(
         "first_name", "last_name", "username",
-    )
+    ).annotate(_iam_display_label=user_label_expression())
 
 
 def user_label_expression(prefix: str = "") -> Coalesce:
@@ -54,6 +63,15 @@ def user_label_expression(prefix: str = "") -> Coalesce:
 
     full_name = Trim(Concat(f"{prefix}first_name", Value(" "), f"{prefix}last_name"))
     return Coalesce(NullIf(full_name, Value("")), f"{prefix}username", output_field=CharField())
+
+
+def user_label_annotation(relation: str) -> Subquery:
+    """Project one linked account's public display label as a scalar only."""
+
+    return Subquery(
+        user_label_queryset().filter(pk=OuterRef(f"{relation}_id"))
+        .order_by().values("_iam_display_label")[:1]
+    )
 
 
 def user_public_id(user_id: Any) -> str | None:
@@ -87,12 +105,11 @@ def user_display_labels(
     *,
     request: HttpRequest | None = None,
 ) -> dict[Any, str | None]:
-    """Return user display labels for ``user_ids`` with one elevated read.
+    """Return user display labels for ``user_ids`` with one narrow read.
 
-    Resolved under ``system_context`` (IAM's elevation for server-side
-    reads) so an actor-scoped caller never pulls a guarded User row into
-    its own queryset — REBAC rejects that; only a display string leaves
-    the helper.
+    The label is the disclosure carried by an already-readable record or
+    principal. Only the display string leaves this helper; User rows remain
+    inside IAM and the queryset selects no credential fields.
 
     Pass the Django ``request`` to prime and reuse the request-scoped label memo:
     list resolvers can ask for all distinct ids up front and pay one query.

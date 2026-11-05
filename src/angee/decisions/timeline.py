@@ -6,13 +6,13 @@ from collections.abc import Iterable
 from typing import Any
 
 from django.apps import apps
-from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.db.models.functions import Coalesce
 from django_cte import CTE, with_cte
 
 from angee.base.refs import generic_pointer_model
+from angee.iam.identity import user_label_queryset
 from angee.timeline.kinds import Presentation, RecordIdentity, TimelineKind, actor_label
 
 KIND = "decisions.decision"
@@ -30,7 +30,7 @@ class DecisionKind(TimelineKind):
         return self.source(record, actor)[0]
 
     def source(self, record: Any, actor: Any) -> tuple[models.QuerySet, tuple[Any, Any] | None]:
-        """Share bounded, audited requester choices between admission and fold."""
+        """Share structural requester choices; admit decisions in the outer read."""
         decision = apps.get_model("decisions", "Decision")
         readable = decision.objects.with_actor(actor)
         requester: CTE | None = None
@@ -38,7 +38,7 @@ class DecisionKind(TimelineKind):
         requesters = decision.requester_querysets()
         if requesters:
             link = apps.get_model("decisions", "DecisionRecord")
-            concerns = link.system_queryset().using(readable.db).filter(link.record_filter(record)).order_by().values(
+            concerns = link._base_manager.using(readable.db).filter(link.record_filter(record)).order_by().values(
                 "decision_id",
             )
             candidates = models.Q(pk__in=concerns)
@@ -60,9 +60,9 @@ class DecisionKind(TimelineKind):
                 choices[field] = models.Subquery(
                     source.filter(_decision_id=models.OuterRef("pk")).order_by(*order).values("pk")[:1],
                 )
-            # Start with the Decision owner's scoped rows, then keep the CTE
-            # bounded to this record's concern and requester decisions.
-            base: models.QuerySet[Any] = readable.scoped().filter(candidates)
+            # The CTE supplies record-bounded identities and fold choices. The
+            # outer Decision read admits its rows before any choice is exposed.
+            base: models.QuerySet[Any] = decision._base_manager.using(readable.db).filter(candidates)
             requester = CTE(base.annotate(**choices).values("pk", *choices),
                             name="timeline_requesters")
             requested: models.QuerySet = models.QuerySet(
@@ -96,7 +96,7 @@ class DecisionKind(TimelineKind):
         else:
             rows = readable.for_records(record).scoped()
         rows = rows.select_related("answered_by").prefetch_related(
-            models.Prefetch("assignees", queryset=get_user_model().system_queryset()),
+            models.Prefetch("assignees", queryset=user_label_queryset()),
         )
         return with_cte(requester, select=rows) if requester is not None else rows, fold
 

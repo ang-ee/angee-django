@@ -128,9 +128,14 @@ class UserManager[UserT: User](_UserManagerBase[UserT], BaseUserManager[UserT]):
         return self.system_context(reason="iam.credentials").get(**{self.model.USERNAME_FIELD: username})
 
     def get_for_session(self, user_id: Any) -> UserT:
-        """Return the session user through the named Django-auth reload seam."""
+        """Reload the session principal by identity before an actor context exists.
 
-        return self.system_context(reason="iam.session").get(pk=user_id)
+        Django's authentication backend calls this with the signed session's
+        canonical user id. It is identity bootstrap, not an application row
+        read, so the declared unscoped base manager is the owning read path.
+        """
+
+        return self.model._base_manager.db_manager(self.db).get(pk=user_id)
 
     async def aget_by_natural_key(self, username: str | None) -> UserT:
         """Async sibling of ``get_by_natural_key``."""

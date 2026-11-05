@@ -20,6 +20,7 @@ from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.projects.testing.models import Task
 from angee.tags.testing.models import Tag
+from angee.workflows.timeline import TimelineSelection
 from tests.conftest import create_platform_admin, create_user, vault_for
 from tests.test_timeline import read_timeline, timeline_entries
 
@@ -90,6 +91,19 @@ def test_record_reader_without_decision_read_sees_no_line_identity_or_count(peop
     assert data["timeline"]["entries"] == []
     assert data["timeline"]["kinds"][0]["count"] == 0
     assert data["timeline"]["needs_me"] == data["timeline_attention"] == 0
+
+
+def test_open_decision_count_keeps_record_attention_when_question_is_unreadable(composed_tables) -> None:
+    issuer = create_platform_admin("timeline-count-issuer")
+    reader = create_user("timeline-count-reader")
+    assignee = create_platform_admin("timeline-count-assignee")
+    record = vault_for(reader)
+    decision = Decision.objects.ask(DecisionRequest(
+        kind="confirm_record", records=(record,), requester=None, assignees=(assignee,),
+        proposal=DecisionProposal(alternatives=[{"key": "confirm", "label": "Confirm", "outcome": "done"}]),
+    ), actor=issuer)
+    assert not Decision.objects.with_actor(reader).filter(pk=decision.pk).exists()
+    assert TimelineSelection([record], reader, run_limit=1).open_decision_count == 1
 
 
 def test_unassigned_attention_uses_answer_permission_without_claiming_others_assignments(people) -> None:

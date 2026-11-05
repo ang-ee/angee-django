@@ -1,4 +1,4 @@
-"""Native prefetch query budgets for scalar-only audit user labels."""
+"""Scalar user-label projection budgets on readable records."""
 
 from __future__ import annotations
 
@@ -30,13 +30,7 @@ _LABELS_QUERY = "query { pages { id created_by_label updated_by_label } }"
 
 
 def _label_reads(captured: CaptureQueriesContext) -> list[str]:
-    """Return the captured SQL that are user-label reads.
-
-    IAM's label queryset projects the user's
-    ``first_name``/``last_name`` through ``.only(...)`` — a narrow projection a
-    full ``SELECT *`` user load (which also carries ``password``) never matches —
-    so this isolates its reads from the list/actor-scope queries.
-    """
+    """Find statements projecting a user label without loading credentials."""
 
     table = get_user_model()._meta.db_table
     return [
@@ -55,8 +49,8 @@ def _author_pages(vault: Any, authors: list[Any], count: int, *, start: int = 0)
     Titles run from ``start`` so successive batches never collide on the model's
     unique ``(vault, title)``. Pages are created by the vault owner (so they stay
     actor-readable), then ``created_by``/``updated_by`` are re-pointed to the K
-    author users — the FK targets the label resolver reads under elevation,
-    distinct from row scope.
+    author users — the FK targets the disclosed scalar label,
+    distinct from the User row scope.
     """
 
     with actor_context(vault.owner):
@@ -71,12 +65,12 @@ def _author_pages(vault: Any, authors: list[Any], count: int, *, start: int = 0)
     ("selection", "label_queries"),
     [
         ("created_by_label", 1),
-        ("created_by_label updated_by_label", 2),
+        ("created_by_label updated_by_label", 1),
         ("created_by updated_by", 0),
     ],
 )
 def test_audited_list_labels_batch_distinct_authors(composed_tables: None, selection: str, label_queries: int) -> None:
-    """One or 25 distinct authors cost one query per selected label relation."""
+    """One or 25 authors retain one scalar-label statement and zero audits."""
 
     alice = create_user("alice")
     vault = vault_for(alice, name="Research")
@@ -85,13 +79,7 @@ def test_audited_list_labels_batch_distinct_authors(composed_tables: None, selec
     schema = addon_schema(knowledge_schema.schemas, "public")
     query = "query Labels($limit: Int!) { pages(limit: $limit, order_by: [{title: asc}]) { id " + selection + " } }"
     query_counts = []
-    actor = to_subject_ref(alice)
-    audits = PermissionAuditEvent.objects.filter(
-        kind=PermissionAuditEvent.KIND_SUDO_BYPASS,
-        reason="iam.identity.user_label",
-        actor_subject_type=actor.subject_type,
-        actor_subject_id=actor.subject_id,
-    )
+    audits = PermissionAuditEvent.objects.all()
     before_audits = audits.count()
     for size in (1, 25):
         with CaptureQueriesContext(connection) as captured:
@@ -107,7 +95,7 @@ def test_audited_list_labels_batch_distinct_authors(composed_tables: None, selec
         ), "Scalar label loading must not fetch credentials"
 
     assert query_counts == [label_queries, label_queries]
-    assert audits.count() - before_audits == 2 * label_queries
+    assert audits.count() == before_audits
 
     # Scalar labels stay available to a reader who cannot read the authors' sign-in names.
     with actor_context(alice):
@@ -115,8 +103,8 @@ def test_audited_list_labels_batch_distinct_authors(composed_tables: None, selec
     assert rows and all(row.username is None for row in rows)
 
 
-def test_audited_label_prefetch_preserves_missing_authors(composed_tables: None) -> None:
-    """Nullable audit references resolve without spurious User reads."""
+def test_audited_label_projection_preserves_missing_authors(composed_tables: None) -> None:
+    """Nullable audit references resolve through the same scalar projection."""
 
     alice = create_user("alice")
     vault = vault_for(alice)
@@ -132,7 +120,7 @@ def test_audited_label_prefetch_preserves_missing_authors(composed_tables: None)
     assert len(rows) == 1
     assert rows[0]["created_by_label"] is None
     assert rows[0]["updated_by_label"] is None
-    assert _label_reads(captured) == []
+    assert len(_label_reads(captured)) == 1
 
 
 def test_vault_owner_labels_batch_distinct_owners(composed_tables: None) -> None:
@@ -169,7 +157,7 @@ def test_vault_owner_labels_batch_distinct_owners(composed_tables: None) -> None
 
 
 def test_user_display_labels_batches_and_primes_request_memo(transactional_db: Any) -> None:
-    """The batch label owner resolves many user ids with one elevated read."""
+    """The batch label owner resolves many user ids with one narrow read."""
 
     del transactional_db
     alice = create_user("batch-alice")

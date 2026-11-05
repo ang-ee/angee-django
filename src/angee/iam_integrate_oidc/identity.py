@@ -245,11 +245,10 @@ class OidcIdentityResolver:
         user_model = get_user_model()
 
         manager = user_model.objects
-        with system_context(reason="iam_integrate_oidc.link_user"):
-            try:
-                user = manager.get_for_session(record.user_id)
-            except user_model.DoesNotExist as exc:
-                raise OAuthFlowError(INVALID_STATE, 400) from exc
+        try:
+            user = manager.get_for_session(record.user_id)
+        except user_model.DoesNotExist as exc:
+            raise OAuthFlowError(INVALID_STATE, 400) from exc
         return user
 
     def _find_by_email(self, email: str) -> _User | None:

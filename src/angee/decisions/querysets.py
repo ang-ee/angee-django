@@ -62,14 +62,15 @@ class DecisionQuerySet[T: Decision](ProtectedAppendOnlyQuerySet[T], ProtectedQue
         return self.open().for_records(*records)
 
     def for_records(self, *records: Any) -> Self:
-        """Select decisions retaining any of the supplied canonical records."""
+        """Select decisions retaining supplied canonical records."""
 
         link = apps.get_model("decisions", "DecisionRecord")
         concerns = Q(pk__in=[])
         for record in records:
             concerns |= link.record_filter(record)
         return self.filter(
-            pk__in=link.system_queryset().using(self.db).filter(concerns).order_by().values("decision_id"),
+            pk__in=link._base_manager.using(self.db)
+            .filter(concerns).order_by().values("decision_id"),
         )
 
     def attention_expression(self, queryset: Any) -> Exists:

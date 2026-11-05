@@ -68,16 +68,18 @@ class WorkflowDecision(Composable, extends="decisions.Decision"):
 
     @classmethod
     def requester_querysets(cls) -> tuple[models.QuerySet, ...]:
+        """Offer structural run references; the consuming Decision read admits rows."""
+
         runs = (
             apps.get_model("workflows", "WorkflowRun")
-            .system_queryset()
+            ._base_manager.all()
             .annotate(
                 _decision_id=models.F("step_runs__decision_id"),
             )
         )
         retained = (
             apps.get_model("workflows", "WorkflowRun")
-            .system_queryset()
+            ._base_manager.all()
             .filter(
                 records__content_type__app_label=cls._meta.app_label,
                 records__content_type__model=cls._meta.model_name,

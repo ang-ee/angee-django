@@ -94,7 +94,10 @@ class WorkflowRunQuerySet[T: WorkflowRun](ProtectedQuerySet[T]):
         ancestors: bool = True,
         limit: int | None = None,
     ) -> Any:
-        """Runs that worked on readable records and all readable ancestors, oldest first."""
+        """Runs that worked on readable records and all readable ancestors, oldest first.
+
+        Evidence links select run identities; this queryset admits the rows.
+        """
         if not isinstance(records, (list, tuple)):
             records = (records,)
         subject_filter = Q(pk__in=[])
@@ -103,7 +106,7 @@ class WorkflowRunQuerySet[T: WorkflowRun](ProtectedQuerySet[T]):
         for record in records:
             targets |= evidence_model.record_filter(record)
             subject_filter |= self.model.record_filter(record)
-        links = evidence_model.system_queryset().using(self.db).filter(targets)
+        links = evidence_model._base_manager.using(self.db).filter(targets)
         if operations is not None:
             links = links.filter(operation__in=operations)
         link_runs = links.values("run_id")
