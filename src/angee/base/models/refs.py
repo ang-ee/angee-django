@@ -7,7 +7,9 @@ native contenttype. Optional protection contributes admission at its own owner.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Protocol
+from collections.abc import Sequence
+from functools import lru_cache
+from typing import Any, ClassVar, Protocol, cast
 
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
@@ -154,19 +156,29 @@ class RecordRefMixin(RecordRefMergeContract, Composable, concrete=False):
         the survivor's native redirect group without rewriting the evidence.
         Other policies already move or refuse references at merge time.
         """
-        content_type, pk = generic_pointer_target(record)
+        return cls.record_filter_batch((record,))
+
+    @classmethod
+    def record_filter_batch(cls, records: Sequence[models.Model]) -> models.Q:
+        """Select one target model's identities, including retained redirects, in one predicate."""
+
+        if not records:
+            return models.Q(pk__in=[])
+        content_type, _ = generic_pointer_target(records[0])
         reference = cls.record_ref_field()
-        model = generic_pointer_model(type(record))
+        model = generic_pointer_model(type(records[0]))
+        ids = [record.pk for record in records]
         scope: dict[str, object] = {reference.ct_field: content_type}
         if cls.merge_policy == MergePolicy.KEEP and issubclass(model, MergeableMixin):
-            assert isinstance(record, MergeableMixin)
-            group = model._base_manager.using(record._state.db)
+            group = model._base_manager.using(records[0]._state.db)
             if not isinstance(group, MergeableQuerySet):
                 raise ImproperlyConfigured(f"{model._meta.label}'s base queryset must support merge redirects.")
-            group = group.redirect_group(record).order_by()
+            group = group.redirect_groups(cast(Sequence[MergeableMixin], records)).order_by()
             scope[f"{reference.fk_field}__in"] = group.values("pk")
         else:
-            scope[reference.fk_field] = pk
+            scope[reference.fk_field if len(ids) == 1 else f"{reference.fk_field}__in"] = (
+                ids[0] if len(ids) == 1 else ids
+            )
         return models.Q(**scope)
 
     @classmethod
@@ -177,6 +189,15 @@ class RecordRefMixin(RecordRefMergeContract, Composable, concrete=False):
             for model in sorted(cls._meta.apps.get_models(), key=lambda model: model._meta.label_lower)
             if not model._meta.auto_created
         }
+
+    @classmethod
+    def possible_target_models(
+        cls,
+        registered_models: Sequence[type[models.Model]] | None = None,
+    ) -> dict[str, type[models.Model]]:
+        """Targets this edge may name before a runtime policy snapshot exists."""
+        models_to_check = registered_models if registered_models is not None else cls._meta.apps.get_models()
+        return {model._meta.label_lower: model for model in models_to_check if not model._meta.auto_created}
 
     @classmethod
     def indexed_target_models(
@@ -326,18 +347,65 @@ def record_ref_cleanup_edges_for_target(
     return tuple(sorted(edges, key=lambda edge: edge._meta.label))
 
 
-def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> None:
-    """Apply each edge owner's declared policy before its target is deleted."""
+@lru_cache(maxsize=1)
+def _possible_record_edges(
+    registered_models: tuple[type[models.Model], ...],
+) -> dict[type[models.Model], tuple[type[RecordRefMixin], ...]]:
+    """Invert authored edge admission once for the installed model set."""
+    index: dict[type[models.Model], list[type[RecordRefMixin]]] = {}
+    for edge in sorted(registered_models, key=lambda model: model._meta.label):
+        if not issubclass(edge, RecordRefMixin):
+            continue
+        for target in edge.possible_target_models(registered_models).values():
+            index.setdefault(target, []).append(edge)
+    return {target: tuple(edges) for target, edges in index.items()}
 
+
+def possible_record_edges(
+    candidate: type[models.Model] | None = None,
+) -> dict[type[models.Model], tuple[type[RecordRefMixin], ...]]:
+    """Return cached possible edge targets, rebuilding for late prepared models."""
+    registered = tuple(apps.get_models())
+    if candidate is not None and candidate not in registered:
+        registered = (*registered, candidate)
+    return _possible_record_edges(registered)
+
+
+def delete_record_refs_batch(
+    sender: type[models.Model],
+    *,
+    instances: tuple[models.Model, ...],
+    using: str,
+    **kwargs: Any,
+) -> None:
+    """Apply each possible edge policy to one admitted collector model batch."""
     del kwargs
-    cleanup_edges = record_ref_cleanup_edges_for_target(type(instance))
+    if not instances:
+        return
+    cleanup_edges = record_ref_cleanup_edges_for_target(sender)
+    target = generic_pointer_model(sender)
+    declared = possible_record_edges().get(target, ()) if target is not None else ()
+    if not cleanup_edges and not declared:
+        return
+    content_type, _ = generic_pointer_target(instances[0])
+    ids = [instance.pk for instance in instances]
     for edge in cleanup_edges:
+        pointer = edge.record_ref_field()
+        attached = set(
+            edge._base_manager.using(using)
+            .filter(
+                **{
+                    pointer.ct_field: content_type,
+                    f"{pointer.fk_field}__in": ids,
+                }
+            )
+            .values_list(pointer.fk_field, flat=True)
+        )
         teardown = edge.teardown_for_target
         assert teardown is not None
-        teardown(instance)
-    target = generic_pointer_model(type(instance))
-    declared = record_edges_by_target().get(target, ()) if target is not None else ()
-    content_type, object_id = generic_pointer_target(instance)
+        for instance in instances:
+            if instance.pk in attached:
+                teardown(instance)
     for edge in declared:
         if edge in cleanup_edges:
             continue
@@ -345,15 +413,29 @@ def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> Non
         object_id_field = edge._meta.get_field(pointer.fk_field)
         if not isinstance(object_id_field, models.Field):
             raise ImproperlyConfigured(f"{edge._meta.label}'s generic object ID must be a concrete field.")
-        try:
-            prepared_id = object_id_field.get_prep_value(object_id)
-        except TypeError, ValueError, ValidationError:
-            # A generic edge with a numeric object ID cannot reference a string-keyed target.
+        prepared_ids = []
+        for object_id in ids:
+            try:
+                prepared_ids.append(object_id_field.get_prep_value(object_id))
+            except TypeError, ValueError, ValidationError:
+                continue
+        if not prepared_ids:
             continue
-        rows = edge._base_manager.using(using).filter(**{pointer.ct_field: content_type, pointer.fk_field: prepared_id})
-        policy = edge.on_target_delete
-        if policy is models.PROTECT:
+        rows = edge._base_manager.using(using).filter(
+            **{
+                pointer.ct_field: content_type,
+                f"{pointer.fk_field}__in": prepared_ids,
+            }
+        )
+        if edge.on_target_delete is models.PROTECT:
             if rows[:1]:
-                raise ProtectedError(f"{edge._meta.label} rows still refer to {instance}.", set(rows))
+                raise ProtectedError(f"{edge._meta.label} rows still refer to {sender._meta.label}.", set(rows))
             continue
         edge.remove_target_refs(rows)
+
+
+def delete_record_refs(instance: models.Model, using: str, **kwargs: Any) -> None:
+    """Keep plain Django targets and historical imports on the shared delete policy."""
+
+    del kwargs
+    delete_record_refs_batch(type(instance), instances=(instance,), using=using)

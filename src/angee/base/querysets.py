@@ -144,7 +144,13 @@ class MergeableQuerySet(CanonicalQuerySet[_ModelT]):
         bounded or per-row lookup; a corpus-wide join keys on :meth:`survivor_ids`.
         """
 
-        return self.filter(models.Q(pk=survivor.pk) | models.Q(merged_into_id=survivor.pk))
+        return self.redirect_groups((survivor,))
+
+    def redirect_groups(self, survivors: Sequence[_ModelT]) -> Self:
+        """Return each survivor and its one-hop redirects in one query."""
+
+        ids = [survivor.pk for survivor in survivors]
+        return self.filter(models.Q(pk__in=ids) | models.Q(merged_into_id__in=ids))
 
     def survivor_ids(self) -> models.QuerySet[Any]:
         """Return each row's :meth:`survivor_id` as ``survivor``.

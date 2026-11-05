@@ -1746,8 +1746,9 @@ so content types resolve on the query database.
 native reverse relation's exclusion from automatic collection.
 Each edge declares `on_target_delete` as `CASCADE`, `PROTECT`, or `SET_NULL`; a
 model needing row-aware cleanup implements `teardown_for_target(target)`. The
-foundation target-delete receiver invokes that one declaration for instance and
-queryset deletion paths.
+foundation applies that declaration once per REBAC collector model batch, including
+instance, queryset and cascade deletes. Plain Django models that an edge may target
+retain a sender-bound `pre_delete` receiver because Django has no collected batch hook.
 [`RecordReferenceNode`](../../src/angee/graphql/relations.py) and
 `with_record_reference_access` project it into GraphQL under the current
 reader's scope. A hidden target yields null identity fields; its model and ID

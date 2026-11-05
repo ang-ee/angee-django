@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import partial
 from typing import Any, ClassVar, cast
 
@@ -121,6 +121,29 @@ class ProtectedRecordRefMixin(RecordRefMixin, concrete=False):
             if (target := canonical_model(model)) is not None
         }
         return dict(sorted(targets.items()))
+
+    @classmethod
+    def possible_target_models(
+        cls,
+        registered_models: Sequence[type[models.Model]] | None = None,
+    ) -> dict[str, type[models.Model]]:
+        """Use authored backing relations, retaining open system edges without one."""
+        definition = declared_rebac_definition(cls)
+        if cls.accepts_any_record_target:
+            models_to_check = registered_models if registered_models is not None else cls._meta.apps.get_models()
+            targets = {
+                target._meta.label_lower: target
+                for model in models_to_check
+                if (target := canonical_model(model)) is not None
+            }
+            return dict(sorted(targets.items()))
+        return (
+            cls._declared_target_models(definition)
+            if definition is not None
+            else super().possible_target_models(
+                registered_models,
+            )
+        )
 
     @classmethod
     def declares_target(cls, model: type[models.Model]) -> bool:
