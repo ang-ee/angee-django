@@ -1076,8 +1076,8 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   cross-actor delivery with `changes(Model, field="<model>Changed")` in its
   schema. Local mutations and subscription events enter the provider's shared
   [reconciler](../../packages/refine/src/query-invalidation.ts). No read is
-  cancelled by reconciliation: commands, live changes and ready let in-flight
-  reads settle, then refetch once for coalesced effects. Idle retained reads
+  cancelled by reconciliation: commands and live changes let in-flight reads
+  settle, then refetch once for coalesced effects. Idle retained reads
   refetch immediately for explicit batches and the exported invalidation helper;
   provider-scheduled commands without a batch flush within the 300 ms quiet gap.
   A command can immediately adopt a sufficient response at its exact native
@@ -1092,27 +1092,37 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   Declare authored `models`, exact `records` and related interests from the
   owners the resolver actually reads. Unknown effects retain model fallback.
   Do not add a page-local invalidator, polling loop or second row cache.
-- **Registration readiness closes read and reconnect gaps without cancellation.**
+- **Registration readiness recovers retained reads without cancellation.**
   The [live provider](../../packages/refine/src/provider.ts) consumes the server's
   `ready` control after model-group registration on initial subscription,
-  reconnect and resume. Each subscription operation sends one ready. It marks
-  stale every matching read that is in flight or holds data, including reads
-  sent between the subscription request and registration. The
-  [reconciler](../../packages/refine/src/query-invalidation.ts) refetches each
-  once at the quiet gap, after an in-flight read settles. It skips an idle read
-  that has fetched since ready, including one still fetching at the flush; an
-  accepted response is not a fetch. Ready never cancels a read or reaches user
-  data callbacks; cached reads without observers refetch on next mount.
+  reconnect and resume. Each subscription operation sends one ready. The
+  [reconciler](../../packages/refine/src/query-invalidation.ts) snapshots matching
+  retained reads before the subscription starts, and snapshots them again when
+  the socket connects or reconnects. On ready it refetches only those reads
+  whose pre-start data has not had a full fetch since that snapshot. A targeted
+  row revalidation or accepted mutation response does not count as a full read.
+  Reads in flight without retained data at the start, and reads sent or completed
+  inside the subscription window, are treated as fresh. Ready never cancels a read
+  or reaches user data callbacks; cached reads without observers refetch on next
+  mount.
   A model's shared upstream stays registered for two seconds after its last
   consumer leaves, so a list-to-record handoff does not create another ready.
   Suspension closes it immediately.
   Recovery costs one fetch per affected read per ready window; a read covering
   two models whose readies arrive in separate windows refetches once for each.
-  A websocket connection acknowledgement precedes group registration.
-  This transport has no replay cursor, total order or row revision guarantee,
-  so recovery rereads the authorized scope. Generic `changed_values` are not
-  complete GraphQL projections and must not be merged into cached rows by
-  inference. Silence after deletion or revocation is not authoritative absence;
+  A websocket connection acknowledgement precedes group registration. A change
+  published after a read executes but before the server registers the subscription
+  could otherwise miss both the response and the live stream, including for reads
+  in flight at subscription start. The registration replay in `angee.graphql`
+  covers changes published within its `CHANGE_REPLAY_SECONDS` window before
+  registration, bounded by `CHANGE_REPLAY_MAXLEN` log entries. If that length
+  limit truncates the log inside the window, the server sends one model-wide
+  change that forces a full reread. Treating in-flight reads as fresh assumes
+  their read plus registration completes within `CHANGE_REPLAY_SECONDS`.
+  The transport has no client replay cursor, total order or row revision
+  guarantee, so recovery rereads the authorized scope. Generic `changed_values`
+  are not complete GraphQL projections and must not be merged into cached rows
+  by inference. Silence after deletion or revocation is not authoritative absence;
   only the actor-scoped read owner can establish it.
 - **Mutation completion follows the returned contract.** Authored hooks decode
   result envelopes through `errorFrom` before reconciliation, preserving domain

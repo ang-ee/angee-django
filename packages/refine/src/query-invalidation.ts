@@ -100,8 +100,10 @@ export interface MutationExecutionOptions {
 
 export interface AuthoredLiveInvalidation {
   push: (change: AuthoredLiveChange, deliver?: () => void) => void;
-  /** Recover reads that preceded this registration without cancelling. */
-  ready: (model: string) => void;
+  /** Capture retained reads before one subscription operation starts. */
+  start: (model: string) => ReadonlyMap<Query, number>;
+  /** Recover only reads that preceded this operation without cancelling. */
+  ready: (started: ReadonlyMap<Query, number>) => void;
   reconcile: (request: QueryReconciliation) => Promise<void>;
   batch: <T>(run: (reconciliation?: MutationReconciliationScope) => Promise<T>) => Promise<T>;
   clear: () => void;
@@ -115,10 +117,11 @@ export type ReconciliationPublish = NonNullable<LiveProvider["publish"]> & {
 };
 
 /**
- * One native reconciliation owner: server/unscoped effects use a bounded queue;
- * explicit command collectors flush independently. Commands, live changes and
- * ready recovery never cancel a read: in-flight reads finish before a coalesced
- * follow-up, and idle retained reads refetch at the command's flush.
+ * One native reconciliation owner. Explicit command collectors flush independently:
+ * idle retained reads refetch at that flush, and in-flight reads get a coalesced
+ * follow-up after settling. Live changes use a bounded queue with the same
+ * idle and in-flight refresh rules. Ready recovers retained data older than the
+ * subscription request only when a full read has not covered it, without cancellation.
  * Query owns retries, errors and row state.
  */
 export function createAuthoredLiveInvalidation(
@@ -144,6 +147,26 @@ export function createAuthoredLiveInvalidation(
   const pending = new Set<{ resolve: () => void; reject: (error: unknown) => void }>();
   let waiting: { resolve: () => void; reject: (error: unknown) => void }[] = [];
   const deferred = new Map<Query, Deferred>();
+  // A row-targeted round updates TanStack data without rereading feed membership.
+  const targetedCounts = new WeakMap<Query, number>();
+  const openRowRoundNeedsRecovery = (query: Query) => {
+    const changes = query.meta?.angeeChanges;
+    return Array.isArray(changes) && changes.length > 0
+      && (query.state.fetchStatus !== "idle" || query.meta?.angeeTargetedRound === changes);
+  };
+  const recordTargetedRound = (query: Query, changes: readonly AuthoredLiveChange[]) => {
+    if (query.meta?.angeeTargetedRound === changes) {
+      targetedCounts.set(query, query.state.dataUpdateCount);
+      delete query.meta.angeeTargetedRound;
+    }
+  };
+  const unchangedSince = (query: Query, count: number) => {
+    const current = query.state.dataUpdateCount;
+    return current === count || targetedCounts.get(query) === current
+      || recordValue(query.meta?.angeeAcceptedResponse)?.dataUpdateCount === current;
+  };
+  const needsRecovery = (query: Query, count: number) =>
+    openRowRoundNeedsRecovery(query) || (query.state.fetchStatus === "idle" && unchangedSince(query, count));
   function retireDeferred(query: Query, entry: Deferred): void {
     entry.active = false;
     if (deferred.get(query) === entry) deferred.delete(query);
@@ -196,12 +219,14 @@ export function createAuthoredLiveInvalidation(
             // cancelling it; this round still completes after that fetch.
             await queryClient.invalidateQueries({ predicate: (candidate) => candidate === query, type: "all", refetchType: "active" },
               { cancelRefetch: false });
+            recordTargetedRound(query, roundChanges);
             current.resolve();
           } catch (error) {
             current.reject(error);
             entry.next.reject(error);
             throw error;
           } finally {
+            if (query.meta?.angeeTargetedRound === roundChanges) delete query.meta.angeeTargetedRound;
             if (query.meta?.angeeChanges === roundChanges) delete query.meta.angeeChanges;
             entry.current = undefined;
           }
@@ -228,20 +253,32 @@ export function createAuthoredLiveInvalidation(
         .filter((change) => authoredQueryReadsLiveChange(query.meta, change)));
       return [query, effects.some((group) => group.length === 0) ? [] : uniqueChanges(effects.flat())] as const;
     }));
-    const held = queries.filter((query) => deferred.has(query) || query.state.fetchStatus !== "idle");
+    const isHeld = (query: Query) => deferred.has(query)
+      || query.state?.fetchStatus === "fetching" || query.state?.fetchStatus === "paused";
+    const held = queries.filter(isHeld);
     const heldSet = new Set(held);
     const immediate = queries.filter((query) => !heldSet.has(query));
+    // Round metadata can change ready's predicate; keep this flush's selected queries stable.
+    const immediateSet = new Set(immediate);
     immediate.forEach((query) => { if (query.meta) query.meta.angeeChanges = changesByQuery.get(query); });
-    const refreshed = queryClient.invalidateQueries({ predicate: (query) => predicate(query) && !heldSet.has(query),
+    const refreshed = queryClient.invalidateQueries({ predicate: (query) => immediateSet.has(query)
+      || (!isHeld(query) && predicate(query)),
       type: "all", refetchType: "active" }, { cancelRefetch: false });
     const followUps = held.map((query) => deferRefresh(query, changesByQuery.get(query) ?? []));
     try {
       callbacks.forEach((deliver) => deliver());
-      await refreshed;
     } finally {
-      for (const query of immediate) {
-        const meta = query.meta;
-        if (meta && meta.angeeChanges === changesByQuery.get(query)) delete meta.angeeChanges;
+      try {
+        await refreshed;
+        for (const query of immediate) {
+          recordTargetedRound(query, changesByQuery.get(query) ?? []);
+        }
+      } finally {
+        for (const query of immediate) {
+          const meta = query.meta;
+          if (meta && meta.angeeTargetedRound === changesByQuery.get(query)) delete meta.angeeTargetedRound;
+          if (meta && meta.angeeChanges === changesByQuery.get(query)) delete meta.angeeChanges;
+        }
       }
     }
     await Promise.all(followUps);
@@ -295,22 +332,21 @@ export function createAuthoredLiveInvalidation(
 
   return {
     get generation() { return generation; },
-    ready(model) {
+    start(model) {
       const change = { model };
-      // A read fetched between the subscription request and this ack can
-      // precede registration. Keep reads in flight at the ack even if they
-      // settle later; an idle read fetched after the ack covers the gap.
-      const snapshot = new Map(queryClient.getQueryCache().findAll({ predicate: (query) =>
-        (query.state.data !== undefined || query.state.fetchStatus !== "idle")
+      return new Map(queryClient.getQueryCache().findAll({ predicate: (query) =>
+        query.state.data !== undefined
         && (authoredQueryReadsLiveChange(query.meta, change) || nativeReadsChange(query, change))
-      }).map((query) => [query, query.state.fetchStatus === "idle" ? query.state.dataUpdateCount : undefined] as const));
+      }).map((query) => [query, query.state.dataUpdateCount] as const));
+    },
+    ready(started) {
+      // Only a full fetch covers a retained pre-start read. Targeted rounds
+      // and accepted mutation data can advance the data count without one.
+      const snapshot = new Map([...started].filter(([query, count]) =>
+        needsRecovery(query, count)));
       if (snapshot.size) void reconcile({ changes: [], predicate: (query) => {
-        if (!snapshot.has(query)) return false;
         const seen = snapshot.get(query);
-        const { fetchStatus, dataUpdateCount } = query.state;
-        // An accepted mutation response updates data without fetching the scope.
-        return seen === undefined || fetchStatus === "idle" && (dataUpdateCount === seen
-          || recordValue(query.meta?.angeeAcceptedResponse)?.dataUpdateCount === dataUpdateCount);
+        return seen !== undefined && needsRecovery(query, seen);
       } }).catch(() => undefined);
     },
     clear() {

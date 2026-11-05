@@ -589,7 +589,8 @@ test("ready reconciles a read fetched before the subscription request", async ()
   try {
     await vi.advanceTimersByTimeAsync(0);
     expect(reads).toBe(1);
-    live.ready("notes.Note");
+    const started = live.start("notes.Note");
+    live.ready(started);
     await vi.advanceTimersByTimeAsync(300);
     expect(reads).toBe(2);
   } finally { live.clear(); stop(); cache.clear(); }
@@ -609,7 +610,8 @@ test("a post-ready refetch still pending at flush needs no recovery fetch", asyn
   try {
     await vi.advanceTimersByTimeAsync(0);
     expect(observer.getCurrentResult().data).toBe(1);
-    live.ready("notes.Note");
+    const started = live.start("notes.Note");
+    live.ready(started);
     const refetch = observer.refetch();
     expect(reads).toBe(2);
     await vi.advanceTimersByTimeAsync(300);
@@ -633,9 +635,32 @@ test("a retained read refetched after ready needs no second recovery fetch", asy
   const live = createAuthoredLiveInvalidation(cache);
   try {
     await vi.advanceTimersByTimeAsync(0);
-    live.ready("notes.Note");
+    const started = live.start("notes.Note");
+    live.ready(started);
     await observer.refetch();
     expect(reads).toBe(2);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(reads).toBe(2);
+  } finally { live.clear(); stop(); cache.clear(); }
+});
+
+test("a full authored row-change refetch before ready covers the retained read", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const key = ["ready", "authored-row-change"];
+  cache.setQueryData(key, 1);
+  let reads = 1;
+  const observer = new QueryObserver(cache, {
+    queryKey: key, meta: { angeeModels: ["notes.Note"] }, queryFn: async () => ++reads,
+  });
+  const stop = observer.subscribe(() => undefined);
+  const live = createAuthoredLiveInvalidation(cache);
+  try {
+    const started = live.start("notes.Note");
+    void live.reconcile({ changes: [{ model: "notes.Note", id: "one", action: "update" }] });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(reads).toBe(2);
+    live.ready(started);
     await vi.advanceTimersByTimeAsync(300);
     expect(reads).toBe(2);
   } finally { live.clear(); stop(); cache.clear(); }
@@ -655,7 +680,8 @@ test("an accepted response after ready still needs an authoritative recovery fet
   try {
     await vi.advanceTimersByTimeAsync(0);
     expect(reads).toBe(1);
-    live.ready("notes.Note");
+    const started = live.start("notes.Note");
+    live.ready(started);
     await acceptQueryData(cache, key, { title: "accepted" }, { complete: true });
     await vi.advanceTimersByTimeAsync(300);
     expect(reads).toBe(2);
@@ -664,6 +690,38 @@ test("an accepted response after ready still needs an authoritative recovery fet
 });
 
 test("ready merged with a row change fully rereads a held keyset feed", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const key = ["ready-feed", "gap-change"];
+  const row = { id: "message-1" };
+  const window = vi.fn(async () => ({
+    rows: [row, { id: "message-2" }], count: 2, older_cursor: null, has_older: false,
+    has_more_in_window: false, has_older_than_through: false,
+  }));
+  const revalidate = vi.fn(async () => ({ rows: [row], absent_ids: [] }));
+  cache.setQueryData(key, {
+    pages: [{ rows: [row], through: null, hasOlder: false, count: 1 }],
+    pageParams: [{ start: true }],
+  });
+  const options = keysetFeedOptions(cache, {
+    queryKey: key, pageSize: 2, revalidateModels: ["messaging.Message"], window, revalidate,
+  });
+  const observer = new InfiniteQueryObserver(cache, { ...options, meta: { angeeModels: ["messaging.Message"] } });
+  const stop = observer.subscribe(() => undefined);
+  const live = createAuthoredLiveInvalidation(cache);
+  try {
+    const started = live.start("messaging.Message");
+    live.push({ model: "messaging.Message", id: row.id, action: "update" });
+    live.ready(started);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(revalidate).not.toHaveBeenCalled();
+    expect(window).toHaveBeenCalledTimes(1);
+    expect(observer.getCurrentResult().data?.pages[0]?.rows.map(({ id }) => id))
+      .toEqual(["message-1", "message-2"]);
+  } finally { live.clear(); stop(); cache.clear(); }
+});
+
+test("ready leaves a held keyset feed to its row change revalidation", async () => {
   vi.useFakeTimers();
   const cache = client();
   const key = ["ready-feed", "same-window"];
@@ -694,19 +752,20 @@ test("ready merged with a row change fully rereads a held keyset feed", async ()
   const stop = observer.subscribe(() => undefined);
   const live = createAuthoredLiveInvalidation(cache);
   try {
+    const started = live.start("messaging.Message");
     void observer.refetch();
     live.push({ model: "messaging.Message", id: row.id, action: "update" });
-    live.ready("messaging.Message");
+    live.ready(started);
     await vi.advanceTimersByTimeAsync(300);
     expect(windows).toBe(1);
     expect(signal.aborted).toBe(false);
     first.resolve(windowResult);
     await vi.advanceTimersByTimeAsync(0);
-    expect(windows).toBe(2);
-    expect(seen).toEqual([undefined, []]);
-    expect(revalidate).not.toHaveBeenCalled();
+    expect(windows).toBe(1);
+    expect(seen).toEqual([undefined]);
+    expect(revalidate).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(300);
-    expect(windows).toBe(2);
+    expect(windows).toBe(1);
   } finally {
     first.resolve(windowResult);
     live.clear(); stop(); cache.clear();
@@ -745,11 +804,12 @@ test("ready during targeted keyset revalidation waits, then fully rereads once",
   const stop = observer.subscribe(() => undefined);
   const live = createAuthoredLiveInvalidation(cache);
   try {
+    const started = live.start("messaging.Message");
     live.push({ model: "messaging.Message", id: row.id, action: "update" });
     await vi.advanceTimersByTimeAsync(300);
     expect(revalidate).toHaveBeenCalledTimes(1);
     expect(window).not.toHaveBeenCalled();
-    live.ready("messaging.Message");
+    live.ready(started);
     await vi.advanceTimersByTimeAsync(300);
     expect(signal.aborted).toBe(false);
     expect(revalidate).toHaveBeenCalledTimes(1);
@@ -763,6 +823,141 @@ test("ready during targeted keyset revalidation waits, then fully rereads once",
   } finally {
     targeted.resolve({ rows: [row], absent_ids: [] });
     live.clear(); stop(); cache.clear();
+  }
+});
+
+test("a completed targeted keyset revalidation does not cover a retained feed at ready", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const key = ["ready-feed", "completed-targeted"];
+  const row = { id: "message-1" };
+  const window = vi.fn(async () => ({
+    rows: [row], count: 1, older_cursor: null, has_older: false,
+    has_more_in_window: false, has_older_than_through: false,
+  }));
+  const revalidate = vi.fn(async () => ({ rows: [row], absent_ids: [] }));
+  cache.setQueryData(key, {
+    pages: [{ rows: [row], through: null, hasOlder: false, count: 1 }],
+    pageParams: [{ start: true }],
+  });
+  const options = keysetFeedOptions(cache, {
+    queryKey: key, pageSize: 2, revalidateModels: ["messaging.Message"], window, revalidate,
+  });
+  const observer = new InfiniteQueryObserver(cache, { ...options, meta: { angeeModels: ["messaging.Message"] } });
+  const stop = observer.subscribe(() => undefined);
+  const live = createAuthoredLiveInvalidation(cache);
+  try {
+    const started = live.start("messaging.Message");
+    live.push({ model: "messaging.Message", id: row.id, action: "update" });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(window).not.toHaveBeenCalled();
+    live.ready(started);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(window).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(window).toHaveBeenCalledTimes(1);
+  } finally { live.clear(); stop(); cache.clear(); }
+});
+
+test("a throwing delivery still records a completed row-only feed for ready recovery", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const key = ["ready-feed", "throwing-delivery"];
+  const row = { id: "message-1" };
+  const targeted = pending<KeysetFeedRevalidation<typeof row>>();
+  const window = vi.fn(async () => ({
+    rows: [row], count: 1, older_cursor: null, has_older: false,
+    has_more_in_window: false, has_older_than_through: false,
+  }));
+  const revalidate = vi.fn(() => targeted.promise);
+  const deliver = vi.fn(() => { throw new Error("consumer delivery failed"); });
+  cache.setQueryData(key, {
+    pages: [{ rows: [row], through: null, hasOlder: false, count: 1 }],
+    pageParams: [{ start: true }],
+  });
+  const options = keysetFeedOptions(cache, {
+    queryKey: key, pageSize: 2, revalidateModels: ["messaging.Message"], window, revalidate,
+  });
+  const feed = new InfiniteQueryObserver(cache, { ...options, meta: { angeeModels: ["messaging.Message"] } });
+  const stop = feed.subscribe(() => undefined);
+  const live = createAuthoredLiveInvalidation(cache);
+  try {
+    const started = live.start("messaging.Message");
+    live.push({ model: "messaging.Message", id: row.id, action: "update" }, deliver);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(window).not.toHaveBeenCalled();
+    targeted.resolve({ rows: [row], absent_ids: [] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(feed.getCurrentResult().isFetching).toBe(false);
+    live.ready(started);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(window).toHaveBeenCalledTimes(1);
+  } finally {
+    targeted.resolve({ rows: [row], absent_ids: [] });
+    live.clear(); stop(); cache.clear();
+  }
+});
+
+test("ready retains a completed row-only feed but skips a completed full read while another read is pending", async () => {
+  vi.useFakeTimers();
+  const cache = client();
+  const key = ["ready-feed", "batch-gap"];
+  const row = { id: "message-1" };
+  const slow = pending<number>();
+  const window = vi.fn(async () => ({
+    rows: [row], count: 1, older_cursor: null, has_older: false,
+    has_more_in_window: false, has_older_than_through: false,
+  }));
+  const revalidate = vi.fn(async () => ({ rows: [row], absent_ids: [] }));
+  cache.setQueryData(key, {
+    pages: [{ rows: [row], through: null, hasOlder: false, count: 1 }],
+    pageParams: [{ start: true }],
+  });
+  cache.setQueryData(["ready-feed", "slow"], 0);
+  const options = keysetFeedOptions(cache, {
+    queryKey: key, pageSize: 2, revalidateModels: ["messaging.Message"], window, revalidate,
+  });
+  const feed = new InfiniteQueryObserver(cache, { ...options, meta: { angeeModels: ["messaging.Message"] } });
+  const stopFeed = feed.subscribe(() => undefined);
+  const slowRead = vi.fn(() => slow.promise);
+  const other = new QueryObserver(cache, {
+    queryKey: ["ready-feed", "slow"], meta: { angeeModels: ["messaging.Message"] }, queryFn: slowRead,
+  });
+  const stopOther = other.subscribe(() => undefined);
+  const fastRead = vi.fn(async () => 1);
+  const fast = new QueryObserver(cache, {
+    queryKey: ["ready-feed", "fast"], meta: { angeeModels: ["messaging.Message"] }, queryFn: fastRead,
+  });
+  const stopFast = fast.subscribe(() => undefined);
+  const live = createAuthoredLiveInvalidation(cache);
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fastRead).toHaveBeenCalledTimes(1);
+    const started = live.start("messaging.Message");
+    live.push({ model: "messaging.Message", id: row.id, action: "update" });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(window).not.toHaveBeenCalled();
+    expect(slowRead).toHaveBeenCalledTimes(1);
+    expect(fastRead).toHaveBeenCalledTimes(2);
+    expect(feed.getCurrentResult().isFetching).toBe(false);
+    live.ready(started);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(window).toHaveBeenCalledTimes(1);
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(slowRead).toHaveBeenCalledTimes(1);
+    expect(other.getCurrentResult().isFetching).toBe(true);
+    expect(fastRead).toHaveBeenCalledTimes(2);
+    slow.resolve(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fastRead).toHaveBeenCalledTimes(2);
+    expect(window).toHaveBeenCalledTimes(1);
+  } finally {
+    slow.resolve(1);
+    live.clear(); stopFast(); stopOther(); stopFeed(); cache.clear();
   }
 });
 

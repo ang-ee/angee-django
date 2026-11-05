@@ -399,7 +399,7 @@ describe("Angee Hasura provider defaults", () => {
     expect(subscribe).not.toHaveBeenCalled();
   });
 
-  test("server readiness recovers older first reads and retained rows after resume without cancellation", async () => {
+  test("server readiness leaves first reads in flight and recovers retained rows after resume", async () => {
     vi.useFakeTimers();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     const attempts: { signal: AbortSignal; resolve: (rows: string[]) => void }[] = [];
@@ -419,36 +419,33 @@ describe("Angee Hasura provider defaults", () => {
     const ready = { data: { noteChanged: { model: "notes.Note", id: "", action: "ready" } } };
     try {
       expect(queryFn).toHaveBeenCalledOnce();
-      // The read predates the model-group request; ready closes that gap.
-      expect(on).not.toHaveBeenCalled();
+      expect(on).toHaveBeenCalledWith("connected", expect.any(Function));
       nthSink(sinks, 0).next(ready);
       expect(attempts[0]?.signal.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(300);
       expect(queryFn).toHaveBeenCalledOnce();
       attempts[0]?.resolve(["older snapshot"]);
       await vi.advanceTimersByTimeAsync(0);
-      expect(queryFn).toHaveBeenCalledTimes(2);
+      expect(queryFn).toHaveBeenCalledOnce();
       expect(attempts[0]?.signal.aborted).toBe(false);
-      attempts[1]?.resolve(["recovered"]);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(observer.getCurrentResult().data).toEqual(["recovered"]);
+      expect(observer.getCurrentResult().data).toEqual(["older snapshot"]);
       expect(callback).not.toHaveBeenCalled();
       provider.setEnabled(false);
       provider.setEnabled(true);
       nthSink(sinks, 0).next(ready); // disposed subscription cannot affect the new actor
-      expect(queryFn).toHaveBeenCalledTimes(2);
+      expect(queryFn).toHaveBeenCalledOnce();
       nthSink(sinks, 1).next(ready);
       await vi.advanceTimersByTimeAsync(300);
-      expect(queryFn).toHaveBeenCalledTimes(3);
-      attempts[2]?.resolve(["resumed"]);
+      expect(queryFn).toHaveBeenCalledTimes(2);
+      attempts[1]?.resolve(["resumed"]);
       await vi.advanceTimersByTimeAsync(0);
       expect(observer.getCurrentResult().data).toEqual(["resumed"]);
       nthSink(sinks, 1).next({ data: { noteChanged: {
         model: "notes.Note", id: "note_1", action: "update",
       } } });
       await vi.advanceTimersByTimeAsync(300);
-      expect(queryFn).toHaveBeenCalledTimes(4);
-      attempts[3]?.resolve(["changed row"]);
+      expect(queryFn).toHaveBeenCalledTimes(3);
+      attempts[2]?.resolve(["changed row"]);
       await vi.advanceTimersByTimeAsync(0);
       expect(observer.getCurrentResult().data).toEqual(["changed row"]);
     } finally {
@@ -460,7 +457,7 @@ describe("Angee Hasura provider defaults", () => {
     }
   });
 
-  test("staggered model readies each recover their read while the other model refetches", async () => {
+  test("staggered model readies recover their retained reads independently", async () => {
     vi.useFakeTimers();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     const noteAttempts: { signal: AbortSignal; resolve: (value: string) => void }[] = [];
@@ -479,8 +476,11 @@ describe("Angee Hasura provider defaults", () => {
     });
     const stopNotes = notes.subscribe(() => undefined);
     const stopTags = tags.subscribe(() => undefined);
+    noteAttempts[0]?.resolve("old note");
+    tagAttempts[0]?.resolve("old tag");
+    await vi.advanceTimersByTimeAsync(0);
     const { subscribe, sinks } = recordingClient();
-    const provider = createAngeeChangeLiveProvider({ subscribe, on: vi.fn() } as never, [
+    const provider = createAngeeChangeLiveProvider({ subscribe, on: vi.fn(() => () => undefined) } as never, [
       resource({ changes: "noteChanged" }),
       resource({ changes: "tagChanged", list: "tags", model: "tags.Tag" }),
     ], { queryClient: client });
@@ -491,15 +491,10 @@ describe("Angee Hasura provider defaults", () => {
       expect(tagQuery).toHaveBeenCalledOnce();
       nthSink(sinks, 0).next({ data: { noteChanged: { model: "notes.Note", id: "", action: "ready" } } });
       await vi.advanceTimersByTimeAsync(300);
-      noteAttempts[0]?.resolve("old note");
-      await vi.advanceTimersByTimeAsync(0);
       expect(noteQuery).toHaveBeenCalledTimes(2);
       nthSink(sinks, 1).next({ data: { tagChanged: { model: "tags.Tag", id: "", action: "ready" } } });
       await vi.advanceTimersByTimeAsync(300);
       expect(noteQuery).toHaveBeenCalledTimes(2);
-      expect(tagQuery).toHaveBeenCalledOnce();
-      tagAttempts[0]?.resolve("old tag");
-      await vi.advanceTimersByTimeAsync(0);
       expect(tagQuery).toHaveBeenCalledTimes(2);
       expect(noteAttempts[1]?.signal.aborted).toBe(false);
       noteAttempts[1]?.resolve("new note");
@@ -532,7 +527,7 @@ describe("Angee Hasura provider defaults", () => {
     });
     const stops = observers.map((observer) => observer.subscribe(() => undefined));
     const { subscribe, sinks } = recordingClient();
-    const provider = createAngeeChangeLiveProvider({ subscribe, on: vi.fn() } as never, [
+    const provider = createAngeeChangeLiveProvider({ subscribe, on: vi.fn(() => () => undefined) } as never, [
       resource({ changes: "noteChanged" }),
       { ...resource({ changes: "parentChanged", list: "parents", model: "notes.Parent" }), resourceIdentifier: "console:notes.Parent" },
     ], { queryClient: client });
