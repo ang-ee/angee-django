@@ -176,13 +176,30 @@ class IosBackup:
 def logical_key(domain: str, relative_path: str) -> str:
     """Return the canonical ``domain/relativePath`` key for one backup entry."""
 
-    raw_domain = str(domain)
+    raw_domain = validate_domain(domain)
     raw_relative_path = str(relative_path)
     key = f"{raw_domain}/{raw_relative_path}"
     parsed_domain, parsed_relative_path = split_logical_key(key)
     if parsed_domain != raw_domain or parsed_relative_path != raw_relative_path:
         raise BackupError(f"Invalid iPhone backup logical key: {key!r}")
     return key
+
+
+def validate_domain(domain: str) -> str:
+    """Return one canonical iPhone backup domain segment."""
+
+    raw_domain = str(domain)
+    segment = PurePosixPath(raw_domain)
+    if (
+        not raw_domain
+        or raw_domain == ".."
+        or segment.is_absolute()
+        or len(segment.parts) != 1
+        or "\\" in raw_domain
+        or segment.as_posix() != raw_domain
+    ):
+        raise BackupError(f"Invalid iPhone backup domain: {raw_domain!r}")
+    return raw_domain
 
 
 def split_logical_key(key: str) -> tuple[str, str]:

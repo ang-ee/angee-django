@@ -849,7 +849,7 @@ class ConnectionMutation:
                 discovery = oauth_client.discover_endpoints()
             except OAuthFlowError as error:
                 return ActionResult(ok=False, message=error.public_message)
-            except Exception:  # noqa: BLE001 — provider diagnostics stay outside the action payload.
+            except Exception:
                 return ActionResult(ok=False, message="OIDC metadata discovery failed.")
             oauth_client.save()
         issuer = discovery.get("issuer") if isinstance(discovery, dict) else None
@@ -1308,8 +1308,6 @@ class IntegrationType(IntegrationLabelMixin, ProtectedNode):
     runtime_status: auto
     last_used_at: auto
     last_used_status: auto
-    use_count_24h: auto
-    error_count_24h: auto
     last_error: auto
     created_at: auto
     updated_at: auto
@@ -1932,7 +1930,7 @@ class IntegrationActionMutation:
                 message = integration.concrete_capability().test_connection()
             except IntegrationError as error:
                 return ActionResult(ok=False, message=error.public_message)
-            except Exception:  # noqa: BLE001 — vendor diagnostics stay in the log, outside the action payload.
+            except Exception:
                 logger.exception("integration %s: connection test failed", integration.pk)
                 return ActionResult(ok=False, message="Connection test failed.")
         return ActionResult(ok=True, message=message)

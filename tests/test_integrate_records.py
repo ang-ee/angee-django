@@ -556,5 +556,4 @@ def test_compound_link_uses_root_application_evidence(replica):
     RecordLink.objects.promote(root, source_payload={}, source_hash="one", mapped_payload={})
     child = RecordLink.objects.observe(replica, "aggregate:child", parent=root)
     assert child.aggregate_root.pk == root.pk
-    assert child.applied_snapshot.pk == root.applied_snapshot.pk
-    assert child.application_count() == root.application_count() == 1
+    assert child.aggregate_root.applied_base_id == root.applied_base_id

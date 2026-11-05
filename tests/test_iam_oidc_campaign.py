@@ -29,8 +29,7 @@ def test_oidc_ambiguous_email_never_links_or_provisions(legacy_person_emails, li
     )
     before = User._base_manager.count(), ExternalAccount._base_manager.count(), Person._base_manager.count()
     with pytest.raises(IdentityFlowError) as caught:
-        identity.resolve(
-            oauth_client,
+        identity.OidcIdentityResolver(oauth_client).resolve(
             sub="unlinked-subject",
             email=" AMBIGUOUS@EXAMPLE.COM ",
             claims={"sub": "unlinked-subject", "email": "ambiguous@example.com", "email_verified": True},
@@ -62,8 +61,8 @@ def test_oidc_login_establishes_person_only_for_explicitly_verified_email(compos
     )
     monkeypatch.setattr(OAuthClientOidcProtocol, "verify_id_token", lambda self, token, **kwargs: claims)
     monkeypatch.setattr(OAuthClientOidcProtocol, "fetch_userinfo", lambda self, token, params=None: {})
-    completion = identity.complete_login(
-        oauth_client, code="test-code", state_token=state_token, redirect_uri=redirect_uri
+    completion = identity.OidcLoginCompletion(oauth_client).complete_login(
+        code="test-code", state_token=state_token, redirect_uri=redirect_uri
     )
     user = User._base_manager.get(pk=completion.user.pk)
     assert user.email == "first.login@example.com"

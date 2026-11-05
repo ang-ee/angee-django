@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import secrets
-from typing import Any
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -62,26 +61,6 @@ class WebhookSubscription(OwnerMixin, ProtectedDataModel, concrete=True):
         "updated_at",
     )
 
-    def matches(
-        self,
-        *,
-        kind: str,
-        impl_app: str,
-        integration: Any | None = None,
-        integration_pk: Any | None = None,
-    ) -> bool:
-        """Return whether this subscription should receive one event."""
-
-        if kind not in {str(value) for value in self.event_kinds or ()}:
-            return False
-        impl_app_filter = tuple(str(value) for value in self.impl_app_filter or ())
-        if impl_app_filter and impl_app not in impl_app_filter:
-            return False
-        if self.integration_filter_id is None:
-            return True
-        expected_pk = getattr(integration, "pk", None) if integration_pk is None else integration_pk
-        return self.integration_filter_id == expected_pk
-
     def deliver(self, body: bytes) -> str:
         """POST one signed event body to this subscription's pinned target; raise on non-2xx."""
 
@@ -92,7 +71,7 @@ class WebhookSubscription(OwnerMixin, ProtectedDataModel, concrete=True):
 
         try:
             status = self.deliver(body)
-        except Exception as exc:  # noqa: BLE001 — delivery failure is telemetry, not a caller exception.
+        except Exception as exc:
             logger.error(
                 "Webhook delivery failed for subscription %s (%s).",
                 self.public_id,

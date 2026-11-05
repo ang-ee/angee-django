@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from copy import deepcopy
 from datetime import datetime
 from typing import Any, ClassVar, Self, cast
 
-from deepdiff import DeepDiff
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
@@ -239,23 +237,13 @@ class RecordLink(
     authority_related = ("stream",)
     stream = models.ForeignKey("integrate.SyncStream", on_delete=models.PROTECT, related_name="links")
 
-    presentation_related: ClassVar[tuple[str, ...]] = ("stream__integration",)
+    presentation_related: ClassVar[tuple[str, ...]] = ("stream__integration__vendor",)
 
     @property
     def aggregate_root(self) -> RecordLink:
         """The applied aggregate root whose compound children share its evidence."""
         parent = self.parent
         return parent if parent is not None else self
-
-    @property
-    def applied_snapshot(self) -> Any | None:
-        """The pinned application snapshot for this identity's aggregate."""
-        return self.aggregate_root.applied_base
-
-    def application_count(self) -> int:
-        """Count distinct retained applications of this identity's aggregate root."""
-        root = self.aggregate_root
-        return root.history.using(root._state.db).exclude(applied_at=None).values("applied_at").distinct().count()
 
     def resolve_target(self) -> models.Model | None:
         """Resolve fresh internal evidence through Django's native base-manager pointer.
@@ -594,12 +582,7 @@ class RecordLink(
         """Compare a JSON-native projection with this link's protected applied base."""
         if self.applied_base is None:
             return projection is not None
-        return bool(
-            DeepDiff(
-                json.loads(canonical_json(self.applied_base.mapped_payload)),
-                json.loads(canonical_json(projection)),
-            )
-        )
+        return canonical_json(self.applied_base.mapped_payload) != canonical_json(projection)
 
     def pin(self) -> None:
         """Withhold automatic inbound application and write-back."""

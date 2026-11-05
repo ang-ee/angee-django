@@ -82,7 +82,7 @@ actually unique to your product.
   is a skeleton plugin using lexical search, with no embeddings. Vector and
   graph retrieval remain future work.
 - **Integrate** — third-party systems: a vendor catalogue, accounts, stateless
-  providers and stateful bridges, and signed inbound/outbound webhooks.
+  providers and stateful bridges, plus signed outbound webhook test delivery.
   **OAuth2 / OIDC** ships as the credential-source sibling and also powers SSO.
 - **Agents** — agents act as their non-login service users; their runtime reach is
   exactly the REBAC grants assigned to that user. Pick a template, bind a model

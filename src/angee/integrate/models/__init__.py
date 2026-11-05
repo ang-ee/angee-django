@@ -1,7 +1,5 @@
 """Integration model declarations and retained public Python imports."""
 
-from django.utils import timezone
-
 from angee.integrate.choices import (
     AccountStatus,
     CredentialStatus,
@@ -80,5 +78,4 @@ __all__ = [
     "WebhookSubscriptionManager",
     "WebhookSubscriptionQuerySet",
     "merge_json_state",
-    "timezone",
 ]

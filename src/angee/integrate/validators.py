@@ -67,7 +67,7 @@ def parse_http_url(url: str) -> SplitResult:
 
     try:
         parsed = urlsplit(url)
-        parsed.port  # noqa: B018 — property access validates the port is well-formed
+        _ = parsed.port
     except ValueError as error:
         raise ValidationError("URL is invalid.") from error
     if parsed.scheme not in ALLOWED_HTTP_SCHEMES:

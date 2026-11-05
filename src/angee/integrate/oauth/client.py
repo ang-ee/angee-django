@@ -227,7 +227,7 @@ class OAuthClientProtocol:
         self._token_response_claims = {}
         extra = self.oauth_client.provider.token_params(
             grant_type,
-            _param_values(self.oauth_client, "token_param_values"),
+            self.oauth_client.token_param_values,
         )
         if self._uses_json_token_request():
             return self._json_token_request(token_endpoint, grant_type, grant, extra)
@@ -236,7 +236,7 @@ class OAuthClientProtocol:
     def _uses_json_token_request(self) -> bool:
         """Return whether this row uses the non-standard JSON token shim."""
 
-        return getattr(self.oauth_client, "token_request_format_value", "form") == "json"
+        return self.oauth_client.token_request_format_value == "json"
 
     def _authlib_token_request(
         self,
@@ -255,11 +255,11 @@ class OAuthClientProtocol:
                 token = session.fetch_token(endpoint, grant_type=grant_type, **grant, **extra)
         except OAuthError as exc:
             body = {"error": exc.error, "error_description": exc.description}
-            self._log_token_failure("oauth_refusal", None)
+            self._log_token_failure("oauth_refusal")
             raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 400, body=body) from exc
         except httpx2.HTTPStatusError as exc:
             # Authlib raises this only for >=500 (it raise_for_status()es server errors).
-            self._log_token_failure(exc.response.status_code, _response_body(exc.response))
+            self._log_token_failure(exc.response.status_code)
             raise OAuthFlowError(
                 TOKEN_EXCHANGE_FAILED,
                 exc.response.status_code,
@@ -272,7 +272,7 @@ class OAuthClientProtocol:
             # non-JSON 4xx (the documented Anthropic/CDN 403/429 block page) surfaces as
             # a ValueError, and a transport failure as httpx2.HTTPError — both map to the
             # stable OAuthFlowError seam, like the JSON-shim and _get_json paths.
-            self._log_token_failure(f"transport_error:{type(exc).__name__}", None)
+            self._log_token_failure(f"transport_error:{type(exc).__name__}")
             raise OAuthFlowError(TOKEN_EXCHANGE_FAILED, 503 if isinstance(exc, httpx2.TransportError) else 400) from exc
         finally:
             session.close()
@@ -304,7 +304,7 @@ class OAuthClientProtocol:
             response.raise_for_status()
             data = response.json()
         except httpx2.HTTPStatusError as exc:
-            self._log_token_failure(exc.response.status_code, _response_body(exc.response))
+            self._log_token_failure(exc.response.status_code)
             raise OAuthFlowError(
                 TOKEN_EXCHANGE_FAILED,
                 exc.response.status_code,
@@ -377,10 +377,9 @@ class OAuthClientProtocol:
 
         return httpx2.Client(headers=dict(OUTBOUND_HEADERS), **_outbound_kwargs(self._transport))
 
-    def _log_token_failure(self, status: object, body: Any) -> None:
+    def _log_token_failure(self, status: object) -> None:
         """Log bounded token-request metadata without provider-controlled values."""
 
-        del body
         client_label = str(getattr(self.oauth_client, "slug", "") or "unknown")
         logger.warning(
             "OAuth token request failed for %s: status=%s",
@@ -407,7 +406,7 @@ class OAuthClientProtocol:
         if not challenge and not self._client_secret():
             raise OAuthFlowError(CLIENT_NOT_CONFIGURED, 400, "OAuth client needs PKCE or a client secret.")
         params = {
-            **_string_param_values(self.oauth_client, "authorize_param_values"),
+            **self.oauth_client.authorize_param_values,
             "redirect_uri": redirect_uri,
             "scope": " ".join(scopes),
         }
@@ -447,24 +446,6 @@ def _outbound_kwargs(transport: httpx2.BaseTransport | None) -> dict[str, Any]:
         "timeout": HTTP_TIMEOUT_SECONDS,
         "transport": transport if transport is not None else PinnedTransport(allow_private=True),
     }
-
-
-def _param_values(oauth_client: object, property_name: str) -> dict[str, Any]:
-    """Return provider-specific JSON/form params without changing scalar types."""
-
-    value = getattr(oauth_client, property_name, {})
-    if isinstance(value, Mapping):
-        return {str(key): item for key, item in value.items() if item is not None}
-    return {}
-
-
-def _string_param_values(oauth_client: object, property_name: str) -> dict[str, str]:
-    """Return provider-specific URL parameters as strings."""
-
-    value = getattr(oauth_client, property_name, {})
-    if isinstance(value, Mapping):
-        return {str(key): str(item) for key, item in value.items() if item is not None}
-    return {}
 
 
 def with_query(url: str, query: Mapping[str, str]) -> str:

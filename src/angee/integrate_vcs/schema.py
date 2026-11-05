@@ -177,7 +177,6 @@ _VCS_BRIDGE_RESOURCE = hasura_model_resource(
         "lifecycle",
         "config",
         "display_name",
-        "webhook_secret",
     ],
     updatable=[
         "vendor",
@@ -187,7 +186,6 @@ _VCS_BRIDGE_RESOURCE = hasura_model_resource(
         "lifecycle",
         "config",
         "display_name",
-        "webhook_secret",
     ],
     write_backend=IntegrationWriteBackend(
         VcsBridge,

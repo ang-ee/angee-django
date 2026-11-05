@@ -73,7 +73,7 @@ def sync_due_bridges(timestamp: int | None = None) -> None:
     for step in (scheduler.enqueue_pending_discoveries, scheduler.enqueue_due_bridges):
         try:
             step()
-        except Exception:  # noqa: BLE001 — independent scheduler steps must all run.
+        except Exception:
             logger.exception("Integration scheduler step %s failed.", step.__name__)
 
 

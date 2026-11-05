@@ -11,7 +11,7 @@ from typing import Any, BinaryIO, cast
 
 from django.core.exceptions import ValidationError
 
-from angee.integrate_iphone.backup import BackupError, IosBackup, logical_key, split_logical_key
+from angee.integrate_iphone.backup import BackupError, IosBackup, logical_key, validate_domain
 from angee.storage.exceptions import UploadError
 from angee.storage_integrate.mounts import (
     LocalFolderMountBackend,
@@ -130,9 +130,7 @@ class IphoneBackupMountBackend(LocalFolderMountBackend):
         seen: set[str] = set()
         for domain, relative_path in self.backup.iter_dirs():
             try:
-                # A domain root is a directory, not a file key; the sentinel is
-                # used only to ask the shared key owner to validate its segment.
-                domain_root, _sentinel = split_logical_key(logical_key(domain, "__root__"))
+                domain_root = validate_domain(domain)
                 directory = (
                     logical_key(domain, relative_path) if relative_path else domain_root
                 )

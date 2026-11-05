@@ -9,7 +9,7 @@ import re
 import sys
 import tempfile
 from collections.abc import Iterator
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack
 from importlib.util import spec_from_file_location
 from pathlib import Path
 from types import ModuleType
@@ -42,7 +42,7 @@ from angee.integrate.models import WebhookSubscription as AbstractWebhookSubscri
 from angee.integrate.states import StreamDefinition
 from angee.integrate.streams import StreamPage
 from angee.integrate.testing.integration import Integration
-from angee.integrate_vcs.backend import Checkout, RepoDescriptor, TreeEntry, VCSBackend
+from angee.integrate_vcs.backend import RepoDescriptor, TreeEntry, VCSBackend
 from angee.integrate_vcs.models import Repository as AbstractRepository
 from angee.integrate_vcs.models import Source as AbstractSource
 from angee.integrate_vcs.models import Template as AbstractTemplate
@@ -465,25 +465,6 @@ class StubVCSBackend(VCSBackend):
 
         del repository, ref
         return "stubsha"
-
-    @contextmanager
-    def materialize(self, repository: Any, *, ref: str, checkout: Checkout) -> Iterator[tuple[Path, str]]:
-        """Provide the configured source files through the native ingestion seam."""
-
-        del repository, ref, checkout
-        with tempfile.TemporaryDirectory(prefix="angee-stub-source-") as temporary:
-            root = Path(temporary).resolve()
-            for name, content in self.bridge.config.get("stub_blobs", {}).items():
-                path = root / name
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(str(content), encoding="utf-8")
-            yield root, "stubsha"
-
-    def verify_webhook(self, vcs_bridge: Any, request: Any) -> bool:
-        """Accept every webhook in tests."""
-
-        del vcs_bridge, request
-        return True
 
 
 class StubInferenceBackend(InferenceBackend):

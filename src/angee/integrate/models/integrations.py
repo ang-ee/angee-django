@@ -58,8 +58,8 @@ from angee.integrate.managers import (
 from angee.integrate.models.bridges import Bridge
 from angee.integrate.models.connections import Credential
 from angee.integrate.oauth.errors import OAuthFlowError
-from angee.integrate.registry import models_with
 from angee.integrate.signals import discovery_finished
+from angee.integrate.states import UNSET
 from angee.integrate.streams import preview_push
 from angee.jobs.enqueue import enqueue_task
 from angee.provenance.contrib.angee.managers import AngeeHistoryUnscopedManager
@@ -71,8 +71,6 @@ from angee.resources.mixins import ResourceLoadMixin
 
 logger = logging.getLogger(__name__)
 
-_UNSET = object()
-_INTEGRATION_FAILURE_MESSAGE = INTEGRATION_FAILURE_MESSAGE
 _DISCOVERY_RETRY_EXHAUSTED_MESSAGE = "Connection discovery exhausted its retries; retry discovery to continue."
 
 
@@ -291,7 +289,9 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
         model = self.declared_concrete_model() or type(self)
         field = model.capability_impl_field()
         key = self.__dict__.get("_connection_impl_key")
-        return field.resolve_class(key) if key is not None else field.resolve_for(self.concrete_capability())
+        if key is not None:
+            return field.resolve_class(key)
+        return field.resolve_for(self if model is type(self) else self.concrete_capability())
 
     @property
     def capability_impl(self) -> Any:
@@ -718,19 +718,18 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
             adapter.close()
 
     def request_sync(self, *, now: datetime | None = None) -> int:
-        """Queue this integration's bridge capabilities and return the dispatch count."""
+        """Queue this integration's declared bridge capability, when it has one."""
 
         using = write_alias(type(self), using=self._state.db, instance=self)
 
-        timestamp = now or timezone.now()
-        count = 0
-        for model in models_with(base=Bridge):
-            for capability in (
-                model._default_manager.db_manager(using).of_concrete_type().filter(pk=self.pk).order_by("pk")
-            ):
-                capability.request_sync(now=timestamp)
-                count += 1
-        return count
+        model = self.declared_concrete_model()
+        if model is None or not issubclass(model, Bridge):
+            return 0
+        capability = model._default_manager.db_manager(using).filter(pk=self.pk).first()
+        if capability is None:
+            return 0
+        capability.request_sync(now=now or timezone.now())
+        return 1
 
     def probe_credential(self) -> str:
         """Prove the attached credential is usable; raise :class:`IntegrationError` when not.
@@ -744,7 +743,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
             raise IntegrationError("No credential is attached.")
         try:
             credential.auth_headers()
-        except Exception as error:  # noqa: BLE001 — handler diagnostics stay outside the operator message.
+        except Exception as error:
             raise IntegrationError("Credential is not usable.") from error
         return "Credential is usable."
 
@@ -797,8 +796,6 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
     """
     last_used_at = models.DateTimeField(null=True, blank=True)
     last_used_status = models.CharField(max_length=64, blank=True)
-    use_count_24h = models.PositiveIntegerField(default=0)
-    error_count_24h = models.PositiveIntegerField(default=0)
     last_error = DiagnosticTextField(blank=True)
     last_error_at = models.DateTimeField(null=True, blank=True)
     discovery_credential = models.ForeignKey(
@@ -847,10 +844,9 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
         rebac_resource_type = "integrate/integration"
 
     def __str__(self) -> str:
-        """Return a stable vendor-qualified integration label."""
+        """Return a stable integration label without fetching its vendor."""
 
-        vendor_slug = getattr(getattr(self, "vendor", None), "slug", "?")
-        return f"{vendor_slug}:{self.public_id}"
+        return str(self.display_name or self.public_id)
 
     def prepare_patch(self, fields: Mapping[str, Any]) -> dict[str, Any]:
         """Apply connection/state/ownership verbs before ordinary native field updates.
@@ -863,8 +859,8 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
         using = write_alias(type(self), using=self._state.db, instance=self)
 
         fields = dict(fields)
-        credential_id = fields.pop("credential_id", _UNSET)
-        if credential_id is not _UNSET:
+        credential_id = fields.pop("credential_id", UNSET)
+        if credential_id is not UNSET:
             actor = instance_actor(self)
             credentials = apps.get_model("integrate", "Credential").objects.db_manager(using).for_write()
             accounts = apps.get_model("integrate", "ExternalAccount").objects.db_manager(using).for_write()
@@ -872,16 +868,16 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
                 credentials = credentials.with_actor(actor)
                 accounts = accounts.with_actor(actor)
             credential = None if credential_id is None else credentials.get(pk=credential_id)
-            account_id = fields.pop("account_id", _UNSET)
-            account = account_id if account_id is _UNSET or account_id is None else accounts.get(pk=account_id)
+            account_id = fields.pop("account_id", UNSET)
+            account = account_id if account_id is UNSET or account_id is None else accounts.get(pk=account_id)
             self.concrete_capability().attach_connection(credential, account=account)
             self.refresh_from_db(
                 using=using,
             )
         if "lifecycle" in fields:
             self.set_lifecycle(fields.pop("lifecycle"))
-        owner_id = fields.pop("owner_id", _UNSET)
-        if owner_id is not _UNSET:
+        owner_id = fields.pop("owner_id", UNSET)
+        if owner_id is not UNSET:
             owner = None if owner_id is None else get_user_model().objects.db_manager(using).get(pk=owner_id)
             self.transfer_ownership(owner)
         if "config" in fields:
@@ -936,12 +932,12 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
         target=IntegrationLifecycle.CONNECTED,
         on_success=_save_connected,
     )
-    def connect(self, *, credential: Any = _UNSET, account: Any = _UNSET) -> None:
+    def connect(self, *, credential: Any = UNSET, account: Any = UNSET) -> None:
         """Mark this integration connected, optionally attaching connection rows."""
 
         self._transition_fields = self._set_connection_fields(credential=credential, account=account)
 
-    def _set_connection_fields(self, *, credential: Any = _UNSET, account: Any = _UNSET) -> set[str]:
+    def _set_connection_fields(self, *, credential: Any = UNSET, account: Any = UNSET) -> set[str]:
         """Attach connection rows and reset health, returning the fields changed."""
 
         fields: set[str] = set()
@@ -949,7 +945,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
             ("credential", credential, type(self).credential.field),
             ("account", account, type(self).account.field),
         ):
-            if value is _UNSET:
+            if value is UNSET:
                 continue
             if value is not None and value._state.adding:
                 setattr(self, name, value)
@@ -971,7 +967,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
         self,
         credential: Any | None,
         *,
-        account: Any = _UNSET,
+        account: Any = UNSET,
         connect_disconnected: bool = True,
         discovery_generation: int | None = None,
     ) -> None:
@@ -984,7 +980,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
         using = write_alias(type(self), using=self._state.db, instance=self)
 
         resolved_account = (
-            (None if credential is None else credential.external_account) if account is _UNSET else account
+            (None if credential is None else credential.external_account) if account is UNSET else account
         )
         if self.pk is None:
             self._set_connection_fields(credential=credential, account=resolved_account)
@@ -1346,7 +1342,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
                     using=using,
                 )
                 return {"ok": applied, "reason": "applied" if applied else "stale-discovery"}
-            except Exception as error:  # noqa: BLE001 — provider diagnostics never become public telemetry.
+            except Exception as error:
                 if not isinstance(error, IntegrationError):
                     logger.exception("Connection discovery failed for integration %s.", target.pk)
                 retryable = (
@@ -1408,7 +1404,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
             self.last_used_status = raw_status or normalized.value
             usage_fields = ["last_used_at", "last_used_status"]
         self.last_error = (
-            error.message if isinstance(error, IntegrationFailure) else (_INTEGRATION_FAILURE_MESSAGE if error else "")
+            error.message if isinstance(error, IntegrationFailure) else (INTEGRATION_FAILURE_MESSAGE if error else "")
         )
         self.last_error_at = reported_at if error else None
 

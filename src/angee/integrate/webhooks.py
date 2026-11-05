@@ -1,8 +1,7 @@
-"""Outbound webhook delivery: a signed POST over the shared HTTP client.
+"""Outbound webhook test delivery: a signed POST over the shared HTTP client.
 
-The delivery *orchestration* (which subscriptions receive an event) lives on
-``WebhookSubscription``'s manager, and a subscription delivers itself via
-``WebhookSubscription.deliver``. This module owns only the webhook *signature*
+A subscription sends its own test delivery through ``WebhookSubscription.deliver``.
+This module owns the webhook *signature*
 and maps the shared client's result to a delivery error — the SSRF-pinned
 transport is :class:`angee.integrate.http.HttpClient`, so the resolve-once-and-pin
 mechanics live in exactly one place.

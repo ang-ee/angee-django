@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from django.core.exceptions import ImproperlyConfigured
-from django.db import connections, models, transaction
+from django.db import models, transaction
 from django.utils import timezone
 from rebac import (
     database_context,
@@ -33,7 +33,7 @@ from angee.integrate.errors import (
     safe_integration_failure,
 )
 from angee.integrate.live import PairingProjection, PairingState, armed_material_key
-from angee.integrate.locks import bridge_advisory_lock, bridge_is_locked, bridge_lock_key, bridge_session_is_hosted
+from angee.integrate.locks import bridge_is_locked, bridge_lock_key, bridge_session_is_hosted
 from angee.integrate.querysets import IntegrationQuerySet
 from angee.integrate.states import (
     StreamState,
@@ -131,7 +131,6 @@ class Bridge(ProtectedModel, concrete=False, demands="integrate.Integration"):
     """Bridge-scoped settings interpreted by the selected backend."""
     poll_interval = models.PositiveIntegerField(default=300)
     subscription_state = models.JSONField(default=dict, blank=True)
-    next_subscription_refresh_at = models.DateTimeField(null=True, blank=True)
     last_sync_started_at = models.DateTimeField(null=True, blank=True)
     last_sync_completed_at = models.DateTimeField(null=True, blank=True)
     last_sync_items = models.PositiveIntegerField(default=0)
@@ -1003,7 +1002,7 @@ class Bridge(ProtectedModel, concrete=False, demands="integrate.Integration"):
             # is when the external work actually finished.
             self.refresh_from_db(fields=["sync_progress"])
             self.record_sync(result, now=timezone.now())
-        except Exception as error:  # noqa: BLE001 — sync failure is telemetry, then caller policy.
+        except Exception as error:
             self.refresh_from_db(fields=["sync_progress"])
             self.record_sync_error(error, now=timezone.now())
             raise
@@ -1013,38 +1012,6 @@ class Bridge(ProtectedModel, concrete=False, demands="integrate.Integration"):
         """Drive backend streams; concrete bridges may override this sync seam."""
 
         return sync_bridge(self)
-
-    def handle_webhook(self, payload: Any) -> None:
-        """Apply one verified inbound webhook payload to this bridge."""
-
-        raise NotImplementedError("Bridge subclasses must implement handle_webhook().")
-
-    def verify_webhook(self, request: Any) -> bool:
-        """Return whether an inbound webhook request is authentic for this bridge."""
-
-        raise NotImplementedError("Bridge subclasses must implement verify_webhook().")
-
-    def dispatch_inbound(self, request_or_payload: Any) -> bool:
-        """Land an authentic webhook under the polling and settlement lock.
-
-        False refuses verification; contention raises a transient refusal so
-        the verified delivery can retry. Call outside atomic blocks: the session
-        advisory lock must cover the concrete capability's committed landing.
-        """
-
-        using = write_alias(type(self), using=self._state.db, instance=self)
-
-        if connections[using].in_atomic_block:
-            raise IntegrationError("Inbound dispatch requires autocommit.")
-        with system_context(reason="integrate.inbound.capability"):
-            capability = self.concrete_capability()
-        if not capability.verify_webhook(request_or_payload):
-            return False
-        with bridge_advisory_lock(capability) as acquired:
-            if not acquired:
-                raise IntegrationError("The bridge is busy; retry inbound delivery.", transient=True)
-            capability.handle_webhook(request_or_payload)
-        return True
 
     def start_live(self) -> None:
         """Start or renew this bridge's live vendor subscription."""

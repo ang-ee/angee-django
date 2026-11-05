@@ -147,7 +147,6 @@ def complete_external_account_link(
 ) -> AccountConnectCompletion:
     """Link an external account to ``user`` and store its OAuth credential."""
 
-    del reason
     Account = cast(Any, apps.get_model("integrate", "ExternalAccount"))
     try:
         account = Account.objects.connect_oauth(
@@ -156,6 +155,7 @@ def complete_external_account_link(
             external_id=external_id,
             tokens=tokens,
             claims=claims,
+            reason=reason,
         )
     except ValidationError as error:
         if error.code == "account_already_linked":

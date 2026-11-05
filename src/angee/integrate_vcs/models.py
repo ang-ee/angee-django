@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from datetime import datetime
-from pathlib import Path
 from typing import Any, ClassVar
 
 from django.apps import apps
@@ -13,7 +11,6 @@ from django.db import models
 from django.utils import timezone
 from rebac import system_context
 
-from angee.base.fields.encrypted import EncryptedField
 from angee.base.fields.implementation import ImplClassField
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
@@ -22,7 +19,7 @@ from angee.iam.managers import ProtectedManager
 from angee.iam.models.base import ProtectedDataModel
 from angee.integrate.models import Bridge, IntegrationCreateMode
 from angee.integrate_vcs import registry
-from angee.integrate_vcs.backend import Checkout, VCSBackend, source_path, tree_entries
+from angee.integrate_vcs.backend import VCSBackend
 from angee.integrate_vcs.managers import RepositoryManager, TemplateManager
 
 
@@ -38,7 +35,7 @@ class VcsBridge(Bridge, inherits="integrate.Integration"):
     """The VCS sync child model over ``Integration``.
 
     A :class:`Bridge`: the scheduler refreshes its repositories' sources over the
-    host REST API and an inbound push webhook triggers the same refresh. The
+    host REST API. The
     host-specific wire format is the integration child row's non-model
     :class:`~angee.integrate_vcs.backend.VCSBackend` implementation — so
     github/gitlab/bitbucket share this one table, differing only in behavior.
@@ -54,8 +51,6 @@ class VcsBridge(Bridge, inherits="integrate.Integration"):
         create_only=True,
     )
     """Registry key for the VCS backend bound to this bridge."""
-    webhook_secret = EncryptedField(blank=True)
-    """Shared secret for verifying inbound push webhooks (per account, not per repo)."""
 
     class Meta:
         """Django model options for the VCS bridge child model."""
@@ -98,7 +93,7 @@ class VcsBridge(Bridge, inherits="integrate.Integration"):
         """Refresh every inventoried repository's sources over REST (Bridge contract).
 
         Repository discovery (creating rows from the account) is the explicit
-        ``discoverRepositories`` action; the scheduled/webhook ``sync`` refreshes the
+        ``discoverRepositories`` action; the scheduled ``sync`` refreshes the
         content of already-inventoried repositories.
         """
 
@@ -110,17 +105,6 @@ class VcsBridge(Bridge, inherits="integrate.Integration"):
                 .order_by("repository_id", "pk")
             )
         return sum(source.refresh() for source in sources)
-
-    def handle_webhook(self, payload: Any) -> None:
-        """Re-sync this bridge's inventory on an inbound push webhook."""
-
-        del payload
-        self.sync()
-
-    def verify_webhook(self, request: Any) -> bool:
-        """Return whether an inbound push webhook is authentic for this bridge."""
-
-        return self.backend.verify_webhook(self, request)
 
     def search_repositories(self, query: str) -> list[Any]:
         """Return host repositories whose name matches ``query`` (the add typeahead)."""
@@ -268,27 +252,6 @@ class Source(AuditMixin, ProtectedDataModel, concrete=True):
             registry.VcsOutputManager,
         )
         return manager.sync_from_source(self)
-
-    @contextmanager
-    def materialized(self, *, checkout: Checkout) -> Iterator[tuple[Path, str]]:
-        """Hold the selected backend's source view while a consumer prepares facts."""
-
-        repository = self.repository
-        with repository.vcs_bridge.backend.materialize(
-            repository,
-            ref=self.ref or repository.default_branch,
-            checkout=checkout,
-        ) as source:
-            yield source
-
-    def marker_paths(self, root: Path, *, marker: str) -> tuple[Path, ...]:
-        """Return deterministic marker paths within this materialized source subtree."""
-
-        return tuple(
-            source_path(root, entry.path)
-            for entry in tree_entries(root, path=self.path, recursive=True)
-            if entry.type == "blob" and entry.name == marker
-        )
 
     def materialize_spec(self) -> dict[str, str]:
         """Return the operator handoff coordinates to clone and check out this source."""

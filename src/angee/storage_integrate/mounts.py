@@ -151,17 +151,10 @@ class LocalFolderMountBackend(MountBackend):
 
         del credential
         raw_token = str(token or "").strip()
-        candidate = Path.home() if not raw_token else Path(raw_token)
-        if raw_token and not candidate.is_absolute():
-            raise ValidationError({"token": "Local folder path must be absolute."})
         try:
-            current = candidate.resolve(strict=True)
-        except OSError as error:
-            raise ValidationError({"token": f"Local folder does not exist: {candidate}"}) from error
-        if not current.is_dir():
-            raise ValidationError({"token": f"Local folder path is not a directory: {current}"})
-        if not os.access(current, os.R_OK | os.X_OK):
-            raise ValidationError({"token": f"Local folder is not readable: {current}"})
+            current = validate_local_folder_root(raw_token or str(Path.home()))
+        except ValidationError as error:
+            raise ValidationError({"token": error.messages}) from error
 
         try:
             directory_children = list(current.iterdir())

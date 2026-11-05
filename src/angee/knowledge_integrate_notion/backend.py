@@ -276,12 +276,16 @@ class NotionBackend(BridgeImpl, HttpClientMixin):
                     cursor.after_source = source.external_key
                 cursor.phase = "sources"
 
+        previous_links = {
+            link.external_key: link
+            for link in stream.links.filter(external_key__in=[str(node.id) for node in cursor.pending])
+        }
         while cursor.pending and len(snapshots) < bound:
             if snapshots and deadline is not None and monotonic() >= deadline:
                 break
             try:
                 node = cursor.pending[0]
-                link = stream.links.filter(external_key=str(node.id)).first()
+                link = previous_links.get(str(node.id))
                 previous = NotionSnapshot.model_validate(link.source_payload) if link is not None else None
                 snapshot = self._snapshot(node, previous=previous)
             except IntegrationError as error:

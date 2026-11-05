@@ -12,7 +12,6 @@ from django.utils.module_loading import import_string
 from rebac.database import write_alias
 
 from angee.base.implementations import ImplBase
-from angee.base.locks import LockKey
 from angee.integrate.constants import RUN_SESSION_TASK, SESSION_START_EXPIRES
 from angee.integrate.live import PairingProjection, SessionLoggedOut
 from angee.jobs.enqueue import enqueue_task
@@ -246,11 +245,6 @@ class LiveBridgeImpl(BridgeImpl):
             using=using,
         )
 
-    def account_lock_key(self, external_id: str) -> LockKey:
-        """Return the cross-worker ownership key for one normalized account id."""
-
-        return self.bridge.live_account_lock_key(self.key, self.normalize_account_id(external_id))
-
     @contextmanager
     def account_lock(self, external_id: str) -> Iterator[bool]:
         """Try to hold the account-scoped ownership lock."""
@@ -262,7 +256,7 @@ class LiveBridgeImpl(BridgeImpl):
         """Record ``external_id`` as this bridge's durable account identity.
 
         Returns whether the claim landed: ``False`` means another bridge already
-        holds the account (:attr:`CLAIMING_LIFECYCLES`) and this one must not
+        holds the account and this one must not
         ingest it. The claim records identity and nothing else; it never moves
         lifecycle, because connection intent is the operator's to declare.
 
