@@ -982,10 +982,9 @@ class TriggerEventManager[T: TriggerEvent](_TriggerEventManagerBase[T]):
             queryset = triggers.system_queryset().using(owner.db).filter(enabled=True, source=source)
             if not implementation.model_label:
                 queryset = queryset.filter(model_label=model._meta.label)
-            if len(records) > 1:
-                with system_context(reason="workflows.capture"):
-                    if not queryset.exists():
-                        return
+            with system_context(reason="workflows.capture"):
+                if not queryset.exists():
+                    return
             content_type = ContentType.objects.db_manager(owner.db).get_for_model(model)
         except Exception:
             logger.exception("Workflow trigger capture failed.")

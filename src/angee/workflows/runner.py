@@ -250,17 +250,29 @@ class Runner:
         with self._fenced(step_run):
             pass
 
-    def record(self, step_run: Any, record: Any, *, label: str, operation: str, actor: Any) -> Any:
+    def record(
+        self, step_run: Any, record: Any, *, label: str, operation: str, actor: Any,
+        admitted_target: Any = None,
+    ) -> Any:
         """Stage an actor-readable canonical reference while the attempt is live."""
         using = step_run._state.db
         if record._state.db is not None and record._state.db != using:
             raise PermissionDenied("Read access to the step record is required.")
+        if operation not in RecordOperation.values:
+            raise ValidationError("Unknown step record operation.")
+        if admitted_target is not None:
+            return step_run.records.model(
+                run=step_run.run,
+                step_run=step_run,
+                content_type=admitted_target.content_type,
+                object_id=admitted_target.object_id,
+                label=label,
+                operation=operation,
+            )
         readable = type(record).objects.db_manager(using, hints={"instance": record}).with_actor(actor)
         if not readable.filter(pk=record.pk).exists():
             raise PermissionDenied("Read access to the step record is required.")
         target = generic_target(record, using=using)
-        if operation not in RecordOperation.values:
-            raise ValidationError("Unknown step record operation.")
         with self._fenced(step_run) as current:
             return current.records.model(
                 run=current.run,

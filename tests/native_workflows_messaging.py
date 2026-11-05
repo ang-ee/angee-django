@@ -20,7 +20,7 @@ from angee.graphql.schema import GraphQLSchemas
 from angee.iam.querysets import ProtectedQuerySet
 from angee.jobs.enqueue import celery_app
 from angee.messaging.backends import ParsedMessage, ParsedPart
-from angee.messaging.events import message_ingested
+from angee.messaging.events import historical_import, message_ingested
 from angee.workflows import triggers
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
@@ -404,7 +404,8 @@ class MessageTriggerTests(TransactionTestCase):
             self.assertEqual(TriggerEvent.system_queryset().count(), 1)
             raise ValueError("rollback")
         self.assertFalse(TriggerEvent.system_queryset().exists())
-        self.ingest("historical-message", historical=True)
+        with historical_import():
+            self.ingest("historical-message")
         self.assertFalse(TriggerEvent.system_queryset().exists())
         self.ingest()
         changed = TriggerEvent.system_queryset().get().changed_at

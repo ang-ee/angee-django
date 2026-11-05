@@ -12,7 +12,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core import checks
 from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured, ValidationError
-from django.db import models, transaction
+from django.db import models, router, transaction
 from django.db.models.functions import MD5
 from django.utils.text import capfirst
 from django_compose.models import Composable
@@ -993,17 +993,26 @@ class Thread(
 
     _angee_base = AngeeHistoryMergeableUnscopedManager()
 
-    history = ChatterHistory(inherit=True, excluded_fields=("message_count", "last_message_at"))
+    history = ChatterHistory(inherit=True, excluded_fields=("message_count", "last_message_at", "is_record_chatter"))
 
     def member_threads(self) -> models.QuerySet:
         """Physical chatter containers under the current, flattened survivor."""
 
         survivor = self.canonical()
-        return type(self)._base_manager.using(survivor._state.db).redirect_group(survivor)
+        using = survivor._state.db or router.db_for_read(type(self), instance=survivor)
+        return type(self)._base_manager.using(using).redirect_group(survivor)
+
+    def retire_merged(self, merged: Any) -> None:
+        """Carry chatter membership to every retained physical container."""
+        super().retire_merged(merged)
+        using = self._state.db or router.db_for_write(type(self), instance=self)
+        apps.get_model("messaging", "ThreadAttachment").sync_chatter_flag(self.pk, using=using)
 
     def chatter_record_ref(self) -> RecordRef | None:
         """The canonical chatter host, without loading messages or the document body."""
         survivor = self.canonical()
+        if not survivor.is_record_chatter:
+            return None
         attachment = (
             apps.get_model("messaging", "ThreadAttachment")
             ._base_manager.using(survivor._state.db).filter(
@@ -1071,6 +1080,8 @@ class Thread(
     thread resource's write surface. Default ``False`` keeps record chatter isolated; a
     host that opts in flips :meth:`broadcasts_changes` on for its thread only.
     """
+    is_record_chatter = models.BooleanField(default=False, editable=False)
+    """Persisted chatter attachment membership for write-path broadcast gates."""
 
     objects = ThreadManager()
 
@@ -1135,12 +1146,7 @@ class Thread(
         Source evidence edges deliberately do not change conversation broadcasting.
         """
 
-        attachment_model = apps.get_model("messaging", "ThreadAttachment")
-        members = self.member_threads()
-        return attachment_model._base_manager.using(members.db).filter(
-            thread_id__in=members.values("pk"),
-            role=attachment_model.AttachmentRole.CHATTER,
-        ).exists()
+        return self.is_record_chatter
 
     def broadcasts_changes(self) -> bool:
         """Whether this thread's changes reach the generic ``changes`` subscription.
@@ -1214,6 +1220,64 @@ class ThreadAttachment(HistoryMixin, AuditMixin, ProtectedRecordRefMixin, Protec
     metadata = models.JSONField(blank=True, default=dict)
 
     objects = ThreadAttachmentManager()
+
+    @classmethod
+    def sync_chatter_flag(cls, thread_id: Any, *, using: str) -> None:
+        """Refresh the redirect group's flag under its row locks.
+
+        Instance attach/detach and merge paths call this owner. A direct queryset
+        delete bypasses those hooks and may leave a stale true flag. Later messages
+        in that thread are stored as COMMENT and skipped for email identity matching;
+        the emptied thread is retained. The messages remain stored.
+        ``ThreadAttachmentManager.teardown_for_target`` re-syncs the flag after
+        deleting attachments.
+        """
+        thread_model = cls._meta.get_field("thread").related_model
+        thread = thread_model._base_manager.using(using).get(pk=thread_id)
+        members = thread.member_threads()
+        member_ids = tuple(members.order_by("pk").select_for_update().values_list("pk", flat=True))
+        attached = cls._base_manager.using(using).filter(
+            thread_id__in=member_ids, role=cls.AttachmentRole.CHATTER,
+        ).exists()
+        thread_model._base_manager.using(using).filter(pk__in=member_ids).update(is_record_chatter=attached)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Keep the thread's chatter flag with its attachment transaction."""
+        using = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
+        written = set(kwargs["update_fields"]) if kwargs.get("update_fields") is not None else None
+        if not self._state.adding and written is not None and {"thread", "thread_id", "role"}.isdisjoint(written):
+            return super().save(*args, **kwargs)
+        with transaction.atomic(using=using):
+            previous = None
+            if self.pk is not None and not self._state.adding:
+                previous = type(self)._base_manager.using(using).select_for_update().filter(pk=self.pk).values_list(
+                    "thread_id", "role",
+                ).first()
+            super().save(*args, **kwargs)
+            thread_id = (
+                previous[0] if previous is not None and written is not None
+                and {"thread", "thread_id"}.isdisjoint(written) else self.thread_id
+            )
+            role = previous[1] if previous is not None and written is not None and "role" not in written else self.role
+            thread_ids = set()
+            if previous is not None and previous[1] == self.AttachmentRole.CHATTER:
+                thread_ids.add(previous[0])
+            if role == self.AttachmentRole.CHATTER:
+                thread_ids.add(thread_id)
+            for thread_id in thread_ids:
+                type(self).sync_chatter_flag(thread_id, using=using)
+
+    def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
+        """Clear chatter membership after direct attachment removal."""
+        using = kwargs.get("using") or self._state.db or router.db_for_write(type(self), instance=self)
+        with transaction.atomic(using=using):
+            persisted = type(self)._base_manager.using(using).select_for_update().filter(pk=self.pk).values_list(
+                "thread_id", "role",
+            ).first()
+            result = super().delete(*args, **kwargs)
+            if persisted is not None and persisted[1] == self.AttachmentRole.CHATTER:
+                type(self).sync_chatter_flag(persisted[0], using=using)
+            return result
 
     class Meta:
         """Django model options for thread attachments."""

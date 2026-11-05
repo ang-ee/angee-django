@@ -9,6 +9,7 @@ from typing import Any
 from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models
+from rebac import generic_target
 from rebac.resources import model_resource_type
 
 from angee.base.models.identity import instance_from_public_id, public_id_for
@@ -34,6 +35,9 @@ class StepContext:
     now: datetime
     pending_records: list[models.Model] = field(default_factory=list, init=False, repr=False)
     pending_notes: list[dict[str, str]] = field(default_factory=list, init=False, repr=False)
+    _admissions: dict[int, tuple[type[models.Model], Any, Any, Any, str, Any, Any]] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     @property
     def state(self) -> Any:
@@ -105,6 +109,11 @@ class StepContext:
         instance = instance_from_public_id(model, public_id, queryset=queryset)
         if instance is None:
             raise PermissionDenied("The requested record is absent or inaccessible.")
+        self._admissions[id(instance)] = (
+            type(instance), instance.pk, instance._state.db,
+            instance.__dict__.get("revision"), permission,
+            self.actor, generic_target(instance, using=self.run._state.db),
+        )
         return instance
 
     def done(self, output: Any = None, *, outcome: str = DONE_OUTCOME) -> Done:
@@ -169,7 +178,16 @@ class StepContext:
         The returned link is unsaved until settlement commits. Failed or
         superseded attempts discard their staged evidence.
         """
-        link = runner.record(self.step_run, record, label=label, operation=operation, actor=self.actor)
+        admission = self._admissions.get(id(record))
+        target = None
+        if admission is not None and admission[:5] == (
+            type(record), record.pk, record._state.db, record.__dict__.get("revision"), "read"
+        ):
+            if admission[5] is self.actor:
+                target = admission[6]
+        link = runner.record(
+            self.step_run, record, label=label, operation=operation, actor=self.actor, admitted_target=target
+        )
         self.pending_records.append(link)
         return link
 

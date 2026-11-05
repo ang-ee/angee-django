@@ -388,6 +388,7 @@ class Stage(ProtectedRowLockMixin, StagePrimitive, AuditMixin, ProtectedDataMode
     """
 
     row_lock_cascade_parent = "queue"
+    row_lock_snapshot_fields: ClassVar[tuple[str, ...]] = ("is_system", "name", "category")
     objects: ClassVar[StageManager[Self]] = StageManager()
     _angee_base: ClassVar[StageBaseManager[Self]] = StageBaseManager()
     _base_manager: ClassVar[StageBaseManager[Self]]
@@ -1235,7 +1236,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
     def _work_snapshot_loaded_values(self, *, fields: Iterable[str] | None = None) -> None:
         """Snapshot loaded work values without touching deferred columns."""
 
-        for attname in ("queue_id", "stage_id", "estimate"):
+        for attname in ("queue_id", "stage_id", "cycle_id", "estimate"):
             if fields is not None and not {attname, attname.removesuffix("_id")}.intersection(fields):
                 continue
             value = self.__dict__.get(attname, _WORK_UNLOADED)
@@ -1294,7 +1295,18 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
 
         self._reject_direct_status_write()
         update_fields = set(kwargs["update_fields"]) if kwargs.get("update_fields") is not None else None
-        stage_written = self._state.adding or update_fields is None or bool({"stage", "stage_id"} & update_fields)
+        placement_fields = {"queue", "queue_id", "stage", "stage_id", "cycle", "cycle_id"}
+        if self._state.adding:
+            placement_written = stage_written = True
+        elif update_fields is not None:
+            placement_written = bool(placement_fields & update_fields)
+            stage_written = bool({"stage", "stage_id"} & update_fields)
+        else:
+            placement_written = any(
+                self.__dict__.get(name, _WORK_UNLOADED) != self._work_loaded_value(name)
+                for name in ("queue_id", "stage_id", "cycle_id")
+            )
+            stage_written = self.__dict__.get("stage_id", _WORK_UNLOADED) != self._work_loaded_value("stage_id")
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
         previous_database = self._state.db
         queue_field = type(self).queue.field
@@ -1303,13 +1315,17 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
         kwargs["using"] = using
         try:
             with database_context(using), transaction.atomic(using=using):
-                defaulted = self._apply_queue_and_stage_defaults(provision=True)
+                defaulted = self._apply_queue_and_stage_defaults(provision=True) if placement_written else set()
                 defaulted.update(self._validate_estimate(update_fields=update_fields))
                 if not stage_written:
                     defaulted.discard("stage")
-                previous, following = self._reject_reserved_stage_transition(lock=True, stage_written=stage_written)
-                self.validate_stage_scope()
-                self.validate_cycle_scope()
+                previous, following = (
+                    self._reject_reserved_stage_transition(lock=True) if stage_written else (None, None)
+                )
+                if stage_written or defaulted.intersection({"stage", "queue"}):
+                    self.validate_stage_scope()
+                if placement_written:
+                    self.validate_cycle_scope()
                 projected = self._project_stage_lifecycle(previous, following) if stage_written else set()
                 allocated = False
                 if self._state.adding and self.queue_id is not None and self.number is None:
@@ -1774,7 +1790,7 @@ class TaskWork(StagedModelMixin[Stage], Composable, extends="projects.Task"):
                     if queue is not None:
                         self.queue = queue
                         changed.add("queue")
-        if self.queue_id is not None:
+        if self.queue_id is not None and (self._state.adding or self.queue_id != self._work_loaded_value("queue_id")):
             # A save(using=...) owns the row-relative FK read even when a caller
             # supplied a cached queue or a read router prefers another replica.
             queue_model = type(self).queue.field.related_model

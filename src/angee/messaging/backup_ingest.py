@@ -33,6 +33,7 @@ from rebac import system_context
 
 from angee.base.serialization import STRINGIFIED_JSON, canonical_json_sha256
 from angee.messaging.backends import ParsedMessage, ParsedPart
+from angee.messaging.events import historical_import
 
 DEFAULT_MAX_BATCH_BYTES = 64_000_000
 """Flush a batch once its buffered media reaches this many bytes.
@@ -137,12 +138,11 @@ def batch_ingest(
         if not batch:
             return
         if not dry_run:
-            with system_context(reason=reason):
+            with system_context(reason=reason), historical_import():
                 message_model.objects.ingest(
                     batch,
                     channel=channel,
                     quote_edges=False,
-                    historical=True,
                 )
         total += len(batch)
         if on_batch is not None:

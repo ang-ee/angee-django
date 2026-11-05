@@ -21,7 +21,10 @@ KIND = "decisions.decision"
 class DecisionKind(TimelineKind):
     id = KIND
     sequence = 20
-    source_models = ("decisions.Decision",)
+    source_models = {
+        "decisions.Decision": ("verdict", "verdict_values", "answered_by", "answered_at", "kind"),
+    }
+    previous_source_models = {"decisions.Decision": ()}
 
     def eligible(self, model: type[models.Model]) -> bool:
         return True

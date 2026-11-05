@@ -435,7 +435,8 @@ def test_feed_sync_overlays_post_metrics_and_public_payload(posts_tables: None) 
 
 
 @pytest.mark.django_db(transaction=True)
-def test_land_posts_is_the_shared_public_overlay_owner(posts_tables: None) -> None:
+@pytest.mark.parametrize("historical", [False, True])
+def test_land_posts_is_the_shared_public_overlay_owner(posts_tables: None, historical: bool) -> None:
     """Archive clients can land the same public shape without a Feed backend."""
 
     del posts_tables
@@ -445,6 +446,7 @@ def test_land_posts_is_the_shared_public_overlay_owner(posts_tables: None) -> No
             feed,
             [_post("archive-p1", subject_url="https://example.test/archive-p1")],
             owner_id=feed.owner_id,
+            historical=historical,
         )
         message = Message._base_manager.get(external_id="archive-p1")
 

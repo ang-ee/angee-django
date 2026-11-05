@@ -11,7 +11,7 @@ from rebac import PermissionDenied, system_context
 
 from angee.base.exceptions import DomainError
 from angee.decisions.signals import decision_answered
-from angee.messaging.events import message_ingested
+from angee.messaging.events import message_landed
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +20,9 @@ def connect() -> None:
     """Listen for ingested messages without adding another messaging hook."""
 
     decision_answered.connect(apply_access_answer, dispatch_uid="intake.apply_access_answer")
-    message_ingested.connect(
+    message_landed.connect(
         capture_channel_message,
-        dispatch_uid="intake.capture_channel_message.message_ingested",
+        dispatch_uid="intake.capture_channel_message.message_landed",
     )
 
 
@@ -34,8 +34,19 @@ def capture_channel_message(sender: Any, instance: Any, **kwargs: Any) -> None:
     retain primary ingest; programming errors propagate so retries can recover.
     """
 
-    del sender, kwargs
+    del sender
+    for message in kwargs.get("created_batch") or (instance,):
+        _capture_channel_message(message)
+
+
+def _capture_channel_message(instance: Any) -> None:
+    """Capture one admitted channel message within its ingest transaction."""
     if instance.channel_id is None:
+        return
+    channel_model = apps.get_model("messaging", "Channel")
+    if not channel_model._base_manager.using(instance._state.db).filter(
+        pk=instance.channel_id, intake_queue_id__isnull=False,
+    ).exists():
         return
     try:
         instance.transport_channel(reason="intake.capture.channel").capture_ingested_message(instance)

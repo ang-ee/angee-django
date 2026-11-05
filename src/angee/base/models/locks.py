@@ -49,15 +49,17 @@ class ImmutableFieldsMixin(models.Model):
                 declared = dict.fromkeys(
                     name for base in type(self).__mro__ for name in base.__dict__.get("immutable_fields", ())
                 )
-                checked = tuple(name for name in declared if name not in allowed and name in self.__dict__)
+                written = kwargs.get("update_fields")
+                checked = tuple(
+                    name for name in declared
+                    if name not in allowed and name in self.__dict__
+                    and (written is None or bool({name, name.removesuffix("_id")}.intersection(written)))
+                )
                 if checked:
                     # Compare committed identities without loading unrelated deferred columns.
-                    persisted = (
-                        type(self)._base_manager.db_manager(using, hints={"instance": self})
-                        .filter(pk=self.pk).values(*checked).first()
-                    )
+                    persisted = cast(PersistenceMixin, self).persisted_for_save(using=using)
                     if persisted is not None:
-                        changed = [name for name in checked if persisted[name] != getattr(self, name)]
+                        changed = [name for name in checked if getattr(persisted, name) != getattr(self, name)]
                         if changed:
                             raise ValidationError(
                                 {
@@ -68,6 +70,7 @@ class ImmutableFieldsMixin(models.Model):
             super().save(*args, **kwargs)
         finally:
             self._allowed_immutable_fields = set()
+            self.__dict__.pop("_persisted_save_snapshot", None)
 
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
@@ -203,6 +206,8 @@ class RowLockMixin(Composable):
 
     locked_rows_label: ClassVar[str | None] = None
     """Plural phrase naming the system rows in refusals; defaults to ``System <plural>``."""
+    row_lock_snapshot_fields: ClassVar[tuple[str, ...] | None] = None
+    """Columns deriving and comparing locks; None preserves a full snapshot."""
 
     class Meta:
         """Django options for the shared system-row lock."""
@@ -280,20 +285,26 @@ class RowLockMixin(Composable):
     def save(self, *args: Any, **kwargs: Any) -> None:
         """Check a user write against the committed row's lock before persisting it."""
 
-        if not self._row_lock_bypassed():
-            persisted = None
-            using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
-            if self.pk is not None and not self._state.adding:
-                persisted = type(self)._base_manager.using(using).filter(pk=self.pk).first()
-            self.validate_row_lock(None if persisted is None else persisted.row_lock())
-        super().save(*args, **kwargs)
+        try:
+            if not self._row_lock_bypassed():
+                persisted = None
+                using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+                if self.pk is not None and not self._state.adding:
+                    persisted = cast(PersistenceMixin, self).persisted_for_save(using=using)
+                self.validate_row_lock(None if persisted is None else cast(Any, persisted).row_lock())
+            super().save(*args, **kwargs)
+        finally:
+            self.__dict__.pop("_persisted_save_snapshot", None)
 
     def delete(self, *args: Any, **kwargs: Any) -> tuple[int, dict[str, int]]:
         """Refuse a user deleting a committed system row."""
 
         if not self._row_lock_bypassed():
             using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
-            persisted = type(self)._base_manager.using(using).filter(pk=self.pk).first()
+            rows = type(self)._base_manager.using(using).filter(pk=self.pk)
+            if self.row_lock_snapshot_fields is not None:
+                rows = rows.only(*self.row_lock_snapshot_fields)
+            persisted = rows.first()
             (persisted or self).validate_row_delete()
         return cast(tuple[int, dict[str, int]], super().delete(*args, **kwargs))
 

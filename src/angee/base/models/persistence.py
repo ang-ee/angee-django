@@ -52,6 +52,22 @@ class PersistenceMixin(models.Model):
         """Carry instance-owned persistence context onto a freshly loaded record."""
         return record
 
+    def persisted_for_save(self, *, using: str) -> Self | None:
+        """Share one committed row snapshot across cooperative save guards."""
+        snapshot = self.__dict__.get("_persisted_save_snapshot")
+        if snapshot is not None and snapshot[0] == using:
+            return snapshot[1]
+        immutable = {
+            name for base in type(self).__mro__ for name in base.__dict__.get("immutable_fields", ())
+        }
+        lock_fields = getattr(type(self), "row_lock_snapshot_fields", ())
+        rows = type(self)._base_manager.db_manager(using, hints={"instance": self}).filter(pk=self.pk)
+        if lock_fields is not None:
+            rows = rows.only(*(immutable | set(lock_fields)))
+        row = rows.first()
+        self.__dict__["_persisted_save_snapshot"] = (using, row)
+        return row
+
     def lock_subject(self, members: Mapping[str, Any] | None = None) -> Self:
         """Lock and reload this subject through its row-bound base manager."""
 

@@ -369,6 +369,28 @@ def test_drill_in_record_reference_queries_are_bounded(schema, execution, regist
     assert counts[0] == counts[1] == counts[2], counts
 
 
+def test_record_reuses_the_step_load_admission(execution, register_step):
+    actor, _ = execution
+    subject = vault_for(actor)
+    statements = []
+
+    class AdmittedRecord(Echo):
+        key = "admitted_record"
+
+        def run(self, ctx):
+            row = ctx.load(type(subject), subject.sqid)
+            with CaptureQueriesContext(connection) as queries:
+                ctx.record(row)
+            statements.append(len(queries))
+            return ctx.done(ctx.input)
+
+    register_step(AdmittedRecord)
+    workflow = load_workflow({"nodes": {"entry": {"step": AdmittedRecord.key}}}, actor=actor)
+    run_until(start_run(workflow, actor=actor, subject=subject))
+    print(f"admitted record statements: {statements}")
+    assert statements == [0]
+
+
 def test_graph_prefetches_real_decision_and_child_relations(schema, review, child_graph):
     actor, _, _, _ = review
     decision_run, decision_step = start_review(review)

@@ -35,26 +35,34 @@ def kinds_for(model: type[models.Model]) -> tuple[TimelineKind, ...]:
     return tuple(kind for kind in timeline_kinds() if kind.observes(model))
 
 
-def _records(row: Any, *, update_fields: Iterable[str] | None = None) -> list[models.Model]:
+def _records(
+    row: Any, *, previous: Any = None, update_fields: Iterable[str] | None = None,
+) -> list[models.Model]:
     """Capture affected identities now; Django sends invalidations only after commit.
 
-    Native pre-save captures old membership on the instance. Its publication
-    adds new membership after the write; Django's callback queue discards
-    invalidations on rollback.
+    Native pre-save captures the old row. Publication collects old and new
+    membership together after the write; Django discards callbacks on rollback.
     """
     if changes_muted() or _suppress_invalidation.get():
         return []
     using = row._state.db
     records = []
     for kind in kinds_for(type(row)):
-        if not kind.relevant(type(row), update_fields):
+        current_relevant = kind.relevant(type(row), update_fields)
+        previous_relevant = previous is not None and kind.previous_relevant(type(row), update_fields)
+        if not current_relevant and not previous_relevant:
             continue
         try:
-            with database_context(using), transaction.atomic(using=using), system_context(reason="timeline.invalidate"):
+            with transaction.atomic(using=using), database_context(using), system_context(reason="timeline.invalidate"):
                 grouped: dict[type[models.Model], set[int]] = {}
-                for target in kind.targets(row):
-                    for model, pk in kind.records(target):
-                        grouped.setdefault(generic_pointer_model(model), set()).add(pk)
+                for source in (previous, row):
+                    if source is None or (source is previous and not previous_relevant) or (
+                        source is row and not current_relevant
+                    ):
+                        continue
+                    for target in kind.targets(source):
+                        for model, pk in kind.records(target):
+                            grouped.setdefault(generic_pointer_model(model), set()).add(pk)
                 for model, ids in grouped.items():
                     canonical = (
                         set(model.canonical_ids(ids, using=using).values())
@@ -79,13 +87,19 @@ def before_save(
     using: str,
     **kwargs: Any,
 ) -> None:
+    instance.__dict__.pop("_timeline_previous_source", None)
     if raw or changes_muted() or instance._state.adding:
         return
-    if not any(kind.relevant(sender, update_fields) for kind in kinds_for(sender)):
+    if not any(kind.previous_relevant(sender, update_fields) for kind in kinds_for(sender)):
         return
-    previous = sender._base_manager.using(using).filter(pk=instance.pk).first()
+    kinds = kinds_for(sender)
+    columns = {column for kind in kinds for column in kind.observed_fields(sender)}
+    previous_rows = sender._base_manager.using(using).filter(pk=instance.pk)
+    if columns and all(isinstance(kind.source_models, dict) for kind in kinds):
+        previous_rows = previous_rows.only(*columns)
+    previous = previous_rows.first()
     if previous is not None:
-        instance._timeline_previous_records = _records(previous, update_fields=update_fields)
+        instance._timeline_previous_source = previous
 
 
 def before_delete(sender: Any, *, instance: Any, **kwargs: Any) -> None:
@@ -94,8 +108,8 @@ def before_delete(sender: Any, *, instance: Any, **kwargs: Any) -> None:
 
 def queue_change(sender: Any, *, payload: ModelChange, **kwargs: Any) -> None:
     if payload.instance is not None and payload.action != "delete":
-        previous = payload.instance.__dict__.pop("_timeline_previous_records", ())
-        broadcast_related_records((*previous, *_records(payload.instance, update_fields=payload.changed_fields)))
+        previous = payload.instance.__dict__.pop("_timeline_previous_source", None)
+        broadcast_related_records(_records(payload.instance, previous=previous, update_fields=payload.changed_fields))
 
 
 def queue_updates(

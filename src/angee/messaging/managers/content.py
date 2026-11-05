@@ -273,13 +273,14 @@ class PartManager[PartT: Part](_PartManagerBase[PartT]):
             FROM siblings s JOIN tree t ON s.parent_id = t.id
         ) SELECT COALESCE(({aggregate}), ''))""", [self.BODY_SEPARATOR]
 
-    def create(self, **fields: Any) -> PartT:
+    def prepare_fields(self, fields: dict[str, Any]) -> dict[str, Any]:
         """Bound source text and discard malformed Content-IDs before writing.
 
         A truncated Content-ID would reference a different part. Keep the part
         but clear that identifier when it cannot fit its declared column.
         """
 
+        fields = fields.copy()
         if "name" in fields:
             max_name_length = self.model.name.field.max_length
             assert max_name_length is not None
@@ -294,7 +295,11 @@ class PartManager[PartT: Part](_PartManagerBase[PartT]):
             max_cid_length = self.model.cid.field.max_length
             assert max_cid_length is not None
             fields["cid"] = cid if len(cid) <= max_cid_length else ""
-        return super().create(**fields)
+        return fields
+
+    def create(self, **fields: Any) -> PartT:
+        """Create a part after the same normalization used by batch inserts."""
+        return super().create(**self.prepare_fields(fields))
 
     def reading_order_for_message(self, message: Message) -> list[Part]:
         """Return ``message`` parts flattened in depth-first reading order.
@@ -521,19 +526,20 @@ class MessageEdgeManager[MessageEdgeT: MessageEdge](ProtectedManager[MessageEdge
         )
         if not fragment_ids:
             return 0
-        # One pass over every sharing part: pull each sharer's message id *and*
-        # sent_at together, so edge direction needs no per-pair lookup. Excluding
-        # this message's own parts leaves only the others to link.
+        # Bound the sharer read in SQL per fragment. A common disclaimer never
+        # transfers its entire corpus into Python just to fail the cutoff.
         sharers_by_fragment: dict[Any, dict[Any, Any]] = {}
-        for fragment_id, other_id, other_sent_at in (
-            part_model.objects.filter(fragment_id__in=fragment_ids)
-            .exclude(message_id=message.pk)
-            # Envelope roles never witness quoting on the sharer side either: a
-            # body paragraph equal to another message's *subject* is not a quote.
-            .exclude(role__in=(part_role.TITLE, part_role.HEADER))
-            .values_list("fragment_id", "message_id", "message__sent_at")
-        ):
-            sharers_by_fragment.setdefault(fragment_id, {})[other_id] = other_sent_at
+        for fragment_id in fragment_ids:
+            sharers_by_fragment[fragment_id] = {
+                other_id: other_sent_at
+                for other_id, other_sent_at in (
+                    part_model.objects.filter(fragment_id=fragment_id)
+                    .exclude(message_id=message.pk)
+                    .exclude(role__in=(part_role.TITLE, part_role.HEADER))
+                    .values_list("message_id", "message__sent_at")
+                    .distinct()[:_BOILERPLATE_CUTOFF + 1]
+                )
+            }
         # Collapse to one directed edge per message pair — the first fragment that
         # links a pair wins, matching the get_or_create this replaces. Boilerplate (a
         # disclaimer/signature quoted by the whole corpus) is skipped past the cutoff

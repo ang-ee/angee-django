@@ -8,6 +8,16 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — messaging historical import compatibility
+
+- `Message.objects.ingest(historical=True)` and `posts.land_posts(historical=True)`
+  remain deprecated compatibility aliases for `messaging.events.historical_import()`. Callers
+  should enter that named context directly for a multi-call import. It also mutes
+  live GraphQL changes and timeline invalidations.
+- Live provider ingest sends `message_ingested` for every changed envelope inside
+  the batch transaction. Receivers can use each `instance` or the final event's
+  complete `created_batch`; workflow capture is durable with the message write.
+
 ## Unreleased — jj workspace slots in the templates
 
 - The `src` workspace template takes `slot_mode` (`worktree`, the default, or

@@ -1114,6 +1114,37 @@ class Task(
     ORDERING_FIELDS: ClassVar[frozenset[str]] = frozenset({
         "project", "project_id", "parent", "parent_id", *ORDERING_RANK_FIELDS,
     })
+    _save_snapshot_fields: ClassVar[tuple[str, ...]] = (
+        "project_id", "parent_id", "sort_order", "sub_sort_order", "assignee_id",
+    )
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._save_snapshot = {
+            name: self.__dict__[name] for name in self._save_snapshot_fields if name in self.__dict__
+        }
+
+    def refresh_from_db(self, *args: Any, **kwargs: Any) -> None:
+        fields = kwargs.get("fields", args[1] if len(args) > 1 else None)
+        super().refresh_from_db(*args, **kwargs)
+        self._save_snapshot.update({
+            name: self.__dict__[name] for name in self._save_snapshot_fields
+            if name in self.__dict__ and (fields is None or not {name, name.removesuffix("_id")}.isdisjoint(fields))
+        })
+
+    def _save_field_changed(self, name: str) -> bool:
+        """Compare an authored value with its last loaded or successfully written value."""
+        return name not in self._save_snapshot or self.__dict__.get(name, models.DEFERRED) != self._save_snapshot[name]
+
+    def _remember_saved_fields(self, fields: Iterable[str] | None) -> None:
+        written = set(fields) if fields is not None else None
+        self._save_snapshot.update({
+            name: self.__dict__[name]
+            for name in self._save_snapshot_fields
+            if name in self.__dict__ and (
+                written is None or bool({name, name.removesuffix("_id")}.intersection(written))
+            )
+        })
 
     @classmethod
     @contextmanager
@@ -1485,23 +1516,34 @@ class Task(
 
         fields = kwargs.get("update_fields")
         using = kwargs.get("using") or router.db_for_write(type(self), instance=self)
+        if self._state.adding:
+            ordering_written = True
+        elif fields is not None:
+            ordering_written = bool(self.ORDERING_FIELDS.intersection(fields))
+        else:
+            ordering_written = any(
+                self._save_field_changed(name) for name in self._save_snapshot_fields if name != "assignee_id"
+            )
         guard = (
             type(self).ordering_write(
                 using=using, rows=type(self).system_queryset().using(using).filter(pk=self.pk),
                 project_ids=(self.project_id,), parent_ids=(self.parent_id,),
             )
-            if self._state.adding or fields is None or self.ORDERING_FIELDS.intersection(fields)
+            if ordering_written
             else nullcontext()
         )
         with guard:
-            if self._state.adding or fields is None or {"parent", "parent_id", "sub_sort_order"}.intersection(fields):
+            if self._state.adding or (
+                fields is None and (self._save_field_changed("parent_id") or self._save_field_changed("sub_sort_order"))
+            ) or (fields is not None and {"parent", "parent_id", "sub_sort_order"}.intersection(fields)):
                 self._default_root_subrank()
             update_fields = kwargs.get("update_fields")
-            deferred = self.get_deferred_fields()
-            project_is_written = (update_fields is None and "project_id" not in deferred) or (
+            project_is_written = (
+                self._state.adding or (update_fields is None and self._save_field_changed("project_id")) or
                 update_fields is not None and bool({"project", "project_id"}.intersection(update_fields))
             )
-            assignee_is_written = (update_fields is None and "assignee_id" not in deferred) or (
+            assignee_is_written = (
+                self._state.adding or (update_fields is None and self._save_field_changed("assignee_id")) or
                 update_fields is not None and bool({"assignee", "assignee_id"}.intersection(update_fields))
             )
             previous_project_id, previous_assignee_id = None, None
@@ -1510,8 +1552,7 @@ class Task(
                     type(self).system_queryset().using(using).filter(pk=self.pk)
                     .values_list("project_id", "assignee_id").get()
                 )
-            project = self.project
-            if project_is_written and project is not None:
+            if project_is_written and (project := self.project) is not None:
                 if self._state.adding or self.project_id != previous_project_id:
                     actor, bypass = self.effective_actor(strict=True)
                     if not bypass and not project.with_actor(actor).has_access("write"):
@@ -1544,8 +1585,10 @@ class Task(
                         and not self.has_access("share")
                     ):
                         raise PermissionDenied("Share access to the task is required to assign it.")
+                self._remember_saved_fields(update_fields)
                 return
             super().save(*args, **kwargs)
+            self._remember_saved_fields(update_fields)
 
     @classmethod
     def hand_actions(cls) -> tuple[str, ...]:

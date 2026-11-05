@@ -50,5 +50,5 @@ class MessageIngested(TriggerSource):
 
     @classmethod
     def record(cls, sender: Any, instance: Any, **kwargs: Any) -> None:
-        """Share durable source capture inside the message owner's transaction."""
-        cls.dispatch(sender, instance)
+        """Capture the changed batch before its owning transaction commits."""
+        cls.dispatch(sender, instance, created_batch=kwargs.get("created_batch"))
