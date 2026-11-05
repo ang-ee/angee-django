@@ -11,6 +11,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured, ObjectDoesNotExist
 from django.db import models, router, transaction
 from django.db.models.base import ModelBase
+from django.db.models.signals import pre_save
 from django.utils import timezone
 from django.utils.functional import classproperty
 from simple_history.manager import HistoryManager
@@ -184,6 +185,19 @@ class ModelHistory(ModelHistoryReplayMixin, HistoricalRecords):
         pre_create_historical_record.connect(
             self.set_changeset, sender=get_history_manager_for_model(sender).model, weak=False
         )
+        pre_save.connect(
+            self.require_save_boundary, sender=sender,
+            dispatch_uid=f"provenance.boundary.{sender._meta.label_lower}", weak=False,
+        )
+
+    def require_save_boundary(
+        self, sender: type[models.Model], instance: models.Model, *, using: str, raw: bool, **kwargs: Any,
+    ) -> None:
+        """Refuse a tracked native save before Django writes its source row."""
+
+        del kwargs
+        if self.capture_enabled and not raw:
+            current_changeset(required=True, using=self.destination(sender, using))
 
     def destination(self, model: type[models.Model], using: str, explicit: str | None = None) -> str:
         history_model = get_history_manager_for_model(model._meta.concrete_model).model

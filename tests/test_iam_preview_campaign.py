@@ -111,7 +111,8 @@ def test_picker_applies_sql_admission_before_the_capped_limit(iam_admin, monkeyp
         user_select_counts.append(len(selections))
         total_counts.append(len(captured))
     assert user_select_counts == [2, 2]
-    assert total_counts == [20, 20]
+    # Removing view_as arms removes two permission statements per picker read.
+    assert total_counts == [18, 18]
 
 
 def test_viewable_people_returns_at_most_twenty_five_people(iam_admin):

@@ -57,7 +57,7 @@ class ImmutableFieldsMixin(models.Model):
                 )
                 if checked:
                     # Compare committed identities without loading unrelated deferred columns.
-                    persisted = cast(PersistenceMixin, self).persisted_for_save(using=using)
+                    persisted = PersistenceMixin.persisted_for_save(cast(Any, self), using=using)
                     if persisted is not None:
                         changed = [name for name in checked if getattr(persisted, name) != getattr(self, name)]
                         if changed:

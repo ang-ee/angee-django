@@ -37,7 +37,6 @@ from angee.iam.graphql.capabilities import held_permissions, permissions_field
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import actor_scoped_to_one
 from angee.iam.testing.queries import is_permission_audit_insert
-from angee.integrate import querysets as integrate_querysets
 from angee.integrate import schema as integrate_schema
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
@@ -284,7 +283,9 @@ def _record_sources_reads(capture_graphql_document, *, kind: type[Integration], 
         schema, SOURCES, {"modelLabel": stream._meta.label, "recordId": public_id_of(stream)}, actor=bridge.owner,
     )
     assert len(one.data["record_links"]) == 1
-    assert one.data["record_links"][0]["stream"]["integration"]["concrete_target"]["state"] == "UNAVAILABLE"
+    # This schema exposes posts.Feed, while messaging.Channel is not composed here.
+    expected_state = "AVAILABLE" if kind is Feed else "UNAVAILABLE"
+    assert one.data["record_links"][0]["stream"]["integration"]["concrete_target"]["state"] == expected_state
     reads = {1: one}
     many = {"modelLabel": many_stream._meta.label, "recordId": public_id_of(many_stream)}
     for index in range(2, 21):
@@ -356,8 +357,11 @@ def test_record_link_source_fields_without_stream_stay_flat(record_sources_reads
 
 
 def test_record_sources_document_fixed_budgets(record_sources_reads) -> None:
+    # One page hook supplies each link's stream and connector; the Feed resource
+    # adds one concrete-target read because this schema exposes posts.Feed.
+    expected = 14 if record_sources_reads[3] is Feed else 13
     for read in record_sources_reads[0].values():
-        assert read.statement_count == 15  # re-measure after integration
+        assert read.statement_count == expected
 
 
 def test_record_sources_ignore_registered_unused_concrete_kind(
@@ -376,27 +380,41 @@ def test_record_sources_ignore_registered_unused_concrete_kind(
         assert UnusedIntegration._meta.apps is isolated
         assert isolated.all_models["integrate"]["unusedintegration"] is UnusedIntegration
 
-        # Isolated apps intentionally hide their models from the global parent.
-        # Include the registered child at the old prefetch discovery seam.
-        def registered_children(parent):
-            children = concrete_child_models(parent)
-            return (*children, UnusedIntegration) if parent is Integration else children
+        # Isolated apps hide their models from the global parent. Register this
+        # real empty child at the Integration owner's current discovery seam.
+        children = Integration.concrete_child_models()
+        with connection.schema_editor() as editor:
+            editor.create_model(UnusedIntegration)
+        try:
+            def registered_children(parent):
+                return (*children, UnusedIntegration) if parent is Integration else concrete_child_models(parent)
 
-        monkeypatch.setattr(integrate_querysets, "concrete_child_models", registered_children, raising=False)
-        extra_reads = _record_sources_reads(
-            capture_graphql_document, kind=kind, slug="document-budget-sources-extra"
-        )[0]
+            with monkeypatch.context() as patch:
+                patch.setattr(Integration, "concrete_child_models", classmethod(registered_children))
+                extra_reads = _record_sources_reads(
+                    capture_graphql_document, kind=kind, slug="document-budget-sources-extra"
+                )[0]
+        finally:
+            with connection.schema_editor() as editor:
+                editor.delete_model(UnusedIntegration)
 
+    overhead = {}
     for size in (1, 5, 10, 20):
-        # re-measure after integration
-        assert extra_reads[size].statement_count == reads[size].statement_count == 15
-        assert extra_reads[size].total_sql_bytes == reads[size].total_sql_bytes
+        # The integrity union gains a branch, but no additional read statement.
+        expected = 14 if kind is Feed else 13
+        assert extra_reads[size].statement_count == reads[size].statement_count == expected
+        overhead[size] = extra_reads[size].total_sql_bytes - reads[size].total_sql_bytes
+    # The empty branch binds at most 100 bytes of keys per additional link.
+    assert overhead[20] - overhead[1] <= 19 * 100
 
 
 def test_record_sources_document_byte_budget(record_sources_reads) -> None:
+    kind = record_sources_reads[3]
+    # The page hook removes the second stream read; SQLite reached 53,465
+    # Channel and 61,175 Feed bytes at twenty links.
+    total = 70_000 if kind is Feed else 62_000
     for read in record_sources_reads[0].values():
-        # re-measure after integration
-        read.assert_bytes(total=100_000, largest=15_000, cause="one batched source-label projection")
+        read.assert_bytes(total=total, largest=16_000, cause="one batched source-label projection")
 
 
 def test_integration_ids_stay_flat_without_concrete_target(record_sources_reads, capture_graphql_document) -> None:
@@ -989,7 +1007,8 @@ def test_unoptimized_permission_fallback_uses_one_unbypassed_proof(composed_tabl
     with actor_context(actor), CaptureQueriesContext(connection) as queries:
         held = held_permissions(project, ("read", "write", "share", "delete"))
     assert held == {"read", "write", "share", "delete"}
-    assert len(queries) == 6  # re-measure after integration
+    # The shared read scope now supplies the proof for all four projected permissions.
+    assert len(queries) == 3
     assert sum(len(query["sql"].encode("utf-8")) for query in queries) <= 18_000
     assert not any(is_permission_audit_insert(query["sql"], connection) for query in queries)
     assert sum(len(re.findall(r'"rebac_scope_[0-9a-f]+_closure" AS \(', query["sql"])) for query in queries) == 1

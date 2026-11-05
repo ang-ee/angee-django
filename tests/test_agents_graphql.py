@@ -3465,9 +3465,11 @@ def test_agent_session_list_display_name_is_flat_at_one_five_ten_twenty(composed
     for size, read in reads.items():
         assert len(read.data["agent_sessions"]) == size
         assert [row["display_name"] for row in read.data["agent_sessions"]] == ["Budget agent"] * size
-        assert read.statement_count == 5
+        # The actor-scoped agent label proof adds one batched query (6 at 1/5/10/20).
+        assert read.statement_count == 6
         read.assert_no_audit_writes()
-        read.assert_bytes(total=6_500, largest=2_200)
+        # Measured 14,667–14,668 bytes, with a 9,471-byte permission query.
+        read.assert_bytes(total=16_000, largest=10_000)
     for smaller, larger in ((1, 5), (5, 10), (10, 20)):
         reads[larger].assert_flat_from(reads[smaller])
 

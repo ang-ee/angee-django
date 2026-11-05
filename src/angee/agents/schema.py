@@ -229,11 +229,24 @@ class AgentType(ProtectedNode):
 class AgentSessionType(ProtectedNode):
     """Projection of one persisted agent conversation, readable by its user."""
 
-    display_name: str = strawberry_django.field(
-        resolver=ProtectedNode.display_name,
+    @strawberry_django.field(
         only=["title", "agent_id"],
-        annotate={"_agent_name": lambda info: AgentSessionModel.agent_name_expression()},
+        prefetch_related=[
+            lambda info: Prefetch(
+                "agent",
+                queryset=Agent.objects.with_actor(session_user(info)).with_action("read"),
+                to_attr="_display_agent",
+            ),
+        ],
     )
+    def display_name(self) -> str:
+        """Use the readable agent's name only when this session has no title."""
+
+        row = cast(Any, self)
+        if row.title:
+            return str(row.title)
+        agent = getattr(row, "_display_agent", None)
+        return str(agent) if agent is not None else str(row._meta.verbose_name)
     agent: AgentType
     user: UserType | None
     title: auto

@@ -37,6 +37,7 @@ from angee.iam.graphql.capabilities import permissions_field
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import (
     RecordReferenceNode,
+    RecordReferencePageProof,
     actor_scoped_public_id,
     record_reference_field,
 )
@@ -192,7 +193,7 @@ class RecordFilesType:
 class StorageQuery:
     """Record-scoped attachment reads shared by public and console schemas."""
 
-    @strawberry.field(name="file_attachments")
+    @strawberry.field(name="file_attachments", extensions=[RecordReferencePageProof(FileAttachmentType)])
     def file_attachments(self, file: PublicID) -> list[FileAttachmentType]:
         """Read one file's edges through the shared target-access projection."""
 

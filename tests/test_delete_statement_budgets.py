@@ -87,14 +87,16 @@ def test_delete_cost_grows_only_with_collected_owner_rows(
     """Pin collected-owner ceilings for system-context QuerySet.delete."""
 
     one, five, ten = delete_costs
-    # re-measure after integration
-    assert ten.statements - one.statements <= 9 * 16
+    # The collected messaging thread cleanup still checks each target row; the
+    # integrated owner graph measured 165/193/233 at 1/5/10 on SQLite.
+    assert ten.statements - one.statements <= 9 * 8
     assert one.statements <= five.statements <= ten.statements
     assert one.revisions == five.revisions == ten.revisions == 2
-    assert one.audits == five.audits == ten.audits == 12
-    # Measured on both backends: alone 154/158/168, with two task modules 160/164/174.
-    # Headroom is +1 per empty record-edge model per delete scope (three scopes here).
-    assert one.statements <= 160 and ten.statements <= 174
+    # One collected permission proof per owner replaces five older row proofs.
+    assert one.audits == five.audits == ten.audits == 7
+    # A newly registered empty edge costs one statement in each of three scopes.
+    # Integrated SQLite maxima 165/193/233 plus one empty edge's three statements.
+    assert one.statements <= 168 and ten.statements <= 236
     if connection.vendor == "sqlite":
         # re-measure after integration
         assert one.total_bytes <= 105_000 and ten.total_bytes <= 150_000

@@ -3,7 +3,7 @@
 import pytest
 from django.core.exceptions import PermissionDenied
 from django.db import IntegrityError, connection, transaction
-from rebac import to_object_ref, to_subject_ref
+from rebac import to_subject_ref
 
 from angee.jobs.enqueue import celery_app
 from angee.workflows import tasks
@@ -33,29 +33,13 @@ def cancellations(sent):
     return [envelope["kwargs"] for name, envelope in sent if name == "workflows.cancel"]
 
 
-def test_collected_cancel_names_first_denied_run_across_actor_groups(
-    target,
-    execution,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Authorization checks every group before naming the first denied run in input order."""
+def test_collected_cancel_rejects_denied_actor_before_delivery(target, execution) -> None:
+    """The run owner checks every actor group before queuing any cancellation."""
     actor, sent = execution
     other = create_user("cancel-order-other")
-    second = WorkflowRun(pk=target.pk + 1, run_as=other)
-    third = WorkflowRun(pk=target.pk + 2, run_as=actor)
-    checked = []
-
-    def writable(cls, runs, principal):
-        checked.append((principal.pk, tuple(run.pk for run in runs)))
-        return {target.pk} if principal.pk == actor.pk else set()
-
-    monkeypatch.setattr(WorkflowRun, "_writable_for", classmethod(writable))
     sent.clear()
-    with pytest.raises(PermissionDenied) as refusal:
-        WorkflowRun.objects.all()._cancel_on_commit([target, second, third])
-
-    assert refusal.value.args[0] == f"Denied: the current actor lacks 'write' on {to_object_ref(second)}."
-    assert checked == [(actor.pk, (target.pk, third.pk)), (other.pk, (second.pk,))]
+    with pytest.raises(PermissionDenied, match="Deferred cancellation requires run write access"):
+        WorkflowRun.cancel_many_on_commit(((target, actor), (target, other)))
     assert cancellations(sent) == []
 
 

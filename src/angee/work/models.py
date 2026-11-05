@@ -389,7 +389,7 @@ class Stage(ProtectedRowLockMixin, StagePrimitive, AuditMixin, ProtectedDataMode
     """
 
     row_lock_cascade_parent = "queue"
-    row_lock_snapshot_fields: ClassVar[tuple[str, ...]] = ("is_system", "name", "category")
+    row_lock_snapshot_fields: ClassVar[tuple[str, ...]] = ("name", "category")
     objects: ClassVar[StageManager[Self]] = StageManager()
     _angee_base: ClassVar[StageBaseManager[Self]] = StageBaseManager()
     _base_manager: ClassVar[StageBaseManager[Self]]

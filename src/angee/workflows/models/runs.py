@@ -833,6 +833,9 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
                 )
                 if allowed != ids:
                     raise PermissionDenied("Deferred cancellation requires run write access.")
+        # Authorize every actor group before queuing any external effect.
+        for (using, actor), runs in groups.items():
+            with database_context(using):
                 for run in runs:
                     run._enqueue_cancel_on_commit(actor, using=using)
 
