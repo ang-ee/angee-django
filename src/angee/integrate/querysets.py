@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from functools import partial
 from typing import TYPE_CHECKING, Any, Self, cast
 
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections, models
-from django.db.models import OuterRef, Prefetch, Q, Subquery
+from django.db.models import OuterRef, Q, Subquery
 from django.utils import timezone
 
-from angee.base.lineage import concrete_child_accessor, concrete_child_models
 from angee.base.refs import generic_pointer_target
 from angee.iam.models.ownership import OwnerQuerySet
 from angee.integrate.choices import (
@@ -133,8 +133,82 @@ class CredentialQuerySet[CredentialT: Credential](AngeeHistoryQuerySet[Credentia
         )
 
 
+def _concrete_page_groups(queryset: models.QuerySet[Any], rows: list[Any]) -> dict[type[models.Model], list[Any]]:
+    """Group materialized base rows by their saved concrete ContentType."""
+
+    if not rows:
+        return {}
+    if any("concrete_type_id" not in row.__dict__ for row in rows):
+        kinds = dict(
+            queryset.model._base_manager.db_manager(queryset.db)
+            .filter(pk__in=[row.pk for row in rows])
+            .values_list("pk", "concrete_type_id")
+        )
+        for row in rows:
+            row.concrete_type_id = kinds.get(row.pk)
+
+    by_model: dict[type[models.Model], list[Any]] = {}
+    for row in rows:
+        model = row.declared_concrete_model()
+        if model is not None and model is not type(row):
+            by_model.setdefault(model, []).append(row)
+    return by_model
+
+
+def _prepare_concrete_capabilities(queryset: models.QuerySet[Any], rows: list[Any]) -> None:
+    """Fetch only the concrete connector types present in this selected page."""
+
+    groups = _concrete_page_groups(queryset, rows)
+    for model, parents in sorted(groups.items(), key=lambda item: item[0]._meta.label_lower):
+        actor, unscoped = parents[0].effective_actor(strict=True)
+        source = model._base_manager.db_manager(queryset.db) if unscoped else (
+            cast(Any, model).objects.db_manager(queryset.db).with_actor(actor)
+        )
+        children = {child.pk: child for child in source.filter(pk__in=[row.pk for row in parents])}
+        for parent in parents:
+            parent.__dict__["_concrete_capability"] = (actor, unscoped, children.get(parent.pk, parent))
+
+
+def _prepare_concrete_children(
+    queryset: models.QuerySet[Any], rows: list[Any], *, actor: Any, exposed_model_labels: set[str]
+) -> None:
+    """Read structural and actor-visible children only for kinds on this page."""
+
+    by_model = _concrete_page_groups(queryset, rows)
+    exposed = frozenset(exposed_model_labels)
+    for row in rows:
+        row.__dict__["_concrete_children"] = (actor, exposed, [], [])
+
+    for model, parents in sorted(by_model.items(), key=lambda item: item[0]._meta.label_lower):
+        keys = [row.pk for row in parents]
+        structural = {
+            child.pk: child
+            for child in model._base_manager.db_manager(queryset.db).filter(pk__in=keys)
+        }
+        visible: dict[Any, Any] = {}
+        if model._meta.label in exposed:
+            visible = {
+                child.pk: child
+                for child in cast(Any, model).objects.db_manager(queryset.db).with_actor(actor).filter(pk__in=keys)
+            }
+        for parent in parents:
+            child = structural.get(parent.pk)
+            if child is not None:
+                parent.__dict__["_concrete_children"] = (
+                    actor,
+                    exposed,
+                    [child],
+                    [visible[parent.pk]] if parent.pk in visible else [],
+                )
+
+
 class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[IntegrationT]):
     """Chainable collection scopes for integration and bridge rows."""
+
+    def with_concrete_capabilities(self) -> Self:
+        """Batch actor-readable concrete connectors only for types on the page."""
+
+        return self.with_page_hook(_prepare_concrete_capabilities)
 
     def of_concrete_type(self) -> Self:
         """Keep rows whose declared final MTI kind is this queryset's model."""
@@ -213,34 +287,11 @@ class IntegrationQuerySet[IntegrationT: Integration](AngeeHistoryQuerySet[Integr
         )
 
     def with_concrete_children(self, *, actor: Any, exposed_model_labels: set[str]) -> Self:
-        """Prefetch structural MTI identity and actor-readable descendants in fixed queries."""
+        """Batch structural and actor-readable descendants for kinds on the page."""
 
-        prefetches: list[Prefetch] = []
-
-        def add_children(parent_model: type[Integration], prefix: str = "") -> None:
-            for child_model in concrete_child_models(parent_model):
-                accessor = concrete_child_accessor(parent_model, child_model)
-                path = f"{prefix}__{accessor}" if prefix else accessor
-                integrity_attr = self.model.concrete_child_cache_attr(child_model, authorized=False)
-                prefetches.append(
-                    Prefetch(
-                        path,
-                        queryset=child_model._base_manager.db_manager(self.db).all(),
-                        to_attr=integrity_attr,
-                    )
-                )
-                if child_model._meta.label in exposed_model_labels:
-                    prefetches.append(
-                        Prefetch(
-                            path,
-                            queryset=child_model.objects.db_manager(self.db).with_actor(actor),
-                            to_attr=self.model.concrete_child_cache_attr(child_model, authorized=True),
-                        )
-                    )
-                add_children(child_model, f"{prefix}__{integrity_attr}" if prefix else integrity_attr)
-
-        add_children(self.model)
-        return self.prefetch_related(*prefetches)
+        return self.with_page_hook(
+            partial(_prepare_concrete_children, actor=actor, exposed_model_labels=exposed_model_labels)
+        )
 
 
 class WebhookSubscriptionQuerySet[WebhookSubscriptionT: WebhookSubscription](

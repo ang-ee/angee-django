@@ -13,6 +13,8 @@ from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.views.decorators.debug import sensitive_variables
 from graphql import GraphQLError
+from rebac.graphql.strawberry_django import optimize
+from strawberry_django.queryset import run_type_get_queryset
 
 from angee.base.exceptions import exception_text
 from angee.graphql.actions import ActionResult
@@ -179,7 +181,8 @@ class MessagingImapMutation:
                     "IMAP integration is not configured.",
                     extensions={"code": "BAD_USER_INPUT"},
                 ) from error
-        return cast(ChannelType, channel)
+        rows = Channel.objects.with_actor(session_user(info)).filter(pk=channel.pk)
+        return cast(ChannelType, optimize(run_type_get_queryset(rows, ChannelType, info), info).get())
 
     @strawberry.mutation(permission_classes=ADMIN_PERMISSION_CLASSES)
     @sensitive_variables("password")

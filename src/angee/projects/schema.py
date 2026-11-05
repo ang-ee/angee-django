@@ -341,15 +341,23 @@ def _visibility_allowed(value: str, info: Any) -> Any:
     return Task.visibility_allowed_expression(current_actor(), value)
 
 
-def _task_action_allowed(action: str, info: Any) -> Any:
-    return Task.action_allowed_expression(current_actor(), action)
+def _task_action_permission(permission: str, info: Any) -> Any:
+    return Task.action_permission_expression(current_actor(), permission)
+
+
+def _task_action_blocked(action: str, info: Any) -> Any:
+    return Task.action_blocked_expression(action)
 
 
 _VISIBILITY_ANNOTATIONS = {
     f"_visibility_allowed_{value}": partial(_visibility_allowed, value) for value in Task.TaskVisibility.values
 }
 _TASK_ACTION_ANNOTATIONS = {
-    f"_task_action_{action}": partial(_task_action_allowed, action) for action in Task.hand_actions()
+    **{
+        f"_task_permission_{permission}": partial(_task_action_permission, permission)
+        for permission in sorted({Task.action_permission(action) for action in Task.hand_actions()})
+    },
+    **{f"_task_blocked_{action}": partial(_task_action_blocked, action) for action in Task.hand_actions()},
 }
 
 
@@ -442,7 +450,11 @@ class TaskProjectionMixin:
     def task_actions(self, info: strawberry.Info) -> list[str]:
         """Hand verbs the viewer may run on this row, from the verbs' own permission and blockers."""
         allowed = _task_annotations(self, info, _TASK_ACTION_ANNOTATIONS)
-        return [action for action in Task.hand_actions() if allowed.get(f"_task_action_{action}")]
+        return [
+            action for action in Task.hand_actions()
+            if allowed.get(f"_task_permission_{Task.action_permission(action)}")
+            and not allowed.get(f"_task_blocked_{action}")
+        ]
 
     @strawberry_django.field(annotate={"_priority_rank": lambda info: Task.priority_rank_expression()})
     def priority_rank(self) -> int:

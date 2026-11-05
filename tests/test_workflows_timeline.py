@@ -362,7 +362,7 @@ def test_symbolic_subject_actions_ask_hold_apply_and_record_both_directions(revi
     run = start_run(workflow, actor=actor, subject=target)
     run_until(run)
     step = StepRun.system_queryset().get(run=run)
-    assert step.hold == "decision"
+    assert step.get_hold() == "decision"
     decision = step.decision
     assert target.sqid in decision.proposal["alternatives"][0]["actions"]
     decision.decide(actor=people[0], chosen=["rename"])
@@ -408,7 +408,7 @@ def test_a_routed_failure_is_done_and_does_not_hold_the_next_question(review, sc
         "review": {"step": "question", "input": {}},
     }})
     failed = StepRun.system_queryset().get(run=run, node_key="failure")
-    assert run.status == "waiting" and failed.hold is None
+    assert run.status == "waiting" and failed.get_hold() is None
     data = timeline(schema, actor, [question.review_subject])["records"][0]["runs"][0]
     assert {node["key"]: node["plan"] for node in data["graph"]["nodes"]} == {"failure": "done", "review": "current"}
     assert data["graph"]["nodes"][0]["step_run"]["hold"] is None
@@ -502,12 +502,12 @@ def test_stop_error_hold_disables_retry_and_removes_the_future_plan(execution, r
     }}, actor=actor), actor=actor)
     run_until(run)
     step = StepRun.system_queryset().get(run=run)
-    assert step.hold == "error" and step.can_retry(actor) and run.can_cancel(actor)
+    assert step.get_hold() == "error" and step.get_can_retry(actor) and run.get_can_cancel(actor)
     WorkflowRun.objects.cancel(run, actor=actor)
     run.refresh_from_db()
     step.refresh_from_db()
     assert run.status == "failed" and run.stopped_at is not None
-    assert step.hold is None and not step.can_retry(actor) and not run.can_cancel(actor)
+    assert step.get_hold() is None and not step.get_can_retry(actor) and not run.get_can_cancel(actor)
     assert {node.node.key: node.plan for node in run.graph(actor).nodes} == {"failure": "done", "finish": "not_run"}
     with pytest.raises(ValidationError, match="cannot be retried"):
         StepRun.objects.retry_step(step, actor=actor)

@@ -147,7 +147,7 @@ def test_empty_map_finishes_without_body_rows(execution, map_steps):
     assert run.status == "succeeded" and run.output == [] and run.outcome == "done"
     assert not body_rows(run).exists()
     assert mapped.is_map and not mapped.is_mapped
-    assert mapped.map_total == mapped.map_settled == 0
+    assert mapped.get_map_total() == mapped.get_map_settled() == 0
     assert mapped.attempt == 1
     schema = addon_schema(workflow_schema.schemas, "console")
     assert result_data(execute_schema(schema, "{ steprun { is_map is_mapped map_total } }", user=actor)) == {
@@ -177,14 +177,14 @@ def test_map_orders_results_and_bounds_planning(execution, map_steps, settings):
     values = [{"value": index} for index in range(5)]
     run, mapped = start_map(actor, values)
     assert (mapped.status, mapped.waiting_kind) == ("waiting", "map")
-    assert (mapped.map_total, mapped.map_settled) == (5, 0)
+    assert (mapped.get_map_total(), mapped.get_map_settled()) == (5, 0)
     assert list(body_rows(run).values_list("map_index", flat=True)) == [0, 1]
     second = body_rows(run).get(map_index=1)
     assert second.is_mapped and second.rank == mapped.rank
     assert runner.execute(second.pk)
     assert list(body_rows(run).values_list("map_index", flat=True)) == [0, 1, 2]
     mapped.refresh_from_db()
-    assert (mapped.map_total, mapped.map_settled) == (5, 1)
+    assert (mapped.get_map_total(), mapped.get_map_settled()) == (5, 1)
     run_until(run)
     results = TypeAdapter(list[MapItem[dict[str, int]]]).validate_python(run.output)
     assert [(item.index, item.outcome, item.output) for item in results] == [
@@ -193,7 +193,7 @@ def test_map_orders_results_and_bounds_planning(execution, map_steps, settings):
     assert all("error" not in item for item in run.output)
     mapped.refresh_from_db()
     assert run.status == "succeeded" and mapped.attempt == 2
-    assert (mapped.map_total, mapped.map_settled) == (5, 5)
+    assert (mapped.get_map_total(), mapped.get_map_settled()) == (5, 5)
     assert all(row.rank == mapped.rank and row.is_mapped for row in body_rows(run))
 
 

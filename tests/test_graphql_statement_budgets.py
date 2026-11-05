@@ -6,13 +6,16 @@ from pathlib import Path
 
 import pytest
 from django.test import override_settings
+from django.test.utils import isolate_apps
 from rebac import actor_context, system_context
 
+from angee.base.lineage import concrete_child_models
 from angee.base.models.identity import public_id_of
 from angee.decisions import schema as decisions_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.decisions.testing.models import Decision
 from angee.iam import schema as iam_schema
+from angee.integrate import querysets as integrate_querysets
 from angee.integrate import schema as integrate_schema
 from angee.integrate.states import StreamKind
 from angee.integrate.testing.models import RecordLink
@@ -24,6 +27,7 @@ from angee.projects.testing.models import Project, Task
 from angee.provenance.context import changeset as open_changeset
 from angee.timeline import schema as timeline_schema
 from tests.conftest import (
+    Integration,
     Page,
     addon_schema,
     authored_graphql_document,
@@ -105,12 +109,10 @@ def test_record_decisions_document_statement_count(record_decisions_reads) -> No
     twenty.assert_flat_from(ten)
 
 
-@pytest.fixture
-def record_sources_reads(composed_tables: None, capture_graphql_document):
+def _record_sources_reads(capture_graphql_document, *, slug: str):
     """Execute the authored pane at one, five, ten and twenty visible links."""
 
-    del composed_tables
-    bridge = make_integration("document-budget-sources", model=Channel)
+    bridge = make_integration(slug, model=Channel)
     schema = addon_schema(iam_schema.schemas, "console", integrate_schema.schemas, integrate_vcs_schema.schemas)
     with system_context(reason="test.document_budget.sources"):
         stream = current_stream(bridge, "records", kind=StreamKind.RECORD_REPLICA)
@@ -118,6 +120,7 @@ def record_sources_reads(composed_tables: None, capture_graphql_document):
     variables = {"modelLabel": stream._meta.label, "recordId": public_id_of(stream)}
     one = capture_graphql_document(schema, SOURCES, variables, actor=bridge.owner)
     assert len(one.data["record_links"]) == 1
+    assert one.data["record_links"][0]["stream"]["integration"]["concrete_target"]["state"] == "UNAVAILABLE"
     reads = {1: one}
     for index in range(2, 21):
         with system_context(reason="test.document_budget.sources.more"):
@@ -129,31 +132,51 @@ def record_sources_reads(composed_tables: None, capture_graphql_document):
     return reads
 
 
+@pytest.fixture
+def record_sources_reads(composed_tables: None, capture_graphql_document):
+    del composed_tables
+    return _record_sources_reads(capture_graphql_document, slug="document-budget-sources")
+
+
 def test_record_sources_document_fixed_budgets(record_sources_reads) -> None:
-    one, five, ten, twenty = (record_sources_reads[count] for count in (1, 5, 10, 20))
-    # Concrete integration reads remain per link until P12 batches them.
-    # Suite context and the full-profile host add one statement per link.
-    one.assert_bytes(total=139_500, largest=20_900, cause="REBAC L2 candidate-root proof on one link")
-    one.assert_statements(34)
-    one.assert_no_audit_writes()
-    five.assert_bytes(total=525_000, largest=20_900, cause="REBAC L2 candidate-root proof per unbatched link")
-    five.assert_statements(110)
-    five.assert_no_audit_writes()
-    ten.assert_statements(205)
-    twenty.assert_statements(395)
+    for read in record_sources_reads.values():
+        assert read.statement_count == 15
 
 
-@pytest.mark.xfail(strict=True, reason="P12: unbatched concrete integration reads exceed the Sources byte target")
+def test_record_sources_ignore_registered_unused_concrete_kind(
+    record_sources_reads, capture_graphql_document, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Registering an unused Integration child adds no read to the Sources pane."""
+
+    with isolate_apps() as isolated:
+        class UnusedIntegration(Integration):
+            class Meta:
+                app_label = "integrate"
+                db_table = "test_unused_sources_integration"
+                rebac_resource_type = "tests/unused_sources_integration"
+
+        assert UnusedIntegration._meta.apps is isolated
+        assert isolated.all_models["integrate"]["unusedintegration"] is UnusedIntegration
+
+        # Isolated apps intentionally hide their models from the global parent.
+        # Include the registered child at the old prefetch discovery seam.
+        def registered_children(parent):
+            children = concrete_child_models(parent)
+            return (*children, UnusedIntegration) if parent is Integration else children
+
+        monkeypatch.setattr(integrate_querysets, "concrete_child_models", registered_children, raising=False)
+        extra_reads = _record_sources_reads(capture_graphql_document, slug="document-budget-sources-extra")
+
+    for size in (1, 5, 10, 20):
+        assert extra_reads[size].statement_count == record_sources_reads[size].statement_count == 15
+        assert extra_reads[size].total_sql_bytes == record_sources_reads[size].total_sql_bytes
+
+
 def test_record_sources_document_byte_budget(record_sources_reads) -> None:
-    five = record_sources_reads[5]
-    five.assert_bytes(
-        total=450_000,
-        largest=20_000,
-        cause="REBAC L2 candidate-root proof repeats for each unbatched concrete integration",
-    )
+    for read in record_sources_reads.values():
+        read.assert_bytes(total=100_000, largest=15_000, cause="one batched source-label projection")
 
 
-@pytest.mark.xfail(strict=True, reason="P12: Sources must batch concrete integrations across links")
 def test_record_sources_document_statement_count(record_sources_reads) -> None:
     one, five, ten, twenty = (record_sources_reads[count] for count in (1, 5, 10, 20))
     twenty.assert_flat_from(ten)

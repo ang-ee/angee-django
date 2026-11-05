@@ -44,7 +44,7 @@ EXPECTED_VERBS = {
     "extraction.Extraction.queryset": "validate_insert",
     "extraction.ExtractionLineage.queryset": "validate_insert",
     "extraction.ExtractionPage.queryset": "validate_insert",
-    "extraction.ExtractionPart.queryset": "validate_insert",
+    "extraction.ExtractionPart.queryset": "validate_insert with_part_values",
     "extraction.ExtractionSource.queryset": "validate_insert",
     "workflows.StepAttempt.queryset": "close",
     "workflows.StepRecord.queryset": "change_related_records",
@@ -52,7 +52,7 @@ EXPECTED_VERBS = {
     "workflows.StepRun.queryset": (
         "answered_decisions cancel_open changed_records claim collect_map count_redispatch dispatch due expire expired "
         "extend_deadline fail_attempt fenced for_map item_counts nodes settle terminal_runs to_ready to_running "
-        "to_succeeded to_waiting undispatched"
+        "to_succeeded to_waiting undispatched with_retry_batch"
     ),
     "workflows.StepWatch.manager": "record_change record_changes register wait_kind",
     "workflows.Trigger.manager": "admit disable drain enable enable_preview lock_grants reconcile_grants revoke_grant",
@@ -63,7 +63,9 @@ EXPECTED_VERBS = {
     "workflows.WorkflowRun.manager": (
         "cancel cancel_abandoned prune reap_interrupted reprocess start"
     ),
-    "workflows.WorkflowRun.queryset": "about blocking for_subject hold hold_owned retention_candidates working_on",
+    "workflows.WorkflowRun.queryset": (
+        "about blocking for_subject hold hold_owned retention_candidates with_cancel_batch working_on"
+    ),
     "decisions.Decision.manager": "ask",
     "decisions.Decision.queryset": (
         "attention_expression for_records open open_expression open_for waiting_on waiting_on_expression"

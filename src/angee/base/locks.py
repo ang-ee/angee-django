@@ -52,6 +52,19 @@ class LockBackend(Protocol):
     """
 
 
+@dataclass(frozen=True)
+class LockSnapshot:
+    """One bounded read of held task locks for a page of lock-backed rows."""
+
+    local_keys: frozenset[LockKey] = frozenset()
+    postgres_pairs: frozenset[tuple[int, int]] = frozenset()
+
+    def is_held(self, key: LockKey) -> bool:
+        """Check a row's stable key against this snapshot without another statement."""
+
+        return key in self.local_keys or _advisory_pair(key.name) in self.postgres_pairs
+
+
 @dataclass
 class _LocalLockHandle:
     backend: LocalLockBackend
@@ -217,6 +230,26 @@ def task_lock_is_held(key: LockKey, *, using: str | None = None) -> bool:
     """Return whether the configured backend reports ``key`` as held."""
 
     return get_lock_backend(using=using).is_held(key)
+
+
+def task_lock_snapshot(*, using: str | None = None) -> LockSnapshot:
+    """Read the configured backend's held locks once for a bounded list projection."""
+
+    backend = get_lock_backend(using=using)
+    if isinstance(backend, LocalLockBackend):
+        with backend._mutex:
+            return LockSnapshot(local_keys=frozenset(backend._held))
+    assert isinstance(backend, PostgresAdvisoryLockBackend)
+    with connections[backend.alias].cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT classid, objid FROM pg_locks
+            WHERE locktype = 'advisory'
+              AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+              AND objsubid = 2 AND granted
+            """,
+        )
+        return LockSnapshot(postgres_pairs=frozenset((int(a), int(b)) for a, b in cursor.fetchall()))
 
 
 def get_lock_backend(*, using: str | None = None) -> LockBackend:

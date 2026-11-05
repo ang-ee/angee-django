@@ -18,7 +18,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
 from django.db.models.expressions import Combinable
-from django.db.models.functions import JSONObject, Lower
+from django.db.models.functions import Coalesce, JSONObject, Lower
 from django.db.models.lookups import Exact
 from django.utils import timezone
 from django_compose.models import Composable
@@ -46,7 +46,7 @@ from angee.base.fields.ordering import FractionalRankField
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin, retained_set_null
 from angee.base.models.locks import ImmutableFieldsMixin, OptimisticLockMixin
-from angee.base.models.persistence import require_composed_type
+from angee.base.models.persistence import require_composed_type, require_projection
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.iam.identity import user_label_expression, user_label_queryset
 from angee.iam.models.base import ProtectedDataModel, ProtectedModel
@@ -1953,16 +1953,6 @@ class ProjectProposalAccess(Composable, extends="projects.Project"):
         )
         return super().setup_complete_condition(actor) & models.Q(models.Exists(rounds))
 
-    @classmethod
-    def question_attention_expression(cls, actor: Any, *, passed_on: bool = False) -> Combinable:
-        """Count readable unanswered questions on this project."""
-
-        return apps.get_model("projects", "Task").question_count_expression(
-            actor,
-            scope=models.Q(project_id=models.OuterRef("pk")),
-            passed_on=passed_on,
-        )
-
     def lock_for_record_access(self, *, using: str) -> Self:
         """A track's round precedes its project row in the grant/ownership lock order."""
 
@@ -2136,7 +2126,7 @@ class TaskProposalAccess(ImmutableFieldsMixin, Composable, extends="projects.Tas
         The caller projects only the blocker, never a gated column from its
         actor-scoped outer row.
         """
-        messages = cls.thread_messages_expression(models.OuterRef("pk")).filter(
+        messages = cls.thread_messages_expression(models.OuterRef("pk"), structural_existence=True).filter(
             created_by_id=models.OuterRef("clarification_asker_id"),
         )
         blocker = models.Case(
@@ -2252,51 +2242,50 @@ class TaskProposalAccess(ImmutableFieldsMixin, Composable, extends="projects.Tas
         round_model = apps.get_model("proposals", "Round")
         proposal_model = apps.get_model("proposals", "Proposal")
         managed = round_model.objects.with_actor(actor).with_action("manage").scoped()
-        with system_context(reason="proposals.clarification.waiting"):
-            current = proposal_model._base_manager.filter(
-                round_id=models.OuterRef("_question_round"),
-                responder_id=models.OuterRef("pk"),
-                retired_at__isnull=True,
+        current = proposal_model._base_manager.filter(
+            round_id=models.OuterRef("_question_round"),
+            responder_id=models.OuterRef("pk"),
+            retired_at__isnull=True,
+        )
+        messages = cls.thread_messages_expression(models.OuterRef("_question_id"), structural_existence=True).filter(
+            created_by_id=models.OuterRef("pk"),
+        )
+        question_context = {}
+        for alias, name in (
+            ("_question_id", "pk"),
+            ("_question_round", "clarification_round"),
+            ("_question_assignee", "assignee"),
+            ("_manager_question", "clarification_by_manager"),
+            ("_passed", "clarification_passed_at"),
+        ):
+            field = cls._meta.pk if name == "pk" else cls._meta.get_field(name)
+            assert isinstance(field, models.Field)
+            question_context[alias] = models.ExpressionWrapper(models.OuterRef(name), output_field=field)
+        users = (
+            user_label_queryset()
+            .annotate(**question_context)
+            .filter(_question_round__isnull=False)
+            .filter(
+                models.Q(pk=models.F("_question_assignee"))
+                | (
+                    models.Q(_question_assignee__isnull=True, _manager_question=True, _passed__isnull=False)
+                    & models.Q(models.Exists(current))
+                ),
             )
-            messages = cls.thread_messages_expression(models.OuterRef("_question_id")).filter(
-                created_by_id=models.OuterRef("pk"),
+            .filter(
+                models.Q(models.Exists(managed.filter(pk=models.OuterRef("_question_round"))))
+                | models.Q(pk=actor_user_id(actor)),
             )
-            question_context = {}
-            for alias, name in (
-                ("_question_id", "pk"),
-                ("_question_round", "clarification_round"),
-                ("_question_assignee", "assignee"),
-                ("_manager_question", "clarification_by_manager"),
-                ("_passed", "clarification_passed_at"),
-            ):
-                field = cls._meta.pk if name == "pk" else cls._meta.get_field(name)
-                assert isinstance(field, models.Field)
-                question_context[alias] = models.ExpressionWrapper(models.OuterRef(name), output_field=field)
-            users = (
-                user_label_queryset()
-                .annotate(**question_context)
-                .filter(_question_round__isnull=False)
-                .filter(
-                    models.Q(pk=models.F("_question_assignee"))
-                    | (
-                        models.Q(_question_assignee__isnull=True, _manager_question=True, _passed__isnull=False)
-                        & models.Q(models.Exists(current))
-                    ),
-                )
-                .filter(
-                    models.Q(models.Exists(managed.filter(pk=models.OuterRef("_question_round"))))
-                    | models.Q(pk=actor_user_id(actor)),
-                )
-                .filter(~models.Exists(messages))
-                .order_by("pk")
-                .annotate(
-                    _recipient=JSONObject(
-                        id="pk",
-                        name=user_label_expression(),
-                    ),
-                )
+            .filter(~models.Exists(messages))
+            .order_by("pk")
+            .annotate(
+                _recipient=JSONObject(
+                    id="pk",
+                    name=user_label_expression(),
+                ),
             )
-            return users if actor is not None else users.none()
+        )
+        return users if actor is not None else users.none()
 
     @classmethod
     def clarification_waiting_expression(cls, actor: Any) -> Combinable:
@@ -2307,46 +2296,99 @@ class TaskProposalAccess(ImmutableFieldsMixin, Composable, extends="projects.Tas
         return JSONArraySubquery(cls.clarification_waiting_users(actor).values(_item=models.F("_recipient")))
 
     @classmethod
-    def question_count_expression(cls, actor: Any, *, scope: models.Q, passed_on: bool) -> Combinable:
-        """Count questions, not recipients, intersecting the native task read scope."""
+    def question_attention_annotations(cls, actor: Any) -> dict[str, Combinable]:
+        """Project the two attention facts from assignee and current responder rows."""
 
-        if actor is None:
-            return models.Value(0)
-        waiting = cls.clarification_waiting_users(actor)
-        if not passed_on:
-            waiting = waiting.filter(pk=actor_user_id(actor))
-        questions = (
-            cls.objects.with_actor(actor)
-            .scoped()
-            .filter(
-                scope,
-                status="open",
-                clarification_round__isnull=False,
-            )
-            .filter(models.Exists(waiting))
+        actor_id = actor_user_id(actor) if actor is not None else None
+        if actor_id is None:
+            return {
+                "_question_waiting_for_me": models.Value(False, output_field=models.BooleanField()),
+                "_question_passed_on": models.Value(False, output_field=models.BooleanField()),
+            }
+        proposal_model = apps.get_model("proposals", "Proposal")
+        current = proposal_model._base_manager.filter(
+            round_id=models.OuterRef("clarification_round_id"),
+            responder_id__isnull=False,
+            retired_at__isnull=True,
         )
-        if passed_on:
-            managed = apps.get_model("proposals", "Round").objects.with_actor(actor).with_action("manage").scoped()
-            questions = questions.filter(
-                models.Exists(managed.filter(pk=models.OuterRef("clarification_round_id"))),
-                clarification_passed_at__isnull=False,
-            )
-        return questions.readable_count_subquery(actor=actor)
+        responder_context = models.Q(
+            assignee_id__isnull=True,
+            clarification_by_manager=True,
+            clarification_passed_at__isnull=False,
+        )
+        actor_answer = cls.thread_messages_expression(
+            models.OuterRef("pk"), structural_existence=True,
+        ).filter(created_by_id=actor_id)
+        waiting = (
+            models.Q(assignee_id=actor_id)
+            | (responder_context & models.Q(models.Exists(current.filter(responder_id=actor_id))))
+        ) & ~models.Q(models.Exists(actor_answer))
+
+        assignee_answer = cls.thread_messages_expression(
+            models.OuterRef("pk"), structural_existence=True,
+        ).filter(created_by_id=models.OuterRef("assignee_id"))
+        responder_answer = cls.thread_messages_expression(
+            models.OuterRef(models.OuterRef("pk")), structural_existence=True,
+        ).filter(created_by_id=models.OuterRef("responder_id"))
+        recipient = (
+            models.Q(assignee_id__isnull=False) & ~models.Q(models.Exists(assignee_answer))
+        ) | (responder_context & models.Q(models.Exists(current.filter(~models.Exists(responder_answer)))))
+        managed = apps.get_model("proposals", "Round").objects.with_actor(actor).with_action("manage").scoped()
+        passed = (
+            models.Q(clarification_passed_at__isnull=False)
+            & models.Q(models.Exists(managed.filter(pk=models.OuterRef("clarification_round_id"))))
+            & recipient
+        )
+        return {
+            "_question_waiting_for_me": models.Case(
+                models.When(waiting, status="open", clarification_round__isnull=False, then=models.Value(True)),
+                default=models.Value(False), output_field=models.BooleanField(),
+            ),
+            "_question_passed_on": models.Case(
+                models.When(passed, status="open", clarification_round__isnull=False, then=models.Value(True)),
+                default=models.Value(False), output_field=models.BooleanField(),
+            ),
+        }
 
     @classmethod
-    def question_attention_expression(cls, actor: Any, *, passed_on: bool = False) -> Combinable:
-        """Include this question or the questions filed under this source task."""
+    def question_attention_expression(cls, actor: Any, *, project: bool) -> Combinable:
+        """Count disclosed candidate questions in the parent page's SQL selection."""
 
-        return cls.question_count_expression(
-            actor,
-            scope=models.Q(parent_id=models.OuterRef("pk")) | models.Q(pk=models.OuterRef("pk")),
-            passed_on=passed_on,
+        empty = models.Value({"waiting": 0, "passed": 0}, output_field=models.JSONField())
+        if actor is None:
+            return empty
+        candidates = cls.objects.with_actor(actor).scoped().filter(
+            status="open", clarification_round__isnull=False,
+        )
+        parent = models.OuterRef("pk")
+        candidates = candidates.filter(
+            models.Q(project_id=parent) if project
+            else models.Q(pk=parent) | models.Q(parent_id=parent)
+        ).annotate(**cls.question_attention_annotations(actor))
+        counts = (
+            candidates.order_by()
+            .values(_group=models.Value(1))
+            .annotate(
+                _waiting=models.Count("pk", filter=models.Q(_question_waiting_for_me=True)),
+                _passed=models.Count("pk", filter=models.Q(_question_passed_on=True)),
+            )
+            .annotate(_attention=JSONObject(waiting="_waiting", passed="_passed"))
+            .values("_attention")[:1]
+        )
+        return Coalesce(
+            models.Subquery(counts, output_field=models.JSONField()), empty, output_field=models.JSONField(),
         )
 
     def clarification_waiting(self) -> list[dict[str, Any]]:
-        """Read the optimized projection, with the same SQL for a standalone row."""
+        """Read the recipient projection requested by the list queryset."""
         if "_clarification_waiting" in self.__dict__:
             return self.__dict__["_clarification_waiting"]
+        require_projection(self, "_clarification_waiting")
+        return self.get_clarification_waiting()
+
+    def get_clarification_waiting(self) -> list[dict[str, Any]]:
+        """Read one task's recipients explicitly outside a projected list."""
+
         expression = type(self).clarification_waiting_expression(instance_actor(self))
         with system_context(reason="proposals.clarification.waiting.row"):
             return (

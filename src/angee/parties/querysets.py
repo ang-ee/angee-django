@@ -241,6 +241,11 @@ class SameAsPair:
 class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQuerySet[PartyT]):
     """Party read scopes: canonical (unmerged) rows and organisation membership."""
 
+    def with_concrete_kind(self) -> Self:
+        """Project the two declared child-row kinds with the party population."""
+
+        return self.annotate(_concrete_kind=self.model.concrete_kind_expression())
+
     def with_display_avatars(self, actor: Any) -> Self:
         """Batch :meth:`PartyManager.display_avatar` for these parties, through ``actor``'s readable files.
 

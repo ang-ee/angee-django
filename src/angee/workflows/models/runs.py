@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import traceback
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -25,7 +25,7 @@ from angee.base.exceptions import exception_text
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.models.merge_references import MergePolicy
-from angee.base.models.persistence import require_composed_type
+from angee.base.models.persistence import require_composed_type, require_projection
 from angee.base.querysets import row_lock_paths
 from angee.base.refs import RecordRef
 from angee.base.serialization import strip_null_bytes
@@ -153,12 +153,24 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
         """Identify an execution by its workflow and start time."""
         if self.version_id is None:
             return str(self._meta.verbose_name)
-        name = getattr(self, "_workflow_name", None)
-        if name is None:
-            with system_context(reason="workflows.run_label"):
-                name = self.policy_version.workflow.name
+        if "_workflow_name" in self.__dict__:
+            name = self.__dict__["_workflow_name"]
+        else:
+            return self.get_workflow_label()
+        return self._format_workflow_label(name)
+
+    def _format_workflow_label(self, name: str) -> str:
         started = self.created_at.strftime("%Y-%m-%d %H:%M") if self.created_at else "not started"
         return f"{name} · {started}"
+
+    def get_workflow_label(self) -> str:
+        """Read one run's workflow name explicitly outside a projected list."""
+
+        if self.version_id is None:
+            return str(self._meta.verbose_name)
+        with system_context(reason="workflows.run_label"):
+            name = self.policy_version.workflow.name
+        return self._format_workflow_label(name)
 
     @property
     def outcome_label(self) -> str:
@@ -201,19 +213,38 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
             return None
         if isinstance(self.output, dict) and isinstance(self.output.get("error"), str) and self.output["error"]:
             return self.output["error"]
+        if "_step_failure_reason" not in self.__dict__:
+            require_projection(self, "_step_failure_reason")
+            return self.get_failure_reason()
+        return self.__dict__["_step_failure_reason"]
+
+    @classmethod
+    def step_failure_reason_expression(cls) -> models.Subquery:
+        """Project the first retained failed-step reason on the admitted run row."""
+
+        step_model = apps.get_model("workflows", "StepRun")
+        rows = (
+            step_model._base_manager.filter(run_id=models.OuterRef("pk"), status=StepRunStatus.FAILED)
+            .exclude(output__error__isnull=True).exclude(output__error="")
+            .order_by("rank", "map_index", "pk")
+            .annotate(_reason=step_model.failure_reason_expression())
+            .values("_reason")[:1]
+        )
+        return models.Subquery(rows)
+
+    def get_failure_reason(self) -> str | None:
+        """Read one run's retained reason explicitly when no list projection is available."""
+
+        if self.outcome != ERROR_OUTCOME:
+            return None
+        if isinstance(self.output, dict) and isinstance(self.output.get("error"), str) and self.output["error"]:
+            return self.output["error"]
         with system_context(reason="workflows.failure_reason"):
-            rows = (
-                apps.get_model("workflows", "StepRun")
-                ._default_manager.db_manager(self._state.db)
-                .filter(run_id=self.pk, status=StepRunStatus.FAILED)
-                .order_by(
-                    "rank",
-                    "map_index",
-                    "pk",
-                )
-                .only("status", "output")
+            return (
+                type(self)._base_manager.using(self._state.db).filter(pk=self.pk)
+                .annotate(_reason=type(self).step_failure_reason_expression())
+                .values_list("_reason", flat=True).get()
             )
-            return next((reason for row in rows if (reason := row.failure_reason)), None)
 
     def _lock_run_subject(self, *, required: bool = True) -> RunSubject | None:
         """Lock an opted-in root subject after the caller has locked this run."""
@@ -434,6 +465,8 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
         queryset = cast(Any, model.objects.db_manager(using).with_actor(actor)).filter(
             run_id__in=[run.pk for run in runs],
         )
+        if "hold" in fields:
+            queryset = queryset.annotate(_hold=model.hold_expression())
         if "requires_duplicate_acknowledgement" in fields:
             queryset = queryset.annotate(_effect_started=model.effect_started_expression())
         related = {
@@ -521,31 +554,15 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
                 row.run = by_id[row.run_id]
                 rows_by_run[row.run_id][row.node_key] = row
         if "can_retry" in step_fields or "can_retry" in map_fields:
-            writable = writable_run_ids if writable_run_ids is not None else cls._writable_for(runs, actor)
-            subject = to_subject_ref(actor)
-            for run_id, rows in rows_by_run.items():
-                graph_rows = (*rows.values(), *(item for group in map_rows[run_id].values() for item in group))
-                for row in graph_rows:
-                    row._graph_retry_permission = (subject, run_id in writable)
-            if writable:
-                with system_context(reason="workflows.retry_policy"):
-                    failures = list(
-                        apps.get_model("workflows", "StepRun")
-                        ._default_manager.db_manager(using)
-                        .filter(run_id__in=writable, status=StepRunStatus.FAILED)
-                        .values_list("run_id", "pk", "node_key")
-                    )
-                for run_id, rows in rows_by_run.items():
-                    if run_id not in writable:
-                        continue
-                    definition = by_id[run_id].policy_version.definition
-                    allowed = tuple(
-                        (pk, key)
-                        for owner_id, pk, key in failures
-                        if owner_id == run_id and definition.retry_allowed(key)
-                    )
-                    for row in (*rows.values(), *(item for group in map_rows[run_id].values() for item in group)):
-                        row._graph_unrouted_failures = allowed
+            cls._prepare_retry_for_steps(
+                runs,
+                tuple(
+                    (*rows.values(), *(item for group in map_rows[run_id].values() for item in group))
+                    for run_id, rows in rows_by_run.items()
+                ),
+                actor,
+                writable_run_ids=writable_run_ids,
+            )
         counts: dict[int, dict[str, list[StepRunStatusCount]]] = {pk: {} for pk in by_id}
         attempts: dict[int, dict[str, int]] = {pk: {} for pk in by_id}
         if "map_steps" in step_fields:
@@ -614,6 +631,62 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
         )
 
     @classmethod
+    def _prepare_retry_for_steps(
+        cls,
+        runs: tuple[WorkflowRun, ...],
+        step_groups: tuple[tuple[StepRun, ...], ...],
+        actor: Any,
+        *,
+        writable_run_ids: set[int] | None = None,
+    ) -> None:
+        """Seed retry permission and unrouted failures once for selected steps."""
+
+        writable = writable_run_ids if writable_run_ids is not None else cls._writable_for(runs, actor)
+        subject = to_subject_ref(actor)
+        for run, steps in zip(runs, step_groups, strict=True):
+            for step in steps:
+                step.__dict__["_graph_retry_permission"] = (subject, run.pk in writable)
+        if not writable:
+            return
+        failures = list(
+            apps.get_model("workflows", "StepRun")
+            ._base_manager.db_manager(runs[0]._state.db)
+            .filter(run_id__in=writable, status=StepRunStatus.FAILED)
+            .values_list("run_id", "pk", "node_key")
+        )
+        for run, steps in zip(runs, step_groups, strict=True):
+            if run.pk not in writable:
+                continue
+            definition = run.policy_version.definition
+            allowed = tuple(
+                (pk, key)
+                for owner_id, pk, key in failures
+                if owner_id == run.pk and definition.retry_allowed(key)
+            )
+            for step in steps:
+                step.__dict__["_graph_unrouted_failures"] = allowed
+
+    @classmethod
+    def _prepare_retry_page(cls, steps: tuple[StepRun, ...], actor: Any) -> None:
+        """Prepare a generic step page through the same graph retry rule."""
+
+        if not steps:
+            return
+        runs = tuple(
+            cls._base_manager.db_manager(steps[0]._state.db)
+            .select_related("version")
+            .filter(pk__in=sorted({step.run_id for step in steps}))
+            .order_by("pk")
+        )
+        by_id = {run.pk: run for run in runs}
+        grouped: dict[int, list[StepRun]] = {run.pk: [] for run in runs}
+        for step in steps:
+            step.__dict__["_retry_run"] = by_id[step.run_id]
+            grouped[step.run_id].append(step)
+        groups = tuple(tuple(grouped[run.pk]) for run in runs)
+        cls._prepare_retry_for_steps(runs, groups, actor)
+
+    @classmethod
     def _prepare_cancel_for(cls, runs: tuple[WorkflowRun, ...], actor: Any) -> set[int]:
         """Seed write and open-work facts on request-scoped projection instances."""
         writable = cls._writable_for(runs, actor)
@@ -644,7 +717,7 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
         open_ids: set[int] = set()
         while frontier:
             children = list(
-                cls.system_queryset()
+                cls._base_manager
                 .using(using)
                 .filter(
                     parent_step__run_id__in=frontier,
@@ -664,7 +737,7 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
         if pending:
             open_ids.update(
                 apps.get_model("workflows", "StepRun")
-                .system_queryset()
+                ._base_manager
                 .using(using)
                 .filter(run_id__in=seen)
                 .exclude(status__in=StepRunStatus.terminal_values())
@@ -724,15 +797,25 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
 
         run.advance()
 
-    def can_cancel(self, actor: Any) -> bool:
+    def can_cancel(self, actor: Any, *, write_access: bool | None = None) -> bool:
         """A writer may cancel active execution or clean up a terminal run's open rows."""
+        return self._can_cancel(actor, write_access=write_access, open_work=lambda: self._has_open_owned_work)
+
+    def get_can_cancel(self, actor: Any) -> bool:
+        """Check one run's cancellation eligibility outside a projected list."""
+
+        return self._can_cancel(actor, write_access=None, open_work=self.get_open_owned_work)
+
+    def _can_cancel(self, actor: Any, *, write_access: bool | None, open_work: Callable[[], bool]) -> bool:
+        """Keep the write and open-work decision shared by both read shapes."""
+
         cached = self.__dict__.get("_graph_write_permission")
         allowed = (
-            cached[1]
-            if cached is not None and actor is not None and cached[0] == to_subject_ref(actor)
+            write_access if write_access is not None
+            else cached[1] if cached is not None and actor is not None and cached[0] == to_subject_ref(actor)
             else self.with_actor(actor).has_access("write")
         )
-        return allowed and self._has_open_owned_work
+        return allowed and open_work()
 
     def check_await(self, observer: Any, *, expects: str) -> None:
         """Require an observed run to match the pinned contract without a self-wait."""
@@ -748,6 +831,12 @@ class WorkflowRun(ProtectedRecordRefMixin, ProtectedDataModel, concrete=True):
         """Cancellation owns open rows throughout the tree, even below final descendants."""
         if "_graph_open_owned_work" in self.__dict__:
             return bool(self.__dict__["_graph_open_owned_work"])
+        require_projection(self, "_graph_open_owned_work")
+        return self.get_open_owned_work()
+
+    def get_open_owned_work(self) -> bool:
+        """Check one run's open owned work explicitly outside a prepared batch."""
+
         return self.pk in type(self)._batch_cancel_open_work((self,))
 
     def can_reprocess(self, actor: Any) -> bool:

@@ -9,14 +9,13 @@ from datetime import datetime, time
 from functools import reduce
 from itertools import batched
 from operator import or_
-from typing import TYPE_CHECKING, Any, Self, TypedDict
+from typing import TYPE_CHECKING, Any, Self, TypedDict, cast
 from zoneinfo import ZoneInfo
 
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models, router, transaction
 from django.db.models.functions import MD5, Coalesce
-from django.db.models.query import ModelIterable
 from django.utils import timezone
 from rebac import (
     current_actor,
@@ -329,15 +328,12 @@ class ThreadFollowerQuerySet[ThreadFollowerT: ThreadFollower](ProtectedQuerySet[
         return self.effective_for_thread(attachment.thread)
 
 
-class NotificationPointerIterable(ModelIterable):
+def _prepare_message_pointers(queryset: models.QuerySet[Any], rows: list[Any]) -> None:
     """Prime the narrowed inbox projection once per materialized Django page."""
 
-    def __iter__(self) -> Iterator[Any]:
-        rows = list(super().__iter__())
-        if not isinstance(self.queryset, ThreadNotificationQuerySet):
-            raise ImproperlyConfigured("NotificationPointerIterable requires ThreadNotificationQuerySet.")
-        self.queryset.prime_message_pointers(rows, relation_actor(self.queryset))
-        yield from rows
+    if not isinstance(queryset, ThreadNotificationQuerySet):
+        raise ImproperlyConfigured("Message pointers require ThreadNotificationQuerySet.")
+    queryset.prime_message_pointers(rows, relation_actor(queryset))
 
 
 class ThreadNotificationQuerySet[ThreadNotificationT: ThreadNotification](ProtectedQuerySet[ThreadNotificationT]):
@@ -427,9 +423,7 @@ class ThreadNotificationQuerySet[ThreadNotificationT: ThreadNotification](Protec
     def with_message_pointers(self) -> Self:
         """Batch the recipient's narrow message context after filtering and pagination."""
 
-        queryset = self.all()
-        queryset._iterable_class = NotificationPointerIterable
-        return queryset
+        return self.with_page_hook(_prepare_message_pointers)
 
     def for_attachment(self, attachment: Any) -> Self:
         """Return notifications bound to one record's chatter attachment edge."""
@@ -660,18 +654,24 @@ class MessageQuerySet[MessageT: Message](
         state, and the preference and chronological owners supply their rules.
         """
 
+        return cast(Self, self._unread_rows(self, user))
+
+    @staticmethod
+    def _unread_rows(rows: models.QuerySet[Any], user: Any) -> models.QuerySet[Any]:
+        """Apply the one receipt predicate to an actor-scoped or record-gated population."""
+
         # Models import their managers; preference values are needed only when querying.
         from angee.messaging.models import NotificationPreference
 
         follower_model = apps.get_model("messaging", "ThreadFollower")
-        follows = follower_model.objects.db_manager(self.db).for_message_expression(user)
-        return self.untrashed().alias(
-            _order_at=self.chronological_time(),
+        follows = follower_model.objects.db_manager(rows.db).for_message_expression(user)
+        return rows.filter(is_trashed=False).alias(
+            _order_at=MessageQuerySet.chronological_time(),
             _follow_policy=models.Subquery(follows.values("notification_policy")[:1]),
             _follow_subtypes=models.Subquery(follows.values("subtype_keys")[:1]),
             _read_pk=models.Subquery(follows.values("last_read_message_id")[:1]),
             _read_at=models.Subquery(follows.annotate(
-                _read_at=self.chronological_time("last_read_message__"),
+                _read_at=MessageQuerySet.chronological_time("last_read_message__"),
             ).values("_read_at")[:1]),
         ).filter(
             models.Exists(follows),
@@ -681,10 +681,11 @@ class MessageQuerySet[MessageT: Message](
             models.Q(_read_pk__isnull=True) | _MESSAGE_ORDER.after((models.F("_read_at"), models.F("_read_pk"))),
         )
 
-    def needaction_expression(self, user: Any) -> models.Exists:
-        """Correlate the existing authorized receipt/preference predicate to one row."""
+    def needaction_expression(self, user: Any, *, structural: bool = False) -> models.Exists:
+        """Correlate the one receipt rule to an inbox or record-gated message."""
 
-        return models.Exists(self.unread_for(user).filter(pk=models.OuterRef("pk")))
+        rows = self.model._base_manager.db_manager(self.db).all() if structural else self
+        return models.Exists(self._unread_rows(rows, user).filter(pk=models.OuterRef("pk")))
 
     def explorer(self) -> MessageInbox:
         """Compose personal-inbox reads from this collection's current scope."""

@@ -50,6 +50,7 @@ from angee.base.exceptions import TransitionNotAllowed
 from angee.base.locks import task_lock
 from angee.graphql.deletion import DeletePreview
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.iam.testing.graphql import measure_graphql_document
 from angee.integrate.credentials import CredentialKind
 from angee.operator.daemon import OperatorDaemonConflict, OperatorDaemonNotFound, OperatorInstanceKind, WorkspaceStatus
 from tests.conftest import (
@@ -693,7 +694,7 @@ def test_owner_deletes_agent_with_idle_sessions_from_several_users(composed_tabl
         unrelated_session = AgentSession.objects.create(agent=unrelated, user=others[0])
         unrelated_turn = AgentTurn.objects.create(session=unrelated_session, index=1, prompt="Keep", status="completed")
     with actor_context(owner):
-        assert Agent.objects.get(pk=agent.pk).can_delete
+        assert Agent.objects.get(pk=agent.pk).get_delete_blocker() is None
         assert not AgentSession.objects.filter(pk__in=[session.pk for session in sessions[1:]]).exists()
         assert not AgentTurn.objects.filter(session_id__in=[session.pk for session in sessions[1:]]).exists()
         assert AgentSession.objects.get(pk=sessions[0].pk).has_access("delete")
@@ -827,8 +828,8 @@ def test_agent_delete_refuses_active_turns_in_unreadable_sessions(composed_table
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Private question", status=status)
     with actor_context(owner):
         target = Agent.objects.get(pk=agent.pk)
-        assert not target.can_delete
-        assert target.delete_blocker() == "Stop all active turns before deleting this agent."
+        assert target.get_delete_blocker() is not None
+        assert target.get_delete_blocker() == "Stop all active turns before deleting this agent."
         with pytest.raises(ValidationError, match="An agent turn is still running or awaiting approval; stop it first"):
             target.delete()
         assert not target.is_sudo()
@@ -849,7 +850,7 @@ def test_agent_delete_refuses_active_turns_in_unreadable_sessions(composed_table
         assert AgentTurn.objects.filter(pk=turn.pk, status=status).exists()
         turn.mark_canceled()
     with actor_context(owner):
-        assert Agent.objects.get(pk=agent.pk).can_delete
+        assert Agent.objects.get(pk=agent.pk).get_delete_blocker() is None
     assert _data(_execute(console, query, user=owner)) == {
         "agents": [{"can_delete": True}], "agent_sessions": [], "agent_turns": [],
     }
@@ -1208,7 +1209,7 @@ def test_agent_delete_after_stop_uses_current_capability(composed_tables: None) 
         turn = AgentTurn.objects.create(session=session, index=1, prompt="Retained", status="running")
     with actor_context(owner):
         target = Agent.objects.annotate(_has_active_turns=Agent.has_active_turns_expression()).get(pk=agent.pk)
-        assert not target.can_delete
+        assert target.get_delete_blocker() is not None
         turn.with_actor(owner).mark_canceled()
         target.delete()
     with system_context(reason="test.agents.stale_capability.verify"):
@@ -3439,6 +3440,36 @@ def test_chat_selection_breaks_timestamp_ties_and_keeps_actor_sessions(composed_
     assert Agent.objects.chat_for_actor() is None
     with actor_context(other):
         assert Agent.objects.chat_for_actor() is None
+
+
+def test_agent_session_list_display_name_is_flat_at_one_five_ten_twenty(composed_tables: None) -> None:
+    """Untitled sessions use one selected agent-name projection for a page."""
+
+    del composed_tables
+    owner = User.objects.create_user(username="session-name-budget")
+    with system_context(reason="tests.agents.session_name_budget.seed"):
+        agent = Agent.objects.create(
+            name="Budget agent", owner=owner, runtime_class="pydantic", runtime_status="running",
+        )
+    with actor_context(owner):
+        for _ in range(20):
+            AgentSession.objects.start(agent, user=owner, context={})
+    schema = _schema()
+    document = """query SessionNames($limit: Int!) {
+        agent_sessions(limit: $limit, order_by: [{created_at: asc}]) { id display_name }
+    }"""
+    reads = {
+        size: measure_graphql_document(schema, document, {"limit": size}, actor=owner)
+        for size in (1, 5, 10, 20)
+    }
+    for size, read in reads.items():
+        assert len(read.data["agent_sessions"]) == size
+        assert [row["display_name"] for row in read.data["agent_sessions"]] == ["Budget agent"] * size
+        assert read.statement_count == 5
+        read.assert_no_audit_writes()
+        read.assert_bytes(total=6_500, largest=2_200)
+    for smaller, larger in ((1, 5), (5, 10), (10, 20)):
+        reads[larger].assert_flat_from(reads[smaller])
 
 
 def test_agent_session_reads_and_view_resolution(composed_tables: None, capture_tasks: list[Any]) -> None:

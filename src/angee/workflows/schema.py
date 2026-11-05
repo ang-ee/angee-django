@@ -29,9 +29,16 @@ from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.data.hasura import declared_hasura_resource_fields, hasura_model_resource
 from angee.graphql.ids import PublicID, optional_public_id, require_instance_for_id
 from angee.graphql.impl import ImplChoice
+from angee.graphql.introspection import selected_field
 from angee.graphql.subscriptions import changes
 from angee.iam.graphql.actions import authorized_action_target, authorized_permission_target
-from angee.iam.graphql.capabilities import permission_annotations, permission_expression, permissions_field
+from angee.iam.graphql.capabilities import (
+    PermissionsExtension,
+    held_permissions,
+    permission_annotations,
+    permission_expression,
+    permissions_field,
+)
 from angee.iam.graphql.node import ProtectedNode
 from angee.iam.graphql.relations import (
     RECORD_REFERENCE_ANNOTATIONS,
@@ -157,7 +164,11 @@ class WorkflowRunType(RecordReferenceNode):
     reprocess_of: WorkflowRunType | None = actor_scoped_to_one("reprocess_of")
     trigger_event: TriggerEventType | None = actor_scoped_to_one("trigger_event")
     records: list[StepRecordType] = actor_scoped_to_many("records")
-    step_runs: list[StepRunType] = actor_scoped_to_many("step_runs")
+    step_runs: list[StepRunType] = actor_scoped_to_many(
+        "step_runs",
+        prepare=lambda rows, info: cast(Any, rows).with_retry_batch()
+        if selected_field(info.selected_fields, "can_retry") else rows,
+    )
     run_as: UserType | None = actor_scoped_to_one("run_as")
     status: auto
     origin: RunOrigin
@@ -174,7 +185,10 @@ class WorkflowRunType(RecordReferenceNode):
         only=["outcome", "version_id"], prefetch_related=[_RUN_POLICY_VERSION],
     )
     error: str | None
-    failure_reason: str | None = strawberry_django.field(only=["outcome", "error", "output"])
+    failure_reason: str | None = strawberry_django.field(
+        only=["outcome", "output"],
+        annotate={"_step_failure_reason": lambda info: WorkflowRun.step_failure_reason_expression()},
+    )
     request_key: auto
     created_at: auto
     updated_at: auto
@@ -237,10 +251,11 @@ class WorkflowRunType(RecordReferenceNode):
             related_querysets=related_querysets,
         )
 
-    @strawberry_django.field(only=["status", "stopped_at"])
+    @strawberry_django.field(only=["status", "stopped_at"], extensions=[PermissionsExtension(("write",))])
     def can_cancel(self, info: strawberry.Info) -> bool:
         """Project the model's viewer-specific cancellation predicate."""
-        return bool(cast(Any, self).can_cancel(get_current_user(info)))
+        run = cast(Any, self)
+        return bool(run.can_cancel(get_current_user(info), write_access="write" in held_permissions(run, ("write",))))
 
     @strawberry_django.field(only=["status", "version_id"])
     def can_reprocess(self, info: strawberry.Info) -> bool:
@@ -276,7 +291,11 @@ class StepRunType(ProtectedNode):
     """A node's retained execution and wait state; transitions use actions."""
 
     display_name: str = strawberry_django.field(resolver=ProtectedNode.display_name, only=["node_key", "map_index"])
-    run: WorkflowRunType | None = actor_scoped_to_one("run")
+    run: WorkflowRunType | None = actor_scoped_to_one(
+        "run",
+        prepare=lambda rows, info: cast(Any, rows).with_cancel_batch()
+        if selected_field(info.selected_fields, "can_cancel") else rows,
+    )
     child_runs: list[WorkflowRunType] = actor_scoped_to_many("child_runs")
     awaited_run: WorkflowRunType | None = actor_scoped_to_one("awaited_run")
     decision: DecisionType | None = actor_scoped_to_one("decision")
@@ -290,7 +309,8 @@ class StepRunType(ProtectedNode):
     is_mapped: bool = strawberry_django.field(only=["node_key"])
     is_map: bool = strawberry_django.field(only=["node_key", "run_id"], prefetch_related=[_STEP_POLICY_VERSION])
     map_total: int = strawberry_django.field(
-        only=["input", "node_key", "run_id"], prefetch_related=[_STEP_POLICY_VERSION],
+        only=["node_key", "run_id"], prefetch_related=[_STEP_POLICY_VERSION],
+        annotate={"_map_total": StepRun.map_total_expression()},
     )
     map_settled: int = strawberry_django.field(annotate={"_map_settled": StepRun.map_settled_expression()})
     status: auto
@@ -334,7 +354,11 @@ class StepRunType(ProtectedNode):
         """Project the same model rule checked by the retry action."""
         return bool(cast(Any, self).can_retry(get_current_user(info)))
 
-    @strawberry_django.field(only=["node_key", "page_index", "run_id"])
+    @strawberry_django.field(
+        only=["node_key", "page_index", "run_id"],
+        prefetch_related=[_STEP_POLICY_VERSION],
+        annotate={"_effect_started": StepRun.effect_started_expression()},
+    )
     def requires_duplicate_acknowledgement(self) -> bool:
         """Read the step owner's current-page effect marker predicate."""
         return bool(cast(Any, self).requires_duplicate_acknowledgement)
@@ -592,6 +616,13 @@ _VERSION_RESOURCE = hasura_model_resource(
     update=False,
     delete=False,
 )
+def _run_queryset(info: strawberry.Info) -> Any:
+    """Batch run cancellation only when selected by this document."""
+
+    rows = WorkflowRun.objects.all()
+    return rows.with_cancel_batch() if selected_field(info.selected_fields, "can_cancel") else rows
+
+
 _RUN_RESOURCE = hasura_model_resource(
     WorkflowRunType,
     model=WorkflowRun,
@@ -619,7 +650,17 @@ _RUN_RESOURCE = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
+    get_queryset=_run_queryset,
 )
+
+
+def _step_queryset(info: strawberry.Info) -> Any:
+    """Batch retry facts only when selected by this document."""
+
+    rows = StepRun.objects.all()
+    return rows.with_retry_batch() if selected_field(info.selected_fields, "can_retry") else rows
+
+
 _STEP_RESOURCE = hasura_model_resource(
     StepRunType,
     model=StepRun,
@@ -642,6 +683,7 @@ _STEP_RESOURCE = hasura_model_resource(
     insert=False,
     update=False,
     delete=False,
+    get_queryset=_step_queryset,
 )
 _ATTEMPT_RESOURCE = hasura_model_resource(
     StepAttemptType,

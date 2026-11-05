@@ -26,11 +26,13 @@ from angee.base.fields import ModelLabelField
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.locks import OptimisticLockMixin
+from angee.base.models.persistence import require_projection
 from angee.base.refs import RecordRef
 from angee.base.serialization import strip_null_bytes
 from angee.graphql.mixins import ChangeBroadcastMixin
 from angee.iam.models.base import ProtectedDataModel
 from angee.iam.models.trash import ProtectedTrashMixin
+from angee.iam.permissions import instance_actor
 from angee.messaging.constants import DELIVERY_TASK_EXPIRES
 from angee.messaging.delivery import queue_message_delivery
 from angee.messaging.managers import (
@@ -604,6 +606,7 @@ class Message(
         if cache is not None and "reactions" in cache:
             reactions = list(self.reactions.all())
         else:
+            require_projection(self, "reactions")
             reactions = list(
                 apps.get_model("messaging", "Reaction")
                 ._base_manager.filter(message=self)
@@ -655,7 +658,16 @@ class Message(
         annotated = getattr(self, "_sender_name", None)
         if annotated is not None:
             return str(annotated)
-        actor = self.actor() or current_actor()
+        actor = instance_actor(self)
+        if self.sender_id is None or actor is None:
+            return ""
+        require_projection(self, "_sender_name")
+        return self.get_sender_name()
+
+    def get_sender_name(self) -> str:
+        """Read one sender label explicitly outside a projected list."""
+
+        actor = instance_actor(self)
         if self.sender_id is None or actor is None:
             return ""
         handle_model = apps.get_model("parties", "Handle")
@@ -674,7 +686,16 @@ class Message(
         annotated = getattr(self, "_thread_title", None)
         if annotated is not None:
             return str(annotated)
-        actor = self.actor() or current_actor()
+        actor = instance_actor(self)
+        if self.thread_id is None or actor is None:
+            return ""
+        require_projection(self, "_thread_title")
+        return self.get_thread_title()
+
+    def get_thread_title(self) -> str:
+        """Read one thread title explicitly outside a projected list."""
+
+        actor = instance_actor(self)
         if self.thread_id is None or actor is None:
             return ""
         # The caller already owns access to this materialized Message. The
@@ -708,7 +729,16 @@ class Message(
         annotated = getattr(self, "_channel_vendor_name", None)
         if annotated is not None:
             return str(annotated)
-        actor = self.actor() or current_actor()
+        actor = instance_actor(self)
+        if self.channel_id is None or actor is None:
+            return ""
+        require_projection(self, "_channel_vendor_name")
+        return self.get_channel_vendor_name()
+
+    def get_channel_vendor_name(self) -> str:
+        """Read one vendor label explicitly outside a projected list."""
+
+        actor = instance_actor(self)
         if self.channel_id is None or actor is None:
             return ""
         return (
@@ -749,6 +779,12 @@ class Message(
                     fragment = part.fragment
                     return fragment.text if fragment is not None else ""
             return ""
+        require_projection(self, "_title_text")
+        return self.get_title()
+
+    def get_title(self) -> str:
+        """Read one retained title part explicitly outside a projected list."""
+
         title_part = (
             apps.get_model("messaging", "Part")
             ._base_manager.filter(message=self, role=Part.PartRole.TITLE)
@@ -911,19 +947,48 @@ class Fragment(AuditMixin, ProtectedDataModel, concrete=True):
     def part_count(self) -> int:
         """Return how many actor-readable parts use this fragment."""
 
-        return int(apps.get_model("messaging", "Part").objects.fragment_uses(self).count())
+        if "_part_count" not in self.__dict__:
+            require_projection(self, "_part_count")
+            return self.get_part_count()
+        return int(self.__dict__["_part_count"])
+
+    def get_part_count(self) -> int:
+        """Count one fragment's readable parts explicitly outside a projected list."""
+
+        return int(type(self)._base_manager.using(self._state.db).filter(pk=self.pk).annotate(
+            _count=type(self).use_count_expression(current_actor()),
+        ).values_list("_count", flat=True).get())
 
     def message_count(self) -> int:
         """Return how many actor-readable messages use this fragment."""
 
-        return int(
+        if "_message_count" not in self.__dict__:
+            require_projection(self, "_message_count")
+            return self.get_message_count()
+        return int(self.__dict__["_message_count"])
+
+    def get_message_count(self) -> int:
+        """Count one fragment's readable messages explicitly outside a projected list."""
+
+        return int(type(self)._base_manager.using(self._state.db).filter(pk=self.pk).annotate(
+            _count=type(self).use_count_expression(current_actor(), distinct_messages=True),
+        ).values_list("_count", flat=True).get())
+
+    @classmethod
+    def use_count_expression(cls, actor: Any, *, distinct_messages: bool = False) -> models.Expression:
+        """Count readable references in one correlated projection on each fragment page row."""
+
+        if actor is None:
+            return models.Value(0)
+        rows = (
             apps.get_model("messaging", "Part")
-            .objects.fragment_uses(self)
-            .order_by()
-            .values("message_id")
-            .distinct()
-            .count()
+            .objects.with_actor(actor).scoped_for_aggregate()
+            .filter(fragment_id=models.OuterRef("pk"))
+            .order_by().values("fragment_id")
+            .annotate(_uses=models.Count("message_id" if distinct_messages else "pk", distinct=distinct_messages))
+            .values("_uses")
         )
+        return Coalesce(models.Subquery(rows), models.Value(0))
 
     def __str__(self) -> str:
         """Return a truncated preview for Django displays."""

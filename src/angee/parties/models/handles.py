@@ -22,6 +22,7 @@ from rebac.database import write_alias
 
 from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
+from angee.base.models.persistence import require_projection
 from angee.iam.models.base import ProtectedDataModel
 from angee.iam.models.merge import ProtectedMergeableMixin
 from angee.iam.permissions import instance_actor
@@ -324,6 +325,14 @@ class Handle(ProtectedMergeableMixin, HistoryMixin, TaggedModel, AuditMixin, Pro
             return None
         if "_resolved_confidence" in self.__dict__:
             return cast(float | None, self.__dict__["_resolved_confidence"])
+        require_projection(self, "_resolved_confidence")
+        return self.get_resolved_confidence()
+
+    def get_resolved_confidence(self) -> float | None:
+        """Read one handle's applied party confidence outside a projected list."""
+
+        if self.party_id is None:
+            return None
         row = (
             apps.get_model("parties", "Party")
             .objects.db_manager(self._state.db)

@@ -220,7 +220,7 @@ def test_waiting_list_has_constant_query_count_and_is_private_to_each_recipient(
                         queries,
                         Task,
                         projection="_clarification_waiting",
-                        audits=1,
+                        audits=0,
                     )
                 )
                 assert len(waiting) == limit
@@ -236,7 +236,7 @@ def test_waiting_list_has_constant_query_count_and_is_private_to_each_recipient(
             assert categories[0].total() <= 27, categories
     with actor_context(manager):
         as_actor(round, manager).remove_responder(c.person("third"))
-        waiting = as_actor(questions[0], manager).clarification_waiting()
+        waiting = as_actor(questions[0], manager).get_clarification_waiting()
     assert {entry["id"] for entry in waiting} == {c.person("peer").pk}
     assert Task._base_manager.filter(clarification_round=round).count() == 50
 
@@ -252,11 +252,11 @@ def test_single_assignee_stops_waiting_after_posting_and_other_threads_do_not_co
     with actor_context(recipient):
         as_actor(other, recipient).message_post("Other answer")
     with actor_context(manager):
-        assert {row["id"] for row in as_actor(question, manager).clarification_waiting()} == {recipient.pk}
+        assert {row["id"] for row in as_actor(question, manager).get_clarification_waiting()} == {recipient.pk}
     with actor_context(recipient):
         as_actor(question, recipient).message_post("This answer")
     with actor_context(manager):
-        assert as_actor(question, manager).clarification_waiting() == []
+        assert as_actor(question, manager).get_clarification_waiting() == []
 
 
 @pytest.mark.skipif(connection.vendor != "postgresql", reason="Native PostgreSQL JSON aggregation is required.")
@@ -274,16 +274,15 @@ def test_postgresql_waiting_projection_executes_with_empty_and_populated_recipie
             assert list(rows) == [[{"id": c.person("responder").pk, "name": c.person("responder").username}]]
         # Recovery REBAC decides the actor sets when the expression is built (before
         # this capture) and compiles the arrow decisions into the one application
-        # SELECT; SQL execution reads one revision and emits one waiting audit.
-        assert _list_statement_categories(queries, Task, projection="waiting", audits=1) == Counter(
+        # SELECT; SQL execution reads one revision without a bypass audit.
+        assert _list_statement_categories(queries, Task, projection="waiting", audits=0) == Counter(
             application=1,
-            bypass_audit=1,
             schema_revision=1,
         )
     with actor_context(c.person("responder")):
         as_actor(task, c.person("responder")).message_post("Answered")
     with actor_context(manager):
-        assert as_actor(task, manager).clarification_waiting() == []
+        assert as_actor(task, manager).get_clarification_waiting() == []
 
 
 def test_active_project_round_uses_live_targets_and_tracks(campaign: ProposalCampaign) -> None:
@@ -366,12 +365,12 @@ def test_task_audience_list_projection_has_constant_query_count(campaign: Propos
             with CaptureQueriesContext(connection) as queries:
                 rows = read(limit)
             assert len(rows) == limit
-            categories.append(_list_statement_categories(queries, Task, audits=2))
+            categories.append(_list_statement_categories(queries, Task, audits=1))
         # Recovery REBAC compiles task arrows into the row SELECT. The list read
         # and widen/narrow annotations are three scopes, each reading one
         # revision and the same actor sets. Field visibility adds one held
         # statement for read__clarification_asker over the returned ids.
         assert categories[0] == categories[1], categories
         assert categories[0] == Counter(
-            application=1, decided_rows=1, bypass_audit=2, schema_revision=3, actor_sets=3
+            application=1, decided_rows=1, bypass_audit=1, schema_revision=3, actor_sets=3
         ), categories

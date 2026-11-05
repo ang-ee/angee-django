@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any, cast
 
 from django.apps import apps
@@ -21,7 +21,7 @@ from angee.base.exceptions import exception_text
 from angee.base.fields.state import StateField
 from angee.base.fields.text import DiagnosticTextField
 from angee.base.models.merge_references import MergePolicy
-from angee.base.models.persistence import require_composed_type
+from angee.base.models.persistence import require_composed_type, require_projection
 from angee.base.models.timestamps import update_fields_with_auto_now
 from angee.base.refs import RecordRef
 from angee.iam.models.base import ProtectedDataModel
@@ -253,6 +253,12 @@ class StepRun(ProtectedDataModel, concrete=True):
         """The three reader-facing holds, independent of scheduler waits."""
         if "_hold" in self.__dict__:
             return self.__dict__["_hold"]
+        require_projection(self, "_hold")
+        return self.get_hold()
+
+    def get_hold(self) -> str | None:
+        """Evaluate one step's hold explicitly outside a projected list."""
+
         if self.run.stopped_at is not None:
             return None
         if self.status == StepRunStatus.FAILED and not self.run.policy_version.definition.retry_allowed(self.node_key):
@@ -303,6 +309,8 @@ class StepRun(ProtectedDataModel, concrete=True):
         if "_failure_reason" in self.__dict__:
             reason = self.__dict__["_failure_reason"]
             return reason if isinstance(reason, str) and reason else None
+        if "output" not in self.__dict__:
+            require_projection(self, "_failure_reason")
         if (
             self.status == StepRunStatus.FAILED
             and isinstance(self.output, dict)
@@ -339,6 +347,13 @@ class StepRun(ProtectedDataModel, concrete=True):
     @property
     def map_total(self) -> int:
         """Count admitted items for a map, including after its wait has ended."""
+        if "_map_total" not in self.__dict__:
+            require_projection(self, "_map_total")
+        return self.get_map_total()
+
+    def get_map_total(self) -> int:
+        """Read one map's admitted item count explicitly."""
+
         if not self.is_map:
             return 0
         if "_map_total" in self.__dict__:
@@ -368,6 +383,12 @@ class StepRun(ProtectedDataModel, concrete=True):
         """Use the same progress expression for ordinary model and optimized reads."""
         if "_map_settled" in self.__dict__:
             return int(self.__dict__["_map_settled"])
+        require_projection(self, "_map_settled")
+        return self.get_map_settled()
+
+    def get_map_settled(self) -> int:
+        """Count one map's terminal body rows explicitly."""
+
         return int(
             type(self)
             .system_queryset()
@@ -388,6 +409,12 @@ class StepRun(ProtectedDataModel, concrete=True):
         """Whether any attempt on this page may have made a non-idempotent effect."""
         if "_effect_started" in self.__dict__:
             return not self.step.effect_idempotent and bool(self.__dict__["_effect_started"])
+        require_projection(self, "_effect_started")
+        return self.get_requires_duplicate_acknowledgement()
+
+    def get_requires_duplicate_acknowledgement(self) -> bool:
+        """Check one step's current-page effect marker explicitly."""
+
         with system_context(reason="workflows.effect_policy"):
             return (
                 not self.step.effect_idempotent
@@ -405,7 +432,7 @@ class StepRun(ProtectedDataModel, concrete=True):
         """Project the current-page effect marker with the step rows."""
         attempt = apps.get_model("workflows", "StepAttempt")
         return models.Exists(
-            attempt.objects.system_context(reason="workflows.effect_policy").filter(
+            attempt._base_manager.filter(
                 step_run_id=models.OuterRef("pk"),
                 page_index=models.OuterRef("page_index"),
                 effect_started_at__isnull=False,
@@ -414,8 +441,21 @@ class StepRun(ProtectedDataModel, concrete=True):
 
     @property
     def retry_blocker(self) -> str | None:
-        """State-only retry eligibility, shared by the locked action and read surface."""
-        run = self.run
+        """State-only retry eligibility from a prepared graph batch."""
+
+        if "_graph_unrouted_failures" not in self.__dict__:
+            require_projection(self, "_graph_unrouted_failures")
+            return self.get_retry_blocker()
+        return self._retry_blocker(self.__dict__["_graph_unrouted_failures"])
+
+    def get_retry_blocker(self) -> str | None:
+        """Check one step's retry state explicitly outside a prepared graph."""
+
+        with system_context(reason="workflows.retry_policy"):
+            return self._retry_blocker(None)
+
+    def _retry_blocker(self, failures: Any) -> str | None:
+        run = self.__dict__.get("_retry_run") or self.run
         definition = run.policy_version.definition
         if (
             run.stopped_at is not None
@@ -429,7 +469,6 @@ class StepRun(ProtectedDataModel, concrete=True):
             and not definition.retry_allowed(self.node_key)
         ):
             return "This step cannot be retried in place."
-        failures = self.__dict__.get("_graph_unrouted_failures")
         if failures is None:
             failures = (
                 (row.pk, row.node_key)
@@ -445,7 +484,17 @@ class StepRun(ProtectedDataModel, concrete=True):
 
     def can_retry(self, actor: Any) -> bool:
         """Expose retry eligibility without granting generic writes to engine rows."""
-        run = self.run
+        return self._can_retry(actor, lambda: self.retry_blocker)
+
+    def get_can_retry(self, actor: Any) -> bool:
+        """Check one step's retry eligibility outside a prepared graph."""
+
+        return self._can_retry(actor, self.get_retry_blocker)
+
+    def _can_retry(self, actor: Any, blocker: Callable[[], str | None]) -> bool:
+        """Apply the same permission and blocker rule to prepared and standalone reads."""
+
+        run = self.__dict__.get("_retry_run") or self.run
         cached = self.__dict__.get("_graph_retry_permission")
         allowed = (
             cached[1]
@@ -454,10 +503,7 @@ class StepRun(ProtectedDataModel, concrete=True):
         )
         if not allowed:
             return False
-        if "_graph_unrouted_failures" in self.__dict__:
-            return self.retry_blocker is None
-        with system_context(reason="workflows.retry_policy"):
-            return self.retry_blocker is None
+        return blocker() is None
 
     class Meta:
         """Django options for node identity, fences and tick predicates."""

@@ -34,6 +34,7 @@ from strawberry_django.pagination import OffsetPaginated
 from strawberry_django.utils.requests import get_request
 
 from angee.base.exceptions import exception_text
+from angee.base.locks import task_lock_snapshot
 from angee.base.models.identity import public_id_of
 from angee.graphql.actions import ActionResult, action_guard
 from angee.graphql.data.hasura import declared_hasura_resource_fields, hasura_model_resource, public_pk_decoder
@@ -79,6 +80,45 @@ _OPEN_FAILURE_LINKS = Prefetch(
     queryset=RecordLink.objects.with_open_failures(include_source=True),
     to_attr="open_failure_links",
 )
+
+
+def _source_integrations(info: strawberry.Info) -> Any:
+    """Reuse the actor-scoped connector capability selection within one request."""
+
+    request = get_request(info)
+    cached = getattr(request, "_angee_source_integrations", None)
+    if cached is not None:
+        return cached
+    actor = _session_user(info)
+    integrations = Integration.objects.with_actor(actor).with_concrete_capabilities()
+    setattr(request, "_angee_source_integrations", integrations)
+    return integrations
+
+
+def _record_link_capability_prefetches(info: strawberry.Info) -> list[Prefetch]:
+    """Attach the stream then its selected connector to every retained link row."""
+
+    request = get_request(info)
+    cached = getattr(request, "_angee_record_link_capability_prefetches", None)
+    if cached is not None:
+        return cast(list[Prefetch], cached)
+    selected = [
+        Prefetch("stream", queryset=SyncStream._base_manager.all(), to_attr="_source_stream"),
+        Prefetch("_source_stream__integration", queryset=_source_integrations(info)),
+    ]
+    setattr(request, "_angee_record_link_capability_prefetches", selected)
+    return selected
+
+
+def _sync_stream_capability_prefetch(info: strawberry.Info) -> Prefetch:
+    """Attach the same connector selection when failure links inherit their stream."""
+
+    request = get_request(info)
+    cached = getattr(request, "_angee_sync_stream_capability_prefetch", None)
+    if cached is None:
+        cached = Prefetch("integration", queryset=_source_integrations(info))
+        setattr(request, "_angee_sync_stream_capability_prefetch", cached)
+    return cast(Prefetch, cached)
 
 
 @strawberry.type
@@ -1209,16 +1249,31 @@ class BridgeSyncStatusMixin:
         return cast(int, cast(Any, self).open_failure_count)
 
     @strawberry_django.field(name="is_syncing", only=["id"])
-    def is_syncing(self) -> bool:
+    def is_syncing(self, info: strawberry.Info) -> bool:
         """Return whether a worker currently holds this bridge's live sync lock."""
 
-        return bool(cast(Any, self).is_syncing)
+        return _prime_bridge_is_syncing(cast(Any, self), info)
 
     @strawberry_django.field(name="sync_stage", only=["id", "sync_stage", "sync_run_id"])
-    def sync_stage(self) -> Bridge.SyncStage:
+    def sync_stage(self, info: strawberry.Info) -> Bridge.SyncStage:
         """Reconcile direct workers against their lock; retained runs settle durably."""
 
-        return cast(Any, self).effective_sync_stage
+        bridge = cast(Any, self)
+        if bridge.sync_stage in bridge.LIVE_SYNC_STAGES and not bridge.sync_is_dispatched:
+            _prime_bridge_is_syncing(bridge, info)
+        return bridge.effective_sync_stage
+
+
+def _prime_bridge_is_syncing(bridge: Any, info: strawberry.Info) -> bool:
+    """Share one request lock snapshot across bridge status fields and rows."""
+
+    request = get_request(info)
+    snapshots = vars(request).setdefault("_angee_task_lock_snapshots", {})
+    alias = bridge._state.db or "default"
+    if alias not in snapshots:
+        snapshots[alias] = task_lock_snapshot(using=alias)
+    locks = snapshots[alias]
+    return bool(bridge.prime_is_syncing(locks))
 
 
 @strawberry.type
@@ -1415,7 +1470,7 @@ class SyncStreamType(ProtectedNode):
 
     @strawberry_django.field(
         only=["inbound"],
-        prefetch_related=[_OPEN_FAILURE_LINKS],
+        prefetch_related=[_OPEN_FAILURE_LINKS, _sync_stream_capability_prefetch],
     )
     def failures(self, open_only: bool = True) -> list[SyncFailureType]:
         return [
@@ -1452,7 +1507,13 @@ class RecordLinkType(ProtectedNode):
     created_at: auto
     updated_at: auto
 
-    @strawberry_django.field(only=["stream_id", "external_key"], select_related=["stream__integration"])
+    @strawberry_django.field(
+        only=["stream_id", "external_key"],
+        prefetch_related=[
+            lambda info: _record_link_capability_prefetches(info)[0],
+            lambda info: _record_link_capability_prefetches(info)[1],
+        ],
+    )
     def source_url(self) -> str | None:
         """Return the selected connector's provider URL for this remote identity."""
 
@@ -1460,14 +1521,23 @@ class RecordLinkType(ProtectedNode):
 
     @strawberry_django.field(
         only=["stream_id", "external_key", "source_payload"],
-        select_related=["stream__integration"],
+        prefetch_related=[
+            lambda info: _record_link_capability_prefetches(info)[0],
+            lambda info: _record_link_capability_prefetches(info)[1],
+        ],
     )
     def source_label(self) -> str:
         """Connector-owned human label, shared by record sources and failures."""
 
         return cast(str, cast(Any, self).source_label)
 
-    @strawberry_django.field(only=["stream_id", "inbound", "outbox_last_error"], select_related=["stream"])
+    @strawberry_django.field(
+        only=["stream_id", "inbound", "outbox_last_error"],
+        prefetch_related=[
+            lambda info: _record_link_capability_prefetches(info)[0],
+            lambda info: _record_link_capability_prefetches(info)[1],
+        ],
+    )
     def failures(self, open_only: bool = True) -> list[SyncFailureType]:
         return [cast(Any, SyncFailureType).from_pydantic(row) for row in cast(Any, self).failures(open_only=open_only)]
 

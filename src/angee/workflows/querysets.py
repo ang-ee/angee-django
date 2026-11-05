@@ -7,7 +7,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import ExitStack, contextmanager, nullcontext
 from contextvars import ContextVar
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Self, cast
 from uuid import uuid4
 
 from django.apps import apps
@@ -19,6 +19,7 @@ from django.db.models.functions import Concat, Least, Now, RowNumber
 from pydantic import TypeAdapter
 from pydantic import ValidationError as PydanticValidationError
 from rebac import (
+    current_actor,
     database_context,
     generic_target,
     system_context,
@@ -79,8 +80,27 @@ def _record_failure(operation: str, *, using: str | None = None) -> Iterator[Non
         logger.exception("Workflow %s failed.", operation)
 
 
+def _prepare_cancel_batch(queryset: QuerySet[Any], rows: list[Any]) -> None:
+    """Seed the run owner's cancellation facts once for a selected page."""
+
+    if rows and (actor := current_actor()) is not None:
+        cast(Any, queryset.model)._prepare_cancel_for(tuple(rows), actor)
+
+
+def _prepare_retry_batch(queryset: QuerySet[Any], rows: list[Any]) -> None:
+    """Seed the run owner's retry facts once for a selected step page."""
+
+    if rows and (actor := current_actor()) is not None:
+        apps.get_model("workflows", "WorkflowRun")._prepare_retry_page(tuple(rows), actor)
+
+
 class WorkflowRunQuerySet[T: WorkflowRun](ProtectedQuerySet[T]):
     """Own run locks and the delivery obligation every lock holder acquires."""
+
+    def with_cancel_batch(self) -> Self:
+        """Prepare cancellation over the materialized page before field resolution."""
+
+        return self.with_page_hook(_prepare_cancel_batch)
 
     def for_subject(self, record: Any) -> Any:
         """Select the canonical subject without changing this queryset's read scope."""
@@ -324,6 +344,11 @@ class StepRecordQuerySet[T: StepRecord](ProtectedAppendOnlyQuerySet[T], Protecte
 class StepRunQuerySet[T: StepRun](ProtectedQuerySet[T]):
     """Own conditional step transitions and database-clock candidate scopes."""
 
+    def with_retry_batch(self) -> Self:
+        """Prepare retry eligibility over the materialized step page."""
+
+        return self.with_page_hook(_prepare_retry_batch)
+
     def _write_transition(self, **values: Any) -> int:
         """Publish affected targets after a conditional state write, retaining its fence."""
 
@@ -526,7 +551,7 @@ class StepRunQuerySet[T: StepRun](ProtectedQuerySet[T]):
         """Retry or fail this selected claim under its persisted effect and retry policy."""
 
         retries = step_run.retries + 1
-        if attempt.retryable and step_run.requires_duplicate_acknowledgement:
+        if attempt.retryable and step_run.get_requires_duplicate_acknowledgement():
             return self.to_waiting(kind=WaitingKind.ERROR, reason="possible duplicate effect", retries=retries)
         if attempt.retryable and retries < step_run.step.retry.max_attempts:
             return self.to_waiting(

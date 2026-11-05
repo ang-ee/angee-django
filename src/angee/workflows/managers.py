@@ -935,9 +935,9 @@ class StepRunManager[T: StepRun](_StepRunManagerBase[T]):
                 steps = owner.filter(run_id=run.pk)
                 current = steps.filter(pk=step_run.pk).lock_if_supported(no_key=True).get()
                 current.run = run
-                if blocker := current.retry_blocker:
+                if blocker := current.get_retry_blocker():
                     raise ValidationError(blocker)
-                if current.requires_duplicate_acknowledgement and not accept_duplicate:
+                if current.get_requires_duplicate_acknowledgement() and not accept_duplicate:
                     raise ValidationError("Retry requires accepting a possible duplicate effect.")
                 steps.filter(pk=current.pk).to_ready(
                     acknowledged_by_id=actor_user_id(to_subject_ref(actor)) if accept_duplicate else None,

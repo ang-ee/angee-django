@@ -1577,15 +1577,28 @@ class Task(
         return "write"
 
     @classmethod
-    def action_allowed_expression(cls, actor: Any, action: str) -> models.expressions.BaseExpression:
-        """Batch the verb's permission and its blockers for one actor's rows."""
+    def action_permission_expression(cls, actor: Any, permission: str) -> models.expressions.BaseExpression:
+        """Project one distinct hand-verb permission for the task row."""
 
         if actor is None:
             return models.Value(False)
-        rows = cls.objects.with_actor(actor).with_action(cls.action_permission(action)).scoped_for_aggregate()
-        for condition, _error in cls.action_blockers(action):
-            rows = rows.exclude(condition)
+        rows = cls.objects.with_actor(actor).with_action(permission).scoped_for_aggregate()
         return models.Exists(rows.filter(pk=models.OuterRef("pk")))
+
+    @classmethod
+    def action_blocked_expression(cls, action: str) -> models.expressions.BaseExpression:
+        """Project the verb's declared row blockers without repeating its permission scope."""
+
+        blockers = cls.action_blockers(action)
+        if not blockers:
+            return models.Value(False)
+        condition = models.Q()
+        for blocker, _error in blockers:
+            condition |= blocker
+        return models.Case(
+            models.When(condition, then=models.Value(True)),
+            default=models.Value(False), output_field=models.BooleanField(),
+        )
 
     def validate_action(self, action: str) -> None:
         """Refuse ``action`` with the first declared blocker the stored row matches."""

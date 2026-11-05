@@ -27,7 +27,6 @@ from angee.messaging.querysets import _WS_RE as _WS_RE
 from angee.messaging.querysets import AUTOMATED_MAIL_HEADERS as AUTOMATED_MAIL_HEADERS
 from angee.messaging.querysets import ChannelQuerySet as ChannelQuerySet
 from angee.messaging.querysets import MessageQuerySet as MessageQuerySet
-from angee.messaging.querysets import NotificationPointerIterable as NotificationPointerIterable
 from angee.messaging.querysets import PartQuerySet as PartQuerySet
 from angee.messaging.querysets import ThreadFollowerQuerySet as ThreadFollowerQuerySet
 from angee.messaging.querysets import ThreadNotificationQuerySet as ThreadNotificationQuerySet

@@ -176,7 +176,7 @@ def test_run_owner_reads_execution_evidence_but_another_starter_cannot(schema, c
       stepattempt { display_name }
       steprecord { display_name }
     }"""
-    run_label = str(run)
+    run_label = run.get_workflow_label()
     with CaptureQueriesContext(connection) as one:
         assert result_data(execute_schema(schema, labels, user=owner)) == {
             "workflow": [{"display_name": workflow.name}],
@@ -555,7 +555,7 @@ def test_terminal_cancel_reports_open_step_cleanup_without_claiming_run_cancella
     run = start_run(workflow, actor=actor)
     run_until(run)
     assert run.status == "failed"
-    assert run.can_cancel(actor)
+    assert run.get_can_cancel(actor)
     retained = (run.status, run.outcome, run.output, run.error, run.finished_at)
     query = "mutation($id: ID!) { cancel_workflow_run(id: $id) { ok message } }"
     first = result_data(execute_schema(schema, query, {"id": run.sqid}, user=actor))
@@ -567,7 +567,7 @@ def test_terminal_cancel_reports_open_step_cleanup_without_claiming_run_cancella
     assert second["cancel_workflow_run"] == {"ok": True, "message": "Nothing to cancel."}
     run = WorkflowRun.system_queryset().get(pk=run.pk)
     assert (run.status, run.outcome, run.output, run.error, run.finished_at) == retained
-    assert not run.can_cancel(actor)
+    assert not run.get_can_cancel(actor)
 
 
 def test_origin_enum_has_native_choice_labels(schema):

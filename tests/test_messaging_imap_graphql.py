@@ -56,6 +56,7 @@ def test_connect_imap_channel_creates_basic_auth_channel(composed_tables: None) 
         "lifecycle": "CONNECTED",
         "credential_status": "active",
         "runtime_status": "OK",
+        "open_failure_count": 0,
         "config": {
             "host": "imap.example.com",
             "security": "starttls",
@@ -466,6 +467,7 @@ mutation ConnectImap(
     lifecycle
     credential_status
     runtime_status
+    open_failure_count
     config
   }
 }

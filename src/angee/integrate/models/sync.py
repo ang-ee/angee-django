@@ -27,7 +27,7 @@ from angee.base.fields.state import StateField
 from angee.base.models.audit import AuditMixin
 from angee.base.models.base import record_display_label
 from angee.base.models.merge_references import MergePolicy, references
-from angee.base.models.persistence import require_composed_type
+from angee.base.models.persistence import require_composed_type, require_projection
 from angee.base.serialization import canonical_json
 from angee.iam.models.base import ProtectedDataModel
 from angee.iam.models.refs import ProtectedRecordRefMixin
@@ -190,6 +190,7 @@ class SyncStream(SyncStateMixin, AuditMixin, ProtectedDataModel, concrete=True):
         rows = list(self.failures(open_only=open_only))
         for link in links:
             link.stream = self
+            link.__dict__["_source_stream"] = self
             rows.extend(link.failures(open_only=open_only))
         return tuple(row for row in rows if kind is None or row.kind == kind)
 
@@ -325,13 +326,33 @@ class RecordLink(
     def source_url(self) -> str | None:
         """Provider URL projected through the connection's implementation."""
 
-        return cast(Bridge, self.stream.integration.concrete_capability()).source_url(self)
+        if "_source_stream" not in self.__dict__:
+            require_projection(self, "_source_stream")
+            return self.get_source_url()
+        return self._source_capability(self.__dict__["_source_stream"]).source_url(self)
+
+    def get_source_url(self) -> str | None:
+        """Resolve one link's provider URL explicitly outside a prepared list."""
+
+        return self._source_capability(self.stream).source_url(self)
 
     @property
     def source_label(self) -> str:
         """Provider-owned human label for this retained identity."""
 
-        return cast(Bridge, self.stream.integration.concrete_capability()).source_label(self)
+        if "_source_stream" not in self.__dict__:
+            require_projection(self, "_source_stream")
+            return self.get_source_label()
+        return self._source_capability(self.__dict__["_source_stream"]).source_label(self)
+
+    def get_source_label(self) -> str:
+        """Resolve one link's provider label explicitly outside a prepared list."""
+
+        return self._source_capability(self.stream).source_label(self)
+
+    @staticmethod
+    def _source_capability(stream: SyncStream) -> Bridge:
+        return cast(Bridge, stream.integration.concrete_capability())
 
     def _lock_sync_state(self) -> Self:
         """Follow a link's current epoch before fencing a retained failure mutation."""

@@ -8,7 +8,20 @@ from django.core.exceptions import FieldDoesNotExist, ImproperlyConfigured
 from django.db import models
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from strawberry.types import get_object_definition
+from strawberry.types.nodes import SelectedField, Selection
 from strawberry_django.utils.typing import get_django_definition
+
+
+def selected_field(selections: list[Selection], name: str) -> bool:
+    """Whether ``name`` is selected directly on the current field, including through fragments."""
+
+    def direct(children: list[Selection]) -> bool:
+        return any(
+            child.name == name if isinstance(child, SelectedField) else direct(child.selections)
+            for child in children
+        )
+
+    return any(direct(selection.selections) for selection in selections)
 
 
 def surface_name(surface: object) -> str:

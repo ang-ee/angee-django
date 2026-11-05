@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from contextlib import AbstractContextManager, contextmanager, nullcontext
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal, overload
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
@@ -142,11 +142,27 @@ class ThreadedModelMixin(models.Model):
     """The attachment role used for the model's primary chatter thread."""
 
     @classmethod
-    def thread_messages_expression(cls, record_id: Any) -> MessageQuerySet[Message]:
+    @overload
+    def thread_messages_expression(
+        cls, record_id: Any, *, structural_existence: Literal[True],
+    ) -> models.QuerySet[Message]: ...
+
+    @classmethod
+    @overload
+    def thread_messages_expression(
+        cls, record_id: Any, *, structural_existence: Literal[False] = False,
+    ) -> MessageQuerySet[Message]: ...
+
+    @classmethod
+    def thread_messages_expression(
+        cls, record_id: Any, *, structural_existence: bool = False,
+    ) -> models.QuerySet[Message]:
         """Return messages of the record's primary thread for a SQL subquery.
 
-        This is a structural, unscoped expression. The calling projection owns
-        authorization of the information derived from these message rows.
+        This is an unscoped expression. The calling projection owns authorization
+        of the information derived from these message rows. A structural existence
+        check needs no content bypass audit; callers returning message content
+        retain the audited queryset.
         """
 
         owner = generic_pointer_model(cls)
@@ -157,7 +173,10 @@ class ThreadedModelMixin(models.Model):
         message_model = apps.get_model("messaging", "Message")
         thread_model = apps.get_model("messaging", "Thread")
         record_ref = record_id if hasattr(record_id, "resolve_expression") else models.Value(record_id)
-        rows = message_model.objects.system_context(reason="messaging.record.messages").alias(_record_id=record_ref)
+        rows = (
+            message_model._base_manager.all()
+            if structural_existence else message_model.objects.system_context(reason="messaging.record.messages")
+        ).alias(_record_id=record_ref)
         survivor = thread_model(pk=rows.survivor_id("thread__", ref=models.OuterRef))
         # The thread rows are structural plumbing for an already-authorized
         # record projection.  The message queryset below is the content-bearing
@@ -170,13 +189,11 @@ class ThreadedModelMixin(models.Model):
         )
         # angee-django-stubs does not relate annotated composed models to their
         # source model here; this narrows the return through MessageQuerySet[Any].
-        return require_composed_type(
-            rows.alias(_record_attached=models.Exists(attached)).filter(
-                thread_id__isnull=False,
-                _record_attached=True,
-            ),
-            MessageQuerySet,
+        messages = rows.alias(_record_attached=models.Exists(attached)).filter(
+            thread_id__isnull=False,
+            _record_attached=True,
         )
+        return messages if structural_existence else require_composed_type(messages, MessageQuerySet)
 
     thread_post_access: ClassVar[str] = "write"
     """Record permission required to post a chatter message."""

@@ -197,7 +197,7 @@ class DeletePreview:
                         if not _is_root(instance, row)
                     ),
                 )
-                if isinstance(row, AngeeModel) and (message := row.delete_blocker())
+                if isinstance(row, AngeeModel) and (message := row.get_delete_blocker())
             )
         )
         groups = _PreviewRows.by_model(
@@ -284,7 +284,7 @@ class DeletePreview:
                 has_blockers=False,
                 root=DeletePreviewNode.from_target(target, groups),
             )
-        if isinstance(target, AngeeModel) and (message := target.delete_blocker()):
+        if isinstance(target, AngeeModel) and (message := target.get_delete_blocker()):
             preview.refusals = [message]
             preview.has_blockers = True
         return preview

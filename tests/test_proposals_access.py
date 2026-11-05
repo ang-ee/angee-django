@@ -374,7 +374,7 @@ def test_question_surrender_replay_and_both_immutable_donors(proposal_schema):
         with pytest.raises(ValidationError, match="surrendered"):
             round.with_actor(admin).pass_clarification(question, recipient)
         passed = round.pass_clarification(question, recipient, audience="asker")
-        assert passed.clarification_waiting() == [{"id": recipient.pk, "name": recipient.username}]
+        assert passed.get_clarification_waiting() == [{"id": recipient.pk, "name": recipient.username}]
     assert passed.created_by_id is None
     assert passed.updated_by_id is None
     with system_context(reason="tests.proposals.immutable_donors"):

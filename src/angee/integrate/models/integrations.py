@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from copy import copy
 from datetime import datetime, timedelta
 from typing import Any, ClassVar, Self, cast
@@ -30,6 +30,7 @@ from angee.base.fields.text import DiagnosticTextField
 from angee.base.lineage import concrete_child, concrete_child_models
 from angee.base.models.audit import AuditMixin
 from angee.base.models.implementations import ImplDefaultsMixin
+from angee.base.models.persistence import require_projection
 from angee.base.models.transitions import StateTransitions, save_state, transition
 from angee.iam.graphql.capabilities import held_permissions
 from angee.iam.models.base import ProtectedDataModel
@@ -241,6 +242,10 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
         returned to a client or used for a capability operation.
         """
 
+        prepared = self.__dict__.get("_concrete_children")
+        if prepared is not None and prepared[0] == actor and prepared[1] == frozenset(exposed_model_labels):
+            return cast(tuple[list[Integration], list[Integration]], prepared[2:])
+
         integrity: list[Integration] = []
         authorized: list[Integration] = []
         declared = self.declared_concrete_model()
@@ -295,6 +300,14 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
     def connection_oauth_slug(self, owner_label: str = "") -> str:
         """Expand this capability's declared registration using its vendor identity."""
 
+        return self._oauth_slug_for_vendor(self.connection_vendor_slug(), owner_label)
+
+    def get_connection_oauth_slug(self, owner_label: str = "") -> str:
+        """Expand one integration's registration outside a projected list."""
+
+        return self._oauth_slug_for_vendor(self.get_connection_vendor_slug(), owner_label)
+
+    def _oauth_slug_for_vendor(self, vendor: str, owner_label: str) -> str:
         hint = str(self.oauth_client_hint or "").strip()
         if not hint:
             raise OAuthFlowError(
@@ -302,7 +315,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
                 400,
                 f"{owner_label or self._meta.label} has no OAuth client.",
             )
-        return hint.format(vendor=self.connection_vendor_slug())
+        return hint.format(vendor=vendor)
 
     def connect_oauth_client(self, owner_label: str) -> Any:
         """Resolve the ready registration for this capability's declared connection."""
@@ -314,7 +327,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
             model.objects.db_manager(using)
             .sudo(reason="integrate.integration.connect_oauth_client")
             .enabled_for_slug(
-                self.connection_oauth_slug(owner_label),
+                self.get_connection_oauth_slug(owner_label),
             )
         )
         if client is None:
@@ -381,10 +394,15 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
     def connection_vendor_slug(self) -> str:
         """Read branding used by connection selection without requiring Vendor read."""
 
-        using = write_alias(type(self), using=self._state.db, instance=self)
-
         if "_connection_vendor_slug" in self.__dict__:
             return str(self.__dict__["_connection_vendor_slug"] or "")
+        require_projection(self, "_connection_vendor_slug")
+        return self.get_connection_vendor_slug()
+
+    def get_connection_vendor_slug(self) -> str:
+        """Read one integration's vendor slug outside a projected list."""
+
+        using = write_alias(type(self), using=self._state.db, instance=self)
         vendor = apps.get_model("integrate", "Vendor")
         return str(
             vendor.objects.db_manager(using)
@@ -399,12 +417,24 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
     def is_oauth_connectable(self, *, ready_slugs: Collection[str] | None = None) -> bool:
         """Use registration readiness without constructing a runtime or loading secrets."""
 
+        return self._is_oauth_connectable(self.connection_oauth_slug, ready_slugs=ready_slugs)
+
+    def get_is_oauth_connectable(self, *, ready_slugs: Collection[str] | None = None) -> bool:
+        """Check one connector's OAuth readiness outside a projected list."""
+
+        return self._is_oauth_connectable(self.get_connection_oauth_slug, ready_slugs=ready_slugs)
+
+    def _is_oauth_connectable(
+        self, slug_reader: Callable[[], str], *, ready_slugs: Collection[str] | None,
+    ) -> bool:
+        """Apply the one registration rule to a projected or explicit slug read."""
+
         using = write_alias(type(self), using=self._state.db, instance=self)
 
         if (self.declared_concrete_model() or type(self)) is apps.get_model("integrate", "Integration"):
             return False
         try:
-            slug = self.connection_oauth_slug()
+            slug = slug_reader()
         except OAuthFlowError:
             return False
         if ready_slugs is not None:
@@ -431,18 +461,40 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
         """
 
         row = copy(self).with_actor(actor) if actor is not None else self
+        return row._can_connect(
+            write_access=write_access,
+            reconnect_required=lambda: row.is_reconnect_required,
+            oauth_connectable=lambda: row.is_oauth_connectable(ready_slugs=ready_slugs),
+        )
+
+    def get_can_connect(self, actor: Any = None) -> bool:
+        """Check one connector's Connect admission outside a projected list."""
+
+        row = copy(self).with_actor(actor) if actor is not None else self
+        return row._can_connect(
+            write_access=None,
+            reconnect_required=row.get_is_reconnect_required,
+            oauth_connectable=row.get_is_oauth_connectable,
+        )
+
+    def _can_connect(
+        self, *, write_access: bool | None,
+        reconnect_required: Callable[[], bool], oauth_connectable: Callable[[], bool],
+    ) -> bool:
+        """Apply the one owner, write, grant and registration admission rule."""
+
         return (
-            row.owner_id == actor_user_id(instance_actor(row))
-            and (row.has_access("write") if write_access is None else write_access)
-            and (row.credential_id is None or row.is_reconnect_required)
-            and row.is_oauth_connectable(ready_slugs=ready_slugs)
+            self.owner_id == actor_user_id(instance_actor(self))
+            and (self.has_access("write") if write_access is None else write_access)
+            and (self.credential_id is None or reconnect_required())
+            and oauth_connectable()
         )
 
     def require_connect(self, actor: Any) -> None:
         """Enforce the same OAuth admission projected to the record client."""
 
         self.require_access("write", actor)
-        if not self.can_connect(actor):
+        if not self.get_can_connect(actor):
             raise PermissionDenied("Integration OAuth Connect is unavailable to the current user.")
 
     def can_pause(self) -> bool:
@@ -458,6 +510,16 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
     def can_resume(self) -> bool:
         """Operator Resume reuses an attached grant and never substitutes for consent."""
 
+        return self._can_resume(lambda: self.is_reconnect_required)
+
+    def get_can_resume(self) -> bool:
+        """Check one connector's Resume admission outside a projected list."""
+
+        return self._can_resume(self.get_is_reconnect_required)
+
+    def _can_resume(self, reconnect_required: Callable[[], bool]) -> bool:
+        """Apply the one permission, grant and lifecycle rule for Resume."""
+
         return (
             "resume"
             in held_permissions(
@@ -465,7 +527,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
                 ("resume",),
                 model=apps.get_model("integrate", "Integration"),
             )
-            and not self.is_reconnect_required
+            and not reconnect_required()
             and (
                 self.lifecycle == IntegrationLifecycle.PAUSED
                 or (self.lifecycle == IntegrationLifecycle.DISCONNECTED and self.credential_id is not None)
@@ -474,6 +536,16 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
 
     def can_retry_discovery(self) -> bool:
         """Retry only failed, settled discovery with an attached healthy grant."""
+
+        return self._can_retry_discovery(lambda: self.is_reconnect_required)
+
+    def get_can_retry_discovery(self) -> bool:
+        """Check one connector's Retry admission outside a projected list."""
+
+        return self._can_retry_discovery(self.get_is_reconnect_required)
+
+    def _can_retry_discovery(self, reconnect_required: Callable[[], bool]) -> bool:
+        """Apply the one permission, grant and discovery rule for Retry."""
 
         return (
             "retry_discovery"
@@ -488,7 +560,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
                 IntegrationLifecycle.PAUSED,
             )
             and self.credential_id is not None
-            and not self.is_reconnect_required
+            and not reconnect_required()
             and not self.discovery_ready
             and not self.discovery_pending
         )
@@ -520,7 +592,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
                 row = self.lock_capability()
             if actor is not None:
                 row.with_actor(actor)
-            if not row.can_resume():
+            if not row.get_can_resume():
                 raise ValidationError("This integration cannot resume in its current state.")
             row.connect()
         self.refresh_from_db(
@@ -530,20 +602,20 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
     def _credential_health(self) -> Credential | None:
         """Consume optimized public facts, or fetch the same narrow elevated projection."""
 
-        using = write_alias(type(self), using=self._state.db, instance=self)
+        if self.credential_id is None:
+            return None
+        if "_connection_credential" in self.__dict__:
+            return cast(Credential | None, self.__dict__["_connection_credential"])
+        require_projection(self, "_connection_credential")
+        return self.get_credential_health()
+
+    def get_credential_health(self) -> Credential | None:
+        """Read one integration's credential health outside a projected list."""
 
         if self.credential_id is None:
             return None
+        using = write_alias(type(self), using=self._state.db, instance=self)
         model = apps.get_model("integrate", "Credential")
-        if "_connection_credential" in self.__dict__:
-            return cast(Credential | None, self.__dict__["_connection_credential"])
-        fields = ("status", "expires_at", "last_refresh_status")
-        if all(f"_connection_{field}" in self.__dict__ for field in fields):
-            values = {field: self.__dict__[f"_connection_{field}"] for field in fields}
-            if values["status"] is None:
-                return None
-            if values["expires_at"] is None or values["expires_at"] > timezone.now():
-                return cast(Credential, model(**values))
         return model.objects.db_manager(using).connection_health().get(pk=self.credential_id)
 
     @property
@@ -553,6 +625,12 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
         credential = self._credential_health()
         return credential is not None and credential.is_reconnect_required
 
+    def get_is_reconnect_required(self) -> bool:
+        """Read one integration's consent health outside a projected list."""
+
+        credential = self.get_credential_health()
+        return credential is not None and credential.is_reconnect_required
+
     @property
     def credential_status(self) -> str:
         """Expose credential health without granting read access to its protected row."""
@@ -560,6 +638,12 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
         if "_connection_status" in self.__dict__:
             return str(self.__dict__["_connection_status"] or "")
         credential = self._credential_health()
+        return "" if credential is None else str(credential.status)
+
+    def get_credential_status(self) -> str:
+        """Read one integration's credential status outside a projected list."""
+
+        credential = self.get_credential_health()
         return "" if credential is None else str(credential.status)
 
     def connection_credential(self) -> Credential | None:
@@ -598,8 +682,13 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
         """
 
         actor, unscoped = self.effective_actor(strict=True)
+        cached = self.__dict__.get("_concrete_capability")
+        if cached is not None and cached[0] == actor and cached[1] == unscoped:
+            return cast(Self, cached[2])
         declared = self.declared_concrete_model()
-        if declared is not None and declared is not type(self) and issubclass(declared, type(self)):
+        if declared is type(self):
+            return self
+        if declared is not None and issubclass(declared, type(self)):
             child = self._concrete_child(declared, actor=actor, authorized=not unscoped)
             return child if child is not None else self
         for child_model in type(self).concrete_child_models():
@@ -1074,7 +1163,7 @@ class Integration(StatementSourceMixin, ImplDefaultsMixin, OwnerMixin, Protected
                 row = self.lock_capability()
             if actor is not None:
                 row.with_actor(actor)
-            if not row.can_retry_discovery():
+            if not row.get_can_retry_discovery():
                 raise ValidationError("This integration cannot retry discovery in its current state.")
             row.await_discovery()
         self.refresh_from_db(

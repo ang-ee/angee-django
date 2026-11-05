@@ -140,6 +140,7 @@ def boot(
     )
     (host_root / "settings.yaml").write_text(yaml.safe_dump({
         "SECRET_KEY": "isolated-composition-check",
+        "ANGEE_REQUIRE_PROJECTIONS": True,
         "COMPOSE_OUTPUT_DIR": str(runtime_dir),
         "COMPOSE_OUTPUT_MODULE": runtime_dir.name,
         "INSTALLED_APPS": installed_apps,

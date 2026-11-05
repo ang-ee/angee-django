@@ -61,6 +61,11 @@ class AngeeModel(
 
         return None
 
+    def get_delete_blocker(self) -> str | None:
+        """Check one row's deletion refusal for a standalone preview or write."""
+
+        return self.delete_blocker()
+
     def lock_for_delete(self, *, queryset: models.QuerySet[models.Model] | None = None) -> Self | None:
         """Lock and reload this target for deletion in the model's domain order.
 

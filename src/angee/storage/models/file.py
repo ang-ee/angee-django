@@ -264,18 +264,15 @@ class File(TaggedModel, ProtectedTrashMixin, OwnerMixin, HistoryMixin, Protected
     def storage(self) -> StorageBackend:
         """Return the resolved backend for this row's drive.
 
-        Resolve an uncached drive and its backend in one query under the native
-        system context. Cached relations need no elevation; the backend instance
-        comes from the per-``(row, config)`` cache.
+        Resolve an uncached drive and its backend structurally in one query.
+        The file's caller owns access; the backend instance comes from the
+        per-``(row, config)`` cache.
         """
 
         drive_field = type(self).drive.field
         if drive_field.is_cached(self):
             return self.drive.storage
-        with (
-            database_context(write_alias(type(self), using=self._state.db, instance=self)),
-            system_context(reason="storage.file.storage"),
-        ):
+        with database_context(write_alias(type(self), using=self._state.db, instance=self)):
             drive_field.set_cached_value(
                 self,
                 drive_field.related_model._base_manager.db_manager(self._state.db, hints={"instance": self})

@@ -25,9 +25,6 @@ from angee.messaging.querysets import (
     MessageQuerySet as MessageQuerySet,
 )
 from angee.messaging.querysets import (
-    NotificationPointerIterable as NotificationPointerIterable,
-)
-from angee.messaging.querysets import (
     PartQuerySet as PartQuerySet,
 )
 from angee.messaging.querysets import (

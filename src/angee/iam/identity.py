@@ -20,6 +20,7 @@ from rebac.resources import model_for_resource_type, model_resource_type
 
 from angee.base.identity import public_data_id_field
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for
+from angee.base.models.persistence import require_projection
 
 
 def group_subject_type() -> str:
@@ -31,7 +32,7 @@ def group_subject_type() -> str:
     return resource_type
 
 
-def user_label(user: Any) -> str:
+def user_label(user: Any, *, guard: bool = True) -> str:
     """Return any user model's human label from the Django auth contract.
 
     A dedicated label queryset projects the display scalar before field
@@ -40,6 +41,8 @@ def user_label(user: Any) -> str:
 
     if "_iam_display_label" in user.__dict__:
         return str(user.__dict__["_iam_display_label"] or "")
+    if guard and user.get_deferred_fields() & {"first_name", "last_name", "username"}:
+        require_projection(user, "_iam_display_label")
     return str(user.get_full_name() or user.username or "")
 
 

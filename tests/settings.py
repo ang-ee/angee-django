@@ -19,6 +19,7 @@ class BareGraphQLConfig(AppConfig):
 
 
 SECRET_KEY = "angee-tests"
+ANGEE_REQUIRE_PROJECTIONS = True
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.auth",
