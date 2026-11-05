@@ -32,6 +32,7 @@ from angee.iam.graphql.relations import (
     RecordReferenceNode,
     actor_scoped_to_many,
     actor_scoped_to_one,
+    record_reference_label_field,
     with_record_reference_access,
 )
 from angee.iam.schema import UserType
@@ -52,6 +53,7 @@ def _concern_links(info: strawberry.Info) -> Prefetch:
 @strawberry_django.type(DecisionRecord)
 class DecisionRecordType(RecordReferenceNode):
     decision: DecisionType = actor_scoped_to_one("decision")
+    record_label: str | None = record_reference_label_field(DecisionRecord)
     record_model: str | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_model, annotate=RECORD_REFERENCE_ANNOTATIONS,
         only=["content_type_id", "object_id"],

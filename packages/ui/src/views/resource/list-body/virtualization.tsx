@@ -1,6 +1,8 @@
 import * as React from "react";
 import type { Virtualizer } from "@tanstack/react-virtual";
 import { TableCell, TableRow } from "../../../ui/table";
+import { DEFAULT_PAGE_SIZE } from "../page-size";
+
 export function VirtualPaddingRow({
   height,
   colSpan,
@@ -35,7 +37,7 @@ export function useVirtualWindow(
   const visibleIndexes =
     virtualItems.length > 0
       ? virtualItems.map((item) => item.index)
-      : Array.from({ length: Math.min(itemCount, 20) }, (_, index) => index);
+      : Array.from({ length: Math.min(itemCount, DEFAULT_PAGE_SIZE) }, (_, index) => index);
   const firstVirtualItem = virtualItems[0];
   const lastVirtualItem = virtualItems[virtualItems.length - 1];
   const paddingTop = firstVirtualItem?.start ?? 0;

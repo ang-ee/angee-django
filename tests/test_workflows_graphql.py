@@ -94,9 +94,9 @@ def test_execution_resources_expose_reads_without_engine_crud(schema):
     assert "layout" in schema._schema.get_type("WorkflowType").fields
     for type_name, pair, obsolete in (
         ("WorkflowRunType", {"subject_model", "subject_id", "subject_label"}, set()),
-        ("StepRecordType", {"record_model", "record_id"}, {"model_label"}),
-        ("StepWatchType", {"record_model", "record_id"}, {"record_model_label", "record_public_id"}),
-        ("TriggerEventType", {"record_model", "record_id"}, set()),
+        ("StepRecordType", {"record_model", "record_id", "record_label"}, {"model_label"}),
+        ("StepWatchType", {"record_model", "record_id", "record_label"}, {"record_model_label", "record_public_id"}),
+        ("TriggerEventType", {"record_model", "record_id", "record_label"}, set()),
     ):
         fields = set(schema._schema.get_type(type_name).fields)
         assert pair <= fields
@@ -220,8 +220,11 @@ def test_artifact_reference_is_redacted_for_run_reader_without_source_read(schem
     run = start_run(workflow, actor=owner, input={"value": 1})
     run_until(run)
     run.with_actor(owner).grant_record_access("reader", reader)
-    query = "{ steprecord { record_model record_id } steprun { records { record_model record_id } } }"
-    hidden = {"record_model": None, "record_id": None}
+    query = """{
+      steprecord { record_model record_id record_label }
+      steprun { records { record_model record_id record_label } }
+    }"""
+    hidden = {"record_model": None, "record_id": None, "record_label": None}
     assert result_data(execute_schema(schema, query, user=reader)) == {
         "steprecord": [hidden],
         "steprun": [{"records": [hidden]}],

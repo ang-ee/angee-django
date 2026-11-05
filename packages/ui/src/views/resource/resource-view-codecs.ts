@@ -34,14 +34,18 @@ export function requestedFieldPaths<TRow extends Row>(
   groups: readonly ResourceViewGroup[] = [],
   columnVisibility?: VisibilityState,
 ): readonly string[] {
-  // Render-only columns are not real GraphQL fields. When metadata is present,
-  // keep only paths whose head belongs to the resource.
+  // Render-only columns are not real GraphQL fields. Query row projections can
+  // also be executable when absent from the model field inventory.
   const known = modelMetadata?.resource?.fields;
+  const query = queryForColumns(columns, modelMetadata, groups);
   const knownNames =
     known && known.length > 0
-      ? new Set(known.map((field) => field.name))
+      ? new Set([
+          ...known.map((field) => field.name),
+          ...Object.values(query.fields).flatMap((field) => field.row?.paths ?? [])
+            .map((path) => path.split(".", 1)[0] ?? path),
+        ])
       : null;
-  const query = queryForColumns(columns, modelMetadata, groups);
   const paths = new Set<string>([query.contract.identity.field]);
   const addSelections = (
     field: string,

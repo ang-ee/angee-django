@@ -21,17 +21,20 @@ export function StepRuns({ runId, nodeKeys }: {
       { id: "attempts", label: t("step.attempts"), render: ({ recordId }) => <StepAttempts stepId={recordId} /> },
       { id: "records", label: t("step.records"), render: ({ recordId }) =>
         <List resource="workflows.StepRecord" scope="local" presentation="embedded"
-          baseFilter={{ step_run: { exact: recordId } }} fields={["record_model", "record_id"]}>
+          baseFilter={{ step_run: { exact: recordId } }} fields={["record_model", "record_id", "record_label"]}>
           <Column field="label" header={t("step.records")} render={(row) =>
             typeof row.record_model === "string" && typeof row.record_id === "string"
-              ? <RecordReference model={row.record_model} id={row.record_id} label={typeof row.label === "string" ? row.label : undefined} /> : null} />
+              ? <RecordReference model={row.record_model} id={row.record_id}
+                label={typeof row.label === "string" && row.label ? row.label
+                  : typeof row.record_label === "string" && row.record_label ? row.record_label : row.record_id} /> : null} />
         </List> },
       { id: "watches", label: t("step.watches"), render: ({ recordId }) =>
         <List resource="workflows.StepWatch" scope="local" presentation="embedded"
           baseFilter={{ step_run: { exact: recordId } }} fields={["record_model"]}>
-          <Column field="record_id" header={t("step.watches")} render={(row) =>
+          <Column field="record_id" header={t("step.watches")} selectionPaths={["record_id", "record_label"]} render={(row) =>
             typeof row.record_model === "string" && typeof row.record_id === "string"
-              ? <RecordReference model={row.record_model} id={row.record_id} /> : null} />
+              ? <RecordReference model={row.record_model} id={row.record_id}
+                label={typeof row.record_label === "string" && row.record_label ? row.record_label : row.record_id} /> : null} />
         </List> },
       { id: "decisions", label: t("step.decisions"), render: ({ recordId }) =>
         <StepDecision stepId={recordId} /> },

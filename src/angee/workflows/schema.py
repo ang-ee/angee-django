@@ -38,6 +38,7 @@ from angee.iam.graphql.relations import (
     RecordReferenceNode,
     actor_scoped_to_many,
     actor_scoped_to_one,
+    record_reference_label_field,
     with_record_reference_access,
 )
 from angee.iam.graphql.resources import ProtectedHasuraWriteBackend
@@ -254,11 +255,7 @@ class WorkflowRunType(RecordReferenceNode):
         annotate=RECORD_REFERENCE_ANNOTATIONS,
     )
 
-    @strawberry_django.field(only=["subject_content_type_id", "subject_object_id"], prefetch_related=["subject"])
-    def subject_label(self, info: strawberry.Info) -> str | None:
-        """The subject's own label (a file name, a message subject), for lists that name the run by what it ran on."""
-        subject = cast(Any, self).subject
-        return str(subject) if subject is not None else None
+    subject_label: str | None = record_reference_label_field(WorkflowRun)
 
 
 @strawberry.type
@@ -437,6 +434,7 @@ class StepWatchType(RecordReferenceNode):
     """A waiting step's reference, visible through its execution read policy."""
 
     step_run: StepRunType | None = actor_scoped_to_one("step_run")
+    record_label: str | None = record_reference_label_field(StepWatch)
 
     record_model: str | None = strawberry_django.field(
         resolver=RecordReferenceNode.reference_model, only=["content_type_id", "object_id"],
@@ -456,6 +454,7 @@ class StepRecordType(RecordReferenceNode):
     step_run: StepRunType | None = actor_scoped_to_one("step_run")
     operation: auto
     label: auto
+    record_label: str | None = record_reference_label_field(StepRecord)
     created_at: auto
 
     record_model: str | None = strawberry_django.field(
@@ -546,6 +545,7 @@ class TriggerEventType(RecordReferenceNode):
     """Durable admission evidence with a started run until that run is pruned."""
 
     trigger: TriggerType | None = actor_scoped_to_one("trigger")
+    record_label: str | None = record_reference_label_field(TriggerEvent)
     started_run: WorkflowRunType | None = actor_scoped_to_one("started_run")
     changed_at: auto
     evaluated_at: auto

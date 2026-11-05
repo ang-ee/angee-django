@@ -113,7 +113,8 @@ export function RunStory({ appearance, list = false, waiting = false, redacted =
       if (query.includes("triggerevent_by_pk")) return jsonResponse({ data: { triggerevent_by_pk: { id: "wte_review", display_name: "Review event" } } });
       if (query.includes("notes_by_pk")) return jsonResponse({ data: { notes_by_pk: { id: "nte_7", display_name: "Review notes" } } });
       if (query.includes("steprecord")) return jsonResponse({ data: {
-        steprecord: JSON.stringify(variables.where).includes("step_run") ? currentSteps.flatMap((step) => step.records) : evidence,
+        steprecord: JSON.stringify(variables.where).includes("step_run") ? currentSteps.flatMap((step) => step.records)
+          : evidence.map((record) => ({ ...record, record_label: record.record_model === "notes.Note" ? "Review notes" : null })),
         steprecord_aggregate: { aggregate: { count: JSON.stringify(variables.where).includes("step_run") ? currentSteps.flatMap((step) => step.records).length : evidence.length } },
       } });
       if (query.includes("steprun_by_pk")) {
@@ -124,7 +125,9 @@ export function RunStory({ appearance, list = false, waiting = false, redacted =
       }
       if (query.includes("stepattempt_by_pk")) return jsonResponse({ data: { stepattempt_by_pk: currentSteps.flatMap((step) => step.attempts).find((attempt) => attempt.id === variables.id) } });
       for (const [name, rows] of [["stepattempt", currentSteps.flatMap((step) => step.attempts)], ["steprecord", currentSteps.flatMap((step) => step.records)], ["stepwatch", currentSteps.flatMap((step) => step.watches)]] as const) {
-        if (query.includes(name)) return jsonResponse({ data: { [name]: rows, [`${name}_aggregate`]: { aggregate: { count: rows.length } } } });
+        if (query.includes(name)) return jsonResponse({ data: { [name]: name === "stepwatch"
+          ? rows.map((row) => ({ ...row, record_label: "Review notes" })) : rows,
+        [`${name}_aggregate`]: { aggregate: { count: rows.length } } } });
       }
       if (/\bsteprun(?:\s*\(|\s*\{)/.test(query)) {
         const offset = typeof variables.offset === "number" ? variables.offset : 0;
@@ -143,7 +146,8 @@ export function RunStory({ appearance, list = false, waiting = false, redacted =
       }], totalCount: 1 } });
       if (/\bworkflow\s*\(/.test(query)) return jsonResponse({ data: { workflow: [current.version?.workflow], workflow_aggregate: { aggregate: { count: 1 } } } });
       const rows = JSON.stringify(variables.where ?? {}).includes("parent_step__run") ? children ?? [] : [current];
-      return jsonResponse({ data: { workflowrun: rows, workflowrun_aggregate: { aggregate: { count: rows.length } } } });
+      return jsonResponse({ data: { workflowrun: rows.map((row) => ({ ...row, subject_label: "Review notes" })),
+        workflowrun_aggregate: { aggregate: { count: rows.length } } } });
     }).public!;
     return { public: fixture, console: { ...fixture, metadata: { angee: { resources: [
       runResourceFixture, recordResourceFixture, stepRunResourceFixture, workflowResourceFixture, runSubjectFixture,
