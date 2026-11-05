@@ -32,7 +32,7 @@ from rebac import (
     write_relationships,
 )
 
-from angee.agents.acp_server import SessionAgent
+from angee.agents.acp_server import SessionAgent, V2SessionAgent
 from angee.agents.context import render_view_context
 from angee.agents.models import AgentSessionManager, TurnStatus
 from angee.agents.protocol import ACP_PATH, TURN_FAILED_STOP_REASON, TURN_FAILURE_CODE
@@ -1423,6 +1423,22 @@ def test_v2_replays_pre_rebuild_thought_and_message_chunks_with_full_bracket(cha
     assert turn.updates == stored
 
 
+def test_v2_delta_keeps_a_message_id_across_flush_batches(chat: Any) -> None:
+    agent, owner, _application, _tasks = chat
+    session = AgentSession.objects.start(agent, user=owner, context={})
+    turn = session.post("Stream")
+    claimed = session.claim_turn()
+    assert claimed is not None
+    with actor_context(agent.principal_subject()):
+        claimed.append_updates([_chunk("First")])
+        claimed.append_updates([_chunk(" second")])
+    fresh = AgentTurn.objects.get(pk=turn.pk)
+    fresh.set_delivery_delta(1)
+    assert list(V2SessionAgent._project_updates(None, fresh)) == [
+        {**_chunk(" second"), "messageId": f"{turn.sqid}:agent:0"},
+    ]
+
+
 def test_v1_stop_cancels_own_pending_waiters(chat: Any, runner: FakeRunner) -> None:
     agent, owner, application, _ = chat
     cookie = _cookie(owner)
@@ -1637,18 +1653,12 @@ def test_follower_query_budget_is_independent_of_history_and_unrelated_turns(
     session = AgentSession.objects.start(agent, user=owner, context={})
     other = AgentSession.objects.start(agent, user=owner, context={})
     with system_context(reason="test transcript query budget"):
-        AgentTurn.objects.bulk_create(
-            [
-                AgentTurn(
-                    session=session,
-                    index=index + 1,
-                    prompt=f"Old {index}",
-                    status=TurnStatus.COMPLETED,
-                    updates=[_chunk("Retained")],
-                )
-                for index in range(turn_count)
-            ]
-        )
+        for index in range(turn_count):
+            turn = AgentTurn.objects.create(
+                session=session, index=index + 1, prompt=f"Old {index}", status=TurnStatus.RUNNING
+            )
+            assert turn.append_updates([_chunk("Retained")])
+            turn.mark_completed(text="Retained", usage={})
     active = session.post("Current")
     active = session.claim_turn()
     unrelated = other.post("Unrelated")
@@ -1696,6 +1706,54 @@ def test_follower_query_budget_is_independent_of_history_and_unrelated_turns(
             await peer.socket.disconnect()
 
     asyncio.run(scenario())
+
+
+def test_replay_reads_all_turn_batches_at_flat_statement_cost(chat: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Loading one, five or ten turns uses one batch read for the session."""
+    agent, owner, application, _ = chat
+    sessions = []
+    with system_context(reason="test replay batch history"):
+        for count in (1, 5, 10):
+            session = AgentSession.objects.start(agent, user=owner, context={})
+            sessions.append(session)
+            for index in range(count):
+                turn = AgentTurn.objects.create(
+                    session=session, index=index + 1, prompt=f"Old {index}", status=TurnStatus.RUNNING
+                )
+                assert turn.append_updates([_chunk("Retained")])
+                turn.mark_completed(text="Retained", usage={})
+
+    measured = []
+    original = SessionAgent._db
+
+    async def count_load(adapter: Any, operation: Any, *args: Any, **kwargs: Any) -> Any:
+        if operation.__name__ != "load_turns":
+            return await original(adapter, operation, *args, **kwargs)
+        thread_sensitive = kwargs.pop("thread_sensitive")
+
+        def counted() -> Any:
+            with CaptureQueriesContext(connection) as queries:
+                result = operation(*args, **kwargs)
+            assert sum(f'FROM "{AgentTurn.update_model()._meta.db_table}"' in query["sql"] for query in queries) == 1
+            measured.append(len(queries))
+            return result
+
+        return await original(adapter, counted, thread_sensitive=thread_sensitive)
+
+    monkeypatch.setattr(SessionAgent, "_db", count_load)
+    cookie = _cookie(owner)
+
+    async def scenario() -> None:
+        peer = Peer(application, agent, cookie, 2)
+        await peer.connect()
+        for session in sessions:
+            await peer.resume(str(session.sqid))
+        await peer.socket.disconnect()
+
+    asyncio.run(scenario())
+    assert len(measured) == 3
+    assert measured[0] == measured[1] == measured[2], measured
+    print(f"ACP replay SQL: {measured}")
 
 
 @pytest.mark.parametrize("version", [1, 2])

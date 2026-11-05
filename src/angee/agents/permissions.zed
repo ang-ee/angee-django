@@ -1,7 +1,7 @@
 // Authorization schema for the agents addon.
 // @rebac_package: agents
 // @rebac_package_version: 0.1.0
-// @rebac_schema_revision: 17
+// @rebac_schema_revision: 18
 
 definition agents/agent {
     relation owner: auth/user // rebac:field=owner
@@ -122,4 +122,13 @@ definition agents/turn {
     permission read = session->read
     permission write = session->write
     permission delete = session->delete
+}
+
+definition agents/turn_update {
+    relation turn: agents/turn // rebac:field=turn
+
+    permission create = turn->write
+    permission read = turn->read
+    permission write = turn->write
+    permission delete = turn->delete
 }

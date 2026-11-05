@@ -33,6 +33,7 @@ from angee.agents.models.sessions import AgentSessionManager as AgentSessionMana
 from angee.agents.models.sessions import AgentSessionQuerySet as AgentSessionQuerySet
 from angee.agents.models.sessions import AgentTurn as AgentTurn
 from angee.agents.models.sessions import AgentTurnQuerySet as AgentTurnQuerySet
+from angee.agents.models.sessions import AgentTurnUpdate as AgentTurnUpdate
 from angee.agents.models.skills import Skill as Skill
 from angee.agents.models.skills import SkillManager as SkillManager
 from angee.agents.models.tools import MCPServer as MCPServer
