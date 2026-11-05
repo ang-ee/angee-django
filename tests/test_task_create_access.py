@@ -11,7 +11,7 @@ import strawberry
 import strawberry_django
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.db import connection, models
+from django.db import connection
 from rebac import (
     PermissionDenied,
     RelationshipTuple,
@@ -34,31 +34,8 @@ from tests.conftest import (
     create_user,
     execute_schema,
     result_data,
-    standalone_relation,
 )
-from tests.scopedemo.models import Scope
-
-
-class ProjectAccessTask(AbstractTask):
-    """Production task lifecycle with a small, independently protected project."""
-
-    sqid_prefix = "pat_"
-    owner_container = None
-    assignee = standalone_relation(AbstractTask, "assignee")
-    delegate = standalone_relation(AbstractTask, "delegate")
-    activity_type = standalone_relation(AbstractTask, "activity_type")
-    project = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)
-    milestone = None
-    milestone_id = None
-    links = None
-    file_attachments = None
-    thread_attachments = None
-    thread_create_autofollow_author = False
-
-    class Meta(AbstractTask.Meta):
-        abstract = False
-        app_label = "scopedemo"
-        rebac_resource_type = "scopedemo/project_access_task"
+from tests.scopedemo.models import ProjectAccessTask, Scope, TaskPromotion
 
 
 @strawberry_django.type(ProjectAccessTask)
@@ -66,16 +43,6 @@ class ProjectAccessTaskType(ProtectedNode):
     title: strawberry.auto
     priority_rank: int = strawberry_django.field(resolver=AbstractTask.priority_rank)
     promoted_phase: str | None = strawberry_django.field(resolver=AbstractTask.promoted_phase)
-
-
-class TaskPromotion(models.Model):
-    """Minimal relation target for the production task's phase expression."""
-
-    converted_from = models.ForeignKey(ProjectAccessTask, on_delete=models.CASCADE, related_name="promoted_projects")
-    current_milestone = models.ForeignKey(Scope, null=True, on_delete=models.SET_NULL)
-
-    class Meta:
-        app_label = "scopedemo"
 
 
 _TASK_RESOURCE = hasura_model_resource(

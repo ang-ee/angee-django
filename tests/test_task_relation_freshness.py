@@ -9,60 +9,14 @@ from django.core.exceptions import ValidationError
 from django.db import connection, models
 from rebac import system_context
 
-from angee.projects.models import Milestone as AbstractMilestone
-from angee.projects.models import Task as AbstractTask
-from angee.projects.testing.models import Stage, Task
-from angee.work.models import Stage as AbstractStage
-from angee.work.models import TaskWork
-from tests.conftest import standalone_relation
-from tests.scopedemo.models import Scope
+from angee.projects.testing.models import Milestone, Stage, Task
+from tests.scopedemo.models import FreshnessMilestone, FreshnessStage, FreshnessTask, Scope
 
 
-class FreshnessStage(AbstractStage):
-    queue = models.ForeignKey(Scope, on_delete=models.CASCADE)
-
-    class Meta(AbstractStage.Meta):
-        abstract = False
-        app_label = "scopedemo"
-        # Its own type: the production type has one concrete model, in angee.projects.testing.models.
-        rebac_resource_type = "scopedemo/freshness_stage"
-
-
-class FreshnessMilestone(AbstractMilestone):
-    project = models.ForeignKey(Scope, on_delete=models.CASCADE)
-
-    class Meta(AbstractMilestone.Meta):
-        abstract = False
-        app_label = "scopedemo"
-        # Its own type: the production type has one concrete model, in angee.projects.testing.models.
-        rebac_resource_type = "scopedemo/freshness_milestone"
-
-
-class FreshnessTask(TaskWork, AbstractTask):
-    # This scope intentionally supplies no item-ownership policy.
-    owner_container = None
-    assignee = standalone_relation(AbstractTask, "assignee")
-    delegate = standalone_relation(AbstractTask, "delegate")
-    activity_type = standalone_relation(AbstractTask, "activity_type")
-    project = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)
-    milestone = models.ForeignKey(FreshnessMilestone, null=True, blank=True, on_delete=models.SET_NULL)
-    queue = models.ForeignKey(Scope, null=True, blank=True, on_delete=models.SET_NULL)
-    stage = models.ForeignKey(FreshnessStage, null=True, blank=True, on_delete=models.SET_NULL)
-    cycle = None
-    cycle_id = None
-    links = None
-    file_attachments = None
-    thread_attachments = None
-    thread_create_autofollow_author = False
-
-    class Meta(AbstractTask.Meta):
-        abstract = False
-        app_label = "scopedemo"
-        # Its own type: the production type has one concrete model, in angee.projects.testing.models.
-        rebac_resource_type = "scopedemo/freshness_task"
-
-
-@pytest.mark.parametrize(("model", "extension"), ((Task, FreshnessTask), (Stage, FreshnessStage)))
+@pytest.mark.parametrize(
+    ("model", "extension"),
+    ((Task, FreshnessTask), (Stage, FreshnessStage), (Milestone, FreshnessMilestone)),
+)
 def test_inherited_constraints_are_local_to_concrete_tables(
     db: None, model: type[models.Model], extension: type[models.Model],
 ) -> None:
