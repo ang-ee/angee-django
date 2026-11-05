@@ -4,12 +4,14 @@ from dataclasses import replace
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.test import override_settings
-from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relationships
+from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.extraction import schema as evidence_schema
 from angee.extraction.acquisition import PageCarrier
 from angee.extraction.contracts import DocumentPart, ExtractionPartKind, Source
+from angee.messaging.testing.models import Part
 from tests.conftest import addon_schema, create_platform_admin, execute_schema, result_data
 from tests.test_extraction_models import evidence as evidence
 from tests.test_messaging_part_tree import part_tree as part_tree
@@ -30,6 +32,62 @@ def test_evidence_resources_expose_reads_without_generic_mutations(schema):
     assert schema._schema.mutation_type is None
     for name in ("extraction", "extractionsource", "extractionpage", "extractionpart"):
         assert {name, f"{name}_by_pk", f"{name}_aggregate"} <= set(schema._schema.query_type.fields)
+
+
+@override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")
+def test_message_part_reference_lists_are_flat_for_reader_and_admin(
+    schema, evidence, part_tree, capture_graphql_document,
+):
+    retain, values = evidence
+    message, parts = part_tree
+    part = parts["plain"]
+    source = Source(0, part.fragment.hash, "text/plain", part.fragment.text, message_part=part)
+    result = replace(values["result"], parts=(DocumentPart(
+        0, 0, "text/plain", ExtractionPartKind.NATIVE_TEXT, part.fragment.text, "native", part.fragment.hash,
+    ),))
+    admin = create_platform_admin("message-list-admin")
+    reader = get_user_model().objects.create_user(username="message-list-reader")
+    more_parts = [part]
+    with system_context(reason="test.message_part_reference_list"):
+        for position in range(1, 18):
+            more_parts.append(Part.objects.create(
+                message=message, position=position + 20, fragment=part.fragment,
+            ))
+    content_type = ContentType.objects.get_for_model(Part)
+    ContentType.objects.get_for_id(content_type.pk)
+    source_model = evidence_schema.ExtractionSource
+    list_query = """query($ids: [String!]!) {
+      extractionsource(where: {id: {_in: $ids}}, order_by: {position: asc}) { message_part_id }
+    }"""
+    nested_query = """query($id: String!) {
+      extraction(where: {id: {_eq: $id}}) { sources { message_part_id } }
+    }"""
+    counts = {}
+    for count in (3, 9, 18):
+        sources = (source, *(
+            Source(position, part.fragment.hash, "text/plain", part.fragment.text, message_part=more_parts[position])
+            for position in range(1, count)
+        ))
+        extraction = retain(
+            target=message, sources=sources, result=result, actor=admin, request_key=f"message-list-{count}",
+        )
+        write_relationships([RelationshipTuple(to_object_ref(extraction), "viewer", to_subject_ref(reader))])
+        with system_context(reason="test.message_part_reference_list"):
+            source_ids = [row.sqid for row in source_model.system_queryset().filter(extraction=extraction)]
+        assert len(source_ids) == count
+        for actor, readable in ((reader, False), (admin, True)):
+            for shape, query, variables in (
+                ("list", list_query, {"ids": source_ids}),
+                ("nested", nested_query, {"id": extraction.sqid}),
+            ):
+                read = capture_graphql_document(schema, query, variables, actor=actor)
+                rows = read.data["extractionsource"] if shape == "list" else read.data["extraction"][0]["sources"]
+                assert len(rows) == count
+                assert all((item["message_part_id"] is not None) == readable for item in rows)
+                counts[(shape, readable, count)] = read.statement_count
+    for shape in ("list", "nested"):
+        for readable in (False, True):
+            assert counts[(shape, readable, 3)] == counts[(shape, readable, 9)] == counts[(shape, readable, 18)]
 
 
 @override_settings(REBAC_LOCAL_BACKEND_STORAGE="registry")

@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
+from strawberry.extensions import FieldExtension
 
 from angee.base.hooks import resolve_hooks
 
@@ -40,6 +41,7 @@ class ResourceExtensions:
     delete_context: Callable[[str | None], AbstractContextManager[Any]] | None = None
     validate_delete: Callable[[models.Model], None] | None = None
     preview_queryset: Callable[[type[models.Model], Any], models.QuerySet[Any]] | None = None
+    row_extensions: Callable[[type], tuple[FieldExtension, ...]] | None = None
 
 
 def resource_extensions(model: type[models.Model]) -> ResourceExtensions:

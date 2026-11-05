@@ -1744,12 +1744,18 @@ Each edge declares `on_target_delete` as `CASCADE`, `PROTECT`, or `SET_NULL`; a
 model needing row-aware cleanup implements `teardown_for_target(target)`. The
 foundation target-delete receiver invokes that one declaration for instance and
 queryset deletion paths.
-[`RecordReferenceNode`](../../src/angee/graphql/relations.py) and
-`with_record_reference_access` project it into GraphQL under the current
-reader's scope. A hidden target yields null identity fields; its model and ID
-must also stay unavailable through resource filters and aggregate counts. Addon
-resources declare their record-reference filter axes through the shared Hasura
-resource owner instead of reimplementing this projection.
+[`RecordReferenceNode`](../../src/angee/iam/graphql/relations.py) projects
+display-only identities after a list page or aggregate `nodes` page is admitted.
+The page proof includes selected nested prefetches and reads each target model
+once for the page, under the current actor, in sync and async execution.
+Reference identity fields use `record_reference_field` to select the pointer
+columns declared by the model's `record_ref_field`; callers add only other
+columns their own resolver needs.
+`with_record_reference_access` supplies
+the SQL guard when a reference filters, sorts, or groups a statement. A hidden
+target yields null identity fields; its model and ID must also stay unavailable
+through resource filters and aggregate counts. Addon resources declare their
+record-reference filter axes through the shared Hasura resource owner.
 
 **Polymorphic edges authorize their target in the schema.** Back one relation
 per target type with the edge's `GenericForeignKey`, contributed by the app

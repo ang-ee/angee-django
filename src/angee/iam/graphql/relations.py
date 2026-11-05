@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
+from inspect import isawaitable
 from typing import Any, cast
 
 import strawberry
 import strawberry_django
+from asgiref.sync import sync_to_async
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ImproperlyConfigured
 from django.db import models
@@ -14,15 +16,22 @@ from django.db.models.expressions import Combinable
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.functions import Cast
 from django.db.models.sql.where import WhereNode
+from django.http import HttpRequest
 from rebac import current_actor
 from rebac.graphql.strawberry_django import optimize
 from rebac.managers import RebacQuerySet
 from rebac.relation_loading import relation_actor
 from rebac.resources import model_resource_type
+from rebac.schema.cache import schema_operation_scope
 from strawberry import Info
+from strawberry.extensions import FieldExtension
+from strawberry.types import get_object_definition
+from strawberry.types.base import StrawberryContainer
+from strawberry.types.nodes import SelectedField, Selection
 from strawberry_django.fields.field import StrawberryDjangoField
 from strawberry_django.optimizer import OptimizerStore
 from strawberry_django.queryset import run_type_get_queryset
+from strawberry_django.utils.requests import get_request
 
 from angee.graphql.ids import PublicID, optional_public_id, to_public_id
 from angee.graphql.introspection import FieldPathError, fields_for_path, is_to_one_relation
@@ -195,12 +204,160 @@ class _RecordReferenceAccess(models.Expression):
         return compiler.compile(predicate)
 
 
-def _record_reference_hint(info: Info | None) -> _RecordReferenceAccess:
+def _record_reference_display_hint(info: Info | None) -> models.Value:
+    """Leave display-only target admission to the bounded page proof."""
     del info
-    return _RecordReferenceAccess(actor=current_actor())
+    return models.Value(None, output_field=models.BooleanField(null=True))
 
 
-RECORD_REFERENCE_ANNOTATIONS = {"_angee_record_readable": _record_reference_hint}
+RECORD_REFERENCE_ANNOTATIONS = {"_angee_record_readable": _record_reference_display_hint}
+
+
+def record_reference_field(
+    model: type[models.Model], *, only: Sequence[str] = (), **kwargs: Any,
+) -> Any:
+    """Declare a display reference with its model-owned pointer columns selected."""
+    reference = cast(type[ProtectedRecordRefMixin], model).record_ref_field()
+    return strawberry_django.field(
+        only=[*only, reference.ct_field_attname, reference.fk_field],
+        annotate=RECORD_REFERENCE_ANNOTATIONS,
+        **kwargs,
+    )
+
+
+def _record_reference_memo(
+    request: HttpRequest | None,
+) -> dict[tuple[Any, str, type[models.Model], str], dict[Any, bool]] | None:
+    if not isinstance(request, HttpRequest):
+        return None
+    memo: dict[tuple[Any, str, type[models.Model], str], dict[Any, bool]] | None = getattr(
+        request,
+        "_iam_record_reference_memo",
+        None,
+    )
+    if memo is None:
+        memo = {}
+        setattr(request, "_iam_record_reference_memo", memo)
+    return memo
+
+
+def prove_record_references(rows: Sequence[ProtectedRecordRefMixin], *, request: HttpRequest | None = None) -> None:
+    """Prove only referenced keys on an already-admitted page, once per target model."""
+    if not rows:
+        return
+    actor = current_actor()
+    pointers: dict[tuple[str, int], set[Any]] = {}
+    row_pointers: list[tuple[ProtectedRecordRefMixin, str, int | None, Any]] = []
+    for row in rows:
+        reference = type(row).record_ref_field()
+        alias = row._state.db or "default"
+        content_type_id = getattr(row, reference.ct_field_attname)
+        object_id = getattr(row, reference.fk_field)
+        row_pointers.append((row, alias, content_type_id, object_id))
+        if content_type_id is not None and object_id is not None:
+            pointers.setdefault((alias, content_type_id), set()).add(object_id)
+    memo = _record_reference_memo(request)
+    visible: dict[tuple[str, int], dict[Any, bool]] = {}
+    with schema_operation_scope():
+        for (alias, content_type_id), ids in pointers.items():
+            try:
+                target_model = ContentType.objects.db_manager(alias).get_for_id(content_type_id).model_class()
+            except ContentType.DoesNotExist:
+                continue
+            if target_model is None or not model_resource_type(target_model):
+                continue
+            key = (actor, alias, target_model, "read")
+            decisions = memo.setdefault(key, {}) if memo is not None else {}
+            missing = ids - decisions.keys()
+            if missing:
+                admitted = (
+                    set(
+                        require_rebac_queryset(target_model)
+                        .using(alias)
+                        .with_actor(actor)
+                        .with_action("read")
+                        .filter(pk__in=missing)
+                        .values_list("pk", flat=True)
+                    )
+                    if actor is not None
+                    else set()
+                )
+                pk_field = target_model._meta.pk
+                assert pk_field is not None
+                decisions.update({identity: pk_field.to_python(identity) in admitted for identity in missing})
+            visible[alias, content_type_id] = decisions
+    for row, alias, content_type_id, object_id in row_pointers:
+        setattr(
+            row,
+            "_angee_record_readable",
+            visible.get((alias, content_type_id), {}).get(object_id, False)
+            if content_type_id is not None else False,
+        )
+        setattr(row, "_angee_record_readable_actor", actor)
+
+
+class RecordReferencePageProof(FieldExtension):
+    """Materialize one native Hasura page before resolving its reference fields."""
+
+    def __init__(self, node: type) -> None:
+        self.node = node
+
+    def _materialize(self, result: Any, info: Info) -> Any:
+        if not _selected_record_reference(info.selected_fields, self.node, info):
+            return result
+        rows = list(result)
+        references: list[ProtectedRecordRefMixin] = []
+        seen: set[int] = set()
+        pending = list(rows)
+        while pending:
+            row = pending.pop()
+            if not isinstance(row, models.Model) or id(row) in seen:
+                continue
+            seen.add(id(row))
+            if isinstance(row, ProtectedRecordRefMixin):
+                references.append(row)
+            pending.extend(value for value in row._state.fields_cache.values() if isinstance(value, models.Model))
+            for cached in getattr(row, "_prefetched_objects_cache", {}).values():
+                pending.extend(cached)
+        prove_record_references(references, request=get_request(info))
+        return rows
+
+    def resolve(self, next_: Callable[..., Any], source: Any, info: Info, **kwargs: Any) -> Any:
+        result = next_(source, info, **kwargs)
+        if isawaitable(result):
+            return self._resolve_awaitable(result, info)
+        return self._materialize(result, info)
+
+    async def _resolve_awaitable(self, result: Awaitable[Any], info: Info) -> Any:
+        return await sync_to_async(self._materialize)(await result, info)
+
+    async def resolve_async(
+        self, next_: Callable[..., Awaitable[Any]], source: Any, info: Info, **kwargs: Any,
+    ) -> Any:
+        result = await next_(source, info, **kwargs)
+        return await sync_to_async(self._materialize)(result, info)
+
+
+def _selected_record_reference(selections: Sequence[Selection], node: Any, info: Info) -> bool:
+    definition = get_object_definition(node, strict=False)
+    if definition is None:
+        return False
+    for selection in selections:
+        field = (
+            info.schema.get_field_for_type(selection.name, definition.name)
+            if isinstance(selection, SelectedField) else None
+        )
+        if (
+            isinstance(field, StrawberryDjangoField)
+            and field.store.annotate.get("_angee_record_readable") is _record_reference_display_hint
+        ):
+            return True
+        target = field.type if field is not None else node
+        while isinstance(target, StrawberryContainer):
+            target = target.of_type
+        if selection.selections and _selected_record_reference(selection.selections, target, info):
+            return True
+    return False
 
 
 def with_record_reference_access(
@@ -211,8 +368,8 @@ def with_record_reference_access(
 ) -> models.QuerySet[Any]:
     """Declare current target privacy, selecting it for explicit Python consumers.
 
-    Record filters use an alias; selected reference fields declare their own
-    expression through the native annotation hint. Bind the actor before declaration;
+    Record filters use an alias; display-only selected fields use the bounded
+    page proof instead. Bind the actor before declaration;
     reapplying this helper after changing actor refreshes the captured projection.
     A target supplied by a positive model-and-ID filter bounds the proof to that row.
     """
@@ -224,29 +381,35 @@ def with_record_reference_access(
 class RecordReferenceNode(ProtectedNode):
     """Project a generic reference only while its current target is readable.
 
-    Selected reference fields request their native annotation hint. A row loaded
-    another way (a to-one fallback, a mutation result) answers the same
-    annotation on a one-row queryset under the current actor.
+    Selected reference fields request a cheap marker; the list page owner
+    proves its targets after rows are known. Other rows use the request memo
+    and a bounded single-target fallback.
     """
 
     @classmethod
     def get_queryset(cls, queryset: models.QuerySet[Any], info: Info) -> models.QuerySet[Any]:
         return queryset
 
-    def reference_model(self) -> str | None:
+    def reference_model(self, info: Info) -> str | None:
         row = cast(Any, self)
-        return (row.record_model_label or None) if _record_readable(row) else None
+        return (row.record_model_label or None) if _record_readable(row, info) else None
 
-    def reference_id(self) -> PublicID | None:
+    def reference_id(self, info: Info) -> PublicID | None:
         row = cast(Any, self)
-        return optional_public_id(row.record_public_id or None) if _record_readable(row) else None
+        return optional_public_id(row.record_public_id or None) if _record_readable(row, info) else None
 
 
-def _record_readable(row: Any) -> bool:
+def _record_readable(row: Any, info: Info | None = None) -> bool:
     """Return the row's batched target-read annotation, computing it once when absent."""
 
-    if "_angee_record_readable" not in row.__dict__:
-        actor = current_actor()
+    actor = current_actor()
+    if (
+        row.__dict__.get("_angee_record_readable") is None
+        or row.__dict__.get("_angee_record_readable_actor", actor) != actor
+    ):
+        if info is not None:
+            prove_record_references([row], request=get_request(info))
+            return bool(row._angee_record_readable)
         rows = with_record_reference_access(
             type(row).objects.none()
             if actor is None

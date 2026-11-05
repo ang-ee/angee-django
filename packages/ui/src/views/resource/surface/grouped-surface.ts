@@ -8,7 +8,6 @@ import {
   stableSerialize,
   useAngeeAggregate,
   useAngeeGroupByBatch,
-  useAngeeListBatch,
   type AngeeListBatchEntry,
 } from "@angee/refine";
 import type { ResourceViewGroupExpansion } from "../resource-view-context";
@@ -26,7 +25,7 @@ import {
   type GroupedGroupScope,
   type GroupedQueryResult,
 } from "../resource-view-grouped-model";
-import { useCollectionQueryBatch } from "../collection-source";
+import { useCollectionQueryBatch, useGroupedNativePages } from "../collection-source";
 import { useResourceViewTableChrome } from "./presentation";
 import { listResultFromPageState, useResourceRowsSnapshot, useResourceViewQueryFacts, useResourceViewTableState } from "./table-state";
 import { EMPTY_ARRAY, EMPTY_EXPANDED_KEYS, EMPTY_LEAF_RESULTS } from "./types";
@@ -37,7 +36,7 @@ import type { GroupedResourceViewSurface, ResourceListResult, UseResourceViewSur
  * headers, the leaf record rows of expanded buckets, and the per-group pagers)
  * driving the same `useVirtualizer` the flat list uses, batches every `_groups`
  * level into one `useAngeeGroupByBatch` and every expanded leaf into one
- * `useAngeeListBatch`, and exposes per-group pagination via `setScopePage`. The
+ * authored GraphQL document, and exposes per-group pagination via `setScopePage`. The
  * thin list and board bodies compose this surface; neither fetches.
  */
 export function useGroupedResourceViewSurface<TRow extends Row = Row>({
@@ -303,10 +302,9 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
       orderBy: query.toOrderBy(order),
     }));
   }, [source, query, leafScopes]);
-  const nativeLeafResults = useAngeeListBatch(listTarget, leafRequests, {
-    fields: requestedFields,
-    enabled: !source && leafScopes.length > 0,
-  });
+  const nativeLeafResults = useGroupedNativePages(
+    source ? null : listTarget, leafRequests, requestedFields, dataResource?.modelLabel,
+  );
   const authoredLeaves = useCollectionQueryBatch(source?.rows, leafScopes);
   const leafResults = React.useMemo<ReadonlyMap<string, AngeeListBatchEntry>>(
     () =>
@@ -464,7 +462,8 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
   }, [resourceView.setPage, rootPage, rootPageCount, rootResult]);
   const refetch = React.useCallback(() => {
     for (const result of groupByResults.values()) result.refetch();
-    for (const result of leafResults.values()) result.refetch();
+    const leafRefetches = new Set([...leafResults.values()].map((result) => result.refetch));
+    for (const refetchLeaf of leafRefetches) refetchLeaf();
     if (measures.length > 0) grandTotal.refetch();
   }, [groupByResults, leafResults, measures.length, grandTotal.refetch]);
   const list = React.useMemo<ResourceListResult>(

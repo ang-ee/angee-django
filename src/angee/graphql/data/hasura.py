@@ -1713,6 +1713,14 @@ def hasura_model_resource(  # noqa: PLR0913 - mirrors the upstream declarative b
         id_decode=id_decode,
         id_column=id_column,
     )
+    row_extensions = resource_extensions(model).row_extensions
+    if row_extensions is not None:
+        for owner, field_name in ((resource.query, resource.name), (resource.aggregate_container_type, "nodes")):
+            if owner is None:
+                continue
+            for graphql_field in get_object_definition(owner, strict=True).fields:
+                if graphql_field.python_name == field_name:
+                    graphql_field.extensions.extend(row_extensions(node))
     if contributed_filters:
         resource.types.append(
             _resource_filter_projection(
