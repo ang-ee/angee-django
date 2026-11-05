@@ -223,7 +223,7 @@ def test_hasura_create_uses_filtered_constant(rebac_storage: str, eligible: bool
         relationships = active_relationship_model().objects.filter(resource_type="scopedemo/shared_doc")
         if eligible:
             public_id = result_data(result)["insert_shared_docs_one"]["id"]
-            document = SharedDoc.objects.as_user(actor).get(sqid=public_id)
+            document = SharedDoc.objects.with_actor(actor).get(sqid=public_id)
             assert document.is_shared is True
             assert SharedDoc._base_manager.count() == 1
             assert not relationships.exists()

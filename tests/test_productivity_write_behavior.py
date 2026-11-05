@@ -151,7 +151,7 @@ def productivity_create_case(composed_permissions: None) -> Iterator[tuple[Any, 
 def test_graphql_task_create_preserves_stage_projected_status(productivity_create_case: tuple[Any, Any, Queue]) -> None:
     """Graphql task create preserves stage projected status."""
     schema, actor, queue = productivity_create_case
-    stage = Stage.objects.as_user(actor).get(queue=queue, category="completed")
+    stage = Stage.objects.with_actor(actor).get(queue=queue, category="completed")
     created = result_data(
         execute_schema(
             schema,
@@ -165,7 +165,7 @@ def test_graphql_task_create_preserves_stage_projected_status(productivity_creat
         )
     )["insert_create_tasks_one"]
     assert created["status"] == "DONE"
-    task = Task.objects.as_user(actor).get(sqid=created["id"])
+    task = Task.objects.with_actor(actor).get(sqid=created["id"])
     assert task.queue_id == queue.pk
     assert task.stage_id == stage.pk
     assert task.status == Task.TaskStatus.DONE
@@ -194,7 +194,7 @@ def test_graphql_stage_create_keeps_system_category_guard(
     assert result.errors is not None
     assert isinstance(result.errors[0].original_error, ValidationError)
     assert "Triage and duplicate stages are system-provisioned." in result.errors[0].message
-    assert not Stage.objects.as_user(actor).filter(queue=queue, category=category.lower()).exists()
+    assert not Stage.objects.with_actor(actor).filter(queue=queue, category=category.lower()).exists()
 
 
 def test_noop_refresh_preserves_authored_work_state_and_loaded_queue() -> None:

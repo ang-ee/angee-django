@@ -899,7 +899,7 @@ def test_graphql_oauth_client_create_materializes_omitted_impl_defaults(
         )
     )["insert_oauth_clients_one"]
 
-    client = OAuthClient.objects.as_user(admin).get(sqid=created["id"])
+    client = OAuthClient.objects.with_actor(admin).get(sqid=created["id"])
     assert client.discovery_url == "https://accounts.google.com/.well-known/openid-configuration"
     assert client.authorize_endpoint == "https://accounts.google.com/o/oauth2/v2/auth"
     assert client.default_scopes == [

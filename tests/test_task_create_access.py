@@ -294,7 +294,7 @@ def test_pinned_task_insert_requires_project_write_inside_system_context(
             match="Write access to the project is required to add a task.",
         ),
     ):
-        ProjectAccessTask.objects.as_user(reader).insert(candidate)
+        ProjectAccessTask.objects.with_actor(reader).insert(candidate)
     assert ProjectAccessTask._base_manager.count() == 0
     assert ProjectAccessTask.history.count() == 0
 

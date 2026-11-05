@@ -30,7 +30,7 @@ def assert_read(row: Any, actor: Any, expected: bool) -> None:
     """Require the single-row decision and SQL read scope to agree."""
     with actor_context(actor):
         assert as_actor(row, actor).has_access("read") is expected, (row._meta.label, actor, expected)
-        assert type(row).objects.as_user(actor).filter(pk=row.pk).exists() is expected, (
+        assert type(row).objects.with_actor(actor).filter(pk=row.pk).exists() is expected, (
             row._meta.label,
             actor,
             expected,
@@ -185,8 +185,8 @@ def test_roster_discloses_only_names_and_optional_status_without_peer_rows(
             if roster != "status"
             else all(entry.track_status == peer.track.status for entry in entries)
         )
-        assert set(Proposal.objects.as_user(reader).values_list("pk", flat=True)) == {own.pk}
-        assert Proposal.objects.as_user(reader).filter(round=round).count() == 1
+        assert set(Proposal.objects.with_actor(reader).values_list("pk", flat=True)) == {own.pk}
+        assert Proposal.objects.with_actor(reader).filter(round=round).count() == 1
         assert not as_actor(peer, reader).has_access("read")
         assert not as_actor(round, reader).has_access("read__roster_visibility")
         assert not as_actor(round, reader).has_access("read__clarification_askers")
@@ -676,7 +676,7 @@ def test_shells_and_requester_party_are_the_only_admission_and_requester_facts(c
     assert_read(round.project, requester, False)
     for permission in ("write", "share", "delete"):
         assert not as_actor(round.project, responder).has_access(permission)
-    assert Milestone.objects.as_user(responder).filter(project=round.project).exists()
+    assert Milestone.objects.with_actor(responder).filter(project=round.project).exists()
 
 
 def test_round_team_and_project_team_do_not_copy_each_others_seats(campaign: ProposalCampaign) -> None:

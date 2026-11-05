@@ -455,7 +455,7 @@ def test_cadence_orm_create_defaults_the_queryset_actor(composed_tables: None) -
     with system_context(reason="test nexus cadence ORM seed"):
         party = Party._base_manager.create(display_name="Party", created_by=viewer)
 
-    cadence = Cadence.objects.as_user(viewer).create(party=party, cadence_days=10)
+    cadence = Cadence.objects.with_actor(viewer).create(party=party, cadence_days=10)
 
     assert cadence.user_id == viewer.pk
     assert Cadence._base_manager.get(pk=cadence.pk).user_id == viewer.pk

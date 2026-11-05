@@ -62,7 +62,7 @@ class NoteWordCountGraphQLTests(TransactionTestCase):
         )["data"]["notes_groups"]
         expected = {
             str(row["status"]).upper(): str(row["word_count_sum"] or 0)
-            for row in Note.objects.as_user(self.alice)
+            for row in Note.objects.with_actor(self.alice)
             .values("status")
             .annotate(word_count_sum=Sum("word_count"))
         }

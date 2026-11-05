@@ -714,7 +714,7 @@ def test_delete_vault_previews_blast_radius(composed_tables: None) -> None:
     assert preview["total_deleted_count"] >= 2
     assert preview["has_blockers"] is False
     assert {group["label"] for group in preview["deleted"]} >= {"vaults", "pages"}
-    assert Vault.objects.as_user(alice).exists()
+    assert Vault.objects.with_actor(alice).exists()
 
     result_data(
         execute_schema(
@@ -728,7 +728,7 @@ def test_delete_vault_previews_blast_radius(composed_tables: None) -> None:
             user=alice,
         )
     )
-    assert not Vault.objects.as_user(alice).exists()
+    assert not Vault.objects.with_actor(alice).exists()
 
 
 @pytest.mark.parametrize("resource", ["vault", "page"])
@@ -761,7 +761,7 @@ def test_knowledge_delete_preview_requires_delete_permission(
     assert result.errors is not None
     assert result.errors[0].extensions == {"code": "PERMISSION_DENIED"}
     assert result.data is None
-    assert type(target).objects.as_user(owner).filter(pk=target.pk).exists()
+    assert type(target).objects.with_actor(owner).filter(pk=target.pk).exists()
 
 
 def test_schema_exposes_subscriptions(composed_tables: None) -> None:

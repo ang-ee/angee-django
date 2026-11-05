@@ -598,7 +598,7 @@ class ProposalCampaignCases(CampaignIdentities, ClarificationCase):
             self.assertEqual(data["project_tasks_aggregate"]["aggregate"]["count"], 0)
             self.assertEqual(data["project_tasks_groups"], [])
         with actor_context(self.recipient):
-            messages = self.Task.thread_messages_expression(task.pk).as_user(self.recipient)
+            messages = self.Task.thread_messages_expression(task.pk).with_actor(self.recipient)
             self.assertFalse(messages.exists())
 
 

@@ -62,8 +62,8 @@ class ProjectSurfaceCampaign(WorkCase):
                 "projects": [],
             },
         )
-        self.assertFalse(self.Project.objects.as_user(self.reader).filter(pk=project.pk).exists())
-        self.assertFalse(self.Milestone.objects.as_user(self.reader).filter(pk=phase.pk).exists())
+        self.assertFalse(self.Project.objects.with_actor(self.reader).filter(pk=project.pk).exists())
+        self.assertFalse(self.Milestone.objects.with_actor(self.reader).filter(pk=phase.pk).exists())
         with actor_context(self.reader):
             self.assertFalse(task.promoted_projects.exists())
         gql = GraphQLSchemas.from_discovery().build("public")
