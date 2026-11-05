@@ -15,7 +15,7 @@ from rebac import PermissionDenied, actor_context, system_context
 from angee.graphql.schema import GraphQLSchemas
 from angee.iam.testing.graphql import measure_graphql_document
 from angee.provenance.context import changeset_model
-from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
+from angee.provenance.engine.exceptions import CreationKeyConflict
 from tests.composed_host import run_composed_tests
 from tests.native_work import WorkCase
 

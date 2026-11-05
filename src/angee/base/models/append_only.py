@@ -10,7 +10,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
 from django_compose.models import Composable
 
-from angee.base.querysets import ClosedUpdateQuerySet, _AngeeQuerySetMixin
+from angee.base.querysets import AngeeQuerySetMixin, ClosedUpdateQuerySet
 
 _ModelT = TypeVar("_ModelT", bound=models.Model)
 
@@ -82,7 +82,7 @@ def _validate_model_insert(model: type[models.Model]) -> None:
 
 class AppendOnlyBaseQuerySet(
     _AppendOnlyWritesMixin[_ModelT],
-    _AngeeQuerySetMixin[_ModelT],
+    AngeeQuerySetMixin[_ModelT],
 ):
     """Unscoped rows for Django's own relation reads, with the same writes closed."""
 

@@ -122,7 +122,7 @@ def _parse(path: Path, package: str) -> Schema:
 
     try:
         return parse_zed(path.read_text(encoding="utf-8"))
-    except Exception as error:  # noqa: BLE001 — re-raised with provenance
+    except Exception as error:
         raise SchemaExtensionError(f"{package}: {error}") from error
 
 

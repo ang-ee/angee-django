@@ -7,10 +7,7 @@ from typing import TYPE_CHECKING, Any, Self, cast
 from django.db import models
 from django.db.models import Exists, F, OuterRef, Q, TextField
 from django.db.models.functions import Cast, Coalesce
-from rebac import (
-    current_actor,
-    to_subject_ref,
-)
+from rebac import to_subject_ref
 from rebac.managers import RebacQuerySet, TrackedQuerySet
 from rebac.resources import model_resource_type
 from rebac.roles import ROLE_RELATION
@@ -28,7 +25,7 @@ class ProtectedQuerySet[ModelT: models.Model](AngeeQuerySet[ModelT], RebacQueryS
     """Native actor-scoped collection and readable correlated projections."""
 
     def attributed_user_id(self) -> Any:
-        return actor_user_id(self.actor() or current_actor())
+        return actor_user_id(self.effective_actor()[0])
 
     def readable_scalar_subquery(
         self,
@@ -44,7 +41,7 @@ class ProtectedQuerySet[ModelT: models.Model](AngeeQuerySet[ModelT], RebacQueryS
         callers own domain fallbacks and may explicitly coalesce an absent value.
         """
 
-        actor = actor or self.actor() or current_actor()
+        actor = actor or self.effective_actor()[0]
         readable = self.with_actor(actor).scoped() if actor is not None else self
         # The selected field owns the scalar type; only the outer fallback needs
         # a common output type (overriding Subquery changes empty-set compilation).
@@ -71,7 +68,7 @@ class ProtectedQuerySet[ModelT: models.Model](AngeeQuerySet[ModelT], RebacQueryS
         )
 
     def _keyset_cursor_scope(self, scope: tuple[Any, ...]) -> tuple[Any, ...]:
-        return (*scope, str(self.actor() or current_actor()))
+        return (*scope, str(self.effective_actor()[0]))
 
 
 class ProtectedUnscopedQuerySet[ModelT: models.Model](AngeeQuerySet[ModelT], TrackedQuerySet[ModelT]):

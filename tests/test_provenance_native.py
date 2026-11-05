@@ -37,7 +37,7 @@ def _capture_database_owner_contract(tmp_path: Path, operation: str, *, angee_ad
     (package / "models.py").write_text("""
 from django.db import models
 from angee.provenance.context import ChangesetRequired
-from angee.provenance.history import HistoryMixin, ModelHistory
+from angee.provenance.history import CaptureHistoryMixin, ModelHistory
 
 class Changeset(models.Model):
     actor_ref = models.TextField(blank=True)
@@ -64,7 +64,7 @@ class Changeset(models.Model):
 class Container(models.Model):
     pass
 
-class Row(HistoryMixin):
+class Row(CaptureHistoryMixin):
     value = models.CharField(max_length=40, unique=True)
     container = models.ForeignKey(Container, null=True, on_delete=models.CASCADE)
     history = ModelHistory(inherit=True, use_base_model_db=False)
@@ -77,7 +77,7 @@ class RetainedRow(models.Model):
         models_path.write_text(
             models_path.read_text()
             .replace(
-                "from angee.provenance.history import HistoryMixin, ModelHistory",
+                "from angee.provenance.history import CaptureHistoryMixin, ModelHistory",
                 "from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory",
             )
             .replace("use_base_model_db=False", "use_base_model_db=True")

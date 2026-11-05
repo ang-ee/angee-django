@@ -578,10 +578,10 @@ Use these owners instead of maintaining another contract in an addon:
   [`FormSpec`](../../src/angee/base/schemas/form_spec.schema.json) is the one
   contract for Python projection, generated TypeScript types and UI validation;
   messaging composes it with its own public-form admission policy.
-- **Actor-scoped scalar subqueries and keyset cursors belong to `angee.base`.**
-  The `Coalesce(Subquery(related.with_actor().scoped().filter(pk=OuterRef).values(v)[:1]), "")`
-  shape and the signed `(order_at, pk)` cursor pager are framework primitives;
-  do not copy them into another addon's queryset.
+- **Actor-scoped scalar subqueries belong to `angee.iam.querysets.ProtectedQuerySet`; keyset cursors belong to `angee.base`.**
+  Use `readable_scalar_subquery` and `readable_count_subquery` for correlated
+  protected values, and the signed `(order_at, pk)` pager for keyset pages.
+  Callers supply their domain fallback for an unreadable scalar.
 
 ## REBAC
 
@@ -629,7 +629,7 @@ data through REBAC, never a queryset bypass.
   retain the library's `pk` identity default. Sqids are public representations
   owned by the model's public-ID field, not alternate authorization identities.
   Transport subject strings pass through
-  [the public identity boundary](../../src/angee/base/identity.py) before reaching
+  [the public identity boundary](../../src/angee/iam/identity.py) before reaching
   REBAC, and outputs encode the PK there. Signed tokens are transport too: a
   download token carries its issuing actor's public subject, and
   [`FileManager.for_download_token`](../../src/angee/storage/managers.py)

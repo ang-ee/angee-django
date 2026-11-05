@@ -11,8 +11,8 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from angee.provenance.context import changeset, changeset_model_label, current_changeset
-from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
 from angee.provenance.contrib.angee.serialization import creation_fingerprint
+from angee.provenance.engine.exceptions import CreationKeyConflict
 
 pytestmark = pytest.mark.django_db(transaction=True)
 

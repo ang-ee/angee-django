@@ -22,9 +22,9 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 |---|---|---|
 | `<addon>/models.py` | `HistoryMixin` composition, captured manager, `history_revert_permission`, `history_relations`, `statements` declaration | `src/angee/tags/models.py:58-77`, `tests/statement_models.py:16` |
 | `<addon>/pyproject.toml` | `[project].dependencies = [..., "angee-provenance>=3,<4"]` | `src/angee/tags/pyproject.toml` |
-| `src/angee/provenance/contrib/angee/history.py` | `HistoryMixin` (:346), `ModelHistory` (:97), `HistoryDocumentMixin` (:50), `record_history` (:86) | docstrings |
+| `src/angee/provenance/contrib/angee/history.py` | `HistoryMixin` (:379), `ModelHistory` (:100), `HistoryDocumentMixin` (:48), `record_history` (:89) | docstrings |
 | `src/angee/provenance/contrib/angee/managers.py`, `querysets.py` | `AngeeHistoryManager` (:20), `AngeeHistoryUnscopedManager` (:24), `AngeeHistoryMergeableUnscopedManager` (:33); `AngeeHistoryQuerySet` (:16) | docstrings |
-| `src/angee/provenance/history.py`, `querysets.py`, `context.py` | native capture without Angee policy: `ModelHistory` (`history.py:132`), `CaptureHistoryMixin` (`history.py:443`); `changeset()` (`context.py:332`), `current_changeset` (`context.py:205`), `ChangesetRequired` (`context.py:70`) | [README](../../README.md) |
+| `src/angee/provenance/history.py`, `querysets.py`, `context.py` | native capture without Angee policy: `ModelHistory` (`history.py:150`), `CaptureHistoryMixin` (`history.py:514`); `changeset()` (`context.py:335`), `current_changeset` (`context.py:214`), `ChangesetRequired` (`context.py:70`) | [README](../../README.md) |
 | `src/angee/provenance/models/`, `managers.py`, `changeset_querysets.py` | protected native Changeset storage/attribution/export, rule and seed principals, native claim adaptations and document/merge query contributions | owner docstrings; generic engines live in `angee.provenance.engine` |
 | `src/angee/provenance/statements.py` | `StatementRecords` (:1424), `Aspect` (:730), `PairAspect` (:1624), `StatementsMixin` (:798), `StatementSourceMixin` (:678), `StatementLinkMixin` (:710), `SourceKind` (:664) | module docstring |
 | `src/angee/provenance/tasks.py`, `middleware.py`, `contrib/angee/context.py` | the entrypoint boundaries: `Task` (:12), `ChangesetMiddleware`, `management_context` (:25), `merge_context` (:34) | [README: Boundaries](../../README.md#boundaries) |
@@ -33,8 +33,8 @@ for statements. `angee.provenance` owns capture, attribution and serving; an add
 
 ## Reuse first
 
-- `HistoryMixin` from `angee.provenance.contrib.angee.history` (never the native `angee.provenance.history` one or
-  `simple_history.models.HistoricalRecords` directly) and the three captured managers above.
+- `HistoryMixin` from `angee.provenance.contrib.angee.history` (rather than
+  `CaptureHistoryMixin` or `simple_history.models.HistoricalRecords` directly) and the three captured managers above.
 - `AuditMixin` (`src/angee/base/models/audit.py`) for `created_by`/`updated_by` stamps; `OwnerMixin` for transferable
   access; `TrashMixin` so a created-row revert can use retained removal.
 - The entrypoint boundaries in the README table: request, connection, task, command, bridge session, test.

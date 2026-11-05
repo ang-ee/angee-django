@@ -644,5 +644,3 @@ class ReplayHistoryMixin(CaptureHistoryMixin, HistoryReplayMixin):
 
 
 # Historical Angee import name for the canonical capture owner.
-_ChangesetHistory = HistoryAttribution
-HistoryMixin = CaptureHistoryMixin

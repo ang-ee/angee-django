@@ -45,7 +45,7 @@ from angee.projects.schema import MilestoneType, ProjectType, TaskType
 from angee.proposals.choices import AnswerVisibility, PassAudience, QuestionAudience, RoundOpeningPolicy
 from angee.proposals.inputs import RoundTemplate, TopicTemplate
 from angee.proposals.models import Round as RoundModel
-from angee.provenance.contrib.angee.exceptions import CreationKeyConflict
+from angee.provenance.engine.exceptions import CreationKeyConflict
 from angee.spaces.schema import SpaceGroupType
 
 Round = apps.get_model("proposals", "Round")

@@ -163,7 +163,7 @@ class MergeableQuerySet(CanonicalQuerySet[_ModelT]):
         return self.order_by().values(survivor=self.survivor_id())
 
 
-class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
+class AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
     """Shared native lookup and locking, preserving each manager's policy."""
 
     model: type[_ModelT]
@@ -189,7 +189,7 @@ class _AngeeQuerySetMixin(CanonicalQuerySet[_ModelT]):
 
 
 class AngeeQuerySet(
-    _AngeeQuerySetMixin[_ModelT],
+    AngeeQuerySetMixin[_ModelT],
 ):
     """QuerySet API shared by Angee source and runtime models."""
 

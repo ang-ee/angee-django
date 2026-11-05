@@ -8,6 +8,16 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — core owner cleanup
+
+- Removed unused party association, stage category, IAM lookup, and provenance
+  helpers. Native provenance capture now uses `CaptureHistoryMixin` directly;
+  creation conflicts are imported from `angee.provenance.engine.exceptions`.
+- Actor resolution on rows and querysets now uses the IAM and REBAC owners.
+  Already-admitted ownership parents and attachment files use structural base
+  manager reads, avoiding one bypass audit row on each path. This cleanup
+  changes no model fields and requires no schema migration.
+
 ## Unreleased — REBAC decided statements per request
 
 - Pin django-zed-rebac at `93b9e90d9446` for bounded, witnessed read scopes

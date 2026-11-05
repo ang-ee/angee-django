@@ -119,7 +119,10 @@ def test_child_transfer_uses_owning_parent_identity_permission_and_live_owner(mo
     # The child explicitly denies this permission; the leaf allows everybody.
     assert row.with_actor(owner).has_access("child_transfer") is (model is SubjectGuardedLeaf)
     with actor_context(outsider):
+        before_audit = PermissionAuditEvent.objects.count()
         assert row.with_actor(owner).transfer_ownership(recipient) is row
+        # Measured after removing the already-admitted parent system read: 5 -> 4 audit rows.
+        assert PermissionAuditEvent.objects.count() - before_audit == 4
     assert (row.owner_id, row.created_by_id) == (recipient.pk, owner.pk)
     with pytest.raises(PermissionDenied):
         stale.with_actor(owner).transfer_ownership(outsider)

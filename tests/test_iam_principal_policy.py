@@ -6,7 +6,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from django.test import override_settings
 from django.utils.connection import ConnectionDoesNotExist
-from rebac import SubjectRef, system_context, to_subject_ref
+from rebac import system_context
 
 from angee.iam.auth import ModelBackend, can_authenticate_user
 from angee.iam.permissions import is_platform_admin
@@ -50,26 +50,6 @@ def test_platform_admin_never_derives_from_django_superuser() -> None:
 
     user = get_user_model()(kind="person", is_active=True, is_superuser=True)
     assert is_platform_admin(user) is False
-
-
-@pytest.mark.django_db
-def test_human_authority_resolves_current_user_state() -> None:
-    users = get_user_model().objects
-    with system_context(reason="test.iam.principal_policy"):
-        person = users.create_user(username="human-authority", kind="person")
-        service = users.create_user(username="service-authority", kind="service")
-    subject = to_subject_ref(person)
-    assert users.active_person_for_subject(subject).pk == person.pk
-    assert users.active_person_for_subject(to_subject_ref(service)) is None
-    assert users.active_person_for_subject(SubjectRef.of("auth/user", "*")) is None
-    assert users.active_person_for_subject(SubjectRef.of("auth/group", "1", "member")) is None
-    assert users.active_person_for_subject(SubjectRef(subject.object, "member")) is None
-    with system_context(reason="test.iam.principal_policy.service"):
-        users.filter(pk=person.pk).update(kind="service")
-    assert users.active_person_for_subject(subject) is None
-    with system_context(reason="test.iam.principal_policy.deactivate"):
-        users.filter(pk=person.pk).update(kind="person", is_active=False)
-    assert users.active_person_for_subject(subject) is None
 
 
 @pytest.mark.django_db(transaction=True)

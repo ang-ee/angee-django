@@ -42,7 +42,6 @@ from angee.iam.models.base import ProtectedDataModel
 from angee.provenance.context import changeset, current_changeset
 from angee.provenance.contrib.angee.history import HistoryMixin, ModelHistory
 from angee.provenance.engine.base import ChangesetAttribution as LegacyAttribution
-from angee.provenance.history import _ChangesetHistory
 from angee.base.serialization import canonical_json, json_safe
 from angee.provenance.testing.models import Changeset
 

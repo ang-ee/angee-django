@@ -234,12 +234,6 @@ def require_changeset(*, record: bool = False, using: str | None = None) -> Chan
     return result
 
 
-def mark_changeset_failed() -> None:
-    boundary = _open_boundary()
-    if boundary is not None:
-        boundary.mark_failed()
-
-
 def is_current_changeset(instance: object) -> bool:
     """Whether this exact instance is storage owned by the open logical boundary.
 
