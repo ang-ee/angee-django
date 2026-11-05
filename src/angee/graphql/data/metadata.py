@@ -211,6 +211,11 @@ def finalize_data_resources(
             aggregate_name = exposed(query, native_resource.aggregate_root, query_fields)
             group_name = exposed(query, native_resource.groups_root, query_fields)
             group_count_name = exposed(query, native_resource.groups_count_root, query_fields)
+            grouped_rows_name = exposed(
+                query,
+                f"{native_resource.name}_grouped_rows" if native_resource.groups_root else None,
+                query_fields,
+            )
             create_name = exposed(mutation, native_resource.insert_one_root, mutation_fields)
             update_name = exposed(mutation, native_resource.update_by_pk_root, mutation_fields)
             delete_name = exposed(mutation, native_resource.delete_by_pk_root, mutation_fields)
@@ -225,6 +230,7 @@ def finalize_data_resources(
                 aggregate_name=aggregate_name,
                 group_name=group_name,
                 group_count_name=group_count_name,
+                grouped_rows_name=grouped_rows_name,
                 create_name=create_name,
                 update_name=update_name,
                 save_name=save_name,
@@ -239,6 +245,10 @@ def finalize_data_resources(
                 grouped=resource_type_name(native_resource.group_type),
                 group_key=resource_type_name(native_resource.group_key_type),
                 group_by_spec=resource_type_name(native_resource.group_by_spec_type),
+                grouped_row_page=(
+                    get_named_type(query_fields[grouped_rows_name].args["pages"].type).name
+                    if grouped_rows_name is not None else None
+                ),
                 group_order=resource_type_name(native_resource.group_order_type),
                 having=resource_type_name(native_resource.having_type),
                 create_input=(resource_type_name(native_resource.insert_input_type) if create_name else None),
