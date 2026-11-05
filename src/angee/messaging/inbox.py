@@ -427,21 +427,22 @@ class MessageInbox:
         ]
         return InboxPage(result, count, matches.count())
 
-    def message(self, public_id: str) -> Any:
-        """Read a message independently of the current result filters."""
+    def message(self, public_id: str, *, include_title: bool = True) -> Any:
+        """Read a message independently of result filters, projecting its title when requested."""
 
-        message = self.messages.with_title_text().from_public_id(public_id)
+        messages = self.messages.with_title_text() if include_title else self.messages
+        message = messages.from_public_id(public_id)
         if message is None:
             raise ValueError("Message unavailable.")
         return message
 
     def selected_message(
         self, public_id: str, coverage: InboxCoverage, search: InboxSearch, *,
-        sender: str = "", circle: str = "",
+        sender: str = "", circle: str = "", include_title: bool = False,
     ) -> tuple[Any, bool]:
         """Admit one public message before checking its result membership."""
 
-        message = self.message(public_id)
+        message = self.message(public_id, include_title=include_title)
         return (
             message,
             self._matches_message(message, coverage, search, sender=sender, circle=circle),
@@ -450,7 +451,7 @@ class MessageInbox:
     def message_uses(self, public_id: str) -> list[InboxPartUse]:
         """Admit one public message before counting its eligible target uses."""
 
-        return self._part_uses(self.message(public_id))
+        return self._part_uses(self.message(public_id, include_title=False))
 
     def _matches_message(
         self, message: Any, coverage: InboxCoverage, search: InboxSearch, *, sender: str = "", circle: str = ""

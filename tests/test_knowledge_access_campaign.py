@@ -400,6 +400,7 @@ def test_binding_refuses_undeclared_and_untyped_targets(composed_permissions):
         assert result["record_knowledge_can_bind"] is expected, model
 
 
+@pytest.mark.postgresql
 def test_deleting_target_removes_bindings_without_deleting_knowledge(composed_permissions):
     author = create_user("binding-owner")
     knowledge = vault_for(author, name="Knowledge")

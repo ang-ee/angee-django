@@ -84,7 +84,8 @@ def test_history_capture_does_not_reselect_the_written_row(monkeypatch: pytest.M
         sql = [query["sql"] for query in queries]
         print(f"history statements: {len(sql)}")
         print(f"history changeset checks: {len(checks)}")
-        assert len(checks) == 1
+        # Pre-save checks the boundary before SQL; post-save records capture on it.
+        assert len(checks) == 2
         assert not any(
             statement.lstrip().upper().startswith("SELECT") and HistoryProbe._meta.db_table in statement
             for statement in sql

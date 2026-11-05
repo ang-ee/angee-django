@@ -7,6 +7,7 @@ import strawberry
 from django.apps import apps
 
 from angee.base.exceptions import classify_error
+from angee.graphql.introspection import selected_field
 from angee.integrate.schema import IntegrationType
 from angee.messaging.inbox import InboxCoverage, InboxSearch
 from angee.messaging.inbox_groups import InboxGroupScope
@@ -499,6 +500,7 @@ class NexusInboxQuery:
     @strawberry.field
     def inbox_message(
         self,
+        info: strawberry.Info,
         id: strawberry.ID,
         coverage: InboxCoverageInput | None = None,
         search: InboxSearchInput | None = None,
@@ -514,6 +516,7 @@ class NexusInboxQuery:
             search.to_pydantic() if search else InboxSearch(),
             sender=sender,
             circle=circle,
+            include_title=selected_field(info.selected_fields, "message.title"),
         )
         return InboxMessage(message=message, matches=matches)
 

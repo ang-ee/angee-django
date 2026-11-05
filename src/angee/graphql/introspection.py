@@ -13,15 +13,22 @@ from strawberry_django.utils.typing import get_django_definition
 
 
 def selected_field(selections: list[Selection], name: str) -> bool:
-    """Whether ``name`` is selected directly on the current field, including through fragments."""
+    """Whether a dot-separated field path is selected, including through fragments."""
 
-    def direct(children: list[Selection]) -> bool:
-        return any(
-            child.name == name if isinstance(child, SelectedField) else direct(child.selections)
-            for child in children
-        )
+    path = tuple(name.split("."))
 
-    return any(direct(selection.selections) for selection in selections)
+    def direct(children: list[Selection], remaining: tuple[str, ...]) -> bool:
+        for child in children:
+            if isinstance(child, SelectedField):
+                if child.name == remaining[0] and (
+                    len(remaining) == 1 or direct(child.selections, remaining[1:])
+                ):
+                    return True
+            elif direct(child.selections, remaining):
+                return True
+        return False
+
+    return any(direct(selection.selections, path) for selection in selections)
 
 
 def surface_name(surface: object) -> str:
