@@ -40,17 +40,59 @@ export interface CollectionPage<TRow extends Row> {
 }
 
 /** Authored transport; the list still owns filtering, grouping and pagination. */
-export interface CollectionQuery<
+export type CollectionQuery<
   TDocument extends AuthoredDocument,
   TRequest,
   TResult,
-> {
-  document: TDocument;
-  variables: (request: TRequest) => AuthoredVariables<TDocument>;
-  select: (data: DocumentData<TDocument>) => TResult;
+> = {
   models?: readonly string[];
   dataProviderName?: string;
   enabled?: boolean;
+} & ({
+  document: TDocument;
+  variables: (request: TRequest) => AuthoredVariables<TDocument>;
+  select: (data: DocumentData<TDocument>) => TResult;
+  batch?: never;
+} | {
+  /** A batch-only transport has no unreachable single-page document. */
+  batch: AnyCollectionBatchQuery<TRequest, TResult>;
+  document?: never;
+  variables?: never;
+  select?: never;
+});
+
+export interface CollectionBatchPage<TResult> {
+  data?: TResult;
+  error?: Error | null;
+}
+
+export interface CollectionBatchQuery<TDocument extends AuthoredDocument, TRequest, TStored, TResult = TStored> {
+  document: TDocument;
+  maxPages?: number;
+  variables: (requests: readonly (TRequest & { key: string })[]) => AuthoredVariables<TDocument>;
+  select: (data: DocumentData<TDocument>, requests: readonly (TRequest & { key: string })[]) => ReadonlyMap<string, CollectionBatchPage<TStored>>;
+  /** Project cached page data with the current render's presentation context. */
+  present?: (data: TStored) => TResult;
+}
+
+export type AnyCollectionBatchQuery<TRequest, TResult> = Omit<
+  CollectionBatchQuery<TypedDocumentNode<unknown, Record<string, unknown>>, TRequest, TResult>,
+  "present"
+> & {
+  /** The declaration helper checks the stored type before this erased boundary. */
+  present?: (data: unknown) => TResult;
+};
+
+/**
+ * Preserve authored batch variable/result types at the declaration.
+ *
+ * @kind null
+ * @reason Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.
+ */
+export function collectionBatchQuery<TDocument extends AuthoredDocument, TRequest, TStored, TResult = TStored>(
+  batch: CollectionBatchQuery<TDocument, TRequest, TStored, TResult>,
+): AnyCollectionBatchQuery<TRequest, TResult> {
+  return batch as unknown as AnyCollectionBatchQuery<TRequest, TResult>;
 }
 
 export type AnyCollectionQuery<TRequest, TResult> = CollectionQuery<
@@ -92,21 +134,23 @@ interface CollectionQueryResult<TResult> {
 }
 
 /** Use the authored-query owner for a dynamic frontier of group or row requests. */
-export function useCollectionQueryBatch<TRequest, TResult>(
+export function useCollectionQueryBatch<TRequest extends { page: number }, TResult>(
   source: AnyCollectionQuery<TRequest, TResult> | undefined,
   requests: readonly (TRequest & { key: string })[],
 ): ReadonlyMap<string, CollectionQueryResult<TResult>> {
   const models = useCanonicalResourceModelLabels(source?.models);
+  const single = source?.document ? source : undefined;
+  const batch = source?.batch;
   const prepared = React.useMemo(() => {
     const errors = new Map<string, Error>();
-    const scopes = source
+    const scopes = single
       ? requests.flatMap((request) => {
           try {
             return [
               {
                 key: request.key,
-                document: source.document,
-                variables: source.variables(request),
+                document: single.document,
+                variables: single.variables(request),
                 models,
               },
             ];
@@ -120,18 +164,43 @@ export function useCollectionQueryBatch<TRequest, TResult>(
         })
       : [];
     return { errors, scopes };
-  }, [source, requests, models]);
+  }, [single, requests, models]);
+  const batchPrepared = React.useMemo(() => {
+    const errors = new Map<string, Error>();
+    const scopes = batch ? requests.flatMap((request) => {
+      try {
+        return [{ key: request.key, document: batch.document,
+          variables: batch.variables([request]),
+          placeholderKey: JSON.stringify(batch.variables([{ ...request, page: 1 }])), models }];
+      } catch (error) {
+        errors.set(request.key, error instanceof Error ? error : new Error(String(error)));
+        return [];
+      }
+    }) : [];
+    return { errors, scopes };
+  }, [batch, requests, models]);
   const results = useAuthoredQueryBatch(prepared.scopes, {
     dataProviderName: source?.dataProviderName,
     enabled: source?.enabled,
   });
+  const byKey = new Map(requests.map((request) => [request.key, request]));
+  const batchResults = useAuthoredQueryBatch<
+    TypedDocumentNode<unknown, Record<string, unknown>>, CollectionBatchPage<TResult>
+  >(batchPrepared.scopes, {
+    dataProviderName: source?.dataProviderName,
+    enabled: source?.enabled,
+    errorNotification: false,
+  }, batch ? {
+    maxPages: batch.maxPages,
+    variables: (scopes) => batch.variables(scopes.map((scope) => byKey.get(scope.key)!)),
+    select: (data, scopes) => batch.select(data, scopes.map((scope) => byKey.get(scope.key)!)),
+  } : undefined);
   return React.useMemo(() => {
     const normalized = new Map<string, CollectionQueryResult<TResult>>(
       [...results].map(([key, result]) => [
         key,
         {
-          data:
-            result.data === undefined ? undefined : source?.select(result.data),
+          data: result.data === undefined ? undefined : single?.select(result.data),
           fetching: result.isFetching,
           error: result.error,
           refetch: () => {
@@ -148,6 +217,18 @@ export function useCollectionQueryBatch<TRequest, TResult>(
         refetch: () => {},
       }),
     );
+    if (batch) {
+      requests.forEach((request) => {
+        const result = batchResults.get(request.key);
+        const page = result?.data;
+        normalized.set(request.key, {
+          data: page?.data === undefined ? undefined : batch.present?.(page.data) ?? page.data,
+          fetching: result?.isFetching ?? false,
+          error: batchPrepared.errors.get(request.key) ?? page?.error ?? result?.error ?? null,
+          refetch: () => { void result?.refetch(); },
+        });
+      });
+    }
     return normalized;
-  }, [results, source, prepared.errors]);
+  }, [results, single, requests, prepared.errors, batch, batchPrepared.errors, batchResults]);
 }

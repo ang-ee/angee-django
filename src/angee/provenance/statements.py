@@ -807,6 +807,16 @@ class StatementsMixin(StatementEditMixin, PersistenceMixin, HistoryDocumentMixin
                 yield declaration.model
 
     @classmethod
+    def has_field_statements(cls) -> bool:
+        """Whether a declared statement has an aspect that names subject fields."""
+
+        return any(
+            aspect.fields
+            for statement_model in cls.statement_models()
+            for aspect in statement_model.statement_aspects.values()
+        )
+
+    @classmethod
     def pair_models(cls) -> tuple[type[StatementPair], ...]:
         """Read generated pair carriers from Django's declared endpoint relations."""
 

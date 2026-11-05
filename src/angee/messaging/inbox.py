@@ -183,10 +183,10 @@ class MessageInbox:
             .order_by("display_name", "pk")
         )
 
-    def coverage(self, coverage: InboxCoverage) -> Any:
+    def coverage(self, coverage: InboxCoverage, rows: Any | None = None) -> Any:
         """Apply source/date coverage without silently relaxing contradictions."""
 
-        rows = self.messages
+        rows = self.messages if rows is None else rows
         if coverage.platforms:
             rows = rows.filter(platform__in=coverage.platforms)
         if coverage.accounts:
@@ -272,8 +272,10 @@ class MessageInbox:
             handles = self.handles.filter(party_id__in=Subquery(members.values("pk")), party_link_confirmed=True)
         return self.involving_handles(rows, handles)
 
-    def matching(self, rows: Any, search: InboxSearch) -> Any:
+    def matching(self, rows: Any, search: InboxSearch, *, part_rows: Any | None = None) -> Any:
         """Search readable part uses with native Postgres full text and filename matching."""
+
+        part_rows = self.parts if part_rows is None else part_rows
 
         if search.direction:
             if search.direction not in ("inbound", "outbound"):
@@ -289,7 +291,7 @@ class MessageInbox:
                 return rows.none()
             stars = apps.get_model("messaging", "MessageStar").objects.filter(user_id=self.user_id)
             rows = rows.filter(pk__in=Subquery(stars.values("message_id")))
-        parts = self.parts.filter(message_id=OuterRef("pk"))
+        parts = part_rows.filter(message_id=OuterRef("pk"))
         if search.attachment:
             attachments = parts.filter(disposition="attachment")
             if search.attachment in ("image", "video", "audio"):
@@ -315,9 +317,9 @@ class MessageInbox:
             # Independent candidate paths let PostgreSQL start at the fragment
             # GIN index. A correlated text-or-filename predicate instead probes
             # parts for every message before it can narrow the population.
-            text_matches = self.parts.filter(Q(role__in=roles) & text).order_by().values("message_id")
+            text_matches = part_rows.filter(Q(role__in=roles) & text).order_by().values("message_id")
             filenames = (
-                self.parts.filter(name__icontains=term, disposition="attachment").order_by().values("message_id")
+                part_rows.filter(name__icontains=term, disposition="attachment").order_by().values("message_id")
             )
             rows = rows.filter(pk__in=Subquery(text_matches.union(filenames)))
         if search.relations:
@@ -433,6 +435,45 @@ class MessageInbox:
             raise ValueError("Message unavailable.")
         return message
 
+    def selected_message(
+        self, public_id: str, coverage: InboxCoverage, search: InboxSearch, *,
+        sender: str = "", circle: str = "",
+    ) -> tuple[Any, bool]:
+        """Admit one public message before checking its result membership."""
+
+        message = self.message(public_id)
+        return (
+            message,
+            self._matches_message(message, coverage, search, sender=sender, circle=circle),
+        )
+
+    def message_uses(self, public_id: str) -> list[InboxPartUse]:
+        """Admit one public message before counting its eligible target uses."""
+
+        return self._part_uses(self.message(public_id))
+
+    def _matches_message(
+        self, message: Any, coverage: InboxCoverage, search: InboxSearch, *, sender: str = "", circle: str = ""
+    ) -> bool:
+        """Check one admitted message against the same result predicates."""
+
+        # The row was admitted by message(). A structural candidate may test its
+        # own fields and part links without recompiling Message.read a second time.
+        candidate = self.messages.model._base_manager.filter(pk=message.pk).annotate(
+            _order_at=self.messages.chronological_time()
+        )
+        selected_parts = self.parts.model._base_manager.filter(message_id=message.pk)
+        matches = self.matching(
+            self.scoped(self.coverage(coverage, candidate), sender=sender, circle=circle),
+            search,
+            part_rows=selected_parts,
+        ).exists()
+        if not matches or message.merged_into_id is None:
+            return matches
+        return not self.results(coverage, search, sender=sender, circle=circle).filter(
+            pk=message.merged_into_id
+        ).exists()
+
     def target_parts(self, target: str) -> Any:
         """Authorize a file through Storage, or shared text through an eligible use.
 
@@ -454,10 +495,13 @@ class MessageInbox:
             raise ValueError("Related content unavailable.")
         return parts
 
-    def part_uses(self, message: Any) -> list[InboxPartUse]:
-        """Batch both target counts; selecting more parts does not add count queries."""
+    def _part_uses(self, message: Any) -> list[InboxPartUse]:
+        """Count selected targets through readable messages, without re-gating their parts."""
 
-        parts = list(self.parts.filter(message=message).select_related("fragment"))
+        # Part.read inherits Message.read. These structural rows belong to the
+        # admitted message; their target IDs only select candidates below.
+        part_model = apps.get_model("messaging", "Part")
+        parts = list(part_model._base_manager.filter(message_id=message.pk).select_related("fragment"))
         files = {
             row.pk: str(row.sqid)
             for row in self.collection("storage", "File").filter(
@@ -467,24 +511,33 @@ class MessageInbox:
         targets = {"file_id": list(files), "fragment_id": [part.fragment_id for part in parts if part.fragment_id]}
         counts = {
             field: dict(
-                self.parts.order_by()
-                .filter(**{f"{field}__in": ids})
+                part_model._base_manager.order_by()
+                .filter(
+                    message_id__in=Subquery(self.messages.order_by().values("pk")),
+                    **{f"{field}__in": ids},
+                )
                 .values(field)
                 .annotate(total=Count("message_id", distinct=True))
                 .values_list(field, "total")
             )
-            for field, ids in targets.items()
+            for field, ids in targets.items() if ids
         }
         result = []
         for part in parts:
             if part.file_id in files:
                 result.append(
-                    InboxPartUse(str(part.sqid), f"file:{files[part.file_id]}", counts["file_id"].get(part.file_id, 0))
+                    InboxPartUse(
+                        str(part.sqid), f"file:{files[part.file_id]}", counts.get("file_id", {}).get(part.file_id, 0)
+                    )
                 )
             if part.fragment_id:
+                fragment = part.fragment
+                assert fragment is not None
                 result.append(
                     InboxPartUse(
-                        str(part.sqid), f"fragment:{part.fragment.sqid}", counts["fragment_id"].get(part.fragment_id, 0)
+                        str(part.sqid),
+                        f"fragment:{fragment.sqid}",
+                        counts.get("fragment_id", {}).get(part.fragment_id, 0),
                     )
                 )
         return result

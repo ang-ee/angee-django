@@ -5721,6 +5721,15 @@
   },
   {
     "package": "@angee/ui",
+    "name": "collectionBatchQuery",
+    "source": "packages/ui/src/views/resource/collection-source.ts",
+    "kind": null,
+    "reason": "Runtime infrastructure: composition, state, validation or lifecycle support without rendered anatomy.",
+    "status": "stable",
+    "storyId": null
+  },
+  {
+    "package": "@angee/ui",
     "name": "collectionQuery",
     "source": "packages/ui/src/views/resource/collection-source.ts",
     "kind": null,

@@ -348,6 +348,8 @@ class DataResourceMetadata:
     """Whether the model composes ``MergeableMixin``, so the shared ``merge_records`` verb serves it."""
     history: bool = False
     """Whether the model keeps native history, so the provenance ``history`` surface serves its records."""
+    field_provenance: bool = False
+    """Whether the model declares field statements served by provenance."""
     row_model: str = "server"
     record_representation: str | None = None
     record_search_fields: tuple[str, ...] = ()

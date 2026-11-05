@@ -25,13 +25,13 @@ export function authoredQueryReadsChange(meta: unknown, model: string, id: strin
   const records = metadata?.angeeRecords;
   const broadModels = metadata?.angeeBroadModels;
   if (Array.isArray(broadModels) && broadModels.includes(model)) return true;
-  const relatedModels = metadata?.angeeRelatedModels;
-  if (Array.isArray(relatedModels) && relatedModels.includes(model)) return false;
-  if (!Array.isArray(records)) return true;
-  return records.some((value) => {
+  if (Array.isArray(records) && records.some((value) => {
     const record = recordValue(value);
     return record?.model === model && record?.id === id;
-  });
+  })) return true;
+  const relatedModels = metadata?.angeeRelatedModels;
+  if (Array.isArray(relatedModels) && relatedModels.includes(model)) return false;
+  return !Array.isArray(records);
 }
 
 /** Match one live change: an exact row with its related rows, or a whole model. */

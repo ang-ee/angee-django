@@ -443,6 +443,7 @@ class MessageType(TrashedRefMixin, TaggedNode, ProtectedNode):
         return cast(Any, self).channel_vendor_name()
 
     parent: "MessageType | None" = actor_scoped_to_one("parent")
+    merged_into: "MessageType | None" = actor_scoped_to_one("merged_into")
     subtype: MessageSubtypeType | None
     thread: "ThreadType | None" = actor_scoped_to_one("thread")
     channel: ChannelType | None = actor_scoped_to_one("channel")

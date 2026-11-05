@@ -22,6 +22,7 @@ from rebac.schema import parse_zed
 from rebac.testing import install_schema
 
 from angee.base.models.identity import public_id_of
+from angee.graphql.data.metadata import data_resource_contributions
 from angee.iam.identity import public_subject_ref
 from angee.iam.models.base import ProtectedDataModel
 from angee.integrate.states import StreamKind
@@ -48,6 +49,7 @@ from tests.conftest import (
     vault_for,
 )
 from tests.core_persistence import OwnedRow
+from tests.extcontrib.models import Claimed
 
 pytestmark = pytest.mark.usefixtures("composed_tables")
 
@@ -476,6 +478,17 @@ def test_field_provenance_is_empty_for_a_readable_record_without_statements() ->
     assert _field_provenance(_schema(), person, "knowledge.Page", page) == []
 
 
+def test_resource_contribution_marks_historyless_statement_subjects_only() -> None:
+    contributions = {
+        item.model_label: item.policy
+        for item in data_resource_contributions(provenance_schema.HistoryQuery)
+    }
+    assert Claimed.statement_models()
+    assert contributions[Claimed._meta.label].field_provenance is True
+    assert contributions[Claimed._meta.label].history is False
+    assert "messaging.Message" not in contributions
+
+
 def test_history_projects_a_readable_statement_link_and_evidence_inline() -> None:
     """Activity gets each statement's retained connector identity and readable evidence in one page."""
 
@@ -567,9 +580,12 @@ def test_metadata_marks_a_resource_that_keeps_history() -> None:
     resources = {item.model_label: item for item in schema.angee_resources}
     assert resources["knowledge.Page"].history is True
     assert resources["parties.Party"].history is True
+    assert resources["parties.Party"].field_provenance is True
+    assert resources["knowledge.Page"].field_provenance is False
     assert resources["parties.PartyStatement"].history is False
     wire = {item["modelLabel"]: item for item in schema._schema.extensions["angee"]["resources"]}
     assert wire["knowledge.Page"]["history"] is True
+    assert wire["parties.Party"]["fieldProvenance"] is True
 
 
 def test_document_history_includes_owned_lines_and_reverts_the_complete_edit() -> None:

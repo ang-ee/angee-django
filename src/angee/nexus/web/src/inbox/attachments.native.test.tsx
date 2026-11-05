@@ -2,10 +2,11 @@
 import { ShellPageTestProviders } from "@angee/app/testing";
 import { ResourceViewProvider, ToastProvider, createRouteHref, type ChatterViewContext } from "@angee/ui";
 import { createUiTestProviders } from "@angee/ui/testing";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import type { RefineTestDataProvider } from "@angee/refine/testing";
+import { authoredQueryReadsLiveChange } from "@angee/refine";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 vi.mock("@angee/app", async (original) => ({
@@ -14,7 +15,7 @@ vi.mock("@angee/app", async (original) => ({
 }));
 
 import { InboxConversation } from "./Conversation";
-import { InboxConnections, InboxConnectionsCount, InboxMessage, InboxRelatedTarget, InboxTranscriptMatches } from "./documents";
+import { InboxConnections, InboxConnectionsCount, InboxMessage, InboxMessageUses, InboxRelatedTarget, InboxTranscriptMatches } from "./documents";
 import { InboxMessageReader } from "./MessageReader";
 import { InboxRelatedPane } from "./Related";
 import { FileMessages, useFileMessageCount } from "./FileMessages";
@@ -54,10 +55,11 @@ const message = {
   participants: [], parts: [pdf(1), pdf(2)], reaction_groups: [], parent,
 };
 
-function fixture(uses: { part_id: string; target: string; count: number }[] = [], fileUses = false, status = false) {
+function fixture(uses: { part_id: string; target: string; count: number }[] = [], fileUses = false, status = false, survivor?: string) {
   const source = status ? { ...message, title: "", platform: "WHATSAPP",
     thread: { ...message.thread, modality: "STATUS", conversation_label: "Status updates" },
-    channel: { id: "acc-one", display_name: "Connected account" } } : message;
+    channel: { id: "acc-one", display_name: "Connected account" } }
+    : survivor ? { ...message, merged_into: { id: survivor } } : message;
   const client = createClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   const dataProvider = { custom: vi.fn(async ({ meta }) => {
     if (meta?.gqlQuery === InboxTranscriptMatches) {
@@ -66,8 +68,9 @@ function fixture(uses: { part_id: string; target: string; count: number }[] = []
       } } };
     }
     if (meta?.gqlQuery === InboxMessage) {
-      return { data: { inbox_message: { matches: !status, uses, message: source } } };
+      return { data: { inbox_message: { matches: !status, message: source } } };
     }
+    if (meta?.gqlQuery === InboxMessageUses) return { data: { inbox_message_uses: uses } };
     if (meta?.gqlQuery === InboxRelatedTarget) {
       const part = pdf(2);
       return { data: { inbox_related_target: {
@@ -100,6 +103,7 @@ function fixture(uses: { part_id: string; target: string; count: number }[] = []
   const scope = { coverage: { timezone: "UTC" }, search: {}, sender: "", circle: "" };
   return {
     custom: dataProvider.custom,
+    client,
     wrapper: Providers,
     navigation,
     props: { navigation: navigation as unknown as InboxNavigation, scope: scope as unknown as InboxScope },
@@ -159,6 +163,9 @@ test("repeated parts of one target keep the server's distinct message count", as
     { part_id: "part-3", target: "fragment:single", count: 1 },
   ]);
   render(<InboxMessageReader {...inbox.props} />, { wrapper: inbox.wrapper });
+  await screen.findByRole("button", { name: /renewal-2\.pdf/ });
+  expect(inbox.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxMessageUses)).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Show message links" }));
   const use = await screen.findByRole("button", { name: "renewal-2.pdf 2 accessible message uses" });
   expect(screen.getAllByRole("button", { name: /accessible message uses/ })).toHaveLength(1);
   fireEvent.click(use);
@@ -170,6 +177,76 @@ const fileContext: ChatterViewContext = {
   route: { name: "storage.file", path: "/storage/$id", viewType: "storage/file", modelLabel: "storage.File" },
   view: { kind: "record", type: "storage/file", sqid: "file-2" },
 };
+
+test("the message read names its own thread, party and files for live invalidation", async () => {
+  const inbox = fixture();
+  render(<InboxMessageReader {...inbox.props} />, { wrapper: inbox.wrapper });
+  await screen.findByRole("button", { name: /renewal-2\.pdf/ });
+  await waitFor(() => {
+    const read = inbox.client.getQueryCache().findAll().find((entry) =>
+      (entry.meta?.angeeRelatedModels as string[] | undefined)?.includes("messaging.Thread")
+      && (entry.meta?.angeeRecords as { model: string; id: string }[] | undefined)?.some((record) => record.id === "message-1"));
+    expect(read?.meta?.angeeRecords).toEqual(expect.arrayContaining([
+      { model: "messaging.Message", id: "message-1" },
+      { model: "messaging.Thread", id: "thread-1" },
+      { model: "storage.File", id: "file-2" },
+    ]));
+    expect(read?.meta?.angeeBroadModels).toEqual(expect.arrayContaining([
+      "messaging.Part", "messaging.Participant", "messaging.MessageStar", "messaging.MessageEdge",
+    ]));
+  });
+});
+
+test.each(["messaging.Part", "messaging.Participant", "messaging.MessageStar", "messaging.MessageEdge"])(
+  "%s changes retain the reader's model fallback", async (model) => {
+    const inbox = fixture();
+    render(<InboxMessageReader {...inbox.props} />, { wrapper: inbox.wrapper });
+    await screen.findByRole("button", { name: /renewal-2\.pdf/ });
+    const read = inbox.client.getQueryCache().findAll().find((entry) =>
+      (entry.meta?.angeeRelatedModels as string[] | undefined)?.includes("messaging.Thread")
+      && (entry.meta?.angeeRecords as { model: string; id: string }[] | undefined)?.some((record) => record.id === "message-1"));
+    expect(read?.meta?.angeeBroadModels).toContain(model);
+    expect(authoredQueryReadsLiveChange(read?.meta, { model, id: "new-child" })).toBe(true);
+  },
+);
+
+test("a new reply naming the selected parent refreshes the reader", async () => {
+  const inbox = fixture();
+  render(<InboxMessageReader {...inbox.props} />, { wrapper: inbox.wrapper });
+  await screen.findByRole("button", { name: /renewal-2\.pdf/ });
+  const read = inbox.client.getQueryCache().findAll().find((entry) =>
+    (entry.meta?.angeeRelatedModels as string[] | undefined)?.includes("messaging.Thread")
+    && (entry.meta?.angeeRecords as { model: string; id: string }[] | undefined)?.some((record) => record.id === "message-1"));
+  expect(authoredQueryReadsLiveChange(read?.meta, {
+    model: "messaging.Message", id: "new-reply",
+    relatedRecords: [{ model: "messaging.Message", id: "message-1" }],
+  })).toBe(true);
+});
+
+test("a selected copy names its survivor for live refresh", async () => {
+  const inbox = fixture([], false, false, "survivor-1");
+  render(<InboxMessageReader {...inbox.props} />, { wrapper: inbox.wrapper });
+  await screen.findByRole("button", { name: /renewal-2\.pdf/ });
+  const read = inbox.client.getQueryCache().findAll().find((entry) =>
+    (entry.meta?.angeeRelatedModels as string[] | undefined)?.includes("messaging.Thread")
+    && (entry.meta?.angeeRecords as { model: string; id: string }[] | undefined)?.some((record) => record.id === "message-1"));
+  expect(read?.meta?.angeeRecords).toEqual(expect.arrayContaining([
+    { model: "messaging.Message", id: "survivor-1" },
+  ]));
+  expect(authoredQueryReadsLiveChange(read?.meta, { model: "messaging.Message", id: "survivor-1" })).toBe(true);
+});
+
+test("a new use refreshes the lazy Links counts", async () => {
+  const inbox = fixture([{ part_id: "part-1", target: "file:file-1", count: 2 }]);
+  render(<InboxMessageReader {...inbox.props} />, { wrapper: inbox.wrapper });
+  await screen.findByRole("button", { name: /renewal-2\.pdf/ });
+  fireEvent.click(screen.getByRole("button", { name: "Show message links" }));
+  await screen.findByRole("button", { name: /accessible message uses/ });
+  const uses = inbox.client.getQueryCache().findAll().find((entry) =>
+    (entry.meta?.angeeBroadModels as string[] | undefined)?.includes("messaging.Part")
+    && !(entry.meta?.angeeRelatedModels as string[] | undefined)?.includes("messaging.Thread"));
+  expect(authoredQueryReadsLiveChange(uses?.meta, { model: "messaging.Part", id: "new-use" })).toBe(true);
+});
 
 test("Files backlinks count selects only message_count without inbox rows", async () => {
   const inbox = fixture([], true);

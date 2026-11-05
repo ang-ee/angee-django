@@ -1,7 +1,9 @@
 import {
   collectionQuery,
+  collectionBatchQuery,
   type CollectionGroupRequest,
   type CollectionPageRequest,
+  type CollectionPage,
   type CollectionSource,
   type ResourceViewFilter,
 } from "@angee/ui";
@@ -10,7 +12,7 @@ import {
   InboxNavigator,
   InboxNavigatorGroups,
   InboxResultGroups,
-  InboxResults,
+  InboxResultsBatch,
   type InboxConnectionRow,
   type InboxNavigatorRow,
   type InboxResultRow,
@@ -29,6 +31,7 @@ import { FADING_NAVIGATOR_MODELS, INBOX_MODELS, type InboxNavigation } from "./s
 import type { useNexusT } from "../i18n";
 
 type Translate = ReturnType<typeof useNexusT>;
+type ResultBatchPage = CollectionPage<InboxResultRow> & { messageCount: number };
 
 export function navigatorSource({
   coverage,
@@ -148,16 +151,47 @@ export function resultSource({
     query: inboxCollectionQuery(resultLenses[lens].axes),
     leafPageSize: lens === "conversations" ? 3 : 25,
     rows: collectionQuery({
-      document: InboxResults,
       models: INBOX_MODELS,
-      variables: (request: CollectionPageRequest) => ({
-        ...options(request),
-        scope: new InboxFilter(request.filter).scope(),
-      }),
-      select: (data) => ({
-        rows: data.inbox_results.rows,
-        total: data.inbox_results.count,
-        summary: summary(data.inbox_results.count, data.inbox_results.message_count),
+      batch: collectionBatchQuery<
+        typeof InboxResultsBatch, CollectionPageRequest, ResultBatchPage, CollectionPage<InboxResultRow>
+      >({
+        document: InboxResultsBatch,
+        maxPages: 100,
+        variables: (requests: readonly (CollectionPageRequest & { key: string })[]) => {
+          const first = options(requests[0]!);
+          const { page: _page, size: _size, ...shared } = first;
+          for (const request of requests.slice(1)) {
+            const { page: _otherPage, size: _otherSize, ...other } = options(request);
+            if (JSON.stringify(other) !== JSON.stringify(shared)) {
+              throw new Error("Batch result pages must share coverage, search, sender, circle and options.");
+            }
+          }
+          return {
+            coverage: first.coverage,
+            search: first.search,
+            sender: first.sender,
+            circle: first.circle,
+            options: first.options,
+            pages: requests.map((request) => ({
+              key: request.key,
+              scope: new InboxFilter(request.filter).scope(),
+              page: request.page,
+              size: request.pageSize,
+            })),
+          };
+        },
+        select: (data) => new Map(data.inbox_results_batch.map(({ key, result, error }) => [key, result ? {
+          data: {
+            rows: result.rows,
+            total: result.count,
+            messageCount: result.message_count,
+          },
+        } : { error: new Error(error ?? "Result group unavailable.") }])),
+        present: (page): CollectionPage<InboxResultRow> => ({
+          rows: page.rows,
+          total: page.total,
+          summary: summary(page.total, page.messageCount),
+        }),
       }),
     }),
     groups: collectionQuery({
