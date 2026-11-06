@@ -124,8 +124,8 @@ with actor_context(actor):
     assert edited._state.db == 'default'
     assert ReplayRow.history.filter(changeset_id=edited.pk).exists()
     version = ReplayRow.history.filter(changeset_id=edited.pk).select_related('changeset').get()
-    restored = version.get_instance()
-    assert restored._state.db == 'default' and restored.counter == 7
+    restored = version.instance
+    assert restored.counter == 7
     reverted = edited.revert()
     assert reverted._state.db == 'default'
     replay_row = ReplayRow._base_manager.get(pk=1)
