@@ -43,7 +43,7 @@ class KeysetPage[Row]:
 
 @dataclass(frozen=True, slots=True)
 class KeysetOrder:
-    """A non-null timestamp expression followed by the model's native primary key.
+    """A non-null timestamp expression followed by a native key, newest first.
 
     The caller owns the timestamp annotation and readable queryset. These native
     Q expressions also work with Django querysets that do not inherit Angee.
@@ -51,17 +51,19 @@ class KeysetOrder:
 
     field: str
     tie_breakers: tuple[str, ...] = ()
-    """Native Django ordering terms between timestamp-desc and primary-key-desc."""
+    """Native Django ordering terms between timestamp-desc and key-desc."""
+    key_field: str = "pk"
+    """The final key: the model's primary key, or a composed relation's key column."""
 
     def _cut(self, position: tuple[Any, ...], *, older: bool, inclusive: bool = False) -> models.Q:
         columns = (
             (self.field, True),
             *((term.removeprefix("-"), term.startswith("-")) for term in self.tie_breakers),
-            ("pk", True),
+            (self.key_field, True),
         )
         if len(position) != len(columns):
             raise ValueError("Cursor does not match its declared keyset ordering.")
-        predicate = models.Q(pk__in=[])
+        predicate = models.Q(**{f"{self.key_field}__in": []})
         equal: dict[str, Any] = {}
         for (name, descending), value in zip(columns, position, strict=True):
             comparison = "lt" if descending == older else "gt"
@@ -85,7 +87,7 @@ class KeysetOrder:
         return (
             getattr(row, self.field),
             *(getattr(row, term.removeprefix("-")) for term in self.tie_breakers),
-            row.pk,
+            getattr(row, self.key_field),
         )
 
     def sign_position(self, position: tuple[Any, ...], signer: signing.Signer) -> str:

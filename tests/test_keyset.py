@@ -65,3 +65,21 @@ def test_malformed_signed_cuts_have_one_error_contract(value: object, pk_field: 
     signer = signing.Signer(salt="keyset-test")
     with pytest.raises(InvalidKeysetCursor):
         KeysetOrder("created_at").unsign(signer.sign_object(value), signer, pk_field)
+
+
+def test_a_declared_key_field_ends_the_cut_and_the_position() -> None:
+    """A composed relation without the model's primary key names its own key column."""
+
+    at = datetime(2026, 1, 1, tzinfo=UTC)
+    native, composed = KeysetOrder("created_at"), KeysetOrder("_at", tie_breakers=("_kind",), key_field="_key")
+    assert str(native.before((at, 7))) == str(models.Q(pk__in=[]) | models.Q(created_at__lt=at)
+                                              | models.Q(created_at=at, pk__lt=7))
+    assert str(composed.before((at, "a", 7))) == str(
+        models.Q(_key__in=[]) | models.Q(_at__lt=at) | models.Q(_at=at, _kind__gt="a")
+        | models.Q(_at=at, _kind="a", _key__lt=7)
+    )
+
+    class Row:
+        _at, _kind, _key = at, "a", 7
+
+    assert composed.position(Row()) == (at, "a", 7)
