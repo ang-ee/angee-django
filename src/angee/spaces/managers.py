@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Self
 
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
-from rebac import PermissionDenied, SubjectRef, check_new, current_actor, to_subject_ref
+from rebac import PermissionDenied, SubjectRef, check_new, current_actor, permission_expression, to_subject_ref
 from rebac.errors import MissingActorError
 from rebac.resources import model_resource_type
 
@@ -48,8 +48,7 @@ class MembershipQuerySet[MembershipT: Membership](AngeeQuerySet[MembershipT]):
         actor = current_actor()
         if actor is None:
             return self.annotate(readable=models.Value(False))
-        readers = type(self)(model=self.model, using=self.db).with_actor(actor).scoped_for_aggregate()
-        return self.annotate(readable=models.Exists(readers.filter(pk=models.OuterRef("pk"))))
+        return self.annotate(readable=permission_expression(self.model, "read", actor=actor))
 
 
 _MembershipManagerBase = AngeeManager.from_queryset(MembershipQuerySet)

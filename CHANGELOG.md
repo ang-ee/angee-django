@@ -14,6 +14,12 @@ live in code docstrings.
   `strawberry-django` extra, the dev group its `caveats` extra) instead of a git
   pin. The library now ships only its local backend, so base autoconfig no
   longer sets `REBAC_BACKEND`; the library's own default selects it.
+- GraphQL permission projections (`permissions_field`, `held_permissions`,
+  `permission_expression` filter expressions) and `Membership.with_readable`
+  compose REBAC's native `permission_expression`, which decides the permission
+  inside the row query instead of a correlated scoped `EXISTS` subquery. Verb
+  eligibility projections that combine a permission with row blockers keep
+  their aggregate-scoped subquery, so hidden blocker facts stay inside it.
 
 ## Unreleased — jj workspace slots in the templates
 
