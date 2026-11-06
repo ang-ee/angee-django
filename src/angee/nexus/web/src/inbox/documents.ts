@@ -236,20 +236,6 @@ export const InboxRelatedTarget = graphql(`
   }
 `);
 
-export const InboxConnectionsCount = graphql(`
-  query NexusInboxConnectionsCount(
-    $target: String!
-    $text: String!
-    $oldest: Boolean!
-    $page: Int!
-    $size: Int!
-  ) {
-    inbox_connections(target: $target, text: $text, oldest: $oldest, page: $page, size: $size) {
-      message_count
-    }
-  }
-`);
-
 export const InboxConnections = graphql(`
   query NexusInboxConnections(
     $target: String!

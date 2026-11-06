@@ -248,9 +248,16 @@ export interface RelatedGroupContent {
   /** Eligible only where the record's metadata declares this edge. */
   edge?: { model: string };
   label: ReactNode;
-  /** Count-only read for the tab badge, or the pane label without usePaneCount. */
-  useCount?: (context: ChatterViewContext) => number | undefined;
-  /** Row-derived count while the Links panel is mounted, reusing its row document. */
+  /**
+   * The record edge (`record_edge_counts`) counting this group's rows for the badge
+   * and its label, and the models whose changes recount it. The edge's owner
+   * declares it beside the row read it counts.
+   */
+  countEdge?: { id: string; models: readonly string[] };
+  /**
+   * Row-derived count while the Links panel is mounted, from the group's own row
+   * read: the count of a group without an edge, or of one whose rows partition its edge.
+   */
   usePaneCount?: (context: ChatterViewContext) => number | undefined;
   /** Whether the group offers its one verb (upload, bind) on this record; a group with neither rows nor a verb is absent. */
   useVerb?: (context: ChatterViewContext) => boolean;
