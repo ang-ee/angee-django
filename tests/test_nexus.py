@@ -21,6 +21,7 @@ from rebac import (
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
 from angee.iam.testing.graphql import measure_graphql_document
+from angee.intake import schema as intake_schema
 from angee.messaging.testing.models import (
     Handle,
     Message,
@@ -36,6 +37,7 @@ from angee.messaging.testing.models import (
 from angee.nexus.models import Cadence as AbstractCadence
 from angee.nexus.models import Tie as AbstractTie
 from angee.nexus.testing.models import Cadence, Tie
+from angee.work import schema as work_schema
 from tests import test_messaging_graphql
 from tests.conftest import (
     SchemaAddon,
@@ -94,6 +96,8 @@ def _schema() -> Any:
         test_messaging_graphql.parties_schema,
         test_messaging_graphql.messaging_schema,
         nexus_schema,
+        work_schema,
+        intake_schema,
     )
     addons = [
         SchemaAddon({"console": {key: tuple(module.schemas["console"].get(key, ())) for key in SCHEMA_PART_KEYS}})

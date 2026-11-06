@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from rebac import RelationshipTuple, system_context, to_object_ref, to_subject_ref, write_relationships
 
 from angee.graphql.schema import SCHEMA_PART_KEYS, GraphQLSchemas
+from angee.iam.testing.graphql import measure_graphql_document
 from angee.workflows import schema as workflow_schema
 from angee.workflows.definition import Definition
 from angee.workflows.runner import runner
@@ -277,6 +278,48 @@ def test_run_subject_labels_share_the_target_proof(schema, execution, capture_gr
     reads[5].assert_flat_from(reads[1])
     reads[20].assert_flat_from(reads[5])
     assert reads[20].total_sql_bytes <= reads[1].total_sql_bytes + 8_000
+
+
+def test_grouped_run_subject_labels_share_one_page_proof(schema, execution):
+    """Grouped run pages prove and label all selected subject references together."""
+
+    actor, _sent = execution
+    workflow = load_workflow(document("entry"), actor=actor, subject_model="knowledge.Vault")
+    targets = [vault_for(actor, name=f"Grouped run target {index}") for index in range(40)]
+    for target in targets[:20]:
+        start_run(workflow, actor=actor, subject=target)
+    for target in targets[20:]:
+        run_until(start_run(workflow, actor=actor, subject=target))
+    query = """query GroupedRuns($limit: Int!) {
+      workflowrun_grouped_rows(
+        group_by: {field: STATUS}, pages: [
+          {key: "RUNNING", limit: $limit}, {key: "SUCCEEDED", limit: $limit}
+        ],
+        order_by: [{created_at: asc}]
+      ) {
+        key rows {
+          id version { workflow { id name } } display_name status subject_id
+          origin created_at finished_at outcome_label subject_model subject_label
+        }
+      }
+    }"""
+    reads = {
+        count: measure_graphql_document(schema, query, {"limit": count}, actor=actor)
+        for count in (1, 5, 20)
+    }
+    for count, read in reads.items():
+        pages = read.data["workflowrun_grouped_rows"]
+        assert [page["key"] for page in pages] == ["RUNNING", "SUCCEEDED"]
+        for page, expected in zip(pages, (targets[:count], targets[20:20 + count]), strict=True):
+            assert [row["subject_label"] for row in page["rows"]] == [str(target) for target in expected]
+            assert all(row["subject_model"] == targets[0]._meta.label for row in page["rows"])
+        assert sum(bool(re.match(rf'^SELECT .* FROM "{targets[0]._meta.db_table}"', statement))
+                   for statement in read.statements) == 1
+        read.assert_no_audit_writes()
+        assert read.statement_count == 13
+        read.assert_bytes(total=150_000, largest=60_000)
+    reads[5].assert_flat_from(reads[1])
+    reads[20].assert_flat_from(reads[5])
 
 
 def test_run_input_reads_declared_mti_sources_under_their_own_permission(schema, callers, register_step):
