@@ -54,11 +54,12 @@ export function InboxConversation({
             { icon: "chevron-right", label: t("inbox.nextMatch"), text: true, disabled: !matches.next,
               onClick: () => navigation.patch({ at: `message:${matches.next}` }) },
           ] : undefined}
-          renderWindow={(messages, children) => (
+          renderWindow={(messages, firstVisibleId, children) => (
             <MatchWindow
               scope={scope}
               navigation={navigation}
               ids={messages.map((message) => message.id)}
+              firstVisibleId={firstVisibleId}
               onMatches={setMatches}
               onError={setError}
             >
@@ -83,6 +84,7 @@ function MatchWindow({
   scope,
   navigation,
   ids,
+  firstVisibleId,
   children,
   onMatches,
   onError,
@@ -90,6 +92,7 @@ function MatchWindow({
   scope: InboxScope;
   navigation: InboxNavigation;
   ids: string[];
+  firstVisibleId: string;
   children: ReactElement;
   onMatches: (matches: TranscriptMatches | null) => void;
   onError: (message: string | null) => void;
@@ -102,7 +105,7 @@ function MatchWindow({
       visible: ids,
       at: navigation.at.startsWith("message:")
         ? navigation.at.slice(8)
-        : (ids[0] ?? ""),
+        : firstVisibleId,
     },
     { models: INBOX_MODELS },
   );

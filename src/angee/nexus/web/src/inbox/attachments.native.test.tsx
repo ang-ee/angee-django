@@ -55,7 +55,7 @@ const message = {
   participants: [], parts: [pdf(1), pdf(2)], reaction_groups: [], parent,
 };
 
-function fixture(uses: { part_id: string; target: string; count: number }[] = [], fileUses = false, status = false, survivor?: string, transcriptMessages = [message]) {
+function fixture(uses: { part_id: string; target: string; count: number }[] = [], fileUses = false, status = false, survivor?: string, transcriptMessages = [message], matchingVisible: string[] = []) {
   const source = status ? { ...message, title: "", platform: "WHATSAPP",
     thread: { ...message.thread, modality: "STATUS", conversation_label: "Status updates" },
     channel: { id: "acc-one", display_name: "Connected account" } }
@@ -64,7 +64,9 @@ function fixture(uses: { part_id: string; target: string; count: number }[] = []
   const dataProvider = { custom: vi.fn(async ({ meta }) => {
     if (meta?.gqlQuery === InboxTranscriptMatches) {
       return { data: { inbox_transcript_matches: {
-        thread: { id: "thread-1", conversation_label: "Renewals" }, count: 0, total: 1, visible: [], previous: null, next: null,
+        thread: { id: "thread-1", conversation_label: "Renewals" }, count: matchingVisible.length,
+        total: transcriptMessages.length, visible: matchingVisible.filter((id) => meta?.gqlVariables?.visible.includes(id)),
+        previous: null, next: null,
       } } };
     }
     if (meta?.gqlQuery === InboxMessage) {
@@ -133,8 +135,36 @@ test("transcript matches read the stable loaded window once while virtual rows m
   const matchesRequest = inbox.custom.mock.calls.find(([request]) =>
     request.meta?.gqlQuery === InboxTranscriptMatches)![0];
   expect(matchesRequest.meta?.gqlVariables?.visible).toHaveLength(50);
+  expect(matchesRequest.meta?.gqlVariables?.at).toBeTruthy();
   expect(inbox.custom.mock.calls.filter(([request]) =>
     request.meta?.gqlQuery === InboxTranscriptMatches)).toHaveLength(1);
+});
+
+test("transcript matches include every loaded message within the server limit", async () => {
+  const messages = Array.from({ length: 200 }, (_, index) => ({
+    ...message, id: `message-${index}`, feed_order_key: `v1:${String(index).padStart(4, "0")}`,
+  }));
+  const inbox = fixture([], false, false, undefined, messages, ["message-199"]);
+  render(<InboxConversation {...inbox.props} />, { wrapper: inbox.wrapper });
+
+  await waitFor(() => expect(inbox.custom.mock.calls.some(([request]) =>
+    request.meta?.gqlQuery === InboxTranscriptMatches)).toBe(true));
+  const matchReads = inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxTranscriptMatches);
+  expect(matchReads[0]![0].meta?.gqlVariables?.visible).toHaveLength(200);
+  const transcript = document.querySelector("ul[aria-label] > li[data-index]")?.parentElement?.parentElement;
+  expect(transcript).toBeTruthy();
+  transcript!.scrollTop = 96 * 150;
+  fireEvent.scroll(transcript!);
+  await waitFor(() => expect(inbox.custom.mock.calls.some(([request]) =>
+    request.meta?.gqlQuery === InboxTranscriptMatches && request.meta?.gqlVariables?.at !== "message-0")).toBe(true));
+  const afterScroll = inbox.custom.mock.calls.filter(([request]) =>
+    request.meta?.gqlQuery === InboxTranscriptMatches).at(-1)![0];
+  expect(afterScroll.meta?.gqlVariables?.visible).toHaveLength(200);
+  expect(afterScroll.meta?.gqlVariables?.at).not.toBe("message-0");
+  transcript!.scrollTop = 1_000_000;
+  fireEvent.scroll(transcript!);
+  await waitFor(() => expect(document.querySelector('li[data-index="199"]')).toBeTruthy());
+  expect(await screen.findByText("Matches current filters")).toBeTruthy();
 });
 
 test("transcript matches bound the annotation window after older history loads", async () => {
@@ -148,7 +178,7 @@ test("transcript matches bound the annotation window after older history loads",
     request.meta?.gqlQuery === InboxTranscriptMatches)).toBe(true));
   for (const [request] of inbox.custom.mock.calls.filter(([entry]) =>
     entry.meta?.gqlQuery === InboxTranscriptMatches)) {
-    expect(request.meta?.gqlVariables?.visible.length).toBeLessThanOrEqual(100);
+    expect(request.meta?.gqlVariables?.visible.length).toBeLessThanOrEqual(1000);
   }
 });
 

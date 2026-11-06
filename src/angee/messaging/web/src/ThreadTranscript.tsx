@@ -32,7 +32,8 @@ import { messageFeedRows } from "./message-feed";
 import { useThreadMessageFeed } from "./thread-message-feed";
 
 const ESTIMATED_ROW_HEIGHT = 96;
-const MATCH_WINDOW_SIZE = 100;
+// inbox_transcript.py accepts at most 1000 membership ids per read.
+const MATCH_WINDOW_SIZE = 1000;
 
 type MessagingT = ReturnType<typeof useMessagingT>;
 
@@ -57,9 +58,10 @@ export interface ThreadTranscriptProps {
   /** Host controls join the transcript's one native pane toolbar. */
   toolbarActions?: readonly PaneToolbarAction[];
   timezone?: string;
-  /** Wrap the rendered window with an annotation context over a bounded message window. */
+  /** Wrap loaded messages with annotations; navigation anchors at the first visible row. */
   renderWindow?: (
     messages: readonly ThreadTranscriptRow[],
+    firstVisibleId: string,
     children: React.ReactElement,
   ) => React.ReactElement;
   renderMessageActions?: (message: ThreadTranscriptRow) => React.ReactNode;
@@ -188,6 +190,7 @@ function TranscriptBody({
   // Conversation mode keeps the viewport anchored when "Load older" prepends
   // earlier turns. Open at the selected message, or at the latest turn by default.
   const scrolledThreadRef = React.useRef<string | null>(null);
+  const [positioned, setPositioned] = React.useState(!conversation);
   React.useLayoutEffect(() => () => {
     // The virtualizer cancels pending scroll reconciliation on effect teardown.
     // A StrictMode replay with cached rows must request the initial position again.
@@ -205,6 +208,7 @@ function TranscriptBody({
       else if (!anchor)
         virtualizer.scrollToIndex(messages.length - 1, { align: "end" });
       scrolledThreadRef.current = threadId;
+      setPositioned(true);
     }
   }, [conversation, threadId, messages, totalSize, anchor, virtualizer]);
 
@@ -303,18 +307,20 @@ function TranscriptBody({
       ) : null}
     </div>
   );
-  // The first loaded page has one stable annotation key while the virtualizer
-  // measures and scrolls to its anchor. Older pages use overlapping bounded
-  // windows so their rendered rows can still be annotated without exceeding
-  // the server's visible-ID limit.
-  const firstVisibleIndex = virtualItems[0]?.index ?? 0;
-  const matchWindowStart = Math.max(0, Math.floor(firstVisibleIndex / (MATCH_WINDOW_SIZE / 2))
-    * (MATCH_WINDOW_SIZE / 2) - MATCH_WINDOW_SIZE / 4);
+  const viewportTop = (scrollRef.current?.scrollTop ?? 0) + scrollMargin;
+  const firstVisibleIndex = virtualItems.find((item) => item.end > viewportTop)?.index
+    ?? virtualItems[0]?.index ?? 0;
+  // Keep one stable membership read for all loaded rows until the server's
+  // 1000-ID limit; a longer history uses a window around the viewport.
+  const matchWindowStart = Math.max(0, Math.min(messages.length - MATCH_WINDOW_SIZE,
+    Math.floor(firstVisibleIndex / (MATCH_WINDOW_SIZE / 2)) * (MATCH_WINDOW_SIZE / 2)
+      - MATCH_WINDOW_SIZE / 4));
   const matchWindow = messages.length <= MATCH_WINDOW_SIZE
     ? messages : messages.slice(matchWindowStart, matchWindowStart + MATCH_WINDOW_SIZE);
-  return renderWindow
+  return renderWindow && positioned
     ? renderWindow(
         matchWindow,
+        messages[firstVisibleIndex]?.id ?? "",
         content,
       )
     : content;

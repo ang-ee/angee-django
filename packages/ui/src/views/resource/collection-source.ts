@@ -23,6 +23,9 @@ import type {
   ResourceViewGroup,
 } from "./resource-view-model";
 
+// hasura.py's grouped_rows resolver accepts at most 50 page keys per read.
+const MAX_GROUPED_ROW_PAGES = 50;
+
 /** A server page request in the collection's semantic query language. */
 export interface CollectionPageRequest {
   /** Readable parent identity for an authored hierarchy's child page. */
@@ -57,9 +60,9 @@ export function useGroupedNativePages(
   const targetKey = stableSerialize(target);
   const scopesKey = stableSerialize(scopes);
   const fieldsKey = stableSerialize(fields);
-  const requests = React.useMemo(
+  const prepared = React.useMemo(
     () => {
-      if (!target) return [];
+      if (!target) return { requests: [], requestByScope: new Map<string, string>() };
       const byParent = new Map<string, NativeGroupedPageScope[]>();
       for (const scope of scopes) {
         const key = stableSerialize([scope.groupBy, scope.parentWhere, scope.orderBy]);
@@ -67,22 +70,32 @@ export function useGroupedNativePages(
         pages.push(scope);
         byParent.set(key, pages);
       }
-      return [...byParent].map(([key, pages]) => ({
-        key,
-        ...groupedListQueryMeta(target, fields, pages[0]!.groupBy, pages,
-          pages[0]!.parentWhere, pages[0]!.orderBy),
-        models,
-      }));
+      const requestByScope = new Map<string, string>();
+      const requests = [...byParent].flatMap(([parentKey, pages]) => {
+        const chunks = [];
+        for (let start = 0; start < pages.length; start += MAX_GROUPED_ROW_PAGES) {
+          const chunk = pages.slice(start, start + MAX_GROUPED_ROW_PAGES);
+          const key = stableSerialize([parentKey, start]);
+          for (const page of chunk) requestByScope.set(page.key, key);
+          chunks.push({
+            key,
+            ...groupedListQueryMeta(target, fields, chunk[0]!.groupBy, chunk,
+              chunk[0]!.parentWhere, chunk[0]!.orderBy),
+            models,
+          });
+        }
+        return chunks;
+      });
+      return { requests, requestByScope };
     },
     [targetKey, scopesKey, fieldsKey, models],
   );
-  const results = useAuthoredQueryBatch(requests, {
+  const results = useAuthoredQueryBatch(prepared.requests, {
     dataProviderName: target?.dataProviderName,
     errorNotification: false,
   });
   return React.useMemo(() => new Map(scopes.map((scope) => {
-    const key = stableSerialize([scope.groupBy, scope.parentWhere, scope.orderBy]);
-    const entry = results.get(key);
+    const entry = results.get(prepared.requestByScope.get(scope.key) ?? "");
     const rows = (entry?.data?.rows ?? []) as readonly Row[];
     return [scope.key, {
       rows: rows.filter((row) => stableSerialize(rowValue(row)) === stableSerialize(scope.identity)),
@@ -91,7 +104,7 @@ export function useGroupedNativePages(
       error: entry?.error ?? null,
       refetch: () => { void entry?.refetch(); },
     }];
-  })), [scopesKey, results, rowValue]);
+  })), [scopesKey, prepared, results, rowValue]);
 }
 
 export interface CollectionGroupRequest extends CollectionPageRequest {
