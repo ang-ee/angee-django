@@ -1963,7 +1963,21 @@ def hasura_model_resource(
                 # Keep ambiguous public IDs correct: discover only readable links
                 # matching this operand, then prove the decoded key per type.
                 reference = cast(type[RecordRefMixin], model).record_ref_field()
-                candidate_filter = models.Q(**{reference.fk_field: ids_equal[0]})
+                key_field = model._meta.get_field(reference.fk_field)
+                assert isinstance(key_field, models.Field)
+                candidate_filter = models.Q(pk__in=())
+                for label, key in ids_equal[0].keys.items():
+                    try:
+                        prepared = key_field.get_prep_value(key)
+                    except (TypeError, ValueError, ValidationError):
+                        continue
+                    if prepared is not None:
+                        target_model = model._meta.apps.get_model(label)
+                        candidate_filter |= models.Q(**{
+                            f"{reference.ct_field}__app_label": target_model._meta.app_label,
+                            f"{reference.ct_field}__model": target_model._meta.model_name,
+                            reference.fk_field: Cast(models.Value(str(prepared)), output_field=key_field),
+                        })
                 candidate_keys = ids_equal[0].keys
             elif len(models_equal) == 1:
                 try:
