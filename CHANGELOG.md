@@ -8,6 +8,27 @@ keeps the load-bearing decisions and the deferred follow-ups that outlive the
 working plans that produced them. Principles live in `docs/`; concrete contracts
 live in code docstrings.
 
+## Unreleased — django-zed-rebac 0.31
+
+- The base addon requires `django-zed-rebac>=0.31,<0.32` (GraphQL its
+  `strawberry-django` extra, the dev group its `caveats` extra) instead of a git
+  pin. The library now ships only its local backend, so base autoconfig no
+  longer sets `REBAC_BACKEND`; the library's own default selects it.
+- GraphQL permission projections (`permissions_field`, `held_permissions`,
+  `permission_expression` filter expressions) and `Membership.with_readable`
+  compose REBAC's native `permission_expression`, which decides the permission
+  inside the row query instead of a correlated scoped `EXISTS` subquery. Verb
+  eligibility projections that combine a permission with row blockers keep
+  their aggregate-scoped subquery, so hidden blocker facts stay inside it.
+- Change-subscription payloads decide their changed gated fields through
+  REBAC's batched field visibility: one statement per distinct
+  `read__<field>` permission instead of one point check per field. A
+  depth-uncertain field is redacted instead of raising.
+- Statement-count pins follow 0.31's inline compilation: a scoped read is its
+  revision witness plus one statement, proposal and round lists drop from up
+  to 149 and 43 policy reads to 4, and a recursive scope is one larger
+  statement whose size no longer grows with the rows.
+
 ## Unreleased — jj workspace slots in the templates
 
 - The `src` workspace template takes `slot_mode` (`worktree`, the default, or
