@@ -171,16 +171,19 @@ def test_record_link_source_fields_are_batched_at_one_five_ten_twenty(composed_t
             f"person:{index}" for index in range(size)
         ]
         assert all(row["source_url"] is None for row in read.data["record_links"])
-        # One page hook supplies streams and connectors; authorization adds
-        # the two reads previously hidden by duplicate prefetch hints.
-        assert read.statement_count == 12, (size, read.statement_count)
+        # One page hook supplies streams and connectors; the merged read proof
+        # now uses nine fixed statements at every page size.
+        assert read.statement_count == 9, (size, read.statement_count)
         read.assert_no_audit_writes()
-        read.assert_bytes(total=165_000, largest=17_000)
+        read.assert_bytes(
+            total=120_000, largest=30_000,
+            cause="the composed policy pre-reads each referenced type (policy fan-out)",
+        )
     for smaller, larger in ((1, 5), (5, 10), (10, 20)):
         reads[larger].assert_flat_from(reads[smaller])
     for size, read in admin_reads.items():
         assert len(read.data["record_links"]) == size
-        assert read.statement_count == 13, (size, read.statement_count)
+        assert read.statement_count == 11, (size, read.statement_count)
         read.assert_no_audit_writes()
     for smaller, larger in ((1, 5), (5, 10), (10, 20)):
         admin_reads[larger].assert_flat_from(admin_reads[smaller])

@@ -85,7 +85,10 @@ def _assert_page_proofs(sql, model_count, *, row_root=True):
         assert len(list_statements) == 1
         assert list_statements[0].count("WITH RECURSIVE") == 1
         for model in TARGETS[:model_count]:
-            if model is not Decision:  # The source-row policy itself reads Decision.
+            # The source-row decision read includes Decision and WorkflowRun
+            # through workflows' requesting_step->operate arm. Their presence
+            # here is separate from the one batched target proof per model.
+            if model not in (Decision, WorkflowRun):
                 assert f'FROM "{model._meta.db_table}"' not in list_statements[0]
 
 

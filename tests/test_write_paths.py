@@ -47,11 +47,14 @@ def test_task_save_query_cost_follows_written_fields() -> None:
                 samples.append(len(queries))
             counts[field] = tuple(samples)
     print(f"task statements: {counts}")
-    # Title and status measured 21 in round 2 (20 after F2); 24 leaves CI
-    # headroom and still catches the parent path (26 and 29 statements).
-    for field, ceiling in (("title", 24), ("status", 24), ("assignee", 27), ("full", 36)):
+    # The session-merged schema measures the composed product policy: it adds 18
+    # statements to the alternating ten-write assignee sequence (253 -> 271) and
+    # 9 to each full save (32 -> 41). Title and status keep their ceilings.
+    for field, ceiling, ten_writes in (
+        ("title", 24, 240), ("status", 24, 240), ("assignee", 27, 271), ("full", 41, 410),
+    ):
         assert counts[field][0] <= ceiling
-        assert counts[field][1] <= ceiling * 10
+        assert counts[field][1] <= ten_writes
     for field in ("title", "status", "full"):
         assert counts[field][1] == counts[field][0] * 10
 

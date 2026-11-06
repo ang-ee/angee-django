@@ -59,7 +59,10 @@ def test_extraction_part_values_are_batched_at_one_five_ten_twenty(schema, evide
         ] * size
         assert read.statement_count == 5
         read.assert_no_audit_writes()
-        read.assert_bytes(total=260_000, largest=125_000)
+        read.assert_bytes(
+            total=260_000, largest=180_000,
+            cause="the composed policy pre-reads each referenced type (policy fan-out)",
+        )
     for smaller, larger in ((1, 5), (5, 10), (10, 20)):
         reads[larger].assert_flat_from(reads[smaller])
 

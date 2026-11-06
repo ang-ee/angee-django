@@ -130,13 +130,17 @@ class PublicationCases(TransactionTestCase):
             with CaptureQueriesContext(connection) as queries, self.assertRaises(ClarificationWidenBlocked) as error:
                 locked.validate_visibility("inherited")
             self.assertEqual(error.exception.code, "HIDDEN_ASKER_IN_THREAD")
-            # The blocked read emits two audits around its one SELECT,
-            # which contains the complete blocker predicate.
-            self.assertEqual(len(queries), 3, queries.captured_queries)  # re-measure after integration
-            self.assertTrue(all('INSERT INTO "rebac_permissionauditevent"' in queries[i]["sql"] for i in (0, 2)))
+            # The blocked read writes a single audit. That audit
+            # and one SELECT retain the complete blocker predicate.
+            statements = tuple(row["sql"] for row in queries.captured_queries)
+            self.assertEqual(len(statements), 2, statements)
+            audits = [sql for sql in statements if 'INSERT INTO "rebac_permissionauditevent"' in sql]
+            selections = [sql for sql in statements if sql.startswith("SELECT ")]
+            self.assertEqual(len(audits), 1, statements)
+            self.assertEqual(len(selections), 1, statements)
             # One EXISTS selects messages; its nested EXISTS follows the
             # canonical (possibly merged) thread attachment for this record.
-            self.assertEqual(queries[1]["sql"].upper().count("EXISTS("), 2)
+            self.assertEqual(selections[0].upper().count("EXISTS("), 2)
         before = self.Task._base_manager.filter(pk=question.pk).values().get()
         with actor_context(self.manager):
             with self.assertRaises(ClarificationWidenBlocked):
