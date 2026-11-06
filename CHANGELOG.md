@@ -20,6 +20,10 @@ live in code docstrings.
   inside the row query instead of a correlated scoped `EXISTS` subquery. Verb
   eligibility projections that combine a permission with row blockers keep
   their aggregate-scoped subquery, so hidden blocker facts stay inside it.
+- Change-subscription payloads decide their changed gated fields through
+  REBAC's batched field visibility: one statement per distinct
+  `read__<field>` permission instead of one point check per field. A
+  depth-uncertain field is redacted instead of raising.
 
 ## Unreleased — jj workspace slots in the templates
 
