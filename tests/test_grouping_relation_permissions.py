@@ -221,7 +221,8 @@ def relation_grouping_case(transactional_db: None):
                 model=GroupParent,
                 name="group_parents",
                 filterable=[
-                    "kind", "target", "metric_target__rank", "target__display_name", "middle__target__display_name",
+                    "kind", "target", "metric_target", "metric_target__rank", "middle", "plain",
+                    "target__display_name", "middle__target__display_name",
                 ],
                 sortable=[
                     "kind", "id", "target", "middle__target", "plain",

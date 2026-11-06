@@ -1847,6 +1847,8 @@ _MESSAGE_RESOURCE = hasura_model_resource(
         "sent_at",
         "is_trashed",
         "scheduled_at",
+        # The metadata.mailbox group axis drills by JSON containment on metadata.
+        "metadata",
         *declared_hasura_resource_fields(Message, "hasura_filterable_fields"),
         # The transcript's keyset "load older" cursors on (sent_at, created_at).
         "created_at",

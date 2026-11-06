@@ -2212,12 +2212,14 @@ def _hasura_group_bucket_filter(
     *,
     filterable: tuple[str, ...],
     is_relation: bool,
-) -> DataQueryDrill | None:
-    """Return the backend-owned drill-down filter for a group dimension."""
+) -> DataQueryDrill:
+    """Return the drill-down filter a group dimension requires.
+
+    The drill names the filter field it needs whether or not the resource declares
+    it; the query projection fails the build when that filter is not executable.
+    """
 
     filter_field = _group_filter_field(path, filterable)
-    if filter_field is None:
-        return None
     if is_relation:
         return DataQueryDrill(
             kind="identity",
@@ -2280,14 +2282,10 @@ def _hasura_group_range_filter(
     )
 
 
-def _group_filter_field(path: str, filterable: tuple[str, ...]) -> str | None:
-    """Return the declared bool-exp field that can filter one group path."""
+def _group_filter_field(path: str, filterable: tuple[str, ...]) -> str:
+    """Return the bool-exp field that filters one group path: as declared, else its normalized name."""
 
-    normalized = path.replace(".", "__")
-    for candidate in (path, normalized):
-        if candidate in filterable:
-            return candidate
-    return None
+    return path if path in filterable else path.replace(".", "__")
 
 
 def _hasura_aggregate_measures(

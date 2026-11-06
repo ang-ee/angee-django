@@ -63,7 +63,7 @@ _CURRENCY_RESOURCE = hasura_model_resource(
     CurrencyType,
     model=Currency,
     name="currencies",
-    filterable=["id", "code", "name", "is_archived"],
+    filterable=["id", "code", "name", "decimal_places", "is_archived"],
     sortable=["code", "name", "decimal_places", "created_at", "updated_at"],
     aggregatable=["id"],
     groupable=["decimal_places", "is_archived"],
