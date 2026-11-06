@@ -13,7 +13,7 @@ from angee.decisions.contracts import DecisionProposal, DecisionRequest
 from angee.workflows.decision_steps import AskDecision, DecisionStep
 from angee.workflows.runner import runner
 from angee.workflows.steps import Step
-from angee.workflows.testing.drivers import load_workflow, run_until, start_run
+from angee.workflows.testing.drivers import decide, load_workflow, run_until, start_run
 from angee.workflows.testing.models import StepAttempt, StepRecord, StepRun, Trigger, WorkflowRun
 from tests.conftest import execute_schema, result_data, vault_for
 from tests.test_workflows_children import child_graph as child_graph
@@ -35,6 +35,60 @@ def timeline(schema, actor, records):
     }""", {"records": [{"model": record._meta.label, "id": record.sqid} for record in records]}, user=actor))[
         "record_timeline"
     ]
+
+
+RUN_GRAPHS = """query($records:[TimelineRecordInput!]!, $limit:Int!) {
+  record_timeline(records: $records, run_limit: $limit) { records { runs {
+    id can_cancel
+    graph {
+      edges { source outcome target taken }
+      nodes {
+        key plan item_counts { status count } item_attempts
+        step_run {
+          id status hold outcome_label failure_reason wait_reason attempt page_index map_total map_settled
+          can_retry requires_duplicate_acknowledgement
+          awaited_run { id display_name status } child_runs { id display_name status }
+          records { id label operation record_model record_id } decision { id kind_label }
+          map_steps { id can_retry requires_duplicate_acknowledgement records { id } decision { id } }
+        }
+      }
+    }
+  } } }
+}"""
+
+
+def test_record_timeline_run_graphs_cost_the_same_for_one_or_five_runs(schema, review):
+    """A run list reads its graphs, selected step details and cancel facts once, not once per run."""
+    actor, reviewers, _, question = review
+    subject = question.review_subject
+    workflow = load_workflow({"nodes": {"review": {"step": "question"}}}, actor=actor)
+    runs = []
+    for _ in range(5):
+        run = WorkflowRun.objects.start(workflow, actor=actor, subject=subject)
+        run_until(run)
+        runs.append(run)
+
+    def measure(query, *, cancelable):
+        counts = []
+        for limit in (1, 5):
+            with CaptureQueriesContext(connection) as queries:
+                rows = result_data(execute_schema(schema, query, {"records": [{
+                    "model": subject._meta.label, "id": subject.sqid,
+                }], "limit": limit}, user=actor))["record_timeline"]["records"][0]["runs"]
+            counts.append(len(queries))
+            assert len(rows) == limit and [row["can_cancel"] for row in rows] == [cancelable] * limit
+            assert all(node["step_run"]["decision"] for row in rows for node in row["graph"]["nodes"])
+        assert counts[0] == counts[1], counts
+
+    for query in (RUN_GRAPHS, RUN_GRAPHS.replace(" can_retry", "")):
+        measure(query, cancelable=True)
+    for run in runs:
+        step = StepRun.system_queryset().get(run=run, node_key="review")
+        decide(step.decision, actor=reviewers[0], chosen=["reject"])
+        runner.wake_decisions(step.decision_id)
+        run_until(run)
+    for query in (RUN_GRAPHS, RUN_GRAPHS.replace(" can_retry", "")):
+        measure(query, cancelable=False)
 
 
 @pytest.mark.parametrize("operation,canceled", [("read", False), ("created", True), ("changed", True)])

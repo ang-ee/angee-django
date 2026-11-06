@@ -1017,10 +1017,10 @@ class StepRunQuerySet[T: StepRun](AngeeQuerySet[T]):
         )
 
     def item_counts(self) -> Any:
-        """Aggregate every admitted map item without fetching its payload."""
+        """Aggregate every admitted map item per run without fetching its payload."""
         return (self.filter(node_key__endswith=MAP_BODY_SUFFIX)
-                .values("node_key", "status").annotate(count=Count("pk"), attempts=Sum("attempt"))
-                .order_by("node_key", "status"))
+                .values("run_id", "node_key", "status").annotate(count=Count("pk"), attempts=Sum("attempt"))
+                .order_by("run_id", "node_key", "status"))
 
     def for_map(self, run_id: Any, node_key: Any) -> Any:
         """Select a containing map's body rows, accepting native ORM expressions."""

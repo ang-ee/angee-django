@@ -313,9 +313,11 @@ def test_drill_in_step_permission_queries_are_bounded(schema, execution):
     assert [node["step_run"]["can_retry"] for node in denied["graph"]["nodes"]] == [False] * 6
     operator = create_user("drill-in-operator")
     last_run.with_actor(starter).grant_record_access("operator", operator)
+    assert last_run.can_cancel(operator)
     failed = last_run.graph(operator, step_fields=frozenset({"can_retry"})).nodes[-1].step_run
     assert failed is not None and failed.can_retry(operator)
     last_run.with_actor(starter).revoke_record_access("operator", operator)
+    assert not last_run.can_cancel(operator)
     unseeded = StepRun.system_queryset().get(pk=failed.pk)
     unseeded.run = last_run
     assert not unseeded.can_retry(operator)

@@ -10,8 +10,9 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db.models import F, Prefetch
+from django.db.models import F, Prefetch, prefetch_related_objects
 from django.db.models.lookups import IsNull
+from rebac import to_subject_ref
 from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
@@ -110,6 +111,21 @@ def _graph_details(actor: Any, steps: list[Selection]) -> dict[str, Any]:
     return {"step_fields": step_fields, "map_fields": map_fields, "related": related}
 
 
+def _project_runs(runs: list[Any], actor: Any, selections: list[Selection]) -> None:
+    """Answer a run list's selected cancel facts and graphs once for the whole list."""
+    names = frozenset(field.name for field in _fields(selections))
+    if not runs or not names & {"can_cancel", "graph"}:
+        return
+    writable = WorkflowRun.prepare_cancel(runs, actor) if "can_cancel" in names else None
+    if "graph" in names:
+        prefetch_related_objects(runs, _RUN_POLICY_VERSION)
+        steps = _selected(selections, "graph", "nodes", "step_run")
+        graphs = WorkflowRun.graphs_for(runs, actor, writable=writable, **_graph_details(actor, steps))
+        subject = to_subject_ref(actor)
+        for run in runs:
+            run.__dict__["_graph_projection"] = (subject, graphs[run.pk])
+
+
 @strawberry_django.type(Workflow)
 class WorkflowType(AngeeNode):
     """Workflow identity with draft fields governed by native REBAC redaction."""
@@ -190,10 +206,17 @@ class WorkflowRunType(RecordReferenceNode):
 
     @strawberry_django.field(only=["version_id", "status", "stopped_at"], prefetch_related=[_RUN_POLICY_VERSION])
     def graph(self, info: strawberry.Info) -> WorkflowRunGraph:
-        """Read one run's bounded graph, batching each selected step detail once per graph."""
+        """Read one run's bounded graph, batching each selected step detail once per graph.
+
+        A run list that already read its graphs as one batch hands each run its own.
+        """
+        run = cast(Any, self)
         actor = get_current_user(info)
+        projected = run.__dict__.get("_graph_projection")
+        if projected is not None and projected[0] == to_subject_ref(actor):
+            return cast(WorkflowRunGraph, projected[1])
         steps = _selected(info.selected_fields, "graph", "nodes", "step_run")
-        return cast(WorkflowRunGraph, cast(Any, self).graph(actor, **_graph_details(actor, steps)))
+        return cast(WorkflowRunGraph, run.graph(actor, **_graph_details(actor, steps)))
 
     @strawberry_django.field(only=["status", "stopped_at"])
     def can_cancel(self, info: strawberry.Info) -> bool:
@@ -955,6 +978,7 @@ class RecordTimelineQuery:
             concerned.append(record)
         selection = TimelineSelection(concerned, actor, run_limit=run_limit)
         runs = list(run_type_get_queryset(selection.runs, WorkflowRunType, info)) if include_runs else []
+        _project_runs(runs, actor, _selected(info.selected_fields, "record_timeline", "records", "runs"))
         result = []
         for target, selected_runs, decisions in selection.entries(runs):
             canonical = target.content_type.model_class()
