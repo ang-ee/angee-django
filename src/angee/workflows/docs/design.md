@@ -68,6 +68,8 @@ How the ontology maps to this addon.
 - **Timeline read:** `record_timeline(records: [{model, id}])` accepts one record or a set: its runs and their ancestors, each as the run graph that
   already exists (`schema.py`, the run graph types), extended with the step's records and decisions.
   A selection is bounded to 100 input records and the 20 latest runs per record.
+  The run list reads its graphs, the step details its selection asks for and its
+  cancel facts once for the list, never once per run or step (`WorkflowRun.graphs_for`).
   The eager probe excludes the native create route. With `include_runs: false`, the attention read supplies only run existence,
   counts and the requested open-question fields; it never loads a graph.
 - **Linear order from a branching plan:** steps that ran, then the current steps, then planned steps; a planned

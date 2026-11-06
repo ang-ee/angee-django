@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
 from functools import partial
 from typing import Any, cast
 
@@ -9,11 +10,13 @@ import strawberry
 import strawberry_django
 from django.apps import apps
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db.models import F, Prefetch
+from django.db.models import F, Prefetch, prefetch_related_objects
 from django.db.models.lookups import IsNull
+from rebac import to_subject_ref
 from rebac.resources import model_for_resource_type
 from strawberry import auto
 from strawberry.scalars import JSON
+from strawberry.types.nodes import SelectedField, Selection
 from strawberry_django.auth.utils import get_current_user
 from strawberry_django.queryset import run_type_get_queryset
 
@@ -36,6 +39,7 @@ from angee.graphql.relations import (
     RecordReferenceNode,
     actor_scoped_to_many,
     actor_scoped_to_one,
+    with_record_reference_access,
 )
 from angee.graphql.subscriptions import changes
 from angee.iam.identity import user_public_id
@@ -59,6 +63,7 @@ StepRun = apps.get_model("workflows", "StepRun")
 StepAttempt = apps.get_model("workflows", "StepAttempt")
 StepRecord = apps.get_model("workflows", "StepRecord")
 StepWatch = apps.get_model("workflows", "StepWatch")
+Decision = apps.get_model("decisions", "Decision")
 Trigger = apps.get_model("workflows", "Trigger")
 TriggerEvent = apps.get_model("workflows", "TriggerEvent")
 _RUN_POLICY_VERSION = Prefetch(
@@ -71,6 +76,54 @@ _STEP_POLICY_VERSION = Prefetch(
     queryset=WorkflowVersion.system_queryset().only("document"),
     to_attr="policy_version",
 )
+_RUN_LABEL = {"_workflow_name": F("version__workflow__name")}
+
+
+def _fields(selections: Sequence[Selection]) -> Iterator[SelectedField]:
+    """Flatten fragment spreads and inline fragments to the fields they select."""
+    for selection in selections:
+        if isinstance(selection, SelectedField):
+            yield selection
+        else:
+            yield from _fields(selection.selections)
+
+
+def _selected(selections: Sequence[Selection], *path: str) -> list[Selection]:
+    """Follow field names through aliases and fragments to their merged children."""
+    for name in path:
+        selections = [child for field in _fields(selections) if field.name == name for child in field.selections]
+    return list(selections)
+
+
+def _graph_details(actor: Any, steps: list[Selection]) -> dict[str, Any]:
+    """Translate a run graph's step selection into the run owner's batched details."""
+    step_fields = frozenset(field.name for field in _fields(steps))
+    map_fields = frozenset(field.name for field in _fields(_selected(steps, "map_steps")))
+    selected = step_fields | map_fields
+    # Built only when selected: record-reference access reads its target types eagerly.
+    readers = {
+        "awaited_run": lambda: WorkflowRun.objects.with_actor(actor).annotate(**_RUN_LABEL),
+        "child_runs": lambda: WorkflowRun.objects.with_actor(actor).annotate(**_RUN_LABEL),
+        "decision": lambda: Decision.objects.with_actor(actor),
+        "records": lambda: with_record_reference_access(StepRecord.objects.with_actor(actor)),
+    }
+    related = tuple(Prefetch(name, queryset=read()) for name, read in readers.items() if name in selected)
+    return {"step_fields": step_fields, "map_fields": map_fields, "related": related}
+
+
+def _project_runs(runs: list[Any], actor: Any, selections: list[Selection]) -> None:
+    """Answer a run list's selected cancel facts and graphs once for the whole list."""
+    names = frozenset(field.name for field in _fields(selections))
+    if not runs or not names & {"can_cancel", "graph"}:
+        return
+    writable = WorkflowRun.prepare_cancel(runs, actor) if "can_cancel" in names else None
+    if "graph" in names:
+        prefetch_related_objects(runs, _RUN_POLICY_VERSION)
+        steps = _selected(selections, "graph", "nodes", "step_run")
+        graphs = WorkflowRun.graphs_for(runs, actor, writable=writable, **_graph_details(actor, steps))
+        subject = to_subject_ref(actor)
+        for run in runs:
+            run.__dict__["_graph_projection"] = (subject, graphs[run.pk])
 
 
 @strawberry_django.type(Workflow)
@@ -120,8 +173,7 @@ class WorkflowRunType(RecordReferenceNode):
     """Execution state, admission and result visible through the run's policy."""
 
     display_name: str = strawberry_django.field(
-        resolver=AngeeNode.display_name,
-        annotate={"_workflow_name": F("version__workflow__name")}, only=["created_at", "version_id"],
+        resolver=AngeeNode.display_name, annotate=_RUN_LABEL, only=["created_at", "version_id"],
     )
     version: WorkflowVersionType | None = actor_scoped_to_one("version")
     parent_step: StepRunType | None = actor_scoped_to_one("parent_step")
@@ -154,8 +206,17 @@ class WorkflowRunType(RecordReferenceNode):
 
     @strawberry_django.field(only=["version_id", "status", "stopped_at"], prefetch_related=[_RUN_POLICY_VERSION])
     def graph(self, info: strawberry.Info) -> WorkflowRunGraph:
-        """Read one run's bounded graph; list selections cost about five queries per row."""
-        return cast(WorkflowRunGraph, cast(Any, self).graph(get_current_user(info)))
+        """Read one run's bounded graph, batching each selected step detail once per graph.
+
+        A run list that already read its graphs as one batch hands each run its own.
+        """
+        run = cast(Any, self)
+        actor = get_current_user(info)
+        projected = run.__dict__.get("_graph_projection")
+        if projected is not None and projected[0] == to_subject_ref(actor):
+            return cast(WorkflowRunGraph, projected[1])
+        steps = _selected(info.selected_fields, "graph", "nodes", "step_run")
+        return cast(WorkflowRunGraph, run.graph(actor, **_graph_details(actor, steps)))
 
     @strawberry_django.field(only=["status", "stopped_at"])
     def can_cancel(self, info: strawberry.Info) -> bool:
@@ -241,14 +302,17 @@ class StepRunType(AngeeNode):
     @strawberry_django.field(only=["node_key", "run_id"])
     def map_steps(self, info: strawberry.Info) -> list[StepRunType]:
         """Map item execution stays beneath its authored parent in the timeline."""
-        return cast(Any, self).map_rows().with_actor(get_current_user(info)).order_by("map_index")
+        return cast(Any, self).map_steps_for(get_current_user(info))
 
     @strawberry_django.field(only=["status", "waiting_kind", "node_key", "run_id"])
     def can_retry(self, info: strawberry.Info) -> bool:
         """Project the same model rule checked by the retry action."""
         return bool(cast(Any, self).can_retry(get_current_user(info)))
 
-    @strawberry_django.field(only=["node_key", "page_index", "run_id"])
+    @strawberry_django.field(
+        only=["node_key", "page_index", "run_id"],
+        annotate={"_effect_started": lambda info: StepRun.effect_started_expression()},
+    )
     def requires_duplicate_acknowledgement(self) -> bool:
         """Read the step owner's current-page effect marker predicate."""
         return bool(cast(Any, self).requires_duplicate_acknowledgement)
@@ -914,6 +978,7 @@ class RecordTimelineQuery:
             concerned.append(record)
         selection = TimelineSelection(concerned, actor, run_limit=run_limit)
         runs = list(run_type_get_queryset(selection.runs, WorkflowRunType, info)) if include_runs else []
+        _project_runs(runs, actor, _selected(info.selected_fields, "record_timeline", "records", "runs"))
         result = []
         for target, selected_runs, decisions in selection.entries(runs):
             canonical = target.content_type.model_class()

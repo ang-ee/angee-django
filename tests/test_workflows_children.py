@@ -263,6 +263,12 @@ def test_observing_an_already_failed_child_keeps_its_open_siblings(child_graph):
     assert parent.status == "succeeded" and pending.status == "ready"
     assert waiter.awaited_run_id == child.pk and waiter.outcome == "error"
     assert parent.can_cancel(actor)
+    # A run list's batched cancel facts agree with each run's own answer.
+    seeded = [WorkflowRun.system_queryset().get(pk=run.pk) for run in (parent, child)]
+    WorkflowRun.prepare_cancel(seeded, actor)
+    fresh = [WorkflowRun.system_queryset().get(pk=run.pk) for run in (parent, child)]
+    assert [run.can_cancel(actor) for run in seeded] == [run.can_cancel(actor) for run in fresh]
+    assert seeded[0].can_cancel(actor)
     result = WorkflowRun.objects.cancel(parent, actor=actor)
     pending.refresh_from_db()
     child.refresh_from_db()
