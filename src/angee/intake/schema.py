@@ -296,6 +296,7 @@ _NEED_RESOURCE = hasura_model_resource(
     NeedType,
     model=Need,
     name="intake_needs",
+    identity_policies={"PartyIdentity": "id"},
     filterable=[
         "id",
         "party",

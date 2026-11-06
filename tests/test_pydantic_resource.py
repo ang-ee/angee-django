@@ -186,7 +186,7 @@ def test_pydantic_resource_groupable_columns_project_server_axes() -> None:
     assert meta.roots.group_name == "catalogue_entries_groups"
     assert meta.roots.group_count_name == "catalogue_entries_groups_count"
     assert meta.roots.grouped_rows_name == "catalogue_entries_grouped_rows"
-    assert meta.type_names.grouped_row_page == "catalogue_entries_grouped_row_page"
+    assert meta.type_names.grouped_row_page == "catalogue_entries_grouped_rows_page"
     assert meta.type_names.group_key is not None
     assert meta.type_names.group_by_spec is not None
     assert {
@@ -227,7 +227,7 @@ def test_pydantic_grouped_rows_use_group_keys_and_one_source_read_per_request() 
     keys = [group["key"]["created_month"] for group in groups.data["catalogue_entries_groups"]]
     calls.clear()
     rows = schema.execute_sync(
-        """query($pages: [catalogue_entries_grouped_row_page!]!) {
+        """query($pages: [catalogue_entries_grouped_rows_page!]!) {
           catalogue_entries_grouped_rows(
             group_by: {field: CREATED, granularity: MONTH}, pages: $pages,
             order_by: [{id: desc}]

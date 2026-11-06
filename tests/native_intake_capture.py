@@ -100,29 +100,45 @@ class ChannelIntakeCaptureTests(TransactionTestCase):
         self.assertEqual(self.Message._base_manager.count(), 1)
         self.assertEqual(self.Need._base_manager.count(), 0)
 
-    def test_retired_intake_triggers_load_as_all_messages(self):
-        """Legacy rows remain readable and capture through the supported trigger."""
+    def test_migrated_retired_intake_triggers_keep_capture_disabled(self):
+        """A project data migration clears the queue when retiring inert triggers."""
 
         with system_context(reason="test retired intake trigger setup"):
             self.channel.intake_queue = self.queue
             self.channel.save(update_fields=["intake_queue"])
         table = connection.ops.quote_name(self.channel._meta.db_table)
         column = connection.ops.quote_name("intake_trigger")
+        queue_column = connection.ops.quote_name("intake_queue_id")
         pk_column = connection.ops.quote_name(self.channel._meta.pk.column)
         for retired in ("reaction", "mention", "command"):
             with self.subTest(retired=retired), connection.cursor() as cursor:
                 cursor.execute(
-                    f"UPDATE {table} SET {column} = %s WHERE {pk_column} = %s",
-                    [retired, self.channel.pk],
+                    f"UPDATE {table} SET {column} = %s, {queue_column} = %s WHERE {pk_column} = %s",
+                    [retired, self.queue.pk, self.channel.pk],
+                )
+                cursor.execute(
+                    f"SELECT {column}, {queue_column} FROM {table} WHERE {pk_column} = %s",
+                    [self.channel.pk],
+                )
+                self.assertEqual(cursor.fetchone(), (retired, self.queue.pk))
+                cursor.execute(
+                    f"UPDATE {table} SET {column} = %s, {queue_column} = NULL "
+                    f"WHERE {column} IN (%s, %s, %s)",
+                    ["all_messages", "reaction", "mention", "command"],
                 )
             channel = type(self.channel)._base_manager.get(pk=self.channel.pk)
             self.assertEqual(str(channel.intake_trigger), "all_messages")
-            self.assertTrue(channel.should_capture_message(None))
-            with system_context(reason="test retired intake trigger save"):
-                channel.save(update_fields=["intake_trigger"])
+            self.assertIsNone(channel.intake_queue_id)
+            self.assertFalse(channel.should_capture_message(None))
+            self.channel = channel
+            self.ingest(external_id=f"retired-{retired}")
+            self.assertEqual(self.Need._base_manager.count(), 0)
             with connection.cursor() as cursor:
                 cursor.execute(f"SELECT {column} FROM {table} WHERE {pk_column} = %s", [channel.pk])
                 self.assertEqual(cursor.fetchone()[0], "all_messages")
+            self.assertTrue(
+                type(self.channel)._base_manager.filter(pk=channel.pk, intake_trigger="all_messages").exists()
+            )
 
     def test_transport_channel_is_the_concrete_channel_child(self):
         (message,) = self.ingest()

@@ -73,11 +73,11 @@ def _attach_grouped_rows(
     assert resource.order_by_type is not None
     page_type = strawberry.input(
         type(
-            f"{resource.name}_grouped_row_page",
+            f"{resource.name}_grouped_rows_page",
             (),
             {"__annotations__": {"key": JSON | None, "limit": int, "offset": int}, "offset": 0},
         ),
-        name=f"{resource.name}_grouped_row_page",
+        name=f"{resource.name}_grouped_rows_page",
     )
     resource.types.append(page_type)
     result_type = grouped_rows_page_result_type(resource.name, node)

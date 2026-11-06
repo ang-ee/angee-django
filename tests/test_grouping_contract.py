@@ -51,6 +51,7 @@ def test_every_server_grouped_resource_emits_both_roots_and_metadata() -> None:
             page_type = get_named_type(grouped_rows.args["pages"].type)
             assert isinstance(page_type, GraphQLInputObjectType)
             assert page_type.name == types.grouped_row_page
+            assert page_type.name == f"{roots.grouped_rows_name}_page"
             assert set(page_type.fields) == {"key", "limit", "offset"}
             result_type = get_named_type(grouped_rows.type)
             assert isinstance(result_type, GraphQLObjectType)
@@ -83,6 +84,7 @@ def test_composed_grouped_resources_emit_group_and_row_roots(tmp_path: Path) -> 
             assert set(rows.args) == {"group_by", "pages", "where", "order_by"}
             page_type = get_named_type(rows.args["pages"].type)
             assert isinstance(page_type, GraphQLInputObjectType)
+            assert page_type.name == f"{rows_root}_page"
             assert set(page_type.fields) == {"key", "limit", "offset"}
             result_type = get_named_type(rows.type)
             assert isinstance(result_type, GraphQLObjectType)

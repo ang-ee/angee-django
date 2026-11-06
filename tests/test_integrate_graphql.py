@@ -65,9 +65,6 @@ User = get_user_model()
 iam_schema = importlib.import_module("angee.iam.schema")
 integrate_schema = importlib.import_module("angee.integrate.schema")
 integrate_vcs_schema = importlib.import_module("angee.integrate_vcs.schema")
-"""Raw stored value of one integration event kind (``str`` for clean typing)."""
-
-
 def test_integration_node_resolves_nested_relations(
     composed_tables: None,
 ) -> None:

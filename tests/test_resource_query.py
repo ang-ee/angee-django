@@ -293,7 +293,7 @@ def test_query_does_not_infer_relation_identity_from_an_unrelated_id_field() -> 
 
 
 def test_query_uses_the_only_public_id_on_an_identity_projection() -> None:
-    """An admitted identity object can page a relation group without Node inheritance."""
+    """A declared non-Node identity can page a relation group."""
 
     schema = build_schema(
         _SCHEMA.replace(
@@ -301,18 +301,31 @@ def test_query_uses_the_only_public_id_on_an_identity_projection() -> None:
             "type Channel { id: ID!, display_name: String! }",
         )
     )
-    assert replace(_projection(), schema=schema).build().fields["channel"].relation.identity_path == "channel.id"
+    assert replace(
+        _projection(), schema=schema, identity_policies={"Channel": "id"},
+    ).build().fields["channel"].relation.identity_path == "channel.id"
 
 
-def test_unexposed_relation_uses_public_identity_constant(monkeypatch) -> None:
-    monkeypatch.setattr("angee.graphql.data.query.PUBLIC_ID_FIELD_NAME", "public_key")
+def test_query_does_not_guess_non_node_identity_from_id_name() -> None:
+    schema = build_schema(
+        _SCHEMA.replace(
+            "type Channel implements Node { id: ID!, display_name: String! }",
+            "type Channel { id: ID!, display_name: String! }",
+        )
+    )
+    assert replace(_projection(), schema=schema).build().fields["channel"].relation.identity_path is None
+
+
+def test_unexposed_relation_uses_declared_identity_policy() -> None:
     schema = build_schema(
         _SCHEMA.replace(
             "type Channel implements Node { id: ID!, display_name: String! }",
             "type Channel { sqid: ID!, public_key: ID!, display_name: String! }",
         )
     )
-    relation = replace(_projection(), schema=schema).build().fields["channel"].relation
+    relation = replace(
+        _projection(), schema=schema, identity_policies={"Channel": "public_key"},
+    ).build().fields["channel"].relation
     assert relation.identity_path == "channel.public_key"
 
 

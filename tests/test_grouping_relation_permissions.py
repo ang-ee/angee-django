@@ -424,7 +424,7 @@ def test_grouped_page_window_sql_budget(relation_grouping_case: Any) -> None:
     ])
     metadata = next(resource for resource in case.owner.resources("public") if resource.model is GroupParent)
     assert metadata.roots.grouped_rows_name == "group_parents_grouped_rows"
-    assert metadata.type_names.grouped_row_page == "group_parents_grouped_row_page"
+    assert metadata.type_names.grouped_row_page == "group_parents_grouped_rows_page"
     # Measured SQLite leaf SQL bytes at 1/10/50 groups: 19,714/17,393/21,425;
     # PostgreSQL: 20,485/18,004/21,964. Largest: 16,535/14,108/17,708
     # and 17,169/14,615/18,215. The 30/25 KB ceilings leave CI headroom.
@@ -522,17 +522,13 @@ def test_extracted_group_pages_match_native_keys_at_flat_cost(
         assert all(group["aggregate"]["count"] == 4 for group in groups.data["group_parents_groups"])
         keys = [group["key"][key_field] for group in groups.data["group_parents_groups"]]
         assert all(key is not None for key in keys)
-        labels = [group["label"] for group in groups.data["group_parents_groups"]]
-        assert all(
-            label == datetime.fromisoformat(key).strftime("%B %Y") if granularity else label == str(key)
-            for key, label in zip(keys, labels, strict=True)
-        )
+        assert all(group["label"] is None for group in groups.data["group_parents_groups"])
         if axis == "METADATA__RANK":
             assert all(isinstance(key, int) for key in keys)
         pages = [{"key": key, "limit": 2, "offset": 1} for key in keys]
         rows = measure_graphql_document(
             case.schema,
-            f'''query AxisRows($pages: [group_parents_grouped_row_page!]!) {{
+            f'''query AxisRows($pages: [group_parents_grouped_rows_page!]!) {{
               group_parents_grouped_rows(group_by: {{{spec}}}, pages: $pages,
                 where: {{kind: {{_eq: "axis"}}}}, order_by: [{{id: asc}}]) {{
                   key rows {{ id kind }}
@@ -597,20 +593,11 @@ def test_date_buckets_round_trip_group_keys(
       group_parents_groups(group_by: [{{field: {axis}, granularity: {granularity}}}],
         where: {{kind: {{_eq: "date-grain"}}}}) {{ key {{ {key_field} }} label aggregate {{ count }} }}
     }}''')["group_parents_groups"]
-    for group in groups:
-        key = datetime.fromisoformat(group["key"][key_field])
-        expected = {
-            "DAY": key.date().isoformat(),
-            "WEEK": f"Week of {key.strftime('%B')} {key.day}, {key.year}",
-            "MONTH": key.strftime("%B %Y"),
-            "QUARTER": f"Q{(key.month - 1) // 3 + 1} {key.year}",
-            "YEAR": str(key.year),
-        }[granularity]
-        assert group["label"] == expected
+    assert all(group["label"] is None for group in groups)
     pages = [{"key": group["key"][key_field], "limit": group["aggregate"]["count"]} for group in groups]
     rows = measure_graphql_document(
         case.schema,
-        f'''query DateRows($pages: [group_parents_grouped_row_page!]!) {{
+        f'''query DateRows($pages: [group_parents_grouped_rows_page!]!) {{
           group_parents_grouped_rows(group_by: {{field: {axis}, granularity: {granularity}}},
             pages: $pages, where: {{kind: {{_eq: "date-grain"}}}}, order_by: [{{id: asc}}]) {{
               key rows {{ id }}
@@ -654,7 +641,7 @@ def test_grouped_page_keys_preserve_local_month_membership_and_empty_pages(
     requested = [keys[11], "2026-12-01T00:00:00-06:00", keys[10]]
     read = measure_graphql_document(
         case.schema,
-        '''query LocalMonthRows($pages: [group_parents_grouped_row_page!]!) {
+        '''query LocalMonthRows($pages: [group_parents_grouped_rows_page!]!) {
           group_parents_grouped_rows(
             group_by: {field: OCCURRED_AT, granularity: MONTH}, pages: $pages,
             where: {kind: {_eq: "local-month"}}, order_by: [{id: asc}]
@@ -671,12 +658,12 @@ def test_grouped_page_keys_preserve_local_month_membership_and_empty_pages(
     ]
 
 
-def test_json_boolean_group_headers_use_scalar_text(relation_grouping_case: Any) -> None:
-    """JSON boolean keys retain their type while their labels use JSON scalar text."""
+def test_json_boolean_group_headers_leave_label_to_client(relation_grouping_case: Any) -> None:
+    """JSON boolean keys retain their type without a server display label."""
 
     case = relation_grouping_case
     with system_context(reason="test.grouped_page.json_bool.seed"):
-        row = GroupParent.objects.create(kind="json-bool", metadata={"enabled": False})
+        row = GroupParent.objects.create(kind="json-bool", metadata={"enabled": False, "mailbox": ""})
     write_relationships([
         RelationshipTuple(to_object_ref(row), "reader", case.alice)
     ])
@@ -684,7 +671,12 @@ def test_json_boolean_group_headers_use_scalar_text(relation_grouping_case: Any)
       group_parents_groups(group_by: [{field: METADATA__ENABLED}],
         where: {kind: {_eq: "json-bool"}}) { key { metadata__enabled } label }
     }''')["group_parents_groups"]
-    assert groups == [{"key": {"metadata__enabled": False}, "label": "false"}]
+    assert groups == [{"key": {"metadata__enabled": False}, "label": None}]
+    blanks = _query(case, case.alice, '''query {
+      group_parents_groups(group_by: [{field: METADATA__MAILBOX}],
+        where: {kind: {_eq: "json-bool"}}) { key { metadata__mailbox } label }
+    }''')["group_parents_groups"]
+    assert blanks == [{"key": {"metadata__mailbox": ""}, "label": None}]
 
 
 def test_grouped_row_pages_keep_offsets_and_redacted_null_bucket(relation_grouping_case: Any) -> None:

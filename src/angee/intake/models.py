@@ -748,21 +748,6 @@ class ProjectIntakeSetup(Composable, extends="projects.Project"):
         super().apply_setup(**options)
 
 
-class IntakeTriggerField(StateField[models.TextChoices]):
-    """Read and write retired channel triggers as the supported capture mode."""
-
-    _retired = frozenset({"reaction", "mention", "command"})
-
-    def to_python(self, value: Any) -> Any:
-        raw = getattr(value, "value", value)
-        return super().to_python("all_messages" if isinstance(raw, str) and raw in self._retired else value)
-
-    def deconstruct(self) -> tuple[str, str, Any, dict[str, Any]]:
-        """Keep the field's database declaration identical to StateField."""
-        name, _, args, kwargs = super().deconstruct()
-        return name, "angee.base.fields.state.StateField", args, kwargs
-
-
 class ChannelIntake(Composable, extends="messaging.Channel"):
     """Same-row intake fields and capture behavior for ``messaging.Channel``."""
 
@@ -790,7 +775,7 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
         on_delete=models.SET_NULL,
         related_name="intake_channels",
     )
-    intake_trigger = IntakeTriggerField(
+    intake_trigger = StateField(
         choices_enum=IntakeTrigger,
         default=IntakeTrigger.ALL_MESSAGES,
     )
@@ -903,8 +888,7 @@ class ChannelIntake(Composable, extends="messaging.Channel"):
 
         if self.intake_queue_id is None:
             return False
-        trigger = type(self)._meta.get_field("intake_trigger").to_python(self.intake_trigger)
-        match str(trigger):
+        match str(self.intake_trigger):
             case self.IntakeTrigger.ALL_MESSAGES:
                 return True
             case _:
