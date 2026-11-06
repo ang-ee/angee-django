@@ -32,6 +32,7 @@ from angee.graphql.data.hasura import (
     public_pk_decoder,
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata, delete_by_public_id
+from angee.graphql.edges import RecordEdge
 from angee.graphql.ids import (
     PublicID,
     optional_public_id,
@@ -270,12 +271,7 @@ class PageType(AuthoredRefMixin, TrashedRefMixin, AngeeNode):
         """
 
         rows = (
-            Link._default_manager.filter(
-                target_page_id=cast(Any, self).pk,
-                is_resolved=True,
-                source_page__is_trashed=False,
-            )
-            .scoped()
+            Link._default_manager.backlinks_to(self)
             .annotate(source_title=F("source_page__title"))
             .order_by("source_title", "sqid")
         )
@@ -838,6 +834,16 @@ _KNOWLEDGE_SCHEMA_BUCKET = {
         *_PAGE_RESOURCE.types,
     ],
 }
+
+
+def record_edges() -> tuple[RecordEdge, ...]:
+    """A record's bound pages, and a page's bound records and backlinks, as their groups list them."""
+
+    return (
+        RecordEdge("knowledge.pages", RecordBinding._default_manager.pages_for_record),
+        RecordEdge("knowledge.bound-to", RecordBinding._default_manager.for_knowledge, target="knowledge.Page"),
+        RecordEdge("knowledge.backlinks", Link._default_manager.backlinks_to, target="knowledge.Page"),
+    )
 
 
 schemas = {

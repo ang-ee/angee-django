@@ -29,6 +29,7 @@ from angee.graphql.actions import (
 )
 from angee.graphql.capabilities import permission_expression, permissions_field
 from angee.graphql.data.hasura import AngeeHasuraWriteBackend, declared_hasura_resource_fields, hasura_model_resource
+from angee.graphql.edges import RecordEdge
 from angee.graphql.ids import PublicID, optional_public_id, require_instance_for_id
 from angee.graphql.impl import ImplChoice
 from angee.graphql.node import AngeeNode
@@ -929,6 +930,26 @@ class RecordTimelineQuery:
             open_decision_count=selection.open_decision_count,
             has_runs=bool(runs) if include_runs else selection.runs.exists(),
         )
+
+
+def record_edges() -> tuple[RecordEdge, ...]:
+    """The runs that worked on a record, a run's asked decisions and a decision's asking run.
+
+    Each reads like its Related group's rows: the run owner's ``about`` selection,
+    and the steps whose readable decision or run the run and decision pages list.
+    """
+
+    decisions = apps.get_model("decisions", "Decision")
+    return (
+        RecordEdge("workflows.runs", lambda record: WorkflowRun.objects.about(record)),
+        RecordEdge("workflows.decisions", lambda run: StepRun.objects.filter(
+            run=run, decision_id__in=decisions.objects.all().scoped().values("pk"),
+        ), target="workflows.WorkflowRun"),
+        RecordEdge("workflows.run", lambda decision: StepRun.objects.filter(
+            decision=decision, run_id__in=WorkflowRun.objects.all().scoped().values("pk"),
+        ), target="decisions.Decision"),
+    )
+
 
 schemas = {
     "console": {

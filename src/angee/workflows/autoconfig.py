@@ -7,6 +7,7 @@ _Settings = TypedDict(
     {
         "ANGEE_MERGE_GUARDS:append": list[str],
         "ANGEE_TIMELINE_KINDS:append": list[str],
+        "ANGEE_GRAPHQL_RECORD_EDGES:append": list[str],
         "ANGEE_RESOURCE_ENTRY_KIND_CLASSES:append": dict[str, str],
         "ANGEE_WORKFLOW_TRIGGER_SOURCE_CLASSES": dict[str, str],
         "CELERY_BEAT_SCHEDULE:append": dict[str, dict[str, object]],
@@ -20,6 +21,7 @@ _Settings = TypedDict(
 SETTINGS: _Settings = {
     "ANGEE_MERGE_GUARDS:append": ["angee.workflows.managers.unfinished_run_merge_guard"],
     "ANGEE_TIMELINE_KINDS:append": ["angee.workflows.timeline.timeline_kinds"],
+    "ANGEE_GRAPHQL_RECORD_EDGES:append": ["angee.workflows.schema.record_edges"],
     "ANGEE_RESOURCE_ENTRY_KIND_CLASSES:append": {
         "workflows.workflowextension": "angee.workflows.resources.WorkflowExtensionResourceKind",
     },
