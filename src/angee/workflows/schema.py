@@ -185,8 +185,12 @@ class WorkflowRunType(RecordReferenceNode):
     status: auto
     origin: RunOrigin
     @strawberry_django.field(only=["input", "version_id"])
-    def input(self, info: strawberry.Info) -> JSON:
-        """Keep non-reference input and check each source's declared model read policy."""
+    def input(self, info: strawberry.Info) -> JSON | None:
+        """Keep non-reference input and check each source's declared model read policy.
+
+        Null when the reader may not see the input: an unreadable reference or a
+        retained step whose implementation is gone occupies the whole input.
+        """
         run = cast(Any, self)
         definition = run.policy_version.definition
         readable = readable_evidence(definition.input_evidence(run.input), get_current_user(info))
