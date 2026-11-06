@@ -1663,7 +1663,8 @@ open fresh evaluator scopes for authorization and change-feed reads.
   queryset `waiting_on` filters compose that same owner predicate. Related read/action
   gates remain; outer record membership and read scope are not repeated.
   [RunKind](../../src/angee/workflows/timeline.py) is the exception: during Timeline
-  construction it re-reads the branch's record-bounded, admitted waiting runs, then
+  construction it selects record-bounded candidate run IDs, applies the actor's
+  `workflowrun#read` to that small set, and re-reads admitted waiting runs, then
   makes up to two bounded reads for readable decision steps and actionable decisions.
   Its StepRecord read is structural and unaudited. The StepRun waits prefetch
   writes one bypass audit only when admitted runs are hydrated. This keeps the

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, fields
 from typing import Any, Protocol
@@ -23,6 +23,8 @@ class PrepareQueryset(Protocol):
         node: type,
         required: bool,
         target: tuple[type[models.Model], Any] | None = None,
+        candidate_filter: models.Q | None = None,
+        candidate_keys: Mapping[str, Any] | None = None,
     ) -> models.QuerySet[Any]: ...
 
 

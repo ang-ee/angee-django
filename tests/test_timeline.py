@@ -168,8 +168,9 @@ def test_sparse_non_admin_page_has_one_bounded_selection_statement(comment_recor
         )
     with CaptureQueriesContext(connection) as queries:
         timeline = Timeline(record, actor)
-        timeline.page()
+        page = timeline.page()
     assert {kind.id for kind in timeline.kinds} == {kind.id for kind in timeline_kinds()}
+    assert next(kind.count for kind in page.kinds if kind.id == "workflows.run") == 0
     selections = [
         query["sql"] for query in queries
         if 'WITH RECURSIVE "timeline_source" AS' in query["sql"]
@@ -177,7 +178,9 @@ def test_sparse_non_admin_page_has_one_bounded_selection_statement(comment_recor
     assert len(selections) == 1
     sql, = selections
     source_kinds = re.findall(r"'([\w.]+)'(?:::\w+)? AS \"_timeline_kind\"", sql)
-    assert sorted(source_kinds) == sorted(kind.id for kind in timeline.kinds)
+    # With no linked run candidates, its actor-scoped branch compiles to EMPTY;
+    # the public kind still appears with count zero.
+    assert sorted(source_kinds) == sorted(kind.id for kind in timeline.kinds if kind.id != "workflows.run")
     assert re.findall(r"'(\w+)'(?:::\w+)? AS \"_timeline_row\"", sql) == ["kind", "entry", "child"]
     assert len(sql.encode("utf-8")) <= 275_000
     assert all(len(query["sql"].encode("utf-8")) <= 275_000 for query in queries)

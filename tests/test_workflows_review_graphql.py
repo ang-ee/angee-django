@@ -5,7 +5,7 @@ from rebac import RelationshipTuple, to_object_ref, to_subject_ref, write_relati
 
 from angee.decisions import schema as decision_schema
 from angee.decisions.contracts import DecisionProposal, DecisionRequest
-from angee.decisions.testing.models import Decision
+from angee.decisions.testing.models import Decision, DecisionRecord
 from angee.graphql.schema import GraphQLSchemas
 from angee.workflows import schema as workflow_schema
 from angee.workflows.decision_steps import DecisionStep
@@ -97,6 +97,18 @@ def test_participants_and_step_operators_read_the_decision(schema, linked_decisi
     }
     data = result_data(execute_schema(schema, query, user=assignee))
     assert data["steprun"] == [] and data["decisions"] == [{"id": decision.sqid}]
+
+
+def test_direct_step_root_prefetches_decision_records(schema, linked_decision):
+    """The StepRunType.decision relation supplies DecisionType.records."""
+    _, _, step, decision, owner, *_ = linked_decision
+    query = "{ steprun { id decision { id records { id } } } }"
+    data = result_data(execute_schema(schema, query, user=owner))
+    link = DecisionRecord.system_queryset().get(decision=decision)
+    assert data["steprun"] == [{
+        "id": step.sqid,
+        "decision": {"id": decision.sqid, "records": [{"id": link.sqid}]},
+    }]
 
 
 def test_step_decision_filter_uses_public_identity(schema, linked_decision):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import copy
 from dataclasses import dataclass
 from datetime import datetime
 from functools import cached_property
@@ -10,6 +11,7 @@ from typing import Any
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections, models
 from django.db.models.functions import Cast
+from django.db.models.sql.query import Query
 from django_cte import CTE, with_cte
 from rebac import database_context, to_subject_ref
 from rebac.managers import share_scoped_definitions
@@ -70,7 +72,7 @@ _RESULT_COLUMNS = (
 def _native(rows: models.QuerySet, *columns: str) -> models.QuerySet:
     """Project a heterogeneous relation without inventing one model's policy.
 
-    Each source operand already owns its eager read scope. REBAC queryset
+    Each source operand owns its admitted-record or actor read scope. REBAC queryset
     combinations rebind operands to the first model's policy, and a CTE's
     default manager belongs to that same arbitrary model. Native Django owns
     both synthetic relations; source predicates and their witnesses stay inside.
@@ -82,12 +84,59 @@ def _native(rows: models.QuerySet, *columns: str) -> models.QuerySet:
 
 def _union(branches: list[models.QuerySet], *columns: str) -> models.QuerySet:
     """Combine independently authorized source projections in native Django."""
-    first, *rest = [rows.values(*columns) for rows in branches]
-    return _native(first, *columns).union(*rest, all=True).order_by()
+    projected = [_native(rows.values(*columns), *columns) for rows in branches]
+    ctes = []
+    names = set()
+    original_names = {
+        cte.name for rows in projected for cte in getattr(rows.query, "_with_ctes", ())
+    }
+    for branch_index, rows in enumerate(projected):
+        branch_ctes = [copy(original) for original in getattr(rows.query, "_with_ctes", ())]
+        for cte in branch_ctes:
+            cte.query = cte.query.clone()
+        for cte_index, cte in enumerate(branch_ctes):
+            if cte.name in names:
+                old = cte.name
+                name = f"{old[:48]}_{branch_index}_{cte_index}"
+                while name in names or name in original_names:
+                    name += "_"
+                cte.name = name
+                _rename_cte_source(rows.query, old, name)
+                for sibling in branch_ctes:
+                    _rename_cte_source(sibling.query, old, name)
+            names.add(cte.name)
+            ctes.append(cte)
+        setattr(rows.query, "_with_ctes", ())
+    first, *rest = projected
+    union = first.union(*rest, all=True).order_by()
+    return with_cte(*ctes, select=union) if ctes else union
+
+
+def _rename_cte_source(query: Any, old: str, new: str) -> None:
+    """Retarget a cloned branch's CTE table names, including nested subqueries."""
+    for alias, table in tuple(query.alias_map.items()):
+        if table.table_name == old:
+            renamed = copy(table)
+            renamed.table_name = new
+            query.alias_map[alias] = renamed
+
+    def visit(expression: Any) -> None:
+        if isinstance(expression, Query):
+            _rename_cte_source(expression, old, new)
+        elif hasattr(expression, "get_source_expressions"):
+            for child in expression.get_source_expressions():
+                if child is not None:
+                    visit(child)
+
+    visit(query.where)
+    for expression in (*query.annotations.values(), *query.select, *query.order_by):
+        visit(expression)
+    for combined in query.combined_queries:
+        _rename_cte_source(combined, old, new)
 
 
 class Timeline:
-    """A record-authorized read; each kind independently authorizes its targets."""
+    """A record-authorized read; each kind bounds its own target rows."""
 
     def __init__(self, record: models.Model, actor: Any):
         self.record = record

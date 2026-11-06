@@ -37,6 +37,7 @@ RECORD = """query InboxRecord($id: String!) {
 
 
 @pytest.mark.postgresql
+@pytest.mark.django_db(transaction=True)
 def test_inbox_list_group_count_and_record_queries_do_not_scale_per_row(composed_tables, tmp_path):
     """Measure real non-admin list, grouped counts, and detail at 1, 10, 50 seats."""
     issuer = create_user("inbox-cost-issuer")
@@ -122,8 +123,9 @@ def test_inbox_list_group_count_and_record_queries_do_not_scale_per_row(composed
     # population plan stays fixed as the inbox grows from ten to fifty seats.
     assert counts["list"][0] <= counts["list"][1] == counts["list"][2], counts
     assert all(len(set(counts[name])) == 1 for name in ("groups", "record")), counts
-    # PostgreSQL currently measures 8/3/7; leave CI headroom for stable plan costs.
-    for name, budget in (("list", 10), ("groups", 5), ("record", 10)):
+    # Transactional setup removes the savepoint fixture's three extra reads.
+    # PostgreSQL measures 8/3/8 for list/groups/detail at 1, 10 and 50 rows.
+    for name, budget in (("list", 8), ("groups", 3), ("record", 8)):
         assert max(counts[name]) <= budget, counts
 
 
