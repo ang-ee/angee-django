@@ -21,7 +21,10 @@ from unittest import TestSuite
 
 import environ
 
-COMPOSED_TEST_TIMEOUT = 1200
+# The composed host resyncs the REBAC schema after every TransactionTestCase flush
+# (~30 s each under the composed policy); the posts run measured 2,730 s on
+# 2026-11-06. The bound tracks the upstream REBAC sync cost, not the tests.
+COMPOSED_TEST_TIMEOUT = 3600
 """Stop a composed-host subprocess that hangs; this is a hang bound, not a time budget.
 
 Every caller that starts ``composed_host.py`` passes this one value. The rule: stay

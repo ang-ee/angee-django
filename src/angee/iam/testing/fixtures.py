@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from django.apps import apps
-from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.db.models.signals import post_migrate
 from pytest_django.plugin import DjangoDbBlocker
@@ -41,6 +40,8 @@ def django_db_setup(
         call_command("rebac", "sync", verbosity=0)
         # Transactional flush emits post_migrate and clears Django's content-type
         # cache. Warm it after resync so each document sees the same policy cost.
+        from django.contrib.contenttypes.models import ContentType  # the plugin loads before Django sets up
+
         ContentType.objects.get_for_models(*apps.get_models(), for_concrete_models=False)
 
     post_migrate.connect(sync_rebac_schema, sender=final_migrated_app, weak=False)

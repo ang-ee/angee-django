@@ -153,12 +153,20 @@ class ResourceQueryProjection:
             extractions = tuple(replace(item, drill=self.drill(item.drill, fields)) for item in axis.extractions)
             # A relation drill filters by the related row's public id, so the
             # row must expose it; a scalar axis drills on its own filter field.
+            # A schema that does not expose the axis field at all (an addon-only
+            # schema built over a model another addon extends) can group by the
+            # key but cannot drill into it, so the drill is dropped there instead
+            # of failing the build; the composed product exposes the field.
             if (
                 relation is not None
                 and identity_path is None
                 and (drill is not None or any(item.drill is not None for item in extractions))
             ):
-                missing_identities.append(canonical)
+                if self.selection(canonical)[1] is None:
+                    drill = None
+                    extractions = tuple(replace(item, drill=None) for item in extractions)
+                else:
+                    missing_identities.append(canonical)
             axes[canonical] = replace(
                 axis,
                 field=canonical,
