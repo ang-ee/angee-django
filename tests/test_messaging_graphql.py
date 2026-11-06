@@ -925,8 +925,8 @@ def test_record_chatter_needaction_keeps_a_structural_message_population(compose
         assert read.data["record_thread"]["messages"] == [
             {"preview": f"Item {index}", "needaction": expected} for index in range(5)
         ]
-        # The composed record-scope and REBAC follow projection now uses seven reads.
-        assert read.statement_count == 7, (actor.username, read.statement_count)
+        # The composed record-scope and REBAC follow projection use six reads.
+        assert read.statement_count == 6, (actor.username, read.statement_count)
         read.assert_bytes(total=15_000, largest=7_000)
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -42,7 +43,7 @@ from angee.integrate.testing.models import RecordLink
 from angee.integrate_vcs import schema as integrate_vcs_schema
 from angee.knowledge import schema as knowledge_schema
 from angee.messaging import schema as messaging_schema
-from angee.messaging.testing.models import Channel, Message, Part
+from angee.messaging.testing.models import Channel, Fragment, Message, Part, Thread
 from angee.messaging.testing.models import Party as PartyModel
 from angee.nexus import schema as nexus_schema
 from angee.parties import schema as parties_schema
@@ -110,6 +111,13 @@ MESSAGE_FRAGMENTS = "\n".join(
     )
 )
 NEXUS_MESSAGE = authored_graphql_document(NEXUS_DOCUMENTS, "InboxMessage") + MESSAGE_FRAGMENTS
+NEXUS_BATCH = "\n".join((
+    authored_graphql_document(NEXUS_DOCUMENTS, "InboxResultsBatch"),
+    authored_graphql_document(NEXUS_DOCUMENTS, "InboxResultRowFields"),
+    authored_graphql_document(NEXUS_DOCUMENTS, "InboxMessageFields"),
+    authored_graphql_document(MESSAGING_DOCUMENTS, "MessageSenderFields"),
+    authored_graphql_document(MESSAGING_DOCUMENTS, "MessagePartFields"),
+))
 MESSAGE_USES = authored_graphql_document(NEXUS_DOCUMENTS, "InboxMessageUses")
 SOURCE_COPIES = "\n".join((
     authored_graphql_document(MESSAGING_DOCUMENTS, "MessageSourceCopiesDocument"),
@@ -121,6 +129,44 @@ SOURCE_COPIES = "\n".join((
 ))
 
 
+@pytest.mark.django_db(transaction=True)
+def test_inbox_result_batch_threads_stay_flat(composed_tables: None, capture_graphql_document) -> None:
+    """The authored inbox group batch reads actor-readable threads once per page."""
+
+    del composed_tables
+    owner = create_user("document-budget-inbox-batch")
+    channel = make_integration("document-budget-inbox", model=Channel, owner=owner)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    with system_context(reason="test.document_budget.inbox_batch"), mute_changes():
+        threads = [Thread._base_manager.create(created_by=owner) for _ in range(25)]
+        for index, thread in enumerate(threads):
+            message = Message._base_manager.create(
+                channel=channel, created_by=owner, thread=thread, status="synced",
+                sent_at=start + timedelta(minutes=index),
+            )
+            title = Fragment.objects.upsert(text=f"Inbox batch {index}", created_by_id=owner.pk)
+            Part._base_manager.create(message=message, role="title", fragment=title, created_by=owner)
+    schema = addon_schema(messaging_schema.schemas, "console", nexus_schema.schemas)
+    reads = {}
+    for count in (1, 5, 25):
+        pages = [
+            {"key": f"group-{index}", "scope": {"axis": "conversation", "value": f"thread:{thread.sqid}"},
+             "page": 1, "size": 3}
+            for index, thread in enumerate(threads[:count])
+        ]
+        reads[count] = capture_graphql_document(
+            schema, NEXUS_BATCH, {"pages": pages, "sender": "", "circle": ""}, actor=owner,
+        )
+        assert [row["result"]["count"] for row in reads[count].data["inbox_results_batch"]] == [1] * count
+    reads[5].assert_flat_from(reads[1])
+    reads[25].assert_flat_from(reads[5])
+    for read in reads.values():
+        read.assert_statements(10)
+        read.assert_bytes(total=180_000, largest=65_000)
+        read.assert_no_audit_writes()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_message_part_document_budgets(composed_tables: None, capture_graphql_document, tmp_path) -> None:
     """The authored message and source-copies reads stay flat as MIME parts grow."""
 
@@ -167,11 +213,11 @@ def test_message_part_document_budgets(composed_tables: None, capture_graphql_do
         copies[count].assert_flat_from(copies[5])
     for read in reads.values():
         # The merged messages resolver reads the parts once for the document.
-        assert read.statement_count == 15
+        assert read.statement_count == 14
         read.assert_bytes(total=450_000, largest=135_000, cause="bounded actor-scoped part and file reads")
         read.assert_no_audit_writes()
-    for count, read in copies.items():
-        assert read.statement_count == (12 if count == 1 else 13)
+    for read in copies.values():
+        assert read.statement_count == 12
         read.assert_bytes(total=310_000, largest=85_000, cause="batched parts and present files")
         read.assert_no_audit_writes()
 
@@ -181,9 +227,11 @@ def test_message_part_document_budgets(composed_tables: None, capture_graphql_do
     assert hidden_read.statement_count == reads[40].statement_count + 1
     nested_parts = hidden_read.data["inbox_message"]["message"]["parts"]
     assert nested_parts[-1]["parent"] is None
-    assert nested_parts[-1]["file"] is None
+    with actor_context(owner):
+        assert not File.objects.with_actor(owner).filter(pk=files[3].pk).exists()
+    assert nested_parts[-1]["file"]["id"] == str(files[3].sqid)
     assert [part["file"]["id"] for part in nested_parts if part["file"] is not None] == [
-        str(file.sqid) for file in files[:3]
+        str(file.sqid) for file in files
     ]
     baseline = capture_graphql_document(
         schema,
@@ -533,7 +581,7 @@ def test_record_thread_document_file_part_growth(
         read.assert_bytes(
             total=150_000, largest=30_000, cause="the read requirement in the messaging held_permissions check",
         )
-        read.assert_audit_inserts(8)
+        read.assert_no_audit_writes()
 
 
 def test_fifty_party_avatars_and_tags_stay_bounded(
@@ -580,7 +628,7 @@ def test_fifty_party_avatars_and_tags_stay_bounded(
     fifty.assert_flat_from(one)
     for read in (one, fifty):
         read.assert_bytes(total=40_000, largest=32_000)
-        read.assert_audit_inserts(3)
+        read.assert_no_audit_writes()
 
 
 @pytest.fixture

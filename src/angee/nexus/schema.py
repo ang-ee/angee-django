@@ -7,6 +7,7 @@ from typing import Any, cast
 import strawberry
 import strawberry_django
 from django.apps import apps
+from django.core.exceptions import PermissionDenied
 from rebac import current_actor
 from strawberry import auto
 
@@ -144,9 +145,9 @@ class NexusQuery:
         )
         circle = Circle.objects.all().scoped().from_public_id(str(circle_id)) if circle_id is not None else None
         if root_id is not None and party is None:
-            raise ValueError("party not found")
+            raise PermissionDenied("party not found")
         if circle_id is not None and circle is None:
-            raise ValueError("circle not found")
+            raise PermissionDenied("circle not found")
         graph = Tie.objects.party_graph(
             root=party,
             circle=circle,

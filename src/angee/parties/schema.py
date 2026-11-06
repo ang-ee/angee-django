@@ -85,7 +85,7 @@ def _display_avatar_prefetch(name: str) -> Callable[[strawberry.Info], Prefetch]
 
     def prefetch(info: strawberry.Info) -> Prefetch:
         actor = session_user(info)
-        avatars = apps.get_model("storage", "File").objects.sudo(reason="parties.admitted_avatar").select_related(
+        avatars = apps.get_model("storage", "File")._base_manager.select_related(
             "mime_type"
         )
         return cast(Prefetch, getattr(Party.objects.display_avatar_prefetches(actor, avatars=avatars), name))

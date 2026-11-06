@@ -23,6 +23,9 @@
 // grant loader (`src/angee/resources/grants.py`). Related rows keep their own
 // read rules. Lossless contact data and handle counts are private. created_by,
 // updated_by and their labels remain readable: attribution belongs to identity.
+// An admitted party or actor-readable handle may project its avatar file's
+// display facts through that row; file content and direct file reads keep their
+// own storage/file policy.
 
 definition parties/party {
     relation owner: auth/user // rebac:field=owner

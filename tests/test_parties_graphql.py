@@ -587,6 +587,7 @@ def test_statement_reads_never_widen_what_the_party_reader_sees(composed_tables:
     ]
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("row_count", [2, 8])
 @pytest.mark.django_db(transaction=True)
 def test_statement_reference_reads_have_a_page_query_budget(
@@ -616,9 +617,9 @@ def test_statement_reference_reads_have_a_page_query_budget(
     query = "query Statements { party_statements { asserted_by evidence { model id } } }"
     # The same count for 2 and 8 rows is the invariant: evidence and asserting
     # principals are admitted in batches. StatementQuerySet.for_reader scopes the
-    # subject (parties/party read) and the handle member (parties/handle read);
-    # REBAC's shared actor-set decisions reuse the subject scope for the handle
-    # scope: the page costs ten statements at both fixture sizes.
+    # subject (parties/party read) and the handle member (parties/handle read).
+    # REBAC reuses the subject scope for the handle; autocommit keeps the page
+    # at ten statements for both fixture sizes.
     with django_assert_num_queries(10):
         rows = _data(execute_schema(schema, query, user=admin))["party_statements"]
     assert len(rows) == row_count

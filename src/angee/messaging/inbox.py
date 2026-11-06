@@ -9,18 +9,21 @@ from __future__ import annotations
 
 import shlex
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.apps import apps
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import connections, models
 from django.db.models import Case, Count, Exists, F, Max, OuterRef, Q, Subquery, When, Window
 from django.db.models.functions import RowNumber
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from angee.base.identity import public_data_id_field
 from angee.iam.permissions import actor_user_id, instance_actor
 
 
@@ -358,11 +361,8 @@ class MessageInbox:
         return self.matching(scoped, search).canonical()
 
     def _conversation_rows(self, rows: Any) -> Any:
-        # A conversation groups under the readable survivor of its thread's
-        # redirect. An unreadable thread is not an exposed grouping identity: its
-        # readable messages remain independently reachable as standalone sections.
-        # Redirects are flattened to one hop, so the survivor and the row's own thread
-        # are each one primary-key probe of the readable inbox threads.
+        # Both the original and redirected thread keep their own read gate.
+        # A message in an unreadable thread remains a standalone section.
         return rows.alias(
             _survivor_visible=Exists(self.threads.filter(pk=rows.survivor_id("thread__", ref=OuterRef))),
             _thread_visible=Exists(self.threads.filter(pk=OuterRef("thread_id"))),
@@ -374,6 +374,40 @@ class MessageInbox:
                 output_field=models.BigIntegerField(),
             ),
         )
+
+    def readable_threads(self, public_ids: Iterable[str]) -> dict[str, Any]:
+        """Resolve a bounded page of public thread IDs through thread read once."""
+
+        field = public_data_id_field(self.threads.model)
+        if field is None:
+            raise ImproperlyConfigured("messaging.Thread requires a public data ID field")
+        decoded = {}
+        for public_id in public_ids:
+            try:
+                pk = field.public_id_to_value(public_id)
+            except (TypeError, ValueError, ValidationError):
+                continue
+            if pk is not None:
+                decoded[public_id] = pk
+        threads = {
+            thread.pk: thread for thread in self.threads.filter(pk__in=decoded.values()).select_related("title")
+        }
+        return {public_id: threads[pk] for public_id, pk in decoded.items() if pk in threads}
+
+    def cache_readable_threads(self, messages: Iterable[Any], *, known: Iterable[Any] = ()) -> None:
+        """Seed the shared relation cache from one actor-scoped read of a bounded page."""
+
+        rows = list(messages)
+        known_rows = list(known)
+        threads = {thread.pk: thread for thread in known_rows}
+        if not known_rows:
+            ids = {message.thread_id for message in rows if message.thread_id is not None}
+            if ids:
+                threads = {
+                    thread.pk: thread for thread in self.threads.filter(pk__in=ids).select_related("title")
+                }
+        for message in rows:
+            message._state.fields_cache["thread"] = threads.get(message.thread_id)
 
     def conversations(self, rows: Any, *, page: int = 1, size: int = 25, oldest: bool = False) -> InboxPage:
         """Page logical sections, then select at most three matches in each using SQL windows."""
@@ -433,6 +467,7 @@ class MessageInbox:
         message = messages.from_public_id(public_id)
         if message is None:
             raise ValueError("Message unavailable.")
+        self.cache_readable_threads((message,))
         return message
 
     def selected_message(

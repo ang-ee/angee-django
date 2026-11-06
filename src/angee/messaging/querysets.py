@@ -229,7 +229,7 @@ class ThreadQuerySet[ThreadT: Thread](
 
         return self.filter(channel=channel)
 
-    def conversation_labels(self) -> dict[Any, str]:
+    def conversation_labels(self, *, admitted: Sequence[Any] | None = None) -> dict[Any, str]:
         """Label each thread for the actor: its title, else the people in it.
 
         Status feeds use their category, never a title inferred from authors.
@@ -242,7 +242,10 @@ class ThreadQuerySet[ThreadT: Thread](
         bounded page of threads; each call costs a fixed number of queries.
         """
 
-        rows = list(self.order_by().select_related("title").only("pk", "modality", "title__text"))
+        rows = (
+            list(admitted) if admitted is not None
+            else list(self.order_by().select_related("title").only("pk", "modality", "title__text"))
+        )
         labels = {thread.pk: thread.display_title for thread in rows}
         untitled = {thread.pk: thread.modality for thread in rows if not labels[thread.pk]}
         actor = instance_actor(self)

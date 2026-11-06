@@ -272,7 +272,7 @@ class PartyQuerySet[PartyT: Party](MergeableQuerySet[PartyT], StatementSubjectQu
         avatar on its own.
         """
 
-        avatars = apps.get_model("storage", "File").objects.sudo(reason="parties.admitted_avatar").select_related(
+        avatars = apps.get_model("storage", "File")._base_manager.select_related(
             "mime_type"
         )
         return self.prefetch_related(*self.model._default_manager.display_avatar_prefetches(actor, avatars=avatars))
