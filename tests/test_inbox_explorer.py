@@ -208,7 +208,7 @@ def test_search_candidates_preserve_terms_roles_and_distinct_message_uses():
         assert (groups.count, groups.record_count, groups.message_count) == (3, 3, 3)
 
 
-def test_sections_page_threads_before_bounded_previews():
+def test_conversation_groups_page_before_bounded_leaf_pages():
     owner = User.objects.create_user(username="explorer-sections")
     channel = make_integration(owner.username, model=Channel, owner=owner)
     with system_context(reason="seed explorer"):
@@ -224,13 +224,15 @@ def test_sections_page_threads_before_bounded_previews():
         Message._base_manager.create(channel=channel, created_by=owner, status="draft")
     with actor_context(owner):
         inbox = Message.objects.all().explorer()
-        first = inbox.conversations(inbox.results(InboxCoverage(), InboxSearch()), size=2)
-        second = inbox.conversations(inbox.messages, size=2, page=2)
+        results = InboxResults(inbox, inbox.results(InboxCoverage(), InboxSearch()), InboxResultOptions())
+        first = results.groups("conversation").page(size=2)
+        second = results.groups("conversation").page(page=2, size=2)
         assert (first.count, first.message_count) == (5, 33)
-        assert first.rows[0].id == f"message:{standalone.sqid}"
-        assert first.rows[1].matching_count == first.rows[1].total_count == 8
-        assert len(first.rows[1].messages) == 3
-        assert {row.id for row in first.rows}.isdisjoint(row.id for row in second.rows)
+        assert first.rows[0].value == f"message:{standalone.sqid}"
+        assert first.rows[1].count == 8
+        leaf = results.page(scope=InboxGroupScope(axis="conversation", value=first.rows[1].value), size=3)
+        assert (len(leaf.rows), leaf.count) == (3, 8)
+        assert {row.value for row in first.rows}.isdisjoint(row.value for row in second.rows)
 
 
 def test_confirmed_senders_consolidate_but_suggestions_do_not():
@@ -563,11 +565,46 @@ def test_unreadable_thread_is_not_exposed_as_a_group():
         )
     with actor_context(owner):
         inbox = Message.objects.all().explorer()
-        result = inbox.conversations(inbox.messages)
-        assert result.rows[0].thread is None
-        assert result.rows[0].id == f"message:{message.sqid}"
-        groups = InboxResults(inbox, inbox.messages, InboxResultOptions()).groups("conversation").page()
+        results = InboxResults(inbox, inbox.messages, InboxResultOptions())
+        groups = results.groups("conversation").page()
         assert groups.rows[0].value == f"message:{message.sqid}"
+        assert results.page(scope=InboxGroupScope(axis="conversation", value=groups.rows[0].value)).count == 1
+        with pytest.raises(ValueError, match="Conversation unavailable"):
+            results.page(scope=InboxGroupScope(axis="conversation", value=f"thread:{thread.sqid}"))
+
+
+def test_merged_threads_group_under_their_readable_survivor():
+    owner = User.objects.create_user(username="explorer-merged-threads")
+    other = User.objects.create_user(username="explorer-merged-hidden")
+    channel = make_integration(owner.username, model=Channel, owner=owner)
+    with system_context(reason="seed merged conversations"):
+        survivor = Thread._base_manager.create(created_by=owner, channel=channel, platform="email")
+        # Redirects keep their messages; readable or not, they belong to a readable survivor.
+        hidden = Thread._base_manager.create(created_by=other, merged_into=survivor)
+        visible = Thread._base_manager.create(created_by=owner, channel=channel, merged_into=survivor)
+        # A readable redirect whose survivor is unreadable stays its own conversation.
+        unreadable_survivor = Thread._base_manager.create(created_by=other)
+        stranded = Thread._base_manager.create(created_by=owner, channel=channel, merged_into=unreadable_survivor)
+        for index, thread in enumerate((survivor, hidden, visible, stranded)):
+            Message._base_manager.create(
+                channel=channel, created_by=owner, thread=thread, status="synced", sent_at=T0 + timedelta(days=index)
+            )
+    with actor_context(owner):
+        inbox = Message.objects.all().explorer()
+        results = InboxResults(inbox, inbox.messages, InboxResultOptions())
+        groups = results.groups("conversation").page()
+        assert [(row.value, row.count) for row in groups.rows] == [
+            (f"thread:{stranded.sqid}", 1), (f"thread:{survivor.sqid}", 3),
+        ]
+        assert groups.message_count == 4
+        survivor_scope = InboxGroupScope(axis="conversation", value=f"thread:{survivor.sqid}")
+        assert results.page(scope=survivor_scope).count == 3
+        stranded_scope = InboxGroupScope(axis="conversation", value=f"thread:{stranded.sqid}")
+        assert results.page(scope=stranded_scope).count == 1
+        # A redirect under a readable survivor is not a conversation key of its own.
+        for redirect in (hidden, visible):
+            with pytest.raises(ValueError, match="Conversation unavailable"):
+                results.page(scope=InboxGroupScope(axis="conversation", value=f"thread:{redirect.sqid}"))
 
 
 def test_live_schema_projects_sections_and_independent_message():
@@ -589,7 +626,6 @@ def test_live_schema_projects_sections_and_independent_message():
       inbox_navigator_groups(axis: "platform") { count record_count rows { value label count } }
       inbox_results { count message_count rows { id latest message { id } } }
       inbox_result_groups(axis: "day") { count record_count rows { value label count } }
-      inbox_conversations { count message_count rows { id matching_count messages { id preview parts { id } } } }
       inbox_message(id: $id, coverage: {platforms: ["slack"]}) {
         matches message { id starred } uses { part_id target count }
       }
@@ -598,7 +634,6 @@ def test_live_schema_projects_sections_and_independent_message():
         request=request,
     )
     data = result_data(result)
-    assert data["inbox_conversations"]["message_count"] == 1
     assert data["inbox_senders"]["count"] == 1
     assert data["inbox_navigator"]["rows"][0]["label"] == "sender@example.com"
     assert data["inbox_navigator_groups"]["record_count"] == 1

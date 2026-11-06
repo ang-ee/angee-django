@@ -132,18 +132,6 @@ class InboxGroupPage:
 
 
 @strawberry.type
-class InboxConversation:
-    """One authorized logical conversation with at most three matching previews."""
-
-    id: str
-    thread: ThreadType | None
-    latest: datetime
-    matching_count: int
-    total_count: int
-    messages: list[MessageType]
-
-
-@strawberry.type
 class InboxPartUse:
     """Authorized exact-content use count for a selected message part."""
 
@@ -418,28 +406,6 @@ class NexusInboxQuery:
                 InboxNavigatorOptions(text=text, include_sent=include_sent, sort=sort, link=link),
             ).page(page=page),
         )
-
-    @strawberry.field
-    def inbox_conversations(
-        self,
-        coverage: InboxCoverageInput | None = None,
-        search: InboxSearchInput | None = None,
-        sender: str = "",
-        circle: str = "",
-        page: int = 1,
-        size: int = 25,
-        oldest: bool = False,
-    ) -> InboxPage[InboxConversation]:
-        """Page conversation sections before fetching their bounded previews."""
-
-        inbox = Message.objects.all().explorer()
-        rows = inbox.results(
-            coverage.to_pydantic() if coverage else InboxCoverage(),
-            search.to_pydantic() if search else InboxSearch(),
-            sender=sender,
-            circle=circle,
-        )
-        return cast(InboxPage[InboxConversation], inbox.conversations(rows, page=page, size=size, oldest=oldest))
 
     @strawberry.field
     def inbox_message(
