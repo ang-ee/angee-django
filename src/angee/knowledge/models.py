@@ -56,7 +56,6 @@ from angee.base.models.refs import RecordRefMixin
 from angee.base.models.trash import TrashMixin, TrashQuerySet
 from angee.base.permissions import actor_user_id
 from angee.base.querysets import row_lock_paths
-from angee.base.refs import RecordRef
 from angee.base.signals import send_created_batch
 from angee.knowledge.retrieval import MAX_SEARCH_PAGE_SIZE, RetrievalBackend
 from angee.messaging.models import ThreadedModelMixin
@@ -745,11 +744,6 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
 
         return self.for_record(record, role=role).filter(page__isnull=False)
 
-    def vaults_for_record(self, record: models.Model, *, role: str | None = None) -> models.QuerySet[Any]:
-        """Return vault bindings on ``record`` without loading gated vault content."""
-
-        return self.for_record(record, role=role).filter(vault__isnull=False)
-
     def for_knowledge(
         self,
         knowledge: models.Model,
@@ -761,16 +755,6 @@ class RecordBindingManager[BindingT: RecordBinding](AngeeHistoryManager[BindingT
         knowledge, owner_field = self._knowledge_owner_instance(knowledge)
         queryset = self.get_queryset().filter(**{owner_field: knowledge})
         return queryset if role is None else queryset.filter(role=self._role(role))
-
-    def records_for_page(self, page: models.Model, *, role: str | None = None) -> tuple[RecordRef, ...]:
-        """Return public refs for actor-readable records bound from ``page``."""
-
-        return tuple(binding.record_ref for binding in self.for_knowledge(page, role=role))
-
-    def records_for_vault(self, vault: models.Model, *, role: str | None = None) -> tuple[RecordRef, ...]:
-        """Return public refs for actor-readable records bound from ``vault``."""
-
-        return tuple(binding.record_ref for binding in self.for_knowledge(vault, role=role))
 
     @classmethod
     def _knowledge_owner(
