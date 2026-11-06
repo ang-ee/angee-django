@@ -14,7 +14,7 @@ vi.mock("@angee/app", async (original) => ({
 }));
 
 import { InboxConversation } from "./Conversation";
-import { InboxConnections, InboxMessage, InboxRelatedTarget, InboxTranscriptMatches } from "./documents";
+import { InboxConnections, InboxConnectionsCount, InboxMessage, InboxRelatedTarget, InboxTranscriptMatches } from "./documents";
 import { InboxMessageReader } from "./MessageReader";
 import { InboxRelatedPane } from "./Related";
 import { FileMessages, useFileMessageCount } from "./FileMessages";
@@ -77,6 +77,9 @@ function fixture(uses: { part_id: string; target: string; count: number }[] = []
     }
     if (meta?.gqlQuery === InboxConnections) {
       return { data: { inbox_connections: { rows: fileUses ? [{ id: "use-1", message: source, part: pdf(2) }] : [], count: fileUses ? 1 : 0, message_count: fileUses ? 1 : 0 } } };
+    }
+    if (meta?.gqlQuery === InboxConnectionsCount) {
+      return { data: { inbox_connections: { message_count: fileUses ? 1 : 0 } } };
     }
     return { data: { thread_message_feed: {
       messages: [message], count: 1, older_cursor: null, has_older: false, has_more_in_window: false,
@@ -162,13 +165,28 @@ test("repeated parts of one target keep the server's distinct message count", as
   expect(inbox.navigation.connect).toHaveBeenCalledWith("file:file-2", "message-1");
 });
 
+const fileContext: ChatterViewContext = {
+  pathname: "/storage/file-2", params: { id: "file-2" },
+  route: { name: "storage.file", path: "/storage/$id", viewType: "storage/file", modelLabel: "storage.File" },
+  view: { kind: "record", type: "storage/file", sqid: "file-2" },
+};
+
+test("Files backlinks count selects only message_count without inbox rows", async () => {
+  const inbox = fixture([], true);
+  function Count() {
+    return <span>Related messages: {useFileMessageCount(fileContext)}</span>;
+  }
+  const root = createRootRoute({ component: Count });
+  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ["/"] }) });
+  render(<ShellPageTestProviders><ToastProvider><RouterProvider router={router} /></ToastProvider></ShellPageTestProviders>, { wrapper: inbox.wrapper });
+  await screen.findByText("Related messages: 1");
+  expect(inbox.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxConnectionsCount)).toBe(true);
+  expect(inbox.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxConnections)).toBe(false);
+});
+
 test("Files backlinks count readable message uses and link to their exact part with the file pinned", async () => {
   const inbox = fixture([], true);
-  const context: ChatterViewContext = {
-    pathname: "/storage/file-2", params: { id: "file-2" },
-    route: { name: "storage.file", path: "/storage/$id", viewType: "storage/file", modelLabel: "storage.File" },
-    view: { kind: "record", type: "storage/file", sqid: "file-2" },
-  };
+  const context = fileContext;
   function Messages() {
     const count = useFileMessageCount(context);
     return <><span>Related messages: {count}</span><FileMessages context={context} /></>;
@@ -183,6 +201,8 @@ test("Files backlinks count readable message uses and link to their exact part w
   const target = new URL(link.getAttribute("href")!, "https://example.test");
   expect(target.pathname).toBe("/nexus/inbox");
   expect(Object.fromEntries(target.searchParams)).toEqual({ message: "message-1", part: "part-2", related: "file:file-2", relatedFrom: "message-1" });
+  expect(inbox.custom.mock.calls.some(([request]) => request.meta?.gqlQuery === InboxConnectionsCount
+    && request.meta?.gqlVariables?.target === "file:file-2")).toBe(true);
   expect(inbox.custom.mock.calls.filter(([request]) => request.meta?.gqlQuery === InboxConnections)
     .every(([request]) => request.meta?.gqlVariables?.target === "file:file-2")).toBe(true);
 });

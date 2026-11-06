@@ -340,6 +340,33 @@ def test_record_sources_filter_by_readable_target_and_project_connector_url(comp
     assert _data(_execute(_schema(), query, variables, user=outsider_bridge.owner))["record_links"] == []
 
 
+def test_record_sources_count_aggregates_the_rows_readable_target_filter(composed_tables: None) -> None:
+    """The Sources badge's count-only aggregate answers exactly the rows its pane would read."""
+
+    del composed_tables
+    bridge = make_integration("record-sources-count", model=Channel)
+    outsider_bridge = make_integration("record-sources-count-outsider", model=Channel)
+    with system_context(reason="test record sources count"):
+        stream = current_stream(bridge, "messages", kind=StreamKind.RECORD_REPLICA)
+        other = current_stream(bridge, "threads", kind=StreamKind.RECORD_REPLICA)
+        for key in ("message:1", "message:2"):
+            RecordLink.objects.observe(stream, key, target=stream)
+        RecordLink.objects.observe(other, "thread:1", target=other)
+    query = """
+      query Sources($modelLabel: String!, $recordId: String!) {
+        record_links(where: {model_label: {_eq: $modelLabel}, record_id: {_eq: $recordId}}) { id }
+        record_links_aggregate(
+          where: {model_label: {_eq: $modelLabel}, record_id: {_eq: $recordId}}
+        ) { aggregate { count } }
+      }
+    """
+    variables = {"modelLabel": "integrate.SyncStream", "recordId": _public_id(stream)}
+    for user, expected in ((bridge.owner, 2), (outsider_bridge.owner, 0)):
+        result = _data(_execute(_schema(), query, variables, user=user))
+        assert len(result["record_links"]) == expected
+        assert result["record_links_aggregate"] == {"aggregate": {"count": expected}}
+
+
 @pytest.mark.parametrize(
     ("mutation", "model", "verb"),
     [
