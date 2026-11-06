@@ -39,6 +39,7 @@ const tableMocks = vi.hoisted(() => ({
   refetch: vi.fn(),
   mutateAsync: vi.fn(),
   pageSizes: [] as number[],
+  fetching: false,
   subgroupTotal: null as number | null,
   subgroupPages: [] as number[],
 }));
@@ -76,8 +77,10 @@ vi.mock("@refinedev/core", async (importOriginal) => {
           tableMocks.pageSizes.push(pagination.pageSize);
       }
       return {
-        result: { data: tableMocks.rows, total: tableMocks.rows.length },
-        query: { isFetching: false, refetch: tableMocks.refetch },
+        result: tableMocks.fetching
+          ? { data: [], total: undefined }
+          : { data: tableMocks.rows, total: tableMocks.rows.length },
+        query: { isFetching: tableMocks.fetching, isSuccess: !tableMocks.fetching, refetch: tableMocks.refetch },
       };
     },
     useUpdate: () => ({ mutateAsync: tableMocks.mutateAsync }),
@@ -166,6 +169,7 @@ afterEach(() => {
   tableMocks.refetch.mockClear();
   tableMocks.mutateAsync.mockClear();
   tableMocks.pageSizes = [];
+  tableMocks.fetching = false;
   tableMocks.rows = [{ id: "note_1", title: "First", status: "active" }];
   tableMocks.subgroupTotal = null;
   tableMocks.subgroupPages = [];
@@ -193,7 +197,72 @@ describe("useClientResourceViewSurface", () => {
       "200:200:200",
     );
   });
+
+  test("client row-model pages records from the view page and keeps it while the read is in flight", () => {
+    tableMocks.rows = clientRows(204);
+    tableMocks.fetching = true;
+    const probe = (): ReactElement => <ResourceViewProvider scope="local" initialState={{ page: 3, pageSize: 50 }}>
+      <ClientPagingProbe />
+    </ResourceViewProvider>;
+    const view = renderSurface(probe());
+    // page:pageCount:hasNext:total:records:groups:first-last
+    expect(screen.getByTestId("client-paging").textContent).toBe("3:1:false:0:0:0:-");
+
+    tableMocks.fetching = false;
+    view.rerender(probe());
+    expect(screen.getByTestId("client-paging").textContent).toBe("3:5:true:204:50:0:note_101-note_150");
+
+    tableMocks.rows = clientRows(60);
+    view.rerender(probe());
+    expect(screen.getByTestId("client-paging").textContent).toBe("2:2:false:60:10:0:note_51-note_60");
+  });
+
+  test("client row-model grouping pages root groups with their records open", () => {
+    tableMocks.rows = clientRows(204);
+    const { unmount } = renderSurface(<ResourceViewProvider scope="local" initialState={{ pageSize: 50, group: { field: "status" } }}>
+      <ClientPagingProbe />
+    </ResourceViewProvider>);
+    // 37 groups on one page, every record open: the last record is the last group's.
+    expect(screen.getByTestId("client-paging").textContent).toBe("1:1:false:37:204:37:note_1-note_185");
+    unmount();
+
+    renderSurface(<ResourceViewProvider scope="local" initialState={{ page: 2, pageSize: 20, group: { field: "status" } }}>
+      <ClientPagingProbe />
+    </ResourceViewProvider>);
+    // Groups 21-37 (five records each) on page 2; groups 1-20 (nineteen of six, one of five) on page 1.
+    expect(screen.getByTestId("client-paging").textContent).toBe("2:2:false:37:85:17:note_21-note_185");
+    fireEvent.click(screen.getByRole("button", { name: "first page" }));
+    expect(screen.getByTestId("client-paging").textContent).toBe("1:2:true:37:119:20:note_1-note_168");
+  });
 });
+
+/** `n` records over 37 statuses, in order: group `s1` holds note_1, note_38, … */
+function clientRows(n: number): Row[] {
+  return Array.from({ length: n }, (_, index) => ({
+    id: `note_${index + 1}`,
+    title: `Note ${index + 1}`,
+    status: `s${(index % 37) + 1}`,
+  }));
+}
+
+function ClientPagingProbe(): React.ReactElement {
+  const resourceView = useResourceView();
+  const surface = useClientResourceViewSurface({
+    resource: "notes.Note",
+    columns: NOTE_COLUMNS,
+    resourceView,
+    modelMetadata: CLIENT_NOTE_METADATA,
+  });
+  const ids = surface.rows.map((row) => row.id);
+  const groups = surface.rowModels.filter((row) => row.getIsGrouped()).length;
+  return <>
+    <button type="button" onClick={() => resourceView.setPage(1)}>first page</button>
+    <span data-testid="client-paging">
+      {[surface.list.page, surface.list.pageCount, surface.list.hasNext, surface.list.total, surface.rows.length, groups,
+        ids.length > 0 ? `${ids[0]}-${ids.at(-1)}` : "-"].join(":")}
+    </span>
+  </>;
+}
 
 function ClientSurfaceProbe(): React.ReactElement {
   const resourceView = useResourceView();

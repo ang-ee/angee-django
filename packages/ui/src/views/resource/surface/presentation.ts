@@ -8,7 +8,7 @@ import { type ResourceViewFilter, type ResourceViewGroup } from "../resource-vie
 import { GROUP_ROW_HEIGHT, RECORD_ROW_HEIGHT, isQueryOnlyColumn, tableColumnLabel, type VisibleFieldOption } from "../resource-view-list-body";
 import type { ColumnDescriptor } from "../../page";
 import { rowGroupsFromLaneSource, type BoardLaneState } from "../resource-view-board-lanes";
-import { idsFromRowSelectionState, leafTableRows, rowGroupsFromTableRows } from "../resource-view-codecs";
+import { idsFromRowSelectionState, recordTableRows, rowGroupsFromTableRows } from "../resource-view-codecs";
 import { filterForTextSearch, queryForColumns } from "../resource-query";
 import { useResourceViewTableState } from "./table-state";
 import { EMPTY_ARRAY, EMPTY_BOARD_PLACEMENTS } from "./types";
@@ -25,6 +25,7 @@ export function useResourceViewPresentationSurface<TRow extends Row>({
   filter,
   textSearchField,
   textSearchFields,
+  defaultExpandedGroups = "all",
 }: {
   rows: readonly TRow[];
   query?: ResourceQuery;
@@ -37,9 +38,13 @@ export function useResourceViewPresentationSurface<TRow extends Row>({
   filter?: ResourceViewFilter;
   textSearchField?: string;
   textSearchFields?: readonly string[];
+  /** The grouped surface's default: root groups open (`all`) or closed (`none`). */
+  defaultExpandedGroups?: "all" | "none";
 }): FlatResourceViewPresentationSurface<TRow> & { mergedFilter: QueryFilter } {
   const rowGroupStack = groupStack ?? resourceView.state.groupStack;
-  const [expanded, setExpanded] = React.useState<ExpandedState>({});
+  const [expanded, setExpanded] = React.useState<ExpandedState>(
+    defaultExpandedGroups === "none" ? {} : true,
+  );
   const tableState = useResourceViewTableState({
     columns,
     resourceView,
@@ -108,13 +113,12 @@ export function useResourceViewPresentationSurface<TRow extends Row>({
     // re-render storm (grouped rows + opening the filter popover) keeps it fed.
     autoResetPageIndex: false,
     autoResetExpanded: false,
+    // A page is `pageSize` top-level rows — records flat, root groups grouped, each group
+    // carrying its expanded records inside its page — so the page count, the pager's total
+    // (`table.getRowCount()`) and the rows on the page agree; the server grouped surface
+    // pages its root groups the same way.
+    paginateExpandedRows: false,
   });
-  const pageCount = Math.max(1, table.getPageCount());
-  React.useEffect(() => {
-    if ((resourceView.state.pagination.pageIndex + 1) > pageCount) {
-      resourceView.setPage(pageCount);
-    }
-  }, [pageCount, resourceView.setPage, (resourceView.state.pagination.pageIndex + 1)]);
   return {
     ...useResourceViewPresentationSurfaceFromTable({ table, columnVisibility, resourceView, groupStack, boardLaneState }),
     mergedFilter: globalFilter,
@@ -147,7 +151,7 @@ export function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
   const tableRowSelection = table.getState().rowSelection;
   const selectedIds = React.useMemo(() => idsFromRowSelectionState(tableRowSelection), [tableRowSelection]);
   const pageIds = React.useMemo(
-    () => leafTableRows(rowModels).map((row) => row.id),
+    () => recordTableRows(rowModels).map((row) => row.id),
     [rowModels],
   );
   const setPageSelection = React.useCallback(

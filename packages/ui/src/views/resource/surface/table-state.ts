@@ -284,6 +284,24 @@ export function useResourceViewTableState<TRow extends Row>({
 }
 
 
+/**
+ * Keep the view's page inside the settled page count: a page beyond it (a stale URL, a
+ * set that shrank) moves to the last page. Nothing moves while a read is in flight —
+ * the count is not known yet, and clamping then would discard the page the URL asked for.
+ */
+export function useSettledPageClamp(
+  resourceView: ResourceViewContextValue,
+  pageCount: number | undefined,
+  settled: boolean,
+): void {
+  const page = resourceView.state.pagination.pageIndex + 1;
+  const { setPage } = resourceView;
+  React.useEffect(() => {
+    if (!settled || pageCount === undefined || page <= pageCount) return;
+    setPage(pageCount);
+  }, [page, pageCount, settled, setPage]);
+}
+
 /** Presentation projection over the native table/query owners; no paging state. */
 export function listResultFromTable<TRow extends Row>(
   table: Table<TRow>,

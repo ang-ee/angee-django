@@ -739,7 +739,11 @@ repaired at their owners on 2026-10-20; the “no owner” lists stay empty.
   `where`/`order_by`/`limit` + the `_groups` aggregate). Grouping is a
   client-side row model by default (it needs the whole set); the server
   `_groups` surface is the escalation only when the data is too large to hold in
-  memory. A computed/non-model source is exposed **once** as a Hasura resource
+  memory. Either way a grouped list pages its **root groups** — the server
+  surface by its root `_groups` read, the client row model by TanStack's
+  top-level rows (`paginateExpandedRows: false`) — with the groups open by
+  default, so the pager counts groups and a page holds its groups' records;
+  an ungrouped list pages records. A computed/non-model source is exposed **once** as a Hasura resource
   (`hasura_pydantic_resource`) for the uniform fetch + metadata + MCP surface.
   A small one processes client-side over the fetched set; a large one keeps the
   server row model and declares `groupable` columns for the same `_groups`

@@ -164,19 +164,26 @@ describe("ListView client row model", () => {
 
     // Grouped client-side by namespace: the fetched set is grouped in the
     // browser into the two namespace buckets, which render as TanStack group
-    // headers (groups start collapsed).
-    // Namespace is free text, so group headers preserve its value verbatim.
-    const example = (await screen.findByText("example")).closest("button");
-    const angee = screen.getByText("angee").closest("button");
-    expect(example?.getAttribute("aria-expanded")).toBe("false");
-    expect(angee?.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByText("Notes")).toBeNull();
-
-    fireEvent.click(example as HTMLElement);
+    // headers with their records open (grouped lists open their groups by
+    // default). Namespace is free text, so group headers preserve its value
+    // verbatim; the records' namespace cells repeat it, so the header is the
+    // text inside a toggle button.
+    const groupHeader = (texts: HTMLElement[]): HTMLElement | null =>
+      texts.map((text) => text.closest("button")).find((button) => button !== null) ?? null;
+    const example = groupHeader(await screen.findAllByText("example"));
+    const angee = groupHeader(screen.getAllByText("angee"));
     expect(example?.getAttribute("aria-expanded")).toBe("true");
+    expect(angee?.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("Notes")).toBeTruthy();
     expect(screen.getByText("Tasks")).toBeTruthy();
-    expect(screen.queryByText("IAM")).toBeNull();
+    expect(screen.getByText("IAM")).toBeTruthy();
+
+    // Collapsing the example namespace hides only its records.
+    fireEvent.click(example as HTMLElement);
+    expect(example?.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("Notes")).toBeNull();
+    expect(screen.queryByText("Tasks")).toBeNull();
+    expect(screen.getByText("IAM")).toBeTruthy();
 
     // The client fetch addresses the computed resource once with a high page cap.
     const addonCalls = listCalls.value.filter(

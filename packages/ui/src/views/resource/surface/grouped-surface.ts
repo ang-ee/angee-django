@@ -27,7 +27,7 @@ import {
 } from "../resource-view-grouped-model";
 import { useCollectionQueryBatch, useGroupedNativePages } from "../collection-source";
 import { useResourceViewTableChrome } from "./presentation";
-import { listResultFromPageState, useResourceRowsSnapshot, useResourceViewQueryFacts, useResourceViewTableState } from "./table-state";
+import { listResultFromPageState, useResourceRowsSnapshot, useResourceViewQueryFacts, useResourceViewTableState, useSettledPageClamp } from "./table-state";
 import { EMPTY_ARRAY, EMPTY_EXPANDED_KEYS, EMPTY_LEAF_RESULTS } from "./types";
 import type { GroupedResourceViewSurface, ResourceListResult, UseResourceViewSurfaceProps } from "./types";
 /**
@@ -459,17 +459,11 @@ export function useGroupedResourceViewSurface<TRow extends Row = Row>({
     rootTotal === undefined
       ? undefined
       : Math.max(1, Math.ceil(rootTotal / statePageSize));
-  React.useEffect(() => {
-    if (
-      rootResult &&
-      !rootResult.fetching &&
-      !rootResult.error &&
-      rootPageCount !== undefined &&
-      rootPage > rootPageCount
-    ) {
-      resourceView.setPage(rootPageCount);
-    }
-  }, [resourceView.setPage, rootPage, rootPageCount, rootResult]);
+  useSettledPageClamp(
+    resourceView,
+    rootPageCount,
+    Boolean(rootResult && !rootResult.fetching && !rootResult.error),
+  );
   const refetch = React.useCallback(() => {
     for (const result of groupByResults.values()) result.refetch();
     const leafRefetches = new Set([...leafResults.values()].map((result) => result.refetch));
