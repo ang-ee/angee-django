@@ -23,6 +23,7 @@ from django.db.models.fields.json import KeyTextTransform
 from django.db.models.fields.reverse_related import ForeignObjectRel
 from django.db.models.functions import Cast, Concat, RowNumber, Trunc
 from django.db.models.lookups import Exact, In
+from django.utils.formats import date_format
 from django.utils.module_loading import import_string
 from strawberry.extensions import FieldExtension
 from strawberry.scalars import JSON
@@ -57,7 +58,7 @@ from strawberry_django_hasura.inputs import comparison_for_python_type
 
 from angee.base.hooks import resolve_hooks
 from angee.base.identity import public_data_id_field
-from angee.base.models.base import record_display_label
+from angee.base.models.base import AngeeModel
 from angee.base.models.children import OwnedChildrenMixin
 from angee.base.models.identity import instance_from_public_id, instances_from_public_ids, public_id_for
 from angee.base.models.inputs import InputExtensionsMixin
@@ -101,6 +102,7 @@ from angee.graphql.introspection import (
     is_to_one_relation,
     require_field_for_path,
 )
+from angee.graphql.node import display_name_paths, node_display_name
 from angee.graphql.writes import write_queryset
 
 if TYPE_CHECKING:
@@ -1609,7 +1611,24 @@ class _GroupLabels(FieldExtension):
             for group in groups:
                 key = getattr(group.key, key_name, None)
                 if key is not None:
-                    group._angee_label = key.isoformat() if isinstance(key, (date, datetime)) else str(key)
+                    if granularity is not None and isinstance(key, (date, datetime)):
+                        bucket = granularity.value
+                        if bucket == "day":
+                            group._angee_label = (
+                                key.date().isoformat() if isinstance(key, datetime) else key.isoformat()
+                            )
+                        elif bucket == "week":
+                            group._angee_label = f"Week of {date_format(key, 'F j, Y')}"
+                        elif bucket == "month":
+                            group._angee_label = date_format(key, "F Y")
+                        elif bucket == "quarter":
+                            group._angee_label = f"Q{(key.month - 1) // 3 + 1} {key.year}"
+                        elif bucket == "year":
+                            group._angee_label = str(key.year)
+                        else:
+                            group._angee_label = key.isoformat()
+                    else:
+                        group._angee_label = str(key).lower() if isinstance(key, bool) else str(key)
             return groups
         if field is None or not is_to_one_relation(field) or not groups:
             return groups
@@ -1625,17 +1644,16 @@ class _GroupLabels(FieldExtension):
             if relation_source is not None
             else target._default_manager.all()
         )
-        display_paths = getattr(target, "record_display_paths", None)
-        if display_paths:
-            joins = [path for path in display_paths if target._meta.get_field(path).is_relation]
-            if joins:
-                queryset = queryset.select_related(*joins)
+        if issubclass(target, AngeeModel):
+            _, related = display_name_paths(target)
+            if related:
+                queryset = queryset.select_related(*related)
         admitted = instances_from_public_ids(target, ids, queryset=queryset)
         for group in groups:
             key = getattr(group.key, key_name, None)
             record = admitted.get(key) if key is not None else None
             if record is not None:
-                group._angee_label = record_display_label(record)
+                group._angee_label = node_display_name(record)
         return groups
 
     def resolve(self, next_: Callable[..., Any], source: Any, info: strawberry.Info, **kwargs: Any) -> Any:

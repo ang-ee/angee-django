@@ -9,7 +9,9 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import strawberry
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from django.db.backends.postgresql.base import DatabaseWrapper
 from graphql import (
@@ -124,6 +126,24 @@ def test_query_separates_row_selections_from_bucket_keys() -> None:
     assert query.fields["payload.mailbox"].row.paths == ("payload",)
     assert query.fields["channel"].row.path == "channel.id"
     assert query.fields["channel"].row.paths == ("channel.id",)
+
+
+def test_group_drill_requires_a_selectable_row_identity_at_schema_build() -> None:
+    """A grouped page cannot match returned rows without its axis identity."""
+
+    projection = _projection(
+        axes=(DataQueryAxis(
+            field="channel", kind="relation",
+            server=DataQueryServerAxis("CHANNEL", "channel_id"),
+            drill=DataQueryDrill("identity", "channel", "channel_id"),
+        ),),
+    )
+    schema = build_schema(_SCHEMA.replace(
+        "type Channel implements Node { id: ID!, display_name: String! }",
+        "type Channel { display_name: String! }",
+    ))
+    with pytest.raises(ImproperlyConfigured, match="Group axis 'channel' has a drill but no selectable row identity"):
+        replace(projection, schema=schema).build()
 
 
 def test_client_filter_only_field_has_no_invented_row_accessor() -> None:
@@ -270,6 +290,18 @@ def test_query_does_not_infer_relation_identity_from_an_unrelated_id_field() -> 
     relation = replace(_projection(), schema=schema).build().fields["channel"].relation
     assert relation.identity_path is None
     assert relation.label_path == "channel.display_name"
+
+
+def test_query_uses_the_only_public_id_on_an_identity_projection() -> None:
+    """An admitted identity object can page a relation group without Node inheritance."""
+
+    schema = build_schema(
+        _SCHEMA.replace(
+            "type Channel implements Node { id: ID!, display_name: String! }",
+            "type Channel { id: ID!, display_name: String! }",
+        )
+    )
+    assert replace(_projection(), schema=schema).build().fields["channel"].relation.identity_path == "channel.id"
 
 
 def test_unexposed_relation_uses_public_identity_constant(monkeypatch) -> None:

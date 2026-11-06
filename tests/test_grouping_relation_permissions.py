@@ -181,6 +181,7 @@ class GroupMiddleType(ProtectedNode):
 class GroupParentType(ProtectedNode):
     kind: auto
     amount: auto
+    occurred_at: auto
     label_name: str | None = strawberry_django.field(annotate=models.F("label_name"))
     nested_name: str | None = strawberry_django.field(annotate=models.F("nested_name"))
     target: GroupLabelType | None = actor_scoped_to_one("target")
@@ -246,8 +247,12 @@ def relation_grouping_case(transactional_db: None):
                     "middle__target__display_name",
                     "plain", "plain__display_name",
                     "occurred_at", "occurred_on", "metadata.mailbox", "metadata.rank", "metadata.held_at",
+                    "metadata.enabled",
                 ],
-                json_paths={"metadata.mailbox": "str", "metadata.rank": "int", "metadata.held_at": "datetime"},
+                json_paths={
+                    "metadata.mailbox": "str", "metadata.rank": "int", "metadata.held_at": "datetime",
+                    "metadata.enabled": "bool",
+                },
                 insert=False,
                 update=False,
                 delete=False,
@@ -513,8 +518,10 @@ def test_extracted_group_pages_match_native_keys_at_flat_cost(
         keys = [group["key"][key_field] for group in groups.data["group_parents_groups"]]
         assert all(key is not None for key in keys)
         labels = [group["label"] for group in groups.data["group_parents_groups"]]
-        assert all(label.startswith(key[:10]) if granularity else label == str(key)
-                   for key, label in zip(keys, labels, strict=True))
+        assert all(
+            label == datetime.fromisoformat(key).strftime("%B %Y") if granularity else label == str(key)
+            for key, label in zip(keys, labels, strict=True)
+        )
         if axis == "METADATA__RANK":
             assert all(isinstance(key, int) for key in keys)
         pages = [{"key": key, "limit": 2, "offset": 1} for key in keys]
@@ -554,7 +561,7 @@ def test_extracted_group_pages_match_native_keys_at_flat_cost(
         groups.assert_bytes(total=5_000, largest=5_000, cause="native grouped aggregate")
 
 
-@pytest.mark.parametrize("granularity", ["DAY", "WEEK", "YEAR"])
+@pytest.mark.parametrize("granularity", ["DAY", "WEEK", "MONTH", "QUARTER", "YEAR"])
 @pytest.mark.parametrize("axis", ["OCCURRED_AT", "OCCURRED_ON"])
 def test_date_buckets_round_trip_group_keys(
     relation_grouping_case: Any, axis: str, granularity: str,
@@ -581,6 +588,16 @@ def test_date_buckets_round_trip_group_keys(
       group_parents_groups(group_by: [{{field: {axis}, granularity: {granularity}}}],
         where: {{kind: {{_eq: "date-grain"}}}}) {{ key {{ {key_field} }} label aggregate {{ count }} }}
     }}''')["group_parents_groups"]
+    for group in groups:
+        key = datetime.fromisoformat(group["key"][key_field])
+        expected = {
+            "DAY": key.date().isoformat(),
+            "WEEK": f"Week of {key.strftime('%B')} {key.day}, {key.year}",
+            "MONTH": key.strftime("%B %Y"),
+            "QUARTER": f"Q{(key.month - 1) // 3 + 1} {key.year}",
+            "YEAR": str(key.year),
+        }[granularity]
+        assert group["label"] == expected
     pages = [{"key": group["key"][key_field], "limit": group["aggregate"]["count"]} for group in groups]
     rows = measure_graphql_document(
         case.schema,
@@ -592,6 +609,22 @@ def test_date_buckets_round_trip_group_keys(
     )
     assert rows.statement_count == 1
     assert {row["id"] for row in rows.data["group_parents_grouped_rows"]} == {parent.sqid for parent in parents}
+
+
+def test_json_boolean_group_headers_use_scalar_text(relation_grouping_case: Any) -> None:
+    """JSON boolean keys retain their type while their labels use JSON scalar text."""
+
+    case = relation_grouping_case
+    with system_context(reason="test.grouped_page.json_bool.seed"):
+        row = GroupParent.objects.create(kind="json-bool", metadata={"enabled": False})
+    write_relationships([
+        RelationshipTuple(to_object_ref(row), "reader", case.alice)
+    ])
+    groups = _query(case, case.alice, '''query {
+      group_parents_groups(group_by: [{field: METADATA__ENABLED}],
+        where: {kind: {_eq: "json-bool"}}) { key { metadata__enabled } label }
+    }''')["group_parents_groups"]
+    assert groups == [{"key": {"metadata__enabled": False}, "label": "false"}]
 
 
 def test_grouped_row_pages_keep_offsets_and_redacted_null_bucket(relation_grouping_case: Any) -> None:

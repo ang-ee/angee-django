@@ -38,7 +38,6 @@ def test_webhook_subscription_owner_is_field_backed(transactional_db: None) -> N
             owner=user,
             target_url="https://hooks.example.test/events",
             secret="owner-secret",
-            event_kinds=["bridge.synced"],
         )
 
     assert subscription.owner_id == user.pk
@@ -109,7 +108,6 @@ def test_record_delivery_failure_refreshes_incremented_counter(transactional_db:
             owner=user,
             target_url="https://hooks-refresh.example.test/events",
             secret="refresh-secret",
-            event_kinds=["bridge.errored"],
             consecutive_failures=4,
         )
         subscription.record_delivery_failure(status="", error="ConnectionRefusedError: connection refused")

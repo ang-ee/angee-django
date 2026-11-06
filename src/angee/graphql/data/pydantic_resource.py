@@ -116,19 +116,23 @@ def _attach_grouped_rows(
         for page in pages:
             if page.limit < 0 or page.offset < 0:
                 raise ValueError("Grouped row limit and offset must be nonnegative.")
-            if any(type(page.key) is type(key) and page.key == key for key in keys):
+            key = scalar.parse_value(page.key) if page.key is not None else None
+            if key in keys:
                 raise ValueError("A grouped row read accepts each key once.")
-            keys.append(page.key)
-            rows = source.query(info, where=where, order_by=order_by, limit=None, offset=None)
-            matching = []
-            for row in rows:
-                [bucket] = compute_row_aggregation((row,), model=resource.row_model, group_by=spec)
-                group_key = builder.shape_group_key(resource.group_key_type, bucket, spec)
-                value = getattr(group_key, alias)
-                key = scalar.serialize(value) if value is not None else None
-                if type(key) is type(page.key) and key == page.key:
-                    matching.append(row)
-            result.extend(matching[page.offset : page.offset + page.limit])
+            keys.append(key)
+        matching: list[list[Any]] = [[] for _ in pages]
+        rows = source.query(info, where=where, order_by=order_by, limit=None, offset=None)
+        for row in rows:
+            [bucket] = compute_row_aggregation((row,), model=resource.row_model, group_by=spec)
+            group_key = builder.shape_group_key(resource.group_key_type, bucket, spec)
+            value = getattr(group_key, alias)
+            key = scalar.parse_value(scalar.serialize(value)) if value is not None else None
+            for index, page_key in enumerate(keys):
+                if key == page_key:
+                    matching[index].append(row)
+                    break
+        for page, matched in zip(pages, matching, strict=True):
+            result.extend(matched[page.offset : page.offset + page.limit])
         return result
 
     resolve_grouped_rows.__annotations__ = {

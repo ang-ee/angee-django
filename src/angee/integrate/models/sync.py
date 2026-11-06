@@ -245,6 +245,16 @@ class RecordLink(
         parent = self.parent
         return parent if parent is not None else self
 
+    @property
+    def applied_snapshot(self) -> Any | None:
+        """Expose the aggregate's pinned application base to bridge consumers."""
+        return self.aggregate_root.applied_base
+
+    def application_count(self) -> int:
+        """Count distinct retained applications of this aggregate for bridge consumers."""
+        root = self.aggregate_root
+        return root.history.using(root._state.db).exclude(applied_at=None).values("applied_at").distinct().count()
+
     def resolve_target(self) -> models.Model | None:
         """Resolve fresh internal evidence through Django's native base-manager pointer.
 

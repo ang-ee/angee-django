@@ -31,7 +31,6 @@ class WebhookSubscription(OwnerMixin, ProtectedDataModel, concrete=True):
     sqid_prefix = "whs_"
     target_url = models.URLField(max_length=2048, validators=(validate_public_url,))
     secret = EncryptedField()
-    event_kinds = models.JSONField(default=list, blank=True)
     impl_app_filter = models.JSONField(default=list, blank=True)
     integration_filter = models.ForeignKey(
         "integrate.Integration",

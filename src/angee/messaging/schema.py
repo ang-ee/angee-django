@@ -42,7 +42,7 @@ from angee.graphql.data.hasura import (
     public_pk_decoder,
 )
 from angee.graphql.deletion import DeletePreview, attach_delete_preview_metadata
-from angee.graphql.ids import PublicID, instance_for_id, require_instance_for_id
+from angee.graphql.ids import PublicID, instance_for_id, public_id_field, require_instance_for_id
 from angee.graphql.introspection import selected_field
 from angee.graphql.node import NODE_DISPLAY_NAME_DESCRIPTION
 from angee.graphql.relations import RecordPointerType
@@ -345,7 +345,7 @@ class FragmentType(ProtectedNode):
 class PartType(ProtectedNode):
     """GraphQL projection of one message body part."""
 
-
+    message: PublicID = public_id_field("message")
     position: auto
     type: auto
     disposition: auto

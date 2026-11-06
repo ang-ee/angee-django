@@ -36,7 +36,9 @@ live in code docstrings.
 
 - Removed the outbound integration event fan-out and inbound VCS webhook dispatch,
   which had no production producer or receiver route. Subscription CRUD and signed
-  test delivery remain available.
+  test delivery remain available. Subscription `event_kinds` is removed from the
+  model, GraphQL writes and console form because no event kind can be delivered;
+  projects must remove that column in their own native migration history.
 - Removed `VcsBridge.webhook_secret`, `Bridge.next_subscription_refresh_at`, and
   `Integration.use_count_24h` / `error_count_24h`. Projects must, in their own
   native migration history, remove the secret from VcsBridge, the refresh
@@ -49,8 +51,9 @@ live in code docstrings.
 
 - Channel intake now offers only `all_messages`. The selectable `reaction`,
   `mention`, and `command` triggers never captured messages and have been removed
-  from the declared choices. The stored column remains unchanged; existing rows
-  with those values need an explicit data decision before enabling capture.
+  from the declared choices. Migration 0011 narrows the choices; existing rows
+  with those retired values read and write as `all_messages`, so no data migration
+  is required before enabling capture.
 
 ## Unreleased — extraction correction cleanup
 

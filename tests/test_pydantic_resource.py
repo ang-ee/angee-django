@@ -201,7 +201,7 @@ def test_pydantic_resource_groupable_columns_project_server_axes() -> None:
     }
 
 
-def test_pydantic_grouped_rows_use_group_keys_and_one_source_read_per_page() -> None:
+def test_pydantic_grouped_rows_use_group_keys_and_one_source_read_per_request() -> None:
     calls: list[tuple[Any, Any, int | None, int | None]] = []
 
     class CountingSource(InMemoryRowSource):
@@ -239,7 +239,7 @@ def test_pydantic_grouped_rows_use_group_keys_and_one_source_read_per_page() -> 
     )
     assert rows.errors is None, rows.errors
     assert [row["id"] for row in rows.data["catalogue_entries_grouped_rows"]] == ["atlas", "hammer"]
-    assert len(calls) == len(keys)
+    assert len(calls) == 1
     assert all(limit is None and offset is None for _, _, limit, offset in calls)
 
     blanks = schema.execute_sync(

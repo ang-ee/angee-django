@@ -30,5 +30,5 @@ def test_owner_reads_own_rows_and_an_outsider_reads_none(composed_tables: None) 
         outsider = get_user_model().objects.create_user(username="outsider", password="outsider")
         row = {{ model_name }}.objects.create(title="First", owner=owner)
 
-    assert [visible.pk for visible in {{ model_name }}.objects.as_user(owner)] == [row.pk]
-    assert not {{ model_name }}.objects.as_user(outsider).exists()
+    assert [visible.pk for visible in {{ model_name }}.objects.with_actor(owner)] == [row.pk]
+    assert not {{ model_name }}.objects.with_actor(outsider).exists()

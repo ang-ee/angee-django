@@ -49,7 +49,6 @@ export function WebhooksPage(): React.ReactElement {
         <Field name="target_url" title />
         <Field name="enabled" />
         <Group label={t("webhooks.filters")} columns={2}>
-          <Field name="event_kinds" widget="tagInput" />
           <Field name="impl_app_filter" widget="tagInput" />
           <Field name="integration_filter" />
         </Group>
