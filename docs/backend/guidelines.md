@@ -1549,12 +1549,15 @@ open fresh evaluator scopes for authorization and change-feed reads.
 - **Live timelines read owners; notifications invalidate reads.**
   [Timeline kinds](../../src/angee/timeline/kinds.py) contribute actor-scoped
   source querysets. The [read owner](../../src/angee/timeline/reading.py)
-  combines their common columns with Django's `union(all=True)`, applying
-  permissions, attention, folding and cursors in each branch before the shared
-  page limit. Display payloads are hydrated only for selected source rows.
-  There is no event projection table or backfill requirement. Folding hides a
-  child only when a readable parent target occurs on the same record; counts
-  and attention use that same scope, independent of the page's filters.
+  combines their common columns with Django's `union(all=True)` in one
+  statement-local `django-cte` relation. Each branch keeps its permissions and
+  attention; one statement applies folding, cursors and the page limit and reads
+  every kind's totals and the page's children. A kind with no readable rows is
+  probed and left out of that statement, so its scope is never compiled there.
+  Display payloads are hydrated only for selected rows, through the kind's own
+  queryset. There is no event projection table or backfill requirement. Folding
+  hides a child only when a readable parent target occurs on the same record;
+  counts and attention use that same scope, independent of the page's filters.
   [`publish_change` / `change_published`](../../src/angee/graphql/publishing.py)
   delivers owner observations inside the transaction. The
   [timeline observer](../../src/angee/timeline/events.py) captures affected

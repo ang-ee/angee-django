@@ -51,13 +51,14 @@ def read_timeline(record, actor, **variables):
 
 def test_cursor_round_trips_and_orders_the_page_totally() -> None:
     at = datetime(2026, 10, 19, 9, 41, tzinfo=UTC)
-    order = KeysetOrder("_timeline_at", tie_breakers=("_timeline_kind",))
+    order = KeysetOrder("_timeline_at", tie_breakers=("_timeline_kind",), key_field="_timeline_pk")
     signer = keyset_signer(["record", "all-kinds"], salt="angee.timeline")
     token = order.sign_position((at, "provenance.change", 7), signer)
     cursor = order.unsign(token, signer, models.BigIntegerField())
     assert cursor == (at, "provenance.change", 7)
     predicate = str(order.before(cursor))
-    assert predicate.count("at__lt") == 1 and predicate.count("kind__gt") == 1 and predicate.count("pk__lt") == 1
+    assert predicate.count("_timeline_at__lt") == 1 and predicate.count("_timeline_kind__gt") == 1
+    assert predicate.count("_timeline_pk__lt") == 1 and "'pk__" not in predicate
     with pytest.raises(ValueError):
         order.unsign("nonsense", signer, models.BigIntegerField())
     with pytest.raises(ValueError):
@@ -107,8 +108,12 @@ def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: No
 
     with CaptureQueriesContext(connection) as queries:
         data = read_timeline(vault, owner)
-    page_queries = [query["sql"] for query in queries if "UNION ALL" in query["sql"] and "LIMIT 26" in query["sql"]]
-    assert len(page_queries) == 1
+    # The page, every kind's totals (read again by timeline_attention) and the
+    # page's children share one statement over the kinds with readable rows.
+    statements = [query["sql"] for query in queries if '"timeline_source"' in query["sql"]]
+    assert len(statements) == 1
+    assert "UNION ALL" in statements[0] and "LIMIT 26" in statements[0]
+    assert f'"{apps.get_model("workflows", "WorkflowRun")._meta.db_table}"' not in statements[0]
     page = data["timeline"]
     assert [kind["id"] for kind in page["kinds"]] == [
         "workflows.run", "decisions.decision", "provenance.change", "projects.task", "messaging.conversation",
@@ -126,6 +131,9 @@ def test_union_pages_sources_and_counts_the_whole_scope(composed_permissions: No
     assert [one["entries"][0], *rest["entries"]] == page["entries"]
     assert one["kinds"] == rest["kinds"] == page["kinds"]
     assert read_timeline(vault, owner, kinds=["workflows.run"])["timeline"]["entries"] == []
+    with CaptureQueriesContext(connection) as queries:
+        assert Timeline(vault, owner).attention() == 1
+    assert sum('"timeline_source"' in query["sql"] for query in queries) == 1
 
 
 def timeline_entries(record, actor=None, *, kind=None):
