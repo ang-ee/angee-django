@@ -298,8 +298,9 @@ backend finalizes `DataResourceQuery` against the composed schema; frontend
 Explicit local row declarations use the same contract and semantics.
 
 **Group axis** — one query dimension with a stable bucket identity, optional
-display label, required row selections and optional server grouping and drill
-projections. Labels describe buckets; identities distinguish them.
+display label, required row selections and optional server grouping; a server
+axis always carries the drill that selects one bucket. Labels describe buckets;
+identities distinguish them.
 
 **REBAC resource** — an authorization object (`ObjectRef`) in the
 `django-zed-rebac` schema. It names what an actor can read/write; it is separate

@@ -65,7 +65,7 @@ def test_native_aggregates_scope_each_logical_row_once() -> None:
                 ScopedAggregateRecordType,
                 model=ScopedAggregateRecord,
                 name="scoped_records",
-                filterable=["id", "amount"],
+                filterable=["id", "amount", "bucket"],
                 sortable=["name"],
                 aggregatable=["amount"],
                 groupable=["bucket"],

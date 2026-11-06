@@ -239,7 +239,9 @@ Use these owners instead of maintaining another contract in an addon:
   from the final composed schema and active execution backend. Relation identity
   comes from the target resource's identity policy, never from a display label or
   a consumer's guessed field name. Keep output values distinct from comparison
-  input domains, and group summaries distinct from optional drill capability.
+  input domains. A server group axis declares the filter its drill uses, or the
+  schema build fails; only an extraction part (a weekday, a month number) is
+  summary-only.
   Extend native lookup seams for database operators; never advertise an operator
   that the exposed comparison input or executor cannot accept.
 - Vendor SDK clients are details. Keep SDK request/response quirks in the

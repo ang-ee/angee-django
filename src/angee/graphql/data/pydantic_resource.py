@@ -10,14 +10,21 @@ through the same ``useList`` path as a model resource — no bespoke client path
 
 from __future__ import annotations
 
+import datetime
+import enum
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
 from typing import Any, Literal
 
 import strawberry.experimental.pydantic
+from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.utils import timezone
 from pydantic import BaseModel
+from strawberry_django_aggregates import group_by_alias, group_by_range_alias
+from strawberry_django_aggregates.granularity import TimeGranularity
 from strawberry_django_hasura import (
+    GroupFieldBatch,
     HasuraResource,
     InMemoryRowSource,
     RowSource,
@@ -25,7 +32,7 @@ from strawberry_django_hasura import (
 )
 
 from angee.graphql.data.contracts import DataAggregateMeasureMetadata
-from angee.graphql.data.hasura import hasura_query_axes
+from angee.graphql.data.hasura import group_rows_field, hasura_query_axes
 from angee.graphql.data.metadata import (
     DataResourceContribution,
     DataResourcePolicy,
@@ -83,6 +90,7 @@ def hasura_pydantic_resource(
         if rows is None:
             raise TypeError("hasura_pydantic_resource requires rows= or source=")
         source = InMemoryRowSource(rows)
+    row_source: RowSource = source
     node = pydantic_node(row_model, name=node_name or row_model.__name__)
     resource = hasura_run_query_resource(
         node,
@@ -92,6 +100,10 @@ def hasura_pydantic_resource(
         groupable=list(groupable),
         source=source,
         id_field=id_field,
+        group_fields=(
+            {"rows": group_rows_field(node, lambda batch, limit: _row_group_pages(row_source, batch, limit))}
+            if groupable else None
+        ),
     )
     if resource.detail_root is None:
         raise ImproperlyConfigured(f"{model_label or name} Hasura resource did not expose a detail root.")
@@ -125,3 +137,43 @@ def hasura_pydantic_resource(
     # bundle's types so a schema bucket carries it explicitly (mirrors the
     # model path, where the addon registers the node type).
     return replace(resource, types=[node, *resource.types])
+
+
+def _row_group_pages(source: RowSource, batch: GroupFieldBatch, limit: int) -> list[list[Any]]:
+    """Each group's first page over the source's filtered, ordered rows, partitioned in memory.
+
+    A row belongs to the group whose key it matches on every dimension, as the
+    library's in-memory grouping assigned it; a time bucket matches its range.
+    """
+
+    order_by = batch.arguments.get("order_by")
+    rows = source.query(batch.info, where=batch.where, order_by=order_by, limit=None, offset=None)
+    pages: list[list[Any]] = [[] for _ in batch.groups]
+    for row in rows:
+        for index, group in enumerate(batch.groups):
+            if all(_in_bucket(row, group.key, path, granularity) for path, granularity in batch.group_by):
+                if len(pages[index]) < limit:
+                    pages[index].append(row)
+                break
+    return pages
+
+
+def _in_bucket(row: Any, key: Any, path: str, granularity: Any) -> bool:
+    """Match one row to one group on one translated ``(path, granularity)`` dimension."""
+    value = _plain(getattr(row, path))
+    if granularity is None:
+        return value == _plain(getattr(key, group_by_alias(path, None)))
+    if not isinstance(granularity, TimeGranularity):
+        raise ValueError(f"Group axis {path!r} by {granularity.value} has no drill, so its groups carry no rows.")
+    span = getattr(key, group_by_range_alias(path, granularity))
+    if span is None or value is None:
+        return span is None and value is None
+    if isinstance(value, datetime.datetime):
+        if settings.USE_TZ and timezone.is_naive(value):
+            value = timezone.make_aware(value)
+        return bool(span.from_ <= value < span.to)
+    return bool(span.from_.date() <= value < span.to.date())
+
+
+def _plain(value: Any) -> Any:
+    return value.value if isinstance(value, enum.Enum) else value

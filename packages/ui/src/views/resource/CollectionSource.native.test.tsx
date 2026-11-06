@@ -139,6 +139,7 @@ function fixture(grouped: boolean, interactive = false, tree = false) {
     const { request } = meta?.gqlVariables as Variables;
     requests.push(request);
     if ("group" in request) {
+      const account = `account-${request.page}`;
       return {
         data: {
           groups: {
@@ -146,11 +147,12 @@ function fixture(grouped: boolean, interactive = false, tree = false) {
             totalCount: 27,
             buckets: [
               {
-                key: {
-                  account: `account-${request.page}`,
-                  label: `Account ${request.page}`,
-                },
+                key: { account, label: `Account ${request.page}` },
                 count: 60,
+                // The leaf groups read carries each group's first page.
+                ...(request.leafPageSize
+                  ? { rows: [{ id: `${account}-1`, title: `Activity ${account} page 1` }] }
+                  : {}),
               },
             ],
           },
@@ -288,11 +290,12 @@ test("an authored source groups through the complete custom catalog without pres
     && request.group.field === "account"
     && filterOperatorValue(request.filter, "title", "iContains") === "document",
   )).toBe(true));
-  await waitFor(() => expect(f.requests.some((request) =>
-    !("group" in request)
-    && filterOperatorValue(request.filter, "title", "iContains") === "document"
-    && Filter.from(request.filter).facetValues("account")[0] === "account-1",
-  )).toBe(true));
+  // The group's first page rides on the groups read; no per-group page request.
+  expect(await screen.findByText("Activity account-1 page 1")).toBeTruthy();
+  expect(f.requests.some((request) => "group" in request && request.leafPageSize === 3)).toBe(true);
+  expect(f.requests.some((request) =>
+    !("group" in request) && Filter.from(request.filter).facetValues("account")[0] === "account-1",
+  )).toBe(false);
   expect(f.getList).not.toHaveBeenCalled();
 });
 

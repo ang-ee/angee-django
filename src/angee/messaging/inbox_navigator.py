@@ -25,7 +25,7 @@ from django.db.models import (
     When,
     Window,
 )
-from django.db.models.functions import Coalesce, RowNumber
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict
 
@@ -314,14 +314,7 @@ class InboxNavigator(MessageInbox):
         keys = [row["_identity"] for row in selected]
         previews = (
             activity.filter(_identity__in=keys)
-            .annotate(
-                _rank=Window(
-                    RowNumber(),
-                    partition_by=[F("_identity")],
-                    order_by=[F("_order_at").desc(), F("pk").desc()],
-                )
-            )
-            .filter(_rank=1)
+            .first_per_group("_identity", order_by=[F("_order_at").desc(), F("pk").desc()], limit=1)
             .values_list("_identity", "preview")
         )
         preview_by_identity = dict(previews)
