@@ -287,7 +287,7 @@ def test_clone_page_tree_queries_do_not_grow_with_depth(composed_tables, record_
 
     actor = create_user("tree-depth-owner")
     counts = []
-    # F35 enforces the inherited varchar(255) path: 19 levels fit, 20 do not.
+    # HierarchyMixin enforces the inherited varchar(255) path: 19 levels fit, 20 do not.
     for depth in (2, 19):
         with actor_context(actor):
             source = Vault.objects.create_for(actor, name=f"Depth {depth}")
