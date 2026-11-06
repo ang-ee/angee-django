@@ -68,21 +68,24 @@ test("a parent with 100 expanded groups reads every page in batches of at most 5
   }
 });
 
-test("server October page retains a UTC November row and preserves empty and null pages", async () => {
+test("server pages match their scopes by key: a UTC edge row, an empty page, a null page's row, and no unrequested page", async () => {
   const edge = { id: "utc-edge", created_at: "2026-11-01T03:00:00Z" };
+  const unkeyed = { id: "no-month", created_at: null };
   custom.mockResolvedValue({ data: { data: { rows: [
     { key: "2026-10", rows: [edge] },
     { key: "2026-11", rows: [] },
-    { key: null, rows: [] },
+    { key: null, rows: [unkeyed] },
+    { key: "2026-12", rows: [{ id: "stray", created_at: "2026-12-01T00:00:00Z" }] },
   ] } } });
   const scopes = (["2026-10", "2026-11", null] as (string | null)[]).map((key, index) => ({
     key: `scope-${index}`, value: key,
-    groupBy: { field: "CREATED_AT", granularity: "MONTH" }, page: 1, pageSize: 20, total: index === 0 ? 1 : 0,
+    groupBy: { field: "CREATED_AT", granularity: "MONTH" }, page: 1, pageSize: 20, total: index === 1 ? 0 : 1,
   }));
   const { result } = renderHook(() => useGroupedNativePages(target, scopes, ["id", "created_at"], undefined), { wrapper: Provider });
   await waitFor(() => expect(result.current.get("scope-0")?.rows).toEqual([edge]));
   expect(result.current.get("scope-1")?.rows).toEqual([]);
-  expect(result.current.get("scope-2")?.rows).toEqual([]);
+  expect(result.current.get("scope-2")?.rows).toEqual([unkeyed]);
+  expect([...result.current.values()].flatMap((page) => page.rows.map((row) => row.id))).not.toContain("stray");
   const variables = custom.mock.calls[0]![0].meta?.gqlVariables as { pages: { key: unknown }[] };
   expect(variables.pages.map(({ key }) => key)).toEqual(["2026-10", "2026-11", null]);
 });

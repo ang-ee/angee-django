@@ -205,16 +205,16 @@ describe("useClientResourceViewSurface", () => {
       <ClientPagingProbe />
     </ResourceViewProvider>;
     const view = renderSurface(probe());
-    // page:pageCount:hasNext:total:records:groups:first-last
-    expect(screen.getByTestId("client-paging").textContent).toBe("3:1:false:0:0:0:-");
+    // page:pageCount:hasNext:total:records:groups:first-last:records-before/total:groupedRows
+    expect(screen.getByTestId("client-paging").textContent).toBe("3:1:false:0:0:0:-:-:1");
 
     tableMocks.fetching = false;
     view.rerender(probe());
-    expect(screen.getByTestId("client-paging").textContent).toBe("3:5:true:204:50:0:note_101-note_150");
+    expect(screen.getByTestId("client-paging").textContent).toBe("3:5:true:204:50:0:note_101-note_150:-:1");
 
     tableMocks.rows = clientRows(60);
     view.rerender(probe());
-    expect(screen.getByTestId("client-paging").textContent).toBe("2:2:false:60:10:0:note_51-note_60");
+    expect(screen.getByTestId("client-paging").textContent).toBe("2:2:false:60:10:0:note_51-note_60:-:1");
   });
 
   test("client row-model grouping pages root groups with their records open", () => {
@@ -223,16 +223,17 @@ describe("useClientResourceViewSurface", () => {
       <ClientPagingProbe />
     </ResourceViewProvider>);
     // 37 groups on one page, every record open: the last record is the last group's.
-    expect(screen.getByTestId("client-paging").textContent).toBe("1:1:false:37:204:37:note_1-note_185");
+    expect(screen.getByTestId("client-paging").textContent).toBe("1:1:false:37:204:37:note_1-note_185:0/204:37");
     unmount();
 
     renderSurface(<ResourceViewProvider scope="local" initialState={{ page: 2, pageSize: 20, group: { field: "status" } }}>
       <ClientPagingProbe />
     </ResourceViewProvider>);
     // Groups 21-37 (five records each) on page 2; groups 1-20 (nineteen of six, one of five) on page 1.
-    expect(screen.getByTestId("client-paging").textContent).toBe("2:2:false:37:85:17:note_21-note_185");
+    // The record facts and the board's groups follow the page: 119 records precede page 2.
+    expect(screen.getByTestId("client-paging").textContent).toBe("2:2:false:37:85:17:note_21-note_185:119/204:17");
     fireEvent.click(screen.getByRole("button", { name: "first page" }));
-    expect(screen.getByTestId("client-paging").textContent).toBe("1:2:true:37:119:20:note_1-note_168");
+    expect(screen.getByTestId("client-paging").textContent).toBe("1:2:true:37:119:20:note_1-note_168:0/204:20");
   });
 });
 
@@ -259,7 +260,9 @@ function ClientPagingProbe(): React.ReactElement {
     <button type="button" onClick={() => resourceView.setPage(1)}>first page</button>
     <span data-testid="client-paging">
       {[surface.list.page, surface.list.pageCount, surface.list.hasNext, surface.list.total, surface.rows.length, groups,
-        ids.length > 0 ? `${ids[0]}-${ids.at(-1)}` : "-"].join(":")}
+        ids.length > 0 ? `${ids[0]}-${ids.at(-1)}` : "-",
+        surface.list.records ? `${surface.list.records.before}/${surface.list.records.total}` : "-",
+        surface.groupedRows.length].join(":")}
     </span>
   </>;
 }

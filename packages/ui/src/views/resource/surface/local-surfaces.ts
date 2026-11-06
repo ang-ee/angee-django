@@ -142,6 +142,7 @@ export function useRowsResourceViewSurface<
   resourceView,
   modelMetadata = null,
   groupStack,
+  defaultExpandedGroups,
   fetching = false,
   error = null,
   onListStateChange,
@@ -161,6 +162,7 @@ export function useRowsResourceViewSurface<
     modelMetadata,
     groupStack,
     getRowId: (row, index) => modelRowId(row, index, query ? { query: query.contract } : modelMetadata?.resource),
+    defaultExpandedGroups,
   });
   const pageRows = React.useMemo(
     () => recordTableRows(presentation.rowModels).map((row) => row.original),

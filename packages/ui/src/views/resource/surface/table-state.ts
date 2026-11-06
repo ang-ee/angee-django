@@ -10,7 +10,7 @@ import { buildColumns, withQueryOnlyColumnsHidden } from "../resource-view-list-
 import type { ColumnDescriptor } from "../../page";
 import { type ResolvedBoardLaneSource } from "../resource-view-board-lanes";
 import { normalisePageSize } from "../page-size";
-import { defaultResourceOrder, groupingStateFromResourceGroups, requestedFieldPaths, resourceColumnVisibility } from "../resource-view-codecs";
+import { defaultResourceOrder, groupingStateFromResourceGroups, leafTableRows, requestedFieldPaths, resourceColumnVisibility } from "../resource-view-codecs";
 import type { ListViewNavigationScope, ResourceFilterInput, ResourceListResult, ResourceListSnapshot, ResourceRowsSnapshotSource, UseResourceRowsSnapshotOptions } from "./types";
 import { useLatestRef } from "../../../lib/use-latest-ref";
 
@@ -39,6 +39,7 @@ export function useResourceRowsSnapshot<TRow extends Row = Row>(
       pageCount: list.pageCount,
       hasNext: list.hasNext,
       hasPrev: list.hasPrev,
+      ...(list.records ? { records: list.records } : {}),
       fetching: list.fetching,
       error: list.error,
       ...(navigationScope ? { navigationScope } : {}),
@@ -52,6 +53,7 @@ export function useResourceRowsSnapshot<TRow extends Row = Row>(
       list.pageCount,
       list.hasNext,
       list.hasPrev,
+      list.records,
       list.fetching,
       list.error,
       navigationScope,
@@ -308,6 +310,14 @@ export function listResultFromTable<TRow extends Row>(
   { rows, total, fetching, error, refetch }: Pick<ResourceListResult, "rows" | "total" | "fetching" | "refetch"> & { error: unknown },
 ): ResourceListResult {
   const { pageIndex, pageSize } = table.getState().pagination;
+  // A grouping client table pages its root groups: the record pager needs the records
+  // behind the pages and how many precede this page.
+  const records = !table.options.manualPagination && table.getState().grouping.length > 0
+    ? {
+        total: table.getFilteredRowModel().rows.length,
+        before: leafTableRows(table.getPrePaginationRowModel().rows.slice(0, pageIndex * pageSize)).length,
+      }
+    : undefined;
   return {
     rows, total, fetching, error: errorFromUnknown(error), refetch,
     page: pageIndex + 1,
@@ -316,6 +326,7 @@ export function listResultFromTable<TRow extends Row>(
     pageCount: total === undefined ? undefined : Math.max(1, table.getPageCount()),
     hasNext: total !== undefined && table.getCanNextPage(),
     hasPrev: table.getCanPreviousPage(),
+    ...(records ? { records } : {}),
     setPage: (page) => table.setPageIndex(page - 1),
     firstPage: table.firstPage,
     nextPage: table.nextPage,

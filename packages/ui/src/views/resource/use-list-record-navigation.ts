@@ -187,8 +187,11 @@ export function useListRecordNavigation<TRow extends Row>({
     return "advanced";
   }, [binding, navigationScope, readId, recordId, refetchCurrent, scopeIdentity, selectRecord]);
   if (recordId && (navigationScope || localSnapshot) && !failed) {
-    const position = index < 0 ? undefined : (page - 1) * pageSize + index + 1;
-    navigation = { current: position, total };
+    // A local grouped page counts groups; its record facts carry the records behind it.
+    const records = navigationScope ? undefined : localSnapshot?.records;
+    const before = records ? records.before : (page - 1) * pageSize;
+    const position = index < 0 ? undefined : before + index + 1;
+    navigation = { current: position, total: records ? records.total : total };
     const ready = index >= 0 && onSelect && !pending && !localEdge && !(navigationScope ? current.query.isFetching : localSnapshot?.fetching);
     if (ready) {
       const move = (direction: -1 | 1) => {
@@ -200,8 +203,11 @@ export function useListRecordNavigation<TRow extends Row>({
         else if (onSetPage) { setLocalEdge({ recordId, binding, sourceScope: localQueryScope, page: nextPage, edge }); onSetPage(nextPage); }
       };
       if (index > 0 || (page > 1 && (navigationScope || onSetPage))) navigation.onPrev = () => move(-1);
-      // Unknown totals never invent a page beyond the authoritative loaded slice.
-      const hasNextPage = total !== undefined && page * pageSize < total;
+      // Unknown totals never invent a page beyond the authoritative loaded slice; a local
+      // page reports its own next page (its pages may be groups).
+      const hasNextPage = navigationScope
+        ? total !== undefined && page * pageSize < total
+        : Boolean(localSnapshot?.hasNext);
       if (index < (rows?.length ?? 0) - 1 || (hasNextPage && (navigationScope || onSetPage))) navigation.onNext = () => move(1);
     }
   }

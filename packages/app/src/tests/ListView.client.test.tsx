@@ -177,6 +177,8 @@ describe("ListView client row model", () => {
     expect(screen.getByText("Notes")).toBeTruthy();
     expect(screen.getByText("Tasks")).toBeTruthy();
     expect(screen.getByText("IAM")).toBeTruthy();
+    // The toolbar pager counts the groups the page holds.
+    expect(screen.getByText("1-2 / 2 groups")).toBeTruthy();
 
     // Collapsing the example namespace hides only its records.
     fireEvent.click(example as HTMLElement);

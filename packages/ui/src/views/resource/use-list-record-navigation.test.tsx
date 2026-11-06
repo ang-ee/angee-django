@@ -278,6 +278,24 @@ test("local row models retain native table snapshots without invoking a server q
   expect(f.getList).not.toHaveBeenCalled();
 });
 
+test("a local grouped page positions the record among the records behind its groups", () => {
+  const f = fixture({ initialScope: null });
+  const onSetPage = vi.fn();
+  const local = renderHook(() => useListRecordNavigation<{ id: string }>({ resource: "notes.Note", recordId: "b", onSelect: vi.fn(), onSetPage }), { wrapper: f.wrapper });
+  // Page 2 of three groups per page over seven groups and 120 records, 50 records before it.
+  const snapshot: ResourceListSnapshot<{ id: string }> = {
+    rows: [{ id: "a" }, { id: "b" }, { id: "c" }], page: 2, pageSize: 3, total: 7, pageCount: 3,
+    hasNext: true, hasPrev: true, fetching: false, records: { total: 120, before: 50 },
+  };
+  act(() => local.result.current.onListStateChange(snapshot));
+  expect(local.result.current.navigation).toMatchObject({ current: 52, total: 120 });
+  expect(local.result.current.navigation?.onNext).toBeDefined();
+  act(() => local.result.current.onListStateChange({ ...snapshot, rows: [{ id: "b" }], page: 3, hasNext: false, records: { total: 120, before: 119 } }));
+  expect(local.result.current.navigation).toMatchObject({ current: 120, total: 120 });
+  expect(local.result.current.navigation?.onNext).toBeUndefined();
+  expect(f.getList).not.toHaveBeenCalled();
+});
+
 test("first-row selection follows collection changes and clears an empty collection", () => {
   const f = fixture({ initialScope: null });
   const onSelect = vi.fn();

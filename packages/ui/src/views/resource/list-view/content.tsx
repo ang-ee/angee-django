@@ -207,9 +207,9 @@ export function ListViewContent<TRow extends Row = Row>({
     />
   );
   // Every grouped list pages its root groups: the server surface by its root read, a
-  // client row model by its table's top-level rows.
+  // client row model by its table's top-level rows (a lane-source board's table does not group).
   const pagesGroups = serverGroupedMode
-    || (clientRowModel && resourceView.state.view === "list" && effectiveGroupStack.length > 0);
+    || (clientRowModel && surface.table.getState().grouping.length > 0);
   const toolbar: ResourceToolbarProps = {
     pane,
     sortOptions: resolvedColumns.flatMap((column) => column.field && column.sortable !== false

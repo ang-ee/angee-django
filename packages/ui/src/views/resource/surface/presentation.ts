@@ -147,7 +147,8 @@ export function useResourceViewPresentationSurfaceFromTable<TRow extends Row>({
   } = useResourceViewTableChrome(table, columnVisibility);
 
   const rowModels = table.getRowModel().rows;
-  const groupedRowModels = table.getPreExpandedRowModel().rows;
+  // The page's root rows (its groups when grouping, its records otherwise), subtrees intact.
+  const groupedRowModels = React.useMemo(() => rowModels.filter((row) => row.depth === 0), [rowModels]);
   const tableRowSelection = table.getState().rowSelection;
   const selectedIds = React.useMemo(() => idsFromRowSelectionState(tableRowSelection), [tableRowSelection]);
   const pageIds = React.useMemo(
