@@ -16,7 +16,6 @@ from rebac import (
     PermissionDenied,
     RebacMixin,
     RebacTrackedMixin,
-    database_context,
     system_context,
 )
 from rebac.actors import is_sudo
@@ -344,10 +343,7 @@ class ModelHistory(CaptureHistory):
             # row through the default manager. That read rebuilds a snapshot for
             # replay, not a projection to the caller: a gated counter would refuse it.
             alias = using if using is not None else record._state.db
-            with (
-                database_context(alias) if alias is not None else nullcontext(),
-                system_context(reason="angee.history.instance") if record._history_excluded_fields else nullcontext(),
-            ):
+            with system_context(reason="angee.history.instance") if record._history_excluded_fields else nullcontext():
                 return native_instance(record, using=alias)
 
         extra["instance"] = property(get_instance)

@@ -19,7 +19,6 @@ from django_compose.models import Composable
 from rebac import (
     PermissionDenied,
     current_actor,
-    database_context,
     generic_target,
     system_context,
     to_object_ref,
@@ -450,7 +449,7 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
         kinds = self.model.activity_type.field.related_model
         tasks = self.db_manager(self._db or record._state.db, hints={"instance": record})
         using = tasks.db
-        with database_context(using), transaction.atomic(using=using):
+        with transaction.atomic(using=using):
             self.model.validate_target(record)
             task = self.model(
                 title=title,
@@ -485,7 +484,7 @@ class TaskManager[TaskT: Task](_TaskManagerBase[TaskT]):
             title, rest = title[: length - 1] + "…", note
         tasks = self.db_manager(self._db or record._state.db, hints={"instance": record})
         using = tasks.db
-        with database_context(using), transaction.atomic(using=using):
+        with transaction.atomic(using=using):
             task = tasks.schedule(
                 record,
                 title=title,

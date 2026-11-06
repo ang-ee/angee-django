@@ -9,7 +9,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import models, transaction
 from django.utils import timezone
 from django_compose.models import Composable
-from rebac import database_context, system_context
+from rebac import system_context
 
 from angee.base.managers import AngeeManager
 from angee.base.models.base import AngeeModel
@@ -76,7 +76,7 @@ class AddonCatalogManager(AngeeManager, VcsOutputManager):
         addon = apps.get_model("platform", "Addon")
         using = self._db or source._state.db or self.db
         rows = addon.objects.db_manager(using)
-        with database_context(using), system_context(reason="platform_integrate_vcs.catalog.sync"):
+        with system_context(reason="platform_integrate_vcs.catalog.sync"):
             repository_field = source._meta.get_field("repository")
             repository = repository_field.related_model._base_manager.db_manager(using).select_related(
                 "vcs_bridge__credential__oauth_client"

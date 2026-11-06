@@ -54,7 +54,6 @@ from rebac import (
     SubjectRef,
     actor_context,
     current_actor,
-    database_context,
     generic_target,
     system_context,
     to_subject_ref,
@@ -1620,7 +1619,7 @@ class ThreadFollowerManager[ThreadFollowerT: ThreadFollower](_ThreadFollowerMana
         attachments = apps.get_model("messaging", "ThreadAttachment").objects.db_manager(
             using, hints={"instance": record},
         )
-        with database_context(using), transaction.atomic(using=using):
+        with transaction.atomic(using=using):
             attachment = attachments.for_record(record, role=role)
             target = attachment.target if attachment is not None else record
             if target is None:
@@ -3508,7 +3507,7 @@ class MessageManager[MessageT: Message](_MessageManagerBase[MessageT]):
         notification_model = apps.get_model("messaging", "ThreadNotification")
         sent_at = timezone.now()
         claim_boundary = changeset(fresh=True, using=using) if idempotency_key is not None else nullcontext()
-        with database_context(using), claim_boundary, transaction.atomic(using=using):
+        with claim_boundary, transaction.atomic(using=using):
             if idempotency_key is not None:
                 message = changeset_model().objects.db_manager(using).claim_created(
                     f"messaging.post:{actor}",
