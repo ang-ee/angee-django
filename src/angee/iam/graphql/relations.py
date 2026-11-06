@@ -84,26 +84,30 @@ class _RecordReferenceAccess(models.Expression):
     redeclare this annotation after an actor change. Native expression children
     carry the containing row's columns through aliases, clones and optimizer paths.
     Unbounded discovery reads actor-admitted reference types, then keeps their
-    candidate keys and target proofs as SQL subqueries. A type first referenced after
+    candidate types on the declaring queryset's database as a fixed snapshot.
+    A type first referenced after
     resolution, or present only on a later compiling alias, remains unreadable.
-    Target proofs render with the statement, so changed grants cannot leave an
-    already-prepared filter with stale readable identities. On another alias,
-    target scopes are rebuilt and ContentType IDs are rendered as subqueries;
-    the discovered type set stays fixed and fails closed.
+    Candidate keys and target proofs render on the statement's database, so a
+    cloned queryset cannot embed a subquery from its original database. Changed
+    grants cannot leave an already-prepared filter with stale readable identities.
+    ContentType IDs are rendered as subqueries on another alias.
     A bound target uses its model's content type and filters the native REBAC
     scope to its primary key before compiling the SQL proof.
     """
 
     contains_subquery = True
-    targets: tuple[tuple[int, str, str, _ActorScopedSubquery], ...] | None = None
+    targets: tuple[tuple[int, str, str, type[models.Model]], ...] | None = None
     content_type_alias: str | None = None
+    source_model: type[ProtectedRecordRefMixin] | None = None
 
     def __init__(
-        self, *, actor: Any, target: tuple[type[models.Model], Any] | None = None,
+        self, *, actor: Any, database_alias: str,
+        target: tuple[type[models.Model], Any] | None = None,
         candidate_filter: models.Q | None = None, candidate_keys: Mapping[str, Any] | None = None,
     ) -> None:
         super().__init__(output_field=models.BooleanField())
         self.actor = actor
+        self.database_alias = database_alias
         self.bound_target = target
         self.candidate_filter = candidate_filter
         self.candidate_keys = candidate_keys
@@ -114,6 +118,20 @@ class _RecordReferenceAccess(models.Expression):
 
     def set_source_expressions(self, expressions: Sequence[Combinable | models.Expression]) -> None:
         self.columns = list(expressions)
+
+    def _candidate_source(self, source: models.QuerySet[Any], alias: str) -> models.QuerySet[Any]:
+        """Select the same admitted reference rows on the requested database."""
+
+        if isinstance(source, RebacQuerySet) and self.actor is not None:
+            source = require_rebac_queryset(source.model).using(alias).with_actor(self.actor).with_action("read")
+        elif self.actor is None:
+            source = source.none()
+        source = source.using(alias)
+        if isinstance(source, RebacQuerySet):
+            source = source.scoped_for_aggregate()
+        if self.candidate_filter is not None:
+            source = source.filter(self.candidate_filter)
+        return source
 
     def resolve_expression(
         self, query: Any = None, allow_joins: bool = True, reuse: Any = None,
@@ -136,21 +154,14 @@ class _RecordReferenceAccess(models.Expression):
             _RecordReferenceAccess,
             super().resolve_expression(query, allow_joins, reuse, summarize, for_save),
         )
+        resolved.source_model = model
         source = model._default_manager.get_queryset()
-        alias = source.db
+        alias = self.database_alias
         content_types: Iterable[ContentType]
         bound_model: type[models.Model] | None = None
         if self.bound_target is None:
             # Bare pointer models may use an ordinary manager; their source has no REBAC scope.
-            if isinstance(source, RebacQuerySet) and self.actor is not None:
-                source = require_rebac_queryset(model).with_actor(self.actor).with_action("read")
-            elif self.actor is None:
-                source = source.none()
-            source = source.using(alias)
-            if isinstance(source, RebacQuerySet):
-                source = source.scoped_for_aggregate()
-            if self.candidate_filter is not None:
-                source = source.filter(self.candidate_filter)
+            source = self._candidate_source(source, alias)
             content_types = ContentType.objects.db_manager(alias).filter(
                 pk__in=source.order_by().values(reference.ct_field_attname),
             ).order_by("app_label", "model")
@@ -170,21 +181,6 @@ class _RecordReferenceAccess(models.Expression):
             resource_type = model_resource_type(resolved_target_model)
             if resource_type is None:
                 continue
-            queryset = (
-                require_rebac_queryset(resolved_target_model).using(alias)
-                .with_actor(self.actor).with_action("read")
-            )
-            keys = queryset.order_by().annotate(_angee_reference_key=Cast("pk", output_field=key_field))
-            if self.bound_target is not None:
-                keys = keys.filter(pk=self.bound_target[1])
-            elif self.candidate_keys is not None:
-                keys = keys.filter(pk=self.candidate_keys.get(resolved_target_model._meta.label_lower))
-            else:
-                candidates = source.filter(**{
-                    f"{reference.ct_field}__app_label": content_type.app_label,
-                    f"{reference.ct_field}__model": content_type.model,
-                }).order_by().values(reference.fk_field)
-                keys = keys.filter(_angee_reference_key__in=candidates)
             model_name = resolved_target_model._meta.model_name
             if model_name is None:
                 raise ImproperlyConfigured(
@@ -194,7 +190,7 @@ class _RecordReferenceAccess(models.Expression):
                 content_type.pk,
                 resolved_target_model._meta.app_label,
                 model_name,
-                _ActorScopedSubquery(keys, "_angee_reference_key").resolve_expression(query),
+                resolved_target_model,
             ))
         resolved.targets = tuple(targets)
         resolved.content_type_alias = alias
@@ -203,7 +199,32 @@ class _RecordReferenceAccess(models.Expression):
     def as_sql(self, compiler: Any, connection: Any) -> tuple[str, Any]:
         branches = []
         content_type_column, object_id_column = self.columns
-        for content_type_id, app_label, model_name, keys in self.targets or ():
+        if not self.targets:
+            return compiler.compile(models.Value(False, output_field=models.BooleanField()))
+        model = self.source_model
+        assert model is not None
+        reference = model.record_ref_field()
+        key_field = model._meta.get_field(reference.fk_field)
+        assert isinstance(key_field, models.Field)
+        source = model._default_manager.get_queryset()
+        if self.bound_target is None:
+            source = self._candidate_source(source, connection.alias)
+        for content_type_id, app_label, model_name, target_model in self.targets:
+            queryset = (
+                require_rebac_queryset(target_model).using(connection.alias)
+                .with_actor(self.actor).with_action("read")
+            )
+            keys = queryset.order_by().annotate(_angee_reference_key=Cast("pk", output_field=key_field))
+            if self.bound_target is not None:
+                keys = keys.filter(pk=self.bound_target[1])
+            elif self.candidate_keys is not None:
+                keys = keys.filter(pk=self.candidate_keys.get(target_model._meta.label_lower))
+            else:
+                candidates = source.filter(**{
+                    f"{reference.ct_field}__app_label": app_label,
+                    f"{reference.ct_field}__model": model_name,
+                }).order_by().values(reference.fk_field)
+                keys = keys.filter(_angee_reference_key__in=candidates)
             target_type: int | models.Subquery = content_type_id
             if connection.alias != self.content_type_alias:
                 target_type = models.Subquery(
@@ -216,13 +237,11 @@ class _RecordReferenceAccess(models.Expression):
             branch.add(
                 object_id_column.get_lookup("in")(
                     object_id_column,
-                    keys,
+                    _ActorScopedSubquery(keys, "_angee_reference_key"),
                 ),
                 "AND",
             )
             branches.append(branch)
-        if not branches:
-            return compiler.compile(models.Value(False, output_field=models.BooleanField()))
         predicate = WhereNode(connector="OR")
         for branch in branches:
             predicate.add(branch, "OR")
@@ -453,7 +472,7 @@ def with_record_reference_access(
     public identity owner's decoded keys to bound each target proof.
     """
     annotation = {"_angee_record_readable": _RecordReferenceAccess(
-        actor=relation_actor(queryset), target=target,
+        actor=relation_actor(queryset), database_alias=queryset.db, target=target,
         candidate_filter=candidate_filter, candidate_keys=candidate_keys,
     )}
     return queryset.annotate(**annotation) if select else queryset.alias(**annotation)

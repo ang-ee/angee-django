@@ -197,6 +197,10 @@ class StorageRoutingContract(TransactionTestCase):
                 selected = prepared.all().using("producer")
                 self.assertEqual(list(selected.values_list("_angee_record_readable", flat=True)), [True])
             self.assertEqual(list(default_queries), [])
+            with CaptureQueriesContext(connections["default"]) as default_queries:
+                direct = with_record_reference_access(models.QuerySet(model=Attachment, using="producer"))
+                self.assertEqual(list(direct.values_list("_angee_record_readable", flat=True)), [True])
+            self.assertEqual(list(default_queries), [])
 
     def test_native_factories_route_writes_and_enclose_attachment_failure(self):
         File = apps.get_model("storage", "File")

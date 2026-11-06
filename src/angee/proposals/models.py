@@ -53,6 +53,7 @@ from angee.iam.models.base import ProtectedDataModel, ProtectedModel
 from angee.iam.models.ownership import OwnerQuerySet
 from angee.iam.models.roles import role_anchor
 from angee.iam.permissions import actor_user_id, instance_actor, subject_reaches_user
+from angee.iam.querysets import structural_prefetch
 from angee.messaging.models import ThreadedModelMixin
 from angee.money.fields import MoneyField
 from angee.proposals.choices import (
@@ -409,7 +410,7 @@ class Round(
             )
             .order_by("responder_id")
         )
-        return models.Prefetch("proposals", queryset=rows, to_attr="_roster_entries")
+        return structural_prefetch("proposals", queryset=rows, to_attr="_roster_entries")
 
     def roster(self, *, permitted: bool | None = None, status: bool | None = None) -> list[RosterEntry]:
         """Use batched permission answers and prefetched scalar facts on lists."""

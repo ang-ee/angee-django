@@ -55,6 +55,7 @@ from angee.iam.graphql.writes import instance_for_write
 from angee.iam.identity import user_from_public_id as _user_from_public_id
 from angee.iam.identity import user_principal as _user_principal
 from angee.iam.permissions import is_platform_admin
+from angee.iam.querysets import structural_prefetch
 from angee.iam.schema import UserType
 from angee.integrate import connect as _connect
 from angee.integrate.credentials import CredentialKind
@@ -1068,7 +1069,7 @@ def _connection_credential(info: Any) -> Prefetch:
     """Batch the credential owner's current facts without projecting its secrets."""
 
     del info
-    return Prefetch(
+    return structural_prefetch(
         "credential",
         queryset=Credential.objects.connection_health(),
         to_attr="_connection_credential",

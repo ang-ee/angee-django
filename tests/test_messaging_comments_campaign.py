@@ -182,7 +182,7 @@ def test_webform_accessor_keeps_claimed_email_unverified_and_returns_a_copy():
 
 
 @pytest.mark.parametrize("operation", ["edit", "delete"])
-def test_record_moderator_cannot_change_retained_notification_hidden_from_generic_scope(comment_record, operation):
+def test_record_reader_cannot_change_retained_notification(comment_record, operation):
     case = comment_record
     with system_context(reason="test.comments.notification-retention"):
         attachment = ThreadAttachment.objects.ensure_for_record(case.record)
@@ -191,10 +191,14 @@ def test_record_moderator_cannot_change_retained_notification_hidden_from_generi
         Message._base_manager.filter(pk=message.pk).update(message_type="notification")
     with actor_context(case.writer):
         assert case.record.can_moderate()
-        assert not message.has_access("read")
+        # The record's read grants its chatter thread and messages through
+        # extcontrib's chatter_record arm; mutation still requires comment kind.
+        assert message.has_access("read")
         with pytest.raises(ValueError, match="Only comment messages"):
             if operation == "edit":
                 Message.objects.update_content(message, body="Tampered", edited_by_id=case.writer.pk)
             else:
                 Message.objects.unlink_from_thread(message, thread=attachment.thread)
+    with actor_context(case.outsider):
+        assert not message.has_access("read")
     assert Message._base_manager.filter(pk=message.pk).exists()
